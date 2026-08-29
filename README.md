@@ -21,7 +21,13 @@ untouched project and can continue to be used alongside this preview.
 - CMUX with sidebar ExtensionKit support
 
 The project uses the CMUX ExtensionKit package from pinned CMUX commit
-`ae7fbce99f98c98df5ccf915e548dd080d33cfa8`. The SDK is fetched into the ignored
+`ae7fbce99f98c98df5ccf915e548dd080d33cfa8`. `scripts/fetch-sdk.sh` fetches that
+exact commit over HTTPS with Git, so Git's content addressing verifies the
+acquired tree against the pin. It then records a deterministic content digest
+in the ignored `vendor/.cmux-sdk-provenance` file, outside the SDK directory,
+and re-verifies the cached tree before reusing it. A replacement is staged and
+only swapped in once it verifies, so a failed fetch leaves the previous usable
+SDK and its provenance record intact. The SDK itself lives in the ignored
 `vendor/CmuxExtensionKit/` directory and is never committed.
 
 ## Build and test
@@ -34,6 +40,13 @@ The project uses the CMUX ExtensionKit package from pinned CMUX commit
 
 `build-unsigned.sh` is the automation path and disables signing. `test.sh` runs
 the focused connection-state tests without requiring a development identity.
+Those tests exercise the same `SidebarConnectionModel` and reducer the shipped
+sidebar uses; the CMUX context and its transport are adapted to plain values at
+the extension entry point, so the state logic stays directly testable.
+
+`.github/workflows/ci.yml` runs those same two scripts, in that order, on a
+macOS runner. It deliberately does not perform machine-wide `pluginkit`
+registration.
 
 ## Build and register locally
 
@@ -43,10 +56,16 @@ No Apple Development identity is required for the local ad hoc proof:
 ./scripts/build-register.sh
 ```
 
-The script builds with `CODE_SIGN_IDENTITY=-`, registers the embedded extension
-with `pluginkit`, and verifies discovery of
-`com.jdylanmc.CMUXMaestroPreview.Extension`. It does not enable the extension,
-select it as CMUX's active sidebar provider, or modify the legacy plugin.
+The script builds with `CODE_SIGN_IDENTITY=-` and registers the embedded
+extension with `pluginkit`. It derives the built product paths and the actual
+`CFBundleIdentifier` from the build itself, then requires `pluginkit` discovery
+to resolve that identifier to the freshly built extension's canonical path,
+failing on no match, a wrong path, or an ambiguous result. Superseded
+registrations left behind by earlier builds in this checkout are removed first;
+a registration owned by another checkout is reported rather than rewritten.
+
+It does not enable the extension, select it as CMUX's active sidebar provider,
+or modify the legacy plugin, and it introduces no distribution signing.
 
 To use the preview afterward, open CMUX's Sidebar Extensions browser, enable
 **CMUX Maestro Preview**, and select it manually.

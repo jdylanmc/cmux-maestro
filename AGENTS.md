@@ -12,12 +12,17 @@ do not copy its source or history, modify it, or make this project depend on it.
 ## Structure
 
 - `CMUXMaestroPreview/`: macOS containing app.
-- `CMUXMaestroSidebar/`: sandboxed ExtensionKit sidebar.
+- `CMUXMaestroSidebar/`: sandboxed ExtensionKit sidebar and the CMUX SDK
+  adapters that turn a CMUX context or status into plain values.
+- `CMUXMaestroSidebarCore/`: pure sidebar state logic with no CMUX SDK
+  dependency, built into both the sidebar and the test target.
 - `CMUXMaestroPreviewTests/`: focused Swift tests.
 - `CMUXMaestroPreview.xcodeproj/`: Xcode project and shared scheme.
 - `scripts/`: pinned SDK fetch, build, test, and local registration commands.
+- `.github/workflows/ci.yml`: macOS CI running the unsigned build and tests.
 - `vendor/CmuxExtensionKit/`: ignored local SDK checkout created by the fetch
-  script. Never commit it.
+  script. Never commit it. Its verified provenance is recorded alongside it in
+  the ignored `vendor/.cmux-sdk-provenance` file.
 
 ## Constraints
 
@@ -39,6 +44,10 @@ Use the checked-in scripts, which select full Xcode explicitly:
 ./scripts/test.sh
 ./scripts/build-register.sh
 ```
+
+`.github/workflows/ci.yml` must keep running exactly `./scripts/build-unsigned.sh`
+then `./scripts/test.sh`, and must not perform machine-wide `pluginkit`
+registration.
 
 Before committing, confirm `git status --short` contains no fetched SDK or build
 products. Configure repository-local Git author identity as Dylan McCurry
