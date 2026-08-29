@@ -3,7 +3,8 @@
 .skill-log/
 DerivedData/
 vendor/CmuxExtensionKit/
-vendor/.cmux-sdk-fetch/
-vendor/.cmux-sdk.tar.gz
+vendor/.cmux-sdk-provenance
+vendor/.cmux-sdk-stage/
+vendor/.cmux-sdk-previous/
 xcuserdata/
 *.xcuserstate

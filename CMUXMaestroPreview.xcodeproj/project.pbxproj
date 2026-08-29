@@ -77,6 +77,11 @@
 			path = CMUXMaestroSidebar;
 			sourceTree = "<group>";
 		};
+		A3685C412FCA3B4000009F1B /* CMUXMaestroSidebarCore */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = CMUXMaestroSidebarCore;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -111,6 +116,7 @@
 				A3685BEB2FCA3AEE00009F1B /* CMUXMaestroPreview */,
 				A3685BF92FCA3AF000009F1B /* CMUXMaestroPreviewTests */,
 				A3685C252FCA3B2500009F1B /* CMUXMaestroSidebar */,
+				A3685C412FCA3B4000009F1B /* CMUXMaestroSidebarCore */,
 				A3685C2D2FCA3B3700009F1B /* Frameworks */,
 				A3685BEA2FCA3AEE00009F1B /* Products */,
 			);
@@ -175,6 +181,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				A3685BF92FCA3AF000009F1B /* CMUXMaestroPreviewTests */,
+				A3685C412FCA3B4000009F1B /* CMUXMaestroSidebarCore */,
 			);
 			name = CMUXMaestroPreviewTests;
 			packageProductDependencies = (
@@ -197,6 +204,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				A3685C252FCA3B2500009F1B /* CMUXMaestroSidebar */,
+				A3685C412FCA3B4000009F1B /* CMUXMaestroSidebarCore */,
 			);
 			name = CMUXMaestroSidebar;
 			packageProductDependencies = (
@@ -439,7 +447,6 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CMUX_SIDEBAR_EXTENSION_POINT_ID = com.cmuxterm.app.cmux.sidebar;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -455,8 +462,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
-				CMUX_BUNDLE_ID_SUFFIX = "";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.jdylanmc.CMUXMaestroPreview$(CMUX_BUNDLE_ID_SUFFIX)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview;
 				PRODUCT_MODULE_NAME = CMUXMaestroPreview;
 				PRODUCT_NAME = "CMUX Maestro Preview";
 				REGISTER_APP_GROUPS = NO;
@@ -474,7 +480,6 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CMUX_SIDEBAR_EXTENSION_POINT_ID = com.cmuxterm.app.cmux.sidebar;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -490,8 +495,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
-				CMUX_BUNDLE_ID_SUFFIX = "";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.jdylanmc.CMUXMaestroPreview$(CMUX_BUNDLE_ID_SUFFIX)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview;
 				PRODUCT_MODULE_NAME = CMUXMaestroPreview;
 				PRODUCT_NAME = "CMUX Maestro Preview";
 				REGISTER_APP_GROUPS = NO;
@@ -558,7 +562,7 @@
 				ENABLE_APP_SANDBOX = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = CMUXMaestroSidebar/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "CMUX Maestro Preview$(CMUX_DISPLAY_NAME_SUFFIX)";
+				INFOPLIST_KEY_CFBundleDisplayName = "CMUX Maestro Preview";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -567,9 +571,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
-				CMUX_BUNDLE_ID_SUFFIX = "";
-				CMUX_DISPLAY_NAME_SUFFIX = "";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.jdylanmc.CMUXMaestroPreview$(CMUX_BUNDLE_ID_SUFFIX).Extension";
+				PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview.Extension;
 				PRODUCT_NAME = "CMUX Maestro Preview Extension";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -593,7 +595,7 @@
 				ENABLE_APP_SANDBOX = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = CMUXMaestroSidebar/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "CMUX Maestro Preview$(CMUX_DISPLAY_NAME_SUFFIX)";
+				INFOPLIST_KEY_CFBundleDisplayName = "CMUX Maestro Preview";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -602,9 +604,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
-				CMUX_BUNDLE_ID_SUFFIX = "";
-				CMUX_DISPLAY_NAME_SUFFIX = "";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.jdylanmc.CMUXMaestroPreview$(CMUX_BUNDLE_ID_SUFFIX).Extension";
+				PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview.Extension;
 				PRODUCT_NAME = "CMUX Maestro Preview Extension";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;

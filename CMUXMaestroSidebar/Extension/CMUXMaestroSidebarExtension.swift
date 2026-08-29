@@ -23,10 +23,10 @@ final class CMUXMaestroSidebarExtension: @MainActor CmuxSidebarExtension {
     }
 
     func update(context: CmuxSidebarContext) {
-        model.update(context: context)
+        model.apply(.snapshot(SidebarSnapshotSummary(context.snapshot)))
     }
 
     func connectionStatusDidChange(_ status: CmuxSidebarConnectionStatus) {
-        model.connectionStatusDidChange(status)
+        model.apply(SidebarConnectionSignal(status))
     }
 }
