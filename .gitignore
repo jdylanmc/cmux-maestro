@@ -1,0 +1,9 @@
+.DS_Store
+.build/
+.skill-log/
+DerivedData/
+vendor/CmuxExtensionKit/
+vendor/.cmux-sdk-fetch/
+vendor/.cmux-sdk.tar.gz
+xcuserdata/
+*.xcuserstate
