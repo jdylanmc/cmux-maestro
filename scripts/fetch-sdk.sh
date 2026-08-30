@@ -12,8 +12,16 @@ set -euo pipefail
 # Replacement is published as an explicit transaction: the new SDK tree and its
 # new provenance record are both fully staged before the previous ones are
 # displaced, and the transaction is only marked complete once both are in place.
-# Any failure before that flag is set rolls the previous SDK and the previous
-# provenance record back byte for byte and discards the replacement.
+#
+# Any failure or forced termination before that point recovers from what is
+# actually on disk -- which backups, destinations and staged artifacts exist
+# right now -- combined with whether each original existed before the
+# transaction opened. No decision depends on bookkeeping that could lag behind
+# a rename which already happened. A backup is restored whenever it exists, an
+# original that was never displaced is left untouched, and a destination is
+# only removed when a replacement is known to have been placed there or there
+# was no original to protect. Rollback success is only reported once the prior
+# SDK and provenance record are verified back in place.
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CMUX_REPO_URL="https://github.com/manaflow-ai/cmux.git"
@@ -34,11 +42,29 @@ PREVIOUS_DIR="$VENDOR_DIR/.cmux-sdk-previous"
 PREVIOUS_SDK="$PREVIOUS_DIR/CmuxExtensionKit"
 PREVIOUS_PROVENANCE="$PREVIOUS_DIR/provenance"
 
-# none -> nothing displaced; started -> previous state displaced and not yet
-# replaced; complete -> replacement fully published.
+# none -> the transaction never opened; started -> the transaction is open and
+# recovery must run; complete -> the replacement is fully published.
+#
+# This flag is only ever advanced to "started" BEFORE the first destructive
+# step, so it can lag in the safe direction (recovery runs when nothing was
+# actually displaced) but never in the unsafe one (recovery skipped after
+# something was displaced). It decides only whether recovery runs; every choice
+# recovery then makes is read from the filesystem.
 PUBLISH_STATE=none
-PREVIOUS_SDK_SAVED=0
-PREVIOUS_PROVENANCE_SAVED=0
+
+# Pre-transaction truth about the originals: recorded before anything is
+# touched and never updated afterwards, so it cannot lag behind a rename.
+ORIGINAL_SDK_EXISTED=0
+ORIGINAL_SDK_DIGEST=
+ORIGINAL_PROVENANCE_EXISTED=0
+ORIGINAL_PROVENANCE_DIGEST=
+
+# Set once this run has created the rollback directory. Until then, a rollback
+# directory on disk belongs to an earlier run and must never be deleted.
+PREVIOUS_DIR_OWNED=0
+
+RECOVERY_FAILED=0
+RESTORED_COUNT=0
 
 fail() {
     echo "fetch-sdk: $*" >&2
@@ -64,47 +90,127 @@ content_digest() {
     ) | shasum -a 256 | cut -d ' ' -f 1
 }
 
+file_digest() {
+    shasum -a 256 "$1" | cut -d ' ' -f 1
+}
+
 read_provenance_field() {
     local field="$1"
     [[ -f "$PROVENANCE" ]] || return 0
     sed -n "s/^$field=//p" "$PROVENANCE" | head -n 1
 }
 
-restore_previous_sdk_on_failure() {
-    local status=$?
-    local rollback_failed=0
+# Positive evidence that a replacement reached its destination: the publication
+# rename consumes the staged artifact, so a staged path that is gone together
+# with a destination that exists can only mean the rename ran. Consulted only
+# while the transaction is open, after staging has completed.
+replacement_was_placed() {
+    local staged="$1" dest="$2"
+    [[ ! -e "$staged" && -e "$dest" ]]
+}
 
-    # Disarm before doing any work so a failing rollback command cannot
-    # re-enter this handler and skip the rest of it.
-    trap - EXIT
+# Recover one artifact from live filesystem state.
+#
+# Renames inside vendor/ are atomic, so while the transaction is open an
+# original that existed is at exactly one of two places: still at its
+# destination because its displacement never ran or failed, or in the rollback
+# directory because its displacement did run. Both cases are read directly.
+recover_artifact() {
+    local staged="$1" dest="$2" backup="$3" existed="$4"
 
-    if [[ "$PUBLISH_STATE" == "started" ]]; then
-        # The previous SDK and provenance were displaced but the replacement
-        # was never completed. Discard whatever the replacement managed to put
-        # in place, then restore the previous state exactly.
-        rm -rf -- "$SDK_DIR" || rollback_failed=1
-        rm -f -- "$PROVENANCE" || rollback_failed=1
-
-        if (( PREVIOUS_SDK_SAVED )); then
-            mv "$PREVIOUS_SDK" "$SDK_DIR" || rollback_failed=1
-        fi
-        if (( PREVIOUS_PROVENANCE_SAVED )); then
-            mv "$PREVIOUS_PROVENANCE" "$PROVENANCE" || rollback_failed=1
-        fi
-
-        if (( rollback_failed )); then
-            echo "fetch-sdk: could not roll back; the previous SDK and provenance are kept in $PREVIOUS_DIR" >&2
-        else
-            echo "fetch-sdk: rolled back to the previous CmuxExtensionKit checkout and provenance" >&2
+    # Remove a destination only with positive justification: a replacement is
+    # known to have been placed there, or there was no original to protect.
+    # Anything else is an untouched original and must survive.
+    if [[ -e "$dest" ]]; then
+        if replacement_was_placed "$staged" "$dest" || (( existed == 0 )); then
+            rm -rf -- "$dest" || RECOVERY_FAILED=1
         fi
     fi
 
+    # Restore whenever the backup exists, however far the transaction got.
+    if [[ -e "$backup" ]]; then
+        if [[ -e "$dest" ]]; then
+            # Never rename a backup into an occupied destination; that would
+            # nest it instead of restoring it.
+            RECOVERY_FAILED=1
+            return
+        fi
+        if mv "$backup" "$dest"; then
+            RESTORED_COUNT=$(( RESTORED_COUNT + 1 ))
+        else
+            RECOVERY_FAILED=1
+        fi
+    fi
+}
+
+# The prior state is intact only when every original that existed is back at
+# its destination with its pre-transaction content, and every destination that
+# had no original is absent again.
+previous_state_is_intact() {
+    if (( ORIGINAL_SDK_EXISTED )); then
+        [[ -d "$SDK_DIR" ]] || return 1
+        [[ "$(content_digest "$SDK_DIR")" == "$ORIGINAL_SDK_DIGEST" ]] || return 1
+    elif [[ -e "$SDK_DIR" ]]; then
+        return 1
+    fi
+
+    if (( ORIGINAL_PROVENANCE_EXISTED )); then
+        [[ -f "$PROVENANCE" ]] || return 1
+        [[ "$(file_digest "$PROVENANCE")" == "$ORIGINAL_PROVENANCE_DIGEST" ]] || return 1
+    elif [[ -e "$PROVENANCE" ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+restore_previous_sdk_on_failure() {
+    local status=$?
+
+    # Disarm everything first: a failing recovery command must not re-enter
+    # this handler, and a second signal must not tear down a rollback that is
+    # partway through restoring an original.
+    trap - EXIT
+    trap '' INT TERM HUP
+
+    if [[ "$PUBLISH_STATE" == "started" ]]; then
+        recover_artifact "$STAGED_SDK" "$SDK_DIR" "$PREVIOUS_SDK" "$ORIGINAL_SDK_EXISTED"
+        recover_artifact "$STAGED_PROVENANCE" "$PROVENANCE" "$PREVIOUS_PROVENANCE" "$ORIGINAL_PROVENANCE_EXISTED"
+
+        if (( RECOVERY_FAILED )) || ! previous_state_is_intact; then
+            RECOVERY_FAILED=1
+            echo "fetch-sdk: could not restore the previous CmuxExtensionKit state; whatever was set aside is kept in $PREVIOUS_DIR" >&2
+        elif (( RESTORED_COUNT > 0 )); then
+            echo "fetch-sdk: rolled back to the previous CmuxExtensionKit checkout and provenance record, byte for byte" >&2
+        else
+            echo "fetch-sdk: publication stopped with nothing displaced; the previous state is unchanged" >&2
+        fi
+
+        # An open transaction never ends successfully.
+        (( status != 0 )) || status=1
+    fi
+
     rm -rf -- "$STAGE_DIR"
-    if (( rollback_failed == 0 )); then
+    if (( PREVIOUS_DIR_OWNED && RECOVERY_FAILED == 0 )); then
         rm -rf -- "$PREVIOUS_DIR"
     fi
 
     exit "$status"
+}
+
+# An earlier run whose rollback could not finish leaves the displaced original
+# in the rollback directory. Restore it before this run does anything else, so
+# a backup is never discarded while the artifact it protects is missing.
+adopt_previous_backup() {
+    local backup="$1" dest="$2"
+
+    [[ -e "$backup" ]] || return 0
+    if [[ -e "$dest" ]]; then
+        fail "both $backup and $dest exist, so an earlier rollback did not finish; inspect $PREVIOUS_DIR and remove it once the intended state is in place"
+    fi
+    mv "$backup" "$dest" \
+        || fail "could not restore $dest from $backup left behind by an interrupted run"
+    echo "fetch-sdk: restored $dest that an interrupted earlier run had set aside" >&2
 }
 
 trap restore_previous_sdk_on_failure EXIT
@@ -115,6 +221,9 @@ trap 'exit 1' INT TERM HUP
 [[ "$CMUX_REPO_URL" == https://* ]] || fail "SDK source must be fetched over HTTPS"
 [[ "$CMUX_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail "pinned commit must be a full 40-character SHA"
 command -v git >/dev/null 2>&1 || fail "git is required to verify the pinned SDK commit"
+
+adopt_previous_backup "$PREVIOUS_SDK" "$SDK_DIR"
+adopt_previous_backup "$PREVIOUS_PROVENANCE" "$PROVENANCE"
 
 # Trust the cached SDK only when its recorded commit matches the pin and the
 # tree still hashes to the recorded digest.
@@ -134,6 +243,7 @@ fi
 mkdir -p "$VENDOR_DIR"
 rm -rf -- "$STAGE_DIR" "$PREVIOUS_DIR"
 mkdir -p "$STAGE_DIR" "$PREVIOUS_DIR"
+PREVIOUS_DIR_OWNED=1
 
 CLONE_DIR="$STAGE_DIR/cmux"
 git init -q "$CLONE_DIR"
@@ -180,20 +290,37 @@ printf 'commit=%s\ndigest=%s\nsource=%s\nsubpath=%s\n' \
     || fail "could not stage the provenance record"
 [[ -s "$STAGED_PROVENANCE" ]] || fail "the staged provenance record is empty"
 
-# Publish transaction. Everything between here and PUBLISH_STATE=complete is
-# recoverable: on any failure the trap discards the replacement and restores
-# both the previous SDK and the previous provenance record byte for byte.
+# Publish transaction.
+#
+# Record the pre-transaction truth about the originals first: whether each one
+# exists and, when it does, its exact content. Both are captured before a
+# single byte moves, so recovery can never mistake an untouched original for a
+# displaced one, and rollback success can be proven rather than assumed.
+if [[ -d "$SDK_DIR" ]]; then
+    ORIGINAL_SDK_EXISTED=1
+    ORIGINAL_SDK_DIGEST="$(content_digest "$SDK_DIR")"
+    [[ -n "$ORIGINAL_SDK_DIGEST" ]] \
+        || fail "could not digest the previous SDK checkout before replacing it"
+fi
+if [[ -f "$PROVENANCE" ]]; then
+    ORIGINAL_PROVENANCE_EXISTED=1
+    ORIGINAL_PROVENANCE_DIGEST="$(file_digest "$PROVENANCE")"
+    [[ -n "$ORIGINAL_PROVENANCE_DIGEST" ]] \
+        || fail "could not digest the previous provenance record before replacing it"
+fi
+
+# Everything from here until PUBLISH_STATE=complete is recoverable: on any
+# failure or forced termination the trap reads the filesystem, discards the
+# replacement, and restores whatever was displaced byte for byte.
 PUBLISH_STATE=started
 
-if [[ -f "$PROVENANCE" ]]; then
+if (( ORIGINAL_PROVENANCE_EXISTED )); then
     mv "$PROVENANCE" "$PREVIOUS_PROVENANCE" \
         || fail "could not set the previous provenance record aside"
-    PREVIOUS_PROVENANCE_SAVED=1
 fi
-if [[ -d "$SDK_DIR" ]]; then
+if (( ORIGINAL_SDK_EXISTED )); then
     mv "$SDK_DIR" "$PREVIOUS_SDK" \
         || fail "could not set the previous SDK checkout aside"
-    PREVIOUS_SDK_SAVED=1
 fi
 
 mv "$STAGED_SDK" "$SDK_DIR" || fail "could not publish the staged SDK"
