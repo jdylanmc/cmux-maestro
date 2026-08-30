@@ -10,9 +10,10 @@ enum SidebarConnectionState: Equatable, Sendable {
 
 /// The only snapshot facts this bootstrap derives from CMUX.
 ///
-/// Keeping the counts in a plain value keeps the state logic free of the CMUX
-/// ExtensionKit context and its transport SPI, so the shipped logic stays
-/// directly testable.
+/// This is a plain core value, not the CMUX adapter. It carries no CMUX
+/// ExtensionKit types, so the reducer stays free of the CMUX context and its
+/// transport SPI. `SidebarConnectionSignal+Cmux.swift` is the adapter that
+/// folds a real `CmuxSidebarSnapshot` into these counts.
 struct SidebarSnapshotSummary: Equatable, Sendable {
     let workspaceCount: Int
     let surfaceCount: Int
@@ -23,7 +24,10 @@ struct SidebarSnapshotSummary: Equatable, Sendable {
     }
 }
 
-/// Value mirror of every CMUX event that can move the sidebar's state.
+/// Core value mirror of every CMUX event that can move the sidebar's state.
+///
+/// The mapping from real `CmuxSidebarConnectionStatus` cases onto these cases
+/// lives in the adapter, `SidebarConnectionSignal+Cmux.swift`.
 enum SidebarConnectionSignal: Equatable, Sendable {
     case snapshot(SidebarSnapshotSummary)
     case connected

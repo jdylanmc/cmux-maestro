@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A3685C2E2FCA3B3700009F1B /* CMUX Maestro Preview Extension.appex in Embed ExtensionKit Extensions */ = {isa = PBXBuildFile; fileRef = A3685C242FCA3B2500009F1B /* CMUX Maestro Preview Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		C0DE47000000000000000001 /* CmuxExtensionKit in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE47000000000000000002 /* CmuxExtensionKit */; };
+		C0DE47000000000000000005 /* CmuxExtensionKit in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE47000000000000000004 /* CmuxExtensionKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -56,6 +57,16 @@
 			);
 			target = A3685C232FCA3B2500009F1B /* CMUXMaestroSidebar */;
 		};
+		C0DE47000000000000000006 /* Exceptions for "CMUXMaestroSidebar" folder in "CMUXMaestroPreviewTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				CMUXMaestroSidebar.entitlements,
+				Extension/CMUXMaestroSidebarExtension.swift,
+				Info.plist,
+				UI/SidebarView.swift,
+			);
+			target = A3685BF52FCA3AF000009F1B /* CMUXMaestroPreviewTests */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -73,6 +84,7 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				A3685C292FCA3B2500009F1B /* Exceptions for "CMUXMaestroSidebar" folder in "CMUXMaestroSidebar" target */,
+				C0DE47000000000000000006 /* Exceptions for "CMUXMaestroSidebar" folder in "CMUXMaestroPreviewTests" target */,
 			);
 			path = CMUXMaestroSidebar;
 			sourceTree = "<group>";
@@ -96,6 +108,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0DE47000000000000000005 /* CmuxExtensionKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -181,10 +194,12 @@
 			);
 			fileSystemSynchronizedGroups = (
 				A3685BF92FCA3AF000009F1B /* CMUXMaestroPreviewTests */,
+				A3685C252FCA3B2500009F1B /* CMUXMaestroSidebar */,
 				A3685C412FCA3B4000009F1B /* CMUXMaestroSidebarCore */,
 			);
 			name = CMUXMaestroPreviewTests;
 			packageProductDependencies = (
+				C0DE47000000000000000004 /* CmuxExtensionKit */,
 			);
 			productName = CMUXMaestroPreviewTests;
 			productReference = A3685BF62FCA3AF000009F1B /* CMUXMaestroPreviewTests.xctest */;
@@ -667,6 +682,11 @@
 
 /* Begin XCSwiftPackageProductDependency section */
 		C0DE47000000000000000002 /* CmuxExtensionKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0DE47000000000000000003 /* XCLocalSwiftPackageReference "vendor/CmuxExtensionKit" */;
+			productName = CmuxExtensionKit;
+		};
+		C0DE47000000000000000004 /* CmuxExtensionKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C0DE47000000000000000003 /* XCLocalSwiftPackageReference "vendor/CmuxExtensionKit" */;
 			productName = CmuxExtensionKit;

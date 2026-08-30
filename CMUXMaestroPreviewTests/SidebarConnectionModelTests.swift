@@ -1,8 +1,12 @@
 import Testing
 
 /// Exercises the same `SidebarConnectionModel` and reducer the shipped sidebar
-/// uses. The CMUX context and its transport SPI are intentionally not
-/// constructed here; the extension entry point owns that adaptation.
+/// uses.
+///
+/// This suite covers only the SDK-free core: it starts from already-reduced
+/// core values and cannot observe how CMUX SDK values are folded or mapped.
+/// `SidebarCmuxAdapterTests` covers that production adapter against real CMUX
+/// ExtensionKit value types.
 @MainActor
 struct SidebarConnectionModelTests {
     @Test
