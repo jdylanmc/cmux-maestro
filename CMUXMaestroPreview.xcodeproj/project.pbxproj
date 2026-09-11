@@ -9,6 +9,9 @@
 /* Begin PBXBuildFile section */
 		A3685C2E2FCA3B3700009F1B /* CMUX Maestro Preview Extension.appex in Embed ExtensionKit Extensions */ = {isa = PBXBuildFile; fileRef = A3685C242FCA3B2500009F1B /* CMUX Maestro Preview Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		C0DE47000000000000000001 /* CmuxExtensionKit in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE47000000000000000002 /* CmuxExtensionKit */; };
+		D10500000000000000000001 /* HierarchySnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10500000000000000000004 /* HierarchySnapshot.swift */; };
+		D10500000000000000000002 /* SidebarConnectionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10500000000000000000005 /* SidebarConnectionModel.swift */; };
+		D10500000000000000000003 /* CmuxExtensionKit in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE47000000000000000002 /* CmuxExtensionKit */; };
 		D10400000000000000000001 /* SidebarPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10400000000000000000003 /* SidebarPreferences.swift */; };
 		D10400000000000000000002 /* SidebarConnectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10400000000000000000004 /* SidebarConnectionState.swift */; };
 /* End PBXBuildFile section */
@@ -50,6 +53,8 @@
 		A3685C242FCA3B2500009F1B /* CMUX Maestro Preview Extension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.extensionkit-extension"; includeInIndex = 0; path = "CMUX Maestro Preview Extension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		D10400000000000000000003 /* SidebarPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarPreferences.swift; sourceTree = SOURCE_ROOT; };
 		D10400000000000000000004 /* SidebarConnectionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Connection/SidebarConnectionState.swift; sourceTree = SOURCE_ROOT; };
+		D10500000000000000000004 /* HierarchySnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Hierarchy/HierarchySnapshot.swift; sourceTree = SOURCE_ROOT; };
+		D10500000000000000000005 /* SidebarConnectionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Connection/SidebarConnectionModel.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -95,6 +100,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D10500000000000000000003 /* CmuxExtensionKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -143,6 +149,8 @@
 			children = (
 				D10400000000000000000003 /* SidebarPreferences.swift */,
 				D10400000000000000000004 /* SidebarConnectionState.swift */,
+				D10500000000000000000004 /* HierarchySnapshot.swift */,
+				D10500000000000000000005 /* SidebarConnectionModel.swift */,
 			);
 			name = "Shared Sidebar Test Sources";
 			sourceTree = "<group>";
@@ -192,6 +200,7 @@
 			);
 			name = CMUXMaestroPreviewTests;
 			packageProductDependencies = (
+				C0DE47000000000000000002 /* CmuxExtensionKit */,
 			);
 			productName = CMUXMaestroPreviewTests;
 			productReference = A3685BF62FCA3AF000009F1B /* CMUXMaestroPreviewTests.xctest */;
@@ -304,6 +313,8 @@
 			files = (
 				D10400000000000000000001 /* SidebarPreferences.swift in Sources */,
 				D10400000000000000000002 /* SidebarConnectionState.swift in Sources */,
+				D10500000000000000000001 /* HierarchySnapshot.swift in Sources */,
+				D10500000000000000000002 /* SidebarConnectionModel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

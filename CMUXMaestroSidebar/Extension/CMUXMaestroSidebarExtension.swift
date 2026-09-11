@@ -10,6 +10,7 @@ final class CMUXMaestroSidebarExtension: @MainActor CmuxSidebarExtension {
             .workspaceList,
             .workspaceMetadata,
             .surfaceMetadata,
+            .workspacePaths,
         ],
         actionScopes: []
     )

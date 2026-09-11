@@ -10,6 +10,7 @@ enum SidebarConnectionState: Equatable {
 @MainActor
 final class SidebarConnectionModel {
     private(set) var state: SidebarConnectionState = .waiting
+    private(set) var hierarchy: HierarchySnapshot = .empty
 
     func showWaiting() {
         state = .waiting
@@ -24,5 +25,9 @@ final class SidebarConnectionModel {
 
     func showDegraded(message: String) {
         state = .degraded(message: message)
+    }
+
+    func replaceHierarchy(with snapshot: HierarchySnapshot) {
+        hierarchy = snapshot
     }
 }
