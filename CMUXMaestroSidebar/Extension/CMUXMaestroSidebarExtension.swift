@@ -15,11 +15,12 @@ final class CMUXMaestroSidebarExtension: @MainActor CmuxSidebarExtension {
     )
 
     private let model = SidebarConnectionModel()
+    private let preferences = SidebarPreferences()
 
     required init() {}
 
     var body: some View {
-        SidebarView(model: model)
+        SidebarView(model: model, preferences: preferences)
     }
 
     func update(context: CmuxSidebarContext) {

@@ -1,20 +1,9 @@
 import CmuxExtensionKit
-import Observation
 
-enum SidebarConnectionState: Equatable {
-    case waiting
-    case connected(workspaceCount: Int, surfaceCount: Int)
-    case degraded(message: String)
-}
-
-@Observable
-@MainActor
-final class SidebarConnectionModel {
-    private(set) var state: SidebarConnectionState = .waiting
-
+extension SidebarConnectionModel {
     func update(context: CmuxSidebarContext) {
         let workspaces = context.snapshot.workspaces
-        state = .connected(
+        showConnected(
             workspaceCount: workspaces.count,
             surfaceCount: workspaces.reduce(0) { $0 + $1.surfaces.count }
         )
@@ -24,12 +13,12 @@ final class SidebarConnectionModel {
         switch status {
         case .connected:
             if case .degraded = state {
-                state = .waiting
+                showWaiting()
             }
         case .waitingForHost:
-            state = .waiting
+            showWaiting()
         case .error(let message):
-            state = .degraded(message: message)
+            showDegraded(message: message)
         }
     }
 }
