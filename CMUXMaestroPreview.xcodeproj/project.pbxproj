@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		A3685C2E2FCA3B3700009F1B /* CMUX Maestro Preview Extension.appex in Embed ExtensionKit Extensions */ = {isa = PBXBuildFile; fileRef = A3685C242FCA3B2500009F1B /* CMUX Maestro Preview Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		C0DE47000000000000000001 /* CmuxExtensionKit in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE47000000000000000002 /* CmuxExtensionKit */; };
+		D10400000000000000000001 /* SidebarPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10400000000000000000003 /* SidebarPreferences.swift */; };
+		D10400000000000000000002 /* SidebarConnectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10400000000000000000004 /* SidebarConnectionState.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -46,6 +48,8 @@
 		A3685BE92FCA3AEE00009F1B /* CMUXMaestroPreview.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = CMUXMaestroPreview.app; path = "CMUX Maestro Preview.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A3685BF62FCA3AF000009F1B /* CMUXMaestroPreviewTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CMUXMaestroPreviewTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A3685C242FCA3B2500009F1B /* CMUX Maestro Preview Extension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.extensionkit-extension"; includeInIndex = 0; path = "CMUX Maestro Preview Extension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		D10400000000000000000003 /* SidebarPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarPreferences.swift; sourceTree = SOURCE_ROOT; };
+		D10400000000000000000004 /* SidebarConnectionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Connection/SidebarConnectionState.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -111,6 +115,7 @@
 				A3685BEB2FCA3AEE00009F1B /* CMUXMaestroPreview */,
 				A3685BF92FCA3AF000009F1B /* CMUXMaestroPreviewTests */,
 				A3685C252FCA3B2500009F1B /* CMUXMaestroSidebar */,
+				D10400000000000000000005 /* Shared Sidebar Test Sources */,
 				A3685C2D2FCA3B3700009F1B /* Frameworks */,
 				A3685BEA2FCA3AEE00009F1B /* Products */,
 			);
@@ -131,6 +136,15 @@
 			children = (
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		D10400000000000000000005 /* Shared Sidebar Test Sources */ = {
+			isa = PBXGroup;
+			children = (
+				D10400000000000000000003 /* SidebarPreferences.swift */,
+				D10400000000000000000004 /* SidebarConnectionState.swift */,
+			);
+			name = "Shared Sidebar Test Sources";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -288,6 +302,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D10400000000000000000001 /* SidebarPreferences.swift in Sources */,
+				D10400000000000000000002 /* SidebarConnectionState.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
