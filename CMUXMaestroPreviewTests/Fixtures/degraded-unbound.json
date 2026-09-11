@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-10T18:00:00Z",
+  "workspaces": [
+    {
+      "id": "workspace-degraded",
+      "title": {
+        "availability": "degraded",
+        "value": "Partial workspace",
+        "detail": "Workspace metadata is stale"
+      },
+      "surfaces": [
+        {
+          "id": "surface-last-known",
+          "workspaceID": "workspace-degraded",
+          "title": {
+            "availability": "degraded",
+            "value": "Last known terminal",
+            "detail": "Surface metadata is stale"
+          },
+          "kind": "terminal"
+        }
+      ]
+    }
+  ],
+  "sessions": [
+    {
+      "identity": { "providerID": "limited-provider", "sessionID": "unbound-1" },
+      "binding": {
+        "kind": "degraded",
+        "lastKnownBinding": {
+          "workspaceID": "workspace-degraded",
+          "surfaceID": "surface-last-known"
+        },
+        "detail": "Current binding could not be observed"
+      },
+      "title": { "availability": "unknown", "detail": "Provider omitted the title" },
+      "state": {
+        "availability": "degraded",
+        "value": "working",
+        "detail": "Current state observation is unavailable"
+      },
+      "activity": {
+        "availability": "degraded",
+        "value": {
+          "kind": "unknown",
+          "summary": "Last known activity",
+          "lastEventAt": "2026-09-10T17:30:00Z"
+        },
+        "detail": "Activity stream disconnected"
+      },
+      "model": { "availability": "unknown" },
+      "paths": {
+        "availability": "degraded",
+        "value": {
+          "currentDirectory": { "availability": "unknown" },
+          "worktree": {
+            "availability": "degraded",
+            "value": {
+              "path": { "value": "/projects/last-known-worktree" },
+              "branch": {
+                "availability": "degraded",
+                "value": "feature/last-known",
+                "detail": "Branch may have changed"
+              }
+            },
+            "detail": "Worktree metadata is stale"
+          }
+        },
+        "detail": "Only last-known path data is available"
+      },
+      "timing": {
+        "availability": "degraded",
+        "value": {
+          "startedAt": "2026-09-10T16:00:00Z",
+          "updatedAt": "2026-09-10T17:30:00Z"
+        },
+        "detail": "Updates stopped unexpectedly"
+      },
+      "childWork": [
+        {
+          "id": "unknown-child",
+          "parent": {
+            "kind": "session",
+            "providerSession": {
+              "providerID": "limited-provider",
+              "sessionID": "unbound-1"
+            }
+          },
+          "title": { "availability": "known", "value": "Unknown child state" },
+          "state": {
+            "availability": "unknown",
+            "detail": "Provider omitted the child state"
+          },
+          "activity": { "availability": "known", "value": { "kind": "executing" } },
+          "children": []
+        },
+        {
+          "id": "degraded-child",
+          "parent": {
+            "kind": "session",
+            "providerSession": {
+              "providerID": "limited-provider",
+              "sessionID": "unbound-1"
+            }
+          },
+          "title": { "availability": "known", "value": "Degraded child state" },
+          "state": {
+            "availability": "degraded",
+            "value": "done",
+            "detail": "Current child state observation is unavailable"
+          },
+          "activity": { "availability": "known", "value": { "kind": "executing" } },
+          "children": []
+        }
+      ]
+    }
+  ]
+}
