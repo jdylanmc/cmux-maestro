@@ -43,3 +43,17 @@ Use the checked-in scripts, which select full Xcode explicitly:
 Before committing, confirm `git status --short` contains no fetched SDK or build
 products. Configure repository-local Git author identity as Dylan McCurry
 `<j.dylan.mccurry@gmail.com>`. Do not add a co-author trailer.
+
+## Project skills
+
+Project-local agent skill dependencies are pinned in `skills-lock.json`. Restore
+them with:
+
+```sh
+npx skills experimental_install
+```
+
+The restored third-party copies under `.agents/skills/` are generated and
+ignored. The repository-owned `.agents/skills/macos-build/SKILL.md` is the
+exception: it adapts build guidance to the checked-in validation scripts and is
+reviewed with the rest of the project.

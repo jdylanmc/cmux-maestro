@@ -1,4 +1,7 @@
 .DS_Store
+.agents/skills/*
+!.agents/skills/macos-build/
+!.agents/skills/macos-build/SKILL.md
 .build/
 .skill-log/
 DerivedData/

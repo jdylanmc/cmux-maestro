@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "skills": {
+    "macos-auto-update": {
+      "source": "fayazara/macos-app-skills",
+      "sourceType": "github",
+      "skillPath": "auto-update/SKILL.md",
+      "computedHash": "704f045635049dcb82380210ec0d337ebce28f41ee9ba28d6211ae3c1c46b190"
+    },
+    "macos-patterns": {
+      "source": "fayazara/macos-app-skills",
+      "sourceType": "github",
+      "skillPath": "macos-patterns/SKILL.md",
+      "computedHash": "ae976dcae49d6a40b131b75104ad58491d9cc076a68c6175f6daba60a266acaf"
+    },
+    "macos-release": {
+      "source": "fayazara/macos-app-skills",
+      "sourceType": "github",
+      "skillPath": "release/SKILL.md",
+      "computedHash": "b313d525a5b732d02b889ec3772594d5edbc327ddb7471827df3d9abf7e5a0f9"
+    },
+    "macos-settings-ui": {
+      "source": "fayazara/macos-app-skills",
+      "sourceType": "github",
+      "skillPath": "settings-ui/SKILL.md",
+      "computedHash": "31d1a4f1d86375291fded0015e93f48e725d24ce72573028eb72902d70aad250"
+    },
+    "swiftui-expert-skill": {
+      "source": "avdlee/swiftui-agent-skill",
+      "sourceType": "github",
+      "skillPath": "skills/swiftui-expert-skill/SKILL.md",
+      "computedHash": "352119e45436aa70d5a0d29e275dc55769ab509c2098505b391c2e1347c1118a"
+    }
+  }
+}
