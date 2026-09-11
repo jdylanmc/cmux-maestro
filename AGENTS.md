@@ -57,3 +57,22 @@ The restored third-party copies under `.agents/skills/` are generated and
 ignored. The repository-owned `.agents/skills/macos-build/SKILL.md` is the
 exception: it adapts build guidance to the checked-in validation scripts and is
 reviewed with the rest of the project.
+
+These skills are available as contextual guidance. Agents should use them when
+they materially improve the work, while retaining judgment for simple or
+unrelated tasks:
+
+| Skill | Useful context |
+| --- | --- |
+| `swiftui-expert-skill` | Writing, reviewing, or refactoring SwiftUI code, state flow, view composition, accessibility, animation, or performance. |
+| `macos-patterns` | Using native macOS APIs or reasoning about windows, focus, activation, menus, shortcuts, file access, clipboard, drag and drop, or other platform behavior. |
+| `macos-settings-ui` | Adding or changing settings and preferences UI. |
+| `macos-auto-update` | Adding or changing automatic updates, Sparkle, appcasts, or update signing, but only when an issue explicitly authorizes that scope. |
+| `macos-release` | Packaging, signing, notarizing, publishing, or updating an appcast, but only when an issue explicitly authorizes release scope. |
+| `macos-build` | Building, testing, registering, or validating the app or extension. |
+
+When delegating implementation or review, keep the worker's current directory
+inside this repository so it can discover project-local skills. Task packets
+may mention relevant skills as available context without requiring their use.
+Confirm skill discovery with `/skills` or `/env` after restoring dependencies
+or starting a fresh Copilot session.
