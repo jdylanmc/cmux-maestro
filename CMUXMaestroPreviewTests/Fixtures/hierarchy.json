@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-10T18:00:00Z",
+  "workspaces": [
+    {
+      "id": "workspace-primary",
+      "title": { "availability": "known", "value": "Snapshot contract" },
+      "surfaces": [
+        {
+          "id": "surface-terminal",
+          "workspaceID": "workspace-primary",
+          "title": { "availability": "known", "value": "Implementation" },
+          "kind": "terminal"
+        }
+      ]
+    }
+  ],
+  "sessions": [
+    {
+      "identity": { "providerID": "synthetic-provider", "sessionID": "session-100" },
+      "binding": {
+        "kind": "bound",
+        "binding": { "workspaceID": "workspace-primary", "surfaceID": "surface-terminal" }
+      },
+      "title": { "availability": "known", "value": "Implement snapshot contract" },
+      "state": { "availability": "known", "value": "working" },
+      "activity": {
+        "availability": "known",
+        "value": {
+          "kind": "executing",
+          "summary": "Writing domain models",
+          "lastEventAt": "2026-09-10T17:58:00Z"
+        }
+      },
+      "model": {
+        "availability": "known",
+        "value": { "identifier": "general-reasoning-model", "displayName": "General Reasoning" }
+      },
+      "paths": {
+        "availability": "known",
+        "value": {
+          "currentDirectory": {
+            "availability": "known",
+            "value": { "value": "/projects/example" }
+          },
+          "worktree": {
+            "availability": "known",
+            "value": {
+              "path": { "value": "/projects/example-worktree" },
+              "branch": { "availability": "known", "value": "feature/snapshot-contract" }
+            }
+          }
+        }
+      },
+      "timing": {
+        "availability": "known",
+        "value": {
+          "startedAt": "2026-09-10T17:00:00Z",
+          "updatedAt": "2026-09-10T17:58:00Z"
+        }
+      },
+      "childWork": [
+        {
+          "id": "task-1",
+          "parent": {
+            "kind": "session",
+            "providerSession": {
+              "providerID": "synthetic-provider",
+              "sessionID": "session-100"
+            }
+          },
+          "title": { "availability": "known", "value": "Define models" },
+          "state": { "availability": "known", "value": "working" },
+          "activity": { "availability": "known", "value": { "kind": "executing" } },
+          "children": [
+            {
+              "id": "child-validation",
+              "parent": {
+                "kind": "child",
+                "childWorkID": "task-1"
+              },
+              "title": { "availability": "known", "value": "Add validation" },
+              "state": { "availability": "known", "value": "queued" },
+              "activity": { "availability": "known", "value": { "kind": "waiting" } },
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "identity": { "providerID": "synthetic-provider", "sessionID": "session-101" },
+      "binding": {
+        "kind": "bound",
+        "binding": { "workspaceID": "workspace-primary", "surfaceID": "surface-terminal" }
+      },
+      "title": { "availability": "known", "value": "Implement snapshot contract" },
+      "state": { "availability": "known", "value": "queued" },
+      "activity": { "availability": "known", "value": { "kind": "waiting" } },
+      "model": { "availability": "unknown", "detail": "Not reported by this provider" },
+      "paths": {
+        "availability": "known",
+        "value": {
+          "currentDirectory": {
+            "availability": "known",
+            "value": { "value": "/projects/example" }
+          },
+          "worktree": { "availability": "unknown" }
+        }
+      },
+      "timing": {
+        "availability": "known",
+        "value": {
+          "startedAt": "2026-09-10T17:30:00Z",
+          "updatedAt": "2026-09-10T17:40:00Z"
+        }
+      },
+      "childWork": [
+        {
+          "id": "task-1",
+          "parent": {
+            "kind": "session",
+            "providerSession": {
+              "providerID": "synthetic-provider",
+              "sessionID": "session-101"
+            }
+          },
+          "title": { "availability": "known", "value": "Queue independent task" },
+          "state": { "availability": "known", "value": "queued" },
+          "activity": { "availability": "known", "value": { "kind": "waiting" } },
+          "children": []
+        }
+      ]
+    }
+  ]
+}

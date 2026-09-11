@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-10T18:00:00Z",
+  "workspaces": [],
+  "sessions": [
+    {
+      "identity": { "providerID": "fixture-provider", "sessionID": "blocked-1" },
+      "binding": {
+        "kind": "unknown",
+        "detail": "Provider does not report binding state"
+      },
+      "title": { "availability": "known", "value": "Blocked task" },
+      "state": { "availability": "known", "value": "blocked" },
+      "activity": {
+        "availability": "known",
+        "value": { "kind": "waiting", "summary": "Waiting for input" }
+      },
+      "model": { "availability": "known", "value": { "identifier": "model-a" } },
+      "paths": { "availability": "unknown" },
+      "timing": {
+        "availability": "known",
+        "value": {
+          "startedAt": "2026-09-10T16:00:00Z",
+          "updatedAt": "2026-09-10T17:00:00Z"
+        }
+      },
+      "childWork": []
+    },
+    {
+      "identity": { "providerID": "fixture-provider", "sessionID": "working-1" },
+      "binding": { "kind": "unbound" },
+      "title": { "availability": "known", "value": "Working task" },
+      "state": { "availability": "known", "value": "working" },
+      "activity": { "availability": "known", "value": { "kind": "executing" } },
+      "model": { "availability": "known", "value": { "identifier": "model-b" } },
+      "paths": { "availability": "unknown" },
+      "timing": {
+        "availability": "known",
+        "value": {
+          "startedAt": "2026-09-10T16:30:00Z",
+          "updatedAt": "2026-09-10T17:45:00Z"
+        }
+      },
+      "childWork": []
+    },
+    {
+      "identity": { "providerID": "fixture-provider", "sessionID": "done-1" },
+      "binding": { "kind": "unbound" },
+      "title": { "availability": "known", "value": "Done task" },
+      "state": { "availability": "known", "value": "done" },
+      "activity": { "availability": "known", "value": { "kind": "idle" } },
+      "model": { "availability": "known", "value": { "identifier": "model-c" } },
+      "paths": { "availability": "unknown" },
+      "timing": {
+        "availability": "known",
+        "value": {
+          "startedAt": "2026-09-10T15:00:00Z",
+          "updatedAt": "2026-09-10T15:45:00Z",
+          "completedAt": "2026-09-10T15:45:00Z"
+        }
+      },
+      "childWork": []
+    }
+  ]
+}
