@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @MainActor
+@Suite(.serialized)
 struct SidebarPreferencesTests {
     @Test
     func exposesExactlyTheTwoSidebarChoices() {
@@ -9,16 +10,16 @@ struct SidebarPreferencesTests {
     }
 
     @Test
-    func defaultsToHierarchy() {
-        withIsolatedDefaults { defaults in
-            #expect(SidebarPreferences(defaults: defaults).selectedMode == .hierarchy)
+    func defaultsToHierarchy() throws {
+        try withIsolatedDefaults { defaults, file, attentionFile, layoutStore in
+            #expect(SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore).selectedMode == .hierarchy)
         }
     }
 
     @Test
-    func switchesImmediatelyWithoutChangingAnyConnectionState() {
-        withIsolatedDefaults { defaults in
-            let preferences = SidebarPreferences(defaults: defaults)
+    func switchesImmediatelyWithoutChangingAnyConnectionState() throws {
+        try withIsolatedDefaults { defaults, file, attentionFile, layoutStore in
+            let preferences = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore)
             let connection = SidebarConnectionModel()
             let states: [SidebarConnectionState] = [
                 .waiting,
@@ -37,32 +38,30 @@ struct SidebarPreferencesTests {
     }
 
     @Test
-    func persistsThroughReconstruction() {
-        withIsolatedDefaults { defaults in
-            let original = SidebarPreferences(defaults: defaults)
+    func persistsThroughReconstruction() throws {
+        try withIsolatedDefaults { defaults, file, attentionFile, layoutStore in
+            let original = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore)
             original.selectedMode = .taskboard
 
-            let reconstructed = SidebarPreferences(defaults: defaults)
+            let reconstructed = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore)
 
             #expect(reconstructed.selectedMode == .taskboard)
         }
     }
 
     @Test
-    func invalidPersistedValueFallsBackToHierarchy() {
-        withIsolatedDefaults { defaults in
+    func invalidPersistedValueFallsBackToHierarchy() throws {
+        try withIsolatedDefaults { defaults, file, attentionFile, layoutStore in
             defaults.set("unknown-mode", forKey: "sidebar.selectedMode")
 
-            #expect(SidebarPreferences(defaults: defaults).selectedMode == .hierarchy)
+            #expect(SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore).selectedMode == .hierarchy)
         }
     }
 
-    private func withIsolatedDefaults(_ body: (UserDefaults) -> Void) {
-        let suiteName = "SidebarPreferencesTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        body(defaults)
+    private func withIsolatedDefaults(_ body: (UserDefaults, URL, URL, SidebarLayoutStore) -> Void) throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        body(fixture.defaults, fixture.historyFile, fixture.attentionFile, .init(file: .init(url: fixture.layoutFile)))
     }
 
     private func set(_ state: SidebarConnectionState, on connection: SidebarConnectionModel) {
