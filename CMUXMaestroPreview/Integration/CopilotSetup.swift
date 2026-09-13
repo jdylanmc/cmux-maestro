@@ -113,6 +113,7 @@ nonisolated protocol CopilotSetupProcessRunner: Sendable {
 nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
     var timeout: TimeInterval = 45
     var terminationGrace: TimeInterval = 0.25
+    var deadlineNow: @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
 
     func run(executable: URL, arguments: [String], path: String) async -> CopilotProcessResult {
         guard !Task.isCancelled else { return .cancelled }
@@ -133,7 +134,7 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         guard timeout.isFinite, timeout > 0, terminationGrace.isFinite, terminationGrace >= 0,
               let pid = Self.spawn(executable: executable, arguments: arguments, environment: environment)
         else { return .unavailable }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
+        let deadline = deadlineNow().advanced(by: .seconds(timeout))
         var outcome: CopilotProcessResult
         while true {
             if Task.isCancelled {
@@ -151,7 +152,7 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
                 return .unavailable
             default: break
             }
-            if ContinuousClock.now >= deadline {
+            if deadlineNow() >= deadline {
                 outcome = .timedOut
                 break
             }

@@ -22,6 +22,45 @@ private struct SetupFileStub: CopilotSetupFileSystem {
     func preparePlugin(root: URL, helper: URL) throws -> URL { root.appendingPathComponent("plugin") }
 }
 
+private final class SetupDeadlineClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private let origin: ContinuousClock.Instant
+    private var instant: ContinuousClock.Instant
+    private var sampled = false
+
+    init() {
+        let initial = ContinuousClock.now
+        origin = initial
+        instant = initial
+    }
+
+    func now() -> ContinuousClock.Instant {
+        lock.lock()
+        defer { lock.unlock() }
+        sampled = true
+        return instant
+    }
+
+    var wasSampled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return sampled
+    }
+
+    var elapsed: Duration {
+        lock.lock()
+        defer { lock.unlock() }
+        return origin.duration(to: instant)
+    }
+
+    func advance(by duration: Duration) {
+        precondition(duration >= .zero)
+        lock.lock()
+        defer { lock.unlock() }
+        instant = instant.advanced(by: duration)
+    }
+}
+
 struct CopilotSetupTests {
     private let root = URL(fileURLWithPath: "/synthetic/integration")
     private let helper = URL(fileURLWithPath: "/Applications/Maestro's App.app/Contents/Helpers/CMUXMaestroCopilotHook")
@@ -69,6 +108,14 @@ struct CopilotSetupTests {
 
     @Test(arguments: [false, true])
     func timeoutAndCancellationStopLauncherAndChildWithoutLateWrites(cancel: Bool) async throws {
+        try await exerciseCleanup(cancel: cancel)
+    }
+
+    @Test func delayedStartupDoesNotExpireBeforeDeadlineIsArmed() async throws {
+        try await exerciseCleanup(cancel: false, delayStartup: true)
+    }
+
+    private func exerciseCleanup(cancel: Bool, delayStartup: Bool = false) async throws {
         let fixture = try gatedInstallerFixture()
         let directory = fixture.directory
         defer {
@@ -90,14 +137,16 @@ struct CopilotSetupTests {
             if unrelated.isRunning { unrelated.terminate() }
             unrelated.waitUntilExit()
         }
-        let runner = LocalCopilotSetupRunner(timeout: cancel ? 5 : 0.4, terminationGrace: 0.05)
-        let arguments = gatedInstallerArguments(in: directory)
+        let clock = SetupDeadlineClock()
+        let runner = LocalCopilotSetupRunner(timeout: 0.4, terminationGrace: 0.05,
+                                             deadlineNow: { clock.now() })
+        let arguments = gatedInstallerArguments(in: directory) + (delayStartup ? ["--delay-startup"] : [])
         let task = Task {
             await runner.run(executable: URL(fileURLWithPath: "/usr/bin/env"),
                              arguments: arguments, path: "/usr/bin:/bin")
         }
         defer { task.cancel() }
-        let ready = try await waitForGatedWriter(in: directory)
+        let ready = try await waitForGatedWriter(in: directory, deadlineClock: clock)
         var readinessFailure = "Synthetic child must execute before the timeout/cancellation assertion"
         if !ready {
             task.cancel()
@@ -106,17 +155,29 @@ struct CopilotSetupTests {
             readinessFailure += "; result=\(stopped); files=\(files.sorted().joined(separator: ","))"
         }
         try #require(ready, Comment(rawValue: readinessFailure))
-        // Startup records survive a scheduling delay that resumes this test
-        // after the timeout; querying live PGIDs at that point would race cleanup.
         let launcherPID = try recordedProcessValue("launcher.pid", in: directory)
         let childPID = try recordedProcessValue("child.pid", in: directory)
         #expect(try recordedProcessValue("launcher.pgid", in: directory) == launcherPID)
         #expect(try recordedProcessValue("child.pgid", in: directory) == launcherPID)
         #expect(launcherPID != getpgrp())
+        try #require(HookProcess.current(launcherPID) != nil)
+        try #require(HookProcess.current(childPID) != nil)
+        #expect(clock.elapsed == .zero)
+        if delayStartup {
+            let delay = try #require(Double(String(
+                contentsOf: directory.appendingPathComponent("startup-delay"), encoding: .utf8
+            )))
+            #expect(delay > runner.timeout)
+        }
         try fixture.reader.close()
-        if cancel { task.cancel() }
+        if cancel {
+            task.cancel()
+        } else {
+            clock.advance(by: .seconds(runner.timeout))
+        }
         let result = await task.value
         #expect(result == (cancel ? .cancelled : .timedOut))
+        #expect(clock.elapsed == (cancel ? .zero : .seconds(runner.timeout)))
         #expect(unrelated.isRunning)
         #expect(HookProcess.current(launcherPID) == nil)
         #expect(HookProcess.current(childPID) == nil)
@@ -184,6 +245,7 @@ struct CopilotSetupTests {
             import os
             import signal
             import sys
+            import time
 
             root = sys.argv[1]
 
@@ -202,6 +264,11 @@ struct CopilotSetupTests {
                         sys.exit(3)
                     record("late-mutation", "forbidden")
                     completion.write("mutated")
+
+            if "--delay-startup" in sys.argv:
+                started = time.monotonic()
+                time.sleep(0.6)
+                record("startup-delay", time.monotonic() - started)
 
             if "--writer-only" in sys.argv:
                 write_after_gate()
@@ -241,13 +308,20 @@ struct CopilotSetupTests {
         }
     }
 
-    private func waitForGatedWriter(in directory: URL) async throws -> Bool {
+    private func waitForGatedWriter(
+        in directory: URL, deadlineClock: SetupDeadlineClock? = nil
+    ) async throws -> Bool {
+        // Observe the runner's baseline sample before advancing test time, even
+        // if the child happens to become ready before the spawning thread resumes.
+        func ready() -> Bool {
+            FileManager.default.fileExists(atPath: directory.appendingPathComponent("ready").path)
+                && (deadlineClock?.wasSampled ?? true)
+        }
         let readiness = ContinuousClock.now.advanced(by: .seconds(3))
-        while !FileManager.default.fileExists(atPath: directory.appendingPathComponent("ready").path),
-              ContinuousClock.now < readiness {
+        while !ready(), ContinuousClock.now < readiness {
             try await Task.sleep(for: .milliseconds(10))
         }
-        return FileManager.default.fileExists(atPath: directory.appendingPathComponent("ready").path)
+        return ready()
     }
 
     private func gatedInstallerArguments(in directory: URL) -> [String] {
