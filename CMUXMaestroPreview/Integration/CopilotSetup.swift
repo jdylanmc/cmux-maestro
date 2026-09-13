@@ -1,4 +1,5 @@
 import Darwin
+import Dispatch
 import Foundation
 
 nonisolated enum CopilotSetupAction: Equatable, Sendable {
@@ -110,34 +111,72 @@ nonisolated protocol CopilotSetupProcessRunner: Sendable {
     func run(executable: URL, arguments: [String], path: String) async -> CopilotProcessResult
 }
 
+private nonisolated final class CopilotSetupCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requested = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return requested
+    }
+
+    func cancel() {
+        lock.lock()
+        defer { lock.unlock() }
+        requested = true
+    }
+}
+
 nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
     var timeout: TimeInterval = 45
     var terminationGrace: TimeInterval = 0.25
     var deadlineNow: @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
 
+    // POSIX waits must not occupy Swift's cooperative executor. Concurrent
+    // dispatch workers also let independent invocations make progress together.
+    private static let processQueue = DispatchQueue(
+        label: "com.jdylanmc.CMUXMaestroPreview.copilot-setup",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
+
     func run(executable: URL, arguments: [String], path: String) async -> CopilotProcessResult {
         guard !Task.isCancelled else { return .cancelled }
-        let worker = Task.detached(priority: .userInitiated) {
-            var environment = ProcessInfo.processInfo.environment
-            environment["PATH"] = executable.deletingLastPathComponent().path + ":" + path
-            return execute(executable: executable, arguments: arguments, environment: environment)
-        }
+        let cancellation = CopilotSetupCancellation()
         return await withTaskCancellationHandler {
-            await worker.value
+            await withCheckedContinuation { continuation in
+                Self.processQueue.async {
+                    let result: CopilotProcessResult
+                    if cancellation.isCancelled {
+                        result = .cancelled
+                    } else {
+                        var environment = ProcessInfo.processInfo.environment
+                        environment["PATH"] = executable.deletingLastPathComponent().path + ":" + path
+                        result = execute(executable: executable, arguments: arguments,
+                                         environment: environment, cancellation: cancellation)
+                    }
+                    continuation.resume(returning: result)
+                }
+            }
         } onCancel: {
-            worker.cancel()
+            cancellation.cancel()
         }
     }
 
-    private func execute(executable: URL, arguments: [String], environment: [String: String]) -> CopilotProcessResult {
-        guard !Task.isCancelled else { return .cancelled }
-        guard timeout.isFinite, timeout > 0, terminationGrace.isFinite, terminationGrace >= 0,
-              let pid = Self.spawn(executable: executable, arguments: arguments, environment: environment)
+    private func execute(executable: URL, arguments: [String], environment: [String: String],
+                         cancellation: CopilotSetupCancellation) -> CopilotProcessResult {
+        guard !cancellation.isCancelled else { return .cancelled }
+        guard timeout.isFinite, timeout > 0, terminationGrace.isFinite, terminationGrace >= 0
         else { return .unavailable }
+        guard let pid = Self.spawn(executable: executable, arguments: arguments,
+                                   environment: environment, cancellation: cancellation) else {
+            return cancellation.isCancelled ? .cancelled : .unavailable
+        }
         let deadline = deadlineNow().advanced(by: .seconds(timeout))
         var outcome: CopilotProcessResult
         while true {
-            if Task.isCancelled {
+            if cancellation.isCancelled {
                 outcome = .cancelled
                 break
             }
@@ -159,12 +198,13 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
             Thread.sleep(forTimeInterval: 0.01)
         }
         // Cancellation cannot bypass cleanup: this synchronous wait stays on
-        // the detached worker until no member can perform further writes.
+        // the dispatch worker until no member can perform further writes.
         return Self.stopGroup(pid, grace: terminationGrace) ? outcome : .unavailable
     }
 
     private static func spawn(executable: URL, arguments: [String],
-                              environment: [String: String]) -> Int32? {
+                              environment: [String: String],
+                              cancellation: CopilotSetupCancellation) -> Int32? {
         // Automatic child reaping would invalidate the retained PID/group anchor.
         var disposition = sigaction()
         guard sigaction(SIGCHLD, nil, &disposition) == 0,
@@ -203,8 +243,9 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         var pid: pid_t = 0
         let result = (argv + [nil]).withUnsafeBufferPointer { arguments in
             (envp + [nil]).withUnsafeBufferPointer { environment in
-                posix_spawn(&pid, executable.path, &actions, &attributes,
-                            arguments.baseAddress, environment.baseAddress)
+                guard !cancellation.isCancelled else { return ECANCELED }
+                return posix_spawn(&pid, executable.path, &actions, &attributes,
+                                   arguments.baseAddress, environment.baseAddress)
             }
         }
         return result == 0 ? pid : nil

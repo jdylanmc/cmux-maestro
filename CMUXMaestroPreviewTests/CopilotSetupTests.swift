@@ -115,6 +115,98 @@ struct CopilotSetupTests {
         try await exerciseCleanup(cancel: false, delayStartup: true)
     }
 
+    @Test func supervisionDefaultsKeepTheRealMonotonicClock() {
+        let before = ContinuousClock.now
+        let runner = LocalCopilotSetupRunner()
+        let sample = runner.deadlineNow()
+        #expect(runner.timeout == 45)
+        #expect(runner.terminationGrace == 0.25)
+        #expect(sample >= before && sample <= ContinuousClock.now)
+    }
+
+    @Test func cancellationBeforeEntryDoesNotSpawnInstaller() async throws {
+        let fixture = try gatedInstallerFixture()
+        let directory = fixture.directory
+        defer {
+            try? fixture.reader.close()
+            try? fixture.writer.close()
+            try? fixture.completion.close()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let gate = AsyncStream<Void>.makeStream()
+        let runner = LocalCopilotSetupRunner(timeout: 0.4, terminationGrace: 0.05)
+        let arguments = gatedInstallerArguments(in: directory)
+        let task = Task {
+            for await _ in gate.stream { break }
+            return await runner.run(executable: URL(fileURLWithPath: "/usr/bin/env"),
+                                    arguments: arguments, path: "/usr/bin:/bin")
+        }
+        task.cancel()
+        gate.continuation.finish()
+        #expect(await task.value == .cancelled)
+        for name in ["launcher.pid", "child.pid", "ready", "late-mutation"] {
+            #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path))
+        }
+    }
+
+    @Test @MainActor
+    func concurrentSupervisionDoesNotOccupyCooperativeExecutor() async throws {
+        var fixtures = [try gatedInstallerFixture()]
+        defer {
+            for fixture in fixtures {
+                try? fixture.reader.close()
+                try? fixture.writer.close()
+                try? fixture.completion.close()
+                try? FileManager.default.removeItem(at: fixture.directory)
+            }
+        }
+        fixtures.append(try gatedInstallerFixture())
+        let clocks = fixtures.map { _ in SetupDeadlineClock() }
+        let tasks = fixtures.enumerated().map { index, fixture in
+            let directory = fixture.directory
+            let clock = clocks[index]
+            let runner = LocalCopilotSetupRunner(timeout: 0.4, terminationGrace: 0.05,
+                                                 deadlineNow: { clock.now() })
+            let arguments = gatedInstallerArguments(in: directory)
+            return Task {
+                await runner.run(executable: URL(fileURLWithPath: "/usr/bin/env"),
+                                 arguments: arguments, path: "/usr/bin:/bin")
+            }
+        }
+        defer { tasks.forEach { $0.cancel() } }
+        // The observer is outside the cooperative pool under test. Both process
+        // operations run concurrently and must start before either deadline advances.
+        func allReady() -> Bool {
+            fixtures.indices.allSatisfy { index in
+                clocks[index].wasSampled
+                    && FileManager.default.fileExists(atPath: fixtures[index].directory.appendingPathComponent("ready").path)
+            }
+        }
+        let readiness = ContinuousClock.now.advanced(by: .seconds(3))
+        while !allReady(), ContinuousClock.now < readiness {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let startedConcurrently = allReady()
+        let readyCount = fixtures.filter {
+            FileManager.default.fileExists(atPath: $0.directory.appendingPathComponent("ready").path)
+        }.count
+        let sampledCount = clocks.filter(\.wasSampled).count
+        if !startedConcurrently { tasks.forEach { $0.cancel() } }
+        clocks.forEach { $0.advance(by: .seconds(0.4)) }
+        for task in tasks {
+            let result = await task.value
+            if startedConcurrently { #expect(result == .timedOut) }
+        }
+        #expect(startedConcurrently,
+                "Blocking supervision: \(readyCount)/2 writers ready; \(sampledCount)/2 supervisors sampled their clocks")
+        for fixture in fixtures {
+            try fixture.reader.close()
+            _ = releaseMutationGate(fixture.writer)
+            #expect(try mutationCompletion(fixture.completion).isEmpty)
+            #expect(!FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("late-mutation").path))
+        }
+    }
+
     private func exerciseCleanup(cancel: Bool, delayStartup: Bool = false) async throws {
         let fixture = try gatedInstallerFixture()
         let directory = fixture.directory
