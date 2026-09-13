@@ -116,14 +116,15 @@ struct SidebarHistoryTests {
     }
 
     @Test func persistedPreferencesReconstructAndRestoreWithoutChangingMode() throws {
-        try withDefaults { defaults in
-            let prefs = SidebarPreferences(defaults: defaults)
+        try withDefaults { defaults, file in
+            let prefs = SidebarPreferences(defaults: defaults, historyFile: file)
             #expect(prefs.history.retention == .fifteenSeconds)
-            #expect(defaults.data(forKey: "sidebar.completedHistory.v1") != nil)
+            #expect(FileManager.default.fileExists(atPath: file.path))
+            #expect(defaults.object(forKey: "sidebar.completedHistory.v1") == nil)
             prefs.selectedMode = .taskboard
             prefs.setRetention(.never)
             prefs.dismiss([key("child")])
-            let reconstructed = SidebarPreferences(defaults: defaults)
+            let reconstructed = SidebarPreferences(defaults: defaults, historyFile: file)
             #expect(reconstructed.history == prefs.history)
             #expect(reconstructed.selectedMode == .taskboard)
             #expect(project([child("child", age: 1)], history: reconstructed.history).retainedHistoryCount == 0)
@@ -134,41 +135,53 @@ struct SidebarHistoryTests {
             reconstructed.resetHistory()
             #expect(reconstructed.history == SidebarHistorySettings())
             #expect(reconstructed.selectedMode == .taskboard)
-            let wire = try #require(defaults.data(forKey: "sidebar.completedHistory.v1"))
+            let wire = try Data(contentsOf: file)
             #expect(!String(decoding: wire, as: UTF8.self).contains("Same label"))
         }
     }
 
-    @Test func corruptStorageFailsOpenWithBoundedRecoverableNotice() throws {
+    @Test func corruptStorageFailsOpenWithBoundedRecoverableNotice() async throws {
         let invalid = [
             Data("broken".utf8),
             Data(#"{"version":999,"retention":"never","dismissed":[]}"#.utf8),
             Data(#"{"version":1,"retention":"invalid","dismissed":[]}"#.utf8),
             Data(#"{"version":1,"retention":"never","dismissed":[{"sessionID":"bad","childID":"c","eventID":"bad"}]}"#.utf8),
             Data(repeating: 0, count: SidebarHistorySettings.maximumStoredBytes + 1),
+            try JSONEncoder().encode(SidebarHistorySettings(dismissed: Set(
+                (0...SidebarHistorySettings.maximumDismissals).map { key("over-limit-\($0)") }
+            ))),
             try JSONEncoder().encode(SidebarHistorySettings(dismissed: [
                 .init(sessionID: fixtures.sessionID, childID: "bad\nvalue", eventID: eventID)
             ]))
         ]
         for stored: Any in invalid + ["wrong-storage-type"] {
-            withDefaults { defaults in
+            try withDefaults { defaults, file in
                 defaults.set(stored, forKey: "sidebar.completedHistory.v1")
-                let prefs = SidebarPreferences(defaults: defaults)
+                let prefs = SidebarPreferences(defaults: defaults, historyFile: file)
                 #expect(prefs.history.retention == .never)
                 #expect(prefs.history.dismissed.isEmpty)
                 #expect((prefs.historyNotice?.count ?? 0) > 0)
                 #expect((prefs.historyNotice?.count ?? 1000) < 300)
                 #expect(project([child("old", age: 60)], history: prefs.history).retainedHistoryCount == 1)
+                prefs.setRetention(.oneMinute)
+                prefs.dismiss([key("new")])
+                prefs.restoreDismissed()
+                #expect(prefs.history == .failOpen)
+                #expect(prefs.historyNotice != nil)
+                #expect(!FileManager.default.fileExists(atPath: file.path))
+                #expect(defaults.object(forKey: "sidebar.completedHistory.v1") != nil)
                 prefs.resetHistory()
                 #expect(prefs.historyNotice == nil)
-                #expect(SidebarPreferences(defaults: defaults).history == SidebarHistorySettings())
+                #expect(defaults.object(forKey: "sidebar.completedHistory.v1") == nil)
+                #expect(SidebarPreferences(defaults: defaults, historyFile: file).history == SidebarHistorySettings())
             }
+            await Task.yield()
         }
     }
 
     @Test func dismissalStorageBoundRejectsWholeBatchWithoutEvictingExistingRecords() throws {
-        try withDefaults { defaults in
-            let prefs = SidebarPreferences(defaults: defaults)
+        try withDefaults { defaults, file in
+            let prefs = SidebarPreferences(defaults: defaults, historyFile: file)
             let full = Set((0..<SidebarHistorySettings.maximumDismissals).map { key("child-\($0)") })
             prefs.dismiss(full)
             #expect(prefs.history.dismissed == full)
@@ -179,8 +192,8 @@ struct SidebarHistoryTests {
             #expect(prefs.history.dismissed.isEmpty)
             #expect(prefs.historyNotice == nil)
             let oversized = SidebarHistorySettings(dismissed: full.union([key("extra")]))
-            defaults.set(try JSONEncoder().encode(oversized), forKey: "sidebar.completedHistory.v1")
-            #expect(SidebarPreferences(defaults: defaults).history.retention == .never)
+            try JSONEncoder().encode(oversized).write(to: file, options: .atomic)
+            #expect(SidebarPreferences(defaults: defaults, historyFile: file).history.retention == .never)
         }
     }
 
@@ -219,10 +232,9 @@ struct SidebarHistoryTests {
         )
     }
 
-    private func withDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
-        let suite = "SidebarHistoryTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        try body(defaults)
+    private func withDefaults(_ body: (UserDefaults, URL) throws -> Void) throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        try body(fixture.defaults, fixture.historyFile)
     }
 }

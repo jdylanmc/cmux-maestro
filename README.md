@@ -111,8 +111,21 @@ terminal parent remains as **child context** when descendants still need it.
 Running counts and retained/hidden history counts are separate; empty history
 is not evidence that a session has finished.
 
-Preferences use the extension's existing local `UserDefaults` store, with a
-versioned history record. Dismissal keys contain only provider-session UUID,
+History uses a versioned `CMUXMaestroPreview/sidebar-history.json` record in the
+extension container's Application Support directory. Coordinated, atomic
+read-modify-write actions preserve other windows' retention and dismissals,
+including separate extension processes. Existing windows observe changes through
+file presentation (no polling daemon); same-process windows update immediately.
+The selected view remains in `UserDefaults` and is not changed by history actions.
+
+On first use, the existing `sidebar.completedHistory.v1` defaults record is
+validated within the same coordinated transaction and migrated once. The file
+is authoritative thereafter, even if another process has stale legacy defaults.
+Only after a successful file write/read is the old key removed. Invalid legacy
+or file data stays untouched until an explicit reset; failed migration can be
+retried. No settings are mirrored back into the old history key.
+
+Dismissal keys contain only provider-session UUID,
 child ID and accepted terminal-event UUID—not labels, paths, or source content.
 Reloads, duplicate events and surface/workspace moves preserve identity; new
 work or a new terminal outcome does not inherit an old dismissal. Fresh lifecycle
@@ -126,8 +139,13 @@ than evicting old keys silently. **Restore dismissed history** frees that store;
 retention still applies, so select **Never** to reveal older work.
 
 Malformed stored settings fail open: history hiding is disabled and a bounded
-notice offers **Reset history settings**. Reset restores 15-second retention and
-clears dismissals without changing the selected view. History deadlines use a
+notice offers **Reset history settings**. Ordinary retention/dismiss/restore
+actions never overwrite corrupt data. Reset explicitly restores 15-second retention
+and clears dismissals; restore clears only dismissals at its coordinated turn,
+preserving the latest retention. Later dismissals remain later actions, not a
+resurrected window snapshot. Neither action changes the selected view. Storage
+I/O failures also fail open with a notice; capacity rejection keeps the last
+valid record and rejects the entire batch. History deadlines use a
 single cancellable timer, are not reset by refresh, and stop on hide, disconnect,
 or access loss. Existing observation freshness remains an independent limit.
 Reducer replay protection is bounded to 65,536 lifecycle event IDs and at most
@@ -163,6 +181,20 @@ The CMUX ExtensionKit package is pinned to CMUX commit
 ./scripts/build-unsigned.sh
 ./scripts/test.sh
 ```
+
+Focused history/preference checks (including two real child processes, coordinated
+writer contention, and automatic observation/projection convergence):
+
+```sh
+./scripts/test.sh -only-testing:CMUXMaestroPreviewTests/SidebarPreferencesTests \
+  -only-testing:CMUXMaestroPreviewTests/SidebarHistoryTests \
+  -only-testing:CMUXMaestroPreviewTests/SidebarHistoryPollingTests \
+  -only-testing:CMUXMaestroPreviewTests/SidebarPreferenceCoordinationTests
+```
+
+The test runner compiles a fixture-only client from the production preference
+sources. Tests inject unique defaults suites and files beneath
+`.build/preference-coordination/`; they never mutate production preferences.
 
 Xcode can register macOS app outputs with LaunchServices even when signing is
 disabled. Validation builds therefore use isolated identities **and** isolated

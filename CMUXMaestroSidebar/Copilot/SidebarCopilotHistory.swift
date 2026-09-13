@@ -1,6 +1,6 @@
 import Foundation
 
-enum SidebarHistoryRetention: String, Codable, CaseIterable, Identifiable {
+nonisolated enum SidebarHistoryRetention: String, Codable, CaseIterable, Identifiable, Sendable {
     case fifteenSeconds, oneMinute, fiveMinutes, oneHour, never
 
     var id: Self { self }
@@ -24,7 +24,7 @@ enum SidebarHistoryRetention: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-struct SidebarDismissedOutcome: Codable, Hashable {
+nonisolated struct SidebarDismissedOutcome: Codable, Hashable, Sendable {
     let sessionID: UUID
     let childID: String
     let eventID: UUID
@@ -36,7 +36,7 @@ struct SidebarDismissedOutcome: Codable, Hashable {
     }
 }
 
-struct SidebarHistorySettings: Codable, Equatable {
+nonisolated struct SidebarHistorySettings: Codable, Equatable, Sendable {
     static let maximumDismissals = 2048
     static let maximumStoredBytes = 1_048_576
     var version = 1
@@ -64,5 +64,15 @@ struct SidebarHistorySettings: Codable, Equatable {
         guard let timestamp = event?.timestamp, timestamp.timeIntervalSince1970.isFinite,
               timestamp <= observedAt, timestamp <= now else { return nil }
         return timestamp
+    }
+}
+
+extension SidebarHistorySettings: SidebarPreferenceValue {
+    nonisolated static var failOpen: Self { .init(retention: .never) }
+    nonisolated static var unreadableNotice: String {
+        "History settings could not be read. Nothing is hidden by history controls. Reset history settings to recover."
+    }
+    nonisolated static var saveNotice: String {
+        "History settings could not be saved. Check local storage and retry or reset history settings."
     }
 }

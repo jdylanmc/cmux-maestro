@@ -23,8 +23,9 @@ final class SidebarPreferences {
     private static let selectedModeKey = "sidebar.selectedMode"
     private static let historyKey = "sidebar.completedHistory.v1"
     private let defaults: UserDefaults
-    private(set) var history: SidebarHistorySettings
-    private(set) var historyNotice: String?
+    private let historyStore: SidebarPreferenceStore<SidebarHistorySettings>
+    var history: SidebarHistorySettings { historyStore.value.settings }
+    var historyNotice: String? { historyStore.value.notice }
 
     var selectedMode: SidebarMode {
         didSet {
@@ -33,59 +34,48 @@ final class SidebarPreferences {
         }
     }
 
-    init(defaults: UserDefaults = .standard) {
+    convenience init() {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        self.init(defaults: .standard, historyFile: root.appendingPathComponent("CMUXMaestroPreview/sidebar-history.json"))
+    }
+
+    init(defaults: UserDefaults, historyFile: URL) {
         self.defaults = defaults
         selectedMode = defaults.string(forKey: Self.selectedModeKey)
             .flatMap(SidebarMode.init(rawValue:)) ?? .hierarchy
-        if let stored = defaults.object(forKey: Self.historyKey) {
-            if let data = stored as? Data, data.count <= SidebarHistorySettings.maximumStoredBytes,
-               let decoded = try? JSONDecoder().decode(SidebarHistorySettings.self, from: data),
-               decoded.isValid {
-                history = decoded
-            } else {
-                // Fail open: corrupt preferences must never silently hide work.
-                history = SidebarHistorySettings(retention: .never)
-                historyNotice = "History settings could not be read. Nothing is hidden by history controls. Reset history settings to recover."
+        historyStore = SidebarPreferenceStore(file: .init(url: historyFile), legacy: {
+            guard let stored = defaults.object(forKey: Self.historyKey) else { return nil }
+            guard let data = stored as? Data, data.count <= SidebarHistorySettings.maximumStoredBytes else {
+                throw SidebarPreferenceRejection(notice: SidebarHistorySettings.unreadableNotice)
             }
-        } else {
-            history = SidebarHistorySettings()
-            save(history)
-        }
+            return try JSONDecoder().decode(SidebarHistorySettings.self, from: data)
+        }, migrated: {
+            // The successfully written file is the migration marker. Never mirror back a
+            // window's snapshot; leave malformed legacy data untouched until explicit reset.
+            defaults.removeObject(forKey: Self.historyKey)
+        })
     }
 
     func setRetention(_ retention: SidebarHistoryRetention) {
-        var next = history
-        next.retention = retention
-        save(next)
+        historyStore.apply { $0.retention = retention }
     }
 
     func dismiss(_ outcomes: Set<SidebarDismissedOutcome>) {
         guard !outcomes.isEmpty else { return }
-        var next = history
-        next.dismissed.formUnion(outcomes)
-        guard next.isValid else {
-            historyNotice = "Dismissal storage is full or invalid (limit 2,048). Nothing new was dismissed. Restore dismissed history to free space."
-            return
+        historyStore.apply {
+            $0.dismissed.formUnion(outcomes)
+            guard $0.isValid,
+                  try JSONEncoder().encode($0).count <= SidebarHistorySettings.maximumStoredBytes else {
+                throw SidebarPreferenceRejection(
+                    notice: "Dismissal storage is full or invalid (limit 2,048 / 1 MiB). Nothing new was dismissed. Restore dismissed history to free space."
+                )
+            }
         }
-        save(next)
     }
 
     func restoreDismissed() {
-        var next = history
-        next.dismissed = []
-        save(next)
+        historyStore.apply { $0.dismissed = [] }
     }
 
-    func resetHistory() { save(SidebarHistorySettings()) }
-
-    private func save(_ next: SidebarHistorySettings) {
-        guard next.isValid, let data = try? JSONEncoder().encode(next),
-              data.count <= SidebarHistorySettings.maximumStoredBytes else {
-            historyNotice = "History settings could not be saved. Previous history settings remain in use."
-            return
-        }
-        defaults.set(data, forKey: Self.historyKey)
-        history = next
-        historyNotice = nil
-    }
+    func resetHistory() { historyStore.apply(reset: true) { _ in } }
 }
