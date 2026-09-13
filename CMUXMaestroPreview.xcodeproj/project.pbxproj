@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C09100000000000000000005 /* SidebarView.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09100000000000000000006; };
+		C09100000000000000000001 /* SidebarLayout.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09100000000000000000003; };
+		C09100000000000000000002 /* SidebarBranchSummary.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09100000000000000000004; };
 		C08100000000000000000001 /* AgentSignals.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C08100000000000000000003; };
 		C08100000000000000000002 /* AgentSignals.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C08100000000000000000003; };
 		C06100000000000000000001 /* Helper in Embed Helpers */ = {isa = PBXBuildFile; fileRef = C06100000000000000000002; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
@@ -90,6 +93,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C09100000000000000000006 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarView.swift; sourceTree = SOURCE_ROOT; };
+		C09100000000000000000003 /* SidebarLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarLayout.swift; sourceTree = SOURCE_ROOT; };
+		C09100000000000000000004 /* SidebarBranchSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Copilot/SidebarBranchSummary.swift; sourceTree = SOURCE_ROOT; };
 		C08100000000000000000003 /* AgentSignals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/Domain/AgentSignals.swift; sourceTree = SOURCE_ROOT; };
 		C06100000000000000000002 /* CMUXMaestroCopilotHook */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = CMUXMaestroCopilotHook; sourceTree = BUILT_PRODUCTS_DIR; };
 		C06100000000000000000011 /* CopilotHookRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroCopilotHook/CopilotHookRecorder.swift; sourceTree = SOURCE_ROOT; };
@@ -216,6 +222,9 @@
 		D10400000000000000000005 /* Shared Sidebar Test Sources */ = {
 			isa = PBXGroup;
 			children = (
+				C09100000000000000000006 /* SidebarView.swift */,
+				C09100000000000000000003 /* SidebarLayout.swift */,
+				C09100000000000000000004 /* SidebarBranchSummary.swift */,
 				C08100000000000000000003 /* AgentSignals.swift */,
 				D10400000000000000000003 /* SidebarPreferences.swift */,
 				D10400000000000000000004 /* SidebarConnectionState.swift */,
@@ -416,6 +425,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				D10400000000000000000001 /* SidebarPreferences.swift in Sources */,
+				C09100000000000000000001 /* SidebarLayout.swift in Test Sources */,
+				C09100000000000000000002 /* SidebarBranchSummary.swift in Test Sources */,
+				C09100000000000000000005 /* SidebarView.swift in Test Sources */,
 				D10400000000000000000002 /* SidebarConnectionState.swift in Sources */,
 				D10500000000000000000001 /* HierarchySnapshot.swift in Sources */,
 				D10500000000000000000002 /* SidebarConnectionModel.swift in Sources */,
