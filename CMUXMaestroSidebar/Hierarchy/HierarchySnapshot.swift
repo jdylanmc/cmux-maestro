@@ -13,6 +13,7 @@ struct HierarchySnapshot: Equatable {
     let surfaceMetadataAvailable: Bool
     let workspacePathsAvailable: Bool
     let workspaces: [HierarchyWorkspace]
+    var windowID: UUID? = nil
 
     static let empty = HierarchySnapshot(
         sequence: 0,
@@ -23,6 +24,75 @@ struct HierarchySnapshot: Equatable {
         workspacePathsAvailable: false,
         workspaces: []
     )
+
+    func pathContext(workspaceID: UUID, surfaceID: UUID) -> HierarchyPathContext {
+        guard SidebarTopology(self).workspaceBySurface[surfaceID] == workspaceID else { return .unavailable }
+        let matches = workspaces.filter { $0.id == workspaceID }
+        guard matches.count == 1, case .available(let surfaces) = matches[0].surfaces else {
+            return .unavailable
+        }
+        let surfaceMatches = surfaces.filter { $0.id == surfaceID }
+        guard surfaceMatches.count == 1 else { return .unavailable }
+        return HierarchyPathContext(
+            rootPath: matches[0].rootPath,
+            projectRootPath: matches[0].projectRootPath,
+            workingDirectory: surfaceMatches[0].workingDirectory
+        )
+    }
+}
+
+struct HierarchyPathContext: Equatable {
+    let rootPath: HierarchyAvailability<String?>
+    let projectRootPath: HierarchyAvailability<String?>
+    let workingDirectory: HierarchyAvailability<String?>
+
+    static let unavailable = HierarchyPathContext(
+        rootPath: .unavailable, projectRootPath: .unavailable, workingDirectory: .unavailable
+    )
+
+    var accessibilityDescription: String {
+        "Workspace: \(rootPath.pathDisplayText). Project: \(projectRootPath.pathDisplayText). Path: \(workingDirectory.pathDisplayText)."
+    }
+}
+
+extension HierarchyAvailability where Value == String? {
+    var pathDisplayText: String {
+        switch self {
+        case .unavailable: "Path unavailable"
+        case .available(let path): path ?? "No path shared"
+        }
+    }
+}
+
+struct SidebarTopology: Equatable, Sendable {
+    let windowID: UUID?
+    let workspaceIDs: Set<UUID>
+    let workspaceBySurface: [UUID: UUID]
+    let canReadSessions: Bool
+
+    init(_ snapshot: HierarchySnapshot) {
+        windowID = snapshot.windowID
+        let groupedWorkspaces = Dictionary(grouping: snapshot.workspaces, by: \.id)
+        let allowedWorkspaces = snapshot.workspaceListAvailable
+            ? Set(groupedWorkspaces.filter { $0.value.count == 1 }.keys) : []
+        workspaceIDs = allowedWorkspaces
+        var placements: [UUID: [UUID]] = [:]
+        for workspace in snapshot.workspaces {
+            if case .available(let surfaces) = workspace.surfaces {
+                for surface in surfaces {
+                    placements[surface.id, default: []].append(workspace.id)
+                }
+            }
+        }
+        canReadSessions = snapshot.receivedSnapshot
+            && snapshot.windowID != nil
+            && snapshot.workspaceMetadataAvailable
+            && snapshot.surfaceMetadataAvailable
+        workspaceBySurface = canReadSessions
+            ? placements.compactMapValues {
+                $0.count == 1 && allowedWorkspaces.contains($0[0]) ? $0.first : nil
+            } : [:]
+    }
 }
 
 struct HierarchyWorkspace: Equatable, Identifiable {

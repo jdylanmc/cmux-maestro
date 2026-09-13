@@ -7,12 +7,11 @@ final class CMUXMaestroSidebarExtension: @MainActor CmuxSidebarExtension {
         id: "com.jdylanmc.CMUXMaestroPreview.Extension",
         displayName: "CMUX Maestro Preview",
         readScopes: [
-            .workspaceList,
             .workspaceMetadata,
             .surfaceMetadata,
             .workspacePaths,
         ],
-        actionScopes: []
+        actionScopes: [.selectWorkspace, .selectSurface]
     )
 
     private let model = SidebarConnectionModel()

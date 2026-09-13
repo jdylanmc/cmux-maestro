@@ -5,6 +5,7 @@ extension SidebarConnectionModel {
         let snapshot = context.snapshot
         let workspaces = snapshot.workspaces
         let scopes = context.grantedReadScopes
+        guard acceptSnapshot(sequence: snapshot.sequence) else { return }
 
         replaceHierarchy(with: HierarchySnapshot(
             sequence: snapshot.sequence,
@@ -19,11 +20,34 @@ extension SidebarConnectionModel {
                     selectedWorkspaceID: snapshot.selectedWorkspaceID,
                     grantedReadScopes: scopes
                 )
-            }
+            },
+            windowID: snapshot.windowID
         ))
         showConnected(
             workspaceCount: workspaces.count,
             surfaceCount: workspaces.reduce(0) { $0 + $1.surfaces.count }
+        )
+        let topology = SidebarTopology(hierarchy)
+        copilot.update(topology: topology, connected: true)
+        navigation.update(
+            topology: topology,
+            connected: true,
+            workspaceAllowed: context.grantedActionScopes.contains(.selectWorkspace),
+            surfaceAllowed: context.grantedActionScopes.contains(.selectSurface),
+            perform: { target in
+                do {
+                    switch target {
+                    case .workspace(let id):
+                        try await context.host.selectWorkspace(id)
+                    case .surface(let workspaceID, let surfaceID):
+                        try await context.host.selectSurface(workspaceID: workspaceID, surfaceID: surfaceID)
+                    }
+                } catch CmuxSidebarActionError.cancelled {
+                    throw SidebarNavigationError.cancelled
+                } catch {
+                    throw SidebarNavigationError.rejected
+                }
+            }
         )
     }
 
@@ -34,6 +58,7 @@ extension SidebarConnectionModel {
                 showWaiting()
             }
         case .waitingForHost:
+            resetSnapshotOrderingForDisconnectedHost()
             showWaiting()
         case .error(let message):
             showDegraded(message: message)
