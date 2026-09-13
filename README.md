@@ -181,11 +181,12 @@ The scripts verify resolved settings before building and
 the resulting app/extension metadata afterward. Run these scripts rather than
 an unqualified application build while a native integration is installed.
 
-Focused, isolated setup and hook checks (no SDK fetch or app launch):
+Focused, isolated setup, hook, and sandbox checks (no SDK fetch or app launch):
 
 ```sh
 ./scripts/test-copilot-hook.sh
 ./scripts/test-copilot-setup.sh
+./scripts/test-copilot-sandbox.sh
 python3 ./scripts/test-build-metadata.py
 ```
 
@@ -196,6 +197,17 @@ malformed input, disable flags, and zero output. The injected ancestry exists
 only in that synthetic binary; app Debug/Release builds have no environment or
 command-line switch that forges owner proof. Installer tests invoke fake
 executables only, never the live Copilot plugin CLI.
+
+The sandbox check compiles the actual shared file helper and runs it under a
+narrow `sandbox-exec` policy over a synthetic deep directory. Ancestors use
+search-only descriptors; the final directory still requires read access.
+The check denies ancestor contents, sibling reads, and writes, and exercises
+owner checks, symlink rejection, and descriptor anchoring during path swaps.
+Fixtures are removed afterward; this check creates no App Sandbox container.
+`O_SEARCH` is declared in Apple's
+[macOS 14-era XNU headers](https://github.com/apple-oss-distributions/xnu/blob/xnu-10002.1.13/bsd/sys/fcntl.h#L184)
+and [macOS 15-era headers](https://github.com/apple-oss-distributions/xnu/blob/xnu-11215.1.10/bsd/sys/fcntl.h#L184),
+covering this project's macOS 14 deployment target.
 
 These tests do **not** prove actual plugin installation, cached-hook loading,
 live owner ancestry, or ExtensionKit-hosted runtime behavior.
