@@ -20,6 +20,8 @@ struct SidebarLayoutRenderingTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = SidebarPreferences(
             defaults: defaults,
+            historyFile: state.appendingPathComponent("history.json"),
+            attentionFile: state.appendingPathComponent("attention.json"),
             layoutStore: SidebarLayoutStore(file: .init(url: state.appendingPathComponent("layout.json")))
         )
         preferences.setRetention(.never)
@@ -99,7 +101,14 @@ struct SidebarLayoutRenderingTests {
                   children: children, observedAt: now)
         ], now: now)
         let polling = SidebarCopilotPolling(
-            read: { _ in snapshot }, pause: { try await Task.sleep(for: .seconds(60)) }, now: { now }
+            read: { _ in snapshot }, pause: { try await Task.sleep(for: .seconds(60)) },
+            expiryPause: { _ in
+                // The render clock never advances; suspend its timers until cancellation.
+                let (ticks, continuation) = AsyncStream<Void>.makeStream()
+                defer { continuation.finish() }
+                for await _ in ticks {}
+                try Task.checkCancellation()
+            }, now: { now }
         )
         let original = fixtures.hierarchy()
         let path = "/synthetic/workspaces/long-project-name/worktrees/accessible-layout/components/deeply-nested-presentation"

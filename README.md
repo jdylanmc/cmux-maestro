@@ -123,6 +123,17 @@ expand all branches and show a recoverable notice; only **Reset layout
 settings** replaces that record. **Expand all branches** preserves density;
 layout reset restores Compact and does not alter history or attention settings.
 
+Layout's file/store types are thin adapters over the same preference coordinator
+used by history and acknowledgements; only layout's mutations and safe eviction
+policy remain feature-specific. The existing layout path and version-1 schema
+are unchanged: no layout migration or rewrite occurs on open. Missing layout
+files mean Compact and fully expanded, and reads/refreshes do not create a file.
+This lazy mode is explicit; history/acknowledgement migration-on-open is unchanged.
+Lazy stores observe the nearest existing container so first-file creation in
+another process also reaches already-open views, without writing defaults first.
+All three records stay separate. Tests and offscreen renders inject all three
+storage paths and never fall back to the production layout singleton.
+
 ### Synthetic layout review images
 
 `./scripts/test.sh` writes offscreen SwiftUI/AppKit PNGs to
@@ -133,6 +144,8 @@ increased contrast, and long synthetic path/model/nested-label scenarios, in
 addition to the light-mode expansion matrix at 240 and 320 pixels. Filenames
 identify density, scenario, view mode and width.
 The renderer checks the actual SwiftUI color-scheme and contrast environment.
+Its fixed synthetic clock also owns the injected freshness timer; elapsed CI
+wall time cannot expire a fixture whose logical clock has not advanced.
 Contrast uses the SDK's writable `_colorSchemeContrast` backing key only in
 tests, paired with native high-contrast AppKit appearances; no system display
 preferences are changed.
@@ -161,8 +174,21 @@ terminal parent remains as **child context** when descendants still need it.
 Running counts and retained/hidden history counts are separate; empty history
 is not evidence that a session has finished.
 
-Preferences use the extension's existing local `UserDefaults` store, with a
-versioned history record. Dismissal keys contain only provider-session UUID,
+History uses a versioned `CMUXMaestroPreview/sidebar-history.json` record in the
+extension container's Application Support directory. Coordinated, atomic
+read-modify-write actions preserve other windows' retention and dismissals,
+including separate extension processes. Existing windows observe changes through
+file presentation (no polling daemon); same-process windows update immediately.
+The selected view remains in `UserDefaults` and is not changed by history actions.
+
+On first use, the existing `sidebar.completedHistory.v1` defaults record is
+validated within the same coordinated transaction and migrated once. The file
+is authoritative thereafter, even if another process has stale legacy defaults.
+Only after a successful file write/read is the old key removed. Invalid legacy
+or file data stays untouched until an explicit reset; failed migration can be
+retried. No settings are mirrored back into the old history key.
+
+Dismissal keys contain only provider-session UUID,
 child ID and accepted terminal-event UUID—not labels, paths, or source content.
 Reloads, duplicate events and surface/workspace moves preserve identity; new
 work or a new terminal outcome does not inherit an old dismissal. Fresh lifecycle
@@ -176,8 +202,13 @@ than evicting old keys silently. **Restore dismissed history** frees that store;
 retention still applies, so select **Never** to reveal older work.
 
 Malformed stored settings fail open: history hiding is disabled and a bounded
-notice offers **Reset history settings**. Reset restores 15-second retention and
-clears dismissals without changing the selected view. History deadlines use a
+notice offers **Reset history settings**. Ordinary retention/dismiss/restore
+actions never overwrite corrupt data. Reset explicitly restores 15-second retention
+and clears dismissals; restore clears only dismissals at its coordinated turn,
+preserving the latest retention. Later dismissals remain later actions, not a
+resurrected window snapshot. Neither action changes the selected view. Storage
+I/O failures also fail open with a notice; capacity rejection keeps the last
+valid record and rejects the entire batch. History deadlines use a
 single cancellable timer, are not reset by refresh, and stop on hide, disconnect,
 or access loss. Existing observation freshness remains an independent limit.
 Reducer replay protection is bounded to 65,536 lifecycle event IDs and at most
@@ -242,6 +273,21 @@ acknowledgements / 1 MiB**, refuses overflowing batches without eviction, and
 offers **Reset acknowledgements**. Corruption fails open with a visible warning:
 no attention is hidden by unreadable settings.
 
+Acknowledgements use the same coordinated action store as history, in the
+separate extension-container Application Support file
+`CMUXMaestroPreview/sidebar-attention.json`. Acknowledge unions only the
+current projection's eligible identities into the latest on-disk record;
+other windows/processes observe changes automatically without polling. Reset
+clears acknowledgements at its coordinated turn, never history or the selected
+view. Later acknowledgements remain later actions, not restored stale snapshots.
+
+The old `sidebar.attention.v1` defaults record is validated and imported once
+under the same lock. The file is authoritative thereafter; the legacy key is
+removed only after successful persistence/read. Corrupt or future-schema files
+and legacy data fail open and are left untouched by ordinary acknowledgement
+actions. Only **Reset acknowledgements** replaces them. Failed migration retains
+legacy data for retry. Tests inject both history and acknowledgement files.
+
 Activity uses only the allowlisted durable tool-name field: **Executing tool**
 (the latest still-executing invocation for that owner) or **Last completed tool**.
 The latter is a tool-invocation event, not a statement that a detached shell
@@ -283,6 +329,26 @@ The CMUX ExtensionKit package is pinned to CMUX commit
 ./scripts/build-unsigned.sh
 ./scripts/test.sh
 ```
+
+Focused history/preference checks (including two real child processes, coordinated
+writer contention, and automatic observation/projection convergence):
+
+```sh
+./scripts/test.sh -only-testing:CMUXMaestroPreviewTests/SidebarPreferencesTests \
+  -only-testing:CMUXMaestroPreviewTests/SidebarHistoryTests \
+  -only-testing:CMUXMaestroPreviewTests/SidebarHistoryPollingTests \
+  -only-testing:CMUXMaestroPreviewTests/SidebarPreferenceCoordinationTests \
+  -only-testing:CMUXMaestroPreviewTests/SidebarAttentionTests \
+  -only-testing:CMUXMaestroPreviewTests/SidebarAttentionCoordinationTests
+```
+
+The test runner compiles a fixture-only client from the production preference
+sources. Tests inject unique defaults suites and files beneath
+`.build/preference-coordination/`; they never mutate production preferences.
+File-I/O-heavy preference suites serialize independent cases and yield between
+fixture phases so synchronous coordination does not starve unrelated UI timers.
+Dedicated coordination tests still exercise simultaneously blocked writers in
+separate processes and automatic observation, without manual refresh.
 
 Xcode can register macOS app outputs with LaunchServices even when signing is
 disabled. Validation builds therefore use isolated identities **and** isolated

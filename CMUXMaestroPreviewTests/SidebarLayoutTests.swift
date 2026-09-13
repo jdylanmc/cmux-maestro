@@ -84,6 +84,28 @@ struct SidebarLayoutTests {
         }
     }
 
+    @Test func existingLayoutBytesAndMissingFileDefaultsArePreservedBySharedAdapters() throws {
+        try withFile { file in
+            let missing = file.read()
+            #expect(missing == .init())
+            #expect(!FileManager.default.fileExists(atPath: file.url.path))
+            let bytes = Data("""
+            {"version":1,"densityOverride":"comfortable","collapsed":[{"kind":"workspace","id":"\(fixtures.workspaceA.uuidString)"}]}
+            """.utf8)
+            try write(bytes, to: file)
+            let stamp = try file.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            let first = SidebarLayoutStore(file: file)
+            let second = SidebarLayoutStore(file: file)
+            first.refresh()
+            second.refresh()
+            #expect(first.value.settings.density == .comfortable)
+            #expect(first.value.settings.collapsed == [.workspace(fixtures.workspaceA)])
+            #expect(first.value == second.value)
+            #expect(try Data(contentsOf: file.url) == bytes)
+            #expect(try file.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate == stamp)
+        }
+    }
+
     @Test func duplicateLabelsAndReusedChildIDsDoNotShareExpansionAcrossSessionsOrProviders() {
         var settings = SidebarLayoutSettings()
         settings.setExpanded(false, for: .child("root", sessionID: fixtures.sessionID))
@@ -286,6 +308,7 @@ struct SidebarLayoutTests {
                 #expect(!id.isValid)
                 #expect(file.apply(.expansion(id, false)).settings.collapsed.isEmpty)
             }
+            #expect(!FileManager.default.fileExists(atPath: file.url.path))
             var large = SidebarLayoutSettings()
             for _ in 0..<SidebarLayoutSettings.maximumOverrides {
                 large.setExpanded(false, for: .child(String(repeating: "x", count: 512), sessionID: UUID()))
@@ -303,7 +326,7 @@ struct SidebarLayoutTests {
         }
     }
 
-    @Test func corruptionUnknownSchemaAndInvalidPrimitiveRecordsRequireExplicitRecovery() throws {
+    @Test func corruptionUnknownSchemaAndInvalidPrimitiveRecordsRequireExplicitRecovery() async throws {
         for data in [
             Data("not JSON".utf8),
             Data(#"{"version":99,"collapsed":[]}"#.utf8),
@@ -325,6 +348,7 @@ struct SidebarLayoutTests {
                 #expect(store.value.notice == nil)
                 #expect(file.read().settings == SidebarLayoutSettings())
             }
+            await Task.yield()
         }
     }
 
@@ -357,7 +381,12 @@ struct SidebarLayoutTests {
             let suite = "SidebarLayoutTests.\(UUID())"
             let defaults = UserDefaults(suiteName: suite)!
             defer { defaults.removePersistentDomain(forName: suite) }
-            let prefs = SidebarPreferences(defaults: defaults, layoutStore: .init(file: file))
+            let prefs = SidebarPreferences(
+                defaults: defaults,
+                historyFile: file.url.deletingLastPathComponent().appendingPathComponent("history.json"),
+                attentionFile: file.url.deletingLastPathComponent().appendingPathComponent("attention.json"),
+                layoutStore: .init(file: file)
+            )
             let model = SidebarConnectionModel()
             model.showDegraded(message: "Synthetic disconnect")
             prefs.selectedMode = .taskboard
@@ -379,6 +408,80 @@ struct SidebarLayoutTests {
             #expect(model.navigation.status == navigation)
             #expect(defaults.string(forKey: "sidebar.selectedMode") == "taskboard")
         }
+    }
+
+    @Test func separateProcessesMergeLayoutActionsAndObserveLazyCreationWithoutChangingOtherStores() async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let layoutFile = fixture.root.appendingPathComponent("uncreated/nested/layout.json")
+        let preferences = fixture.preferences(layoutFile: layoutFile)
+        preferences.selectedMode = .taskboard
+        preferences.setRetention(.never)
+        let attention = PreferenceAttentionFixture()
+        preferences.acknowledge([attention.key("a")], in: attention.tree())
+        let historyBytes = try Data(contentsOf: fixture.historyFile)
+        let attentionBytes = try Data(contentsOf: fixture.attentionFile)
+        let a = try PreferenceTestChild(fixture, layoutFile: layoutFile)
+        let b = try PreferenceTestChild(fixture, layoutFile: layoutFile)
+        defer { a.stop(); b.stop() }
+        #expect(try await a.line() == "ready")
+        #expect(try await b.line() == "ready")
+        #expect(!FileManager.default.fileExists(atPath: layoutFile.deletingLastPathComponent().path))
+        var invalidations = 0
+        withObservationTracking {
+            _ = preferences.layout
+        } onChange: {
+            MainActor.assumeIsolated { invalidations += 1 }
+        }
+        try a.send("hold-layout \(fixtures.workspaceA.uuidString)")
+        #expect(try await a.line() == "locked")
+        try b.send("collapse \(fixtures.workspaceB.uuidString)")
+        #expect(try await b.line() == "applying")
+        try a.send("continue")
+        #expect(try await a.line() == "done")
+        #expect(try await b.line() == "done")
+        try await layoutEventually { preferences.layout.collapsed.count == 2 }
+        #expect(Set(preferences.layout.collapsed) == [.workspace(fixtures.workspaceA), .workspace(fixtures.workspaceB)])
+        #expect(invalidations == 1)
+        try a.send("expect-layout 2 compact")
+        #expect(try await a.line() == "done")
+        try a.send("density comfortable")
+        #expect(try await a.line() == "done")
+        try await layoutEventually { preferences.layout.density == .comfortable }
+        #expect(preferences.layout.collapsed.count == 2)
+
+        preferences.expandAll()
+        try a.send("expect-layout 0 comfortable")
+        try b.send("expect-layout 0 comfortable")
+        #expect(try await a.line() == "done")
+        #expect(try await b.line() == "done")
+        try b.send("collapse \(fixtures.workspaceB.uuidString)")
+        #expect(try await b.line() == "applying")
+        #expect(try await b.line() == "done")
+        try a.send("reset-layout")
+        #expect(try await a.line() == "done")
+        try await layoutEventually { preferences.layout == .init() }
+        try b.send("expect-layout 0 compact")
+        #expect(try await b.line() == "done")
+        preferences.setExpanded(false, for: .workspace(fixtures.workspaceA))
+        try a.send("expect-layout 1 compact")
+        #expect(try await a.line() == "done")
+        #expect(preferences.layout.collapsed == [.workspace(fixtures.workspaceA)])
+        #expect(try Data(contentsOf: fixture.historyFile) == historyBytes)
+        #expect(try Data(contentsOf: fixture.attentionFile) == attentionBytes)
+        #expect(preferences.selectedMode == .taskboard)
+        let layoutBytes = try Data(contentsOf: layoutFile)
+        preferences.resetHistory()
+        preferences.resetAcknowledgements()
+        #expect(try Data(contentsOf: layoutFile) == layoutBytes)
+    }
+
+    private func layoutEventually(_ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while !condition() && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(condition(), "Existing layout observation did not converge from file presentation", sourceLocation: sourceLocation)
     }
 
     @Test func narrowLayoutValuesKeepControlsAndStatusRoomWithoutDecorativeAnimation() throws {

@@ -1,6 +1,6 @@
 import Foundation
 
-enum SidebarHistoryRetention: String, Codable, CaseIterable, Identifiable {
+nonisolated enum SidebarHistoryRetention: String, Codable, CaseIterable, Identifiable, Sendable {
     case fifteenSeconds, oneMinute, fiveMinutes, oneHour, never
 
     var id: Self { self }
@@ -24,7 +24,7 @@ enum SidebarHistoryRetention: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-struct SidebarDismissedOutcome: Codable, Hashable {
+nonisolated struct SidebarDismissedOutcome: Codable, Hashable, Sendable {
     let sessionID: UUID
     let childID: String
     let eventID: UUID
@@ -36,7 +36,7 @@ struct SidebarDismissedOutcome: Codable, Hashable {
     }
 }
 
-struct SidebarHistorySettings: Codable, Equatable {
+nonisolated struct SidebarHistorySettings: Codable, Equatable, Sendable {
     static let maximumDismissals = 2048
     static let maximumStoredBytes = 1_048_576
     var version = 1
@@ -71,7 +71,17 @@ struct SidebarHistorySettings: Codable, Equatable {
     }
 }
 
-struct SidebarAcknowledgedOutcome: Codable, Hashable {
+extension SidebarHistorySettings: SidebarPreferenceValue {
+    nonisolated static var failOpen: Self { .init(retention: .never) }
+    nonisolated static var unreadableNotice: String {
+        "History settings could not be read. Nothing is hidden by history controls. Reset history settings to recover."
+    }
+    nonisolated static var saveNotice: String {
+        "History settings could not be saved. Check local storage and retry or reset history settings."
+    }
+}
+
+nonisolated struct SidebarAcknowledgedOutcome: Codable, Hashable, Sendable {
     let sessionID: UUID
     let ownerID: String?
     let evidence: AgentEvidenceID
@@ -83,7 +93,7 @@ struct SidebarAcknowledgedOutcome: Codable, Hashable {
     }
 }
 
-struct SidebarAttentionSettings: Codable, Equatable {
+nonisolated struct SidebarAttentionSettings: Codable, Equatable, Sendable {
     static let maximumAcknowledgements = 2048
     static let maximumStoredBytes = 1_048_576
     var version = 1
@@ -98,5 +108,15 @@ struct SidebarAttentionSettings: Codable, Equatable {
         !signal.kind.isBlocking && acknowledged.contains(.init(
             sessionID: sessionID, ownerID: ownerID, evidence: signal.evidence
         ))
+    }
+}
+
+extension SidebarAttentionSettings: SidebarPreferenceValue {
+    nonisolated static var failOpen: Self { .init() }
+    nonisolated static var unreadableNotice: String {
+        "Acknowledgements could not be read. No attention is hidden. Reset acknowledgements to recover."
+    }
+    nonisolated static var saveNotice: String {
+        "Acknowledgements could not be saved. Check local storage and retry or reset acknowledgements."
     }
 }
