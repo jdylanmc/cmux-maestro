@@ -23,6 +23,7 @@ final class SidebarCopilotPolling {
     private var historyGeneration: UInt64 = 0
     private var snapshot: CopilotSnapshot?
     private var history = SidebarHistorySettings()
+    private var attention = SidebarAttentionSettings()
     private let read: Read
     private let hasPendingHistory: PendingHistory
     private let pause: Pause
@@ -69,6 +70,12 @@ final class SidebarCopilotPolling {
     func updateHistory(_ history: SidebarHistorySettings) {
         guard history != self.history else { return }
         self.history = history
+        reprojectHistory()
+    }
+
+    func updateAttention(_ attention: SidebarAttentionSettings) {
+        guard attention != self.attention else { return }
+        self.attention = attention
         reprojectHistory()
     }
 
@@ -146,7 +153,7 @@ final class SidebarCopilotPolling {
             return false
         }
         self.snapshot = snapshot
-        tree = SidebarCopilotTree.project(snapshot, onto: topology, now: now(), history: history)
+        tree = SidebarCopilotTree.project(snapshot, onto: topology, now: now(), history: history, attention: attention)
         scheduleHistoryExpiry()
         expiry?.cancel()
         guard tree.availability == .ready || tree.availability == .partial else {
@@ -170,7 +177,7 @@ final class SidebarCopilotPolling {
 
     private func reprojectHistory() {
         guard canPoll, let snapshot else { return }
-        tree = SidebarCopilotTree.project(snapshot, onto: topology, now: now(), history: history)
+        tree = SidebarCopilotTree.project(snapshot, onto: topology, now: now(), history: history, attention: attention)
         scheduleHistoryExpiry()
     }
 

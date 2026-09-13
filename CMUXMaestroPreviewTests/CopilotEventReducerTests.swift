@@ -396,6 +396,8 @@ nonisolated struct CopilotEventReducerTests {
         #expect(reducer.value().state == .idle)
         #expect(reducer.value().children[0].state == .blocked)
         try feed(&reducer, "user_input.completed", ["requestId": "child-request"])
+        #expect(reducer.value().children[0].state == .blocked)
+        try feed(&reducer, "user_input.completed", agent: "child", ["requestId": "child-request"])
         #expect(reducer.value().children[0].state == .working)
     }
 

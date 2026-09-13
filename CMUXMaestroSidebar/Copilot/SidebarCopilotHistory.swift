@@ -61,8 +61,42 @@ struct SidebarHistorySettings: Codable, Equatable {
     }
 
     static func knownTimestamp(_ event: CopilotTerminalEvent?, observedAt: Date, now: Date) -> Date? {
-        guard let timestamp = event?.timestamp, timestamp.timeIntervalSince1970.isFinite,
+        knownDate(event?.timestamp, observedAt: observedAt, now: now)
+    }
+
+    static func knownDate(_ date: Date?, observedAt: Date, now: Date) -> Date? {
+        guard let timestamp = date, timestamp.timeIntervalSince1970.isFinite,
               timestamp <= observedAt, timestamp <= now else { return nil }
         return timestamp
+    }
+}
+
+struct SidebarAcknowledgedOutcome: Codable, Hashable {
+    let sessionID: UUID
+    let ownerID: String?
+    let evidence: AgentEvidenceID
+
+    var isValid: Bool {
+        evidence.source == "copilot.events" && (ownerID.map {
+            SidebarDismissedOutcome(sessionID: sessionID, childID: $0, eventID: evidence.eventID).isValid
+        } ?? true)
+    }
+}
+
+struct SidebarAttentionSettings: Codable, Equatable {
+    static let maximumAcknowledgements = 2048
+    static let maximumStoredBytes = 1_048_576
+    var version = 1
+    var acknowledged: Set<SidebarAcknowledgedOutcome> = []
+
+    var isValid: Bool {
+        version == 1 && acknowledged.count <= Self.maximumAcknowledgements
+            && acknowledged.allSatisfy(\.isValid)
+    }
+
+    func contains(_ signal: AgentAttention, sessionID: UUID, ownerID: String?) -> Bool {
+        !signal.kind.isBlocking && acknowledged.contains(.init(
+            sessionID: sessionID, ownerID: ownerID, evidence: signal.evidence
+        ))
     }
 }

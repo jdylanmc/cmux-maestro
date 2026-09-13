@@ -3,6 +3,7 @@ import Testing
 @testable import CMUXMaestroPreview
 
 struct AgentSessionSnapshotTests {
+    typealias AgentActivity = CMUXMaestroPreview.AgentActivity
     @Test(arguments: ["hierarchy", "taskboard", "degraded-unbound"])
     func decodesAndValidatesFixture(named fixtureName: String) throws {
         let snapshot = try decodeFixture(named: fixtureName)

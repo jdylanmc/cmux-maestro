@@ -294,7 +294,7 @@ actor CopilotSessionReader {
                 if newline != nil {
                     if !tail.droppingOversizedLine {
                         if tail.partial.last == 13 { tail.partial.removeLast() }
-                        tail.reducer.consume(tail.partial)
+                        tail.reducer.consume(tail.partial, observedAt: now)
                     }
                     tail.partial.removeAll(keepingCapacity: true)
                     tail.droppingOversizedLine = false
@@ -339,7 +339,8 @@ actor CopilotSessionReader {
         .init(
             sessionID: record.sessionID, surfaceID: record.surfaceID,
             launchWorkspaceID: record.launchWorkspaceID, liveness: liveness,
-            state: value.state, model: value.model, children: value.children, observedAt: now
+            state: value.state, model: value.model, children: value.children, observedAt: now,
+            attention: value.attention, activity: value.activity
         )
     }
 

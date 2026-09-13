@@ -187,7 +187,7 @@ struct SidebarHistoryTests {
     @Test func bothViewsConsumeSameHistoryProjectionAndUseDistinctDismissButtons() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let view = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarView.swift"), encoding: .utf8)
-        #expect(view.contains("HierarchyContent(model: model, dismiss: dismiss)"))
+        #expect(view.contains("HierarchyContent(model: model, dismiss: dismiss, acknowledge: acknowledge)"))
         #expect(view.contains("tree: model.copilot.tree, hierarchy: model.hierarchy"))
         #expect(view.components(separatedBy: "DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)").count == 3)
         #expect(view.contains(".popover(isPresented: $showingHistory)"))

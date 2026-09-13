@@ -22,9 +22,12 @@ enum SidebarMode: String, CaseIterable, Identifiable {
 final class SidebarPreferences {
     private static let selectedModeKey = "sidebar.selectedMode"
     private static let historyKey = "sidebar.completedHistory.v1"
+    private static let attentionKey = "sidebar.attention.v1"
     private let defaults: UserDefaults
     private(set) var history: SidebarHistorySettings
     private(set) var historyNotice: String?
+    private(set) var attention = SidebarAttentionSettings()
+    private(set) var attentionNotice: String?
 
     var selectedMode: SidebarMode {
         didSet {
@@ -50,6 +53,15 @@ final class SidebarPreferences {
         } else {
             history = SidebarHistorySettings()
             save(history)
+        }
+        if let stored = defaults.object(forKey: Self.attentionKey) {
+            if let data = stored as? Data, data.count <= SidebarAttentionSettings.maximumStoredBytes,
+               let decoded = try? JSONDecoder().decode(SidebarAttentionSettings.self, from: data),
+               decoded.isValid {
+                attention = decoded
+            } else {
+                attentionNotice = "Acknowledgements could not be read. No attention is hidden. Reset acknowledgements to recover."
+            }
         }
     }
 
@@ -77,6 +89,33 @@ final class SidebarPreferences {
     }
 
     func resetHistory() { save(SidebarHistorySettings()) }
+
+    func acknowledge(_ outcomes: Set<SidebarAcknowledgedOutcome>, in tree: SidebarCopilotTree) {
+        // The current-window projection, not a captured row or persisted key,
+        // decides eligibility. Blocking requests are never acknowledgement targets.
+        let eligible = outcomes.intersection(tree.acknowledgeableOutcomes)
+        guard !eligible.isEmpty else { return }
+        var next = attention
+        next.acknowledged.formUnion(eligible)
+        guard next.isValid else {
+            attentionNotice = "Acknowledgement storage is full or invalid (limit 2,048). Nothing new was acknowledged. Reset acknowledgements to free space."
+            return
+        }
+        saveAttention(next)
+    }
+
+    func resetAcknowledgements() { saveAttention(SidebarAttentionSettings()) }
+
+    private func saveAttention(_ next: SidebarAttentionSettings) {
+        guard next.isValid, let data = try? JSONEncoder().encode(next),
+              data.count <= SidebarAttentionSettings.maximumStoredBytes else {
+            attentionNotice = "Acknowledgements could not be saved. Previous acknowledgements remain in use."
+            return
+        }
+        defaults.set(data, forKey: Self.attentionKey)
+        attention = next
+        attentionNotice = nil
+    }
 
     private func save(_ next: SidebarHistorySettings) {
         guard next.isValid, let data = try? JSONEncoder().encode(next),

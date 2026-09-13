@@ -32,22 +32,39 @@ struct SidebarView: View {
             .accessibilityLabel("Sidebar view")
 
             CopilotOverview(tree: model.copilot.tree)
+            if model.copilot.tree.attentionOwnerCount > 0 {
+                HStack {
+                    Label("\(model.copilot.tree.attentionOwnerCount) need attention", systemImage: "bell.badge")
+                        .font(.caption).foregroundStyle(.orange)
+                    Spacer(minLength: 0)
+                    Button("Acknowledge all") { acknowledge(model.copilot.tree.acknowledgeableOutcomes) }
+                        .buttonStyle(.borderless).font(.caption2)
+                        .disabled(model.copilot.tree.acknowledgeableOutcomes.isEmpty)
+                        .help("Acknowledge nonblocking outcomes on current-window surfaces. Never answers or approves a request.")
+                        .accessibilityIdentifier("sidebar-acknowledge-all")
+                }
+            }
             if let notice = preferences.historyNotice {
                 Text(notice)
                     .font(.caption2).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("sidebar-history-notice")
             }
+            if let notice = preferences.attentionNotice {
+                Text(notice).font(.caption2).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("sidebar-attention-notice")
+            }
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 9) {
                     switch preferences.selectedMode {
                     case .hierarchy:
-                        HierarchyContent(model: model, dismiss: dismiss)
+                        HierarchyContent(model: model, dismiss: dismiss, acknowledge: acknowledge)
                     case .taskboard:
                         TaskboardContent(
                             tree: model.copilot.tree, hierarchy: model.hierarchy,
-                            navigation: model.navigation, dismiss: dismiss
+                            navigation: model.navigation, dismiss: dismiss, acknowledge: acknowledge
                         )
                     }
                 }
@@ -72,9 +89,11 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             model.copilot.updateHistory(preferences.history)
+            model.copilot.updateAttention(preferences.attention)
             model.setVisible(true)
         }
         .onChange(of: preferences.history) { _, history in model.copilot.updateHistory(history) }
+        .onChange(of: preferences.attention) { _, attention in model.copilot.updateAttention(attention) }
         .onDisappear { model.setVisible(false) }
     }
 
@@ -83,6 +102,11 @@ struct SidebarView: View {
         guard model.copilot.tree.dismissibleOutcomes.contains(outcome) else { return }
         preferences.dismiss([outcome])
         model.copilot.updateHistory(preferences.history)
+    }
+
+    private func acknowledge(_ outcomes: Set<SidebarAcknowledgedOutcome>) {
+        preferences.acknowledge(outcomes, in: model.copilot.tree)
+        model.copilot.updateAttention(preferences.attention)
     }
 
     private var historySettings: some View {
@@ -99,7 +123,7 @@ struct SidebarView: View {
                     Text(value.title).tag(value)
                 }
             }
-            Text("Only finished, failed, or cancelled child work is hidden. Unknown completion ages stay visible. Parent context is kept for remaining children.")
+            Text("Only finished, failed, or cancelled child history is hidden. Outstanding attention and unknown completion ages stay visible. Parent context is kept for remaining children.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Button("Clear completed (\(model.copilot.tree.dismissibleOutcomes.count))") {
@@ -124,6 +148,19 @@ struct SidebarView: View {
                 preferences.resetHistory()
                 model.copilot.updateHistory(preferences.history)
             }
+            Divider()
+            Text("Attention").font(.headline)
+            Text("Acknowledgement is local to Maestro. Pending permissions and questions cannot be acknowledged. Turn finished means the main turn ended; background work may still run.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Reset acknowledgements") {
+                preferences.resetAcknowledgements()
+                model.copilot.updateAttention(preferences.attention)
+            }
+            .disabled(preferences.attention.acknowledged.isEmpty && preferences.attentionNotice == nil)
+            Text("Stores up to 2,048 outcome identities. Reset reveals current outstanding outcomes, not all historical completions.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
         .frame(width: 300)
@@ -197,6 +234,7 @@ private struct CopilotOverview: View {
 private struct HierarchyContent: View {
     let model: SidebarConnectionModel
     let dismiss: (SidebarDismissedOutcome) -> Void
+    let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
 
     var body: some View {
         if !model.hierarchy.receivedSnapshot {
@@ -210,7 +248,7 @@ private struct HierarchyContent: View {
                 WorkspaceRow(
                     workspace: workspace,
                     sessions: model.copilot.tree.sessions.filter { $0.workspaceID == workspace.id },
-                    navigation: model.navigation, dismiss: dismiss
+                    navigation: model.navigation, dismiss: dismiss, acknowledge: acknowledge
                 )
             }
         }
@@ -222,6 +260,7 @@ private struct WorkspaceRow: View {
     let sessions: [SidebarCopilotSession]
     let navigation: SidebarNavigation
     let dismiss: (SidebarDismissedOutcome) -> Void
+    let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @State private var expanded = true
 
     private var title: String {
@@ -276,7 +315,7 @@ private struct WorkspaceRow: View {
                         SurfaceRow(
                             workspaceID: workspace.id, surface: surface,
                             sessions: sessions.filter { $0.surfaceID == surface.id },
-                            navigation: navigation, dismiss: dismiss
+                            navigation: navigation, dismiss: dismiss, acknowledge: acknowledge
                         )
                     }
                 }
@@ -295,6 +334,7 @@ private struct SurfaceRow: View {
     let sessions: [SidebarCopilotSession]
     let navigation: SidebarNavigation
     let dismiss: (SidebarDismissedOutcome) -> Void
+    let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @State private var expanded = true
 
     private var title: String { surface.title.isEmpty ? "Untitled surface" : surface.title }
@@ -328,7 +368,7 @@ private struct SurfaceRow: View {
             SurfacePathDetail(workingDirectory: surface.workingDirectory)
             if expanded {
                 ForEach(sessions) { session in
-                    CopilotSessionRow(session: session, navigation: navigation, dismiss: dismiss)
+                    CopilotSessionRow(session: session, navigation: navigation, dismiss: dismiss, acknowledge: acknowledge)
                 }
             }
         }
@@ -343,6 +383,7 @@ private struct CopilotSessionRow: View {
     let session: SidebarCopilotSession
     let navigation: SidebarNavigation
     let dismiss: (SidebarDismissedOutcome) -> Void
+    let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @State private var expanded = true
     @State private var collapsed: Set<String> = []
 
@@ -365,6 +406,18 @@ private struct CopilotSessionRow: View {
             }
             Text("Process: \(session.liveness.rawValue)")
                 .font(.caption2).foregroundStyle(.secondary)
+            HStack(alignment: .top) {
+                AttentionSummary(attention: session.attention, state: session.state, degraded: session.attentionDegraded)
+                AcknowledgeOutcomeButton(
+                    attention: session.attention, sessionID: session.id, ownerID: nil,
+                    degraded: session.attentionDegraded, acknowledge: acknowledge
+                )
+            }
+            ActivityDetail(activity: session.activity)
+            if session.attentionOwnerCount > 0 {
+                Text("\(session.attentionOwnerCount) session/child rows need attention")
+                    .font(.caption2).foregroundStyle(.orange)
+            }
             Text("\(session.retainedHistoryCount) retained outcomes · \(session.hiddenHistoryCount) hidden")
                 .font(.caption2).foregroundStyle(.secondary)
             if session.knownRunningChildren > 0 {
@@ -409,6 +462,10 @@ private struct CopilotSessionRow: View {
                             CopilotChildLabel(node: node)
                         }
                         DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)
+                        AcknowledgeOutcomeButton(
+                            attention: node.attention, sessionID: session.id, ownerID: node.id,
+                            degraded: node.attentionDegraded, acknowledge: acknowledge
+                        )
                     }
                     .padding(.leading, CGFloat(node.depth + (node.ancestryUnresolved ? 1 : 0)) * 4)
                     .accessibilityIdentifier("copilot-child-\(session.id)-\(node.id)")
@@ -433,6 +490,8 @@ private struct CopilotChildLabel: View {
             Label(node.name, systemImage: node.kind.symbolName)
                 .font(.caption).lineLimit(2)
             WorkStateLabel(state: node.state)
+            AttentionSummary(attention: node.attention, state: node.state, degraded: node.attentionDegraded)
+            ActivityDetail(activity: node.activity)
             if node.historyAncestor {
                 Text("Kept for child context").font(.caption2).foregroundStyle(.secondary)
             } else if node.state.isTerminal {
@@ -479,6 +538,7 @@ private struct TaskboardContent: View {
     let hierarchy: HierarchySnapshot
     let navigation: SidebarNavigation
     let dismiss: (SidebarDismissedOutcome) -> Void
+    let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
 
     private let groups: [(String, [CopilotWorkState])] = [
         ("Blocked", [.blocked]), ("Working", [.working]), ("Idle", [.idle]),
@@ -486,6 +546,35 @@ private struct TaskboardContent: View {
     ]
 
     var body: some View {
+        ForEach(tree.sessions.filter { !$0.attention.isEmpty || $0.attentionDegraded }) { session in
+            let paths = hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID)
+            VStack(alignment: .leading, spacing: 4) {
+                FocusButton(
+                    target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
+                    navigation: navigation, label: "Focus Copilot session \(session.shortID)"
+                ) {
+                    Text("Copilot · \(session.shortID)").font(.caption.weight(.semibold))
+                }
+                WorkStateLabel(state: session.state)
+                HStack(alignment: .top) {
+                    AttentionSummary(attention: session.attention, state: session.state, degraded: session.attentionDegraded)
+                    AcknowledgeOutcomeButton(
+                        attention: session.attention, sessionID: session.id, ownerID: nil,
+                        degraded: session.attentionDegraded, acknowledge: acknowledge
+                    )
+                }
+                ActivityDetail(activity: session.activity)
+                Text("Process: \(session.liveness.rawValue)").font(.caption2).foregroundStyle(.secondary)
+                if session.knownRunningChildren > 0 {
+                    Text("\(session.knownRunningChildren) known child tasks running").font(.caption2).foregroundStyle(.blue)
+                }
+                AvailabilityPathRows(rootPath: paths.rootPath, projectRootPath: paths.projectRootPath)
+                SurfacePathDetail(workingDirectory: paths.workingDirectory)
+            }
+            .padding(7)
+            .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+            .accessibilityIdentifier("taskboard-session-attention-\(session.id)")
+        }
         if tree.sessions.allSatisfy({ $0.nodes.isEmpty }) {
             SidebarNotice(
                 title: tree.hasCompleteCounts ? "No visible child tasks" : "Taskboard data unavailable",
@@ -515,11 +604,91 @@ private struct TaskboardContent: View {
                                 }
                                 .accessibilityValue(paths.accessibilityDescription)
                                 DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)
+                                AcknowledgeOutcomeButton(
+                                    attention: node.attention, sessionID: session.id, ownerID: node.id,
+                                    degraded: node.attentionDegraded, acknowledge: acknowledge
+                                )
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+private struct AttentionSummary: View {
+    let attention: [AgentAttention]
+    let state: CopilotWorkState
+    let degraded: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(AgentAttentionKind.allCases.filter { kind in attention.contains { $0.kind == kind } }, id: \.self) { kind in
+                let signals = attention.filter { $0.kind == kind }
+                Label(kind.title + (signals.count > 1 ? " (\(signals.count))" : ""),
+                      systemImage: kind.isBlocking ? "hand.raised" : "bell.badge")
+                    .font(.caption2).foregroundStyle(.orange)
+                if kind == .turnFinished {
+                    Text("Main turn only; background work may continue.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if signals.count == 1 {
+                    if let date = signals.first?.occurredAt {
+                        Text(date, format: .dateTime.year().month(.abbreviated).day().hour().minute())
+                            .font(.caption2).foregroundStyle(.secondary)
+                    } else {
+                        Text("Event time unknown").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if state == .blocked && !attention.contains(where: { $0.kind.isBlocking }) {
+                Text("Blocking reason unavailable").font(.caption2).foregroundStyle(.orange)
+            }
+            if degraded {
+                Text("Attention evidence incomplete").font(.caption2).foregroundStyle(.orange)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct AcknowledgeOutcomeButton: View {
+    let attention: [AgentAttention]
+    let sessionID: UUID
+    let ownerID: String?
+    let degraded: Bool
+    let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
+
+    var body: some View {
+        let eligible = Set(SidebarCopilotTree.acknowledgeable(attention, sessionID: sessionID, ownerID: ownerID, degraded: degraded))
+        if !eligible.isEmpty {
+            Button("Acknowledge") { acknowledge(eligible) }
+                .buttonStyle(.borderless).font(.caption2)
+                .help("Acknowledge this nonblocking outcome in Maestro only. No approval, answer or cancellation is sent.")
+                .accessibilityIdentifier("acknowledge-outcome-\(sessionID)-\(ownerID.map { "child:\($0)" } ?? "primary")")
+        }
+    }
+}
+
+private struct ActivityDetail: View {
+    let activity: AgentActivity?
+
+    var body: some View {
+        if let activity, let summary = activity.summary {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(summary).lineLimit(2)
+                if let date = activity.lastEventAt {
+                    HStack(spacing: 3) {
+                        Text("Recorded")
+                        Text(date, format: .dateTime.year().month(.abbreviated).day().hour().minute())
+                    }
+                } else {
+                    Text("Activity time unknown")
+                }
+            }
+            .font(.caption2).foregroundStyle(.secondary)
+            .accessibilityElement(children: .combine)
         }
     }
 }

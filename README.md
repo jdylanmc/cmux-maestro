@@ -141,8 +141,79 @@ current partial data, including unknown lifecycle state and replay limits.
 Malformed events, incompatible session schemas, identity changes and torn reads
 still cannot publish unvalidated replacement state.
 
-This is completed-child-work management only. Session attention/acknowledgement
-and broader presentation preferences are separate, not implemented here.
+## Attention and safe activity
+
+Both views distinguish **Waiting for permission** from **Waiting for answer**,
+on the session or child that owns the durable request. Pairing uses request kind,
+owner and request ID; a completion for another owner or kind cannot clear it.
+Hook-resolved permissions do not block. Repeated/late request identities cannot
+reopen a resolved request. Rejected stale abort/error evidence cannot erase a
+newer request. Missing ancestry stays explicitly unresolved.
+Independent requests are not ordered against one another's clocks: a delayed
+question remains pending even if a different permission has a newer timestamp.
+Hook resolution uses the exact kind/owner/request identity, including when it
+arrives after another request or a new turn.
+
+The compact **Needs attention** affordance includes outstanding requests and
+nonblocking outcomes. **Acknowledge** records only the latter locally in the
+native sidebar. **Acknowledge all** uses the current-window projection, including
+collapsed branches but excluding off-window or display-capped rows. An owner
+with a pending request is never eligible, even if it also has an outcome.
+Neither acknowledgement, history dismissal nor focus sends approval, answers,
+cancellation or any agent-control command. CMUX unread counts are untouched.
+
+**Turn finished** means a matching primary `assistant.turn_end` was recorded,
+not that the session or its background children finished. Root errors/aborts
+likewise do not end or unblock unrelated children. Process liveness, work state
+and attention remain independent. Process presence, idle time, file modification
+time and expired history never imply success, progress, or a hung agent.
+
+Outstanding nonblocking evidence is intentionally bounded: only the latest
+accepted error/abort outcome per owner, plus the latest primary-turn completion.
+Successful historical child completions are history, not attention. Fresh
+owner turn/tool/invocation activity retires that owner's obsolete outcome. A
+new primary turn begins a new outcome cycle for the session and its children;
+it does **not** resolve their still-pending requests. Resume invalidates prior
+activity/attention and demotes nonterminal children to unknown, rather than
+claiming that pre-resume background work completed. Accepted terminal child
+evidence remains available to history controls. Duplicate/retired lifecycle
+identities cannot restart attention or its timing.
+
+Outstanding attention protects rows from history retention and dismissal.
+Acknowledging an error/abort then allows ordinary history retention to apply;
+required parent context and current blocking descendants stay visible. No timer
+auto-acknowledges anything. History and acknowledgement resets are independent.
+
+Acknowledgements persist by provider-session UUID, owner ID (or primary owner),
+source and stable accepted event UUID. Labels, paths, tool payloads and topology
+are not keys. The same outcome remains acknowledged after reload or surface
+moves; a new outcome reappears. Storage is versioned and bounded to **2,048
+acknowledgements / 1 MiB**, refuses overflowing batches without eviction, and
+offers **Reset acknowledgements**. Corruption fails open with a visible warning:
+no attention is hidden by unreadable settings.
+
+Activity uses only the allowlisted durable tool-name field: **Executing tool**
+(the latest still-executing invocation for that owner) or **Last completed tool**.
+The latter is a tool-invocation event, not a statement that a detached shell
+process exited. Child attribution requires real event ownership. Names must be
+bounded symbolic identifiers; arguments, results, prompts and raw errors are
+never decoded for display. Invalid/missing/future timing is explicitly unknown;
+timestamps are not replaced with poll time. No token/context counters, guessed
+percentages or speculative stall detection are implemented.
+Lifecycle acceptance never depends on the current read clock. Tool and turn
+completions pair with their own active invocation/owner identities; contradictory
+start/completion timestamps retain the completed evidence with **unknown timing**,
+rather than resurrecting executing work on a later replay. Observation freshness
+and future display timestamps are validated separately in sidebar projection.
+
+The reusable neutral `AgentActivity` contract lives in `Domain/AgentSignals.swift`
+alongside evidence-bearing attention primitives, compiled into app, sidebar and
+tests, not the hook. Existing snapshot behavior is unchanged. New live model
+fields are optional for backward Codable compatibility. Reader identity,
+partial-read, corruption, freshness and replay-cap safeguards still apply;
+untrusted or unavailable evidence cannot fabricate an outcome or an action.
+Broader presentation preferences, telemetry and the remaining backlog are not
+claimed by this feature.
 
 ## Requirements
 
