@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarView: View {
     let model: SidebarConnectionModel
     @Bindable private var preferences: SidebarPreferences
+    @State private var showingHistory = false
 
     init(model: SidebarConnectionModel, preferences: SidebarPreferences) {
         self.model = model
@@ -11,7 +12,18 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Maestro").font(.headline)
+            HStack {
+                Text("Maestro").font(.headline)
+                Spacer()
+                Button { showingHistory.toggle() } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless)
+                .help("Completed work history settings")
+                .accessibilityLabel("Completed work history settings")
+                .accessibilityIdentifier("sidebar-history-settings")
+                .popover(isPresented: $showingHistory) { historySettings }
+            }
             Picker("Sidebar view", selection: $preferences.selectedMode) {
                 ForEach(SidebarMode.allCases) { mode in Text(mode.title).tag(mode) }
             }
@@ -20,14 +32,23 @@ struct SidebarView: View {
             .accessibilityLabel("Sidebar view")
 
             CopilotOverview(tree: model.copilot.tree)
+            if let notice = preferences.historyNotice {
+                Text(notice)
+                    .font(.caption2).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("sidebar-history-notice")
+            }
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 9) {
                     switch preferences.selectedMode {
                     case .hierarchy:
-                        HierarchyContent(model: model)
+                        HierarchyContent(model: model, dismiss: dismiss)
                     case .taskboard:
-                        TaskboardContent(tree: model.copilot.tree, hierarchy: model.hierarchy, navigation: model.navigation)
+                        TaskboardContent(
+                            tree: model.copilot.tree, hierarchy: model.hierarchy,
+                            navigation: model.navigation, dismiss: dismiss
+                        )
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -49,8 +70,63 @@ struct SidebarView: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear { model.setVisible(true) }
+        .onAppear {
+            model.copilot.updateHistory(preferences.history)
+            model.setVisible(true)
+        }
+        .onChange(of: preferences.history) { _, history in model.copilot.updateHistory(history) }
         .onDisappear { model.setVisible(false) }
+    }
+
+    private func dismiss(_ outcome: SidebarDismissedOutcome) {
+        // Revalidate against the current projection, not a stale button's captured row.
+        guard model.copilot.tree.dismissibleOutcomes.contains(outcome) else { return }
+        preferences.dismiss([outcome])
+        model.copilot.updateHistory(preferences.history)
+    }
+
+    private var historySettings: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Completed work history").font(.headline)
+            Picker("Retain for", selection: Binding(
+                get: { preferences.history.retention },
+                set: {
+                    preferences.setRetention($0)
+                    model.copilot.updateHistory(preferences.history)
+                }
+            )) {
+                ForEach(SidebarHistoryRetention.allCases) { value in
+                    Text(value.title).tag(value)
+                }
+            }
+            Text("Only finished, failed, or cancelled child work is hidden. Unknown completion ages stay visible. Parent context is kept for remaining children.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Clear completed (\(model.copilot.tree.dismissibleOutcomes.count))") {
+                preferences.dismiss(model.copilot.tree.dismissibleOutcomes)
+                model.copilot.updateHistory(preferences.history)
+            }
+            .disabled(model.copilot.tree.dismissibleOutcomes.isEmpty)
+            .help("Dismiss retained terminal outcomes on current-window surfaces, including collapsed branches. Does not delete source events.")
+            .accessibilityIdentifier("sidebar-clear-completed")
+            Button("Restore dismissed history") {
+                preferences.restoreDismissed()
+                model.copilot.updateHistory(preferences.history)
+            }
+            .disabled(preferences.history.dismissed.isEmpty)
+            Text("Retention still applies after restoring. Choose Never to see older history. Dismissals are stored locally, up to 2,048 outcomes.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let notice = preferences.historyNotice {
+                Text(notice).font(.caption).foregroundStyle(.orange)
+            }
+            Button("Reset history settings") {
+                preferences.resetHistory()
+                model.copilot.updateHistory(preferences.history)
+            }
+        }
+        .padding(16)
+        .frame(width: 300)
     }
 
     @ViewBuilder private var connectionStatus: some View {
@@ -86,6 +162,8 @@ private struct CopilotOverview: View {
                     Text("Running child count unavailable")
                         .font(.caption)
                 }
+                Text("\(tree.retainedHistoryCount) retained outcomes · \(tree.hiddenHistoryCount) hidden by history controls")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
             Text(tree.summary)
                 .font(.caption)
@@ -118,6 +196,7 @@ private struct CopilotOverview: View {
 
 private struct HierarchyContent: View {
     let model: SidebarConnectionModel
+    let dismiss: (SidebarDismissedOutcome) -> Void
 
     var body: some View {
         if !model.hierarchy.receivedSnapshot {
@@ -131,7 +210,7 @@ private struct HierarchyContent: View {
                 WorkspaceRow(
                     workspace: workspace,
                     sessions: model.copilot.tree.sessions.filter { $0.workspaceID == workspace.id },
-                    navigation: model.navigation
+                    navigation: model.navigation, dismiss: dismiss
                 )
             }
         }
@@ -142,6 +221,7 @@ private struct WorkspaceRow: View {
     let workspace: HierarchyWorkspace
     let sessions: [SidebarCopilotSession]
     let navigation: SidebarNavigation
+    let dismiss: (SidebarDismissedOutcome) -> Void
     @State private var expanded = true
 
     private var title: String {
@@ -195,7 +275,8 @@ private struct WorkspaceRow: View {
                     ForEach(surfaces) { surface in
                         SurfaceRow(
                             workspaceID: workspace.id, surface: surface,
-                            sessions: sessions.filter { $0.surfaceID == surface.id }, navigation: navigation
+                            sessions: sessions.filter { $0.surfaceID == surface.id },
+                            navigation: navigation, dismiss: dismiss
                         )
                     }
                 }
@@ -213,6 +294,7 @@ private struct SurfaceRow: View {
     let surface: HierarchySurface
     let sessions: [SidebarCopilotSession]
     let navigation: SidebarNavigation
+    let dismiss: (SidebarDismissedOutcome) -> Void
     @State private var expanded = true
 
     private var title: String { surface.title.isEmpty ? "Untitled surface" : surface.title }
@@ -246,7 +328,7 @@ private struct SurfaceRow: View {
             SurfacePathDetail(workingDirectory: surface.workingDirectory)
             if expanded {
                 ForEach(sessions) { session in
-                    CopilotSessionRow(session: session, navigation: navigation)
+                    CopilotSessionRow(session: session, navigation: navigation, dismiss: dismiss)
                 }
             }
         }
@@ -260,6 +342,7 @@ private struct SurfaceRow: View {
 private struct CopilotSessionRow: View {
     let session: SidebarCopilotSession
     let navigation: SidebarNavigation
+    let dismiss: (SidebarDismissedOutcome) -> Void
     @State private var expanded = true
     @State private var collapsed: Set<String> = []
 
@@ -282,6 +365,8 @@ private struct CopilotSessionRow: View {
             }
             Text("Process: \(session.liveness.rawValue)")
                 .font(.caption2).foregroundStyle(.secondary)
+            Text("\(session.retainedHistoryCount) retained outcomes · \(session.hiddenHistoryCount) hidden")
+                .font(.caption2).foregroundStyle(.secondary)
             if session.knownRunningChildren > 0 {
                 Label("\(session.knownRunningChildren) known child tasks running", systemImage: "arrow.trianglehead.2.clockwise")
                     .font(.caption2).foregroundStyle(.blue)
@@ -296,7 +381,7 @@ private struct CopilotSessionRow: View {
             }
             if expanded {
                 if session.nodes.isEmpty {
-                    Text(session.childrenComplete ? "No recorded child tasks" : "Child history unavailable or loading")
+                    Text(session.childrenComplete ? "No visible child tasks; history controls may hide ended work." : "Child history unavailable or loading")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 ForEach(session.visibleNodes(collapsed: collapsed)) { node in
@@ -323,6 +408,7 @@ private struct CopilotSessionRow: View {
                         ) {
                             CopilotChildLabel(node: node)
                         }
+                        DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)
                     }
                     .padding(.leading, CGFloat(node.depth + (node.ancestryUnresolved ? 1 : 0)) * 4)
                     .accessibilityIdentifier("copilot-child-\(session.id)-\(node.id)")
@@ -347,6 +433,20 @@ private struct CopilotChildLabel: View {
             Label(node.name, systemImage: node.kind.symbolName)
                 .font(.caption).lineLimit(2)
             WorkStateLabel(state: node.state)
+            if node.historyAncestor {
+                Text("Kept for child context").font(.caption2).foregroundStyle(.secondary)
+            } else if node.state.isTerminal {
+                if let timestamp = node.terminalTimestamp {
+                    HStack(spacing: 3) {
+                        Text("Ended")
+                        Text(timestamp, style: .relative)
+                        Text("ago")
+                    }
+                    .font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Text("Completion age unknown").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
             if let model = node.model {
                 Text(model).font(.caption2).foregroundStyle(.secondary)
             }
@@ -356,10 +456,29 @@ private struct CopilotChildLabel: View {
     }
 }
 
+private struct DismissOutcomeButton: View {
+    let node: SidebarCopilotNode
+    let sessionID: UUID
+    let dismiss: (SidebarDismissedOutcome) -> Void
+
+    var body: some View {
+        if let outcome = node.dismissibleOutcome(sessionID: sessionID) {
+            Button { dismiss(outcome) } label: {
+                Image(systemName: "xmark").font(.caption2).frame(width: 22, height: 22)
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss this \(node.state.rawValue) outcome from history; does not stop or delete work")
+            .accessibilityLabel("Dismiss \(node.name), \(node.state.rawValue) outcome")
+            .accessibilityIdentifier("dismiss-outcome-\(sessionID)-\(node.id)")
+        }
+    }
+}
+
 private struct TaskboardContent: View {
     let tree: SidebarCopilotTree
     let hierarchy: HierarchySnapshot
     let navigation: SidebarNavigation
+    let dismiss: (SidebarDismissedOutcome) -> Void
 
     private let groups: [(String, [CopilotWorkState])] = [
         ("Blocked", [.blocked]), ("Working", [.working]), ("Idle", [.idle]),
@@ -369,8 +488,8 @@ private struct TaskboardContent: View {
     var body: some View {
         if tree.sessions.allSatisfy({ $0.nodes.isEmpty }) {
             SidebarNotice(
-                title: tree.hasCompleteCounts ? "No recorded child tasks" : "Taskboard data unavailable",
-                detail: "Taskboard groups contain observed Copilot child work only. The hierarchy remains available for workspace and session focus."
+                title: tree.hasCompleteCounts ? "No visible child tasks" : "Taskboard data unavailable",
+                detail: "History controls may hide ended work; this does not mean the session is finished. The hierarchy remains available for workspace and session focus."
             )
         } else {
             ForEach(groups, id: \.0) { title, states in
@@ -380,20 +499,23 @@ private struct TaskboardContent: View {
                     ForEach(sessions) { session in
                         let paths = hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID)
                         ForEach(session.nodes.filter { states.contains($0.state) }) { node in
-                            FocusButton(
-                                target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
-                                navigation: navigation, label: "Focus Copilot \(session.shortID), \(node.name)"
-                            ) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    CopilotChildLabel(node: node)
-                                    Text("Copilot · \(session.shortID)").font(.caption2).foregroundStyle(.secondary)
-                                    AvailabilityPathRows(rootPath: paths.rootPath, projectRootPath: paths.projectRootPath)
-                                    SurfacePathDetail(workingDirectory: paths.workingDirectory)
+                            HStack(alignment: .top, spacing: 4) {
+                                FocusButton(
+                                    target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
+                                    navigation: navigation, label: "Focus Copilot \(session.shortID), \(node.name)"
+                                ) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        CopilotChildLabel(node: node)
+                                        Text("Copilot · \(session.shortID)").font(.caption2).foregroundStyle(.secondary)
+                                        AvailabilityPathRows(rootPath: paths.rootPath, projectRootPath: paths.projectRootPath)
+                                        SurfacePathDetail(workingDirectory: paths.workingDirectory)
+                                    }
+                                    .padding(7)
+                                    .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
                                 }
-                                .padding(7)
-                                .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+                                .accessibilityValue(paths.accessibilityDescription)
+                                DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)
                             }
-                            .accessibilityValue(paths.accessibilityDescription)
                         }
                     }
                 }

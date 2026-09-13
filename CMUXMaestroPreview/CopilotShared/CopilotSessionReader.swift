@@ -8,11 +8,13 @@ nonisolated struct CopilotReaderLimits: Sendable {
     let bytesPerSession: Int
     let linesPerSession: Int
     let maximumLineBytes: Int
+    let maximumLifecycleEvents: Int
 
     init(
         maximumSessions: Int = 64, maximumBindings: Int = 1024,
         bytesPerRead: Int = 8_388_608, bytesPerSession: Int = 4_194_304,
-        linesPerSession: Int = 2048, maximumLineBytes: Int = 1_048_576
+        linesPerSession: Int = 2048, maximumLineBytes: Int = 1_048_576,
+        maximumLifecycleEvents: Int = 65_536
     ) {
         self.maximumSessions = max(1, maximumSessions)
         self.maximumBindings = max(1, maximumBindings)
@@ -20,6 +22,7 @@ nonisolated struct CopilotReaderLimits: Sendable {
         self.bytesPerSession = max(1, bytesPerSession)
         self.linesPerSession = max(1, linesPerSession)
         self.maximumLineBytes = max(1, maximumLineBytes)
+        self.maximumLifecycleEvents = max(1, maximumLifecycleEvents)
     }
 }
 
@@ -160,7 +163,9 @@ actor CopilotSessionReader {
                 }
                 var tail = tails[record.sessionID]
                 if tail.map({ Self.sameBindingIdentity($0.record, record) }) != true {
-                    tail = Tail(record: record, reducer: CopilotEventReducer(sessionID: record.sessionID))
+                    tail = Tail(record: record, reducer: CopilotEventReducer(
+                        sessionID: record.sessionID, maximumLifecycleEvents: limits.maximumLifecycleEvents
+                    ))
                 }
                 var candidate = tail!
                 var sessionIssues: [CopilotIssue] = []
@@ -250,7 +255,9 @@ actor CopilotSessionReader {
         if reset {
             let saved = tail.lastComplete
             let savedAt = tail.lastCompleteAt
-            tail = Tail(record: tail.record, reducer: CopilotEventReducer(sessionID: tail.record.sessionID))
+            tail = Tail(record: tail.record, reducer: CopilotEventReducer(
+                sessionID: tail.record.sessionID, maximumLifecycleEvents: limits.maximumLifecycleEvents
+            ))
             tail.lastComplete = saved
             tail.lastCompleteAt = savedAt
         }
@@ -316,7 +323,9 @@ actor CopilotSessionReader {
         if incomplete {
             issues.append(.loadingHistory)
             if tail.offset < after.size { issues.append(.readLimitReached) }
-        } else if issues.isEmpty {
+        } else if tail.reducer.canPublishProjection {
+            // Complete here means a verified read boundary, not complete semantics.
+            // Conservative unknown/limited projections stay current; unsafe input does not.
             tail.lastComplete = value
             tail.lastCompleteAt = now
         }

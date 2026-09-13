@@ -18,6 +18,11 @@ final class SidebarCopilotPolling {
     private var lastGeneratedAt: Date?
     private var worker: Task<Void, Never>?
     private var expiry: Task<Void, Never>?
+    private var historyExpiry: Task<Void, Never>?
+    private var historyDeadline: Date?
+    private var historyGeneration: UInt64 = 0
+    private var snapshot: CopilotSnapshot?
+    private var history = SidebarHistorySettings()
     private let read: Read
     private let hasPendingHistory: PendingHistory
     private let pause: Pause
@@ -61,11 +66,19 @@ final class SidebarCopilotPolling {
         invalidate()
     }
 
+    func updateHistory(_ history: SidebarHistorySettings) {
+        guard history != self.history else { return }
+        self.history = history
+        reprojectHistory()
+    }
+
     private func invalidate() {
         generation &+= 1
         worker?.cancel()
         expiry?.cancel()
         expiry = nil
+        cancelHistoryExpiry()
+        snapshot = nil
         lastGeneratedAt = nil
         tree = SidebarCopilotTree(
             availability: !visible ? .hidden : !connected ? .disconnected
@@ -98,6 +111,10 @@ final class SidebarCopilotPolling {
                     hasUnreadHistory = accepted && !snapshot.isComplete && pending
                 } catch {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
+                    self.expiry?.cancel()
+                    self.expiry = nil
+                    self.cancelHistoryExpiry()
+                    self.snapshot = nil
                     self.tree = SidebarCopilotTree(
                         availability: .unavailable, sessions: [], issues: [], generatedAt: nil
                     )
@@ -118,18 +135,67 @@ final class SidebarCopilotPolling {
     private func accept(_ snapshot: CopilotSnapshot, topology: SidebarTopology, token: UInt64) -> Bool {
         guard lastGeneratedAt.map({ snapshot.generatedAt >= $0 }) ?? true else { return false }
         lastGeneratedAt = snapshot.generatedAt
-        tree = SidebarCopilotTree.project(snapshot, onto: topology, now: now())
+        if snapshot.issues.contains(.permissionDenied) {
+            self.snapshot = nil
+            expiry?.cancel()
+            expiry = nil
+            cancelHistoryExpiry()
+            tree = SidebarCopilotTree(
+                availability: .partial, sessions: [], issues: snapshot.issues, generatedAt: snapshot.generatedAt
+            )
+            return false
+        }
+        self.snapshot = snapshot
+        tree = SidebarCopilotTree.project(snapshot, onto: topology, now: now(), history: history)
+        scheduleHistoryExpiry()
         expiry?.cancel()
+        guard tree.availability == .ready || tree.availability == .partial else {
+            self.snapshot = nil
+            return false
+        }
         let earliestObservation = ([snapshot.generatedAt] + tree.sessions.map(\.observedAt)).min() ?? snapshot.generatedAt
         let delay = max(0, SidebarCopilotTree.maximumAge - now().timeIntervalSince(earliestObservation))
         let expiryPause = expiryPause
         expiry = Task { [weak self] in
             do { try await expiryPause(delay) } catch { return }
-            guard let self, self.generation == token else { return }
+            guard let self, self.generation == token, !Task.isCancelled else { return }
+            self.snapshot = nil
+            self.cancelHistoryExpiry()
             self.tree = SidebarCopilotTree(
                 availability: .unavailable, sessions: [], issues: [], generatedAt: nil
             )
         }
         return SidebarCopilotTree.isFresh(snapshot.generatedAt, now: now())
+    }
+
+    private func reprojectHistory() {
+        guard canPoll, let snapshot else { return }
+        tree = SidebarCopilotTree.project(snapshot, onto: topology, now: now(), history: history)
+        scheduleHistoryExpiry()
+    }
+
+    private func cancelHistoryExpiry() {
+        historyGeneration &+= 1
+        historyExpiry?.cancel()
+        historyExpiry = nil
+        historyDeadline = nil
+    }
+
+    private func scheduleHistoryExpiry() {
+        let deadline = canPoll ? tree.nextHistoryExpiry : nil
+        guard deadline != historyDeadline else { return }
+        cancelHistoryExpiry()
+        guard let deadline else { return }
+        historyDeadline = deadline
+        let token = historyGeneration
+        let delay = deadline.timeIntervalSince(now())
+        let expiryPause = expiryPause
+        historyExpiry = Task { [weak self] in
+            do { try await expiryPause(max(0, delay)) } catch { return }
+            guard let self, self.historyGeneration == token, !Task.isCancelled else { return }
+            self.historyExpiry = nil
+            self.historyDeadline = nil
+            self.reprojectHistory()
+        }
     }
 }

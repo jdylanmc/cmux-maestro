@@ -92,6 +92,58 @@ symlinked state directories are not supported. Missing lifecycle events can
 leave completion/status unknown, and agent IDs are not automatically native
 child-session IDs. No title/transcript heuristics repair missing identity.
 
+## Completed work history
+
+The sidebar's **gear** opens native history settings, shared by **Hierarchy** and
+**Taskboard**. Finished, failed and cancelled child outcomes are retained for
+**15 seconds** by default; choose **1 minute**, **5 minutes**, **1 hour**, or
+**Never**. Retention starts at the accepted terminal event's RFC 3339 timestamp,
+not the poll, first display, or application launch. Missing, malformed, or
+future timing is shown as **Completion age unknown** and never automatically
+expired while unknown. Source events are not deleted.
+
+Use a row's separate **Dismiss** button, or **Clear completed** for eligible
+retained outcomes on current-window surfaces (including collapsed branches,
+excluding display-capped/off-window/expired work). These controls never focus,
+cancel, approve, prompt, or otherwise control an agent. Working, blocked, idle,
+and unknown work stays visible under the existing display limits. A hidden
+terminal parent remains as **child context** when descendants still need it.
+Running counts and retained/hidden history counts are separate; empty history
+is not evidence that a session has finished.
+
+Preferences use the extension's existing local `UserDefaults` store, with a
+versioned history record. Dismissal keys contain only provider-session UUID,
+child ID and accepted terminal-event UUID—not labels, paths, or source content.
+Reloads, duplicate events and surface/workspace moves preserve identity; new
+work or a new terminal outcome does not inherit an old dismissal. Fresh lifecycle
+identities—not comparisons against possibly future wall-clock timestamps—reopen
+work. Retired invocation and agent-scoped turn identities remain tombstoned,
+independent of current tool mappings. Repeated starts cannot reopen old work,
+even with a new event UUID.
+Records are
+bounded to **2,048 dismissals / 1 MiB**; a full store refuses a new batch rather
+than evicting old keys silently. **Restore dismissed history** frees that store;
+retention still applies, so select **Never** to reveal older work.
+
+Malformed stored settings fail open: history hiding is disabled and a bounded
+notice offers **Reset history settings**. Reset restores 15-second retention and
+clears dismissals without changing the selected view. History deadlines use a
+single cancellable timer, are not reset by refresh, and stop on hide, disconnect,
+or access loss. Existing observation freshness remains an independent limit.
+Reducer replay protection is bounded to 65,536 lifecycle event IDs and at most
+65,536 start-identity tombstones per session. Exhaustion reports partial data;
+uncertain new starts demote affected work to unknown and clear obsolete terminal
+evidence, so a prior dismissal cannot hide possibly active work. Unresolved
+lifecycle scope is demoted conservatively. Session identity/schema checks run
+before all deduplication and capacity guards.
+Complete, identity-verified reads publish conservative semantic degradation as
+current partial data, including unknown lifecycle state and replay limits.
+Malformed events, incompatible session schemas, identity changes and torn reads
+still cannot publish unvalidated replacement state.
+
+This is completed-child-work management only. Session attention/acknowledgement
+and broader presentation preferences are separate, not implemented here.
+
 ## Requirements
 
 - macOS 14 or newer.
