@@ -2,20 +2,21 @@ import Foundation
 import Testing
 
 @MainActor
+@Suite(.serialized)
 struct SidebarAttentionTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     @Test func acknowledgementPersistsBySessionOwnerAndEvidenceNotSurfaceOrLabel() throws {
-        try withDefaults { defaults in
+        try withDefaults { defaults, historyFile, attentionFile in
             let outcome = signal(.turnFinished)
             let first = session(attention: [outcome])
             let sibling = session(id: fixtures.otherSessionID, surface: fixtures.surfaceB, attention: [outcome])
             let tree = project([first, sibling])
             let key = SidebarAcknowledgedOutcome(sessionID: first.sessionID, ownerID: nil, evidence: outcome.evidence)
-            let preferences = SidebarPreferences(defaults: defaults)
+            let preferences = SidebarPreferences(defaults: defaults, historyFile: historyFile, attentionFile: attentionFile)
             preferences.acknowledge([key], in: tree)
-            let reloaded = SidebarPreferences(defaults: defaults)
+            let reloaded = SidebarPreferences(defaults: defaults, historyFile: historyFile, attentionFile: attentionFile)
             #expect(reloaded.attention == preferences.attention)
             for moved in [false, true] {
                 let shown = project([first, sibling], attention: reloaded.attention, moved: moved)
@@ -27,13 +28,14 @@ struct SidebarAttentionTests {
             #expect(project([session(attention: [newOutcome])], attention: reloaded.attention).attentionOwnerCount == 1)
             let sameEventOtherOwner = child("child", state: .failed, attention: [outcome])
             #expect(project([session(children: [sameEventOtherOwner])], attention: reloaded.attention).attentionOwnerCount == 1)
-            let stored = try #require(defaults.data(forKey: "sidebar.attention.v1"))
+            let stored = try Data(contentsOf: attentionFile)
+            #expect(defaults.object(forKey: "sidebar.attention.v1") == nil)
             #expect(!String(decoding: stored, as: UTF8.self).contains("Same label"))
         }
     }
 
-    @Test func blockersCannotBeAcknowledgedEvenWithForgedStoredKeysOrStaleButtons() {
-        withDefaults { defaults in
+    @Test func blockersCannotBeAcknowledgedEvenWithForgedStoredKeysOrStaleButtons() throws {
+        try withDefaults { defaults, historyFile, attentionFile in
             let permission = signal(.permission)
             let answer = signal(.answer)
             let outcome = signal(.turnFinished)
@@ -44,7 +46,7 @@ struct SidebarAttentionTests {
             let tree = project([blocked])
             #expect(tree.acknowledgeableOutcomes.isEmpty)
             #expect(tree.dismissibleOutcomes.isEmpty)
-            let preferences = SidebarPreferences(defaults: defaults)
+            let preferences = SidebarPreferences(defaults: defaults, historyFile: historyFile, attentionFile: attentionFile)
             preferences.acknowledge(keys, in: tree)
             #expect(preferences.attention.acknowledged.isEmpty)
             let forged = project([blocked], attention: .init(acknowledged: keys))
@@ -57,8 +59,8 @@ struct SidebarAttentionTests {
         }
     }
 
-    @Test func bulkActionIsCurrentWindowAndPreservesBlockingOwners() {
-        withDefaults { defaults in
+    @Test func bulkActionIsCurrentWindowAndPreservesBlockingOwners() throws {
+        try withDefaults { defaults, historyFile, attentionFile in
             let error = signal(.error)
             let permission = signal(.permission)
             let tree = project([
@@ -71,7 +73,7 @@ struct SidebarAttentionTests {
             #expect(tree.acknowledgeableOutcomes.count == 2)
             #expect(Set(tree.acknowledgeableOutcomes.compactMap(\.ownerID)) == ["failed"])
             #expect(tree.acknowledgeableOutcomes.allSatisfy { $0.sessionID == fixtures.sessionID })
-            let prefs = SidebarPreferences(defaults: defaults)
+            let prefs = SidebarPreferences(defaults: defaults, historyFile: historyFile, attentionFile: attentionFile)
             prefs.acknowledge(tree.acknowledgeableOutcomes, in: tree)
             #expect(prefs.attention.acknowledged.count == 2)
             #expect(!prefs.attention.acknowledged.contains {
@@ -146,46 +148,54 @@ struct SidebarAttentionTests {
         }
     }
 
-    @Test func corruptionFailsOpenAndResetDoesNotChangeHistoryOrMode() throws {
+    @Test func corruptionFailsOpenAndResetDoesNotChangeHistoryOrMode() async throws {
         for stored: Any in [
             Data("invalid".utf8), "wrong-type",
             Data(#"{"version":99,"acknowledged":[]}"#.utf8),
             Data(#"{"version":1,"acknowledged":[{"sessionID":"bad"}]}"#.utf8),
             Data(repeating: 0, count: SidebarAttentionSettings.maximumStoredBytes + 1)
         ] {
-            try withDefaults { defaults in
+            try withDefaults { defaults, historyFile, attentionFile in
                 defaults.set(stored, forKey: "sidebar.attention.v1")
-                let prefs = SidebarPreferences(defaults: defaults)
+                let prefs = SidebarPreferences(defaults: defaults, historyFile: historyFile, attentionFile: attentionFile)
                 prefs.selectedMode = .taskboard
                 prefs.setRetention(.never)
                 #expect(prefs.attention.acknowledged.isEmpty)
                 #expect(prefs.attentionNotice != nil)
                 #expect((prefs.attentionNotice?.count ?? 1000) < 300)
                 #expect(project([session(attention: [signal(.error)])], attention: prefs.attention).attentionOwnerCount == 1)
+                let tree = project([session(attention: [signal(.error)])])
+                prefs.acknowledge(tree.acknowledgeableOutcomes, in: tree)
+                #expect(prefs.attention.acknowledged.isEmpty)
+                #expect(prefs.attentionNotice != nil)
+                #expect(defaults.object(forKey: "sidebar.attention.v1") != nil)
+                #expect(!FileManager.default.fileExists(atPath: attentionFile.path))
                 prefs.resetAcknowledgements()
                 #expect(prefs.attentionNotice == nil)
                 #expect(prefs.history.retention == .never)
                 #expect(prefs.selectedMode == .taskboard)
-                #expect(SidebarPreferences(defaults: defaults).attention == prefs.attention)
-                let stored = try #require(defaults.data(forKey: "sidebar.attention.v1"))
+                #expect(SidebarPreferences(defaults: defaults, historyFile: historyFile, attentionFile: attentionFile).attention == prefs.attention)
+                let stored = try Data(contentsOf: attentionFile)
+                #expect(defaults.object(forKey: "sidebar.attention.v1") == nil)
                 #expect(try JSONDecoder().decode(SidebarAttentionSettings.self, from: stored).isValid)
             }
+            await Task.yield()
         }
     }
 
     @Test func fullStorageRefusesBatchWithoutEvictingPreviouslyAcknowledgedEvidence() throws {
-        try withDefaults { defaults in
+        try withDefaults { defaults, historyFile, attentionFile in
             let stored = SidebarAttentionSettings(acknowledged: Set((0..<SidebarAttentionSettings.maximumAcknowledgements).map { index in
                 SidebarAcknowledgedOutcome(sessionID: fixtures.sessionID, ownerID: "child-\(index)",
                                            evidence: .init(source: "copilot.events", eventID: UUID()))
             }))
             defaults.set(try JSONEncoder().encode(stored), forKey: "sidebar.attention.v1")
-            let prefs = SidebarPreferences(defaults: defaults)
+            let prefs = SidebarPreferences(defaults: defaults, historyFile: historyFile, attentionFile: attentionFile)
             let tree = project([session(attention: [signal(.turnFinished)])])
             prefs.acknowledge(tree.acknowledgeableOutcomes, in: tree)
             #expect(prefs.attention == stored)
             #expect(prefs.attentionNotice != nil)
-            #expect(SidebarPreferences(defaults: defaults).attention == stored)
+            #expect(SidebarPreferences(defaults: defaults, historyFile: historyFile, attentionFile: attentionFile).attention == stored)
             prefs.resetAcknowledgements()
             prefs.acknowledge(tree.acknowledgeableOutcomes, in: tree)
             #expect(prefs.attention.acknowledged == tree.acknowledgeableOutcomes)
@@ -266,10 +276,9 @@ struct SidebarAttentionTests {
                                    onto: fixtures.topology(moved: moved), now: now, history: history, attention: attention)
     }
 
-    private func withDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
-        let suite = "SidebarAttentionTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        try body(defaults)
+    private func withDefaults(_ body: (UserDefaults, URL, URL) throws -> Void) throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        try body(fixture.defaults, fixture.historyFile, fixture.attentionFile)
     }
 }

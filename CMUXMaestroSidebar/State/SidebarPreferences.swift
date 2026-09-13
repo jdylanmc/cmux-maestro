@@ -24,10 +24,12 @@ final class SidebarPreferences {
     private static let historyKey = "sidebar.completedHistory.v1"
     private static let attentionKey = "sidebar.attention.v1"
     private let defaults: UserDefaults
-    private(set) var history: SidebarHistorySettings
-    private(set) var historyNotice: String?
-    private(set) var attention = SidebarAttentionSettings()
-    private(set) var attentionNotice: String?
+    private let historyStore: SidebarPreferenceStore<SidebarHistorySettings>
+    private let attentionStore: SidebarPreferenceStore<SidebarAttentionSettings>
+    var history: SidebarHistorySettings { historyStore.value.settings }
+    var historyNotice: String? { historyStore.value.notice }
+    var attention: SidebarAttentionSettings { attentionStore.value.settings }
+    var attentionNotice: String? { attentionStore.value.notice }
 
     var selectedMode: SidebarMode {
         didSet {
@@ -36,95 +38,79 @@ final class SidebarPreferences {
         }
     }
 
-    init(defaults: UserDefaults = .standard) {
+    convenience init() {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        self.init(
+            defaults: .standard,
+            historyFile: root.appendingPathComponent("CMUXMaestroPreview/sidebar-history.json"),
+            attentionFile: root.appendingPathComponent("CMUXMaestroPreview/sidebar-attention.json")
+        )
+    }
+
+    init(defaults: UserDefaults, historyFile: URL, attentionFile: URL) {
         self.defaults = defaults
         selectedMode = defaults.string(forKey: Self.selectedModeKey)
             .flatMap(SidebarMode.init(rawValue:)) ?? .hierarchy
-        if let stored = defaults.object(forKey: Self.historyKey) {
-            if let data = stored as? Data, data.count <= SidebarHistorySettings.maximumStoredBytes,
-               let decoded = try? JSONDecoder().decode(SidebarHistorySettings.self, from: data),
-               decoded.isValid {
-                history = decoded
-            } else {
-                // Fail open: corrupt preferences must never silently hide work.
-                history = SidebarHistorySettings(retention: .never)
-                historyNotice = "History settings could not be read. Nothing is hidden by history controls. Reset history settings to recover."
+        historyStore = SidebarPreferenceStore(file: .init(url: historyFile), legacy: {
+            guard let stored = defaults.object(forKey: Self.historyKey) else { return nil }
+            guard let data = stored as? Data, data.count <= SidebarHistorySettings.maximumStoredBytes else {
+                throw SidebarPreferenceRejection(notice: SidebarHistorySettings.unreadableNotice)
             }
-        } else {
-            history = SidebarHistorySettings()
-            save(history)
-        }
-        if let stored = defaults.object(forKey: Self.attentionKey) {
-            if let data = stored as? Data, data.count <= SidebarAttentionSettings.maximumStoredBytes,
-               let decoded = try? JSONDecoder().decode(SidebarAttentionSettings.self, from: data),
-               decoded.isValid {
-                attention = decoded
-            } else {
-                attentionNotice = "Acknowledgements could not be read. No attention is hidden. Reset acknowledgements to recover."
+            return try JSONDecoder().decode(SidebarHistorySettings.self, from: data)
+        }, migrated: {
+            // The successfully written file is the migration marker. Never mirror back a
+            // window's snapshot; leave malformed legacy data untouched until explicit reset.
+            defaults.removeObject(forKey: Self.historyKey)
+        })
+        attentionStore = SidebarPreferenceStore(file: .init(url: attentionFile), legacy: {
+            guard let stored = defaults.object(forKey: Self.attentionKey) else { return nil }
+            guard let data = stored as? Data, data.count <= SidebarAttentionSettings.maximumStoredBytes else {
+                throw SidebarPreferenceRejection(notice: SidebarAttentionSettings.unreadableNotice)
             }
-        }
+            return try JSONDecoder().decode(SidebarAttentionSettings.self, from: data)
+        }, migrated: {
+            defaults.removeObject(forKey: Self.attentionKey)
+        })
     }
 
     func setRetention(_ retention: SidebarHistoryRetention) {
-        var next = history
-        next.retention = retention
-        save(next)
+        historyStore.apply { $0.retention = retention }
     }
 
     func dismiss(_ outcomes: Set<SidebarDismissedOutcome>) {
         guard !outcomes.isEmpty else { return }
-        var next = history
-        next.dismissed.formUnion(outcomes)
-        guard next.isValid else {
-            historyNotice = "Dismissal storage is full or invalid (limit 2,048). Nothing new was dismissed. Restore dismissed history to free space."
-            return
+        historyStore.apply {
+            $0.dismissed.formUnion(outcomes)
+            guard $0.isValid,
+                  try JSONEncoder().encode($0).count <= SidebarHistorySettings.maximumStoredBytes else {
+                throw SidebarPreferenceRejection(
+                    notice: "Dismissal storage is full or invalid (limit 2,048 / 1 MiB). Nothing new was dismissed. Restore dismissed history to free space."
+                )
+            }
         }
-        save(next)
     }
 
     func restoreDismissed() {
-        var next = history
-        next.dismissed = []
-        save(next)
+        historyStore.apply { $0.dismissed = [] }
     }
 
-    func resetHistory() { save(SidebarHistorySettings()) }
+    func resetHistory() { historyStore.apply(reset: true) { _ in } }
 
     func acknowledge(_ outcomes: Set<SidebarAcknowledgedOutcome>, in tree: SidebarCopilotTree) {
         // The current-window projection, not a captured row or persisted key,
         // decides eligibility. Blocking requests are never acknowledgement targets.
         let eligible = outcomes.intersection(tree.acknowledgeableOutcomes)
         guard !eligible.isEmpty else { return }
-        var next = attention
-        next.acknowledged.formUnion(eligible)
-        guard next.isValid else {
-            attentionNotice = "Acknowledgement storage is full or invalid (limit 2,048). Nothing new was acknowledged. Reset acknowledgements to free space."
-            return
+        attentionStore.apply {
+            $0.acknowledged.formUnion(eligible)
+            guard $0.isValid,
+                  try JSONEncoder().encode($0).count <= SidebarAttentionSettings.maximumStoredBytes else {
+                throw SidebarPreferenceRejection(
+                    notice: "Acknowledgement storage is full or invalid (limit 2,048 / 1 MiB). Nothing new was acknowledged. Reset acknowledgements to free space."
+                )
+            }
         }
-        saveAttention(next)
     }
 
-    func resetAcknowledgements() { saveAttention(SidebarAttentionSettings()) }
-
-    private func saveAttention(_ next: SidebarAttentionSettings) {
-        guard next.isValid, let data = try? JSONEncoder().encode(next),
-              data.count <= SidebarAttentionSettings.maximumStoredBytes else {
-            attentionNotice = "Acknowledgements could not be saved. Previous acknowledgements remain in use."
-            return
-        }
-        defaults.set(data, forKey: Self.attentionKey)
-        attention = next
-        attentionNotice = nil
-    }
-
-    private func save(_ next: SidebarHistorySettings) {
-        guard next.isValid, let data = try? JSONEncoder().encode(next),
-              data.count <= SidebarHistorySettings.maximumStoredBytes else {
-            historyNotice = "History settings could not be saved. Previous history settings remain in use."
-            return
-        }
-        defaults.set(data, forKey: Self.historyKey)
-        history = next
-        historyNotice = nil
-    }
+    func resetAcknowledgements() { attentionStore.apply(reset: true) { _ in } }
 }
