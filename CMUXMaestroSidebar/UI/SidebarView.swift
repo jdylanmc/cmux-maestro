@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct SidebarView: View {
+    // CMUX overlays 50 points of bottom chrome; the current SDK forwards no inset.
+    private static let hostFooterClearance: CGFloat = 50
     let model: SidebarConnectionModel
     @Bindable private var preferences: SidebarPreferences
 
@@ -46,8 +48,10 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
             }
             connectionStatus
+                .accessibilityIdentifier("sidebar-connection-status")
         }
         .padding(10)
+        .padding(.bottom, Self.hostFooterClearance)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { model.setVisible(true) }
         .onDisappear { model.setVisible(false) }

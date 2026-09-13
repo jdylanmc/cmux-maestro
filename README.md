@@ -92,6 +92,80 @@ symlinked state directories are not supported. Missing lifecycle events can
 leave completion/status unknown, and agent IDs are not automatically native
 child-session IDs. No title/transcript heuristics repair missing identity.
 
+### Bounded retention and discovery
+
+- The 256-row reducer budget retires the oldest terminal **leaf**, not active,
+  idle, blocked, or unknown work. Retained descendants, pending requests, and
+  unresolved active ownership protect their ancestors. Agent row IDs stay stable
+  across fresh lifecycles; retirement does not permanently blacklist an agent ID.
+  Completed tool ownership is reclaimed separately so the 4,096-relationship
+  budget does not become the next long-session bottleneck. Recent completed
+  owners still support delayed parent joins; retired joins remain unresolved.
+- Spawn replay keys use the spawn tool ID; turn replay keys use owner + turn ID.
+  A new spawn tool or previously unseen scoped turn is fresh activity, even for
+  a retained or retired terminal agent. Completions pair with the row's current
+  spawn, so a late old completion cannot finish a newer lifecycle. A turn alone
+  recreates an unknown agent, not an invented old name/parent/spawn. Enriching an
+  unknown row must not silently discard its pending requests.
+- Work/lifecycle/tool/request replay keys keep up to 4,096 exact recent tombstones.
+  Older identities spill into a deterministic 128-KiB replay filter; its bits are
+  never cleared within a transcript generation. This bounded filter has no false
+  negatives, but can have false positives: a cold match suppresses resurrection
+  **and reports `readLimitReached`**, rather than claiming exact replay knowledge.
+  At half occupancy it fails closed; it never forgets history to admit more work.
+  True active-capacity exhaustion also reports a limit without fabricating
+  completion. Transcript replacement reconstructs this state from the new log.
+- Routing discovery resumes one descriptor-anchored directory stream across
+  batches (up to 1,024 directory entries per batch, plus bounded revalidation of
+  at most 64 cached identities and one staged granted binding). Historical locks
+  and off-surface records cannot pin discovery to a prefix. At most 64 transcript
+  tails are retained. An unfinished initial tail keeps its slot until its finite
+  captured byte boundary is verified and published (or explicitly unavailable);
+  discovery stages at most one next binding while it waits. Finished slots then
+  rotate, retaining an explicit limit warning when granted sessions exceed capacity.
+  Only a full, unchanged, non-overflowed cycle without errors can be complete.
+  Cached bindings are checked before process/transcript access and publication;
+  replaced directories, revoked surfaces, and cancellation discard cached state.
+  EOF, errors, cancellation, and destruction close the directory stream.
+- Capture a fixed prefix length and observation time for each catch-up pass;
+  later appends do not extend that lease forever. A verified complete prefix may
+  be published with its captured observation time and `loadingHistory` when
+  newer bytes remain; this is not a current/complete snapshot. Torn or malformed
+  prefixes cannot become fabricated complete evidence. A failed observation
+  cannot pin every later session indefinitely.
+- A binding rerouted during a read is deliberately omitted, **not** returned
+  with its superseded surface/session identity as an ambiguous row. Other
+  verified granted sessions remain visible; the snapshot reports
+  `identityChanged` and is incomplete. A later stable read under the new grant
+  reconstructs that session, including when both surfaces were already granted.
+  By contrast, unstable process/marker evidence with an unchanged valid routing
+  binding still produces a content-free ambiguous row. Timestamp-only hook
+  refreshes preserve the verified row but require a stable discovery cycle
+  before completeness. Reader tests cover all three distinct contracts and use
+  `#require` before unwrapping expected observations.
+- `hasPendingHistory` accelerates initial/changed-index catch-up and retained-tail
+  deltas. After an overflow sweep finishes, revisiting evicted prefixes of the
+  unchanged index uses normal polling rather than an endless fast rebuild loop.
+  EOF, torn final lines, and warnings alone never request a fast retry. No sandbox
+  entitlement or ancestor traversal permission is broadened.
+
+**Downstream integration (PR #27 history / PR #28 attention):** merge the
+retention policy into the richer reducer, not a wholesale reducer replacement.
+Preserve terminal timestamps/event IDs, request ownership and resolved-request
+tombstones, started-lifecycle/event replay guards, attention ordering, and
+`canPublishProjection`. Apply bounded spill/fail-closed handling to those richer
+guards too; retaining their old fixed event/tombstone rejection caps would merely
+move the starvation point. Retiring a row must clean its terminal attention,
+turn/activity/outcome state and obsolete tool joins without discarding pending
+requests, unknown placeholders, or required ancestors. Keep history presentation
+limits separate from ingestion/admission limits. Keep agent identity distinct
+from lifecycle identity: history/attention terminal records and replay guards
+must preserve current-spawn/turn pairing, allow fresh scoped starts after row
+retirement, and never attach an old completion to a new spawn. Carry finite
+catch-up watermarks, staged-binding revalidation, and overflow scheduling together
+with the reader. Re-run the continuous-session, reconstruction, exact versus fresh
+lifecycle replay, multi-batch overflow, append-traffic, and attention tests together.
+
 ## Requirements
 
 - macOS 14 or newer.
@@ -103,6 +177,11 @@ child-session IDs. No title/transcript heuristics repair missing identity.
 The CMUX ExtensionKit package is pinned to CMUX commit
 `ae7fbce99f98c98df5ccf915e548dd080d33cfa8`. It is fetched into ignored
 `vendor/CmuxExtensionKit/`; no CMUX source changes are required.
+
+**Host footer compatibility:** the native view reserves 50 points of bottom
+clearance for the current CMUX overlaid footer. The SDK provides no footer-inset
+contract; a rendered-strip regression test checks that both sidebar modes leave
+this area clear. Reverify the clearance when host chrome changes.
 
 ## Build and test
 

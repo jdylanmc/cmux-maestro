@@ -55,6 +55,31 @@ struct CopilotSandboxTestMain {
             let names = try CopilotFileAccess.names(at: descriptor, limit: 1)
             try require(names.names.count == 1 && names.limited)
         }
+        check("resumable stream reaches EOF and releases descriptors") {
+            let descriptor = try CopilotFileAccess.openDirectory(
+                allowed.appendingPathComponent("target"), owner: getuid()
+            )
+            defer { close(descriptor) }
+            func descriptorCount() -> Int {
+                (0..<1024).reduce(0) { $0 + (fcntl(Int32($1), F_GETFD) >= 0 ? 1 : 0) }
+            }
+            let baseline = descriptorCount()
+            for _ in 0..<128 {
+                let stream = try CopilotDirectoryStream(at: descriptor)
+                try require(try stream.next() != nil)
+                // Partial streams close on destruction, without waiting for EOF.
+            }
+            try require(descriptorCount() == baseline)
+            let stream = try CopilotDirectoryStream(at: descriptor)
+            var names: Set<String> = []
+            while let name = try stream.next() { names.insert(name) }
+            try require(names == ["sample", "extra"] && stream.finished)
+            try require(try stream.next() == nil)
+            try require(descriptorCount() == baseline)
+            stream.closeStream()
+            stream.closeStream()
+            try require(descriptorCount() == baseline)
+        }
         check("ancestor directory contents denied") {
             try denied(root.appendingPathComponent("ancestor/deep"), flags: O_RDONLY | O_DIRECTORY)
         }

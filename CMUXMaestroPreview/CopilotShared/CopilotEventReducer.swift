@@ -20,6 +20,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
     let shellID: String?
     let shellExitCode: Int?
     let resolvedByHook: Bool?
+    let turnID: String?
 
     private enum Keys: String, CodingKey { case id, type, agentId, data }
     private enum Fields: String, CodingKey {
@@ -43,6 +44,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
         var session: UUID?, format: Int?
         var shell: String?, exitCode: Int?
         var hookResolved: Bool?
+        var turn: String?
         let known: Set<String> = [
             "session.start", "session.resume", "session.idle", "session.model_change", "session.shutdown",
             "session.error", "abort", "assistant.turn_start", "assistant.turn_end",
@@ -67,7 +69,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
                 guard ["routine", "error"].contains(shutdown!) else { throw Self.invalid(decoder) }
                 selectedModel = try data.decodeIfPresent(String.self, forKey: .currentModel)
             case "assistant.turn_start", "assistant.turn_end":
-                _ = try data.decode(String.self, forKey: .turnId)
+                turn = try data.decode(String.self, forKey: .turnId)
                 selectedModel = try data.decodeIfPresent(String.self, forKey: .model)
             case "tool.execution_start":
                 tool = try data.decode(String.self, forKey: .toolCallId)
@@ -106,7 +108,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
             default: break
             }
         }
-        for identifier in [tool, parent, request, shell].compactMap({ $0 }) {
+        for identifier in [tool, parent, request, shell, turn].compactMap({ $0 }) {
             guard Self.validID(identifier) else { throw Self.invalid(decoder) }
         }
         toolCallID = tool
@@ -123,6 +125,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
         shellID = shell
         shellExitCode = exitCode
         resolvedByHook = hookResolved
+        turnID = turn
     }
 
     private static func validID(_ value: String) -> Bool {
@@ -156,6 +159,72 @@ nonisolated struct CopilotReducedState: Equatable, Sendable {
     }
 }
 
+// Exact recent tombstones spill into a fixed, deterministic no-false-negative
+// filter. A cold match is uncertain, never permission to resurrect old work.
+nonisolated struct CopilotReplayGuard: Sendable {
+    enum Match { case absent, exact, uncertain }
+    private let capacity: Int
+    private let wordCount: Int
+    private var recent: Set<String> = []
+    private var order: [String] = []
+    private var cursor = 0
+    private var bits: [UInt64] = []
+    private(set) var occupiedBits = 0
+
+    init(capacity: Int, wordCount: Int = 16_384) {
+        self.capacity = max(1, capacity)
+        self.wordCount = max(1, wordCount)
+    }
+
+    var retainedCount: Int { recent.count }
+    var filterWordCount: Int { bits.count }
+
+    func match(_ key: String) -> Match {
+        if recent.contains(key) { return .exact }
+        if !bits.isEmpty && positions(key).allSatisfy({ bits[$0 / 64] & (1 << ($0 % 64)) != 0 }) {
+            return .uncertain
+        }
+        return .absent
+    }
+
+    @discardableResult
+    mutating func remember(_ key: String) -> Bool {
+        if match(key) != .absent { return true }
+        if recent.count == capacity {
+            // Stop before the filter becomes indiscriminate. Never clear old bits
+            // or retire an identity whose anti-replay evidence cannot be retained.
+            guard occupiedBits < wordCount * 32 else { return false }
+            if bits.isEmpty { bits = Array(repeating: 0, count: wordCount) }
+            let old = order[cursor]
+            for position in positions(old) {
+                let mask: UInt64 = 1 << (position % 64)
+                if bits[position / 64] & mask == 0 {
+                    bits[position / 64] |= mask
+                    occupiedBits += 1
+                }
+            }
+            recent.remove(old)
+            order[cursor] = key
+            cursor = (cursor + 1) % capacity
+        } else {
+            order.append(key)
+        }
+        recent.insert(key)
+        return true
+    }
+
+    private func positions(_ key: String) -> [Int] {
+        // Unlike Swift.Hasher this is stable across launches/reconstruction.
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in key.utf8 { hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211 }
+        var mixed = hash
+        mixed = (mixed ^ (mixed >> 30)) &* 0xbf58476d1ce4e5b9
+        mixed = (mixed ^ (mixed >> 27)) &* 0x94d049bb133111eb
+        let step = (mixed ^ (mixed >> 31)) | 1
+        return (0..<7).map { Int((hash &+ UInt64($0) &* step) % UInt64(wordCount * 64)) }
+    }
+}
+
 nonisolated struct CopilotEventReducer: Sendable {
     private struct Work: Sendable {
         var id: String
@@ -165,27 +234,39 @@ nonisolated struct CopilotEventReducer: Sendable {
         var name: String
         var state: CopilotWorkState
         var model: String?
+        var lifecycle: String?
+        var spawnTool: String?
+        var turnID: String?
     }
     private struct Owner: Sendable { let agentID: String? }
+    private struct Tool: Sendable {
+        let agentID: String?
+        var completed = false
+    }
     let sessionID: UUID
     let maximumWorkItems: Int
     let maximumRelationships: Int
     let maximumDepth: Int
     private var rootState: CopilotWorkState = .unknown
     private var rootModel: String?
+    private var rootTurnID: String?
     private var work: [String: Work] = [:]
     private var order: [String] = []
-    private var toolOwners: [String: Owner] = [:]
+    private var toolOwners: [String: Tool] = [:]
+    private var toolOrder: [String] = []
     private var agentForTool: [String: String] = [:]
     private var pending: [String: Owner] = [:]
+    private var replay: CopilotReplayGuard
+    private var replayExhausted = false
     private(set) var issues: [CopilotIssue] = []
     private var ended = false
 
     init(sessionID: UUID, maximumWorkItems: Int = 256, maximumRelationships: Int = 4096, maximumDepth: Int = 16) {
         self.sessionID = sessionID
-        self.maximumWorkItems = maximumWorkItems
-        self.maximumRelationships = maximumRelationships
+        self.maximumWorkItems = max(1, maximumWorkItems)
+        self.maximumRelationships = max(1, maximumRelationships)
         self.maximumDepth = maximumDepth
+        replay = CopilotReplayGuard(capacity: maximumRelationships)
     }
 
     mutating func consume(_ line: Data) {
@@ -199,6 +280,10 @@ nonisolated struct CopilotEventReducer: Sendable {
 
     mutating func markMalformed() { addIssue(.malformedData) }
     mutating func markLimited() { addIssue(.readLimitReached) }
+
+    var retentionCounts: (work: Int, owners: Int, agents: Int, requests: Int, tombstones: Int, replayWords: Int) {
+        (work.count, toolOwners.count, agentForTool.count, pending.count, replay.retainedCount, replay.filterWordCount)
+    }
 
     mutating func value() -> CopilotReducedState {
         var children: [CopilotChildWork] = []
@@ -250,7 +335,8 @@ nonisolated struct CopilotEventReducer: Sendable {
         case "session.resume":
             ended = false
             rootState = .unknown
-            pending.removeAll()
+            rootTurnID = nil
+            retireRequests()
             demoteNonterminalChildren()
         case "session.model_change":
             rootModel = event.model
@@ -260,27 +346,70 @@ nonisolated struct CopilotEventReducer: Sendable {
             rootState = event.shutdownType == "error" ? .failed : .completed
             if let model = event.model { rootModel = model }
             ended = true
-            pending.removeAll()
+            retireRequests()
             demoteNonterminalChildren()
         case "session.error", "abort":
             setState(event.type == "abort" ? .cancelled : .failed, agent: event.agentID)
-            pending = pending.filter { $0.value.agentID != event.agentID }
+            retireRequests(owner: event.agentID)
         case "assistant.turn_start":
-            if event.agentID == nil { ended = false }
-            setState(.working, agent: event.agentID)
-            setModel(event.model, agent: event.agentID)
+            guard let turn = event.turnID else { return }
+            let key = Self.turnKey(turn, owner: event.agentID)
+            guard !rejectReplay(key) else { return }
+            if let id = event.agentID {
+                if let previous = work[id], !Self.terminal(previous.state) {
+                    guard remember(key) else { return }
+                    work[id]?.turnID = turn
+                    work[id]?.state = .working
+                    setModel(event.model, agent: id)
+                } else {
+                    // A fresh turn attests activity, not the old spawn's name,
+                    // parent or tool pairing, even if that row was retained.
+                    insert(Work(
+                        id: id, parent: "unresolved-owner", kind: .unknown,
+                        name: "Unknown agent", state: .working, model: event.model,
+                        lifecycle: key, turnID: turn
+                    ))
+                }
+            } else {
+                guard remember(key) else { return }
+                ended = false
+                rootTurnID = turn
+                rootState = .working
+                setModel(event.model, agent: nil)
+            }
         case "assistant.turn_end":
+            guard let turn = event.turnID else { return }
             if event.agentID == nil {
+                guard rootTurnID == nil || rootTurnID == turn else { return }
+                if rootTurnID == nil && rejectReplay(Self.turnKey(turn, owner: nil)) { return }
+                remember(Self.turnKey(turn, owner: nil))
+                rootTurnID = turn
                 if !ended && !Self.terminal(rootState) { rootState = .idle }
             } else if let id = event.agentID, let item = work[id], !Self.terminal(item.state) {
+                guard item.turnID == nil || item.turnID == turn else { return }
+                if item.turnID == nil && rejectReplay(Self.turnKey(turn, owner: id)) { return }
+                remember(Self.turnKey(turn, owner: id))
+                work[id]?.turnID = turn
                 work[id]?.state = .idle
+            } else {
+                return
             }
             setModel(event.model, agent: event.agentID)
         case "tool.execution_start":
             guard let tool = event.toolCallID else { return }
+            guard !rejectReplay("tool:\(tool)"),
+                  !rejectReplay("work:shell:\(tool)"),
+                  !Self.terminal(work["shell:\(tool)"]?.state ?? .unknown) else { return }
             if toolOwners[tool] == nil {
-                guard toolOwners.count < maximumRelationships else { addIssue(.readLimitReached); return }
-                toolOwners[tool] = Owner(agentID: event.agentID)
+                if toolOwners.count >= maximumRelationships {
+                    guard let retired = toolOrder.first(where: { toolOwners[$0]?.completed == true }),
+                          remember("tool:\(retired)") else {
+                        addIssue(.readLimitReached); return
+                    }
+                    removeTool(retired)
+                }
+                toolOwners[tool] = Tool(agentID: event.agentID)
+                toolOrder.append(tool)
             }
             for id in order where work[id]?.unresolvedTool == tool {
                 work[id]?.parent = event.agentID
@@ -293,10 +422,19 @@ nonisolated struct CopilotEventReducer: Sendable {
                 ))
             }
         case "tool.execution_complete":
-            if let tool = event.toolCallID, work["shell:\(tool)"] != nil {
+            guard let tool = event.toolCallID else { return }
+            if work["shell:\(tool)"] != nil {
                 // This is the tool invocation's lifetime, not evidence that a
                 // background shell process has exited.
-                work["shell:\(tool)"]?.state = event.success == true ? .completed : .failed
+                if work["shell:\(tool)"]?.state != .failed {
+                    work["shell:\(tool)"]?.state = event.success == true ? .completed : .failed
+                }
+            }
+            // Shell joins are fully projected. Keep other completed owners until
+            // pressure, so a delayed subagent.started still gets its known parent.
+            if remember("tool:\(tool)") {
+                toolOwners[tool]?.completed = true
+                if work["shell:\(tool)"] != nil { removeTool(tool) }
             }
         case "system.notification":
             if let shell = event.shellID {
@@ -311,19 +449,28 @@ nonisolated struct CopilotEventReducer: Sendable {
         case "subagent.started":
             guard let tool = event.toolCallID else { return }
             let id = event.agentID ?? tool
+            let lifecycle = "subagent:\(tool)"
+            guard !rejectReplay(lifecycle) else { return }
+            guard agentForTool[tool] == nil || agentForTool[tool] == id else {
+                addIssue(.malformedData); return
+            }
             let owner = toolOwners[tool]
             let parent = event.parentAgentID ?? owner?.agentID
             let unresolved = event.parentAgentID == nil && owner == nil ? tool : nil
-            guard agentForTool[tool] != nil || agentForTool.count < maximumRelationships else {
+            guard agentForTool[tool] != nil || agentForTool.count < maximumRelationships
+                    || agentForTool.values.contains(id) else {
                 addIssue(.readLimitReached); return
             }
-            agentForTool[tool] = id
-            insert(Work(
+            if insert(Work(
                 id: id, parent: parent, unresolvedTool: unresolved, kind: .subagent,
-                name: event.name ?? "Subagent", state: .working, model: event.model
-            ))
+                name: event.name ?? "Subagent", state: .working, model: event.model,
+                lifecycle: lifecycle, spawnTool: tool
+            )) {
+                agentForTool[tool] = id
+            }
         case "subagent.completed", "subagent.failed":
-            guard let tool = event.toolCallID, let id = agentForTool[tool], let item = work[id] else { return }
+            guard let tool = event.toolCallID, let id = agentForTool[tool],
+                  let item = work[id], item.spawnTool == tool else { return }
             if event.type == "subagent.failed" {
                 work[id]?.state = .failed
             } else if event.cancelled == true {
@@ -331,7 +478,7 @@ nonisolated struct CopilotEventReducer: Sendable {
             } else if item.state != .failed && item.state != .cancelled {
                 work[id]?.state = .completed
             }
-            pending = pending.filter { $0.value.agentID != id }
+            retireRequests(owner: id)
             setModel(event.model, agent: id)
         case "subagent.configured":
             if let agent = event.agentID { setModel(event.model, agent: agent) }
@@ -343,8 +490,13 @@ nonisolated struct CopilotEventReducer: Sendable {
         case "permission.requested", "user_input.requested":
             guard !ended, let request = event.requestID else { return }
             let key = (event.type.hasPrefix("permission.") ? "permission:" : "input:") + request
+            guard !rejectReplay("request:\(key)") else { return }
+            if let agent = event.agentID {
+                guard !Self.terminal(work[agent]?.state ?? .unknown) else { return }
+            }
             if event.type == "permission.requested" && event.resolvedByHook == true {
                 pending.removeValue(forKey: key)
+                remember("request:\(key)")
                 return
             }
             guard pending[key] != nil || pending.count < maximumRelationships else {
@@ -355,16 +507,120 @@ nonisolated struct CopilotEventReducer: Sendable {
             guard let request = event.requestID else { return }
             let key = (event.type.hasPrefix("permission.") ? "permission:" : "input:") + request
             pending.removeValue(forKey: key)
+            remember("request:\(key)")
         default: break
         }
     }
 
-    private mutating func insert(_ item: Work) {
-        guard work[item.id] != nil || work.count < maximumWorkItems else {
-            addIssue(.readLimitReached); return
+    @discardableResult
+    private mutating func insert(_ item: Work) -> Bool {
+        var inserted = item
+        if let previous = work[item.id], previous.kind == .unknown,
+           previous.state == .working || previous.state == .idle, item.kind == .subagent {
+            inserted.turnID = previous.turnID
+            if inserted.model == nil { inserted.model = previous.model }
+        }
+        if let lifecycle = item.lifecycle {
+            guard !rejectReplay(lifecycle) else { return false }
+        } else {
+            if let previous = work[item.id], Self.terminal(previous.state) { return false }
+            if work[item.id] == nil && rejectReplay("work:\(item.id)") { return false }
+        }
+        if work[item.id] == nil && work.count >= maximumWorkItems {
+            guard retireTerminalLeaf(protecting: item.parent) else {
+                addIssue(.readLimitReached); return false
+            }
+        }
+        if let lifecycle = item.lifecycle {
+            guard remember(lifecycle) else { return false }
+            if work[item.id] != nil {
+                guard removeSpawnJoins(for: item.id) else { return false }
+                if Self.terminal(work[item.id]?.state ?? .unknown) { retireRequests(owner: item.id) }
+            }
         }
         if work[item.id] == nil { order.append(item.id) }
-        work[item.id] = item
+        work[item.id] = inserted
+        return true
+    }
+
+    private mutating func retireTerminalLeaf(protecting parent: String?) -> Bool {
+        // Even a terminal ancestor is needed while a retained descendant (or
+        // pending request) refers to it. Unknown work is not completion evidence.
+        var protected = Set(work.values.compactMap(\.parent))
+        protected.formUnion(pending.values.compactMap(\.agentID))
+        protected.formUnion(toolOwners.values.filter { !$0.completed }.compactMap(\.agentID))
+        if let parent { protected.insert(parent) }
+        guard let id = order.first(where: {
+            Self.terminal(work[$0]?.state ?? .unknown) && !protected.contains($0)
+        }) else { return false }
+        guard remember(work[id]?.lifecycle ?? "work:\(id)") else { return false }
+        let tools = agentForTool.filter { $0.value == id }.map(\.key).sorted()
+        for tool in tools {
+            guard remember("tool:\(tool)") else { return false }
+        }
+        for tool in tools {
+            agentForTool.removeValue(forKey: tool)
+            removeTool(tool)
+        }
+        for tool in toolOrder.filter({ toolOwners[$0]?.agentID == id && toolOwners[$0]?.completed == true }) {
+            removeTool(tool)
+        }
+        work.removeValue(forKey: id)
+        order.removeAll { $0 == id }
+        return true
+    }
+
+    private mutating func removeTool(_ tool: String) {
+        toolOwners.removeValue(forKey: tool)
+        toolOrder.removeAll { $0 == tool }
+    }
+
+    private mutating func removeSpawnJoins(for id: String) -> Bool {
+        for tool in agentForTool.keys.sorted() where agentForTool[tool] == id {
+            guard remember("tool:\(tool)") else { return false }
+            agentForTool.removeValue(forKey: tool)
+            removeTool(tool)
+        }
+        return true
+    }
+
+    private static func turnKey(_ turn: String, owner: String?) -> String {
+        let owner = owner ?? ""
+        return "turn:\(owner.utf8.count):\(owner):\(turn)"
+    }
+
+    private mutating func retireRequests() {
+        for key in pending.keys.sorted() { remember("request:\(key)") }
+        pending.removeAll()
+    }
+
+    private mutating func retireRequests(owner: String?) {
+        for key in pending.keys.sorted() where pending[key]?.agentID == owner {
+            remember("request:\(key)")
+            pending.removeValue(forKey: key)
+        }
+    }
+
+    private mutating func rejectReplay(_ key: String) -> Bool {
+        switch replay.match(key) {
+        case .absent:
+            if replayExhausted { addIssue(.readLimitReached) }
+            return replayExhausted
+        case .exact: return true
+        case .uncertain:
+            addIssue(.readLimitReached)
+            return true
+        }
+    }
+
+    @discardableResult
+    private mutating func remember(_ key: String) -> Bool {
+        guard replay.remember(key) else {
+            replayExhausted = true
+            addIssue(.readLimitReached)
+            return false
+        }
+        return true
     }
 
     private mutating func demoteNonterminalChildren() {
@@ -376,7 +632,7 @@ nonisolated struct CopilotEventReducer: Sendable {
 
     private mutating func setState(_ state: CopilotWorkState, agent: String?) {
         if let agent {
-            if work[agent] != nil { work[agent]?.state = state }
+            if let item = work[agent], !Self.terminal(item.state) { work[agent]?.state = state }
         } else {
             rootState = state
         }
