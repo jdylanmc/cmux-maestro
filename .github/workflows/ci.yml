@@ -30,3 +30,5 @@ jobs:
         run: ./scripts/test-copilot-setup.sh
       - name: Verify compiled hooks fail open
         run: ./scripts/test-copilot-hook.sh
+      - name: Verify shared file traversal under narrow sandbox grants
+        run: ./scripts/test-copilot-sandbox.sh
