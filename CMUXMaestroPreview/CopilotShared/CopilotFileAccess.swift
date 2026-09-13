@@ -56,12 +56,18 @@ nonisolated struct CopilotFileStamp: Equatable, Sendable {
 nonisolated enum CopilotFileAccess {
     static func openDirectory(_ url: URL, owner: UInt32? = nil) throws -> Int32 {
         guard url.isFileURL, url.path.hasPrefix("/") else { throw CopilotFileError.unsafePath }
-        var descriptor = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        let components = url.path.split(separator: "/").map(String.init)
+        var descriptor = Darwin.open(
+            "/", (components.isEmpty ? O_RDONLY : O_SEARCH) | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+        )
         guard descriptor >= 0 else { throw CopilotFileError.current() }
         do {
-            for part in url.path.split(separator: "/").map(String.init) {
+            for (index, part) in components.enumerated() {
                 guard validComponent(part) else { throw CopilotFileError.unsafePath }
-                let next = openat(descriptor, part, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+                // Ancestor traversal needs search permission, not directory contents.
+                // The authorized final directory still requires normal read access.
+                let access = index == components.count - 1 ? O_RDONLY : O_SEARCH
+                let next = openat(descriptor, part, access | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
                 guard next >= 0 else { throw CopilotFileError.current() }
                 close(descriptor)
                 descriptor = next

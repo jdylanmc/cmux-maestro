@@ -4,6 +4,28 @@ import Testing
 @testable import CMUXMaestroPreview
 
 nonisolated struct CopilotIdentityTests {
+    @Test(.enabled(if: getuid() != 0))
+    func searchOnlyAncestorsDoNotRequireDirectoryReadAccess() throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let ancestor = fixture.root.appendingPathComponent("search-only", isDirectory: true)
+        let leaf = ancestor.appendingPathComponent("leaf", isDirectory: true)
+        try FileManager.default.createDirectory(at: leaf, withIntermediateDirectories: true)
+        #expect(chmod(ancestor.path, 0o111) == 0)
+        defer { _ = chmod(ancestor.path, 0o700) }
+
+        let descriptor = try CopilotFileAccess.openDirectory(leaf, owner: getuid())
+        #expect(try CopilotFileAccess.statFile(descriptor).isDirectory)
+        close(descriptor)
+
+        #expect(chmod(leaf.path, 0o111) == 0)
+        defer { _ = chmod(leaf.path, 0o700) }
+        #expect(throws: CopilotFileError.permissionDenied) {
+            let denied = try CopilotFileAccess.openDirectory(leaf, owner: getuid())
+            close(denied)
+        }
+    }
+
     @Test func recordRoundTripsMillisecondsAndFileContract() throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
