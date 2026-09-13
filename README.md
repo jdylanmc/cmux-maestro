@@ -7,8 +7,9 @@ The separate interpreted Maestro project is untouched and is not a dependency.
 
 ## One-time setup
 
-1. Build/register the native app and extension, or open an installed build.
-   Keep the app at its intended location before enabling integration.
+1. Use the [local preview install](#install-a-stable-local-preview) below, or
+   open an already-installed build. Keep the app at its intended location
+   before enabling integration.
 2. Open **CMUX Maestro Preview**. Click **Enable Copilot Integration**, then
    explicitly confirm **Install Native Plugin**. If the app's configured `PATH`
    cannot find Copilot, use **Choose Copilot…** to select the trusted executable
@@ -258,6 +259,7 @@ Focused, isolated setup and hook checks (no SDK fetch or app launch):
 ./scripts/test-copilot-hook.sh
 ./scripts/test-copilot-setup.sh
 python3 ./scripts/test-build-metadata.py
+python3 ./scripts/test-local-preview.py
 ```
 
 Tests use synthetic roots and injected installer/process seams. The standalone
@@ -270,6 +272,205 @@ executables only, never the live Copilot plugin CLI.
 
 These tests do **not** prove actual plugin installation, cached-hook loading,
 live owner ancestry, or ExtensionKit-hosted runtime behavior.
+
+## Install a stable local preview
+
+This is a **local, user-owned preview**, not a public release, auto-updater,
+notarized distribution, license decision, or legacy-plugin cutover. The stable
+default is **`~/Applications/CMUX Maestro Preview.app`**. Its app, extension and
+bundled helper no longer depend on a disposable Git worktree after installation.
+The Python 3 command uses the standard library and macOS `ditto`, `codesign`,
+LaunchServices and `pluginkit`; it does not install a service or dependency.
+
+From a trusted checkout, explicitly build the current ad-hoc-signed product,
+then install it:
+
+```sh
+./scripts/build-register.sh
+python3 scripts/local-preview.py install \
+  --source "$PWD/.build/adhoc/Build/Products/Debug/CMUX Maestro Preview.app" \
+  --retire-development-registration
+```
+
+These are **two deliberate publication operations**, not validation commands.
+`build-register.sh` can register its source app during Xcode's build, and
+explicitly registers the source extension. There is no supported
+`REGISTER_APP_WITH_LAUNCH_SERVICES=NO` setting. The install command stages and
+verifies the signed copy, atomically installs it, then retires **only this
+checkout's known `.build/adhoc` registration** before registering the stable
+app and extension. The flag is optional for separately supplied signed
+artifacts; no other development copies are discovered or deregistered.
+Source files are **never removed**.
+
+The helper target explicitly supplies its resolved production/validation
+identifier to `codesign`; otherwise a command-line tool can retain its
+linker-generated identifier despite `PRODUCT_BUNDLE_IDENTIFIER`. Publication
+and installation verify the effective helper identity. Rebuild older products
+with linker-generated helper IDs; they are not accepted as install sources.
+
+The command confirms the exact production bundle ID and canonical path in
+both LaunchServices and the extension registry—not merely exit status zero.
+The extension parser accepts pluginkit's documented election markers, including
+`=` (superseded) and `?` (unknown); retained sibling registrations do not prevent
+an exact match, and are never removed merely for appearing in the listing.
+This does not claim CMUX has selected or loaded the new extension.
+
+Open the **stable** app in Finder, use **Enable Copilot Integration**, and
+explicitly confirm **Install Native Plugin**. This consent flow must be
+repeated after a move, update or rollback: the native plugin embeds the
+helper's **absolute app path**, and Copilot caches plugin contents. The install
+script never edits `~/.copilot`, invokes its plugin CLI, or rewrites active
+sessions. Restart/resume existing CLI sessions **once, at a time you choose**,
+to load the refreshed plugin. Keep the old development app/worktree until
+sessions with its cached hooks have retired. Future normal CLI launches need
+no manual observer or session-start procedure.
+
+### Update, rollback and status
+
+Close the containing installer app normally before replacing it. In CMUX,
+select the **Default** sidebar and allow preview/helper processes to finish;
+do not quit CMUX or terminate existing CLI sessions. The command refuses a
+replacement while a same-user process is executing from an affected preview
+app or backup. It reports the specific process ID when possible; it never signals a
+process. Keep these apps closed until the operation finishes.
+
+```sh
+# After another explicit ./scripts/build-register.sh:
+python3 scripts/local-preview.py update \
+  --source "$PWD/.build/adhoc/Build/Products/Debug/CMUX Maestro Preview.app" \
+  --retire-development-registration
+python3 scripts/local-preview.py status
+
+# Explicitly exchange the current app with its verified previous version:
+python3 scripts/local-preview.py rollback
+```
+
+Then refresh integration in the stable containing app and select the Preview
+sidebar. If the host view loses its connection, select **Default → CMUX Maestro
+Preview** again. `cmux sidebar reload` is for interpreted sidebars, not native
+extensions. No operation here restarts CMUX or running CLI sessions.
+
+Updates may replace a changed development build with the same build number,
+but never silently downgrade. An identical artifact is refused as already
+installed. Rollback revalidates the previous app's **own** matching app/extension
+version, strict ad-hoc signatures, production identities and compatible
+entitlements. A previous preview with fewer approved read-only grants is
+allowed; missing sandbox, broader or unknown grants, unsigned components and
+test namespaces are refused. Normal publication/install validation still
+requires the current build number; this feature does not bump it.
+
+### Transaction and recovery contract
+
+- One kernel-held, nonblocking install lock and a private `0700` ownership
+  directory live at `~/Applications/.cmux-maestro-preview-install/`. Receipts
+  are `0600`, atomically written and synchronized. The persistent lock file is
+  **not a stale lock** just because the caller has exited. A one-command
+  Python supervisor retains the lock while a mutating `ditto`, `lsregister`
+  or `pluginkit` invocation runs, including after caller timeout or `SIGKILL`.
+  Tools do not inherit the lock descriptor: closing their descriptors cannot
+  release the supervisor's copy. The supervisor waits for the tool's private
+  foreground process group, not just its direct child's exit or pipe EOF.
+  There is no installed daemon or persistent background observer.
+- A bounded marker in that same lock file records command progress. A gated
+  launcher cannot execute the tool until its private process group is durably
+  recorded. If the supervisor itself dies, a new lock owner still refuses
+  recovery while that recorded group exists—even if the direct child already
+  exited. Once the group is gone, normal recovery may resume; a launcher whose
+  group was never recorded cannot pass its gate. Corrupt/unverifiable markers
+  fail closed. Never delete or truncate the lock to bypass this barrier.
+- The 120-second command timeout ends the caller's wait, **not** a surviving
+  mutator's lifetime. Wait for the protected workers to finish, then retry
+  `recover`. A hung worker continues to block new operations rather than risk
+  a delayed deregistration affecting a later installation. This supervision
+  is for the fixed foreground macOS tools, not a general-purpose launcher for
+  programs that daemonize into independent sessions. It does not control
+  unrelated operating-system services or other apps' registry requests.
+- Source and staged copy must match an integrity receipt and pass effective
+  signed-profile verification. Files and directory metadata are synchronized
+  before commit. Darwin `renamex_np(RENAME_SWAP)` exchanges an update/rollback
+  with the live destination in one operation: there is no deliberate
+  missing-app interval. First install uses exclusive rename. Unsupported
+  filesystems fail closed; there is no non-atomic replacement fallback.
+- A completed update retains **one verified previous app** in an owned slot.
+  During a transaction/cleanup, at most the current, previous and one extra
+  candidate/retiring version are retained. Rollback exchanges current and
+  previous, so the rollback itself can be undone. Backups are not integration
+  setup targets and their owned registrations are retired.
+- The receipt journals staging, replacement and removal. A copy, signature,
+  disk, registration or cleanup failure is **not success**, and a failure
+  after atomic replacement is **not an automatic rollback**. The new app may
+  already be at the destination; the old app remains in the journaled slot.
+  A later cleanup failure can leave the older retiring slot too. Further
+  update/rollback operations refuse until recovery finishes.
+
+```sh
+python3 scripts/local-preview.py status
+python3 scripts/local-preview.py recover
+
+# If a committed update cannot be registered, explicitly restore its old app:
+python3 scripts/local-preview.py recover --restore-previous
+```
+
+Recovery cancels pre-commit staging, or infers a committed exchange from the
+verified app identities and finishes registration/backup bookkeeping. It can
+resume its own interrupted cleanup or rollback. If no transaction is pending,
+it verifies owned apps and refreshes the stable registration. First install has
+no older app to restore: recover it, then explicitly uninstall if desired.
+Ambiguous identities, replaced partial-cleanup directories, foreign backups,
+or corrupt receipts are refused rather than guessed or deleted. Preserve the
+receipt, apps and original checkout/source while a transaction is pending.
+Do not manually shuffle slots or remove metadata to force an update.
+
+Only an existing, normal, non-root user's real home is used; `HOME` overrides
+are not install roots. Symlink components, foreign ownership, group/world
+writable paths, escaping bundle symlinks and hard-linked files are refused.
+Internal relative framework symlinks are allowed. An alternate destination can
+be specified **before** the command, but must be a direct `.app` child of the
+same `~/Applications`, for example:
+
+```sh
+python3 scripts/local-preview.py \
+  --destination "$HOME/Applications/My Maestro Preview.app" install \
+  --source "$PWD/.build/adhoc/Build/Products/Debug/CMUX Maestro Preview.app"
+```
+
+The singleton receipt binds that destination; use the same option thereafter.
+There is no automatic adoption, relocation or force-overwrite mode, even for
+another apparently matching Maestro app. Ad-hoc signatures establish local
+integrity and component identity, **not publisher authenticity**: choose a
+trusted source. This is not protection against another process already
+controlling your user account or machine.
+
+### Remove only the owned local preview
+
+First, in the stable containing app, explicitly choose **Uninstall Native
+Plugin…** and confirm the official CLI action. Restart/resume sessions that
+still cache its hooks when convenient, then close the containing app and
+deselect the preview sidebar. Only after those hooks no longer need its
+helper, explicitly remove the installed preview:
+
+```sh
+python3 scripts/local-preview.py uninstall --cached-hooks-retired
+```
+
+This deregisters and removes only the receipt-owned stable app and backups.
+The option is an operator assertion, not a scan of private CLI state. An
+interrupted removal is resumed by `recover`. Ownership metadata and the lock
+remain for safe future installs. Observation records, history/attention
+preferences, containers, native plugin settings and source builds are retained;
+there is no purge option. Neither removal nor update touches `maestro-cmux`,
+legacy settings, hooks, sidebars, other apps or CMUX configuration.
+
+The synthetic install tests exercise real macOS atomic renames in
+repository-local fixture directories, with injected signing, process and
+registration adapters. They never access real Applications, Copilot settings
+or user runtime data. Controlled fixture processes deliberately close their
+descriptors, leave a delayed mutating descendant, and lose their caller or
+supervisor to `SIGKILL`; tests prove recovery/new installation stay blocked
+until those synthetic workers finish. No real app/session/tool is killed.
+CI retains all existing build/test commands and adds
+these transaction regressions. Live signed installation, consent refresh,
+host selection and visual verification remain separate operator gates.
 
 ## Build and register locally
 
