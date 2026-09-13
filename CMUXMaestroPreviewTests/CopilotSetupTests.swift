@@ -138,13 +138,13 @@ struct CopilotSetupTests {
         let arguments = gatedInstallerArguments(in: directory)
         let task = Task {
             for await _ in gate.stream { break }
-            return await runner.run(executable: URL(fileURLWithPath: "/usr/bin/env"),
+            return await runner.run(executable: URL(fileURLWithPath: "/bin/sh"),
                                     arguments: arguments, path: "/usr/bin:/bin")
         }
         task.cancel()
         gate.continuation.finish()
         #expect(await task.value == .cancelled)
-        for name in ["launcher.pid", "child.pid", "ready", "late-mutation"] {
+        for name in ["launch-started", "launcher.pid", "child.pid", "ready", "late-mutation"] {
             #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(name).path))
         }
     }
@@ -169,7 +169,7 @@ struct CopilotSetupTests {
                                                  deadlineNow: { clock.now() })
             let arguments = gatedInstallerArguments(in: directory)
             return Task {
-                await runner.run(executable: URL(fileURLWithPath: "/usr/bin/env"),
+                await runner.run(executable: URL(fileURLWithPath: "/bin/sh"),
                                  arguments: arguments, path: "/usr/bin:/bin")
             }
         }
@@ -233,33 +233,35 @@ struct CopilotSetupTests {
         let runner = LocalCopilotSetupRunner(timeout: 0.4, terminationGrace: 0.05,
                                              deadlineNow: { clock.now() })
         let arguments = gatedInstallerArguments(in: directory) + (delayStartup ? ["--delay-startup"] : [])
+        let startupStarted = ContinuousClock.now
         let task = Task {
-            await runner.run(executable: URL(fileURLWithPath: "/usr/bin/env"),
+            await runner.run(executable: URL(fileURLWithPath: "/bin/sh"),
                              arguments: arguments, path: "/usr/bin:/bin")
         }
         defer { task.cancel() }
         let ready = try await waitForGatedWriter(in: directory, deadlineClock: clock)
         var readinessFailure = "Synthetic child must execute before the timeout/cancellation assertion"
         if !ready {
+            let sampled = clock.wasSampled
             task.cancel()
             let stopped = await task.value
             let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-            readinessFailure += "; result=\(stopped); files=\(files.sorted().joined(separator: ","))"
+            let boundedFiles = files.sorted().prefix(16).map { String($0.prefix(64)) }.joined(separator: ",")
+            readinessFailure += "; result=\(stopped); clock.wasSampled=\(sampled); files=\(boundedFiles)"
         }
         try #require(ready, Comment(rawValue: readinessFailure))
         let launcherPID = try recordedProcessValue("launcher.pid", in: directory)
         let childPID = try recordedProcessValue("child.pid", in: directory)
-        #expect(try recordedProcessValue("launcher.pgid", in: directory) == launcherPID)
-        #expect(try recordedProcessValue("child.pgid", in: directory) == launcherPID)
-        #expect(launcherPID != getpgrp())
         try #require(HookProcess.current(launcherPID) != nil)
         try #require(HookProcess.current(childPID) != nil)
         #expect(clock.elapsed == .zero)
+        #expect(getpgid(launcherPID) == launcherPID)
+        #expect(getpgid(childPID) == launcherPID)
+        #expect(launcherPID != getpgrp())
         if delayStartup {
-            let delay = try #require(Double(String(
-                contentsOf: directory.appendingPathComponent("startup-delay"), encoding: .utf8
-            )))
-            #expect(delay > runner.timeout)
+            #expect(try String(contentsOf: directory.appendingPathComponent("delay-started"), encoding: .utf8) == "0.6")
+            #expect(try String(contentsOf: directory.appendingPathComponent("delay-completed"), encoding: .utf8) == "0.6")
+            #expect(startupStarted.duration(to: ContinuousClock.now) > .seconds(runner.timeout))
         }
         try fixture.reader.close()
         if cancel {
@@ -297,8 +299,8 @@ struct CopilotSetupTests {
         // Deliberately bypass runner cleanup: the very same gated child remains
         // alive at the release boundary and must produce the forbidden write.
         let writer = Process()
-        writer.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        writer.arguments = gatedInstallerArguments(in: directory) + ["--writer-only"]
+        writer.executableURL = URL(fileURLWithPath: "/bin/sh")
+        writer.arguments = [directory.appendingPathComponent("child.sh").path, directory.path]
         writer.environment = ["PATH": "/usr/bin:/bin"]
         writer.standardInput = FileHandle.nullDevice
         writer.standardOutput = FileHandle.nullDevice
@@ -331,50 +333,37 @@ struct CopilotSetupTests {
         var writer: Int32 = -1
         var completion: Int32 = -1
         do {
-            // Fork and capture native IDs in-process instead of scheduling
-            // additional metadata executables within the short timeout.
             try """
-            import os
-            import signal
-            import sys
-            import time
+            #!/bin/sh
+            set -eu
+            printf started > "$1/launch-started"
+            printf '%s' "$$" > "$1/launcher.pid"
+            if [ "${2:-}" = "--delay-startup" ]; then
+                printf '0.6' > "$1/delay-started"
+                /bin/sleep 0.6
+                printf '0.6' > "$1/delay-completed"
+            fi
+            /bin/sh "$1/child.sh" "$1" &
+            wait "$!"
 
-            root = sys.argv[1]
+            """.write(to: directory.appendingPathComponent("launcher.sh"), atomically: true, encoding: .utf8)
+            try """
+            #!/bin/sh
+            set -eu
+            trap '' TERM
+            printf started > "$1/child-started"
+            printf '%s' "$$" > "$1/child.pid"
+            exec 3< "$1/mutation-gate"
+            printf opened > "$1/gate-opened"
+            exec 4> "$1/mutation-completion"
+            printf opened > "$1/completion-opened"
+            printf started > "$1/ready"
+            IFS= read -r release <&3
+            [ "$release" = "release" ]
+            printf forbidden > "$1/late-mutation"
+            printf mutated >&4
 
-            def record(name, value):
-                with open(os.path.join(root, name), "w") as output:
-                    output.write(str(value))
-
-            def write_after_gate():
-                signal.signal(signal.SIGTERM, signal.SIG_IGN)
-                with open(os.path.join(root, "mutation-gate")) as gate, \\
-                     open(os.path.join(root, "mutation-completion"), "w") as completion:
-                    record("child.pid", os.getpid())
-                    record("child.pgid", os.getpgrp())
-                    record("ready", "started")
-                    if gate.readline() != "release\\n":
-                        sys.exit(3)
-                    record("late-mutation", "forbidden")
-                    completion.write("mutated")
-
-            if "--delay-startup" in sys.argv:
-                started = time.monotonic()
-                time.sleep(0.6)
-                record("startup-delay", time.monotonic() - started)
-
-            if "--writer-only" in sys.argv:
-                write_after_gate()
-            else:
-                record("launcher.pid", os.getpid())
-                record("launcher.pgid", os.getpgrp())
-                child = os.fork()
-                if child == 0:
-                    write_after_gate()
-                    os._exit(0)
-                _, status = os.waitpid(child, 0)
-                sys.exit(os.waitstatus_to_exitcode(status))
-
-            """.write(to: directory.appendingPathComponent("installer.py"), atomically: true, encoding: .utf8)
+            """.write(to: directory.appendingPathComponent("child.sh"), atomically: true, encoding: .utf8)
             let gate = directory.appendingPathComponent("mutation-gate").path
             let acknowledgement = directory.appendingPathComponent("mutation-completion").path
             guard mkfifo(gate, 0o600) == 0, mkfifo(acknowledgement, 0o600) == 0 else {
@@ -417,7 +406,7 @@ struct CopilotSetupTests {
     }
 
     private func gatedInstallerArguments(in directory: URL) -> [String] {
-        ["python3", "-I", "-S", directory.appendingPathComponent("installer.py").path, directory.path]
+        [directory.appendingPathComponent("launcher.sh").path, directory.path]
     }
 
     private func recordedProcessValue(_ name: String, in directory: URL) throws -> Int32 {
