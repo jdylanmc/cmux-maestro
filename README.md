@@ -93,9 +93,59 @@ symlinked state directories are not supported. Missing lifecycle events can
 leave completion/status unknown, and agent IDs are not automatically native
 child-session IDs. No title/transcript heuristics repair missing identity.
 
+## Sidebar layout
+
+The sidebar **gear** includes **Compact** (the original spacing) and
+**Comfortable** (more room and larger native detail text) density. Both
+Hierarchy and Taskboard keep the same data, counts, paths and independent
+focus, dismissal and acknowledgement actions. Narrow rows stack actions;
+full paths remain available to accessibility and tooltips.
+
+Hierarchy expansion persists by workspace/surface UUID and provider/session/
+child identity—not names, paths or the current window. Moves and reloads keep
+the setting; new identities start expanded. Reusing the same child ID in a
+different session/provider does not inherit a collapse. Returning with the
+same full identity intentionally does. Collapsed ancestors retain visible
+running, blocked and attention summaries; incomplete counts stay labelled.
+Collapse never dismisses or acknowledges work and never changes retention.
+Taskboard still shows the full retained projection regardless of tree collapse.
+
+Only density overrides and collapsed identities are stored, in a versioned
+`CMUXMaestroPreview/sidebar-layout.json` record in the extension container's
+Application Support directory. Coordinated, atomic action-level writes merge
+across views/processes rather than replacing a stale window snapshot. Local
+views synchronize immediately; native file-presentation notifications refresh
+other processes, with reloads on host/observation updates, activation and
+appearance as well.
+Storage is bounded to **2,048 overrides / 1 MiB**. Oldest collapse overrides
+are evicted first, which only **expands** branches. Off-window state is never
+pruned based on a current snapshot. Unreadable or unknown-schema settings
+expand all branches and show a recoverable notice; only **Reset layout
+settings** replaces that record. **Expand all branches** preserves density;
+layout reset restores Compact and does not alter history or attention settings.
+
+### Synthetic layout review images
+
+`./scripts/test.sh` writes offscreen SwiftUI/AppKit PNGs to
+`.build/layout-validation/offscreen/`. CI uploads only those PNGs as the
+**sidebar-layout-offscreen** artifact (14-day retention), including when tests
+fail after producing images. Review both densities at 240 pixels in dark mode,
+increased contrast, and long synthetic path/model/nested-label scenarios, in
+addition to the light-mode expansion matrix at 240 and 320 pixels. Filenames
+identify density, scenario, view mode and width.
+The renderer checks the actual SwiftUI color-scheme and contrast environment.
+Contrast uses the SDK's writable `_colorSchemeContrast` backing key only in
+tests, paired with native high-contrast AppKit appearances; no system display
+preferences are changed.
+
+All metadata is synthetic and local preferences are isolated for the render
+test. Its AppKit windows are never shown; this is not a desktop capture, live
+CMUX-host visual proof, system VoiceOver verification or a pixel-baseline
+comparison. No transcripts, real workspace paths or desktop images are uploaded.
+
 ## Completed work history
 
-The sidebar's **gear** opens native history settings, shared by **Hierarchy** and
+The sidebar's **gear** also opens native history settings, shared by **Hierarchy** and
 **Taskboard**. Finished, failed and cancelled child outcomes are retained for
 **15 seconds** by default; choose **1 minute**, **5 minutes**, **1 hour**, or
 **Never**. Retention starts at the accepted terminal event's RFC 3339 timestamp,
@@ -213,8 +263,7 @@ tests, not the hook. Existing snapshot behavior is unchanged. New live model
 fields are optional for backward Codable compatibility. Reader identity,
 partial-read, corruption, freshness and replay-cap safeguards still apply;
 untrusted or unavailable evidence cannot fabricate an outcome or an action.
-Broader presentation preferences, telemetry and the remaining backlog are not
-claimed by this feature.
+Telemetry and the remaining backlog are not claimed by this feature.
 
 ## Requirements
 
@@ -253,11 +302,12 @@ The scripts verify resolved settings before building and
 the resulting app/extension metadata afterward. Run these scripts rather than
 an unqualified application build while a native integration is installed.
 
-Focused, isolated setup and hook checks (no SDK fetch or app launch):
+Focused, isolated setup, hook, and sandbox checks (no SDK fetch or app launch):
 
 ```sh
 ./scripts/test-copilot-hook.sh
 ./scripts/test-copilot-setup.sh
+./scripts/test-copilot-sandbox.sh
 python3 ./scripts/test-build-metadata.py
 python3 ./scripts/test-local-preview.py
 ```
@@ -269,6 +319,17 @@ malformed input, disable flags, and zero output. The injected ancestry exists
 only in that synthetic binary; app Debug/Release builds have no environment or
 command-line switch that forges owner proof. Installer tests invoke fake
 executables only, never the live Copilot plugin CLI.
+
+The sandbox check compiles the actual shared file helper and runs it under a
+narrow `sandbox-exec` policy over a synthetic deep directory. Ancestors use
+search-only descriptors; the final directory still requires read access.
+The check denies ancestor contents, sibling reads, and writes, and exercises
+owner checks, symlink rejection, and descriptor anchoring during path swaps.
+Fixtures are removed afterward; this check creates no App Sandbox container.
+`O_SEARCH` is declared in Apple's
+[macOS 14-era XNU headers](https://github.com/apple-oss-distributions/xnu/blob/xnu-10002.1.13/bsd/sys/fcntl.h#L184)
+and [macOS 15-era headers](https://github.com/apple-oss-distributions/xnu/blob/xnu-11215.1.10/bsd/sys/fcntl.h#L184),
+covering this project's macOS 14 deployment target.
 
 These tests do **not** prove actual plugin installation, cached-hook loading,
 live owner ancestry, or ExtensionKit-hosted runtime behavior.

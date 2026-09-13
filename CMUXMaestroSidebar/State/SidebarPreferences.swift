@@ -24,6 +24,9 @@ final class SidebarPreferences {
     private static let historyKey = "sidebar.completedHistory.v1"
     private static let attentionKey = "sidebar.attention.v1"
     private let defaults: UserDefaults
+    private let layoutStore: SidebarLayoutStore
+    var layout: SidebarLayoutSettings { layoutStore.value.settings }
+    var layoutNotice: String? { layoutStore.value.notice }
     private(set) var history: SidebarHistorySettings
     private(set) var historyNotice: String?
     private(set) var attention = SidebarAttentionSettings()
@@ -36,8 +39,9 @@ final class SidebarPreferences {
         }
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, layoutStore: SidebarLayoutStore? = nil) {
         self.defaults = defaults
+        self.layoutStore = layoutStore ?? .shared
         selectedMode = defaults.string(forKey: Self.selectedModeKey)
             .flatMap(SidebarMode.init(rawValue:)) ?? .hierarchy
         if let stored = defaults.object(forKey: Self.historyKey) {
@@ -64,6 +68,12 @@ final class SidebarPreferences {
             }
         }
     }
+
+    func setDensity(_ density: SidebarDensity) { layoutStore.apply(.density(density)) }
+    func setExpanded(_ expanded: Bool, for id: SidebarExpansionID) { layoutStore.apply(.expansion(id, expanded)) }
+    func expandAll() { layoutStore.apply(.expandAll) }
+    func resetLayout() { layoutStore.apply(.reset) }
+    func refreshLayout() { layoutStore.refresh() }
 
     func setRetention(_ retention: SidebarHistoryRetention) {
         var next = history

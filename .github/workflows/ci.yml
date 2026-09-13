@@ -19,7 +19,18 @@ jobs:
         run: ./scripts/build-unsigned.sh
       - name: Run integrated Swift tests
         run: ./scripts/test.sh
+      - name: Upload synthetic sidebar layout renders
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidebar-layout-offscreen
+          path: .build/layout-validation/offscreen/*.png
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
       - name: Verify setup process isolation
         run: ./scripts/test-copilot-setup.sh
       - name: Verify compiled hooks fail open
         run: ./scripts/test-copilot-hook.sh
+      - name: Verify shared file traversal under narrow sandbox grants
+        run: ./scripts/test-copilot-sandbox.sh
