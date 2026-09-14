@@ -105,9 +105,10 @@ struct SidebarClarityTests {
         #expect(SidebarPresentation.overviewWarnings(tree).contains("3 working/blocked tasks beyond display limits"))
         tree.issues = [.permissionDenied]
         #expect(SidebarPresentation.overviewWarnings(tree).contains("Copilot access denied"))
-        tree.issues = [.malformedData, .unsupportedFormat, .identityChanged, .ambiguousIdentity, .stateUnavailable, .readLimitReached]
+        tree.issues = [.malformedData, .unsupportedFormat, .identityChanged, .ambiguousIdentity, .ambiguousTurn, .stateUnavailable, .readLimitReached]
         #expect(SidebarPresentation.overviewWarnings(tree).contains("Some Copilot history is unreadable"))
         #expect(SidebarPresentation.overviewWarnings(tree).contains("Session identity is unconfirmed"))
+        #expect(SidebarPresentation.overviewWarnings(tree).contains("Turn identity is unconfirmed"))
         #expect(SidebarPresentation.overviewWarnings(tree).contains("History read limit reached"))
         for availability: SidebarCopilotAvailability in [.waiting, .loading, .hidden, .disconnected, .unavailable] {
             tree.availability = availability

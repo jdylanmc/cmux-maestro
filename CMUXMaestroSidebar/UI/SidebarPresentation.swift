@@ -98,6 +98,7 @@ enum SidebarPresentation {
             (.unsupportedFormat, "Unsupported Copilot history format"),
             (.identityChanged, "Session identity changed"),
             (.ambiguousIdentity, "Session identity is unconfirmed"),
+            (.ambiguousTurn, "Turn identity is unconfirmed"),
             (.stateUnavailable, "Copilot state unavailable"),
             (.readLimitReached, "History read limit reached")
         ] where tree.issues.contains(issue) { result.append(message) }
