@@ -9,6 +9,21 @@ struct ContentView: View {
     @State private var setupTask: Task<Void, Never>?
 
     var body: some View {
+        if CopilotSetupAccess.currentAppAllowsChanges {
+            setupContents
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Maestro validation copy", systemImage: "testtube.2")
+                    .font(.headline)
+                Text(CopilotSetupResult.validationOnly.message)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(24)
+            .frame(width: 380, alignment: .leading)
+        }
+    }
+
+    private var setupContents: some View {
         VStack(alignment: .leading, spacing: 16) {
             Label("CMUX Maestro Preview", systemImage: "sidebar.left")
                 .font(.title2.weight(.semibold))
@@ -75,6 +90,7 @@ struct ContentView: View {
     }
 
     private func chooseExecutable() {
+        guard CopilotSetupAccess.currentAppAllowsChanges else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
@@ -83,6 +99,10 @@ struct ContentView: View {
     }
 
     private func perform(_ action: CopilotSetupAction) {
+        guard CopilotSetupAccess.currentAppAllowsChanges else {
+            result = .validationOnly
+            return
+        }
         busy = true
         result = nil
         setupTask = Task {

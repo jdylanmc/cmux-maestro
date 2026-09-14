@@ -46,8 +46,8 @@ products. Configure repository-local Git author identity as Dylan McCurry
 
 ## Project skills
 
-Project-local agent skill dependencies are pinned in `skills-lock.json`. Restore
-them with:
+Project-local agent skill dependencies are recorded in `skills-lock.json`.
+Restore the recorded skill set with:
 
 ```sh
 npx skills experimental_install
@@ -57,6 +57,20 @@ The restored third-party copies under `.agents/skills/` are generated and
 ignored. The repository-owned `.agents/skills/macos-build/SKILL.md` is the
 exception: it adapts build guidance to the checked-in validation scripts and is
 reviewed with the rest of the project.
+
+Workflow skills from `jdylanmc/agent-skills` are installed project-locally for
+GitHub Copilot. To add or refresh that package's discoverable skills, run:
+
+```sh
+npx --yes skills add jdylanmc/agent-skills --skill '*' --agent github-copilot --copy -y
+```
+
+Keep the wildcard quoted. This installs the existing upstream skills (33 at
+this update), not newly authored skills. Their copies also live under the
+ignored `.agents/skills/` directory; commit the lockfile, not generated copies.
+Neither command installs globally. The lock records sources and content hashes,
+not immutable upstream revisions, so review lockfile changes after restoring
+or refreshing skills.
 
 These skills are available as contextual guidance. Agents should use them when
 they materially improve the work, while retaining judgment for simple or

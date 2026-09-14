@@ -45,7 +45,7 @@ enum SidebarPresentation {
 
     static func state(_ state: CopilotWorkState) -> SidebarVisual {
         switch state {
-        case .working: .init(title: "Working", symbol: "arrow.trianglehead.2.clockwise", tone: .blue)
+        case .working: .init(title: "Working", symbol: "arrow.triangle.2.circlepath", tone: .blue)
         case .blocked: .init(title: "Blocked", symbol: "hand.raised.fill", tone: .amber)
         case .completed: .init(title: "Finished", symbol: "checkmark.circle.fill", tone: .green)
         case .failed: .init(title: "Failed", symbol: "exclamationmark.circle.fill", tone: .red)
