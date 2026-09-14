@@ -22,6 +22,33 @@ private struct SetupFileStub: CopilotSetupFileSystem {
     func preparePlugin(root: URL, helper: URL) throws -> URL { root.appendingPathComponent("plugin") }
 }
 
+private final class SetupAccessSpy: CopilotSetupFileSystem, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var calls: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func executable(selected: URL?, path: String) throws -> URL {
+        record()
+        return URL(fileURLWithPath: "/synthetic/copilot")
+    }
+
+    func preparePlugin(root: URL, helper: URL) throws -> URL {
+        record()
+        return root.appendingPathComponent("plugin")
+    }
+
+    private func record() {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+    }
+}
+
 private final class SetupDeadlineClock: @unchecked Sendable {
     private let lock = NSLock()
     private let origin: ContinuousClock.Instant
@@ -83,7 +110,8 @@ struct CopilotSetupTests {
 
     @Test func constructionDoesNotInstallAndConsentUsesExactOwnPluginArguments() async {
         let runner = SetupRunnerSpy()
-        let setup = CopilotSetup(files: SetupFileStub(fail: false), runner: runner)
+        let setup = CopilotSetup(files: SetupFileStub(fail: false), runner: runner,
+                                 bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
         #expect(await runner.calls.isEmpty)
         #expect(await setup.perform(.install, selected: nil, path: "", root: root, helper: helper) == .installed)
         #expect(await setup.perform(.uninstall, selected: nil, path: "", root: root, helper: helper) == .uninstalled)
@@ -95,15 +123,47 @@ struct CopilotSetupTests {
 
     @Test func reportsRealFailureAndNeverRunsWhenFilesystemFails() async {
         let failure = SetupRunnerSpy(result: .exited(7))
-        let setup = CopilotSetup(files: SetupFileStub(fail: false), runner: failure)
+        let setup = CopilotSetup(files: SetupFileStub(fail: false), runner: failure,
+                                 bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
         #expect(await setup.perform(.install, selected: nil, path: "", root: root, helper: helper) == .failed(7))
-        let unavailable = CopilotSetup(files: SetupFileStub(fail: true), runner: failure)
+        let unavailable = CopilotSetup(files: SetupFileStub(fail: true), runner: failure,
+                                       bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
         #expect(await unavailable.perform(.install, selected: nil, path: "", root: root, helper: helper) == .unavailable)
         #expect(await failure.calls.count == 1)
-        let timeout = CopilotSetup(files: SetupFileStub(fail: false), runner: SetupRunnerSpy(result: .timedOut))
+        let timeout = CopilotSetup(files: SetupFileStub(fail: false), runner: SetupRunnerSpy(result: .timedOut),
+                                   bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
         #expect(await timeout.perform(.install, selected: nil, path: "", root: root, helper: helper) == .timedOut)
-        let cancelled = CopilotSetup(files: SetupFileStub(fail: false), runner: SetupRunnerSpy(result: .cancelled))
+        let cancelled = CopilotSetup(files: SetupFileStub(fail: false), runner: SetupRunnerSpy(result: .cancelled),
+                                     bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
         #expect(await cancelled.perform(.install, selected: nil, path: "", root: root, helper: helper) == .cancelled)
+    }
+
+    @Test(arguments: [
+        nil, "", "com.jdylanmc.CMUXMaestroPreview.Validation.Tests",
+        "com.jdylanmc.CMUXMaestroPreview.Validation.Unsigned",
+        "com.jdylanmc.CMUXMaestroPreview.Extension", "com.jdylanmc.CMUXMaestroPreview.other"
+    ] as [String?])
+    func nonproductionCopiesCannotTouchSetupFilesOrRunCopilot(bundleIdentifier: String?) async {
+        let files = SetupAccessSpy()
+        let runner = SetupRunnerSpy()
+        let setup = CopilotSetup(files: files, runner: runner, bundleIdentifier: bundleIdentifier)
+        for action: CopilotSetupAction in [.install, .uninstall] {
+            #expect(await setup.perform(action, selected: helper, path: "/synthetic",
+                                        root: root, helper: helper) == .validationOnly)
+        }
+        #expect(files.calls == 0)
+        #expect(await runner.calls.isEmpty)
+        #expect(!CopilotSetupAccess.allowsChanges(bundleIdentifier: bundleIdentifier))
+    }
+
+    @Test func defaultSetupUsesTheActualNonproductionHostIdentity() async {
+        #expect(!CopilotSetupAccess.currentAppAllowsChanges)
+        let files = SetupAccessSpy()
+        let runner = SetupRunnerSpy()
+        let setup = CopilotSetup(files: files, runner: runner)
+        #expect(await setup.perform(.install, selected: nil, path: "", root: root, helper: helper) == .validationOnly)
+        #expect(files.calls == 0)
+        #expect(await runner.calls.isEmpty)
     }
 
     @Test(arguments: [false, true])

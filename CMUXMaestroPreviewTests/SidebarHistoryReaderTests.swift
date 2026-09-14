@@ -70,7 +70,7 @@ struct SidebarHistoryReaderTests {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         let clock = HistoryReaderClock()
-        let limits = CopilotReaderLimits(maximumLifecycleEvents: 2)
+        let limits = CopilotReaderLimits(maximumLifecycleEvents: 2, maximumReplayFilterWords: 1)
         let reader = reader(fixture, clock: clock, limits: limits)
         try fixture.writeEvents([
             copilotTestEvent("subagent.started", agent: "child", data: [
@@ -79,6 +79,7 @@ struct SidebarHistoryReaderTests {
             copilotTestEvent("assistant.turn_start", data: ["turnId": "root"])
         ])
         #expect(try await reader.read(surfaceIDs: [fixture.surface]).sessions.first?.children.first?.state == .working)
+        for row in try copilotTestReplayPressure() { try fixture.append(row + Data([10])) }
         try fixture.append(copilotTestEvent("subagent.completed", data: [
             "toolCallId": "task", "agentDisplayName": "Child"
         ]) + Data([10]))
@@ -96,12 +97,14 @@ struct SidebarHistoryReaderTests {
         #expect(rebuilt == refreshed)
     }
 
-    @Test(arguments: [CopilotWorkState.completed, .failed, .cancelled])
-    func capTwoCannotKeepRestartedChildHiddenByItsPreviousOutcome(_ state: CopilotWorkState) async throws {
+    @Test(arguments: [CopilotWorkState.completed, .failed, .cancelled], [false, true])
+    func capTwoCannotKeepRestartedChildHiddenByItsPreviousOutcome(
+        _ state: CopilotWorkState, saturated: Bool
+    ) async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         let clock = HistoryReaderClock()
-        let limits = CopilotReaderLimits(maximumLifecycleEvents: 2)
+        let limits = CopilotReaderLimits(maximumLifecycleEvents: 2, maximumReplayFilterWords: saturated ? 1 : 16_384)
         let reader = reader(fixture, clock: clock, limits: limits)
         try fixture.writeEvents([
             copilotTestEvent("subagent.started", agent: "child", data: [
@@ -119,22 +122,26 @@ struct SidebarHistoryReaderTests {
         )
         #expect(history.dismissed.count == 1)
         #expect(try project(ended, fixture: fixture, history: history).sessions.first?.nodes.isEmpty == true)
+        if saturated {
+            for row in try copilotTestReplayPressure() { try fixture.append(row + Data([10])) }
+        }
         try fixture.append(copilotTestEvent("subagent.started", agent: "child", data: [
             "toolCallId": "new", "agentDisplayName": "Child"
         ]) + Data([10]))
         clock.advance(30)
         let restarted = try await reader.read(surfaceIDs: [fixture.surface])
-        #expect(restarted.issues == [.readLimitReached])
-        #expect(restarted.sessions.first?.children.first?.state == .unknown)
+        let expected: CopilotWorkState = saturated ? .unknown : .working
+        #expect(restarted.issues == (saturated ? [.readLimitReached] : []))
+        #expect(restarted.sessions.first?.children.first?.state == expected)
         #expect(restarted.sessions.first?.children.first?.terminalEvent == nil)
         let tree = try project(restarted, fixture: fixture, history: history)
-        #expect(tree.sessions.first?.nodes.first?.state == .unknown)
+        #expect(tree.sessions.first?.nodes.first?.state == expected)
         #expect(tree.hiddenHistoryCount == 0)
         #expect(tree.dismissibleOutcomes.isEmpty)
         #expect(!tree.hasCompleteCounts)
         clock.advance(30)
         let refreshed = try await reader.read(surfaceIDs: [fixture.surface])
-        #expect(try project(refreshed, fixture: fixture, history: history).sessions.first?.nodes.first?.state == .unknown)
+        #expect(try project(refreshed, fixture: fixture, history: history).sessions.first?.nodes.first?.state == expected)
         let rebuilt = try await self.reader(fixture, clock: clock, limits: limits).read(surfaceIDs: [fixture.surface])
         #expect(rebuilt == refreshed)
     }
@@ -200,6 +207,173 @@ struct SidebarHistoryReaderTests {
         #expect(try project(repeated, fixture: fixture, history: history).sessions.first?.nodes.isEmpty == true)
         let rebuilt = try await self.reader(fixture, clock: clock).read(surfaceIDs: [fixture.surface])
         #expect(rebuilt == repeated)
+    }
+
+    @Test(arguments: ["subagent.started", "assistant.turn_start"], [false, true])
+    func unsaturatedColdCollisionCannotHideDismissedOrExpiredTerminalWork(
+        type: String, expired: Bool
+    ) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let clock = HistoryReaderClock()
+        let limits = CopilotReaderLimits(maximumReplayFilterWords: 1, maximumRelationships: 2)
+        let reader = reader(fixture, clock: clock, limits: limits)
+        let start = try copilotTestEvent("subagent.started", agent: "worker", data: [
+            "toolCallId": "spawn-a", "agentDisplayName": "A"
+        ])
+        let completion = try timedEvent("subagent.completed", at: clock.read(), data: [
+            "toolCallId": "spawn-a", "agentDisplayName": "A"
+        ])
+        try fixture.writeEvents([start, completion] + copilotTestColdStartPressure())
+        let initial = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(initial.issues.isEmpty)
+        let initialTree = try project(initial, fixture: fixture)
+        #expect(initialTree.retainedHistoryCount == 1)
+        let history = expired ? SidebarHistorySettings() : SidebarHistorySettings(
+            retention: .never, dismissed: initialTree.dismissibleOutcomes
+        )
+        if expired { clock.advance(15) }
+        let hidden = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(try project(hidden, fixture: fixture, history: history).hiddenHistoryCount == 1)
+        try fixture.append(copilotTestEvent(type, agent: "worker", data: [
+            "toolCallId": "fresh-457", "turnId": "fresh-turn-135",
+            "agentDisplayName": "Unattested B", "model": "unattested-model"
+        ]) + Data([10]))
+        let uncertain = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(uncertain.issues == [.readLimitReached])
+        #expect(uncertain.sessions.first?.children.first?.state == .unknown)
+        #expect(uncertain.sessions.first?.children.first?.terminalEvent == nil)
+        let visible = try project(uncertain, fixture: fixture, history: history)
+        #expect(visible.sessions.first?.nodes.first?.id == "worker")
+        #expect(visible.sessions.first?.nodes.first?.state == .unknown)
+        #expect(visible.knownRunningChildren == 0)
+        #expect(visible.hiddenHistoryCount == 0)
+        #expect(visible.dismissibleOutcomes.isEmpty)
+        #expect(!visible.hasCompleteCounts)
+        try fixture.append(copilotTestEvent("subagent.completed", data: [
+            "toolCallId": "spawn-a", "agentDisplayName": "A"
+        ]) + Data([10]))
+        let late = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(late.sessions == uncertain.sessions)
+        let rebuilt = try await self.reader(fixture, clock: clock, limits: limits).read(surfaceIDs: [fixture.surface])
+        #expect(rebuilt.sessions == uncertain.sessions)
+        try fixture.writeEvents([
+            start, completion
+        ] + copilotTestColdStartPressure() + [
+            copilotTestEvent(type, agent: "worker", data: [
+                "toolCallId": "fresh-457", "turnId": "fresh-turn-135", "agentDisplayName": "Unattested B"
+            ])
+        ], atomic: true)
+        let replaced = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(replaced.sessions.first?.children.first?.state == .unknown)
+        #expect(replaced.sessions.first?.children.first?.terminalEvent == nil)
+        #expect(try project(replaced, fixture: fixture, history: history).hiddenHistoryCount == 0)
+    }
+
+    @Test(arguments: [CopilotWorkState.completed, .failed, .cancelled], [false, true])
+    func retiredHistoryAndDismissalCannotHideFreshBlockedInvocation(
+        _ outcome: CopilotWorkState, retire: Bool
+    ) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let clock = HistoryReaderClock()
+        let limits = CopilotReaderLimits(maximumLifecycleEvents: 8)
+        let reader = reader(fixture, clock: clock, limits: limits)
+        let startA = try copilotTestEvent("subagent.started", agent: "worker", data: [
+            "toolCallId": "spawn-a", "agentDisplayName": "A"
+        ])
+        let turnA = try copilotTestEvent("assistant.turn_start", agent: "worker", data: ["turnId": "turn-a"])
+        let requestA = try copilotTestEvent("permission.requested", agent: "worker", data: ["requestId": "request-a"])
+        let finishA = try timedEvent(
+            outcome == .failed ? "subagent.failed" : "subagent.completed", at: clock.read(), data: [
+                "toolCallId": "spawn-a", "agentDisplayName": "A", "cancelled": outcome == .cancelled
+            ]
+        )
+        try fixture.writeEvents([startA, turnA, requestA, finishA])
+        let initial = try await reader.read(surfaceIDs: [fixture.surface])
+        let initialTree = try project(initial, fixture: fixture)
+        #expect(initialTree.retainedHistoryCount == 1)
+        let oldEvent = try #require(initial.sessions.first?.children.first?.terminalEvent)
+        let dismissed = SidebarHistorySettings(retention: .never, dismissed: initialTree.dismissibleOutcomes)
+        #expect(try project(initial, fixture: fixture, history: dismissed).hiddenHistoryCount == 1)
+        clock.advance(15)
+        let expired = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(try project(expired, fixture: fixture).hiddenHistoryCount == 1)
+
+        if retire {
+            for index in 0..<256 {
+                try fixture.append(copilotTestEvent("tool.execution_start", data: [
+                    "toolCallId": "retire-\(index)", "toolName": "bash"
+                ]) + Data([10]))
+                try fixture.append(copilotTestEvent("tool.execution_complete", data: [
+                    "toolCallId": "retire-\(index)", "success": true
+                ]) + Data([10]))
+            }
+            let retired = try await reader.read(surfaceIDs: [fixture.surface])
+            #expect(!retired.sessions.flatMap(\.children).contains { $0.id == "worker" })
+        }
+        // A fresh turn alone is sufficient after retirement. Structured spawn
+        // enrichment must then retain that turn and its pending permission.
+        try fixture.append(copilotTestEvent("assistant.turn_start", agent: "worker", data: [
+            "turnId": "turn-b", "model": "current"
+        ]) + Data([10]))
+        try fixture.append(copilotTestEvent("permission.requested", agent: "worker", data: [
+            "requestId": "request-b"
+        ]) + Data([10]))
+        try fixture.append(copilotTestEvent("subagent.started", agent: "worker", data: [
+            "toolCallId": "spawn-b", "agentDisplayName": "B"
+        ]) + Data([10]))
+        let current = try await reader.read(surfaceIDs: [fixture.surface])
+        let worker = try #require(current.sessions.flatMap(\.children).first { $0.id == "worker" })
+        #expect(worker.state == .blocked)
+        #expect(worker.name == "B")
+        #expect(worker.terminalEvent == nil)
+        #expect(try project(current, fixture: fixture, history: dismissed).sessions.first?.nodes.contains {
+            $0.id == "worker" && $0.state == .blocked
+        } == true)
+
+        for row in [startA, turnA, requestA, finishA] { try fixture.append(row + Data([10])) }
+        for row in try [
+            copilotTestEvent("subagent.started", agent: "worker", data: [
+                "toolCallId": "spawn-a", "agentDisplayName": "A"
+            ]),
+            copilotTestEvent("assistant.turn_start", agent: "worker", data: ["turnId": "turn-a"]),
+            copilotTestEvent("assistant.turn_end", agent: "worker", data: ["turnId": "turn-a"]),
+            copilotTestEvent("subagent.failed", data: ["toolCallId": "spawn-a", "agentDisplayName": "A"]),
+            copilotTestEvent("permission.requested", agent: "worker", data: ["requestId": "request-a"])
+        ] { try fixture.append(row + Data([10])) }
+        let replayed = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(replayed.sessions == current.sessions)
+        let rebuilt = try await self.reader(fixture, clock: clock, limits: limits).read(surfaceIDs: [fixture.surface])
+        #expect(rebuilt.sessions == replayed.sessions)
+        #expect(try project(rebuilt, fixture: fixture, history: dismissed).sessions.first?.nodes.contains {
+            $0.id == "worker" && $0.state == .blocked
+        } == true)
+        try fixture.append(copilotTestEvent("permission.completed", agent: "worker", data: [
+            "requestId": "request-b"
+        ]) + Data([10]))
+        let finishB = try timedEvent(
+            outcome == .failed ? "subagent.failed" : "subagent.completed", at: clock.read(), data: [
+                "toolCallId": "spawn-b", "agentDisplayName": "B", "cancelled": outcome == .cancelled
+            ]
+        )
+        try fixture.append(finishB + Data([10]))
+        let finished = try await reader.read(surfaceIDs: [fixture.surface])
+        let completed = try #require(finished.sessions.flatMap(\.children).first { $0.id == "worker" })
+        #expect(completed.state == outcome)
+        #expect(completed.terminalEvent?.id != oldEvent.id)
+        #expect(completed.terminalEvent?.timestamp == clock.read())
+        let visible = try project(finished, fixture: fixture, history: dismissed)
+        #expect(visible.sessions.first?.nodes.contains { $0.id == "worker" && $0.state == outcome } == true)
+        #expect(try project(finished, fixture: fixture).nextHistoryExpiry == clock.read().addingTimeInterval(15))
+        clock.advance(15)
+        let refreshed = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(try project(refreshed, fixture: fixture).sessions.first?.nodes.contains { $0.id == "worker" } == false)
+        let finalRebuilt = try await self.reader(fixture, clock: clock, limits: limits).read(surfaceIDs: [fixture.surface])
+        #expect(finalRebuilt.sessions == refreshed.sessions)
+        #expect(try project(finalRebuilt, fixture: fixture, history: dismissed).sessions.first?.nodes.contains {
+            $0.id == "worker" && $0.state == outcome
+        } == true)
     }
 
     @Test(arguments: ["abort", "session.error"])
@@ -289,6 +463,12 @@ struct SidebarHistoryReaderTests {
             processLookup: { $0 == fixture.process.pid ? .found(fixture.process) : .dead },
             limits: limits
         )
+    }
+
+    private func timedEvent(_ type: String, at date: Date, data: [String: Any]) throws -> Data {
+        var event = try #require(JSONSerialization.jsonObject(with: copilotTestEvent(type, data: data)) as? [String: Any])
+        event["timestamp"] = date.ISO8601Format()
+        return try JSONSerialization.data(withJSONObject: event)
     }
 
     private func project(

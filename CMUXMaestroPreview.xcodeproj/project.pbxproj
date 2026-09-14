@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C09100000000000000000005 /* SidebarView.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09100000000000000000006; };
 		C06100000000000000000001 /* Helper in Embed Helpers */ = {isa = PBXBuildFile; fileRef = C06100000000000000000002; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		C06100000000000000000010 /* CopilotHookRecorder.swift in App Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000011; };
 		C06100000000000000000101 /* CopilotIdentityRecord.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000201; };
@@ -89,6 +90,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C09100000000000000000006 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarView.swift; sourceTree = SOURCE_ROOT; };
 		C06100000000000000000002 /* CMUXMaestroCopilotHook */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = CMUXMaestroCopilotHook; sourceTree = BUILT_PRODUCTS_DIR; };
 		C06100000000000000000011 /* CopilotHookRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroCopilotHook/CopilotHookRecorder.swift; sourceTree = SOURCE_ROOT; };
 		C06100000000000000000201 /* CopilotIdentityRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/CopilotIdentityRecord.swift; sourceTree = SOURCE_ROOT; };
@@ -215,6 +217,7 @@
 		D10400000000000000000005 /* Shared Sidebar Test Sources */ = {
 			isa = PBXGroup;
 			children = (
+				C09100000000000000000006 /* SidebarView.swift */,
 				D10400000000000000000003 /* SidebarPreferences.swift */,
 				D12700000000000000000002 /* SidebarPreferenceStore.swift */,
 				D10400000000000000000004 /* SidebarConnectionState.swift */,
@@ -414,6 +417,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C09100000000000000000005 /* SidebarView.swift in Test Sources */,
 				D10400000000000000000001 /* SidebarPreferences.swift in Sources */,
 				D12700000000000000000001 /* SidebarPreferenceStore.swift in Test Sources */,
 				D10400000000000000000002 /* SidebarConnectionState.swift in Sources */,

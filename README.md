@@ -148,11 +148,24 @@ I/O failures also fail open with a notice; capacity rejection keeps the last
 valid record and rejects the entire batch. History deadlines use a
 single cancellable timer, are not reset by refresh, and stop on hide, disconnect,
 or access loss. Existing observation freshness remains an independent limit.
-Reducer replay protection is bounded to 65,536 lifecycle event IDs and at most
-65,536 start-identity tombstones per session. Exhaustion reports partial data;
+Reducer replay protection keeps up to 65,536 exact recent lifecycle event UUIDs
+and 4,096 exact recent start/work/tool/resolved-request keys per session.
+Each ledger spills into its own fixed 128-KiB filter rather than rejecting new
+events at the exact-window boundary; spilled bits are never cleared within a
+transcript generation. Cold matches are uncertain and report partial data.
+Actual filter saturation fails closed; it never silently forgets anti-replay
+evidence. Cold start-identity matches cannot distinguish old replay from a fresh
+start's false positive. A matching agent row that is already terminal is exposed
+as unknown, clearing its obsolete terminal outcome and completion pairing so
+prior dismissal/expiry cannot hide potentially active work. A terminal root
+similarly becomes unknown on an uncertain root turn. Neither case claims fresh
+activity or adopts the unprocessed event's model. Live/blocked rows, pending
+requests and unrelated root state remain unchanged; exact replay is a no-op.
+On unprocessed fresh lifecycle evidence,
 uncertain new starts demote affected work to unknown and clear obsolete terminal
 evidence, so a prior dismissal cannot hide possibly active work. Unresolved
-lifecycle scope is demoted conservatively. Session identity/schema checks run
+lifecycle scope is demoted conservatively; uncertainty alone does not resolve
+known pending requests. Session identity/schema checks run
 before all deduplication and capacity guards.
 Complete, identity-verified reads publish conservative semantic degradation as
 current partial data, including unknown lifecycle state and replay limits.
@@ -161,6 +174,77 @@ still cannot publish unvalidated replacement state.
 
 This is completed-child-work management only. Session attention/acknowledgement
 and broader presentation preferences are separate, not implemented here.
+
+### Bounded retention and discovery
+
+- The 256-row reducer budget retires the oldest terminal **leaf**, not active,
+  idle, blocked, or unknown work. Retained descendants, pending requests, and
+  unresolved active ownership protect their ancestors. Agent row IDs stay stable
+  across fresh lifecycles; retirement does not permanently blacklist an agent ID.
+  Completed tool ownership is reclaimed separately so the 4,096-relationship
+  budget does not become the next long-session bottleneck. Recent completed
+  owners still support delayed parent joins; retired joins remain unresolved.
+- Spawn replay keys use the spawn tool ID; turn replay keys use owner + turn ID.
+  A new spawn tool or previously unseen scoped turn is fresh activity, even for
+  a retained or retired terminal agent. Completions pair with the row's current
+  spawn, so a late old completion cannot finish a newer lifecycle. A turn alone
+  recreates an unknown agent, not an invented old name/parent/spawn. Enriching an
+  unknown row must not silently discard its pending requests.
+- Work/lifecycle/tool/request replay keys keep up to 4,096 exact recent tombstones.
+  Older identities spill into a deterministic 128-KiB replay filter; its bits are
+  never cleared within a transcript generation. This bounded filter has no false
+  negatives, but can have false positives: a cold match rejects fresh admission
+  **and reports `readLimitReached`**, rather than claiming exact replay knowledge.
+  Terminal agent/root state fails open to unknown as described above; an uncertain
+  start-identity match does not demote live work.
+  At half occupancy it fails closed; it never forgets history to admit more work.
+  True active-capacity exhaustion also reports a limit without fabricating
+  completion. Transcript replacement reconstructs this state from the new log.
+- Routing discovery resumes one descriptor-anchored directory stream across
+  batches (up to 1,024 directory entries per batch, plus bounded revalidation of
+  at most 64 cached identities and one staged granted binding). Historical locks
+  and off-surface records cannot pin discovery to a prefix. At most 64 transcript
+  tails are retained. An unfinished initial tail keeps its slot until its finite
+  captured byte boundary is verified and published (or explicitly unavailable);
+  discovery stages at most one next binding while it waits. Finished slots then
+  rotate, retaining an explicit limit warning when granted sessions exceed capacity.
+  Only a full, unchanged, non-overflowed cycle without errors can be complete.
+  Cached bindings are checked before process/transcript access and publication;
+  replaced directories, revoked surfaces, and cancellation discard cached state.
+  EOF, errors, cancellation, and destruction close the directory stream.
+- Capture a fixed prefix length and observation time for each catch-up pass;
+  later appends do not extend that lease forever. A verified complete prefix may
+  be published with its captured observation time and `loadingHistory` when
+  newer bytes remain; this is not a current/complete snapshot. A verified current
+  EOF uses the verification time, including after multi-batch reconstruction on
+  normal polling cadence. Torn or malformed
+  prefixes cannot become fabricated complete evidence. A failed observation
+  cannot pin every later session indefinitely.
+- A binding rerouted during a read is deliberately omitted, **not** returned
+  with its superseded surface/session identity as an ambiguous row. Other
+  verified granted sessions remain visible; the snapshot reports
+  `identityChanged` and is incomplete. A later stable read under the new grant
+  reconstructs that session, including when both surfaces were already granted.
+  By contrast, unstable process/marker evidence with an unchanged valid routing
+  binding still produces a content-free ambiguous row. Timestamp-only hook
+  refreshes preserve the verified row but require a stable discovery cycle
+  before completeness. Reader tests cover all three distinct contracts and use
+  `#require` before unwrapping expected observations.
+- `hasPendingHistory` accelerates initial/changed-index catch-up and retained-tail
+  deltas. After an overflow sweep finishes, revisiting evicted prefixes of the
+  unchanged index uses normal polling rather than an endless fast rebuild loop.
+  EOF, torn final lines, and warnings alone never request a fast retry. No sandbox
+  entitlement or ancestor traversal permission is broadened.
+
+**Downstream attention integration (PR #28):** preserve this combined reducer's
+accepted terminal UUID/timestamp, current-spawn/turn pairing, bounded event/start/
+resolved-request guards, and `canPublishProjection` distinctions. Attention
+retirement must also clean obsolete turn/activity/outcome state without
+discarding pending requests, unknown placeholders or required ancestors.
+History presentation limits remain separate from ingestion limits; a prior
+terminal dismissal cannot hide a fresh lifecycle using the same agent ID.
+Carry finite reader watermarks, staged-binding revalidation, EOF freshness and
+overflow scheduling together, and rerun these regressions with attention tests.
 
 ## Requirements
 
@@ -173,6 +257,11 @@ and broader presentation preferences are separate, not implemented here.
 The CMUX ExtensionKit package is pinned to CMUX commit
 `ae7fbce99f98c98df5ccf915e548dd080d33cfa8`. It is fetched into ignored
 `vendor/CmuxExtensionKit/`; no CMUX source changes are required.
+
+**Host footer compatibility:** the native view reserves 50 points of bottom
+clearance for the current CMUX overlaid footer. The SDK provides no footer-inset
+contract; a rendered-strip regression test checks that both sidebar modes leave
+this area clear. Reverify the clearance when host chrome changes.
 
 ## Build and test
 
@@ -212,6 +301,17 @@ CMUX sidebar providers; do not use their installer UI for integration setup.
 The scripts verify resolved settings before building and
 the resulting app/extension metadata afterward. Run these scripts rather than
 an unqualified application build while a native integration is installed.
+
+Validation builds also compile a settings-only app scene: test runs do not open
+the Copilot setup window. If opened manually, a validation copy shows only a
+read-only explanation. Install and uninstall are rejected before executable
+lookup, filesystem access, or CLI invocation unless the containing app has the
+exact production bundle identity. Use the installed production app for setup,
+never a window labelled **Test Validation** or **Unsigned Validation**.
+Resolved build checks require the no-window compilation condition for validation
+and reject it for production. Tests cover both the zero-window host and
+zero-side-effect install/uninstall denial; fake production setup tests explicitly
+inject the production identity.
 
 Focused, isolated setup, hook, and sandbox checks (no SDK fetch or app launch):
 
