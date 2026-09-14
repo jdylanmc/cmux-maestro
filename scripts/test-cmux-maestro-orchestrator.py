@@ -263,6 +263,20 @@ if "[DUPLICATE_FINAL_REPORT]" in prompt:
         "type": "assistant.message",
         "data": {"phase": "final_answer", "toolRequests": [], "content": content},
     }))
+print(json.dumps({
+    "type": "assistant.reasoning", "ephemeral": True,
+    "data": {"content": "synthetic opaque auxiliary value", "reasoningId": "fixture", "rte": {}},
+}))
+if "[PERSISTENT_AUXILIARY]" in prompt:
+    print(json.dumps({
+        "type": "assistant.reasoning", "ephemeral": False,
+        "data": {"content": "synthetic opaque value"},
+    }))
+if "[AUXILIARY_WITH_TOOL]" in prompt:
+    print(json.dumps({
+        "type": "assistant.reasoning", "ephemeral": True,
+        "data": {"toolRequests": [{"toolName": "bash"}]},
+    }))
 print(json.dumps({"type": "assistant.turn_end", "data": {"turnId": "0"}}))
 print(json.dumps({
     "type": "session.usage_checkpoint",
@@ -743,6 +757,8 @@ class OrchestratorTests(unittest.TestCase):
             ("[AFTER_FINAL_CONTENT]", "report-missing"),
             ("[BOOKKEEPING_WITH_CONTENT]", "report-missing"),
             ("[BACKGROUND_NOTICE_WITH_CONTENT]", "report-missing"),
+            ("[PERSISTENT_AUXILIARY]", "report-missing"),
+            ("[AUXILIARY_WITH_TOOL]", "report-missing"),
             ("[AFTER_FINAL_MALFORMED]", "turn-failed"),
             ("[AFTER_RESULT_BOOKKEEPING]", "turn-failed"),
         ]

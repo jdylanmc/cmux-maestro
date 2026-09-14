@@ -60,6 +60,8 @@ and post-result events remain rejected. Policy denial requires a failed tool's
 structured error code, not words found inside successful output.
 Resumed-session empty `session.background_tasks_changed` invalidations are also
 accepted as notifications, never as proof that background work finished.
+The CLI's ephemeral `assistant.reasoning` auxiliary envelope is ignored without
+using or publishing its contents; it is not a new reply or a task report.
 
 Owned pre-orchestration installs may lack the newer controller/skill assets when
 their signed profile has no orchestration grant. Their exact receipts remain

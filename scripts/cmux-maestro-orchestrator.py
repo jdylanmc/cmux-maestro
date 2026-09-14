@@ -1084,6 +1084,13 @@ def event_has_permission_denial(event):
 
 
 def terminal_bookkeeping(event):
+    if event.get("type") == "assistant.reasoning":
+        data = event.get("data")
+        return (
+            event.get("ephemeral") is True
+            and isinstance(data, dict)
+            and set(data) <= {"content", "reasoningId", "rte"}
+        )
     if event.get("type") == "session.background_tasks_changed":
         return isinstance(event.get("data"), dict) and not event["data"]
     if event.get("type") not in {
