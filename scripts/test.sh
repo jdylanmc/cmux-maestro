@@ -12,6 +12,7 @@ SETTINGS=(
     CODE_SIGNING_REQUIRED=NO
     CMUX_BUNDLE_ID_SUFFIX=.Validation.Tests
     "CMUX_DISPLAY_NAME_SUFFIX= (Test Validation)"
+    'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) CMUX_VALIDATION'
     CMUX_SIDEBAR_EXTENSION_POINT_ID=com.jdylanmc.CMUXMaestroPreview.validation.tests.sidebar
 )
 

@@ -59,6 +59,12 @@ def verify_settings(rows, mode):
         if name in ("CMUXMaestroPreview", "CMUXMaestroSidebar"):
             require(settings.get("CMUX_SIDEBAR_EXTENSION_POINT_ID") == point,
                     "Resolved extension point is outside its build namespace.")
+        if name == "CMUXMaestroPreview":
+            conditions = settings.get("SWIFT_ACTIVE_COMPILATION_CONDITIONS", "")
+            require(isinstance(conditions, (str, list)), "Invalid compilation conditions.")
+            conditions = conditions.split() if isinstance(conditions, str) else conditions
+            require(("CMUX_VALIDATION" in conditions) == (mode != "production"),
+                    "Validation must use the no-window app scene; production must retain its setup scene.")
         expected_sandbox = "YES" if name == "CMUXMaestroSidebar" else "NO"
         if name != "CMUXMaestroPreviewTests":
             require(settings.get("ENABLE_APP_SANDBOX") == expected_sandbox,

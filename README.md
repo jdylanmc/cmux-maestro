@@ -208,6 +208,17 @@ The scripts verify resolved settings before building and
 the resulting app/extension metadata afterward. Run these scripts rather than
 an unqualified application build while a native integration is installed.
 
+Validation builds also compile a settings-only app scene: test runs do not open
+the Copilot setup window. If opened manually, a validation copy shows only a
+read-only explanation. Install and uninstall are rejected before executable
+lookup, filesystem access, or CLI invocation unless the containing app has the
+exact production bundle identity. Use the installed production app for setup,
+never a window labelled **Test Validation** or **Unsigned Validation**.
+Resolved build checks require the no-window compilation condition for validation
+and reject it for production. Tests cover both the zero-window host and
+zero-side-effect install/uninstall denial; fake production setup tests explicitly
+inject the production identity.
+
 Focused, isolated setup, hook, and sandbox checks (no SDK fetch or app launch):
 
 ```sh
