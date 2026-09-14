@@ -228,25 +228,28 @@ struct CopilotSetupTests {
             let runner = LocalCopilotSetupRunner(timeout: 0.4, terminationGrace: 0.05,
                                                  deadlineNow: { clock.now() })
             let arguments = gatedInstallerArguments(in: directory)
-            return Task {
+            return Task.detached {
                 await runner.run(executable: URL(fileURLWithPath: "/bin/sh"),
                                  arguments: arguments, path: "/usr/bin:/bin")
             }
         }
         defer { tasks.forEach { $0.cancel() } }
-        // The observer is outside the cooperative pool under test. Both process
-        // operations run concurrently and must start before either deadline advances.
+        // Keep drivers on the cooperative executor and the observer on MainActor.
+        // Yielding here would let inherited actor tasks masquerade as detached drivers.
         func allReady() -> Bool {
             fixtures.indices.allSatisfy { index in
                 clocks[index].wasSampled
                     && FileManager.default.fileExists(atPath: fixtures[index].directory.appendingPathComponent("ready").path)
             }
         }
-        let readiness = ContinuousClock.now.advanced(by: .seconds(3))
-        while !allReady(), ContinuousClock.now < readiness {
-            try await Task.sleep(for: .milliseconds(10))
+        func observeReadiness() -> Bool {
+            let readiness = ContinuousClock.now.advanced(by: .seconds(3))
+            while !allReady(), ContinuousClock.now < readiness {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            return allReady()
         }
-        let startedConcurrently = allReady()
+        let startedConcurrently = observeReadiness()
         let readyCount = fixtures.filter {
             FileManager.default.fileExists(atPath: $0.directory.appendingPathComponent("ready").path)
         }.count
