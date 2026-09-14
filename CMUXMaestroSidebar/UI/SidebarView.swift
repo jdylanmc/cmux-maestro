@@ -175,6 +175,10 @@ struct SidebarView: View {
             } else {
                 ManagedOverview(polling: model.orchestration)
             }
+            ManagedSourceNotice(
+                availability: model.orchestration.availability,
+                hasNodes: !model.orchestration.snapshot.nodes.isEmpty
+            )
             if model.copilot.tree.attentionOwnerCount > 0 {
                 HStack {
                     Label(SidebarCountText.attention(model.copilot.tree.attentionOwnerCount), systemImage: "bell.badge")
@@ -421,13 +425,47 @@ private struct ManagedOverview: View {
     }
 }
 
+private struct ManagedSourceNotice: View {
+    let availability: SidebarOrchestrationAvailability
+    let hasNodes: Bool
+
+    private var notice: (String, String)? {
+        switch availability {
+        case .waiting:
+            return ("clock", "Managed orchestration evidence has not been published yet.")
+        case .loading:
+            return ("arrow.clockwise", "Checking managed orchestration evidence.")
+        case .partial:
+            return ("exclamationmark.triangle", "Managed orchestration evidence is incomplete.")
+        case .stale:
+            return ("clock.badge.exclamationmark", "Managed orchestration evidence is stale.")
+        case .unavailable:
+            return ("exclamationmark.triangle", "Managed orchestration evidence is unavailable.")
+        case .ready where !hasNodes:
+            return ("checkmark.circle", "No managed work is registered on these surfaces.")
+        case .ready, .hidden, .disconnected:
+            return nil
+        }
+    }
+
+    var body: some View {
+        if let notice {
+            Label(notice.1, systemImage: notice.0)
+                .sidebarFont(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("managed-source-notice")
+        }
+    }
+}
+
 private struct ManagedDisplayNode: Identifiable {
     let node: SidebarOrchestrationNode
     let depth: Int
     var id: UUID { node.id }
 }
 
-private struct ManagedHierarchyContent: View {
+struct ManagedHierarchyContent: View {
     let polling: SidebarOrchestrationPolling
     let navigation: SidebarNavigation
 

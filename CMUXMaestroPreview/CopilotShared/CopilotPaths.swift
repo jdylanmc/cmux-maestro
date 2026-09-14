@@ -41,4 +41,8 @@ nonisolated enum CopilotPaths {
             "Library/Application Support/CMUXMaestroPreview/Orchestration", isDirectory: true
         )
     }
+
+    static func orchestrationObserverDirectory() throws -> URL {
+        try orchestrationRoot().appendingPathComponent("observer", isDirectory: true)
+    }
 }

@@ -41,11 +41,14 @@ orchestration run.
   --task "Bounded objective, constraints, validation, and stop condition"
 ```
 
-The command creates exactly one unfocused terminal tab beside the actor and
-starts one interactive Copilot session with a preassigned stable session ID.
-Workers may spawn descendants through the same command using their injected
+The command creates exactly one unfocused terminal tab beside the actor. A
+foreground supervisor runs one bounded noninteractive Copilot turn with a
+preassigned stable session ID, then remains in that terminal for authenticated
+follow-ups. Workers may spawn descendants through the same command using their injected
 `CMUX_MAESTRO_WORKER_ID` and `CMUX_MAESTRO_CONTROL_TOKEN`. Respect the depth
-and active-child limits; do not retry fanout failures in a loop.
+and eight-live-worker workspace limit; a completed report does not release a
+live terminal/supervisor slot. Reuse an idle worker instead of retrying fanout
+failures in a loop.
 
 ## Inspect, follow up, and focus
 
@@ -62,10 +65,12 @@ and active-child limits; do not retry fanout failures in a loop.
   --worker-id "$WORKER_ID"
 ```
 
-Follow-up is allowed only for a directly owned worker that explicitly reported
-blocked, completed, or failed for its current generation and whose exact
-Copilot process and CMUX surface still validate. There is no fallback to
-`--continue`, a display name, the focused terminal, or a recent session.
+Follow-up is queued privately and allowed only for a directly owned worker that
+explicitly reported blocked, completed, or failed and whose supervisor has
+verified the exact current turn boundary. The next turn uses that worker's
+preassigned exact `--resume` session ID. No prompt is typed into a terminal,
+and there is no fallback to `--continue`, a display name, the focused terminal,
+or a recent session.
 
 ## Worker reporting
 
@@ -78,7 +83,33 @@ Before becoming idle after every turn, report exactly once:
   --summary "Brief factual result"
 ```
 
-Use `running`, `blocked`, or `failed` when accurate. A terminal's existence, a
+Use `blocked` or `failed` instead of `completed` when accurate. The report stays
+pending until the foreground supervisor verifies that generation's Copilot
+process/result boundary. A terminal's existence, a
 normal assistant response, or a zero process exit is not task success. Reports
 are operational evidence, not independent review or acceptance. Do not place
 secrets, raw output, or full task prompts in summaries.
+
+## End or recover a run
+
+Archive an owned run before reusing its coordinator surface:
+
+```sh
+"$CMUX_MAESTRO_ORCHESTRATOR" archive \
+  --actor-id "$COORDINATOR_ID" --token "$CONTROL_TOKEN"
+```
+
+Archive asks idle supervisors to exit but never kills a process or deletes a
+terminal. Still-present worker terminals remain counted as retained resources.
+If the coordinator token is lost, `recover` may issue a new run only after the
+exact current caller workspace/surface matches, ownership is stale, and no
+worker process or surface from that run remains:
+
+```sh
+"$CMUX_MAESTRO_ORCHESTRATOR" recover \
+  --workspace "$CMUX_WORKSPACE_ID" \
+  --surface "$CMUX_SURFACE_ID" \
+  --name "Coordinator"
+```
+
+Recovery never guesses from a title, directory, focused tab, or recent session.

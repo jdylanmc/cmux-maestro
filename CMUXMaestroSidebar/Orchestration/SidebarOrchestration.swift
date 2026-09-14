@@ -18,7 +18,8 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
 
     var isActive: Bool {
         !["reported-completed", "reported-failed", "launch-failed",
-          "process-disappeared", "terminal-disappeared"].contains(phase)
+          "startup-failed", "turn-failed", "process-disappeared",
+          "terminal-disappeared", "resource-retired"].contains(phase)
     }
 }
 
@@ -35,18 +36,21 @@ nonisolated struct SidebarOrchestrationSnapshot: Codable, Equatable, Sendable {
 }
 
 nonisolated enum SidebarOrchestrationAvailability: Equatable, Sendable {
-    case waiting, loading, ready, partial, unavailable, hidden, disconnected
+    case waiting, loading, ready, partial, stale, unavailable, hidden, disconnected
 }
 
 nonisolated enum SidebarOrchestrationReader {
     static let maximumBytes = 1_048_576
     static let maximumNodes = 128
+    static let maximumDepth = 8
+    static let futureTolerance: TimeInterval = 300
+    static let staleInterval: TimeInterval = 60
 
     static func read() throws -> SidebarOrchestrationSnapshot {
         let owner = getuid()
-        let root = try CopilotFileAccess.openDirectory(try CopilotPaths.orchestrationRoot(), owner: owner)
-        defer { close(root) }
-        let observer = try CopilotFileAccess.openDirectory(at: root, name: "observer", owner: owner)
+        let observer = try CopilotFileAccess.openDirectory(
+            try CopilotPaths.orchestrationObserverDirectory(), owner: owner
+        )
         defer { close(observer) }
         let data = try CopilotFileAccess.readStableRegular(
             at: observer, filename: "current.json", owner: owner,
@@ -67,17 +71,78 @@ nonisolated enum SidebarOrchestrationReader {
             return date
         }
         let snapshot = try decoder.decode(SidebarOrchestrationSnapshot.self, from: data)
+        try validate(snapshot)
+        return snapshot
+    }
+
+    static func validate(_ snapshot: SidebarOrchestrationSnapshot, now: Date = Date()) throws {
         guard snapshot.version == 1, snapshot.nodes.count <= maximumNodes,
               snapshot.omittedCount >= 0,
-              snapshot.nodes.allSatisfy({
-                  !$0.label.isEmpty && $0.label.utf8.count <= 100
-                      && $0.generation >= 0
-                      && ["coordinator", "worker"].contains($0.role)
-              }),
-              Set(snapshot.nodes.map(\.id)).count == snapshot.nodes.count else {
+              Set(snapshot.nodes.map(\.id)).count == snapshot.nodes.count,
+              snapshot.generatedAt <= now.addingTimeInterval(futureTolerance) else {
             throw CopilotFileError.unsafePath
         }
-        return snapshot
+        let nodes = Dictionary(uniqueKeysWithValues: snapshot.nodes.map { ($0.id, $0) })
+        var surfaces = Set<UUID>()
+        var rootsByRun: [UUID: Int] = [:]
+        for node in snapshot.nodes {
+            guard !node.label.isEmpty, node.label.utf8.count <= 100,
+                  node.generation >= 0, node.createdAt <= node.updatedAt,
+                  node.updatedAt <= now.addingTimeInterval(futureTolerance),
+                  node.updatedAt <= snapshot.generatedAt.addingTimeInterval(futureTolerance),
+                  surfaces.insert(node.surfaceId).inserted,
+                  validState(node) else {
+                throw CopilotFileError.unsafePath
+            }
+            if node.parentId == nil {
+                rootsByRun[node.runId, default: 0] += 1
+            }
+        }
+        guard rootsByRun.values.allSatisfy({ $0 == 1 }) else {
+            throw CopilotFileError.unsafePath
+        }
+        for node in snapshot.nodes {
+            var current = node
+            var seen = Set([node.id])
+            var depth = 0
+            while let parentId = current.parentId {
+                guard let parent = nodes[parentId], seen.insert(parent.id).inserted,
+                      parent.runId == node.runId,
+                      parent.workspaceId == node.workspaceId else {
+                    throw CopilotFileError.unsafePath
+                }
+                depth += 1
+                guard depth <= maximumDepth else { throw CopilotFileError.unsafePath }
+                current = parent
+            }
+            guard current.role == "coordinator" else { throw CopilotFileError.unsafePath }
+        }
+    }
+
+    static func isStale(_ snapshot: SidebarOrchestrationSnapshot, now: Date = Date()) -> Bool {
+        now.timeIntervalSince(snapshot.generatedAt) > staleInterval
+    }
+
+    private static func validState(_ node: SidebarOrchestrationNode) -> Bool {
+        if node.role == "coordinator" {
+            return node.parentId == nil && node.generation == 0
+                && node.phase == "registered" && node.availability == "active"
+        }
+        guard node.role == "worker", node.parentId != nil, node.generation > 0 else {
+            return false
+        }
+        switch node.phase {
+        case "launching", "turn-queued", "turn-running":
+            return node.availability == "busy"
+        case "reported-blocked", "reported-completed", "reported-failed",
+             "report-missing", "turn-failed":
+            return node.availability == "idle"
+        case "process-disappeared", "terminal-disappeared", "launch-failed",
+             "startup-failed", "resource-retired":
+            return node.availability == "unavailable"
+        default:
+            return false
+        }
     }
 }
 
@@ -152,16 +217,25 @@ final class SidebarOrchestrationPolling {
                 do {
                     let raw = try await read()
                     guard let self, self.generation == token, !Task.isCancelled else { break }
-                    let nodes = raw.nodes.filter {
-                        topology.workspaceBySurface[$0.surfaceId] == $0.workspaceId
+                    let byID = Dictionary(uniqueKeysWithValues: raw.nodes.map { ($0.id, $0) })
+                    let onSurface = Set(raw.nodes.compactMap { node in
+                        topology.workspaceBySurface[node.surfaceId] == node.workspaceId ? node.id : nil
+                    })
+                    let nodes = raw.nodes.filter { node in
+                        var current: SidebarOrchestrationNode? = node
+                        while let candidate = current {
+                            guard onSurface.contains(candidate.id) else { return false }
+                            current = candidate.parentId.flatMap { byID[$0] }
+                        }
+                        return true
                     }
                     self.snapshot = SidebarOrchestrationSnapshot(
                         version: raw.version, generatedAt: raw.generatedAt,
-                        complete: raw.complete && nodes.count == raw.nodes.count,
-                        omittedCount: raw.omittedCount + raw.nodes.count - nodes.count,
+                        complete: raw.complete, omittedCount: raw.omittedCount,
                         nodes: nodes
                     )
-                    self.availability = self.snapshot.complete ? .ready : .partial
+                    self.availability = SidebarOrchestrationReader.isStale(raw)
+                        ? .stale : self.snapshot.complete ? .ready : .partial
                 } catch CopilotFileError.missing {
                     self?.snapshot = .empty
                     self?.availability = .waiting

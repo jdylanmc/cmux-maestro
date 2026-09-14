@@ -300,7 +300,7 @@ struct CopilotHookTests: Sendable {
         let grants = try #require(plist["com.apple.security.temporary-exception.files.home-relative-path.read-only"] as? [String])
         #expect(grants == [
             "/Library/Application Support/CMUXMaestroPreview/Copilot/",
-            "/Library/Application Support/CMUXMaestroPreview/Orchestration/",
+            "/Library/Application Support/CMUXMaestroPreview/Orchestration/observer/",
             "/.copilot/session-state/",
         ])
         #expect(grants.allSatisfy { $0.hasPrefix("/") && $0.hasSuffix("/") })

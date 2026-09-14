@@ -32,9 +32,14 @@ do not copy its source or history, modify it, or make this project depend on it.
   a later issue explicitly approves that scope.
 - Do not add a license until the repository's licensing issue is resolved.
 - Keep orchestration control outside the sandboxed sidebar. The sidebar may
-  read only sanitized bounded metadata and use typed host navigation; never add
+  read only sanitized bounded metadata from the exact `Orchestration/observer/`
+  grant and use typed host navigation; never add
   raw prompts/results/tokens, a daemon, loopback server, socket client, focus
   inference, automatic tool approval, or automatic terminal/process cleanup.
+- Keep each worker's bounded Copilot turns behind its foreground terminal
+  supervisor. Follow-ups require a generation report plus verified process/result
+  boundary and exact session resume. Archive/recovery must never guess ownership,
+  kill a process, delete a terminal, or bypass the still-live resource bound.
 - Preserve exact workspace/surface/session/generation ownership and the
   controller's depth, node, size and concurrent-operation bounds.
 

@@ -82,7 +82,8 @@ For individual future CLI launches, either `CMUX_COPILOT_HOOKS_DISABLED=1` or
 - Terminal control runs in the installed standard-library Python controller at
   `~/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/`.
   Private prompts, results, control tokens and process identities remain under
-  `control/`; the sidebar can read only the bounded sanitized `observer/current.json`.
+  `control/`; the sidebar sandbox grant reaches only the bounded sanitized
+  `observer/` directory and cannot read sibling control, binary, task or result data.
   The controller uses exact CMUX workspace, pane and surface UUIDs. It never
   infers ownership from labels, paths, focus, chronology, or terminal text.
 - The outer hook shell redirects both output streams and returns zero even
@@ -118,12 +119,18 @@ observations remain available under **Other sessions/activity** and are never
 attached to the managed graph by guesswork.
 
 The installed skill exposes explicit `register`, `spawn`, `status`, `follow-up`,
-`focus`, and worker `report` operations. Follow-up is limited to a directly
-owned, explicitly idle worker with the same validated process and surface.
+`focus`, worker `report`, `archive`, and exact stale-surface `recover` operations.
+Each terminal keeps a foreground supervisor that runs bounded noninteractive
+Copilot turns. Follow-up is privately queued only after a directly owned
+worker's structured report and exact process/result boundary both verify, then
+uses that worker's preassigned exact `--resume` session ID.
 Terminal existence and a zero CLI exit are not success: completed, blocked and
 failed states require a generation-matched structured report. Missing reports,
 delivery failure, process disappearance and terminal disappearance remain
-distinct. Completed tabs stay open. Tool permissions are not auto-approved.
+distinct. Eight still-live managed worker resources are allowed per workspace;
+reported completion does not free a slot. Archive retains bounded history and
+never kills processes or deletes tabs, so still-present archived worker tabs
+continue to consume the resource bound. Tool permissions are not auto-approved.
 
 The hierarchy uses distinct native icons and accents: blue workspace stacks,
 teal terminals, purple Copilot sessions, pink child agents and amber skills.
@@ -930,6 +937,10 @@ installation remain explicit manual verification gates.
 Installation follows GitHub's [local plugin
 instructions](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-creating):
 `copilot plugin install <absolute-path>`; uninstall uses the manifest name.
+The installed CLI currently accepts absolute local paths but warns that direct
+repository, URL, and local-path installation is deprecated for a future release.
+CMUX Maestro intentionally retains the working local-preview path; public
+marketplace or release infrastructure remains out of scope.
 Hook manifests follow the [command-hook
 reference](https://docs.github.com/en/copilot/reference/hooks-reference), including
 `version: 1`, `type: command`, `bash`, and `timeoutSec`.

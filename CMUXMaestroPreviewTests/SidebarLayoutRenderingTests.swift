@@ -87,14 +87,43 @@ struct SidebarLayoutRenderingTests {
         }
     }
 
-    private func makeManagedModel(fixtures: SidebarTreeFixtures) -> SidebarConnectionModel {
+    @Test func managedRootSummaryFitsDirectOneHundredTwentyPointBoundAtThreeHundredWidth() async throws {
+        let fixtures = SidebarTreeFixtures()
+        let model = makeManagedModel(fixtures: fixtures, nodeCount: 1)
+        defer { model.setVisible(false) }
+        let suite = "SidebarRootMeasure.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let state = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: state)
+        }
+        let preferences = SidebarPreferences(
+            defaults: defaults,
+            historyFile: state.appendingPathComponent("history.json"),
+            attentionFile: state.appendingPathComponent("attention.json"),
+            layoutStore: SidebarLayoutStore(file: .init(url: state.appendingPathComponent("layout.json")))
+        )
+        preferences.setDensity(.compact)
+        preferences.selectedMode = .hierarchy
+        await sidebarEventually { model.orchestration.snapshot.nodes.count == 1 }
+        let view = NSHostingView(rootView: ManagedHierarchyContent(
+            polling: model.orchestration, navigation: model.navigation
+        ).frame(width: 300, alignment: .leading))
+        view.layoutSubtreeIfNeeded()
+        #expect(view.fittingSize.height <= 120)
+    }
+
+    private func makeManagedModel(
+        fixtures: SidebarTreeFixtures, nodeCount: Int = 5
+    ) -> SidebarConnectionModel {
         let workspace = fixtures.workspaceA
-        let surfaces = (0..<5).map { _ in UUID() }
+        let surfaces = (0..<nodeCount).map { _ in UUID() }
         let run = UUID()
         let rootID = UUID()
         let now = Date()
         let labels = ["Coordinator", "Implementation", "Verification", "Documentation", "Nested review"]
-        let phases = ["registered", "process-running", "reported-blocked",
+        let phases = ["registered", "turn-running", "reported-blocked",
                       "reported-completed", "report-missing"]
         let nodes = surfaces.enumerated().map { index, surface in
             SidebarOrchestrationNode(
@@ -103,8 +132,8 @@ struct SidebarLayoutRenderingTests {
                 role: index == 0 ? "coordinator" : "worker", label: labels[index],
                 workspaceId: workspace, surfaceId: surface, generation: index == 0 ? 0 : 1,
                 phase: phases[index],
-                availability: index == 3 ? "idle" : index == 0 ? "active" : "busy",
-                createdAt: now.addingTimeInterval(Double(index)), updatedAt: now
+                availability: index == 0 ? "active" : index == 1 ? "busy" : "idle",
+                createdAt: now.addingTimeInterval(-Double(index)), updatedAt: now
             )
         }
         let orchestration = SidebarOrchestrationPolling(

@@ -20,7 +20,7 @@ PROFILES = {
 }
 READ_PATHS = [
     "/Library/Application Support/CMUXMaestroPreview/Copilot/",
-    "/Library/Application Support/CMUXMaestroPreview/Orchestration/",
+    "/Library/Application Support/CMUXMaestroPreview/Orchestration/observer/",
     "/.copilot/session-state/",
 ]
 SANDBOX_KEY = "com.apple.security.app-sandbox"
