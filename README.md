@@ -122,14 +122,23 @@ The installed skill exposes explicit `register`, `spawn`, `status`, `follow-up`,
 `focus`, worker `report`, `archive`, and exact stale-surface `recover` operations.
 Each terminal keeps a foreground supervisor that runs bounded noninteractive
 Copilot turns. Follow-up is privately queued only after a directly owned
-worker's structured report and exact process/result boundary both verify, then
-uses that worker's preassigned exact `--resume` session ID.
+worker has a successful exact-session boundary for its current generation, then
+uses that worker's preassigned exact `--resume` session ID. Explicitly reported
+outcomes are preferred; a report-missing or permission-denied generation may be
+re-prompted without claiming that its earlier task succeeded.
 The supervisor multiplexes bounded JSON output and promptly forwards provider
 diagnostics while continuing current-generation heartbeats during silent turns;
-it never answers permission prompts. Terminal existence and a zero CLI exit are
+it never answers permission prompts. Noninteractive Copilot can deny a tool in
+JSON without offering an interactive prompt, so stderr inheritance is not a
+permission mechanism. Terminal existence and a zero CLI exit are
 not success: completed, blocked and failed states require both a successful
-exact-session process boundary and a generation-matched structured report.
-Missing reports, nonzero or malformed turns, startup failure, process
+exact-session process boundary and one strict generation-matched whole-final-
+message report. The report is versioned, identity-bound and permission-free;
+ordinary prose, fenced or extra JSON, tool-bearing final messages, and dual
+helper/final reports are refused. It remains a worker self-reported outcome,
+not independent artifact validation or reviewer acceptance. Missing reports,
+permission denials, nonzero
+or malformed turns, startup failure, process
 disappearance and terminal disappearance remain distinct. An explicit launch
 lease prevents archive from crossing CMUX surface creation/attachment, and any
 exact surface created before a later launch failure remains accounted. Eight
@@ -137,6 +146,12 @@ still-live managed worker resources are allowed per workspace;
 reported completion does not free a slot. Archive retains bounded history and
 never kills processes or deletes tabs, so still-present archived worker tabs
 continue to consume the resource bound. Tool permissions are not auto-approved.
+Spawn accepts bounded caller-explicit `--allow-tool` and `--deny-tool` rules;
+the default adds no grants, denies win, and descendants cannot exceed their
+parent's explicit allows or remove inherited denies. These Copilot flags are
+policy controls, not an operating-system sandbox. Shell access is never a
+default and requires an explicit task-level caller decision; wildcard,
+all-resource and `--allow-all` grants are never injected.
 
 The hierarchy uses distinct native icons and accents: blue workspace stacks,
 teal terminals, purple Copilot sessions, pink child agents and amber skills.

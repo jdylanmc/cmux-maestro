@@ -116,7 +116,7 @@ finally:
 '''
 
 FAKE_COPILOT = r'''#!/usr/bin/env python3
-import json, os, subprocess, sys, time
+import json, os, subprocess, sys, time, uuid
 from pathlib import Path
 args = sys.argv[1:]
 def value(flag):
@@ -146,37 +146,99 @@ if "[OVERSIZED]" in prompt:
     print()
 if "[SCALAR]" in prompt:
     print(json.dumps(["not", "an", "object"]))
-if "[NO_REPORT]" not in prompt:
-    outcome = "completed"
-    if "[BLOCKED]" in prompt:
-        outcome = "blocked"
-    elif "[FAIL]" in prompt:
-        outcome = "failed"
-    summary = "bounded " + outcome
-    if "[SKILL_REPORT]" in prompt:
-        actual = {
-            key: value for key, value in os.environ.items()
-            if key.startswith("CMUX_MAESTRO_")
-        }
-        actual["PATH"] = "/usr/bin:/bin"
-        completed = subprocess.run(
-            ["/bin/sh", "-c", os.environ["FAKE_SKILL_REPORT_COMMAND"]],
-            env=actual, text=True, capture_output=True,
-        )
-    else:
-        report = [
-            os.environ["CMUX_MAESTRO_ORCHESTRATOR"], "report",
-            "--worker-id", os.environ["CMUX_MAESTRO_WORKER_ID"],
-            "--token", os.environ["CMUX_MAESTRO_CONTROL_TOKEN"],
-            "--generation", os.environ["CMUX_MAESTRO_GENERATION"],
-            "--state", outcome, "--summary", summary,
-        ]
-        completed = subprocess.run(report, text=True, capture_output=True)
+outcome = "completed"
+if "[BLOCKED]" in prompt:
+    outcome = "blocked"
+elif "[FAIL]" in prompt:
+    outcome = "failed"
+summary = "bounded " + outcome
+if "[CLI_REPORT]" in prompt or "[DUAL_REPORT]" in prompt:
+    report = [
+        os.environ["CMUX_MAESTRO_ORCHESTRATOR"], "report",
+        "--worker-id", os.environ["CMUX_MAESTRO_WORKER_ID"],
+        "--token", os.environ["CMUX_MAESTRO_CONTROL_TOKEN"],
+        "--generation", os.environ["CMUX_MAESTRO_GENERATION"],
+        "--state", outcome, "--summary", summary,
+    ]
+    completed = subprocess.run(report, text=True, capture_output=True)
     if completed.returncode:
         print(json.dumps({"type": "assistant.message", "data": {"content": completed.stderr}}))
         raise SystemExit(7)
+if "[NESTED_SUBSET]" in prompt or "[NESTED_ESCALATE]" in prompt:
+    nested = [
+        os.environ["CMUX_MAESTRO_ORCHESTRATOR"], "spawn",
+        "--actor-id", os.environ["CMUX_MAESTRO_WORKER_ID"],
+        "--token", os.environ["CMUX_MAESTRO_CONTROL_TOKEN"],
+        "--name", "Nested policy worker", "--cwd", os.getcwd(),
+        "--task", "[NO_REPORT]", "--allow-tool",
+        "write" if "[NESTED_ESCALATE]" in prompt else "read",
+        "--deny-tool", "network",
+    ]
+    completed = subprocess.run(nested, text=True, capture_output=True)
+    with open(os.environ["FAKE_POLICY_RESULTS"], "a") as stream:
+        stream.write(json.dumps({
+            "kind": "escalate" if "[NESTED_ESCALATE]" in prompt else "subset",
+            "returncode": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+        }) + "\n")
+if "[DENIED" in prompt:
+    print(json.dumps({
+        "type": "tool.execution_complete",
+        "data": {"toolName": "bash"},
+        "result": {
+            "success": False,
+            "error": {
+                "code": "denied",
+                "message": "Permission denied and could not request permission from user",
+            },
+        },
+    }))
 time.sleep(0.45 if "[DELAY]" in prompt else 0.08)
-print(json.dumps({"type": "assistant.message", "data": {"content": "worker output"}}))
+worker_id = os.environ["CMUX_MAESTRO_WORKER_ID"]
+generation = int(os.environ["CMUX_MAESTRO_GENERATION"])
+machine_report = {
+    "protocol": "cmux-maestro.worker-report",
+    "version": 1,
+    "workerId": worker_id,
+    "generation": generation,
+    "state": outcome,
+    "summary": summary,
+}
+if "[WRONG_REPORT_WORKER]" in prompt:
+    machine_report["workerId"] = str(uuid.uuid4())
+if "[WRONG_REPORT_GENERATION]" in prompt:
+    machine_report["generation"] += 1
+if "[WRONG_REPORT_VERSION]" in prompt:
+    machine_report["version"] = 2
+if "[WRONG_REPORT_STATE]" in prompt:
+    machine_report["state"] = "working"
+if "[EXTRA_REPORT_FIELD]" in prompt:
+    machine_report["unexpected"] = True
+content = json.dumps(machine_report, separators=(",", ":"))
+if "[DUPLICATE_REPORT_KEY]" in prompt:
+    content = content[:-1] + ',"state":"failed"}'
+tool_requests = []
+if "[FENCED_REPORT]" in prompt:
+    content = "```json\n" + content + "\n```"
+if "[NORMAL_FINAL]" in prompt or "[NO_REPORT]" in prompt or "[DENIED_NO_REPORT]" in prompt:
+    content = "Verified acceptance marker"
+if "[REPORT_TOOL_REQUEST]" in prompt:
+    tool_requests = [{"toolName": "bash"}]
+if "[CLI_REPORT]" not in prompt or "[DUAL_REPORT]" in prompt:
+    print(json.dumps({
+        "type": "assistant.message",
+        "data": {
+            "phase": "final_answer",
+            "toolRequests": tool_requests,
+            "content": content,
+        },
+    }))
+if "[DUPLICATE_FINAL_REPORT]" in prompt:
+    print(json.dumps({
+        "type": "assistant.message",
+        "data": {"phase": "final_answer", "toolRequests": [], "content": content},
+    }))
 final_session = "00000000-0000-4000-8000-000000000099" if "[WRONG_SESSION]" in prompt else session
 timestamp = "2099-01-01T00:00:00Z" if "[FUTURE_RESULT]" in prompt else "2026-01-01T00:00:00Z"
 exit_code = 7 if "[EXIT7]" in prompt else 0
@@ -208,6 +270,7 @@ class Harness:
         self.cmux_state = self.path / "cmux.json"
         self.copilot_calls = self.path / "copilot-calls.jsonl"
         self.stderr_ready = self.path / "stderr-ready"
+        self.policy_results = self.path / "policy-results.jsonl"
         self.cmux = self.path / "cmux"
         self.copilot = self.path / "copilot"
         self.cmux.write_text(FAKE_CMUX)
@@ -224,16 +287,13 @@ class Harness:
             "FAKE_CMUX_STATE": str(self.cmux_state),
             "FAKE_COPILOT_CALLS": str(self.copilot_calls),
             "FAKE_STDERR_READY": str(self.stderr_ready),
+            "FAKE_POLICY_RESULTS": str(self.policy_results),
             "TEST_WORKSPACE": self.workspace,
             "TEST_PANE": self.pane,
             "TEST_ROOT_SURFACE": self.surface,
             "CMUX_WORKSPACE_ID": self.workspace,
             "CMUX_SURFACE_ID": self.surface,
         })
-        skill = (REPO / ".agents/skills/cmux-maestro-orchestrate/SKILL.md").read_text()
-        reporting = skill.split("## Worker reporting", 1)[1]
-        self.skill_report_command = reporting.split("```sh", 1)[1].split("```", 1)[0].strip()
-        self.env["FAKE_SKILL_REPORT_COMMAND"] = self.skill_report_command
         self.registration = self.run(
             "register", "--workspace", self.workspace, "--surface", self.surface,
             "--name", "Coordinator",
@@ -289,11 +349,16 @@ class Harness:
     def token(self):
         return self.registration["controlToken"]
 
-    def spawn(self, task="Complete the bounded task.", label="Worker"):
-        return self.run(
+    def spawn(self, task="Complete the bounded task.", label="Worker", allow=(), deny=()):
+        arguments = [
             "spawn", "--actor-id", self.node, "--token", self.token,
             "--name", label, "--cwd", str(REPO), "--task", task,
-        )
+        ]
+        for rule in allow:
+            arguments.extend(["--allow-tool", rule])
+        for rule in deny:
+            arguments.extend(["--deny-tool", rule])
+        return self.run(*arguments)
 
     def state(self):
         return json.loads((self.root / "control" / "state.json").read_text())
@@ -463,7 +528,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(set(self.h.cmux_data()["surfaces"]), surfaces_before)
 
     def test_follow_up_waits_for_verified_boundary_and_uses_exact_resume(self):
-        worker = self.h.spawn("[DELAY]")
+        worker = self.h.spawn("[CLI_REPORT] [DELAY]")
         pending = self.h.wait_node(worker["workerId"], lambda node: node["pendingReport"] is not None)
         self.assertEqual(pending["availability"], "busy")
         rejected = self.h.run(
@@ -472,7 +537,7 @@ class OrchestratorTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(rejected["returncode"], 2)
-        self.assertIn("verified idle turn boundary", rejected["stderr"])
+        self.assertIn("verified idle boundary", rejected["stderr"])
         idle = self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
         follow = self.h.run(
             "follow-up", "--actor-id", self.h.node, "--token", self.h.token,
@@ -492,13 +557,31 @@ class OrchestratorTests(unittest.TestCase):
         missing = self.h.spawn("[NO_REPORT]")
         missing_node = self.h.wait_node(missing["workerId"], lambda node: node["phase"] == "report-missing")
         self.assertEqual(missing_node["availability"], "idle")
+        self.assertEqual(
+            missing_node["verifiedBoundaryGeneration"], missing_node["generation"]
+        )
+        recovered = self.h.run(
+            "follow-up", "--actor-id", self.h.node, "--token", self.h.token,
+            "--worker-id", missing["workerId"], "--task", "recover exact session",
+        )
+        self.h.wait_node(
+            missing["workerId"],
+            lambda node: (
+                node["generation"] == recovered["generation"]
+                and node["phase"] == "reported-completed"
+            ),
+        )
         malformed = self.h.spawn("[MALFORMED]", label="Malformed")
         failed = self.h.wait_node(malformed["workerId"], lambda node: node["phase"] == "turn-failed")
         self.assertEqual(failed["availability"], "idle")
         self.assertIn("valid exact-session", failed["result"])
 
     def test_nonzero_exact_session_never_finalizes_pending_report(self):
-        for task in ("[EXIT7]", "[BLOCKED] [EXIT7]", "[FAIL] [EXIT7]"):
+        for task in (
+            "[CLI_REPORT] [EXIT7]",
+            "[CLI_REPORT] [BLOCKED] [EXIT7]",
+            "[CLI_REPORT] [FAIL] [EXIT7]",
+        ):
             with self.subTest(task=task):
                 worker = self.h.spawn(task, label=f"Exit {task}")
                 failed = self.h.wait_node(
@@ -512,6 +595,31 @@ class OrchestratorTests(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(rejected["returncode"], 2)
+
+    def test_older_verified_boundary_cannot_authorize_failed_new_generation(self):
+        worker = self.h.spawn()
+        self.h.wait_node(
+            worker["workerId"], lambda node: node["phase"] == "reported-completed"
+        )
+        follow = self.h.run(
+            "follow-up", "--actor-id", self.h.node, "--token", self.h.token,
+            "--worker-id", worker["workerId"], "--task", "[EXIT7]",
+        )
+        failed = self.h.wait_node(
+            worker["workerId"],
+            lambda node: (
+                node["generation"] == follow["generation"]
+                and node["phase"] == "turn-failed"
+            ),
+        )
+        self.assertEqual(failed["verifiedBoundaryGeneration"], 1)
+        rejected = self.h.run(
+            "follow-up", "--actor-id", self.h.node, "--token", self.h.token,
+            "--worker-id", worker["workerId"], "--task", "unsafe retry",
+            check=False,
+        )
+        self.assertEqual(rejected["returncode"], 2)
+        self.assertIn("current generation", rejected["stderr"])
 
     def test_bounded_stream_protocol_rejects_invalid_frames_and_results(self):
         cases = [
@@ -563,15 +671,139 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("approval prompt before completion", log.read_text())
         self.assertEqual(self.h.state()["nodes"][prompt["workerId"]]["phase"], "turn-running")
 
-    def test_installed_skill_report_uses_only_injected_environment(self):
-        skill = (REPO / ".agents/skills/cmux-maestro-orchestrate/SKILL.md").read_text()
-        self.assertNotIn("CURRENT_GENERATION", skill)
-        self.assertIn('"$CMUX_MAESTRO_GENERATION"', self.h.skill_report_command)
-        worker = self.h.spawn("[SKILL_REPORT]", label="Skill contract")
+    def test_permission_free_final_report_uses_real_envelope(self):
+        worker = self.h.spawn("[DENIED]", label="Read-only contract")
         completed = self.h.wait_node(
             worker["workerId"], lambda node: node["phase"] == "reported-completed"
         )
-        self.assertEqual(completed["result"], "Brief factual result")
+        self.assertEqual(completed["result"], "bounded completed")
+        self.assertIsNone(completed["pendingReport"])
+        self.assertEqual(completed["verifiedBoundaryGeneration"], 1)
+        call = self.h.calls()[0]
+        self.assertNotIn("--allow-tool", call["args"])
+        self.assertNotIn("--deny-tool", call["args"])
+
+        skill = (REPO / ".agents/skills/cmux-maestro-orchestrate/SKILL.md").read_text()
+        self.assertNotIn("CURRENT_GENERATION", skill)
+        self.assertIn("cmux-maestro.worker-report", skill)
+        self.assertIn('"phase":"final_answer"', skill)
+        self.assertIn("do not call a tool", skill)
+
+    def assert_strict_report_cases(self, cases):
+        for index, (task, diagnostic) in enumerate(cases):
+            with self.subTest(task=task):
+                worker = self.h.spawn(task, label=f"Strict report {index}")
+                missing = self.h.wait_node(
+                    worker["workerId"], lambda node: node["phase"] == "report-missing"
+                )
+                self.assertEqual(missing["verifiedBoundaryGeneration"], 1)
+                self.assertIn(diagnostic.casefold(), missing["result"].casefold())
+
+    def test_final_answer_report_shape_identity_and_generation_are_strict(self):
+        self.assert_strict_report_cases([
+            ("[WRONG_REPORT_WORKER]", "invalid"),
+            ("[WRONG_REPORT_GENERATION]", "invalid"),
+            ("[WRONG_REPORT_VERSION]", "invalid"),
+            ("[WRONG_REPORT_STATE]", "invalid"),
+            ("[EXTRA_REPORT_FIELD]", "invalid"),
+            ("[DUPLICATE_REPORT_KEY]", "invalid"),
+        ])
+
+    def test_final_answer_report_framing_and_conflicts_are_strict(self):
+        self.assert_strict_report_cases([
+            ("[FENCED_REPORT]", "invalid"),
+            ("[REPORT_TOOL_REQUEST]", "invalid"),
+            ("[DUPLICATE_FINAL_REPORT]", "conflicting"),
+            ("[DUAL_REPORT]", "Conflicting lifecycle report channels"),
+            ("[NORMAL_FINAL]", "invalid"),
+        ])
+
+    def test_permission_denial_without_report_is_visible_and_recoverable(self):
+        worker = self.h.spawn("[DENIED_NO_REPORT]", label="Denied")
+        denied = self.h.wait_node(
+            worker["workerId"], lambda node: node["phase"] == "permission-denied"
+        )
+        self.assertEqual(denied["availability"], "idle")
+        self.assertEqual(denied["verifiedBoundaryGeneration"], 1)
+        self.assertNotIn("bash", denied["result"])
+        follow = self.h.run(
+            "follow-up", "--actor-id", self.h.node, "--token", self.h.token,
+            "--worker-id", worker["workerId"], "--task", "return a valid report",
+        )
+        completed = self.h.wait_node(
+            worker["workerId"],
+            lambda node: (
+                node["generation"] == follow["generation"]
+                and node["phase"] == "reported-completed"
+            ),
+        )
+        self.assertEqual(completed["verifiedBoundaryGeneration"], 2)
+        calls = self.h.calls()
+        self.assertEqual(
+            calls[1]["args"][calls[1]["args"].index("--resume") + 1],
+            worker["sessionId"],
+        )
+
+    def test_explicit_tool_policy_is_private_deny_first_and_non_escalating(self):
+        denied = self.h.spawn(
+            label="Deny precedence",
+            allow=("shell", "read", "read"),
+            deny=("read", "network"),
+        )
+        self.h.wait_node(denied["workerId"], lambda node: node["availability"] == "idle")
+        first_args = self.h.calls()[0]["args"]
+        self.assertEqual(
+            [first_args[index + 1] for index, value in enumerate(first_args) if value == "--allow-tool"],
+            ["shell"],
+        )
+        self.assertEqual(
+            [first_args[index + 1] for index, value in enumerate(first_args) if value == "--deny-tool"],
+            ["read", "network"],
+        )
+        observer = json.loads(
+            (self.h.root / "observer" / "current.json").read_text()
+        )
+        self.assertNotIn("toolPolicy", json.dumps(observer))
+
+        surfaces = set(self.h.cmux_data()["surfaces"])
+        broad = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Broad", "--cwd", str(REPO), "--task", "bounded",
+            "--allow-tool", "*", check=False,
+        )
+        self.assertEqual(broad["returncode"], 2)
+        self.assertIn("Broad Copilot tool grants", broad["stderr"])
+        self.assertEqual(set(self.h.cmux_data()["surfaces"]), surfaces)
+
+        parent = self.h.spawn(
+            "[NESTED_SUBSET]", label="Subset parent",
+            allow=("read",), deny=("shell(exact)",),
+        )
+        self.h.wait_node(parent["workerId"], lambda node: node["availability"] == "idle")
+        results = [
+            json.loads(line) for line in self.h.policy_results.read_text().splitlines()
+        ]
+        self.assertEqual(results[-1]["kind"], "subset")
+        self.assertEqual(results[-1]["returncode"], 0)
+        state = self.h.state()
+        child = next(
+            node for node in state["nodes"].values()
+            if node["parentId"] == parent["workerId"]
+        )
+        self.assertEqual(child["toolPolicy"]["allow"], ["read"])
+        self.assertEqual(child["toolPolicy"]["deny"], ["shell(exact)", "network"])
+
+        escalation = self.h.spawn(
+            "[NESTED_ESCALATE]", label="Escalating parent",
+            allow=("read",), deny=("shell(exact)",),
+        )
+        self.h.wait_node(escalation["workerId"], lambda node: node["availability"] == "idle")
+        results = [
+            json.loads(line) for line in self.h.policy_results.read_text().splitlines()
+        ]
+        self.assertEqual(results[-1]["kind"], "escalate")
+        self.assertEqual(results[-1]["returncode"], 2)
+        self.assertIn("cannot grant a child additional", results[-1]["stderr"])
 
     def test_python_projection_and_typed_swift_phase_vocabulary_match(self):
         module = ast.parse(CONTROLLER.read_text())

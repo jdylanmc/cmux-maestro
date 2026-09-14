@@ -48,6 +48,7 @@ nonisolated enum SidebarOrchestrationPhase: String, CaseIterable, Hashable, Send
     case reportedCompleted = "reported-completed"
     case reportedFailed = "reported-failed"
     case reportMissing = "report-missing"
+    case permissionDenied = "permission-denied"
     case turnFailed = "turn-failed"
     case processDisappeared = "process-disappeared"
     case terminalDisappeared = "terminal-disappeared"
@@ -67,6 +68,7 @@ nonisolated enum SidebarOrchestrationPhase: String, CaseIterable, Hashable, Send
         case .reportedFailed:
             availability == "idle" ? "Failed · available" : "Failed"
         case .reportMissing: "Report missing"
+        case .permissionDenied: "Permission denied · available"
         case .turnFailed: "Turn failed"
         case .processDisappeared: "Process disappeared"
         case .terminalDisappeared: "Terminal disappeared"
@@ -74,6 +76,11 @@ nonisolated enum SidebarOrchestrationPhase: String, CaseIterable, Hashable, Send
         case .startupFailed: "Startup failed"
         case .resourceRetired: "Resource retired"
         }
+    }
+
+    func symbolName(role: String) -> String {
+        if role == "coordinator" { return "person.2" }
+        return self == .permissionDenied ? "exclamationmark.shield" : "terminal"
     }
 }
 
@@ -176,7 +183,7 @@ nonisolated enum SidebarOrchestrationReader {
         case .launching, .turnQueued, .turnRunning:
             return node.availability == "busy"
         case .reportedBlocked, .reportedCompleted, .reportedFailed,
-             .reportMissing, .turnFailed:
+             .reportMissing, .permissionDenied, .turnFailed:
             return node.availability == "idle"
         case .processDisappeared, .terminalDisappeared, .launchFailed,
              .startupFailed, .resourceRetired:

@@ -169,6 +169,7 @@ struct SidebarOrchestrationTests {
             .reportedCompleted: "Completed · available",
             .reportedFailed: "Failed · available",
             .reportMissing: "Report missing",
+            .permissionDenied: "Permission denied · available",
             .turnFailed: "Turn failed",
             .processDisappeared: "Process disappeared",
             .terminalDisappeared: "Terminal disappeared",
@@ -180,6 +181,7 @@ struct SidebarOrchestrationTests {
         for phase in SidebarOrchestrationPhase.allCases {
             let title = phase.title(availability: phase == .registered ? "active" : "idle")
             #expect(title == expected[phase])
+            #expect(!phase.symbolName(role: "worker").isEmpty)
             #expect(title != "Unknown state")
         }
     }

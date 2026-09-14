@@ -37,13 +37,18 @@ do not copy its source or history, modify it, or make this project depend on it.
   raw prompts/results/tokens, a daemon, loopback server, socket client, focus
   inference, automatic tool approval, or automatic terminal/process cleanup.
 - Keep each worker's bounded Copilot turns behind its foreground terminal
-  supervisor. Follow-ups require a generation report plus verified process/result
-  boundary and exact session resume. Archive/recovery must never guess ownership,
-  kill a process, delete a terminal, or bypass the still-live resource bound.
+  supervisor. Reported outcomes require a strict whole-final-message generation
+  report plus verified process/result boundary. Report-missing or permission-
+  denied recovery requires that exact current-generation boundary and exact
+  session resume. Archive/recovery must never guess ownership, kill a process,
+  delete a terminal, or bypass the still-live resource bound.
 - Preserve the launch lease across external surface creation and attachment.
   Archive must not cross an active lease, and every exact created surface must
   remain owned or retained. Keep turn I/O bounded while heartbeats and visible
   provider diagnostics continue; never infer success or approve a prompt.
+- Keep Copilot tool policy explicit, bounded and private. Add no grants by
+  default; preserve denies and descendant non-escalation. Provider policy flags
+  are not an operating-system sandbox or a lifecycle reporting channel.
 - Preserve exact workspace/surface/session/generation ownership and the
   controller's depth, node, size and concurrent-operation bounds.
 

@@ -510,7 +510,7 @@ private struct ManagedNodeRow: View {
                     navigation: navigation, label: "Focus \(node.label)"
                 ) {
                     HStack(spacing: 5) {
-                        Image(systemName: node.role == "coordinator" ? "person.2" : "terminal")
+                        Image(systemName: statePhase?.symbolName(role: node.role) ?? "terminal")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
                             .frame(width: 16)
@@ -553,19 +553,22 @@ private struct ManagedNodeRow: View {
     }
 
     private var stateTitle: String {
-        SidebarOrchestrationPhase(rawValue: node.phase)?
-            .title(availability: node.availability) ?? "Unknown state"
+        statePhase?.title(availability: node.availability) ?? "Unknown state"
     }
 
     private var stateColor: Color {
-        switch SidebarOrchestrationPhase(rawValue: node.phase) {
+        switch statePhase {
         case .reportedCompleted: .green
-        case .reportedBlocked, .reportMissing: .orange
+        case .reportedBlocked, .reportMissing, .permissionDenied: .orange
         case .reportedFailed, .turnFailed, .processDisappeared,
              .terminalDisappeared, .launchFailed, .startupFailed: .red
         case .registered, .launching, .turnQueued, .turnRunning,
              .resourceRetired, .none: .secondary
         }
+    }
+
+    private var statePhase: SidebarOrchestrationPhase? {
+        SidebarOrchestrationPhase(rawValue: node.phase)
     }
 }
 

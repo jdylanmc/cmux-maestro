@@ -28,6 +28,9 @@ MAX_ARCHIVES = 32
 MAX_LABEL = 100
 MAX_TASK = 32_768
 MAX_RESULT = 4_096
+MAX_POLICY_RULE = 512
+MAX_POLICY_RULES = 16
+MAX_REPORT_MESSAGE = 8_192
 STALE_SECONDS = 600
 HEARTBEAT_SECONDS = 15
 STARTUP_SECONDS = 8
@@ -41,8 +44,13 @@ PROJECTED_PHASES = {
     "registered", "launching", "turn-queued", "turn-running",
     "reported-blocked", "reported-completed", "reported-failed",
     "report-missing", "turn-failed", "process-disappeared",
+    "permission-denied",
     "terminal-disappeared", "launch-failed", "startup-failed",
     "resource-retired",
+}
+REPORT_PROTOCOL = "cmux-maestro.worker-report"
+REPORT_KEYS = {
+    "protocol", "version", "workerId", "generation", "state", "summary",
 }
 
 
@@ -78,7 +86,11 @@ def canonical_uuid(value, field):
 def bounded_text(value, field, limit, *, empty=False):
     if not isinstance(value, str) or (not empty and not value.strip()):
         raise OrchestrationError(f"{field} is required.")
-    if len(value.encode("utf-8")) > limit or "\0" in value:
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise OrchestrationError(f"{field} contains invalid Unicode.")
+    if len(encoded) > limit or "\0" in value:
         raise OrchestrationError(f"{field} exceeds its safe limit.")
     if any(ord(character) < 32 and character not in "\n\t" for character in value):
         raise OrchestrationError(f"{field} contains control characters.")
@@ -88,6 +100,48 @@ def bounded_text(value, field, limit, *, empty=False):
 def sanitize_label(value):
     cleaned = "".join(character for character in value if character.isprintable())
     return " ".join(cleaned.split())[:MAX_LABEL] or "Unnamed worker"
+
+
+def normalize_tool_policy(allow, deny, parent=None):
+    if not isinstance(allow, list) or not isinstance(deny, list):
+        raise OrchestrationError("Copilot tool policy must contain rule lists.")
+    if len(allow) > MAX_POLICY_RULES or len(deny) > MAX_POLICY_RULES:
+        raise OrchestrationError("Copilot tool policy exceeds its rule limit.")
+
+    def rules(values, field):
+        result = []
+        for value in values:
+            rule = bounded_text(value, field, MAX_POLICY_RULE)
+            if rule not in result:
+                result.append(rule)
+        return result
+
+    allowed = rules(allow, "allow-tool rule")
+    denied = rules(deny, "deny-tool rule")
+    broad = {"*", "all"}
+    if any(
+        "*" in rule or rule.casefold().replace(" ", "") in broad
+        for rule in allowed
+    ):
+        raise OrchestrationError("Broad Copilot tool grants are not supported.")
+    if parent is not None:
+        parent_allow = set(parent["allow"])
+        if any(rule not in parent_allow for rule in allowed):
+            raise OrchestrationError("A worker cannot grant a child additional Copilot tools.")
+        denied = list(dict.fromkeys([*parent["deny"], *denied]))
+    denied_set = set(denied)
+    allowed = [rule for rule in allowed if rule not in denied_set]
+    if len(denied) > MAX_POLICY_RULES:
+        raise OrchestrationError("Inherited Copilot deny policy exceeds its rule limit.")
+    return {"allow": allowed, "deny": denied}
+
+
+def validate_tool_policy(value):
+    if not isinstance(value, dict) or set(value) != {"allow", "deny"}:
+        raise OrchestrationError("Stored Copilot tool policy is invalid.")
+    normalized = normalize_tool_policy(value["allow"], value["deny"])
+    if normalized != value:
+        raise OrchestrationError("Stored Copilot tool policy is not canonical.")
 
 
 def default_root():
@@ -205,6 +259,18 @@ def validate_state(state):
             roots_by_run[node["runId"]] = roots_by_run.get(node["runId"], 0) + 1
         if not isinstance(node.get("generation"), int) or node["generation"] < 0:
             raise OrchestrationError("Stored generation is invalid.")
+        boundary_generation = node.get("verifiedBoundaryGeneration")
+        if (
+            boundary_generation is not None
+            and (
+                type(boundary_generation) is not int
+                or boundary_generation < 1
+                or boundary_generation > node["generation"]
+                or role != "worker"
+            )
+        ):
+            raise OrchestrationError("Stored verified boundary generation is invalid.")
+        validate_tool_policy(node.get("toolPolicy"))
         if not isinstance(node.get("archiving", False), bool):
             raise OrchestrationError("Stored archive state is invalid.")
         created = parse_date(node.get("createdAt"), "stored creation time")
@@ -219,7 +285,7 @@ def validate_state(state):
                 (phase in {"launching", "turn-queued", "turn-running"} and availability == "busy")
                 or (phase in {
                     "reported-blocked", "reported-completed", "reported-failed",
-                    "report-missing", "turn-failed",
+                    "report-missing", "permission-denied", "turn-failed",
                 } and availability == "idle")
                 or (phase in {
                     "process-disappeared", "terminal-disappeared", "launch-failed",
@@ -408,12 +474,13 @@ class Store:
         state.setdefault("archives", [])
         state.setdefault("retainedResources", [])
         for node in state["nodes"].values():
-            candidate = "archiving" not in node and "hasStartedSession" not in node
+            candidate = "archiving" not in node
             node.setdefault("archiving", False)
             node.setdefault("lastControlAt", node.get("updatedAt"))
             node.setdefault("pendingReport", None)
             node.setdefault("supervisor", None)
-            node.setdefault("hasStartedSession", False)
+            node.setdefault("verifiedBoundaryGeneration", None)
+            node.setdefault("toolPolicy", {"allow": [], "deny": []})
             if candidate and node.get("role") == "worker":
                 node["phase"] = "process-disappeared"
                 node["availability"] = "unavailable"
@@ -698,7 +765,8 @@ def new_root(workspace, surface, pane, label):
         "phase": "registered", "availability": "active", "createdAt": timestamp,
         "updatedAt": timestamp, "lastControlAt": timestamp, "tokenHash": token_hash(token),
         "task": None, "result": None, "pendingReport": None, "supervisor": None,
-        "archiving": False,
+        "archiving": False, "verifiedBoundaryGeneration": None,
+        "toolPolicy": {"allow": [], "deny": []},
     }
     return node, token
 
@@ -781,6 +849,8 @@ def command_spawn(args, root, cmux):
         raise OrchestrationError("Working directory must be a directory.")
     snapshot = read_state(root)
     actor = authorize(snapshot, args.actor_id, args.token)
+    parent_policy = actor["toolPolicy"] if actor["role"] == "worker" else None
+    tool_policy = normalize_tool_policy(args.allow_tool, args.deny_tool, parent_policy)
     pane = cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
     if actor["role"] == "worker" and not process_matches(actor):
         raise OrchestrationError("Actor worker supervisor identity is stale.")
@@ -834,7 +904,8 @@ def command_spawn(args, root, cmux):
             "availability": "busy", "createdAt": timestamp, "updatedAt": timestamp,
             "lastControlAt": timestamp, "tokenHash": token_hash(worker_token),
             "task": task, "result": None, "pendingReport": None, "supervisor": None,
-            "archiving": False, "hasStartedSession": False,
+            "archiving": False,
+            "verifiedBoundaryGeneration": None, "toolPolicy": tool_policy,
         }
         state["launches"][identifier] = {
             "workerId": identifier, "runId": current["runId"],
@@ -928,28 +999,121 @@ def assistant_text(event):
 
 
 def report_instruction(node):
-    command = shlex.quote(str(Path(__file__).resolve())) + " report"
+    report = json.dumps({
+        "protocol": REPORT_PROTOCOL,
+        "version": 1,
+        "workerId": node["id"],
+        "generation": node["generation"],
+        "state": "completed",
+        "summary": "<brief factual result>",
+    }, separators=(",", ":"))
     return (
         f"\n\nCMUX Maestro worker contract: bounded generation {node['generation']} for "
         f"worker {node['id']}. Do not spawn except through the installed "
-        "cmux-maestro-orchestrate skill. Before finishing this turn, run "
-        f"`{command} --generation {node['generation']} --state completed "
-        "--summary '<brief result>'`; use blocked or failed when accurate. "
-        "The report is pending until the supervisor verifies this exact Copilot turn boundary. "
-        "A normal answer or zero exit is not task success."
+        "cmux-maestro-orchestrate skill. Your final assistant message must be only "
+        f"this compact JSON object, with no code fence or prose: {report}. "
+        "Replace state with blocked or failed when accurate and replace summary with "
+        "a brief factual result. Do not call a tool to submit this report. The supervisor "
+        "accepts it only at this generation's exact successful Copilot boundary. A normal "
+        "answer or zero exit is not task success."
     )
+
+
+def parse_final_report(event, node):
+    if event.get("type") != "assistant.message":
+        return "none", None
+    data = event.get("data")
+    if not isinstance(data, dict) or data.get("phase") != "final_answer":
+        return "none", None
+    if data.get("toolRequests") != []:
+        return "invalid", None
+    content = data.get("content")
+    if not isinstance(content, str) or not content:
+        return "invalid", None
+    try:
+        if len(content.encode("utf-8")) > MAX_REPORT_MESSAGE:
+            return "invalid", None
+        def strict_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate JSON key")
+                result[key] = value
+            return result
+        report = json.loads(content, object_pairs_hook=strict_object)
+    except (json.JSONDecodeError, UnicodeEncodeError, ValueError):
+        return "invalid", None
+    if not isinstance(report, dict) or set(report) != REPORT_KEYS:
+        return "invalid", None
+    if (
+        report.get("protocol") != REPORT_PROTOCOL
+        or type(report.get("version")) is not int
+        or report["version"] != 1
+        or report.get("workerId") != node["id"]
+        or type(report.get("generation")) is not int
+        or report["generation"] != node["generation"]
+        or report.get("state") not in REPORT_PHASES
+    ):
+        return "invalid", None
+    try:
+        summary = bounded_text(
+            report.get("summary"), "final report summary", MAX_RESULT, empty=True
+        )
+    except OrchestrationError:
+        return "invalid", None
+    return "valid", {
+        "generation": report["generation"],
+        "state": report["state"],
+        "summary": summary,
+    }
+
+
+def event_has_permission_denial(event):
+    if event.get("type") != "tool.execution_complete":
+        return False
+    pending = [(event, 0)]
+    visited = 0
+    while pending and visited < 64:
+        value, depth = pending.pop()
+        visited += 1
+        if isinstance(value, dict):
+            if value.get("code") == "denied":
+                return True
+            message = value.get("message")
+            if (
+                isinstance(message, str)
+                and "permission denied" in message.casefold()
+            ):
+                return True
+            if depth < 4:
+                pending.extend((child, depth + 1) for child in value.values())
+        elif isinstance(value, list) and depth < 4:
+            pending.extend((child, depth + 1) for child in value[:64])
+    return False
 
 
 def run_copilot_turn(root, worker_id, token, node):
     copilot = trusted_executable("CMUX_MAESTRO_COPILOT", "copilot")
     prompt = node["task"] + report_instruction(node)
     arguments = [copilot, "--no-auto-update", "-p", prompt, "--output-format", "json"]
-    if node.get("hasStartedSession"):
+    if node["generation"] > 1:
+        if node.get("verifiedBoundaryGeneration") != node["generation"] - 1:
+            return (
+                "protocol-failed",
+                "Exact previous-generation boundary is unavailable for resume.",
+                None,
+                False,
+                None,
+            )
         arguments.extend(["--resume", node["copilotSessionId"]])
     else:
         arguments.extend([
             "--session-id", node["copilotSessionId"], "--name", node["label"],
         ])
+    for rule in node["toolPolicy"]["allow"]:
+        arguments.extend(["--allow-tool", rule])
+    for rule in node["toolPolicy"]["deny"]:
+        arguments.extend(["--deny-tool", rule])
     arguments.extend(["-C", node["workingDirectory"]])
     environment = os.environ.copy()
     environment.update({
@@ -961,9 +1125,19 @@ def run_copilot_turn(root, worker_id, token, node):
     })
     heartbeat_interval = timeout("CMUX_MAESTRO_HEARTBEAT_SECONDS", HEARTBEAT_SECONDS)
     if heartbeat_interval <= 0:
-        return "protocol-failed", "Supervisor heartbeat interval is invalid."
+        return (
+            "protocol-failed",
+            "Supervisor heartbeat interval is invalid.",
+            None,
+            False,
+            None,
+        )
     final = None
     malformed = False
+    final_answer_count = 0
+    final_report = None
+    final_report_invalid = False
+    permission_denied = False
     stdout_buffer = bytearray()
     discarding_stdout = False
     stderr_capture = bytearray()
@@ -973,11 +1147,12 @@ def run_copilot_turn(root, worker_id, token, node):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
         )
     except OSError as error:
-        return "protocol-failed", f"Copilot launch failed: {error}"
+        return "protocol-failed", f"Copilot launch failed: {error}", None, False, None
     assert process.stdout is not None and process.stderr is not None
 
     def parse_event(line):
-        nonlocal final, malformed
+        nonlocal final, malformed, final_answer_count, final_report
+        nonlocal final_report_invalid, permission_denied
         try:
             event = json.loads(line)
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -989,6 +1164,8 @@ def run_copilot_turn(root, worker_id, token, node):
         if final is not None:
             malformed = True
             return
+        if final_answer_count and event.get("type") != "result":
+            final_report_invalid = True
         if event.get("type") == "result":
             timestamp = event.get("timestamp")
             try:
@@ -1002,9 +1179,28 @@ def run_copilot_turn(root, worker_id, token, node):
                 malformed = True
                 return
             final = event
+        report_status, report = parse_final_report(event, node)
+        if report_status != "none":
+            final_answer_count += 1
+            if report_status == "valid" and final_report is None:
+                final_report = report
+            else:
+                final_report_invalid = True
+        if event_has_permission_denial(event):
+            permission_denied = True
         text = assistant_text(event)
         if text:
-            print(text, flush=True)
+            output = (
+                f"{report['state'].capitalize()}: {report['summary']}"
+                if report_status == "valid" else text
+            )
+            try:
+                os.write(
+                    sys.stdout.fileno(),
+                    output.encode("utf-8", errors="replace") + b"\n",
+                )
+            except OSError:
+                pass
 
     def consume_stdout(chunk, *, eof=False):
         nonlocal malformed, discarding_stdout
@@ -1105,13 +1301,24 @@ def run_copilot_turn(root, worker_id, token, node):
         return (
             "protocol-failed",
             "Copilot did not produce a valid exact-session turn boundary." + suffix,
+            None,
+            permission_denied,
+            None,
         )
     if return_code != 0:
         return (
             "nonzero-exit",
             f"Copilot turn exited with status {return_code}." + suffix,
+            None,
+            permission_denied,
+            None,
         )
-    return "success", None
+    report_diagnostic = None
+    if final_answer_count != 1 or final_report_invalid:
+        final_report = None
+        if final_answer_count:
+            report_diagnostic = "Copilot returned an invalid or conflicting final task report."
+    return "success", None, final_report, permission_denied, report_diagnostic
 
 
 def command_runtime(args, root):
@@ -1163,7 +1370,10 @@ def command_runtime(args, root):
                     current["pendingReport"], current["updatedAt"] = None, now()
                     return json.loads(json.dumps(current))
                 claimed = mutate(root, claim, wait=2)
-                boundary, diagnostic = run_copilot_turn(
+                (
+                    boundary, diagnostic, final_report,
+                    permission_denied, report_diagnostic,
+                ) = run_copilot_turn(
                     root, worker_id, args.token, claimed
                 )
 
@@ -1172,17 +1382,28 @@ def command_runtime(args, root):
                     if not current or current["generation"] != generation:
                         return
                     report = current.get("pendingReport")
-                    if (
-                        boundary == "success"
-                        and report and report.get("generation") == generation
-                    ):
-                        current["phase"] = REPORT_PHASES[report["state"]]
-                        current["result"] = report["summary"]
+                    if boundary == "success":
+                        current["verifiedBoundaryGeneration"] = generation
+                    reports = [
+                        item for item in (report, final_report)
+                        if item and item.get("generation") == generation
+                    ]
+                    if boundary == "success" and len(reports) == 1:
+                        accepted = reports[0]
+                        current["phase"] = REPORT_PHASES[accepted["state"]]
+                        current["result"] = accepted["summary"]
                         current["availability"] = "idle"
-                        current["hasStartedSession"] = True
+                    elif boundary == "success" and len(reports) > 1:
+                        current["phase"], current["availability"] = "report-missing", "idle"
+                        current["result"] = "Conflicting lifecycle report channels were refused."
+                    elif boundary == "success" and permission_denied:
+                        current["phase"], current["availability"] = "permission-denied", "idle"
+                        current["result"] = (
+                            "Copilot tool permission was denied; no valid task report was returned."
+                        )
                     elif boundary == "success":
                         current["phase"], current["availability"] = "report-missing", "idle"
-                        current["hasStartedSession"] = True
+                        current["result"] = report_diagnostic
                     else:
                         current["phase"], current["availability"] = "turn-failed", "idle"
                         current["result"] = diagnostic
@@ -1227,6 +1448,8 @@ def command_report(args, root):
             raise OrchestrationError("Late or mismatched worker generation report refused.")
         if node["phase"] != "turn-running" or not process_matches(node):
             raise OrchestrationError("Worker turn is not currently supervised.")
+        if node.get("pendingReport") is not None:
+            raise OrchestrationError("This worker generation already has a pending report.")
         node["pendingReport"] = {
             "generation": args.generation,
             "state": args.state,
@@ -1255,9 +1478,14 @@ def command_follow_up(args, root, cmux):
         current = ensure_owned(state, current_actor, args.worker_id, direct=True)
         if (current["generation"], current["phase"], current.get("supervisor")) != expected:
             raise OrchestrationError("Worker state changed before follow-up could be queued.")
-        if current["availability"] != "idle" or current["phase"] not in REPORT_PHASES.values():
+        recoverable = {*REPORT_PHASES.values(), "report-missing", "permission-denied"}
+        if (
+            current["availability"] != "idle"
+            or current["phase"] not in recoverable
+            or current.get("verifiedBoundaryGeneration") != current["generation"]
+        ):
             raise OrchestrationError(
-                "Worker lacks an explicit report at a verified idle turn boundary."
+                "Worker lacks a verified idle boundary for its current generation."
             )
         if not process_matches(current):
             raise OrchestrationError("Worker supervisor identity is stale; no task was queued.")
@@ -1475,6 +1703,8 @@ def parser():
     spawn.add_argument("--name", required=True)
     spawn.add_argument("--task", required=True)
     spawn.add_argument("--cwd", required=True)
+    spawn.add_argument("--allow-tool", action="append", default=[])
+    spawn.add_argument("--deny-tool", action="append", default=[])
     runtime = commands.add_parser("runtime")
     runtime.add_argument("--worker-id", required=True)
     runtime.add_argument("--token", required=True)

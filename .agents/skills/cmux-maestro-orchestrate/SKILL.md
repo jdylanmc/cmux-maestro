@@ -41,6 +41,28 @@ orchestration run.
   --task "Bounded objective, constraints, validation, and stop condition"
 ```
 
+The safe default adds no Copilot tool grants. When the user explicitly approves
+tools for this task, pass each exact supported Copilot rule separately:
+
+```sh
+"$CMUX_MAESTRO_ORCHESTRATOR" spawn \
+  --actor-id "$COORDINATOR_ID" \
+  --token "$CONTROL_TOKEN" \
+  --name "Authorized implementation worker" \
+  --cwd "/absolute/working/directory" \
+  --task "Bounded implementation and validation" \
+  --allow-tool "read" \
+  --allow-tool "edit" \
+  --deny-tool "web"
+```
+
+These are Copilot policy arguments, not an operating-system sandbox. Never add
+`--allow-all`, a wildcard, all paths or URLs, or rights not explicitly approved
+for the task. A general shell grant must also be caller-explicit and task-
+justified; it is never a default. Denies win. A descendant receives no additional
+grants by default and may request only a subset of its parent's explicit allows;
+inherited denies cannot be removed. Policies remain private.
+
 The command creates exactly one unfocused terminal tab beside the actor. A
 foreground supervisor runs one bounded noninteractive Copilot turn with a
 preassigned stable session ID, then remains in that terminal for authenticated
@@ -77,29 +99,39 @@ For an explicitly delegated descendant, use only the injected worker identity:
 ```
 
 Follow-up is queued privately and allowed only for a directly owned worker that
-explicitly reported blocked, completed, or failed and whose supervisor has
-verified the exact current turn boundary. The next turn uses that worker's
-preassigned exact `--resume` session ID. No prompt is typed into a terminal,
-and there is no fallback to `--continue`, a display name, the focused terminal,
-or a recent session.
+has a verified successful exact-session boundary for its current generation.
+That includes an explicitly reported blocked, completed, or failed outcome and
+a bounded recovery from report-missing or permission-denied without claiming
+the earlier task succeeded. The next turn keeps the existing tool policy and
+uses that worker's preassigned exact `--resume` session ID. No prompt is typed
+into a terminal, and there is no fallback to `--continue`, a display name, the
+focused terminal, or a recent session.
 
 ## Worker reporting
 
-Before becoming idle after every turn, report exactly once:
+The required report is permission-free. End the turn with exactly one compact
+JSON object as the entire final assistant message, with no code fence, prose,
+or tool request:
 
-```sh
-"$CMUX_MAESTRO_ORCHESTRATOR" report \
-  --generation "$CMUX_MAESTRO_GENERATION" \
-  --state completed \
-  --summary "Brief factual result"
+```json
+{"protocol":"cmux-maestro.worker-report","version":1,"workerId":"<exact injected worker ID>","generation":1,"state":"completed","summary":"Brief factual result"}
 ```
 
-Use `blocked` or `failed` instead of `completed` when accurate. The report stays
-pending until the foreground supervisor verifies that generation's Copilot
-process/result boundary. A terminal's existence, a
-normal assistant response, or a zero process exit is not task success. Reports
-are operational evidence, not independent review or acceptance. Do not place
-secrets, raw output, or full task prompts in summaries.
+Use the exact worker ID and generation stated in the appended turn contract.
+Use `blocked` or `failed` instead of `completed` when accurate. Copilot emits
+this content in an envelope shaped as
+`{"type":"assistant.message","data":{"phase":"final_answer","toolRequests":[],"content":"..."}}`;
+do not call a tool to submit it. The supervisor requires that exact phase,
+empty tool requests, exact report fields and identity, and the successful
+current-session process/result boundary. A normal answer or zero exit is not
+task success.
+
+The authenticated `report` subcommand remains an optional compatibility path
+when an already-approved caller can execute it. Do not rely on that path:
+noninteractive Copilot may deny a tool without offering the human a prompt.
+Dual final-message and helper reports are refused rather than reconciled.
+Reports are self-reported operational evidence, not independent review or
+artifact acceptance. Keep secrets, raw output and full prompts out of summaries.
 
 ## End or recover a run
 
