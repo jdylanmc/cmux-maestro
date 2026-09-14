@@ -116,8 +116,8 @@ struct CopilotSetupTests {
         #expect(await setup.perform(.install, selected: nil, path: "", root: root, helper: helper) == .installed)
         #expect(await setup.perform(.uninstall, selected: nil, path: "", root: root, helper: helper) == .uninstalled)
         #expect(await runner.calls == [
-            ["/chosen/copilot", "plugin", "install", "/synthetic/integration/plugin"],
-            ["/chosen/copilot", "plugin", "uninstall", "cmux-maestro-native"],
+            ["/chosen/copilot", "--no-auto-update", "plugin", "install", "/synthetic/integration/plugin"],
+            ["/chosen/copilot", "--no-auto-update", "plugin", "uninstall", "cmux-maestro-native"],
         ])
     }
 

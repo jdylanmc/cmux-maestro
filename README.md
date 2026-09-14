@@ -31,6 +31,8 @@ Installer invocations start in their own process group. **Cancel Setup** and
 the 45-second timeout stop that invocation's launcher and descendants, then
 wait for cleanup before permitting retry; existing Copilot sessions are never
 signalled. CLI output remains suppressed.
+Setup passes `--no-auto-update` so a plugin change does not opt into upgrading
+the selected CLI.
 
 Only the distinct **`cmux-maestro-native`** plugin is installed. Existing
 `maestro-cmux`, other plugins, provider settings, and sidebar selection are
@@ -41,7 +43,7 @@ contain the **absolute current bundled helper path**.
 ### Disable or uninstall
 
 Use **Uninstall Native Plugin…**, then explicitly confirm. This runs only
-`copilot plugin uninstall cmux-maestro-native`. Restart/resume existing CLI
+`copilot --no-auto-update plugin uninstall cmux-maestro-native`. Restart/resume existing CLI
 sessions to unload their cached hooks. Disable this sidebar in CMUX separately
 if desired; uninstall does not select or remove any other provider.
 
