@@ -167,12 +167,40 @@ class LocalPreviewTests(unittest.TestCase):
             "extension": signature(".Extension", profile if profile is not None else {
                 metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS,
             }),
-            "helper": signature(".CopilotHook", {}),
+            "helper": signature(".CopilotHook", {
+                "com.apple.application-identifier": metadata.BASE_ID + ".CopilotHook",
+                "com.apple.security.get-task-allow": True,
+            }),
         }))
         return app
 
     def installer(self, destination=None):
         return preview.Installer(self.home, destination, self.ops)
+
+    def test_helper_identity_entitlement_is_optional_but_must_match_exactly(self):
+        for entitlements in ({}, {
+            "com.apple.application-identifier": metadata.BASE_ID + ".CopilotHook",
+            "com.apple.security.get-task-allow": True,
+        }):
+            self.change_signature(self.old, "helper", "entitlements", entitlements)
+            self.assertEqual(self.ops.verify(self.old, current=True), "2")
+
+    def test_invalid_helper_identity_or_extra_privileges_are_refused_before_staging(self):
+        for index, entitlements in enumerate([
+            {"com.apple.application-identifier": metadata.BASE_ID},
+            {"com.apple.application-identifier": "OTHERTEAM." + metadata.BASE_ID + ".CopilotHook"},
+            {"com.apple.application-identifier": ""},
+            {"com.apple.application-identifier": True},
+            {"com.apple.application-identifier": metadata.BASE_ID + ".CopilotHook",
+             "com.apple.security.network.client": True},
+        ]):
+            with self.subTest(entitlements=entitlements):
+                source = self.fixture("invalid-helper-" + str(index))
+                self.change_signature(source, "helper", "entitlements", entitlements)
+                with self.assertRaises(ValueError):
+                    self.operation("install", source)
+                self.assertFalse(self.app.exists())
+                self.assertIsNone(self.receipt()["transaction"])
 
     def operation(self, name, *args, **kwargs):
         installer = self.installer()

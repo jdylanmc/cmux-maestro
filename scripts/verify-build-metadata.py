@@ -156,7 +156,12 @@ def verify_local_preview(app, *, current=True, runner=subprocess.run):
                 require(set(profile) <= {SANDBOX_KEY, READ_KEY, "com.apple.security.get-task-allow"},
                         "Unknown rollback sidebar entitlement.")
         else:
-            require(set(profile) <= {"com.apple.security.get-task-allow"},
+            allowed = {"com.apple.security.get-task-allow"}
+            if target == helper and "com.apple.application-identifier" in profile:
+                require(profile["com.apple.application-identifier"] == identifier,
+                        "Helper application-identifier entitlement does not match its signing identity.")
+                allowed.add("com.apple.application-identifier")
+            require(set(profile) <= allowed,
                     "Installer/helper entitlements differ from the approved unsandboxed profile.")
     return plist(app / "Contents/Info.plist")["CFBundleVersion"]
 
