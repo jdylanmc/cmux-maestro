@@ -20,6 +20,7 @@ PROFILES = {
 }
 READ_PATHS = [
     "/Library/Application Support/CMUXMaestroPreview/Copilot/",
+    "/Library/Application Support/CMUXMaestroPreview/Orchestration/",
     "/.copilot/session-state/",
 ]
 SANDBOX_KEY = "com.apple.security.app-sandbox"
@@ -101,6 +102,13 @@ def verify_metadata(app, mode, *, expected_build=APP_BUILD_VERSION):
             "App and sidebar must have the same valid build version.")
     if expected_build is not None:
         require(version == expected_build, "App or sidebar native feature build version is stale.")
+    resources = app / "Contents/Resources"
+    controller = resources / "cmux-maestro-orchestrator.py"
+    skill = resources / "SKILL.md"
+    require(controller.is_file() and 0 < controller.stat().st_size <= 1_048_576,
+            "Bundled orchestration controller is missing or oversized.")
+    require(skill.is_file() and 0 < skill.stat().st_size <= 65_536,
+            "Bundled orchestration skill is missing or oversized.")
     return extension, child
 
 

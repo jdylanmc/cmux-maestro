@@ -148,6 +148,10 @@ class LocalPreviewTests(unittest.TestCase):
         (extension / "Contents/MacOS").mkdir(parents=True)
         helper = app / "Contents/Helpers/CMUXMaestroCopilotHook"
         helper.parent.mkdir()
+        resources = app / "Contents/Resources"
+        resources.mkdir()
+        (resources / "cmux-maestro-orchestrator.py").write_text("#!/usr/bin/env python3\n")
+        (resources / "SKILL.md").write_text("---\nname: cmux-maestro-orchestrate\n---\n")
         parent = {"CFBundleIdentifier": metadata.BASE_ID, "CFBundlePackageType": "APPL",
                   "CFBundleVersion": version, "CFBundleExecutable": "Preview"}
         child = {"CFBundleIdentifier": metadata.BASE_ID + ".Extension", "CFBundlePackageType": "XPC!",

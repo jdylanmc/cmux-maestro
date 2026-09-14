@@ -9,7 +9,8 @@ struct SidebarLayoutRenderingTests {
         let fixtures = SidebarTreeFixtures()
         let model = makeModel(fixtures: fixtures, longMetadata: false)
         let longModel = makeModel(fixtures: fixtures, longMetadata: true)
-        defer { model.setVisible(false); longModel.setVisible(false) }
+        let managedModel = makeManagedModel(fixtures: fixtures)
+        defer { model.setVisible(false); longModel.setVisible(false); managedModel.setVisible(false) }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let folder = root.appendingPathComponent(".build/layout-validation/offscreen")
         let state = root.appendingPathComponent(".build/layout-tests/\(UUID())")
@@ -46,16 +47,13 @@ struct SidebarLayoutRenderingTests {
                 try await render(model: model, preferences: preferences, width: width,
                                  destination: folder.appendingPathComponent("\(density.rawValue)-taskboard-\(width).png"))
             }
-
             let additional: [(String, RenderAppearance, SidebarConnectionModel)] = [
-                ("dark", .dark, model),
-                ("increased-contrast", .increasedContrast, model),
+                ("dark", .dark, model), ("increased-contrast", .increasedContrast, model),
                 ("long-metadata", .light, longModel),
                 ("long-metadata-dark-contrast", .darkIncreasedContrast, longModel)
             ]
             for (name, appearance, scenarioModel) in additional {
                 preferences.expandAll()
-                // Keep a visible collapsed summary in the standard dark/contrast examples.
                 if scenarioModel === model {
                     preferences.setExpanded(false, for: .child("root", sessionID: fixtures.sessionID))
                 }
@@ -70,6 +68,93 @@ struct SidebarLayoutRenderingTests {
                 }
             }
         }
+        preferences.setDensity(.compact)
+        preferences.selectedMode = .hierarchy
+        for (width, appearance) in [
+            (240, RenderAppearance.light), (300, .light), (340, .light), (349, .light),
+            (340, .dark), (340, .increasedContrast),
+        ] {
+            let metrics = try await render(
+                model: managedModel, preferences: preferences, width: width, height: 600,
+                appearance: appearance, managed: true,
+                destination: folder.appendingPathComponent(
+                    "managed-\(appearance.name)-\(width)x600.png"
+                )
+            )
+            if width == 340 {
+                #expect(metrics.documentHeight <= metrics.viewportHeight + 0.5)
+            }
+        }
+    }
+
+    private func makeManagedModel(fixtures: SidebarTreeFixtures) -> SidebarConnectionModel {
+        let workspace = fixtures.workspaceA
+        let surfaces = (0..<5).map { _ in UUID() }
+        let run = UUID()
+        let rootID = UUID()
+        let now = Date()
+        let labels = ["Coordinator", "Implementation", "Verification", "Documentation", "Nested review"]
+        let phases = ["registered", "process-running", "reported-blocked",
+                      "reported-completed", "report-missing"]
+        let nodes = surfaces.enumerated().map { index, surface in
+            SidebarOrchestrationNode(
+                id: index == 0 ? rootID : UUID(), runId: run,
+                parentId: index == 0 ? nil : rootID,
+                role: index == 0 ? "coordinator" : "worker", label: labels[index],
+                workspaceId: workspace, surfaceId: surface, generation: index == 0 ? 0 : 1,
+                phase: phases[index],
+                availability: index == 3 ? "idle" : index == 0 ? "active" : "busy",
+                createdAt: now.addingTimeInterval(Double(index)), updatedAt: now
+            )
+        }
+        let orchestration = SidebarOrchestrationPolling(
+            read: {
+                SidebarOrchestrationSnapshot(
+                    version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: nodes
+                )
+            },
+            pause: { try await Task.sleep(for: .seconds(60)) }
+        )
+        let copilot = SidebarCopilotPolling(
+            read: {
+                _ in CopilotSnapshot(
+                    generatedAt: now, sessions: [], issues: [], isComplete: true
+                )
+            },
+            pause: { try await Task.sleep(for: .seconds(60)) },
+            now: { now }
+        )
+        let hierarchy = HierarchySnapshot(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true,
+            workspacePathsAvailable: true,
+            workspaces: [HierarchyWorkspace(
+                id: workspace, title: .available("Managed workspace"), detail: .available(nil),
+                isSelected: .available(true), isPinned: .available(false),
+                unreadCount: .available(0), rootPath: .available("/synthetic/managed"),
+                projectRootPath: .available("/synthetic/managed"),
+                surfaces: .available(surfaces.map {
+                    HierarchySurface(
+                        id: $0, title: "Terminal", kind: .terminal, isFocused: false,
+                        isPinned: false, unreadCount: 0,
+                        workingDirectory: .available("/synthetic/managed")
+                    )
+                })
+            )],
+            windowID: fixtures.windowID
+        )
+        let model = SidebarConnectionModel(copilot: copilot, orchestration: orchestration)
+        model.replaceHierarchy(with: hierarchy)
+        model.showConnected(workspaceCount: 1, surfaceCount: surfaces.count)
+        let topology = SidebarTopology(hierarchy)
+        copilot.update(topology: topology, connected: true)
+        orchestration.update(topology: topology, connected: true)
+        model.navigation.update(
+            topology: topology, connected: true, workspaceAllowed: true,
+            surfaceAllowed: true, perform: { _ in }
+        )
+        model.setVisible(true)
+        return model
     }
 
     private func makeModel(fixtures: SidebarTreeFixtures, longMetadata: Bool) -> SidebarConnectionModel {
@@ -147,15 +232,21 @@ struct SidebarLayoutRenderingTests {
         return model
     }
 
+    @discardableResult
     private func render(
         model: SidebarConnectionModel, preferences: SidebarPreferences, width: Int,
-        appearance: RenderAppearance = .light, destination: URL
-    ) async throws {
+        height: Int = 941, appearance: RenderAppearance = .light, managed: Bool = false,
+        destination: URL
+    ) async throws -> SidebarRenderingEvidence.Metrics {
         // Yield between renders so unrelated asynchronous navigation tests can service their deadlines.
         try await Task.sleep(for: .milliseconds(10))
         model.setVisible(true)
-        await sidebarEventually { model.copilot.tree.sessions.count == 1 }
-        let frame = NSRect(x: 0, y: 0, width: width, height: 941)
+        if managed {
+            await sidebarEventually { model.orchestration.snapshot.nodes.count == 5 }
+        } else {
+            await sidebarEventually { model.copilot.tree.sessions.count == 1 }
+        }
+        let frame = NSRect(x: 0, y: 0, width: width, height: height)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: appearance.nativeName)
@@ -177,7 +268,7 @@ struct SidebarLayoutRenderingTests {
         #expect(evidence.contrast == appearance.contrast)
         let png = try #require(bitmap.representation(using: .png, properties: [:]))
         #expect(bitmap.pixelsWide >= width)
-        #expect(bitmap.pixelsHigh >= 941)
+        #expect(bitmap.pixelsHigh >= height)
         #expect(png.count > 1_024)
         try png.write(to: destination)
         let metrics = SidebarRenderingEvidence.metrics(for: view)
@@ -185,6 +276,7 @@ struct SidebarLayoutRenderingTests {
         #expect(metrics.documentHeight > 0)
         #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
         try JSONEncoder().encode(metrics).write(to: destination.deletingPathExtension().appendingPathExtension("json"))
+        return metrics
     }
 
     private enum RenderAppearance {
@@ -207,6 +299,14 @@ struct SidebarLayoutRenderingTests {
             }
         }
 
+        var name: String {
+            switch self {
+            case .light: "light"
+            case .dark: "dark"
+            case .increasedContrast: "contrast"
+            case .darkIncreasedContrast: "dark-contrast"
+            }
+        }
     }
 
     private final class AppearanceEvidence {

@@ -35,4 +35,10 @@ nonisolated enum CopilotPaths {
     static func sessionStateRoot() throws -> URL {
         try realUserHome().appendingPathComponent(".copilot/session-state", isDirectory: true)
     }
+
+    static func orchestrationRoot() throws -> URL {
+        try realUserHome().appendingPathComponent(
+            "Library/Application Support/CMUXMaestroPreview/Orchestration", isDirectory: true
+        )
+    }
 }

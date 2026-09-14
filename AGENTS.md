@@ -16,6 +16,8 @@ do not copy its source or history, modify it, or make this project depend on it.
 - `CMUXMaestroPreviewTests/`: focused Swift tests.
 - `CMUXMaestroPreview.xcodeproj/`: Xcode project and shared scheme.
 - `scripts/`: pinned SDK fetch, build, test, and local registration commands.
+- `.agents/skills/cmux-maestro-orchestrate/`: repository-owned installed
+  terminal orchestration skill.
 - `vendor/CmuxExtensionKit/`: ignored local SDK checkout created by the fetch
   script. Never commit it.
 
@@ -29,6 +31,12 @@ do not copy its source or history, modify it, or make this project depend on it.
   models, fixtures presented as real data, packaging, or migration logic unless
   a later issue explicitly approves that scope.
 - Do not add a license until the repository's licensing issue is resolved.
+- Keep orchestration control outside the sandboxed sidebar. The sidebar may
+  read only sanitized bounded metadata and use typed host navigation; never add
+  raw prompts/results/tokens, a daemon, loopback server, socket client, focus
+  inference, automatic tool approval, or automatic terminal/process cleanup.
+- Preserve exact workspace/surface/session/generation ownership and the
+  controller's depth, node, size and concurrent-operation bounds.
 
 ## Validation
 
@@ -37,6 +45,7 @@ Use the checked-in scripts, which select full Xcode explicitly:
 ```sh
 ./scripts/build-unsigned.sh
 ./scripts/test.sh
+python3 scripts/test-cmux-maestro-orchestrator.py
 ./scripts/build-register.sh
 ```
 

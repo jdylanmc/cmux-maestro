@@ -46,6 +46,7 @@ acceptance scope.
 | Unknown/degraded data, freshness and bounded catch-up | [SidebarCopilotTreeTests](../CMUXMaestroPreviewTests/SidebarCopilotTreeTests.swift): `partialKnownChildrenRemainVisibleWithoutInventingZeroOrModels`, `pollingUsesOnlyGrantedVisibleSurfacesAndClearsOnRevocation`, `staleHistoryCannotTriggerCatchUpAndHideCancelsCatchUpPause` | Partial counts, revocation and stale-data handling have Swift proof. Continuing observations and stable scrolling are verified in [PR27][r27]/[PR28][r28]. Missing evidence never implies success or a hung agent. |
 | Accessibility semantics and glanceability | [SidebarClarityTests](../CMUXMaestroPreviewTests/SidebarClarityTests.swift): `entityIconsAndStateBadgesDoNotRelyOnColorAlone`, `realDetailsAndFocusHandlersAreIndependentAndKeepTypedNavigationGuards`; [SidebarLayoutRenderingTests](../CMUXMaestroPreviewTests/SidebarLayoutRenderingTests.swift): `syntheticSidebarRendersAtNarrowWidthsInBothDensitiesAndModes` | [PR29][r29] verifies native control geometry. [PR32][r32] verifies eight physical layout combinations, independent Details and final scoped wording. Spoken VoiceOver/global accessibility settings were not changed or claimed tested. |
 | Stable local install, update, rollback and recovery | [test-local-preview.py](../scripts/test-local-preview.py): `test_first_install_stable_copy_and_exact_registration`, `test_atomic_updates_preserve_one_previous_and_rollback_is_reversible`, `test_ambiguous_recovery_refuses_to_guess` | [PR30][r30] verifies real stable installation, signed Debug/Release update, exact rollback and recovery. This is local-preview delivery, not public distribution. |
+| Explicit terminal-backed orchestration | [test-cmux-maestro-orchestrator.py](../scripts/test-cmux-maestro-orchestrator.py): background-tab, ownership, generation, failed-delivery and focus contracts; [SidebarOrchestrationTests](../CMUXMaestroPreviewTests/SidebarOrchestrationTests.swift): exact current-window filtering and parent-child projection | The controller and skill are bundled and production setup installs them. Live CMUX spawn/follow-up acceptance is operator-gated and remains unverified in this implementation worktree. |
 
 ## Intentional differences and explicit limits
 
@@ -55,6 +56,13 @@ acceptance scope.
   The optional identity hook is non-vetoing; the sandboxed sidebar reads
   directly. Focus is a CMUX action. Dismissal and acknowledgement cannot approve,
   answer, stop or otherwise control the provider.
+- **Managed control is external and explicit.** The sandboxed sidebar remains
+  read-only. A separately installed local command creates unfocused terminal
+  tabs through supported CMUX CLI UUID operations and launches exact Copilot
+  session IDs. It stores private control data outside the sidebar-readable
+  projection. It does not inspect or reconstruct Copilot's hidden subagent
+  graph, approve tools, delete tabs, stop sessions, or fall back to
+  `--continue`, recent sessions, titles, paths, focus, or terminal text.
 - **Neutral contract versus adapter internals.** The versioned
   [AgentSessionSnapshot](../CMUXMaestroPreview/Domain/AgentSessionSnapshot.swift)
   contract exists and has fixtures. The live `SidebarCopilotPolling.Read` still

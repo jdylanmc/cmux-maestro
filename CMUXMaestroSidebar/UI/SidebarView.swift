@@ -134,6 +134,7 @@ struct SidebarView: View {
     let model: SidebarConnectionModel
     @Bindable private var preferences: SidebarPreferences
     @State private var showingHistory = false
+    @State private var showingOtherActivity = false
     @Environment(\.scenePhase) private var scenePhase
 
     init(model: SidebarConnectionModel, preferences: SidebarPreferences) {
@@ -169,7 +170,11 @@ struct SidebarView: View {
             .labelsHidden()
             .accessibilityLabel("Sidebar view")
 
-            CopilotOverview(tree: model.copilot.tree)
+            if model.orchestration.snapshot.nodes.isEmpty {
+                CopilotOverview(tree: model.copilot.tree)
+            } else {
+                ManagedOverview(polling: model.orchestration)
+            }
             if model.copilot.tree.attentionOwnerCount > 0 {
                 HStack {
                     Label(SidebarCountText.attention(model.copilot.tree.attentionOwnerCount), systemImage: "bell.badge")
@@ -205,18 +210,17 @@ struct SidebarView: View {
                 // Workspace rows already contain whole subtrees. Avoid lazy root
                 // placement cycling during remote accessibility scrolling.
                 VStack(alignment: .leading, spacing: preferences.layout.density.spacing(6)) {
-                    switch preferences.selectedMode {
-                    case .hierarchy:
-                        HierarchyContent(
-                            model: model, layout: preferences.layout,
-                            setExpanded: { preferences.setExpanded($1, for: $0) },
-                            dismiss: dismiss, acknowledge: acknowledge
+                    if model.orchestration.snapshot.nodes.isEmpty {
+                        otherActivity
+                    } else {
+                        ManagedHierarchyContent(
+                            polling: model.orchestration, navigation: model.navigation
                         )
-                    case .taskboard:
-                        TaskboardContent(
-                            tree: model.copilot.tree, hierarchy: model.hierarchy,
-                            navigation: model.navigation, dismiss: dismiss, acknowledge: acknowledge
-                        )
+                        DisclosureGroup("Other sessions/activity", isExpanded: $showingOtherActivity) {
+                            otherActivity.padding(.top, 4)
+                        }
+                        .sidebarFont(.caption, weight: .medium)
+                        .accessibilityHint("Unmanaged CMUX surfaces and inferred Copilot observations")
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -255,6 +259,22 @@ struct SidebarView: View {
             if phase == .active { preferences.refreshLayout() }
         }
         .onDisappear { model.setVisible(false) }
+    }
+
+    @ViewBuilder private var otherActivity: some View {
+        switch preferences.selectedMode {
+        case .hierarchy:
+            HierarchyContent(
+                model: model, layout: preferences.layout,
+                setExpanded: { preferences.setExpanded($1, for: $0) },
+                dismiss: dismiss, acknowledge: acknowledge
+            )
+        case .taskboard:
+            TaskboardContent(
+                tree: model.copilot.tree, hierarchy: model.hierarchy,
+                navigation: model.navigation, dismiss: dismiss, acknowledge: acknowledge
+            )
+        }
     }
 
     private func dismiss(_ outcome: SidebarDismissedOutcome) {
@@ -369,6 +389,155 @@ struct SidebarView: View {
         case .degraded:
             Label("CMUX disconnected. Focus and live status unavailable.", systemImage: "exclamationmark.triangle")
                 .font(.caption2).foregroundStyle(.orange)
+        }
+    }
+}
+
+private struct ManagedOverview: View {
+    let polling: SidebarOrchestrationPolling
+    @State private var showingDetails = false
+
+    var body: some View {
+        HStack {
+            let workers = polling.snapshot.nodes.filter { $0.role == "worker" }
+            Text("\(workers.count) managed worker\(workers.count == 1 ? "" : "s")")
+                .sidebarFont(.caption).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            SidebarDetailsButton(
+                expanded: $showingDetails, label: "Managed orchestration",
+                id: "details-managed-overview"
+            )
+        }
+        if showingDetails {
+            SidebarMetadataDetails(lines: [
+                .init(title: "Source", value: "Explicit terminal-backed orchestration"),
+                .init(title: "Projection", value: polling.snapshot.complete
+                      ? "Complete" : "\(polling.snapshot.omittedCount) omitted or off-window"),
+                .init(title: "Observed", value: polling.snapshot.generatedAt.formatted(
+                    date: .abbreviated, time: .shortened
+                ))
+            ])
+        }
+    }
+}
+
+private struct ManagedDisplayNode: Identifiable {
+    let node: SidebarOrchestrationNode
+    let depth: Int
+    var id: UUID { node.id }
+}
+
+private struct ManagedHierarchyContent: View {
+    let polling: SidebarOrchestrationPolling
+    let navigation: SidebarNavigation
+
+    private var rows: [ManagedDisplayNode] {
+        var result: [ManagedDisplayNode] = []
+        func append(_ node: SidebarOrchestrationNode, depth: Int) {
+            result.append(.init(node: node, depth: min(depth, 8)))
+            for child in polling.children(of: node.id).sorted(by: sort) {
+                append(child, depth: depth + 1)
+            }
+        }
+        for root in polling.roots.sorted(by: sort) { append(root, depth: 0) }
+        return result
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(rows) { row in
+                ManagedNodeRow(node: row.node, depth: row.depth, navigation: navigation)
+            }
+        }
+        .accessibilityIdentifier("managed-orchestration")
+    }
+
+    private func sort(_ lhs: SidebarOrchestrationNode, _ rhs: SidebarOrchestrationNode) -> Bool {
+        if lhs.isActive != rhs.isActive { return lhs.isActive }
+        return lhs.createdAt < rhs.createdAt
+    }
+}
+
+private struct ManagedNodeRow: View {
+    let node: SidebarOrchestrationNode
+    let depth: Int
+    let navigation: SidebarNavigation
+    @State private var showingDetails = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                FocusButton(
+                    target: .surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
+                    navigation: navigation, label: "Focus \(node.label)"
+                ) {
+                    HStack(spacing: 5) {
+                        Image(systemName: node.role == "coordinator" ? "person.2" : "terminal")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 16)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(node.label).sidebarFont(.caption, weight: .medium).lineLimit(1)
+                            Text(stateTitle).sidebarFont(.caption2)
+                                .foregroundStyle(stateColor).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+                SidebarDetailsButton(
+                    expanded: $showingDetails, label: node.label,
+                    id: "details-managed-\(node.id)"
+                )
+            }
+            if showingDetails {
+                SidebarMetadataDetails(lines: [
+                    .init(title: "Role", value: node.role.capitalized),
+                    .init(title: "State", value: stateTitle),
+                    .init(title: "Worker ID", value: node.id.uuidString),
+                    .init(title: "Run ID", value: node.runId.uuidString),
+                    .init(title: "Parent ID", value: node.parentId?.uuidString ?? "None"),
+                    .init(title: "Workspace ID", value: node.workspaceId.uuidString),
+                    .init(title: "Surface ID", value: node.surfaceId.uuidString),
+                    .init(title: "Generation", value: "\(node.generation)")
+                ])
+            }
+        }
+        .padding(.leading, CGFloat(depth * 12))
+        .padding(.vertical, 1)
+        .overlay(alignment: .leading) {
+            if depth > 0 {
+                Rectangle().fill(.quaternary).frame(width: 1)
+                    .padding(.leading, CGFloat(depth * 12 - 6))
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("managed-node-\(node.id)")
+    }
+
+    private var stateTitle: String {
+        switch node.phase {
+        case "registered": "Registered"
+        case "launching": "Launching"
+        case "process-running": "Working"
+        case "reported-blocked": "Blocked"
+        case "reported-completed": node.availability == "idle" ? "Completed · available" : "Completed"
+        case "reported-failed": node.availability == "idle" ? "Failed · available" : "Failed"
+        case "report-missing": "Report missing"
+        case "process-disappeared": "Process disappeared"
+        case "terminal-disappeared": "Terminal disappeared"
+        case "launch-failed": "Launch failed"
+        case "delivery-failed": "Follow-up not delivered"
+        default: "Unknown state"
+        }
+    }
+
+    private var stateColor: Color {
+        switch node.phase {
+        case "reported-completed": .green
+        case "reported-blocked", "report-missing": .orange
+        case "reported-failed", "process-disappeared", "terminal-disappeared",
+             "launch-failed", "delivery-failed": .red
+        default: .secondary
         }
     }
 }

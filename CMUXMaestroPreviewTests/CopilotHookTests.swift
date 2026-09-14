@@ -298,7 +298,11 @@ struct CopilotHookTests: Sendable {
         let data = try Data(contentsOf: repository.appendingPathComponent("CMUXMaestroSidebar/CMUXMaestroSidebar.entitlements"))
         let plist = try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
         let grants = try #require(plist["com.apple.security.temporary-exception.files.home-relative-path.read-only"] as? [String])
-        #expect(grants == ["/Library/Application Support/CMUXMaestroPreview/Copilot/", "/.copilot/session-state/"])
+        #expect(grants == [
+            "/Library/Application Support/CMUXMaestroPreview/Copilot/",
+            "/Library/Application Support/CMUXMaestroPreview/Orchestration/",
+            "/.copilot/session-state/",
+        ])
         #expect(grants.allSatisfy { $0.hasPrefix("/") && $0.hasSuffix("/") })
         #expect(plist["com.apple.security.app-sandbox"] as? Bool == true)
         #expect(plist.count == 2)

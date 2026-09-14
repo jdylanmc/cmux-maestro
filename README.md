@@ -1,7 +1,7 @@
 # CMUX Maestro
 
-A compiled macOS CMUX sidebar that displays Copilot sessions and their durable
-agent hierarchy. The native sidebar reads locally; no companion daemon,
+A compiled macOS CMUX sidebar that displays Copilot sessions and explicit
+terminal-backed orchestration hierarchies. The native sidebar reads locally; no companion daemon,
 watcher, loopback server, XPC service, raw CMUX socket, or session-start ritual.
 The separate interpreted Maestro project is untouched and is not a dependency.
 
@@ -23,7 +23,8 @@ evidence, live acceptance scope, intentional differences and remaining limits.
 4. Restart or resume already-running Copilot CLI sessions **once** to load the
    newly installed plugin. Maestro never restarts them automatically. Launch
    future sessions normally inside CMUX; their hooks record validated identity
-   and the sidebar renders the tree directly from durable events.
+   and the sidebar renders the tree directly from durable events. Setup also
+   installs the bundled `cmux-maestro-orchestrate` skill and local controller.
 
 The containing app is an installer, not an observer. It may be closed after
 setup. A successful setup message means the selected CLI exited successfully;
@@ -37,7 +38,8 @@ signalled. CLI output remains suppressed.
 Setup passes `--no-auto-update` so a plugin change does not opt into upgrading
 the selected CLI.
 
-Only the distinct **`cmux-maestro-native`** plugin is installed. Existing
+Only the distinct **`cmux-maestro-native`** plugin, its bundled orchestration
+skill, and its private local controller are installed. Existing
 `maestro-cmux`, other plugins, provider settings, and sidebar selection are
 never replaced automatically. Moving/replacing the native app requires enabling
 the integration again: Copilot caches local plugin contents, and generated hooks
@@ -77,6 +79,12 @@ For individual future CLI launches, either `CMUX_COPILOT_HOOKS_DISABLED=1` or
   Own directories are `0700`, files `0600`; dates use milliseconds since 1970.
   The last diagnostic is a bounded generic status, never a hook payload, path,
   credential, transcript, or raw CLI error.
+- Terminal control runs in the installed standard-library Python controller at
+  `~/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/`.
+  Private prompts, results, control tokens and process identities remain under
+  `control/`; the sidebar can read only the bounded sanitized `observer/current.json`.
+  The controller uses exact CMUX workspace, pane and surface UUIDs. It never
+  infers ownership from labels, paths, focus, chronology, or terminal text.
 - The outer hook shell redirects both output streams and returns zero even
   when the helper is missing, fails, or crashes. Hooks cannot supply prompt
   content, tool decisions, or control commands.
@@ -99,6 +107,23 @@ leave completion/status unknown, and agent IDs are not automatically native
 child-session IDs. No title/transcript heuristics repair missing identity.
 
 ## Sidebar layout
+
+When a coordinator explicitly registers a terminal-backed run, its coordinator
+→ worker → nested-worker relationships become the primary compact hierarchy.
+Every worker is a genuine unfocused terminal tab in the coordinator's current
+CMUX pane/workspace. Rows show safe labels and explicit lifecycle state; Details
+contains exact run, parent, worker, workspace, surface and generation IDs.
+Selecting a row uses the existing typed CMUX Focus action. Inferred/unmanaged
+observations remain available under **Other sessions/activity** and are never
+attached to the managed graph by guesswork.
+
+The installed skill exposes explicit `register`, `spawn`, `status`, `follow-up`,
+`focus`, and worker `report` operations. Follow-up is limited to a directly
+owned, explicitly idle worker with the same validated process and surface.
+Terminal existence and a zero CLI exit are not success: completed, blocked and
+failed states require a generation-matched structured report. Missing reports,
+delivery failure, process disappearance and terminal disappearance remain
+distinct. Completed tabs stay open. Tool permissions are not auto-approved.
 
 The hierarchy uses distinct native icons and accents: blue workspace stacks,
 teal terminals, purple Copilot sessions, pink child agents and amber skills.

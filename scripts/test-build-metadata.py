@@ -38,6 +38,10 @@ class BuildMetadataTests(unittest.TestCase):
             "CFBundleExecutable": "Fixture",
             "EXAppExtensionAttributes": {"EXExtensionPointIdentifier": point},
         }
+        resources = self.app / "Contents/Resources"
+        resources.mkdir(parents=True, exist_ok=True)
+        (resources / "cmux-maestro-orchestrator.py").write_text("#!/usr/bin/env python3\n")
+        (resources / "SKILL.md").write_text("---\nname: cmux-maestro-orchestrate\n---\n")
         self.save()
 
     def save(self):
