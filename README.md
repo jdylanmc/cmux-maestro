@@ -685,15 +685,29 @@ replacement while a same-user process is executing from an affected preview
 app or backup. It reports the specific process ID when possible; it never signals a
 process. Keep these apps closed until the operation finishes.
 
+macOS can retain an idle extension process even after Default is selected.
+Use **`prepare-update`** to retire only the receipt-owned preview registration
+before an update or rollback. This does not delete or replace app files, change
+plugin settings, or signal any process. It verifies the owned app first and
+refuses to report readiness if a preview/helper process remains. If preparation
+is interrupted or you decide not to update, **`recover`** restores the current
+registration. Until update/rollback/recovery completes, `status` can report the
+expected missing registration.
+
 ```sh
 # After another explicit ./scripts/build-register.sh:
+python3 scripts/local-preview.py prepare-update
 python3 scripts/local-preview.py update \
   --source "$PWD/.build/adhoc/Build/Products/Debug/CMUX Maestro Preview.app" \
   --retire-development-registration
 python3 scripts/local-preview.py status
 
 # Explicitly exchange the current app with its verified previous version:
+python3 scripts/local-preview.py prepare-update
 python3 scripts/local-preview.py rollback
+
+# Cancel preparation without changing the installed build:
+python3 scripts/local-preview.py recover
 ```
 
 Then refresh integration in the stable containing app and select the Preview
