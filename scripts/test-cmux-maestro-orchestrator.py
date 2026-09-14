@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import ast
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -115,6 +117,7 @@ finally:
 
 FAKE_COPILOT = r'''#!/usr/bin/env python3
 import json, os, subprocess, sys, time
+from pathlib import Path
 args = sys.argv[1:]
 def value(flag):
     return args[args.index(flag) + 1] if flag in args else None
@@ -129,9 +132,20 @@ with open(os.environ["FAKE_COPILOT_CALLS"], "a") as stream:
     stream.write(json.dumps(record) + "\n")
 if "[STDERR]" in prompt:
     print("visible permission diagnostic", file=sys.stderr, flush=True)
+if "[STDERR_WAIT]" in prompt:
+    print("approval prompt before completion", file=sys.stderr, flush=True)
+    Path(os.environ["FAKE_STDERR_READY"]).write_text("ready")
+    time.sleep(0.8)
+if "[SILENT]" in prompt:
+    time.sleep(0.35)
 if "[MALFORMED]" in prompt:
     print("not-json")
     raise SystemExit(0)
+if "[OVERSIZED]" in prompt:
+    os.write(sys.stdout.fileno(), b"x" * (1048576 + 4096))
+    print()
+if "[SCALAR]" in prompt:
+    print(json.dumps(["not", "an", "object"]))
 if "[NO_REPORT]" not in prompt:
     outcome = "completed"
     if "[BLOCKED]" in prompt:
@@ -139,24 +153,47 @@ if "[NO_REPORT]" not in prompt:
     elif "[FAIL]" in prompt:
         outcome = "failed"
     summary = "bounded " + outcome
-    report = [
-        os.environ["CMUX_MAESTRO_ORCHESTRATOR"], "report",
-        "--worker-id", os.environ["CMUX_MAESTRO_WORKER_ID"],
-        "--token", os.environ["CMUX_MAESTRO_CONTROL_TOKEN"],
-        "--generation", os.environ["CMUX_MAESTRO_GENERATION"],
-        "--state", outcome, "--summary", summary,
-    ]
-    completed = subprocess.run(report, text=True, capture_output=True)
+    if "[SKILL_REPORT]" in prompt:
+        actual = {
+            key: value for key, value in os.environ.items()
+            if key.startswith("CMUX_MAESTRO_")
+        }
+        actual["PATH"] = "/usr/bin:/bin"
+        completed = subprocess.run(
+            ["/bin/sh", "-c", os.environ["FAKE_SKILL_REPORT_COMMAND"]],
+            env=actual, text=True, capture_output=True,
+        )
+    else:
+        report = [
+            os.environ["CMUX_MAESTRO_ORCHESTRATOR"], "report",
+            "--worker-id", os.environ["CMUX_MAESTRO_WORKER_ID"],
+            "--token", os.environ["CMUX_MAESTRO_CONTROL_TOKEN"],
+            "--generation", os.environ["CMUX_MAESTRO_GENERATION"],
+            "--state", outcome, "--summary", summary,
+        ]
+        completed = subprocess.run(report, text=True, capture_output=True)
     if completed.returncode:
         print(json.dumps({"type": "assistant.message", "data": {"content": completed.stderr}}))
         raise SystemExit(7)
 time.sleep(0.45 if "[DELAY]" in prompt else 0.08)
 print(json.dumps({"type": "assistant.message", "data": {"content": "worker output"}}))
 final_session = "00000000-0000-4000-8000-000000000099" if "[WRONG_SESSION]" in prompt else session
+timestamp = "2099-01-01T00:00:00Z" if "[FUTURE_RESULT]" in prompt else "2026-01-01T00:00:00Z"
+exit_code = 7 if "[EXIT7]" in prompt else 0
+if "[MISSING_RESULT]" in prompt:
+    raise SystemExit(exit_code)
 print(json.dumps({
-    "type": "result", "timestamp": "2026-01-01T00:00:00Z",
-    "sessionId": final_session, "exitCode": 0, "usage": {},
+    "type": "result", "timestamp": timestamp,
+    "sessionId": final_session,
+    "exitCode": True if "[BOOL_EXIT]" in prompt else exit_code,
+    "usage": {},
 }))
+if "[DUPLICATE_RESULT]" in prompt:
+    print(json.dumps({
+        "type": "result", "timestamp": timestamp,
+        "sessionId": final_session, "exitCode": exit_code, "usage": {},
+    }))
+raise SystemExit(exit_code)
 '''
 
 
@@ -170,6 +207,7 @@ class Harness:
         self.surface = "00000000-0000-4000-8000-000000000003"
         self.cmux_state = self.path / "cmux.json"
         self.copilot_calls = self.path / "copilot-calls.jsonl"
+        self.stderr_ready = self.path / "stderr-ready"
         self.cmux = self.path / "cmux"
         self.copilot = self.path / "copilot"
         self.cmux.write_text(FAKE_CMUX)
@@ -185,12 +223,17 @@ class Harness:
             "CMUX_MAESTRO_TESTING": "1",
             "FAKE_CMUX_STATE": str(self.cmux_state),
             "FAKE_COPILOT_CALLS": str(self.copilot_calls),
+            "FAKE_STDERR_READY": str(self.stderr_ready),
             "TEST_WORKSPACE": self.workspace,
             "TEST_PANE": self.pane,
             "TEST_ROOT_SURFACE": self.surface,
             "CMUX_WORKSPACE_ID": self.workspace,
             "CMUX_SURFACE_ID": self.surface,
         })
+        skill = (REPO / ".agents/skills/cmux-maestro-orchestrate/SKILL.md").read_text()
+        reporting = skill.split("## Worker reporting", 1)[1]
+        self.skill_report_command = reporting.split("```sh", 1)[1].split("```", 1)[0].strip()
+        self.env["FAKE_SKILL_REPORT_COMMAND"] = self.skill_report_command
         self.registration = self.run(
             "register", "--workspace", self.workspace, "--surface", self.surface,
             "--name", "Coordinator",
@@ -218,6 +261,25 @@ class Harness:
         result["returncode"] = completed.returncode
         result["stderr"] = completed.stderr
         return result
+
+    def start(self, *args, env=None):
+        return subprocess.Popen(
+            [sys.executable, str(CONTROLLER), *args],
+            env=env or self.env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+
+    def finish(self, process, *, timeout=15, check=True):
+        stdout, stderr = process.communicate(timeout=timeout)
+        if check and process.returncode:
+            raise AssertionError(
+                f"controller failed {process.returncode}\nstdout={stdout}\nstderr={stderr}"
+            )
+        return {
+            **(json.loads(stdout) if stdout.strip() else {}),
+            "returncode": process.returncode,
+            "stderr": stderr,
+        }
 
     @property
     def node(self):
@@ -306,6 +368,100 @@ class OrchestratorTests(unittest.TestCase):
         log = self.h.path / f"runtime-{worker['surfaceId']}.log"
         self.assertIn("visible permission diagnostic", log.read_text())
 
+    def test_archive_refuses_external_create_attach_gap_and_tracks_surface(self):
+        barrier = self.h.path / "attach-barrier"
+        env = self.h.env.copy()
+        env["CMUX_MAESTRO_TEST_ATTACH_BARRIER"] = str(barrier)
+        process = self.h.start(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Barrier worker", "--cwd", str(REPO), "--task", "bounded",
+            env=env,
+        )
+        deadline = time.monotonic() + 5
+        ready = barrier.with_suffix(".ready")
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(ready.exists())
+        created = set(self.h.cmux_data()["surfaces"]) - {self.h.surface}
+        self.assertEqual(len(created), 1)
+        launch = next(iter(self.h.state()["launches"].values()))
+        self.assertEqual(launch["surfaceId"], next(iter(created)))
+        refused = self.h.run(
+            "archive", "--actor-id", self.h.node, "--token", self.h.token,
+            check=False,
+        )
+        self.assertEqual(refused["returncode"], 2)
+        self.assertIn("worker launch is in progress", refused["stderr"])
+        barrier.with_suffix(".release").write_text("release")
+        worker = self.h.finish(process)
+        self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
+        archived = self.h.run(
+            "archive", "--actor-id", self.h.node, "--token", self.h.token,
+            timeout=12,
+        )
+        self.assertTrue(archived["archived"])
+        state = self.h.state()
+        self.assertEqual(state["launches"], {})
+        self.assertEqual(
+            {item["surfaceId"] for item in state["retainedResources"]}, created
+        )
+
+        self.h.registration = self.h.run(
+            "register", "--workspace", self.h.workspace, "--surface", self.h.surface,
+            "--name", "Replacement coordinator",
+        )
+        for index in range(7):
+            added = self.h.spawn(label=f"Capacity {index}")
+            self.h.wait_node(added["workerId"], lambda node: node["availability"] == "idle")
+        surfaces_before = set(self.h.cmux_data()["surfaces"])
+        ninth = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Over capacity", "--cwd", str(REPO), "--task", "bounded",
+            check=False,
+        )
+        self.assertEqual(ninth["returncode"], 2)
+        self.assertEqual(set(self.h.cmux_data()["surfaces"]), surfaces_before)
+
+    def test_archive_winning_before_spawn_creates_no_surface(self):
+        self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token)
+        surfaces_before = set(self.h.cmux_data()["surfaces"])
+        rejected = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Too late", "--cwd", str(REPO), "--task", "bounded",
+            check=False,
+        )
+        self.assertEqual(rejected["returncode"], 2)
+        self.assertEqual(set(self.h.cmux_data()["surfaces"]), surfaces_before)
+
+    def test_failed_attachment_retains_exact_created_surface_in_capacity(self):
+        env = self.h.env.copy()
+        env["CMUX_MAESTRO_TEST_ATTACH_FAILURE"] = "1"
+        failed = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Attachment failure", "--cwd", str(REPO), "--task", "bounded",
+            check=False, env=env,
+        )
+        self.assertEqual(failed["returncode"], 2)
+        state = self.h.state()
+        failed_node = next(
+            node for node in state["nodes"].values()
+            if node["role"] == "worker"
+        )
+        self.assertEqual(failed_node["phase"], "launch-failed")
+        self.assertIn(failed_node["surfaceId"], self.h.cmux_data()["surfaces"])
+        self.assertEqual(state["launches"], {})
+        for index in range(7):
+            worker = self.h.spawn(label=f"Capacity {index}")
+            self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
+        surfaces_before = set(self.h.cmux_data()["surfaces"])
+        rejected = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Ninth", "--cwd", str(REPO), "--task", "bounded",
+            check=False,
+        )
+        self.assertEqual(rejected["returncode"], 2)
+        self.assertEqual(set(self.h.cmux_data()["surfaces"]), surfaces_before)
+
     def test_follow_up_waits_for_verified_boundary_and_uses_exact_resume(self):
         worker = self.h.spawn("[DELAY]")
         pending = self.h.wait_node(worker["workerId"], lambda node: node["pendingReport"] is not None)
@@ -340,6 +496,107 @@ class OrchestratorTests(unittest.TestCase):
         failed = self.h.wait_node(malformed["workerId"], lambda node: node["phase"] == "turn-failed")
         self.assertEqual(failed["availability"], "idle")
         self.assertIn("valid exact-session", failed["result"])
+
+    def test_nonzero_exact_session_never_finalizes_pending_report(self):
+        for task in ("[EXIT7]", "[BLOCKED] [EXIT7]", "[FAIL] [EXIT7]"):
+            with self.subTest(task=task):
+                worker = self.h.spawn(task, label=f"Exit {task}")
+                failed = self.h.wait_node(
+                    worker["workerId"], lambda node: node["phase"] == "turn-failed"
+                )
+                self.assertEqual(failed["availability"], "idle")
+                self.assertIn("exited with status 7", failed["result"])
+                rejected = self.h.run(
+                    "follow-up", "--actor-id", self.h.node, "--token", self.h.token,
+                    "--worker-id", worker["workerId"], "--task", "must reject",
+                    check=False,
+                )
+                self.assertEqual(rejected["returncode"], 2)
+
+    def test_bounded_stream_protocol_rejects_invalid_frames_and_results(self):
+        cases = [
+            "[NO_REPORT] [OVERSIZED]", "[NO_REPORT] [SCALAR]",
+            "[NO_REPORT] [MISSING_RESULT]", "[NO_REPORT] [FUTURE_RESULT]",
+            "[NO_REPORT] [DUPLICATE_RESULT]", "[NO_REPORT] [BOOL_EXIT]",
+        ]
+        for index, task in enumerate(cases):
+            with self.subTest(task=task):
+                worker = self.h.spawn(task, label=f"Protocol {index}")
+                failed = self.h.wait_node(
+                    worker["workerId"], lambda node: node["phase"] == "turn-failed"
+                )
+                self.assertIn("valid exact-session", failed["result"])
+
+    def test_silent_turn_heartbeats_and_short_stderr_is_visible_before_exit(self):
+        heartbeat_env = self.h.env.copy()
+        heartbeat_env["CMUX_MAESTRO_HEARTBEAT_SECONDS"] = "0.05"
+        silent = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Silent", "--cwd", str(REPO), "--task", "[SILENT]",
+            env=heartbeat_env,
+        )
+        running = self.h.wait_node(
+            silent["workerId"],
+            lambda node: node["phase"] == "turn-running" and node["pendingReport"] is None,
+        )
+        initial_update = running["updatedAt"]
+        heartbeat = self.h.wait_node(
+            silent["workerId"],
+            lambda node: (
+                node["phase"] == "turn-running"
+                and node["pendingReport"] is None
+                and node["updatedAt"] != initial_update
+            ),
+        )
+        self.assertNotEqual(heartbeat["updatedAt"], initial_update)
+
+        prompt = self.h.spawn("[STDERR_WAIT]", label="Approval")
+        deadline = time.monotonic() + 3
+        log = self.h.path / f"runtime-{prompt['surfaceId']}.log"
+        while (
+            (not self.h.stderr_ready.exists() or not log.exists()
+             or "approval prompt before completion" not in log.read_text())
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+        self.assertTrue(self.h.stderr_ready.exists())
+        self.assertIn("approval prompt before completion", log.read_text())
+        self.assertEqual(self.h.state()["nodes"][prompt["workerId"]]["phase"], "turn-running")
+
+    def test_installed_skill_report_uses_only_injected_environment(self):
+        skill = (REPO / ".agents/skills/cmux-maestro-orchestrate/SKILL.md").read_text()
+        self.assertNotIn("CURRENT_GENERATION", skill)
+        self.assertIn('"$CMUX_MAESTRO_GENERATION"', self.h.skill_report_command)
+        worker = self.h.spawn("[SKILL_REPORT]", label="Skill contract")
+        completed = self.h.wait_node(
+            worker["workerId"], lambda node: node["phase"] == "reported-completed"
+        )
+        self.assertEqual(completed["result"], "Brief factual result")
+
+    def test_python_projection_and_typed_swift_phase_vocabulary_match(self):
+        module = ast.parse(CONTROLLER.read_text())
+        assignment = next(
+            item for item in module.body
+            if isinstance(item, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "PROJECTED_PHASES"
+                for target in item.targets
+            )
+        )
+        projected = ast.literal_eval(assignment.value)
+        swift = (
+            REPO / "CMUXMaestroSidebar/Orchestration/SidebarOrchestration.swift"
+        ).read_text()
+        phase_block = swift.split(
+            "enum SidebarOrchestrationPhase", 1
+        )[1].split("\n}", 1)[0]
+        typed = {
+            raw or name
+            for name, raw in re.findall(
+                r'case\s+(\w+)(?:\s*=\s*"([^"]+)")?', phase_block
+            )
+        }
+        self.assertEqual(projected, typed)
 
     def test_completed_live_resources_reject_ninth_until_exact_resource_retired(self):
         workers = []

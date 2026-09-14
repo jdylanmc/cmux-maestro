@@ -2,6 +2,7 @@
 """Bounded CMUX terminal-backed Copilot orchestration."""
 
 import argparse
+import codecs
 import datetime
 import fcntl
 import hashlib
@@ -9,12 +10,12 @@ import json
 import os
 from pathlib import Path
 import secrets
+import selectors
 import signal
 import shlex
 import stat
 import subprocess
 import sys
-import threading
 import time
 import uuid
 
@@ -110,6 +111,21 @@ def timeout(name, production):
     return production
 
 
+def test_barrier(name):
+    path = os.environ.get(name)
+    if path is None:
+        return
+    if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
+        raise OrchestrationError(f"{name} is test-only.")
+    marker = Path(path)
+    marker.with_suffix(".ready").write_text("ready")
+    deadline = time.monotonic() + 10
+    while not marker.with_suffix(".release").exists():
+        if time.monotonic() >= deadline:
+            raise OrchestrationError(f"{name} timed out.")
+        time.sleep(0.01)
+
+
 def shutil_which(name):
     for directory in os.environ.get("PATH", "/usr/bin:/bin").split(os.pathsep):
         candidate = Path(directory) / name
@@ -146,6 +162,7 @@ def empty_state():
         "nodes": {},
         "archives": [],
         "retainedResources": [],
+        "launches": {},
     }
 
 
@@ -154,7 +171,11 @@ def validate_state(state):
         raise OrchestrationError("Control state version is unsupported.")
     state.setdefault("archives", [])
     state.setdefault("retainedResources", [])
+    state.setdefault("launches", {})
     nodes = state["nodes"]
+    launches = state["launches"]
+    if not isinstance(launches, dict) or len(launches) > MAX_NODES:
+        raise OrchestrationError("Launch transactions exceed their safe limit.")
     if len(nodes) > MAX_NODES or len(state["archives"]) > MAX_ARCHIVES:
         raise OrchestrationError("Control state exceeds its retention limit.")
     if len(state["retainedResources"]) > MAX_NODES:
@@ -234,6 +255,30 @@ def validate_state(state):
         if identifier in retained_ids or identifier in surfaces:
             raise OrchestrationError("Retained resource ownership is duplicated.")
         retained_ids.add(identifier)
+    for identifier, launch in launches.items():
+        if canonical_uuid(identifier, "launch worker ID") != launch.get("workerId"):
+            raise OrchestrationError("Launch transaction identity is invalid.")
+        node = nodes.get(identifier)
+        if (
+            node is None or node["role"] != "worker" or node["phase"] != "launching"
+            or launch.get("runId") != node["runId"]
+            or launch.get("workspaceId") != node["workspaceId"]
+            or launch.get("state") not in {"creating", "attaching", "starting"}
+        ):
+            raise OrchestrationError("Launch transaction ownership is invalid.")
+        parse_date(launch.get("createdAt"), "launch creation time")
+        updated = parse_date(launch.get("updatedAt"), "launch update time")
+        if updated > now_date() + datetime.timedelta(minutes=5):
+            raise OrchestrationError("Launch transaction timestamp is invalid.")
+        surface = launch.get("surfaceId")
+        if surface is not None:
+            canonical_uuid(surface, "launch surface ID")
+            owner = next(
+                (item["id"] for item in nodes.values() if item.get("surfaceId") == surface),
+                None,
+            )
+            if (owner is not None and owner != identifier) or surface in retained_ids:
+                raise OrchestrationError("Launch surface ownership is duplicated.")
 
 
 class Store:
@@ -696,6 +741,35 @@ def resource_observations(state, cmux, workspace):
     return active, retained_gone
 
 
+def record_launch_failure(state, worker_id, surface=None):
+    launch = state["launches"].pop(worker_id, None)
+    node = state["nodes"].get(worker_id)
+    if surface is not None:
+        owner = next(
+            (
+                item for item in state["nodes"].values()
+                if item.get("surfaceId") == surface
+            ),
+            None,
+        )
+        retained = any(
+            item["surfaceId"] == surface for item in state["retainedResources"]
+        )
+        if node is not None and (owner is None or owner["id"] == worker_id) and not retained:
+            node["surfaceId"] = surface
+        elif owner is None and not retained and launch is not None:
+            state["retainedResources"].append({
+                "runId": launch["runId"],
+                "workspaceId": launch["workspaceId"],
+                "surfaceId": surface,
+                "archivedAt": now(),
+            })
+    if node is not None and node["phase"] == "launching":
+        node["phase"], node["availability"], node["updatedAt"] = (
+            "launch-failed", "unavailable", now()
+        )
+
+
 def command_spawn(args, root, cmux):
     task = bounded_text(args.task, "task", MAX_TASK)
     label = sanitize_label(bounded_text(args.name, "name", MAX_LABEL))
@@ -762,19 +836,49 @@ def command_spawn(args, root, cmux):
             "task": task, "result": None, "pendingReport": None, "supervisor": None,
             "archiving": False, "hasStartedSession": False,
         }
+        state["launches"][identifier] = {
+            "workerId": identifier, "runId": current["runId"],
+            "workspaceId": current["workspaceId"], "surfaceId": None,
+            "state": "creating", "createdAt": timestamp, "updatedAt": timestamp,
+        }
         current["lastControlAt"] = timestamp
     mutate(root, reserve)
+    surface = None
     try:
         surface = cmux.create_surface(actor["workspaceId"], pane, str(cwd))
+
+        def created(state):
+            launch = state["launches"].get(identifier)
+            node = state["nodes"].get(identifier)
+            if (
+                not launch or not node or launch["state"] != "creating"
+                or node["phase"] != "launching"
+            ):
+                raise OrchestrationError("Launch creation lease is no longer current.")
+            launch["surfaceId"], launch["state"], launch["updatedAt"] = (
+                surface, "attaching", now()
+            )
+        mutate(root, created, wait=1)
+        test_barrier("CMUX_MAESTRO_TEST_ATTACH_BARRIER")
         confirmed_pane = cmux.validate_surface(actor["workspaceId"], surface)
+        if os.environ.get("CMUX_MAESTRO_TEST_ATTACH_FAILURE") == "1":
+            if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
+                raise OrchestrationError("CMUX_MAESTRO_TEST_ATTACH_FAILURE is test-only.")
+            raise OrchestrationError("Injected attachment commit failure.")
 
         def attach(state):
             node = state["nodes"].get(identifier)
-            if not node or node["phase"] != "launching" or node["surfaceId"] is not None:
+            launch = state["launches"].get(identifier)
+            if (
+                not node or not launch or launch["state"] != "attaching"
+                or launch["surfaceId"] != surface or node["phase"] != "launching"
+                or node["surfaceId"] is not None
+            ):
                 raise OrchestrationError("Launch reservation is no longer current.")
             if any(item.get("surfaceId") == surface for item in state["nodes"].values()):
                 raise OrchestrationError("New worker surface already has an owner.")
             node["surfaceId"], node["paneId"], node["updatedAt"] = surface, confirmed_pane, now()
+            launch["state"], launch["updatedAt"] = "starting", now()
         mutate(root, attach)
         cmux.rename(actor["workspaceId"], surface, label)
         bootstrap = " ".join([
@@ -784,11 +888,7 @@ def command_spawn(args, root, cmux):
         cmux.start(actor["workspaceId"], surface, bootstrap)
     except Exception:
         def failed(state):
-            node = state["nodes"].get(identifier)
-            if node and node["phase"] == "launching":
-                node["phase"], node["availability"], node["updatedAt"] = (
-                    "launch-failed", "unavailable", now()
-                )
+            record_launch_failure(state, identifier, surface)
         mutate(root, failed, wait=1)
         raise
     deadline = time.monotonic() + timeout("CMUX_MAESTRO_STARTUP_SECONDS", STARTUP_SECONDS)
@@ -806,6 +906,7 @@ def command_spawn(args, root, cmux):
     def startup_failed(state):
         node = state["nodes"].get(identifier)
         if node and node["phase"] == "launching":
+            state["launches"].pop(identifier, None)
             node["phase"], node["availability"], node["updatedAt"] = (
                 "startup-failed", "unavailable", now()
             )
@@ -858,57 +959,159 @@ def run_copilot_turn(root, worker_id, token, node):
         "CMUX_MAESTRO_GENERATION": str(node["generation"]),
         "CMUX_MAESTRO_ORCHESTRATOR": str(Path(__file__).resolve()),
     })
+    heartbeat_interval = timeout("CMUX_MAESTRO_HEARTBEAT_SECONDS", HEARTBEAT_SECONDS)
+    if heartbeat_interval <= 0:
+        return "protocol-failed", "Supervisor heartbeat interval is invalid."
     final = None
     malformed = False
-    stderr_chunks = []
-    stderr_size = [0]
+    stdout_buffer = bytearray()
+    discarding_stdout = False
+    stderr_capture = bytearray()
     try:
         process = subprocess.Popen(
             arguments, cwd=node["workingDirectory"], env=environment,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
         )
     except OSError as error:
-        return False, f"Copilot launch failed: {error}"
+        return "protocol-failed", f"Copilot launch failed: {error}"
     assert process.stdout is not None and process.stderr is not None
-    def drain_stderr():
-        for chunk in iter(lambda: process.stderr.read(1024), ""):
-            sys.stderr.write(chunk)
-            sys.stderr.flush()
-            remaining = MAX_RESULT - stderr_size[0]
-            if remaining > 0:
-                kept = chunk[:remaining]
-                stderr_chunks.append(kept)
-                stderr_size[0] += len(kept)
-    stderr_reader = threading.Thread(target=drain_stderr, daemon=True)
-    stderr_reader.start()
-    for line in process.stdout:
-        if len(line.encode("utf-8")) > MAX_BYTES:
-            malformed = True
-            continue
+
+    def parse_event(line):
+        nonlocal final, malformed
         try:
             event = json.loads(line)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             malformed = True
-            continue
+            return
+        if not isinstance(event, dict):
+            malformed = True
+            return
+        if final is not None:
+            malformed = True
+            return
         if event.get("type") == "result":
+            timestamp = event.get("timestamp")
+            try:
+                result_time = parse_date(timestamp, "Copilot result timestamp")
+                if (
+                    result_time.tzinfo is None
+                    or result_time > now_date() + datetime.timedelta(minutes=5)
+                ):
+                    raise OrchestrationError("Copilot result timestamp is invalid.")
+            except OrchestrationError:
+                malformed = True
+                return
             final = event
         text = assistant_text(event)
         if text:
             print(text, flush=True)
+
+    def consume_stdout(chunk, *, eof=False):
+        nonlocal malformed, discarding_stdout
+        remaining = chunk
+        while remaining:
+            if discarding_stdout:
+                newline = remaining.find(b"\n")
+                if newline < 0:
+                    return
+                remaining = remaining[newline + 1:]
+                discarding_stdout = False
+                continue
+            newline = remaining.find(b"\n")
+            if newline < 0:
+                if len(stdout_buffer) + len(remaining) > MAX_BYTES:
+                    malformed = True
+                    stdout_buffer.clear()
+                    discarding_stdout = True
+                else:
+                    stdout_buffer.extend(remaining)
+                return
+            piece = remaining[:newline]
+            remaining = remaining[newline + 1:]
+            if len(stdout_buffer) + len(piece) > MAX_BYTES:
+                malformed = True
+                stdout_buffer.clear()
+                continue
+            stdout_buffer.extend(piece)
+            line = bytes(stdout_buffer)
+            stdout_buffer.clear()
+            if not line:
+                malformed = True
+            else:
+                parse_event(line)
+        if eof and (stdout_buffer or discarding_stdout):
+            malformed = True
+            stdout_buffer.clear()
+            discarding_stdout = False
+
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    next_heartbeat = time.monotonic() + heartbeat_interval
+    try:
+        while selector.get_map():
+            wait = max(0.0, min(0.25, next_heartbeat - time.monotonic()))
+            for key, _ in selector.select(wait):
+                try:
+                    chunk = os.read(key.fileobj.fileno(), 65_536)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    if key.data == "stdout":
+                        consume_stdout(b"", eof=True)
+                    continue
+                if key.data == "stdout":
+                    consume_stdout(chunk)
+                else:
+                    try:
+                        os.write(sys.stderr.fileno(), chunk)
+                    except OSError:
+                        pass
+                    available = MAX_RESULT - len(stderr_capture)
+                    if available > 0:
+                        stderr_capture.extend(chunk[:available])
+            if process.poll() is None and time.monotonic() >= next_heartbeat:
+                generation = node["generation"]
+                supervisor = node.get("supervisor")
+
+                def heartbeat(state):
+                    current = state["nodes"].get(worker_id)
+                    if (
+                        current and current["generation"] == generation
+                        and current["phase"] == "turn-running"
+                        and current.get("supervisor") == supervisor
+                    ):
+                        current["updatedAt"] = now()
+                mutate(root, heartbeat, wait=2)
+                next_heartbeat = time.monotonic() + heartbeat_interval
+    finally:
+        selector.close()
     return_code = process.wait()
-    stderr_reader.join(timeout=2)
-    valid = (
+    exit_code = final.get("exitCode") if isinstance(final, dict) else None
+    valid_protocol = (
         not malformed
         and isinstance(final, dict)
         and final.get("sessionId") == node["copilotSessionId"]
-        and isinstance(final.get("exitCode"), int)
-        and final["exitCode"] == return_code
+        and type(exit_code) is int
+        and exit_code == return_code
     )
-    if not valid:
-        diagnostic = " ".join("".join(stderr_chunks).split())
+    diagnostic = " ".join(
+        codecs.decode(bytes(stderr_capture), "utf-8", errors="replace").split()
+    )
+    suffix = f" Copilot error: {diagnostic[:512]}" if diagnostic else ""
+    if not valid_protocol:
         suffix = f" Copilot error: {diagnostic[:512]}" if diagnostic else ""
-        return False, "Copilot did not produce a valid exact-session turn boundary." + suffix
-    return True, None
+        return (
+            "protocol-failed",
+            "Copilot did not produce a valid exact-session turn boundary." + suffix,
+        )
+    if return_code != 0:
+        return (
+            "nonzero-exit",
+            f"Copilot turn exited with status {return_code}." + suffix,
+        )
+    return "success", None
 
 
 def command_runtime(args, root):
@@ -920,10 +1123,17 @@ def command_runtime(args, root):
 
     def started(state):
         node = authorize(state, worker_id, args.token)
-        if node["role"] != "worker" or node["phase"] != "launching" or not node["surfaceId"]:
+        launch = state["launches"].get(worker_id)
+        if (
+            node["role"] != "worker" or node["phase"] != "launching"
+            or not node["surfaceId"] or not launch
+            or launch["state"] != "starting"
+            or launch["surfaceId"] != node["surfaceId"]
+        ):
             raise OrchestrationError("Worker runtime is not in the launch phase.")
         node["supervisor"] = {"pid": pid, "start": start}
         node["phase"], node["availability"], node["updatedAt"] = "turn-queued", "busy", now()
+        del state["launches"][worker_id]
     mutate(root, started, wait=2)
     def stop_supervisor(_signum, _frame):
         raise SystemExit(143)
@@ -953,19 +1163,24 @@ def command_runtime(args, root):
                     current["pendingReport"], current["updatedAt"] = None, now()
                     return json.loads(json.dumps(current))
                 claimed = mutate(root, claim, wait=2)
-                valid, diagnostic = run_copilot_turn(root, worker_id, args.token, claimed)
+                boundary, diagnostic = run_copilot_turn(
+                    root, worker_id, args.token, claimed
+                )
 
                 def finish(state):
                     current = state["nodes"].get(worker_id)
                     if not current or current["generation"] != generation:
                         return
                     report = current.get("pendingReport")
-                    if valid and report and report.get("generation") == generation:
+                    if (
+                        boundary == "success"
+                        and report and report.get("generation") == generation
+                    ):
                         current["phase"] = REPORT_PHASES[report["state"]]
                         current["result"] = report["summary"]
                         current["availability"] = "idle"
                         current["hasStartedSession"] = True
-                    elif valid:
+                    elif boundary == "success":
                         current["phase"], current["availability"] = "report-missing", "idle"
                         current["hasStartedSession"] = True
                     else:
@@ -1135,6 +1350,13 @@ def command_archive(args, root, cmux):
 
     def begin(state):
         current = authorize(state, args.actor_id, args.token, allow_archiving=True)
+        if any(
+            launch["runId"] == current["runId"]
+            for launch in state["launches"].values()
+        ):
+            raise OrchestrationError(
+                "Run archive is pending because a worker launch is in progress; retry."
+            )
         for node in state["nodes"].values():
             if node["runId"] == current["runId"]:
                 node["archiving"] = True
@@ -1157,7 +1379,11 @@ def command_archive(args, root, cmux):
 
     def finish(state):
         nodes = [node for node in state["nodes"].values() if node["runId"] == run_id]
-        if not nodes or any(node["role"] == "worker" and process_matches(node) for node in nodes):
+        if (
+            not nodes
+            or any(launch["runId"] == run_id for launch in state["launches"].values())
+            or any(node["role"] == "worker" and process_matches(node) for node in nodes)
+        ):
             raise OrchestrationError("Run archive cannot finish while a supervisor is live.")
         state["archives"].append(archive_summary(state, run_id))
         state["archives"] = state["archives"][-MAX_ARCHIVES:]
@@ -1197,6 +1423,11 @@ def command_recover(args, root, cmux):
     run_nodes = [
         node for node in snapshot["nodes"].values() if node["runId"] == previous["runId"]
     ]
+    if any(
+        launch["runId"] == previous["runId"]
+        for launch in snapshot["launches"].values()
+    ):
+        raise OrchestrationError("Stale recovery refuses an in-flight worker launch.")
     for node in run_nodes:
         if node["role"] == "worker" and (
             process_matches(node) or (

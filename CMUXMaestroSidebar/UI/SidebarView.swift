@@ -553,29 +553,18 @@ private struct ManagedNodeRow: View {
     }
 
     private var stateTitle: String {
-        switch node.phase {
-        case "registered": "Registered"
-        case "launching": "Launching"
-        case "process-running": "Working"
-        case "reported-blocked": "Blocked"
-        case "reported-completed": node.availability == "idle" ? "Completed · available" : "Completed"
-        case "reported-failed": node.availability == "idle" ? "Failed · available" : "Failed"
-        case "report-missing": "Report missing"
-        case "process-disappeared": "Process disappeared"
-        case "terminal-disappeared": "Terminal disappeared"
-        case "launch-failed": "Launch failed"
-        case "delivery-failed": "Follow-up not delivered"
-        default: "Unknown state"
-        }
+        SidebarOrchestrationPhase(rawValue: node.phase)?
+            .title(availability: node.availability) ?? "Unknown state"
     }
 
     private var stateColor: Color {
-        switch node.phase {
-        case "reported-completed": .green
-        case "reported-blocked", "report-missing": .orange
-        case "reported-failed", "process-disappeared", "terminal-disappeared",
-             "launch-failed", "delivery-failed": .red
-        default: .secondary
+        switch SidebarOrchestrationPhase(rawValue: node.phase) {
+        case .reportedCompleted: .green
+        case .reportedBlocked, .reportMissing: .orange
+        case .reportedFailed, .turnFailed, .processDisappeared,
+             .terminalDisappeared, .launchFailed, .startupFailed: .red
+        case .registered, .launching, .turnQueued, .turnRunning,
+             .resourceRetired, .none: .secondary
         }
     }
 }

@@ -124,10 +124,16 @@ Each terminal keeps a foreground supervisor that runs bounded noninteractive
 Copilot turns. Follow-up is privately queued only after a directly owned
 worker's structured report and exact process/result boundary both verify, then
 uses that worker's preassigned exact `--resume` session ID.
-Terminal existence and a zero CLI exit are not success: completed, blocked and
-failed states require a generation-matched structured report. Missing reports,
-delivery failure, process disappearance and terminal disappearance remain
-distinct. Eight still-live managed worker resources are allowed per workspace;
+The supervisor multiplexes bounded JSON output and promptly forwards provider
+diagnostics while continuing current-generation heartbeats during silent turns;
+it never answers permission prompts. Terminal existence and a zero CLI exit are
+not success: completed, blocked and failed states require both a successful
+exact-session process boundary and a generation-matched structured report.
+Missing reports, nonzero or malformed turns, startup failure, process
+disappearance and terminal disappearance remain distinct. An explicit launch
+lease prevents archive from crossing CMUX surface creation/attachment, and any
+exact surface created before a later launch failure remains accounted. Eight
+still-live managed worker resources are allowed per workspace;
 reported completion does not free a slot. Archive retains bounded history and
 never kills processes or deletes tabs, so still-present archived worker tabs
 continue to consume the resource bound. Tool permissions are not auto-approved.

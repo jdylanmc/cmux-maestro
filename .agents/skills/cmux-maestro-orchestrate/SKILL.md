@@ -50,6 +50,17 @@ and eight-live-worker workspace limit; a completed report does not release a
 live terminal/supervisor slot. Reuse an idle worker instead of retrying fanout
 failures in a loop.
 
+For an explicitly delegated descendant, use only the injected worker identity:
+
+```sh
+"$CMUX_MAESTRO_ORCHESTRATOR" spawn \
+  --actor-id "$CMUX_MAESTRO_WORKER_ID" \
+  --token "$CMUX_MAESTRO_CONTROL_TOKEN" \
+  --name "Bounded descendant" \
+  --cwd "/absolute/working/directory" \
+  --task "Bounded objective, constraints, validation, and stop condition"
+```
+
 ## Inspect, follow up, and focus
 
 ```sh
@@ -78,7 +89,7 @@ Before becoming idle after every turn, report exactly once:
 
 ```sh
 "$CMUX_MAESTRO_ORCHESTRATOR" report \
-  --generation "$CURRENT_GENERATION" \
+  --generation "$CMUX_MAESTRO_GENERATION" \
   --state completed \
   --summary "Brief factual result"
 ```

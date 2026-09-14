@@ -159,6 +159,31 @@ struct SidebarOrchestrationTests {
         }
     }
 
+    @Test func everyAcceptedPhaseHasAnExplicitVisibleTitle() {
+        let expected: [SidebarOrchestrationPhase: String] = [
+            .registered: "Registered",
+            .launching: "Launching",
+            .turnQueued: "Queued",
+            .turnRunning: "Working",
+            .reportedBlocked: "Blocked",
+            .reportedCompleted: "Completed · available",
+            .reportedFailed: "Failed · available",
+            .reportMissing: "Report missing",
+            .turnFailed: "Turn failed",
+            .processDisappeared: "Process disappeared",
+            .terminalDisappeared: "Terminal disappeared",
+            .launchFailed: "Launch failed",
+            .startupFailed: "Startup failed",
+            .resourceRetired: "Resource retired"
+        ]
+        #expect(Set(expected.keys) == Set(SidebarOrchestrationPhase.allCases))
+        for phase in SidebarOrchestrationPhase.allCases {
+            let title = phase.title(availability: phase == .registered ? "active" : "idle")
+            #expect(title == expected[phase])
+            #expect(title != "Unknown state")
+        }
+    }
+
     private func node(
         id: UUID = UUID(),
         run: UUID,

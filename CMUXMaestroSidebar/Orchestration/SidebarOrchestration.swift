@@ -39,6 +39,44 @@ nonisolated enum SidebarOrchestrationAvailability: Equatable, Sendable {
     case waiting, loading, ready, partial, stale, unavailable, hidden, disconnected
 }
 
+nonisolated enum SidebarOrchestrationPhase: String, CaseIterable, Hashable, Sendable {
+    case registered
+    case launching
+    case turnQueued = "turn-queued"
+    case turnRunning = "turn-running"
+    case reportedBlocked = "reported-blocked"
+    case reportedCompleted = "reported-completed"
+    case reportedFailed = "reported-failed"
+    case reportMissing = "report-missing"
+    case turnFailed = "turn-failed"
+    case processDisappeared = "process-disappeared"
+    case terminalDisappeared = "terminal-disappeared"
+    case launchFailed = "launch-failed"
+    case startupFailed = "startup-failed"
+    case resourceRetired = "resource-retired"
+
+    func title(availability: String) -> String {
+        switch self {
+        case .registered: "Registered"
+        case .launching: "Launching"
+        case .turnQueued: "Queued"
+        case .turnRunning: "Working"
+        case .reportedBlocked: "Blocked"
+        case .reportedCompleted:
+            availability == "idle" ? "Completed · available" : "Completed"
+        case .reportedFailed:
+            availability == "idle" ? "Failed · available" : "Failed"
+        case .reportMissing: "Report missing"
+        case .turnFailed: "Turn failed"
+        case .processDisappeared: "Process disappeared"
+        case .terminalDisappeared: "Terminal disappeared"
+        case .launchFailed: "Launch failed"
+        case .startupFailed: "Startup failed"
+        case .resourceRetired: "Resource retired"
+        }
+    }
+}
+
 nonisolated enum SidebarOrchestrationReader {
     static let maximumBytes = 1_048_576
     static let maximumNodes = 128
@@ -131,16 +169,19 @@ nonisolated enum SidebarOrchestrationReader {
         guard node.role == "worker", node.parentId != nil, node.generation > 0 else {
             return false
         }
-        switch node.phase {
-        case "launching", "turn-queued", "turn-running":
+        guard let phase = SidebarOrchestrationPhase(rawValue: node.phase) else {
+            return false
+        }
+        switch phase {
+        case .launching, .turnQueued, .turnRunning:
             return node.availability == "busy"
-        case "reported-blocked", "reported-completed", "reported-failed",
-             "report-missing", "turn-failed":
+        case .reportedBlocked, .reportedCompleted, .reportedFailed,
+             .reportMissing, .turnFailed:
             return node.availability == "idle"
-        case "process-disappeared", "terminal-disappeared", "launch-failed",
-             "startup-failed", "resource-retired":
+        case .processDisappeared, .terminalDisappeared, .launchFailed,
+             .startupFailed, .resourceRetired:
             return node.availability == "unavailable"
-        default:
+        case .registered:
             return false
         }
     }
