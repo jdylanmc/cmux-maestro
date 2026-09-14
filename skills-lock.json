@@ -1,6 +1,90 @@
 {
   "version": 1,
   "skills": {
+    "automate-this": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/automate-this/SKILL.md",
+      "computedHash": "6e6fa3f7e61d7071317c981e4d3a478c406ef37200cff21bea824bf228dc7442"
+    },
+    "breakdown-tickets": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/breakdown-tickets/SKILL.md",
+      "computedHash": "6e1c5f87b955b723085e505c4425c637e207509d6e9ab6c611718465fda180f8"
+    },
+    "caveman": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/caveman/SKILL.md",
+      "computedHash": "d98d870ca2d96d767ab04ebb628f64fd8e4e877086f042754551cb1af03bb5d0"
+    },
+    "changelog": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/changelog/SKILL.md",
+      "computedHash": "bae7ec69e8d9705d7532a2f12955f807bba9d8d647b1aec1fb4c3137e5e718b9"
+    },
+    "chart-a-course": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/chart-a-course/SKILL.md",
+      "computedHash": "7ce88fbee03c3b78c21c146bd1d7083aebfd16b0bd830f99055105521a6f40db"
+    },
+    "conflicts": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/conflicts/SKILL.md",
+      "computedHash": "a1d28fef2c6368b64f78f7e6d9a11622905d102020c643dc714d2263f79a2f0b"
+    },
+    "discovery": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/discovery/SKILL.md",
+      "computedHash": "9804b451d4cc0bef71c87cf1a8e7a2866f499bf716f770cc952c0325a750f33a"
+    },
+    "doctrine": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/doctrine/SKILL.md",
+      "computedHash": "a0562094296cb86214af65c6154fe31aaf87b48c3e757752fcd6f94296b7df74"
+    },
+    "domain-modeling": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/domain-modeling/SKILL.md",
+      "computedHash": "a850c06dfbde97a6cae52e25ed5e311ba7c6ae15df213c5e5382254ccb2094fd"
+    },
+    "eli5": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/eli5/SKILL.md",
+      "computedHash": "f784a2e57e493d98186edc5d422cc540e661a3de85cfa349151903d41d00f757"
+    },
+    "evolve-architecture": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/evolve-architecture/SKILL.md",
+      "computedHash": "3cdd898a8c1a74073a63f80de8b41e4e90e5ad4a88f23dd1c216b4d61a2290e9"
+    },
+    "handoff": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/handoff/SKILL.md",
+      "computedHash": "414cf655ad3bba0d59e825cf92270e8d0ebf00aee90dbac1caa87d1eae414dae"
+    },
+    "interrogate": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/interrogate/SKILL.md",
+      "computedHash": "5c0ee6cc639d4f3a7e0ce2ad97fe1c7e381a67e376b1468d78a37f37293fb9fd"
+    },
+    "joe-mode": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/joe-mode/SKILL.md",
+      "computedHash": "c0d958517fc6cd108634f063020485fa2648917ce560dc027de7af8f89843fa5"
+    },
     "macos-auto-update": {
       "source": "fayazara/macos-app-skills",
       "sourceType": "github",
@@ -25,11 +109,125 @@
       "skillPath": "settings-ui/SKILL.md",
       "computedHash": "31d1a4f1d86375291fded0015e93f48e725d24ce72573028eb72902d70aad250"
     },
+    "migration": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/migration/SKILL.md",
+      "computedHash": "5278fa96fbbdac21805bc5c571ef94d8e4d5bdcb3a39fe993a4a559fe393a6b4"
+    },
+    "patch": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/patch/SKILL.md",
+      "computedHash": "f9f0d2409f31b0a0f7cdbbee13cc9039093fed36c739695d2cc768e6014f77e5"
+    },
+    "poc": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/poc/SKILL.md",
+      "computedHash": "f8f1827ac89a0497ad5897755c923bb1ce8682b2e53ca115e83b590041e81002"
+    },
+    "refactor": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/refactor/SKILL.md",
+      "computedHash": "27893ba9af36e9ef5d0fefc306de40b6c496bc5acd1ab89533c6ecbe89682e0b"
+    },
+    "research": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/research/SKILL.md",
+      "computedHash": "d9f299feb425d219b240efaf682b7598ab60aa263ad147ee961f6b008e2ecb4b"
+    },
+    "retro": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/retro/SKILL.md",
+      "computedHash": "5fc1d79633076ed4eb890cd3d0744e5d10ce6970d3ad6746a3bc6c78880f9038"
+    },
+    "roast": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/roast/SKILL.md",
+      "computedHash": "90144c1830d63efde8324517ab3de7490ef6617b11380ba36ddae7d8bbc81827"
+    },
+    "scout": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/scout/SKILL.md",
+      "computedHash": "8925084da5511653042971ce3d920ab903cb0b617a25a42cdb7ee57c842f2003"
+    },
+    "setup": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/setup/SKILL.md",
+      "computedHash": "a03657854eabe3080c57b15bb2212b7809bfe00b9ebc10d50988da98e9c2f63e"
+    },
+    "shepherd": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/shepherd/SKILL.md",
+      "computedHash": "f0bcf218e58266f7b4c63e19cdfdd0530a0055acda73d154896eee115c9800d2"
+    },
+    "ship": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/ship/SKILL.md",
+      "computedHash": "b545776c551916df6cecd66fa25ebe977ae98af11d03122217a9af446b821447"
+    },
+    "specify": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/specify/SKILL.md",
+      "computedHash": "c4e32fce06ae5bed76f62886e0f09e47629c2c85981121c6609a92f21e2903ae"
+    },
+    "squadron": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/squadron/SKILL.md",
+      "computedHash": "0338e4362ca2bb8fc3c7c00d9de9de6e178648864d6c9f6b0afd0b3002c5f5d1"
+    },
+    "status-report": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/status-report/SKILL.md",
+      "computedHash": "951dbd99f7661232d464d35a2a29e3603c9353bfdb9703a1d64fcfad1a6e8b1e"
+    },
     "swiftui-expert-skill": {
       "source": "avdlee/swiftui-agent-skill",
       "sourceType": "github",
       "skillPath": "skills/swiftui-expert-skill/SKILL.md",
       "computedHash": "352119e45436aa70d5a0d29e275dc55769ab509c2098505b391c2e1347c1118a"
+    },
+    "synthesize": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/synthesize/SKILL.md",
+      "computedHash": "67eb19958c25608d062d70c3c81bd2b8b15c13fa090ed2a1d475066ed744a5f0"
+    },
+    "tdd": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/tdd/SKILL.md",
+      "computedHash": "4c9869c5f9d8372af3ddb9b69eb989a18d264b30f5a666a2e6658c2b4bacc470"
+    },
+    "triage": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/triage/SKILL.md",
+      "computedHash": "fda82a58578b00661af488df27757637061567c37290633b825f5a53a97c1ffb"
+    },
+    "verify": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/verify/SKILL.md",
+      "computedHash": "39b60ae479a3f8c531b94912e714cea82338d8c89e1528cbe271a2e5101c777d"
+    },
+    "wait-what": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/wait-what/SKILL.md",
+      "computedHash": "9d4616479556e1e7f371d7c1731b1f1c8ae660a04ae4807371d48ad2b41db9b1"
     }
   }
 }
