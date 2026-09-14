@@ -67,6 +67,8 @@ private struct CollapsedBranchSummary: View {
 }
 
 struct SidebarView: View {
+    // CMUX overlays 50 points of bottom chrome; the current SDK forwards no inset.
+    private static let hostFooterClearance: CGFloat = 50
     let model: SidebarConnectionModel
     @Bindable private var preferences: SidebarPreferences
     @State private var showingHistory = false
@@ -135,7 +137,9 @@ struct SidebarView: View {
             }
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: preferences.layout.density.spacing(9)) {
+                // Workspace rows already contain whole subtrees. Avoid lazy root
+                // placement cycling during remote accessibility scrolling.
+                VStack(alignment: .leading, spacing: preferences.layout.density.spacing(9)) {
                     switch preferences.selectedMode {
                     case .hierarchy:
                         HierarchyContent(
@@ -166,8 +170,10 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
             }
             connectionStatus
+                .accessibilityIdentifier("sidebar-connection-status")
         }
         .padding(preferences.layout.density.spacing(10))
+        .padding(.bottom, Self.hostFooterClearance)
         .environment(\.sidebarDensity, preferences.layout.density)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {

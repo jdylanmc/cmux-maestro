@@ -415,18 +415,27 @@ struct SidebarCopilotTreeTests {
     func unreadHistoryContinuesSeriallyWithoutNormalPollingDelay() async {
         let harness = SidebarReadHarness()
         let cadence = SidebarCadenceHarness()
+        let now = Date(timeIntervalSince1970: 2_000)
         let poller = SidebarCopilotPolling(
             read: { try await harness.read($0) },
             hasPendingHistory: { await harness.hasPendingHistory },
             pause: { try await cadence.idle() },
-            catchUpPause: { try await cadence.catchUp() }
+            catchUpPause: { try await cadence.catchUp() },
+            expiryPause: { _ in
+                // Cadence owns a frozen clock; unrelated test scheduling cannot expire its snapshots.
+                let (ticks, continuation) = AsyncStream<Void>.makeStream()
+                defer { continuation.finish() }
+                for await _ in ticks {}
+                try Task.checkCancellation()
+            },
+            now: { now }
         )
         poller.update(topology: fixtures.topology(), connected: true)
         poller.setVisible(true)
         for index in 0..<3 {
             await sidebarEventually { await harness.callCount == index + 1 }
             await harness.succeed(index, with: fixtures.snapshot(
-                sessions: [], issues: [.loadingHistory, .readLimitReached], complete: false
+                sessions: [], issues: [.loadingHistory, .readLimitReached], complete: false, now: now
             ), pendingHistory: true)
         }
         await sidebarEventually { await harness.callCount == 4 }
@@ -436,8 +445,8 @@ struct SidebarCopilotTreeTests {
         #expect(!poller.tree.hasCompleteCounts)
         #expect(poller.tree.summary.contains("Loading"))
         await harness.succeed(3, with: fixtures.snapshot(sessions: [
-            fixtures.session(children: [fixtures.child("tail-child", state: .working)]),
-        ]))
+            fixtures.session(children: [fixtures.child("tail-child", state: .working)], now: now),
+        ], now: now))
         await sidebarEventually { await cadence.idleCalls == 1 }
         #expect(poller.tree.availability == .ready)
         #expect(poller.tree.knownRunningChildren == 1)
