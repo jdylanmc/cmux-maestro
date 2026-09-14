@@ -78,12 +78,19 @@ unrelated tasks:
 
 | Skill | Useful context |
 | --- | --- |
+| `swiftui-design-skill` | Reviewing visual hierarchy, information density, progressive disclosure, and design direction. |
+| `swiftui-design-principles` | Applying restrained native styling, consistent spacing, typography, and semantic colors. |
 | `swiftui-expert-skill` | Writing, reviewing, or refactoring SwiftUI code, state flow, view composition, accessibility, animation, or performance. |
 | `macos-patterns` | Using native macOS APIs or reasoning about windows, focus, activation, menus, shortcuts, file access, clipboard, drag and drop, or other platform behavior. |
 | `macos-settings-ui` | Adding or changing settings and preferences UI. |
 | `macos-auto-update` | Adding or changing automatic updates, Sparkle, appcasts, or update signing, but only when an issue explicitly authorizes that scope. |
 | `macos-release` | Packaging, signing, notarizing, publishing, or updating an appcast, but only when an issue explicitly authorizes release scope. |
 | `macos-build` | Building, testing, registering, or validating the app or extension. |
+
+Apply design guidance in the context of the macOS 14 ExtensionKit sidebar.
+Mobile-only APIs, touch-target sizes, large headings, and layout examples do
+not override the deployment target, accessibility needs, or established
+runtime safeguards.
 
 When delegating implementation or review, keep the worker's current directory
 inside this repository so it can discover project-local skills. Task packets
