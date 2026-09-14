@@ -9,5 +9,17 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: ./scripts/build-unsigned.sh
-      - run: ./scripts/test.sh
+      - name: Verify build and registration metadata contracts
+        run: python3 scripts/test-build-metadata.py
+      - name: Verify SDK fetch concurrency and cleanup
+        run: ./scripts/test-fetch-sdk-concurrency.sh
+      - name: Build isolated validation targets
+        run: ./scripts/build-unsigned.sh
+      - name: Run integrated Swift tests
+        run: ./scripts/test.sh
+      - name: Verify setup process isolation
+        run: ./scripts/test-copilot-setup.sh
+      - name: Verify compiled hooks fail open
+        run: ./scripts/test-copilot-hook.sh
+      - name: Verify shared file traversal under narrow sandbox grants
+        run: ./scripts/test-copilot-sandbox.sh
