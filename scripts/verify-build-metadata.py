@@ -56,6 +56,9 @@ def verify_settings(rows, mode):
         settings = targets[name]
         require(settings.get("PRODUCT_BUNDLE_IDENTIFIER") == BASE_ID + suffix + ending,
                 "Resolved target bundle identifier is outside its build namespace.")
+        if name == "CMUXMaestroCopilotHook":
+            require(settings.get("OTHER_CODE_SIGN_FLAGS") == "--identifier " + BASE_ID + suffix + ending,
+                    "Identity helper signing must override its linker-generated identifier.")
         if name in ("CMUXMaestroPreview", "CMUXMaestroSidebar"):
             require(settings.get("CMUX_SIDEBAR_EXTENSION_POINT_ID") == point,
                     "Resolved extension point is outside its build namespace.")
@@ -78,7 +81,7 @@ def verify_settings(rows, mode):
             require(settings.get("CODE_SIGNING_ALLOWED") == "NO", "Validation unexpectedly enables signing.")
 
 
-def verify_metadata(app, mode):
+def verify_metadata(app, mode, *, expected_build=APP_BUILD_VERSION):
     suffix, point = PROFILES[mode]
     app = Path(app)
     extension = app / "Contents/Extensions/CMUX Maestro Preview Extension.appex"
@@ -92,10 +95,75 @@ def verify_metadata(app, mode):
             "Sidebar extension point does not match its build namespace.")
     require(parent.get("CFBundlePackageType") == "APPL", "Containing product is not an application.")
     require(child.get("CFBundlePackageType") == "XPC!", "Sidebar product is not an extension.")
-    require(parent.get("CFBundleVersion") == APP_BUILD_VERSION
-            and child.get("CFBundleVersion") == APP_BUILD_VERSION,
-            "App or sidebar native feature build version is stale.")
+    version = parent.get("CFBundleVersion", "")
+    require(isinstance(version, str) and re.fullmatch(r"[1-9][0-9]*(?:\.[0-9]+){0,2}", version)
+            and child.get("CFBundleVersion") == version,
+            "App and sidebar must have the same valid build version.")
+    if expected_build is not None:
+        require(version == expected_build, "App or sidebar native feature build version is stale.")
     return extension, child
+
+
+def verify_ad_hoc_identity(target, identifier, runner):
+    signed = runner(["/usr/bin/codesign", "-d", "--verbose=4", str(target)],
+                    check=True, capture_output=True)
+    details = signed.stderr.decode("utf-8", errors="strict")
+    require(re.findall(r"^Identifier=(.+)$", details, re.MULTILINE) == [identifier],
+            "Signed component identity differs from the production identity.")
+    require(re.findall(r"^Signature=(.+)$", details, re.MULTILINE) == ["adhoc"],
+            "Local preview requires the existing ad-hoc signing policy.")
+
+
+def verify_local_preview(app, *, current=True, runner=subprocess.run):
+    """Local receipts may restore an older, no-more-privileged signed preview.
+
+    The publication CLI and verify_signed retain their current-build guards.
+    This separate API is used only with an owned install/rollback receipt.
+    """
+    extension, child = verify_metadata(
+        app, "production", expected_build=APP_BUILD_VERSION if current else None
+    )
+    app = Path(app)
+    helper = app / "Contents/Helpers/CMUXMaestroCopilotHook"
+    require(helper.is_file() and os.access(helper, os.X_OK), "Bundled identity helper is missing or not executable.")
+    for bundle, info in ((app, plist(app / "Contents/Info.plist")), (extension, child)):
+        executable = info.get("CFBundleExecutable", "")
+        require(isinstance(executable, str) and executable and "/" not in executable
+                and executable not in (".", ".."), "Invalid bundle executable.")
+        binary = bundle / "Contents/MacOS" / executable
+        require(binary.is_file() and os.access(binary, os.X_OK), "Bundle executable is missing or not executable.")
+    for target, identifier in (
+        (app, BASE_ID), (extension, BASE_ID + ".Extension"), (helper, BASE_ID + ".CopilotHook")
+    ):
+        runner(["/usr/bin/codesign", "--verify", "--strict", "--deep", str(target)],
+               check=True, capture_output=True)
+        verify_ad_hoc_identity(target, identifier, runner)
+        result = runner(["/usr/bin/codesign", "-d", "--entitlements", ":-", str(target)],
+                        check=True, capture_output=True)
+        profile = plistlib.loads(result.stdout) if result.stdout.strip() else {}
+        require(isinstance(profile, dict), "Invalid effective entitlements.")
+        require("com.apple.security.get-task-allow" not in profile
+                or type(profile["com.apple.security.get-task-allow"]) is bool,
+                "Invalid debugging entitlement.")
+        if target == extension:
+            if current:
+                verify_profile(profile)
+            else:
+                require(profile.get(SANDBOX_KEY) is True, "Rollback sidebar must remain sandboxed.")
+                paths = profile.get(READ_KEY, [])
+                require(isinstance(paths, list) and all(isinstance(path, str) for path in paths)
+                        and set(paths) <= set(READ_PATHS), "Rollback expands approved read-only access.")
+                require(set(profile) <= {SANDBOX_KEY, READ_KEY, "com.apple.security.get-task-allow"},
+                        "Unknown rollback sidebar entitlement.")
+        else:
+            allowed = {"com.apple.security.get-task-allow"}
+            if target == helper and "com.apple.application-identifier" in profile:
+                require(profile["com.apple.application-identifier"] == identifier,
+                        "Helper application-identifier entitlement does not match its signing identity.")
+                allowed.add("com.apple.application-identifier")
+            require(set(profile) <= allowed,
+                    "Installer/helper entitlements differ from the approved unsandboxed profile.")
+    return plist(app / "Contents/Info.plist")["CFBundleVersion"]
 
 
 def verify_signed(app):
@@ -106,6 +174,7 @@ def verify_signed(app):
                    check=True, capture_output=True)
     subprocess.run(["/usr/bin/codesign", "--verify", "--strict", str(helper)],
                    check=True, capture_output=True)
+    verify_ad_hoc_identity(helper, BASE_ID + ".CopilotHook", subprocess.run)
     executable = extension / "Contents/MacOS" / child["CFBundleExecutable"]
     for target in (extension, executable):
         result = subprocess.run(["/usr/bin/codesign", "-d", "--entitlements", ":-", str(target)],
@@ -117,9 +186,10 @@ def verify_signed(app):
             "The installer unexpectedly has App Sandbox enabled.")
 
 
-def verify_registration_output(output, expected_extension):
-    """Accept a supported verbose listing containing the exact ID/path pair."""
-    expected = Path(expected_extension).resolve()
+def registration_records(output, *, allow_empty=False):
+    """Parse only the supported pluginkit listing; diagnostics are not success."""
+    if allow_empty and output.strip() in ("(no matches)", "(0 plug-ins)"):
+        return []
     records = []
     count = None
     fields = {"Path", "UUID", "Timestamp", "SDK", "Parent Bundle",
@@ -133,7 +203,7 @@ def verify_registration_output(output, expected_extension):
         if summary:
             count = int(summary.group(1))
             continue
-        header = re.fullmatch(r"[+\-!]?\s*([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+)(?:\([^\r\n]*\))?", line)
+        header = re.fullmatch(r"[+\-!=?]?\s*([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+)(?:\([^\r\n]*\))?", line)
         if header:
             records.append({"id": header.group(1)})
             continue
@@ -145,9 +215,16 @@ def verify_registration_output(output, expected_extension):
     require(count is not None and count == len(records) and records, "Missing registration entries.")
     require(all("Path" in record and Path(record["Path"]).is_absolute() for record in records),
             "Registration entry has no absolute path.")
-    require(any(record["id"] == BASE_ID + ".Extension"
-                and Path(record["Path"]).resolve() == expected for record in records),
-            "Expected production ID/path registration is missing.")
+    return records
+
+
+def verify_registration_output(output, expected_extension, *, absent=False):
+    """Require (or explicitly exclude) the exact production ID/canonical path."""
+    expected = Path(expected_extension).resolve()
+    records = registration_records(output, allow_empty=absent)
+    found = any(record["id"] == BASE_ID + ".Extension"
+                and Path(record["Path"]).resolve() == expected for record in records)
+    require(found != absent, "Production ID/path registration does not match the requested state.")
 
 
 def verify_registered_extension(extension):

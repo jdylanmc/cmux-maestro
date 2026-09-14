@@ -356,9 +356,9 @@ nonisolated struct CopilotSetup {
             switch action {
             case .install:
                 let plugin = try files.preparePlugin(root: root, helper: helper)
-                arguments = ["plugin", "install", plugin.path]
+                arguments = ["--no-auto-update", "plugin", "install", plugin.path]
             case .uninstall:
-                arguments = ["plugin", "uninstall", CopilotPluginManifest.name]
+                arguments = ["--no-auto-update", "plugin", "uninstall", CopilotPluginManifest.name]
             }
             switch await runner.run(executable: executable, arguments: arguments, path: path) {
             case .exited(0): return action == .install ? .installed : .uninstalled

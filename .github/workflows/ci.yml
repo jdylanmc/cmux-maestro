@@ -11,6 +11,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify build and registration metadata contracts
         run: python3 scripts/test-build-metadata.py
+      - name: Verify local preview transactions and recovery
+        run: python3 scripts/test-local-preview.py
       - name: Verify SDK fetch concurrency and cleanup
         run: ./scripts/test-fetch-sdk-concurrency.sh
       - name: Build isolated validation targets

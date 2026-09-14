@@ -97,14 +97,22 @@ class BuildMetadataTests(unittest.TestCase):
         good = {metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS}
 
         def signed(command, **_):
+            if "--verbose=4" in command:
+                return subprocess.CompletedProcess(command, 0, stdout=b"",
+                                                   stderr=f"Identifier={metadata.BASE_ID}.CopilotHook\nSignature=adhoc\n".encode())
             profile = {} if command[-1] == str(self.app) else good
             return subprocess.CompletedProcess(command, 0, stdout=plistlib.dumps(profile))
 
         with patch.object(metadata.subprocess, "run", side_effect=signed) as runner:
             metadata.verify_signed(self.app)
-            self.assertEqual(runner.call_count, 5)
+            self.assertEqual(runner.call_count, 6)
             self.assertIn("--strict", runner.call_args_list[0].args[0])
-        with patch.object(metadata.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=plistlib.dumps({}))):
+        def empty_profile(command, **kwargs):
+            if "--verbose=4" in command:
+                return signed(command, **kwargs)
+            return subprocess.CompletedProcess(command, 0, stdout=plistlib.dumps({}), stderr=b"")
+
+        with patch.object(metadata.subprocess, "run", side_effect=empty_profile):
             with self.assertRaises(ValueError):
                 metadata.verify_signed(self.app)
 
@@ -122,9 +130,15 @@ class BuildMetadataTests(unittest.TestCase):
                     "CODE_SIGNING_ALLOWED": "YES" if mode == "production" else "NO",
                     "CODE_SIGN_IDENTITY": "-",
                     "CURRENT_PROJECT_VERSION": metadata.APP_BUILD_VERSION,
+                    "OTHER_CODE_SIGN_FLAGS": "--identifier " + metadata.BASE_ID + suffix + ending
+                    if target == "CMUXMaestroCopilotHook" else "",
                     "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG" if mode == "production" else "DEBUG CMUX_VALIDATION",
                 }})
             metadata.verify_settings(rows, mode)
+            flags = rows[2]["buildSettings"].pop("OTHER_CODE_SIGN_FLAGS")
+            with self.assertRaises(ValueError):
+                metadata.verify_settings(rows, mode)
+            rows[2]["buildSettings"]["OTHER_CODE_SIGN_FLAGS"] = flags
             valid_conditions = rows[0]["buildSettings"]["SWIFT_ACTIVE_COMPILATION_CONDITIONS"]
             rows[0]["buildSettings"]["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = (
                 "DEBUG CMUX_VALIDATION" if mode == "production" else "DEBUG"
@@ -160,6 +174,28 @@ class BuildMetadataTests(unittest.TestCase):
         alias = self.directory / "alias.appex"
         alias.symlink_to(self.extension, target_is_directory=True)
         metadata.verify_registration_output(self.registration_listing((identifier, alias)), self.extension)
+
+    def test_documented_election_prefixes_preserve_exact_record_matching(self):
+        identifier = metadata.BASE_ID + ".Extension"
+        for prefix in ("", "+", "-", "!", "=", "?"):
+            with self.subTest(prefix=prefix):
+                output = self.registration_listing((identifier, self.extension)).replace("+    ", prefix + "    ")
+                metadata.verify_registration_output(output, self.extension)
+                with self.assertRaises(ValueError):
+                    metadata.verify_registration_output(output, self.directory / "wrong.appex")
+                with self.assertRaises(ValueError):
+                    metadata.verify_registration_output(output, self.extension, absent=True)
+                with self.assertRaises(ValueError):
+                    metadata.verify_registration_output(output.replace("(1 plug-in)", "(2 plug-ins)"), self.extension)
+                with self.assertRaises(ValueError):
+                    metadata.verify_registration_output(output.replace(identifier, "com.example.Other"), self.extension)
+
+    def test_unsupported_or_combined_election_prefixes_remain_invalid(self):
+        output = self.registration_listing((metadata.BASE_ID + ".Extension", self.extension))
+        for prefix in ("@", "*", "+=", "??", "!?"):
+            with self.subTest(prefix=prefix):
+                with self.assertRaises(ValueError):
+                    metadata.verify_registration_output(output.replace("+    ", prefix + "    "), self.extension)
 
     def test_registration_rejects_no_matches_wrong_path_and_unsupported_output(self):
         identifier = metadata.BASE_ID + ".Extension"
@@ -208,6 +244,8 @@ class BuildMetadataTests(unittest.TestCase):
                 self.assertEqual(settings["CMUX_BUNDLE_ID_SUFFIX"], "")
                 if target["name"] != "CMUXMaestroPreviewTests":
                     self.assertEqual(settings["CURRENT_PROJECT_VERSION"], metadata.APP_BUILD_VERSION)
+                if target["name"] == "CMUXMaestroCopilotHook":
+                    self.assertEqual(settings["OTHER_CODE_SIGN_FLAGS"], "--identifier $(PRODUCT_BUNDLE_IDENTIFIER)")
                 if target["name"] in ("CMUXMaestroPreview", "CMUXMaestroSidebar"):
                     self.assertEqual(settings["CMUX_SIDEBAR_EXTENSION_POINT_ID"], metadata.PRODUCTION_POINT)
         metadata.verify_profile(metadata.plist(ROOT / "CMUXMaestroSidebar/CMUXMaestroSidebar.entitlements"))
