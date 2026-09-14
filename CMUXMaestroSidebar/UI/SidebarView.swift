@@ -42,7 +42,9 @@ struct SidebarView: View {
             }
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 9) {
+                // Workspace rows already contain whole subtrees. Avoid lazy root
+                // placement cycling during remote accessibility scrolling.
+                VStack(alignment: .leading, spacing: 9) {
                     switch preferences.selectedMode {
                     case .hierarchy:
                         HierarchyContent(model: model, dismiss: dismiss)

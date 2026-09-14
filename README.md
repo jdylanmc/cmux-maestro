@@ -263,6 +263,12 @@ clearance for the current CMUX overlaid footer. The SDK provides no footer-inset
 contract; a rendered-strip regression test checks that both sidebar modes leave
 this area clear. Reverify the clearance when host chrome changes.
 
+Workspace containers use eager layout inside the scroll view; their child trees
+retain the existing projection limits. This avoids the lazy root-placement loop
+observed during remote accessibility scrolling. An offscreen AppKit regression
+exercises repeated scrolling and mode changes; live accessibility scrolling and
+continued history updates remain part of deployment acceptance.
+
 ## Build and test
 
 ```sh
