@@ -185,14 +185,38 @@ if "[NESTED_SUBSET]" in prompt or "[NESTED_ESCALATE]" in prompt:
 if "[DENIED" in prompt:
     print(json.dumps({
         "type": "tool.execution_complete",
-        "data": {"toolName": "bash"},
-        "result": {
+        "data": {
+            "toolName": "bash",
             "success": False,
             "error": {
                 "code": "denied",
                 "message": "Permission denied and could not request permission from user",
             },
         },
+    }))
+if "[SUCCESS_PERMISSION_TEXT]" in prompt:
+    print(json.dumps({
+        "type": "tool.execution_complete",
+        "data": {
+            "success": True,
+            "result": {"message": "Documentation says permission denied", "code": "denied"},
+        },
+    }))
+if "[FAILED_OTHER_ERROR]" in prompt:
+    print(json.dumps({
+        "type": "tool.execution_complete",
+        "data": {
+            "success": False,
+            "error": {"code": "file_error", "message": "File operation: permission denied"},
+        },
+    }))
+if "[NESTED_PERMISSION_TEXT]" in prompt:
+    payload = {"code": "denied", "message": "permission denied " * 2048}
+    for _ in range(10):
+        payload = {"nested": payload}
+    print(json.dumps({
+        "type": "tool.execution_complete",
+        "data": {"success": True, "result": payload},
     }))
 time.sleep(0.45 if "[DELAY]" in prompt else 0.08)
 worker_id = os.environ["CMUX_MAESTRO_WORKER_ID"]
@@ -239,6 +263,24 @@ if "[DUPLICATE_FINAL_REPORT]" in prompt:
         "type": "assistant.message",
         "data": {"phase": "final_answer", "toolRequests": [], "content": content},
     }))
+print(json.dumps({"type": "assistant.turn_end", "data": {"turnId": "0"}}))
+print(json.dumps({
+    "type": "session.usage_checkpoint",
+    "data": {"totalNanoAiu": 0, "totalPremiumRequests": 0, "modelCacheState": {},
+             "promptCacheBreakState": {}},
+}))
+print(json.dumps({"type": "assistant.idle", "data": {}}))
+if "[AFTER_FINAL_TOOL]" in prompt:
+    print(json.dumps({"type": "tool.execution_start", "data": {"toolName": "bash"}}))
+if "[AFTER_FINAL_CONTENT]" in prompt:
+    print(json.dumps({
+        "type": "assistant.message",
+        "data": {"phase": "commentary", "content": "More work", "toolRequests": []},
+    }))
+if "[BOOKKEEPING_WITH_CONTENT]" in prompt:
+    print(json.dumps({"type": "assistant.idle", "data": {"content": "Not bookkeeping"}}))
+if "[AFTER_FINAL_MALFORMED]" in prompt:
+    print("{not-json")
 final_session = "00000000-0000-4000-8000-000000000099" if "[WRONG_SESSION]" in prompt else session
 timestamp = "2099-01-01T00:00:00Z" if "[FUTURE_RESULT]" in prompt else "2026-01-01T00:00:00Z"
 exit_code = 7 if "[EXIT7]" in prompt else 0
@@ -255,6 +297,8 @@ if "[DUPLICATE_RESULT]" in prompt:
         "type": "result", "timestamp": timestamp,
         "sessionId": final_session, "exitCode": exit_code, "usage": {},
     }))
+if "[AFTER_RESULT_BOOKKEEPING]" in prompt:
+    print(json.dumps({"type": "assistant.idle", "data": {}}))
 raise SystemExit(exit_code)
 '''
 
@@ -688,6 +732,33 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("cmux-maestro.worker-report", skill)
         self.assertIn('"phase":"final_answer"', skill)
         self.assertIn("do not call a tool", skill)
+
+    def test_terminal_bookkeeping_does_not_admit_late_work_or_post_result_events(self):
+        cases = [
+            ("[AFTER_FINAL_TOOL]", "report-missing"),
+            ("[AFTER_FINAL_CONTENT]", "report-missing"),
+            ("[BOOKKEEPING_WITH_CONTENT]", "report-missing"),
+            ("[AFTER_FINAL_MALFORMED]", "turn-failed"),
+            ("[AFTER_RESULT_BOOKKEEPING]", "turn-failed"),
+        ]
+        for index, (task, expected) in enumerate(cases):
+            with self.subTest(task=task):
+                worker = self.h.spawn(task, label=f"Late event {index}")
+                node = self.h.wait_node(
+                    worker["workerId"], lambda value: value["phase"] == expected
+                )
+                self.assertNotEqual(node["phase"], "reported-completed")
+
+    def test_permission_words_in_payload_are_not_provider_policy_denials(self):
+        for index, marker in enumerate((
+            "[SUCCESS_PERMISSION_TEXT]", "[FAILED_OTHER_ERROR]", "[NESTED_PERMISSION_TEXT]",
+        )):
+            with self.subTest(marker=marker):
+                worker = self.h.spawn(f"[NO_REPORT] {marker}", label=f"Payload {index}")
+                node = self.h.wait_node(
+                    worker["workerId"], lambda value: value["phase"] == "report-missing"
+                )
+                self.assertNotIn("Copilot tool permission was denied", node["result"])
 
     def assert_strict_report_cases(self, cases):
         for index, (task, diagnostic) in enumerate(cases):

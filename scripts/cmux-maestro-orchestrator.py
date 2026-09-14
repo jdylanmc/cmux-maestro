@@ -1071,25 +1071,27 @@ def parse_final_report(event, node):
 def event_has_permission_denial(event):
     if event.get("type") != "tool.execution_complete":
         return False
-    pending = [(event, 0)]
-    visited = 0
-    while pending and visited < 64:
-        value, depth = pending.pop()
-        visited += 1
-        if isinstance(value, dict):
-            if value.get("code") == "denied":
-                return True
-            message = value.get("message")
-            if (
-                isinstance(message, str)
-                and "permission denied" in message.casefold()
-            ):
-                return True
-            if depth < 4:
-                pending.extend((child, depth + 1) for child in value.values())
-        elif isinstance(value, list) and depth < 4:
-            pending.extend((child, depth + 1) for child in value[:64])
-    return False
+    data = event.get("data")
+    if not isinstance(data, dict) or data.get("success") is not False:
+        return False
+    error = data.get("error")
+    if not isinstance(error, dict):
+        return False
+    code = error.get("code")
+    return isinstance(code, str) and code.casefold().replace("-", "_") in {
+        "denied", "permission_denied", "permissiondenied",
+    }
+
+
+def terminal_bookkeeping(event):
+    if event.get("type") not in {
+        "assistant.turn_end", "session.usage_checkpoint", "assistant.idle",
+    }:
+        return False
+    data = event.get("data")
+    return isinstance(data, dict) and not {
+        "content", "text", "message", "toolRequests", "toolName", "arguments",
+    }.intersection(data)
 
 
 def run_copilot_turn(root, worker_id, token, node):
@@ -1164,7 +1166,11 @@ def run_copilot_turn(root, worker_id, token, node):
         if final is not None:
             malformed = True
             return
-        if final_answer_count and event.get("type") != "result":
+        if (
+            final_answer_count
+            and event.get("type") != "result"
+            and not terminal_bookkeeping(event)
+        ):
             final_report_invalid = True
         if event.get("type") == "result":
             timestamp = event.get("timestamp")

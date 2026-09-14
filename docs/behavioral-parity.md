@@ -53,6 +53,12 @@ Managed polling fences read success, failure, and task cleanup by generation.
 covers late success/missing/unsafe reads, current-task cancellation, and hide/show
 restart without erasing newer state or creating extra pollers.
 
+Managed report fixtures include the real terminal sequence: `final_answer`,
+`assistant.turn_end`, `session.usage_checkpoint`, `assistant.idle`, then `result`.
+Only non-content terminal bookkeeping is permitted; later assistant/tool work
+and post-result events remain rejected. Policy denial requires a failed tool's
+structured error code, not words found inside successful output.
+
 ## Intentional differences and explicit limits
 
 - **No observer service or loopback transport.** The proposals in
