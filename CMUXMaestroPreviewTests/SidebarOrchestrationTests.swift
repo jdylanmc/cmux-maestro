@@ -94,6 +94,65 @@ struct SidebarOrchestrationTests {
         poll.setVisible(false)
     }
 
+    @Test(arguments: ["success", "missing", "unsafe"])
+    func obsoleteReadCannotEraseCurrentStateOrDuplicatePolling(completion: String) async throws {
+        let workspace = UUID()
+        let previous = node(run: UUID(), role: "coordinator", parent: nil, workspace: workspace)
+        let current = node(run: UUID(), role: "coordinator", parent: nil, workspace: workspace)
+        let previousSnapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [previous]
+        )
+        let currentSnapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [current]
+        )
+        let gate = OrchestrationReadGate()
+        let poll = SidebarOrchestrationPolling(
+            read: { try await gate.read() },
+            pause: { try await gate.pause() },
+            taskFinished: { gate.finished.append($0) }
+        )
+        defer {
+            poll.setVisible(false)
+            gate.cancelPending()
+        }
+        poll.update(
+            topology: topology(workspace: workspace, surfaces: [previous.surfaceId]),
+            connected: true
+        )
+        poll.setVisible(true)
+        await sidebarEventually { gate.readCount == 1 }
+        poll.update(
+            topology: topology(workspace: workspace, surfaces: [current.surfaceId]),
+            connected: true
+        )
+        await sidebarEventually { gate.readCount == 2 }
+        try gate.resolve(2, with: .success(currentSnapshot))
+        await sidebarEventually { poll.snapshot.nodes == [current] && gate.pauseCount == 1 }
+
+        switch completion {
+        case "success": try gate.resolve(1, with: .success(previousSnapshot))
+        case "missing": try gate.resolve(1, with: .failure(CopilotFileError.missing))
+        default: try gate.resolve(1, with: .failure(CopilotFileError.unsafePath))
+        }
+        await sidebarEventually { gate.finished.count == 1 }
+        #expect(poll.snapshot.nodes == [current])
+        #expect(poll.availability == .ready)
+        #expect(gate.readCount == 2)
+
+        poll.setVisible(false)
+        await sidebarEventually { gate.finished.count == 2 }
+        #expect(gate.finishedPauses.contains(1))
+        #expect(poll.availability == .hidden)
+        #expect(gate.readCount == 2)
+        poll.setVisible(true)
+        await sidebarEventually { gate.readCount == 3 }
+        try gate.resolve(3, with: .success(currentSnapshot))
+        await sidebarEventually { poll.snapshot.nodes == [current] }
+        poll.setVisible(false)
+        await sidebarEventually { gate.finished.count == 3 }
+        #expect(gate.readCount == 3)
+    }
+
     @Test func validationRejectsCyclesDuplicateSurfacesAndFutureEvidence() {
         let workspace = UUID()
         let run = UUID()
@@ -115,6 +174,7 @@ struct SidebarOrchestrationTests {
                 )
             )
         }
+
         #expect(throws: CopilotFileError.self) {
             try SidebarOrchestrationReader.validate(future)
         }
@@ -228,5 +288,39 @@ struct SidebarOrchestrationTests {
             id: id, title: "Terminal", kind: .terminal, isFocused: false,
             isPinned: false, unreadCount: 0, workingDirectory: .unavailable
         )
+    }
+}
+
+@MainActor
+private final class OrchestrationReadGate {
+    private(set) var readCount = 0
+    private(set) var pauseCount = 0
+    private(set) var finishedPauses: Set<Int> = []
+    var finished: [UInt64] = []
+    private var pending: [Int: CheckedContinuation<SidebarOrchestrationSnapshot, Error>] = [:]
+
+    func read() async throws -> SidebarOrchestrationSnapshot {
+        readCount += 1
+        let index = readCount
+        return try await withCheckedThrowingContinuation { pending[index] = $0 }
+    }
+
+    func resolve(_ index: Int, with result: Result<SidebarOrchestrationSnapshot, Error>) throws {
+        let pendingContinuation = pending.removeValue(forKey: index)
+        let continuation = try #require(pendingContinuation)
+        continuation.resume(with: result)
+    }
+
+    func pause() async throws {
+        pauseCount += 1
+        let index = pauseCount
+        defer { finishedPauses.insert(index) }
+        try await Task.sleep(for: .seconds(60))
+    }
+
+    func cancelPending() {
+        let continuations = Array(pending.values)
+        pending.removeAll()
+        for continuation in continuations { continuation.resume(throwing: CancellationError()) }
     }
 }

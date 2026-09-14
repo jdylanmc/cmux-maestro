@@ -48,6 +48,11 @@ acceptance scope.
 | Stable local install, update, rollback and recovery | [test-local-preview.py](../scripts/test-local-preview.py): `test_first_install_stable_copy_and_exact_registration`, `test_atomic_updates_preserve_one_previous_and_rollback_is_reversible`, `test_ambiguous_recovery_refuses_to_guess` | [PR30][r30] verifies real stable installation, signed Debug/Release update, exact rollback and recovery. This is local-preview delivery, not public distribution. |
 | Explicit terminal-backed orchestration | [test-cmux-maestro-orchestrator.py](../scripts/test-cmux-maestro-orchestrator.py): external create/attach/archive ordering, exact surface retention, background-tab startup, exact ownership/resume, strict permission-free `final_answer` reports, caller-explicit private tool policy and descendant non-escalation, visible JSON permission denial, verified-idle report recovery, successful/nonzero/malformed result boundaries, bounded streaming, in-turn heartbeats, live-resource cap/reclamation, archive/recovery, automatic exit and focus contracts; [SidebarOrchestrationTests](../CMUXMaestroPreviewTests/SidebarOrchestrationTests.swift): exhaustive managed phase titles/symbols, validated ancestry/lifecycle/timestamps, stale qualification and privacy-preserving current-window filtering; [SidebarLayoutRenderingTests](../CMUXMaestroPreviewTests/SidebarLayoutRenderingTests.swift): regenerated mixed-state render and direct density bounds; [test-copilot-sandbox.sh](../scripts/test-copilot-sandbox.sh): observer-readable/private-sibling-denied proof | The controller and skill are bundled and production setup installs them. Actual frozen-controller evidence demonstrated JSON-only provider denial of the old helper report path; this correction removes that required permission. Live validation of the corrected default and explicitly authorized nested paths remains operator-gated and unverified in this worktree. |
 
+Managed polling fences read success, failure, and task cleanup by generation.
+`SidebarOrchestrationTests.obsoleteReadCannotEraseCurrentStateOrDuplicatePolling`
+covers late success/missing/unsafe reads, current-task cancellation, and hide/show
+restart without erasing newer state or creating extra pollers.
+
 ## Intentional differences and explicit limits
 
 - **No observer service or loopback transport.** The proposals in

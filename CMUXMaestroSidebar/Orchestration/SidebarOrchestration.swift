@@ -209,15 +209,19 @@ final class SidebarOrchestrationPolling {
     private var worker: Task<Void, Never>?
     private let read: Read
     private let pause: Pause
+    // Observe quiescence without exposing cancellable task handles.
+    private let taskFinished: @MainActor @Sendable (UInt64) -> Void
 
     init(
         read: Read? = nil,
-        pause: @escaping Pause = { try await Task.sleep(for: .seconds(2)) }
+        pause: @escaping Pause = { try await Task.sleep(for: .seconds(2)) },
+        taskFinished: @escaping @MainActor @Sendable (UInt64) -> Void = { _ in }
     ) {
         self.read = read ?? {
             try await Task.detached { try SidebarOrchestrationReader.read() }.value
         }
         self.pause = pause
+        self.taskFinished = taskFinished
     }
 
     var roots: [SidebarOrchestrationNode] {
@@ -260,7 +264,9 @@ final class SidebarOrchestrationPolling {
         let topology = topology
         let read = read
         let pause = pause
+        let taskFinished = taskFinished
         worker = Task { [weak self] in
+            defer { taskFinished(token) }
             while !Task.isCancelled {
                 do {
                     let raw = try await read()
@@ -285,17 +291,18 @@ final class SidebarOrchestrationPolling {
                     self.availability = SidebarOrchestrationReader.isStale(raw)
                         ? .stale : self.snapshot.complete ? .ready : .partial
                 } catch CopilotFileError.missing {
-                    self?.snapshot = .empty
-                    self?.availability = .waiting
+                    guard let self, self.generation == token, !Task.isCancelled else { break }
+                    self.snapshot = .empty
+                    self.availability = .waiting
                 } catch {
-                    self?.snapshot = .empty
-                    self?.availability = .unavailable
+                    guard let self, self.generation == token, !Task.isCancelled else { break }
+                    self.snapshot = .empty
+                    self.availability = .unavailable
                 }
                 do { try await pause() } catch { break }
             }
-            guard let self else { return }
+            guard let self, self.generation == token else { return }
             self.worker = nil
-            if self.generation != token { self.startIfNeeded() }
         }
     }
 }
