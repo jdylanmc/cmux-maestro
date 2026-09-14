@@ -5,6 +5,9 @@ agent hierarchy. The native sidebar reads locally; no companion daemon,
 watcher, loopback server, XPC service, raw CMUX socket, or session-start ritual.
 The separate interpreted Maestro project is untouched and is not a dependency.
 
+See the [behavioral parity matrix](docs/behavioral-parity.md) for regression
+evidence, live acceptance scope, intentional differences and remaining limits.
+
 ## One-time setup
 
 1. Use the [local preview install](#install-a-stable-local-preview) below, or
