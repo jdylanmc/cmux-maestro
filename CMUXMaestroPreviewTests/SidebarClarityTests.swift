@@ -8,6 +8,11 @@ struct SidebarClarityTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test func emptyChildNoticeDoesNotClaimTheWholeTaskboardIsUnavailable() {
+        #expect(SidebarPresentation.emptyChildHistoryTitle(complete: true) == "No visible child tasks")
+        #expect(SidebarPresentation.emptyChildHistoryTitle(complete: false) == "Child history unavailable")
+    }
+
     @Test func entityIconsAndStateBadgesDoNotRelyOnColorAlone() {
         let kinds = [
             SidebarPresentation.workspace, SidebarPresentation.surface(.terminal),

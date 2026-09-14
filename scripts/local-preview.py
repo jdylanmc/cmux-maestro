@@ -458,6 +458,19 @@ class Installer:
             apps.append(self.slot(previous["slot"]))
         self.ops.assert_idle(*apps)
 
+    def prepare_update(self):
+        require(not self.receipt["transaction"] and not self.receipt["garbage"], "Run recover first.")
+        require(self.receipt["current"], "No owned preview is installed.")
+        self.check_stable()
+        # ExtensionKit may retain its idle process after Default is selected.
+        # Retiring only this owned registration lets macOS release that process.
+        self.ops.unregister(self.destination)
+        self.idle()
+        self.match(self.destination, self.receipt["current"])
+        return ("Preview registration retired; app files, backups and user data unchanged. "
+                "Run update or rollback, or recover to restore the current registration. "
+                "Keep CMUX on Default until the operation finishes.")
+
     def install(self, source, *, update=False, retire_source=False):
         require(not self.receipt["transaction"] and not self.receipt["garbage"]
                 and not (self.receipt["current"] is None and self.receipt["previous"]),
@@ -567,6 +580,13 @@ class Installer:
         self.receipt["transaction"] = None
         self.save()
 
+    def refresh_current_registration(self):
+        current = self.receipt["current"]
+        if current:
+            self.match(self.destination, current)
+            self.ops.register(self.destination)
+            self.match(self.destination, current)
+
     def recover(self, *, restore_previous=False):
         transaction = self.receipt["transaction"]
         if not transaction:
@@ -574,8 +594,7 @@ class Installer:
             self.check_stable()
             self.clean_garbage()
             self.clean_removed_current()
-            if self.receipt["current"]:
-                self.ops.register(self.destination)
+            self.refresh_current_registration()
             return "No pending transaction. Owned apps verified; installed preview registration refreshed if present."
         if transaction["kind"] == "uninstall":
             require(not restore_previous, "Removal is not a replacement to roll back; use recover to resume explicit removal.")
@@ -585,6 +604,7 @@ class Installer:
         if transaction["phase"] in ("copying", "discarding"):
             self.check_stable()
             self.discard_staging()
+            self.refresh_current_registration()
             return "Interrupted staging discarded. Installed app and previous version unchanged."
         if transaction["phase"] == "reverting":
             self.revert_committed()
@@ -602,6 +622,7 @@ class Installer:
                 self.save()
             else:
                 self.discard_staging()
+            self.refresh_current_registration()
             return "Pre-commit transaction cancelled; installed app unchanged."
         require(actual == transaction["after"], "Ambiguous destination; recovery refuses to guess.")
         if restore_previous:
@@ -714,6 +735,7 @@ def main():
                              help="Unregister only this checkout's verified .build/adhoc source, not its files")
     for name in ("rollback", "status"):
         commands.add_parser(name)
+    commands.add_parser("prepare-update", help="Retire the owned preview registration before replacing an idle extension")
     recovery = commands.add_parser("recover")
     recovery.add_argument("--restore-previous", action="store_true",
                           help="Restore the old app after a committed replacement failed, instead of retrying the new one")
@@ -736,6 +758,8 @@ def main():
                 print("Owned preview apps/registrations removed. User data, settings and other plugins retained.")
             elif args.command == "recover":
                 print(installer.recover(restore_previous=args.restore_previous))
+            elif args.command == "prepare-update":
+                print(installer.prepare_update())
             else:
                 result = getattr(installer, args.command)()
                 print(result or "Verified previous preview restored and registered. Refresh integration explicitly.")

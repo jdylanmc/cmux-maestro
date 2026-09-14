@@ -232,6 +232,108 @@ class LocalPreviewTests(unittest.TestCase):
         self.assertIn("Verified installed preview", self.operation("status"))
         self.assertEqual(self.data.read_text(), "observation-data")
 
+    def test_prepare_update_retires_only_owned_registration_and_supports_update(self):
+        self.operation("install", self.old)
+        unrelated = self.fixture("unrelated")
+        self.ops.register(unrelated)
+        before = self.receipt()
+        digest = preview.digest(self.app)
+        self.assertIn("registration retired", self.operation("prepare_update"))
+        self.assertEqual(self.receipt(), before)
+        self.assertEqual(preview.digest(self.app), digest)
+        self.assertNotIn(self.app, self.ops.applications)
+        self.assertIn(unrelated, self.ops.applications)
+        self.assertIn((metadata.BASE_ID + ".Extension", unrelated / preview.EXTENSION), self.ops.extensions)
+        self.assertEqual(self.data.read_text(), "observation-data")
+        self.assertEqual(self.legacy.read_text(), "not-installer-owned")
+        self.operation("prepare_update")
+        self.operation("install", self.new, update=True)
+        self.assertIn("Verified installed preview", self.operation("status"))
+
+    def test_prepare_update_can_be_undone_by_ordinary_recovery(self):
+        self.operation("install", self.old)
+        before = self.receipt()
+        self.operation("prepare_update")
+        self.operation("recover")
+        self.assertEqual(self.receipt(), before)
+        self.assertIn("Verified installed preview", self.operation("status"))
+
+    def test_one_recovery_restores_registration_after_prepared_update_failure(self):
+        self.operation("install", self.old)
+        self.operation("install", self.new, update=True)
+        unrelated = self.fixture("unrelated")
+        self.ops.register(unrelated)
+        before = self.receipt()
+        for point in ("copy", "before-move"):
+            with self.subTest(point=point):
+                self.operation("prepare_update")
+                self.ops.failures[point] = OSError("synthetic update failure")
+                with self.assertRaises(OSError):
+                    self.operation("install", self.latest, update=True)
+                self.operation("recover")
+                self.assertEqual(self.receipt(), before)
+                self.assertEqual((self.app / "payload").read_text(), "new")
+                self.assertEqual((self.previous() / "payload").read_text(), "old")
+                self.assertIn("Verified installed preview", self.operation("status"))
+                self.assertIn(unrelated, self.ops.applications)
+                self.assertEqual(self.data.read_text(), "observation-data")
+
+    def test_one_recovery_restores_registration_after_prepared_rollback_failure(self):
+        self.operation("install", self.old)
+        self.operation("install", self.new, update=True)
+        before = self.receipt()
+        self.operation("prepare_update")
+        self.ops.failures["before-move"] = OSError("synthetic rollback failure")
+        with self.assertRaises(OSError):
+            self.operation("rollback")
+        self.operation("recover")
+        self.assertEqual(self.receipt(), before)
+        self.assertIn("Verified installed preview", self.operation("status"))
+        self.assertEqual((self.previous() / "payload").read_text(), "old")
+
+    def test_prepare_update_preserves_files_when_registration_retirement_fails(self):
+        self.operation("install", self.old)
+        before = self.receipt()
+        digest = preview.digest(self.app)
+        self.ops.failures["unregister"] = OSError("synthetic registry failure")
+        with self.assertRaises(OSError):
+            self.operation("prepare_update")
+        self.assertEqual(self.receipt(), before)
+        self.assertEqual(preview.digest(self.app), digest)
+        self.operation("recover")
+        self.assertIn("Verified installed preview", self.operation("status"))
+
+    def test_prepare_update_does_not_claim_readiness_while_a_process_remains(self):
+        self.operation("install", self.old)
+        before = self.receipt()
+        self.ops.busy = True
+        with self.assertRaisesRegex(ValueError, "running"):
+            self.operation("prepare_update")
+        self.assertEqual(self.receipt(), before)
+        self.ops.busy = False
+        self.operation("recover")
+        self.assertIn("Verified installed preview", self.operation("status"))
+
+    def test_prepare_update_refuses_unowned_tampered_and_pending_apps(self):
+        with self.assertRaisesRegex(ValueError, "No owned"):
+            self.operation("prepare_update")
+        self.assertEqual(self.ops.commands, [])
+        self.operation("install", self.old)
+        (self.app / "payload").write_text("tampered")
+        before = len(self.ops.commands)
+        with self.assertRaises(ValueError):
+            self.operation("prepare_update")
+        self.assertFalse(any(command[:2] in ([preview.LSREGISTER, "-u"], ["/usr/bin/pluginkit", "-r"])
+                             for command in self.ops.commands[before:]))
+        (self.app / "payload").write_text("old")
+        self.ops.failures["after-move"] = Interrupted()
+        with self.assertRaises(Interrupted):
+            self.operation("install", self.new, update=True)
+        before = len(self.ops.commands)
+        with self.assertRaisesRegex(ValueError, "recover"):
+            self.operation("prepare_update")
+        self.assertEqual(len(self.ops.commands), before)
+
     def test_atomic_updates_preserve_one_previous_and_rollback_is_reversible(self):
         self.operation("install", self.old)
         self.operation("install", self.new, update=True)
