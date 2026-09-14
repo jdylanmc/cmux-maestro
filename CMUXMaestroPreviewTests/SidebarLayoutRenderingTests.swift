@@ -35,15 +35,17 @@ struct SidebarLayoutRenderingTests {
             for (name, collapsed) in scenarios {
                 preferences.expandAll()
                 if let collapsed { preferences.setExpanded(false, for: collapsed) }
-                for width in [240, 320] {
+                for width in [240, 349] {
                     preferences.selectedMode = .hierarchy
                     try await render(model: model, preferences: preferences, width: width,
                                      destination: folder.appendingPathComponent("\(density.rawValue)-\(name)-\(width).png"))
                 }
             }
             preferences.selectedMode = .taskboard
-            try await render(model: model, preferences: preferences, width: 240,
-                             destination: folder.appendingPathComponent("\(density.rawValue)-taskboard-240.png"))
+            for width in [240, 349] {
+                try await render(model: model, preferences: preferences, width: width,
+                                 destination: folder.appendingPathComponent("\(density.rawValue)-taskboard-\(width).png"))
+            }
 
             let additional: [(String, RenderAppearance, SidebarConnectionModel)] = [
                 ("dark", .dark, model),
@@ -59,10 +61,12 @@ struct SidebarLayoutRenderingTests {
                 }
                 for mode in SidebarMode.allCases {
                     preferences.selectedMode = mode
-                    try await render(
-                        model: scenarioModel, preferences: preferences, width: 240, appearance: appearance,
-                        destination: folder.appendingPathComponent("\(density.rawValue)-\(name)-\(mode.rawValue)-240.png")
-                    )
+                    for width in [240, 349] {
+                        try await render(
+                            model: scenarioModel, preferences: preferences, width: width, appearance: appearance,
+                            destination: folder.appendingPathComponent("\(density.rawValue)-\(name)-\(mode.rawValue)-\(width).png")
+                        )
+                    }
                 }
             }
         }
@@ -151,7 +155,7 @@ struct SidebarLayoutRenderingTests {
         try await Task.sleep(for: .milliseconds(10))
         model.setVisible(true)
         await sidebarEventually { model.copilot.tree.sessions.count == 1 }
-        let frame = NSRect(x: 0, y: 0, width: width, height: 1_000)
+        let frame = NSRect(x: 0, y: 0, width: width, height: 941)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: appearance.nativeName)
@@ -173,9 +177,14 @@ struct SidebarLayoutRenderingTests {
         #expect(evidence.contrast == appearance.contrast)
         let png = try #require(bitmap.representation(using: .png, properties: [:]))
         #expect(bitmap.pixelsWide >= width)
-        #expect(bitmap.pixelsHigh >= 1_000)
+        #expect(bitmap.pixelsHigh >= 941)
         #expect(png.count > 1_024)
         try png.write(to: destination)
+        let metrics = SidebarRenderingEvidence.metrics(for: view)
+        #expect(metrics.viewportHeight > 0)
+        #expect(metrics.documentHeight > 0)
+        #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
+        try JSONEncoder().encode(metrics).write(to: destination.deletingPathExtension().appendingPathExtension("json"))
     }
 
     private enum RenderAppearance {

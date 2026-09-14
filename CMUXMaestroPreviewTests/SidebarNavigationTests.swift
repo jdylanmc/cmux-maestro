@@ -321,12 +321,12 @@ struct SidebarNavigationTests {
             contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarView.swift"),
             encoding: .utf8
         )
-        #expect(view.contains("rootPath: workspace.rootPath"))
-        #expect(view.contains("projectRootPath: workspace.projectRootPath"))
-        #expect(view.contains("SurfacePathDetail(workingDirectory: surface.workingDirectory)"))
-        #expect(view.contains("AvailabilityPathRows(rootPath: paths.rootPath, projectRootPath: paths.projectRootPath)"))
-        #expect(view.contains("SurfacePathDetail(workingDirectory: paths.workingDirectory)"))
-        #expect(view.contains(".accessibilityValue(paths.accessibilityDescription)"))
+        #expect(view.contains("SidebarPresentation.briefPath(root: workspace.rootPath, project: workspace.projectRootPath)"))
+        #expect(view.contains("value: workspace.rootPath.pathDisplayText"))
+        #expect(view.contains("value: workspace.projectRootPath.pathDisplayText"))
+        #expect(view.contains("value: surface.workingDirectory.pathDisplayText"))
+        #expect(view.contains("SidebarPresentation.paths(paths)"))
+        #expect(view.contains("paths.map(SidebarPresentation.paths)"))
     }
 
     private func pathSnapshot(sequence: UInt64 = 1, hasPaths: Bool = true) -> CmuxSidebarSnapshot {

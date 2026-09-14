@@ -95,6 +95,35 @@ child-session IDs. No title/transcript heuristics repair missing identity.
 
 ## Sidebar layout
 
+The hierarchy uses distinct native icons and accents: blue workspace stacks,
+teal terminals, purple Copilot sessions, pink child agents and amber skills.
+State badges pair a symbol and short label with blue Working, amber Blocked,
+green Finished or red Failed. Idle, Cancelled and Unknown have distinct neutral
+symbols; color is never the only state cue. Process ended/unconfirmed ownership
+is shown separately from task completion. Selected workspaces have a subtle
+accent edge rather than another nested card.
+
+Rows lead with the workspace/surface name or task type/name and current state,
+not a stack of diagnostic cards. A separate **ⓘ Details** disclosure on each row
+reveals model/context availability, process evidence, timestamps, history counts,
+stable IDs, and granted paths. It never focuses, dismisses, or acknowledges work;
+title focus, expansion, dismissal, and acknowledgement remain separate controls.
+Unknown task state, unresolved ancestry, incomplete evidence, blocking requests,
+and outstanding attention stay visible without opening Details. Taskboard also
+shows each primary session's state, even when it has no attention or child rows.
+
+A healthy overview is one compact summary line; observation timing and history
+totals are in its Details disclosure. Availability failures, partial/unknown data,
+and omitted active work remain visible. Workspaces show one granted path with
+middle truncation and full-path help; complete path metadata remains in Details
+rather than repeating unavailable workspace/project/path lines on every row.
+The settings gear is still the single entry for density and stored preferences.
+No saved expansion, retention, acknowledgement, navigation, or source semantics
+are changed by this presentation.
+When several source warnings apply, the overview keeps the primary warning
+and omitted active-work count visible; its Details disclosure lists every reason.
+The current host's overlaid footer has 50 points of reserved clearance.
+
 The sidebar **gear** includes **Compact** (the original spacing) and
 **Comfortable** (more room and larger native detail text) density. Both
 Hierarchy and Taskboard keep the same data, counts, paths and independent
@@ -142,11 +171,18 @@ storage paths and never fall back to the production layout singleton.
 **sidebar-layout-offscreen** artifact (14-day retention), including when tests
 fail after producing images. Review both densities at 240 pixels in dark mode,
 increased contrast, and long synthetic path/model/nested-label scenarios, in
-addition to the light-mode expansion matrix at 240 and 320 pixels. Filenames
+addition to the light-mode expansion matrix at 240 and 349 pixels. All renders
+use a 941-point viewport height. The existing scenario matrix now covers both
+widths in both modes and densities (56 images). Filenames
 identify density, scenario, view mode and width.
 The renderer checks the actual SwiftUI color-scheme and contrast environment.
+Per-image JSON records measured scroll viewport/document geometry; metadata-only
+panels are also rendered at both widths to check horizontal containment. Clarity
+validation uses matched before/after fixtures, not screenshots of live work.
 Its fixed synthetic clock also owns the injected freshness timer; elapsed CI
 wall time cannot expire a fixture whose logical clock has not advanced.
+The clarity tests also render light/dark icon and status keys, verify that each
+symbol exists, and confirm that the output contains actual color accents.
 Contrast uses the SDK's writable `_colorSchemeContrast` backing key only in
 tests, paired with native high-contrast AppKit appearances; no system display
 preferences are changed.
