@@ -354,7 +354,7 @@ nonisolated struct CopilotEventReducerTests {
         ])
         #expect(reducer.value() == value)
         #expect(reducer.issues == [.readLimitReached])
-        try feed(&reducer, "permission.completed", ["requestId": "approval"])
+        try feed(&reducer, "permission.completed", agent: "child", ["requestId": "approval"])
         #expect(reducer.value().children.first(where: { $0.id == "child" })?.state == .working)
     }
 
@@ -364,7 +364,7 @@ nonisolated struct CopilotEventReducerTests {
             sessionID: UUID(), maximumWorkItems: 1, maximumRelationships: spill ? 4 : 4096,
             maximumLifecycleEvents: spill ? 2 : 65_536
         )
-        let toolA = try copilotTestEvent("tool.execution_start", agent: "parent-a", data: [
+        let toolA = try copilotTestEvent("tool.execution_start", data: [
             "toolCallId": "tool-a", "toolName": "task"
         ])
         let startA = try copilotTestEvent("subagent.started", agent: "worker", data: [
@@ -384,7 +384,7 @@ nonisolated struct CopilotEventReducerTests {
             ])
             #expect(!reducer.value().children.contains(where: { $0.id == "worker" }))
         }
-        try feed(&reducer, "tool.execution_start", agent: "parent-b", ["toolCallId": "tool-b", "toolName": "task"])
+        try feed(&reducer, "tool.execution_start", ["toolCallId": "tool-b", "toolName": "task"])
         try feed(&reducer, "subagent.started", agent: "worker", [
             "toolCallId": "tool-b", "agentDisplayName": "B", "parentId": "parent-b"
         ])
@@ -406,7 +406,7 @@ nonisolated struct CopilotEventReducerTests {
         try feed(&reducer, "subagent.failed", ["toolCallId": "tool-a", "agentDisplayName": "A"])
         try feed(&reducer, "permission.requested", agent: "worker", ["requestId": "request-a"])
         #expect(reducer.value().children.first == fresh)
-        try feed(&reducer, "permission.completed", ["requestId": "request-b"])
+        try feed(&reducer, "permission.completed", agent: "worker", ["requestId": "request-b"])
         #expect(reducer.value().children.first?.state == .working)
         try feed(&reducer, "subagent.completed", ["toolCallId": "tool-b", "agentDisplayName": "B"])
         #expect(reducer.value().children.first?.state == .completed)
@@ -428,7 +428,7 @@ nonisolated struct CopilotEventReducerTests {
         #expect(a.name == "A")
         #expect(a.parentID == "parent")
         #expect(b.state == .blocked)
-        try feed(&reducer, "permission.completed", ["requestId": "permission-a"])
+        try feed(&reducer, "permission.completed", agent: "a", ["requestId": "permission-a"])
         #expect(reducer.value().children.first(where: { $0.id == "a" })?.state == .working)
         try feed(&reducer, "assistant.turn_end", agent: "a", ["turnId": "shared"])
         #expect(reducer.value().children.first(where: { $0.id == "a" })?.state == .idle)
@@ -504,7 +504,7 @@ nonisolated struct CopilotEventReducerTests {
         #expect(reducer.value().children.first?.state == .blocked)
         try feed(&reducer, "assistant.turn_end", agent: "worker", ["turnId": "turn-b"])
         #expect(reducer.value().children.first?.state == .blocked)
-        try feed(&reducer, "permission.completed", ["requestId": "new-request"])
+        try feed(&reducer, "permission.completed", agent: "worker", ["requestId": "new-request"])
         #expect(reducer.value().children.first?.state == .idle)
         #expect(reducer.issues.isEmpty)
     }
@@ -639,7 +639,7 @@ nonisolated struct CopilotEventReducerTests {
         #expect(reducer.value() == live)
         #expect(reducer.retentionCounts.requests == 1)
         #expect(reducer.issues == [.readLimitReached])
-        try feed(&reducer, "permission.completed", ["requestId": "pending-b"])
+        try feed(&reducer, "permission.completed", agent: "worker", ["requestId": "pending-b"])
         #expect(reducer.value().children.first?.state == .working)
     }
 
@@ -694,7 +694,7 @@ nonisolated struct CopilotEventReducerTests {
         try feed(&reducer, "subagent.started", agent: "child", [
             "toolCallId": "delayed", "agentDisplayName": "Child"
         ])
-        #expect(reducer.value().children.first?.parentID == "parent")
+        #expect(reducer.value().children.first(where: { $0.id == "child" })?.parentID == "parent")
         for index in 0..<100 {
             try feed(&reducer, "tool.execution_start", ["toolCallId": "read-\(index)", "toolName": "view"])
             try feed(&reducer, "tool.execution_complete", ["toolCallId": "read-\(index)", "success": true])
@@ -703,7 +703,7 @@ nonisolated struct CopilotEventReducerTests {
         try feed(&reducer, "subagent.started", agent: "fresh", [
             "toolCallId": "fresh", "agentDisplayName": "Fresh"
         ])
-        #expect(reducer.value().children.first?.parentID == "parent")
+        #expect(reducer.value().children.first(where: { $0.id == "child" })?.parentID == "parent")
         #expect(reducer.value().children.last?.id == "fresh")
         #expect(reducer.retentionCounts.owners <= 8)
         #expect(reducer.retentionCounts.tombstones <= 8)
@@ -801,6 +801,8 @@ nonisolated struct CopilotEventReducerTests {
         #expect(reducer.value().state == .idle)
         #expect(reducer.value().children[0].state == .blocked)
         try feed(&reducer, "user_input.completed", ["requestId": "child-request"])
+        #expect(reducer.value().children[0].state == .blocked)
+        try feed(&reducer, "user_input.completed", agent: "child", ["requestId": "child-request"])
         #expect(reducer.value().children[0].state == .working)
     }
 
@@ -949,7 +951,10 @@ nonisolated func copilotTestColdStartPressure() throws -> [Data] {
     }
     #expect(replay.occupiedBits == 18)
     #expect(replay.occupiedBits < 32)
-    for key in ["subagent:spawn-a", "subagent:fresh-457", "turn:6:worker:fresh-turn-135", "turn:0::root-fresh-47"] {
+    for key in [
+        "subagent:spawn-a", "subagent:fresh-457", "turn:6:worker:fresh-turn-135",
+        "turn:0::root-fresh-47", "start-tool:fresh-shell-50"
+    ] {
         #expect(replay.match(key) == .uncertain)
     }
     #expect(replay.match("subagent:spawn-b") == .absent)

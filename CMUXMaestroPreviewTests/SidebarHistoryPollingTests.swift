@@ -6,6 +6,38 @@ struct SidebarHistoryPollingTests {
     private let fixtures = SidebarTreeFixtures()
     private let initial = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test func acknowledgementReprojectsWithoutReadingAndCannotRestoreExpiredObservation() async {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        let outcome = AgentAttention(kind: .turnFinished, evidence: .init(source: "copilot.events", eventID: UUID()),
+                                     occurredAt: initial)
+        let observation = CopilotSessionObservation(
+            sessionID: fixtures.sessionID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,
+            liveness: .alive, state: .idle, model: nil, children: [], observedAt: initial, attention: [outcome]
+        )
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(fixtures.snapshot(sessions: [observation], now: initial))
+        await sidebarEventually { await harness.isPaused && poller.tree.attentionOwnerCount == 1 }
+        let settings = SidebarAttentionSettings(acknowledged: poller.tree.acknowledgeableOutcomes)
+        poller.updateAttention(settings)
+        #expect(poller.tree.attentionOwnerCount == 0)
+        #expect(poller.tree.sessions.first?.state == .idle)
+        #expect(await harness.reads == 1)
+        poller.updateHistory(.init(retention: .never))
+        #expect(poller.tree.attentionOwnerCount == 0)
+        await sidebarEventually { await harness.activeTimers == 1 }
+        clock.advance(8)
+        await harness.fire(delay: 8)
+        await sidebarEventually { poller.tree.availability == .unavailable }
+        poller.updateAttention(.init())
+        #expect(poller.tree.sessions.isEmpty)
+        #expect(poller.tree.acknowledgeableOutcomes.isEmpty)
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
     @Test func rapidRefreshDoesNotResetHistoryDeadlineAndBoundaryDoesNotBusyLoop() async {
         let clock = HistoryTestClock(initial)
         let harness = HistoryPollingHarness()

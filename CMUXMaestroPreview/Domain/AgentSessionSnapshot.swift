@@ -203,27 +203,6 @@ nonisolated enum AgentSessionState: String, Codable, Equatable, Sendable {
     case done
 }
 
-nonisolated enum AgentActivityKind: String, Codable, Equatable, Sendable {
-    case unknown
-    case planning
-    case executing
-    case waiting
-    case reviewing
-    case idle
-}
-
-nonisolated struct AgentActivity: Codable, Equatable, Sendable {
-    let kind: AgentActivityKind
-    let summary: String?
-    let lastEventAt: Date?
-
-    init(kind: AgentActivityKind, summary: String? = nil, lastEventAt: Date? = nil) {
-        self.kind = kind
-        self.summary = summary
-        self.lastEventAt = lastEventAt
-    }
-}
-
 nonisolated struct AgentModel: Codable, Equatable, Sendable {
     let identifier: String
     let displayName: String?

@@ -3,6 +3,7 @@ import Observation
 import Testing
 
 @MainActor
+@Suite(.serialized)
 struct SidebarPreferenceCoordinationTests {
     private let sessionID = UUID(uuidString: "70000000-0000-0000-0000-000000000001")!
     private let eventID = UUID(uuidString: "70000000-0000-0000-0000-000000000002")!
@@ -10,8 +11,8 @@ struct SidebarPreferenceCoordinationTests {
     @Test func existingInstancesMergeActionsAndRestoreOrResetOnlyTheirScope() async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
-        let a = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
-        let b = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
+        let a = fixture.preferences()
+        let b = fixture.preferences()
         await Task.yield()
         a.selectedMode = .taskboard
         fixture.defaults.set("untouched", forKey: "sidebar.attention.v1")
@@ -39,7 +40,7 @@ struct SidebarPreferenceCoordinationTests {
         #expect(fixture.defaults.string(forKey: "sidebar.selectedMode") == "taskboard")
         #expect(fixture.defaults.string(forKey: "sidebar.attention.v1") == "untouched")
         #expect(fixture.defaults.string(forKey: "sidebar.layout.v1") == "untouched")
-        #expect(SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile).history == a.history)
+        #expect(fixture.preferences().history == a.history)
     }
 
     @Test func migrationIsBoundedOneTimeAndCannotResurrectAfterRestoreOrReset() async throws {
@@ -48,7 +49,7 @@ struct SidebarPreferenceCoordinationTests {
         let legacy = SidebarHistorySettings(retention: .never, dismissed: [key("legacy")])
         fixture.defaults.set(try JSONEncoder().encode(legacy), forKey: "sidebar.completedHistory.v1")
         fixture.defaults.set("taskboard", forKey: "sidebar.selectedMode")
-        let first = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
+        let first = fixture.preferences()
         #expect(first.history == legacy)
         #expect(first.selectedMode == .taskboard)
         #expect(fixture.defaults.object(forKey: "sidebar.completedHistory.v1") == nil)
@@ -58,12 +59,12 @@ struct SidebarPreferenceCoordinationTests {
         first.restoreDismissed()
         // Simulate another process still holding an old defaults snapshot.
         fixture.defaults.set(try JSONEncoder().encode(legacy), forKey: "sidebar.completedHistory.v1")
-        let second = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
+        let second = fixture.preferences()
         #expect(second.history == .init(retention: .never))
         await Task.yield()
         second.resetHistory()
         fixture.defaults.set("broken legacy", forKey: "sidebar.completedHistory.v1")
-        let third = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
+        let third = fixture.preferences()
         #expect(third.history == .init())
         #expect(third.historyNotice == nil)
         #expect(fixture.defaults.object(forKey: "sidebar.completedHistory.v1") == nil)
@@ -72,8 +73,8 @@ struct SidebarPreferenceCoordinationTests {
     @Test func injectedFilesDoNotShareHistoryEvenWithTheSameDefaultsSuite() throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
-        let a = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
-        let b = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.root.appendingPathComponent("other.json"))
+        let a = fixture.preferences()
+        let b = fixture.preferences(historyFile: fixture.root.appendingPathComponent("other.json"))
         a.setRetention(.never)
         a.dismiss([key("a")])
         #expect(b.history == .init())
@@ -93,8 +94,8 @@ struct SidebarPreferenceCoordinationTests {
             let fixture = try SidebarPreferenceFixture()
             defer { fixture.cleanup() }
             try bytes.write(to: fixture.historyFile)
-            let a = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
-            let b = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
+            let a = fixture.preferences()
+            let b = fixture.preferences()
             a.setRetention(.oneMinute)
             b.dismiss([key("b")])
             a.restoreDismissed()
@@ -114,8 +115,8 @@ struct SidebarPreferenceCoordinationTests {
     @Test func capacityChecksUseLatestRecordAndRejectWholeBatchIncludingByteLimit() async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
-        let a = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
-        let b = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
+        let a = fixture.preferences()
+        let b = fixture.preferences()
         a.setRetention(.never)
         let full = Set((0..<SidebarHistorySettings.maximumDismissals).map { key("child-\($0)") })
         a.dismiss(full)
@@ -148,9 +149,7 @@ struct SidebarPreferenceCoordinationTests {
         fixture.defaults.set(legacy, forKey: "sidebar.completedHistory.v1")
         let blocker = fixture.root.appendingPathComponent("not-a-directory")
         try Data("blocker".utf8).write(to: blocker)
-        let preferences = SidebarPreferences(
-            defaults: fixture.defaults, historyFile: blocker.appendingPathComponent("history.json")
-        )
+        let preferences = fixture.preferences(historyFile: blocker.appendingPathComponent("history.json"))
         preferences.dismiss([key("a")])
         #expect(preferences.history == .failOpen)
         #expect(preferences.historyNotice != nil)
@@ -165,7 +164,7 @@ struct SidebarPreferenceCoordinationTests {
     @Test func separateProcessesSerializeActionsAndAutomaticallyConvergeExistingProjections() async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
-        let preferences = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
+        let preferences = fixture.preferences()
         preferences.selectedMode = .taskboard
         let projection = HistoryPreferenceProjection(preferences: preferences, sessionID: sessionID, eventID: eventID)
         let a = try PreferenceTestChild(fixture)
@@ -260,7 +259,7 @@ private final class HistoryPreferenceProjection {
 }
 
 @MainActor
-private final class PreferenceTestChild {
+final class PreferenceTestChild {
     private let process: Process
     private let input = Pipe()
     private let output = Pipe()
@@ -270,7 +269,7 @@ private final class PreferenceTestChild {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         process = Process()
         process.executableURL = root.appendingPathComponent(".build/preference-coordination/preference-test-client")
-        process.arguments = [fixture.historyFile.path, fixture.suiteName]
+        process.arguments = [fixture.historyFile.path, fixture.suiteName, fixture.attentionFile.path]
         process.standardInput = input
         process.standardOutput = output
         let (stream, continuation) = AsyncStream<String>.makeStream()

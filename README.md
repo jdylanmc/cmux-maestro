@@ -172,31 +172,192 @@ current partial data, including unknown lifecycle state and replay limits.
 Malformed events, incompatible session schemas, identity changes and torn reads
 still cannot publish unvalidated replacement state.
 
-This is completed-child-work management only. Session attention/acknowledgement
-and broader presentation preferences are separate, not implemented here.
+## Attention and safe activity
+
+Both views distinguish **Waiting for permission** from **Waiting for answer**,
+on the session or child that owns the durable request. Pairing uses request kind,
+owner and request ID; a completion for another owner or kind cannot clear it.
+Hook-resolved permissions do not block. Repeated/late request identities cannot
+reopen a resolved request. Rejected stale abort/error evidence cannot erase a
+newer request. Missing ancestry stays explicitly unresolved.
+Independent requests are not ordered against one another's clocks: a delayed
+question remains pending even if a different permission has a newer timestamp.
+Hook resolution uses the exact kind/owner/request identity, including when it
+arrives after another request or a new turn.
+
+The compact **Needs attention** affordance includes outstanding requests and
+nonblocking outcomes. **Acknowledge** records only the latter locally in the
+native sidebar. **Acknowledge all** uses the current-window projection, including
+collapsed branches but excluding off-window or display-capped rows. An owner
+with a pending request is never eligible, even if it also has an outcome.
+Neither acknowledgement, history dismissal nor focus sends approval, answers,
+cancellation or any agent-control command. CMUX unread counts are untouched.
+
+**Turn finished** means a matching primary `assistant.turn_end` was recorded,
+not that the session or its background children finished. Root errors/aborts
+likewise do not end or unblock unrelated children. Process liveness, work state
+and attention remain independent. Process presence, idle time, file modification
+time and expired history never imply success, progress, or a hung agent.
+
+Copilot reuses turn IDs such as `0` and `1` in later interactions. When supplied,
+`data.interactionId` scopes accepted starts and replay protection together with
+the owner and turn ID. It is an opaque, nonempty string bounded to 256 UTF-8 bytes,
+not a counter or an inferred user-message epoch. Retired interaction identities
+use the existing bounded replay guard. A new primary interaction does not reset
+still-running children or their pending requests.
+
+An end with an explicit interaction ID must match the current accepted owner
+turn. Ends without that field retain legacy pairing when the turn identity is
+unambiguous. For reused IDs, they require a current causal parent or a uniquely
+matched tool completion whose start was tied to the current turn. Only envelope
+IDs/parent links are used across ignored payload-bearing events: no prompt,
+arguments, results or message content is decoded for this purpose. Tracking is
+bounded to one causal tip per active owner and one origin per retained tool,
+not an accumulated transcript graph.
+Optional interaction/turn tags on `tool.execution_complete` are validated against
+its recorded tool origin, or the current accepted owner turn when no origin was
+recorded. Explicit contradictions cannot complete current work or advance its
+causal tip. Matching tags do not create missing tool ownership.
+
+All tool-associated events, including tool-backed subagent events and unjoined
+shell notifications, are excluded from generic parent bridging.
+Accepted tool starts, completions and partial results advance a causal tip only
+through a known tool whose recorded origin is the current accepted owner turn.
+An old or missing origin cannot be replaced by a later `parentId`, even when tags
+are nil or the raw turn ID matches. Partial results decode only bounded optional
+tool/turn/interaction metadata, never output content. A matching current partial
+may advance the single tip, but does not change work state or manufacture an
+outcome. Non-tool envelope bridges retain their bounded current-parent behavior.
+
+Missing/gapped causal evidence for a reused nil-interaction end produces
+`ambiguousTurn` and unknown primary state, not a fabricated completion. Pending
+requests and background work survive, and a later proven end can recover the
+current outcome; the observed ambiguity keeps that transcript projection partial.
+Explicitly mismatched ends and exact old event replays cannot close the new turn.
+Contradictory clocks on a proven match retain identity with unknown timing.
+Legacy-only streams keep their existing replay behavior; missing interaction
+metadata cannot silently reinterpret an already-used explicit turn identity.
+A provider record incorrectly labeled or parented as current is not distinguishable
+from current evidence by this metadata-only reader.
+
+Normal tool failure may coexist with **Turn finished** and an idle primary turn.
+An accepted primary `session.error` or `abort` retains its existing failed/cancelled
+policy instead; it is not relabeled as normal turn completion. A fresh accepted
+interaction can subsequently establish working state.
+
+Outstanding nonblocking evidence is intentionally bounded: only the latest
+accepted error/abort outcome per owner, plus the latest primary-turn completion.
+Successful historical child completions are history, not attention. Fresh
+owner turn/tool/invocation activity retires that owner's obsolete outcome. A
+new primary turn begins a new outcome cycle for the session and its children;
+it does **not** resolve their still-pending requests. Resume invalidates prior
+activity/attention and demotes nonterminal children to unknown, rather than
+claiming that pre-resume background work completed. Accepted terminal child
+evidence remains available to history controls. Duplicate/retired lifecycle
+identities cannot restart attention or its timing.
+
+Outstanding attention protects rows from history retention and dismissal.
+Acknowledging an error/abort then allows ordinary history retention to apply;
+required parent context and current blocking descendants stay visible. No timer
+auto-acknowledges anything. History and acknowledgement resets are independent.
+The reader also protects current-cycle outcome owners from terminal-leaf
+retirement. Local acknowledgement changes presentation, not the provider's
+ingestion state; a verified new primary turn or fresh owner activity establishes
+when prior nonblocking signals are obsolete. Genuine active/attention capacity
+exhaustion is reported as partial data rather than dropping protected signals.
+Unknown lifecycle data or replay-filter saturation can invalidate current
+activity, but cannot silently acknowledge already-recorded outcomes or requests.
+
+Acknowledgements persist by provider-session UUID, owner ID (or primary owner),
+source and stable accepted event UUID. Labels, paths, tool payloads and topology
+are not keys. The same outcome remains acknowledged after reload or surface
+moves; a new outcome reappears. Storage is versioned and bounded to **2,048
+acknowledgements / 1 MiB**, refuses overflowing batches without eviction, and
+offers **Reset acknowledgements**. Corruption fails open with a visible warning:
+no attention is hidden by unreadable settings.
+
+Acknowledgements use the same coordinated action store as history, in the
+separate extension-container Application Support file
+`CMUXMaestroPreview/sidebar-attention.json`. Acknowledge unions only the
+current projection's eligible identities into the latest on-disk record;
+other windows/processes observe changes automatically without polling. Reset
+clears acknowledgements at its coordinated turn, never history or the selected
+view. Later acknowledgements remain later actions, not restored stale snapshots.
+
+The old `sidebar.attention.v1` defaults record is validated and imported once
+under the same lock. The file is authoritative thereafter; the legacy key is
+removed only after successful persistence/read. Corrupt or future-schema files
+and legacy data fail open and are left untouched by ordinary acknowledgement
+actions. Only **Reset acknowledgements** replaces them. Failed migration retains
+legacy data for retry. Tests inject both history and acknowledgement files.
+
+Activity uses only the allowlisted durable tool-name field: **Executing tool**
+(the latest still-executing invocation for that owner) or **Last completed tool**.
+The latter is a tool-invocation event, not a statement that a detached shell
+process exited. Child attribution requires real event ownership. Names must be
+bounded symbolic identifiers; arguments, results, prompts and raw errors are
+never decoded for display. Invalid/missing/future timing is explicitly unknown;
+timestamps are not replaced with poll time. No token/context counters, guessed
+percentages or speculative stall detection are implemented.
+Lifecycle acceptance never depends on the current read clock. Tool and turn
+completions pair with their own active invocation/owner identities; contradictory
+start/completion timestamps retain the completed evidence with **unknown timing**,
+rather than resurrecting executing work on a later replay. Observation freshness
+and future display timestamps are validated separately in sidebar projection.
+Missing tool ownership never creates an error or executing activity: a bounded
+completion tombstone prevents a later start from resurrecting that invocation.
+Delayed tool metadata for an already-ended spawn cannot reopen its owner.
+Tool starts classify their start, completed-tool and shell-row replay aliases
+together before mutating owner metadata. An exact match is a no-op; uncertainty
+in **any** alias fails terminal history open without changing a live owner.
+The legacy shell-row alias remains checked even for non-shell tool names, keeping
+global tool-ID replay protection conservative across metadata/name differences.
+Both ordinary tool and actual shell starts have selective-alias regressions.
+
+The reusable neutral `AgentActivity` contract lives in `Domain/AgentSignals.swift`
+alongside evidence-bearing attention primitives, compiled into app, sidebar and
+tests, not the hook. Existing snapshot behavior is unchanged. New live model
+fields are optional for backward Codable compatibility. Reader identity,
+partial-read, corruption, freshness and replay-cap safeguards still apply;
+untrusted or unavailable evidence cannot fabricate an outcome or an action.
+Broader presentation preferences, telemetry and the remaining backlog are not
+claimed by this feature.
 
 ### Bounded retention and discovery
 
 - The 256-row reducer budget retires the oldest terminal **leaf**, not active,
-  idle, blocked, or unknown work. Retained descendants, pending requests, and
+  idle, blocked, or unknown work. Current-cycle error/abort outcomes protect their
+  owners. Retained descendants, pending requests, and
   unresolved active ownership protect their ancestors. Agent row IDs stay stable
   across fresh lifecycles; retirement does not permanently blacklist an agent ID.
   Completed tool ownership is reclaimed separately so the 4,096-relationship
   budget does not become the next long-session bottleneck. Recent completed
   owners still support delayed parent joins; retired joins remain unresolved.
-- Spawn replay keys use the spawn tool ID; turn replay keys use owner + turn ID.
+  Retirement removes only the retired owner's obsolete turn/activity/outcome
+  records and joins. Signal dictionaries are bounded by retained owners plus
+  the primary owner; tool ordering uses the bounded retained-tool list.
+  Request/tool-only unknown owners use event-scoped lifecycles, never permanent
+  agent-ID tombstones.
+- Spawn replay keys use the spawn tool ID; turn replay keys use owner +
+  interaction ID + turn ID when interaction metadata is present, otherwise the
+  legacy owner + turn ID namespace.
   A new spawn tool or previously unseen scoped turn is fresh activity, even for
   a retained or retired terminal agent. Completions pair with the row's current
   spawn, so a late old completion cannot finish a newer lifecycle. A turn alone
   recreates an unknown agent, not an invented old name/parent/spawn. Enriching an
   unknown row must not silently discard its pending requests.
 - Work/lifecycle/tool/request replay keys keep up to 4,096 exact recent tombstones.
+  Resolved-request keys include length-qualified owner, request kind and request
+  ID; spilling never collapses root/child or permission/answer namespaces.
   Older identities spill into a deterministic 128-KiB replay filter; its bits are
   never cleared within a transcript generation. This bounded filter has no false
   negatives, but can have false positives: a cold match rejects fresh admission
   **and reports `readLimitReached`**, rather than claiming exact replay knowledge.
   Terminal agent/root state fails open to unknown as described above; an uncertain
   start-identity match does not demote live work.
+  This also applies to uncertain tool-activity admission for a terminal owner.
+  Clearing obsolete terminal history does not acknowledge retained attention or
+  resolve a pending request.
   At half occupancy it fails closed; it never forgets history to admit more work.
   True active-capacity exhaustion also reports a limit without fabricating
   completion. Transcript replacement reconstructs this state from the new log.
@@ -236,15 +397,17 @@ and broader presentation preferences are separate, not implemented here.
   EOF, torn final lines, and warnings alone never request a fast retry. No sandbox
   entitlement or ancestor traversal permission is broadened.
 
-**Downstream attention integration (PR #28):** preserve this combined reducer's
+**Further presentation integration:** preserve this combined reducer's
 accepted terminal UUID/timestamp, current-spawn/turn pairing, bounded event/start/
-resolved-request guards, and `canPublishProjection` distinctions. Attention
-retirement must also clean obsolete turn/activity/outcome state without
+owner-qualified resolved-request guards, and `canPublishProjection` distinctions.
+Retirement must continue to clean obsolete turn/activity/outcome state without
 discarding pending requests, unknown placeholders or required ancestors.
 History presentation limits remain separate from ingestion limits; a prior
 terminal dismissal cannot hide a fresh lifecycle using the same agent ID.
 Carry finite reader watermarks, staged-binding revalidation, EOF freshness and
-overflow scheduling together, and rerun these regressions with attention tests.
+overflow scheduling together. Layout, installer and clarity changes must not
+weaken the quiet validation scene, backend setup denial, current-tree
+acknowledgement guards, or the host's 50-point footer clearance.
 
 ## Requirements
 
@@ -284,12 +447,18 @@ writer contention, and automatic observation/projection convergence):
 ./scripts/test.sh -only-testing:CMUXMaestroPreviewTests/SidebarPreferencesTests \
   -only-testing:CMUXMaestroPreviewTests/SidebarHistoryTests \
   -only-testing:CMUXMaestroPreviewTests/SidebarHistoryPollingTests \
-  -only-testing:CMUXMaestroPreviewTests/SidebarPreferenceCoordinationTests
+  -only-testing:CMUXMaestroPreviewTests/SidebarPreferenceCoordinationTests \
+  -only-testing:CMUXMaestroPreviewTests/SidebarAttentionTests \
+  -only-testing:CMUXMaestroPreviewTests/SidebarAttentionCoordinationTests
 ```
 
 The test runner compiles a fixture-only client from the production preference
 sources. Tests inject unique defaults suites and files beneath
 `.build/preference-coordination/`; they never mutate production preferences.
+File-I/O-heavy preference suites serialize independent cases and yield between
+fixture phases so synchronous coordination does not starve unrelated UI timers.
+Dedicated coordination tests still exercise simultaneously blocked writers in
+separate processes and automatic observation, without manual refresh.
 
 Xcode can register macOS app outputs with LaunchServices even when signing is
 disabled. Validation builds therefore use isolated identities **and** isolated

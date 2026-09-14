@@ -5,6 +5,15 @@ struct SidebarPreferenceFixture {
     let suiteName: String
     let defaults: UserDefaults
     var historyFile: URL { root.appendingPathComponent("history.json") }
+    var attentionFile: URL { root.appendingPathComponent("attention.json") }
+
+    @MainActor
+    func preferences(historyFile: URL? = nil, attentionFile: URL? = nil) -> SidebarPreferences {
+        SidebarPreferences(
+            defaults: defaults, historyFile: historyFile ?? self.historyFile,
+            attentionFile: attentionFile ?? self.attentionFile
+        )
+    }
 
     init() throws {
         suiteName = "SidebarPreferenceTests.\(UUID().uuidString)"

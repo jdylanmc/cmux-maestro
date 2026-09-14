@@ -27,10 +27,13 @@ nonisolated struct CopilotChildWork: Codable, Equatable, Sendable {
     let state: CopilotWorkState
     let model: String?
     let terminalEvent: CopilotTerminalEvent?
+    let attention: [AgentAttention]?
+    let activity: AgentActivity?
 
     init(
         id: String, parentID: String?, kind: CopilotWorkKind, name: String,
-        state: CopilotWorkState, model: String?, terminalEvent: CopilotTerminalEvent? = nil
+        state: CopilotWorkState, model: String?, terminalEvent: CopilotTerminalEvent? = nil,
+        attention: [AgentAttention]? = nil, activity: AgentActivity? = nil
     ) {
         self.id = id
         self.parentID = parentID
@@ -39,6 +42,8 @@ nonisolated struct CopilotChildWork: Codable, Equatable, Sendable {
         self.state = state
         self.model = model
         self.terminalEvent = terminalEvent
+        self.attention = attention
+        self.activity = activity
     }
 }
 
@@ -51,11 +56,14 @@ nonisolated struct CopilotSessionObservation: Codable, Equatable, Sendable {
     let model: String?
     let children: [CopilotChildWork]
     let observedAt: Date
+    let attention: [AgentAttention]?
+    let activity: AgentActivity?
 
     init(
         sessionID: UUID, surfaceID: UUID, launchWorkspaceID: UUID,
         liveness: CopilotLiveness, state: CopilotWorkState, model: String?,
-        children: [CopilotChildWork], observedAt: Date
+        children: [CopilotChildWork], observedAt: Date,
+        attention: [AgentAttention]? = nil, activity: AgentActivity? = nil
     ) {
         self.sessionID = sessionID
         self.surfaceID = surfaceID
@@ -65,13 +73,15 @@ nonisolated struct CopilotSessionObservation: Codable, Equatable, Sendable {
         self.model = model
         self.children = children
         self.observedAt = observedAt
+        self.attention = attention
+        self.activity = activity
     }
 }
 
 nonisolated enum CopilotIssue: String, Codable, Equatable, Sendable {
     case integrationNotInstalled, noIdentityRecords, stateUnavailable
     case permissionDenied, malformedData, unsupportedFormat, loadingHistory
-    case identityChanged, ambiguousIdentity, readLimitReached
+    case identityChanged, ambiguousIdentity, ambiguousTurn, readLimitReached
 }
 
 nonisolated struct CopilotSnapshot: Codable, Equatable, Sendable {

@@ -4,6 +4,7 @@ import SwiftUI
 import Testing
 
 @MainActor
+@Suite(.serialized)
 struct SidebarPreferencesTests {
     @Test
     func exposesExactlyTheTwoSidebarChoices() {
@@ -12,15 +13,15 @@ struct SidebarPreferencesTests {
 
     @Test
     func defaultsToHierarchy() throws {
-        try withIsolatedDefaults { defaults, file in
-            #expect(SidebarPreferences(defaults: defaults, historyFile: file).selectedMode == .hierarchy)
+        try withIsolatedDefaults { defaults, file, attentionFile in
+            #expect(SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile).selectedMode == .hierarchy)
         }
     }
 
     @Test
     func switchesImmediatelyWithoutChangingAnyConnectionState() throws {
-        try withIsolatedDefaults { defaults, file in
-            let preferences = SidebarPreferences(defaults: defaults, historyFile: file)
+        try withIsolatedDefaults { defaults, file, attentionFile in
+            let preferences = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile)
             let connection = SidebarConnectionModel()
             let states: [SidebarConnectionState] = [
                 .waiting,
@@ -40,11 +41,11 @@ struct SidebarPreferencesTests {
 
     @Test
     func persistsThroughReconstruction() throws {
-        try withIsolatedDefaults { defaults, file in
-            let original = SidebarPreferences(defaults: defaults, historyFile: file)
+        try withIsolatedDefaults { defaults, file, attentionFile in
+            let original = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile)
             original.selectedMode = .taskboard
 
-            let reconstructed = SidebarPreferences(defaults: defaults, historyFile: file)
+            let reconstructed = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile)
 
             #expect(reconstructed.selectedMode == .taskboard)
         }
@@ -52,24 +53,24 @@ struct SidebarPreferencesTests {
 
     @Test
     func invalidPersistedValueFallsBackToHierarchy() throws {
-        try withIsolatedDefaults { defaults, file in
+        try withIsolatedDefaults { defaults, file, attentionFile in
             defaults.set("unknown-mode", forKey: "sidebar.selectedMode")
 
-            #expect(SidebarPreferences(defaults: defaults, historyFile: file).selectedMode == .hierarchy)
+            #expect(SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile).selectedMode == .hierarchy)
         }
     }
 
-    private func withIsolatedDefaults(_ body: (UserDefaults, URL) -> Void) throws {
+    private func withIsolatedDefaults(_ body: (UserDefaults, URL, URL) -> Void) throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
-        body(fixture.defaults, fixture.historyFile)
+        body(fixture.defaults, fixture.historyFile, fixture.attentionFile)
     }
 
     @Test
     func renderedContentClearsTheHostsOverlaidFooter() async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
-        let preferences = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
+        let preferences = fixture.preferences()
         let model = SidebarConnectionModel(copilot: SidebarCopilotPolling(
             read: { _ in .init(generatedAt: Date(), sessions: [], issues: [], isComplete: true) }
         ))
@@ -113,7 +114,7 @@ struct SidebarPreferencesTests {
     @Test func renderedHierarchyRemainsResponsiveAcrossScrollingAndModeChanges() async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
-        let preferences = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
+        let preferences = fixture.preferences()
         preferences.setRetention(.never)
         let data = SidebarTreeFixtures()
         let now = Date(timeIntervalSince1970: 2_000)

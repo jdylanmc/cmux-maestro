@@ -61,7 +61,11 @@ nonisolated struct SidebarHistorySettings: Codable, Equatable, Sendable {
     }
 
     static func knownTimestamp(_ event: CopilotTerminalEvent?, observedAt: Date, now: Date) -> Date? {
-        guard let timestamp = event?.timestamp, timestamp.timeIntervalSince1970.isFinite,
+        knownDate(event?.timestamp, observedAt: observedAt, now: now)
+    }
+
+    static func knownDate(_ date: Date?, observedAt: Date, now: Date) -> Date? {
+        guard let timestamp = date, timestamp.timeIntervalSince1970.isFinite,
               timestamp <= observedAt, timestamp <= now else { return nil }
         return timestamp
     }
@@ -74,5 +78,45 @@ extension SidebarHistorySettings: SidebarPreferenceValue {
     }
     nonisolated static var saveNotice: String {
         "History settings could not be saved. Check local storage and retry or reset history settings."
+    }
+}
+
+nonisolated struct SidebarAcknowledgedOutcome: Codable, Hashable, Sendable {
+    let sessionID: UUID
+    let ownerID: String?
+    let evidence: AgentEvidenceID
+
+    var isValid: Bool {
+        evidence.source == "copilot.events" && (ownerID.map {
+            SidebarDismissedOutcome(sessionID: sessionID, childID: $0, eventID: evidence.eventID).isValid
+        } ?? true)
+    }
+}
+
+nonisolated struct SidebarAttentionSettings: Codable, Equatable, Sendable {
+    static let maximumAcknowledgements = 2048
+    static let maximumStoredBytes = 1_048_576
+    var version = 1
+    var acknowledged: Set<SidebarAcknowledgedOutcome> = []
+
+    var isValid: Bool {
+        version == 1 && acknowledged.count <= Self.maximumAcknowledgements
+            && acknowledged.allSatisfy(\.isValid)
+    }
+
+    func contains(_ signal: AgentAttention, sessionID: UUID, ownerID: String?) -> Bool {
+        !signal.kind.isBlocking && acknowledged.contains(.init(
+            sessionID: sessionID, ownerID: ownerID, evidence: signal.evidence
+        ))
+    }
+}
+
+extension SidebarAttentionSettings: SidebarPreferenceValue {
+    nonisolated static var failOpen: Self { .init() }
+    nonisolated static var unreadableNotice: String {
+        "Acknowledgements could not be read. No attention is hidden. Reset acknowledgements to recover."
+    }
+    nonisolated static var saveNotice: String {
+        "Acknowledgements could not be saved. Check local storage and retry or reset acknowledgements."
     }
 }
