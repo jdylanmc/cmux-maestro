@@ -365,6 +365,7 @@ struct SidebarCopilotTreeTests {
         let poller = SidebarCopilotPolling(
             read: { try await harness.read($0) },
             pause: { try await Task.sleep(for: .milliseconds(5)) },
+            expiryPause: sidebarFrozenExpiry,
             now: { now }
         )
         poller.update(topology: fixtures.topology(), connected: true)
@@ -421,13 +422,7 @@ struct SidebarCopilotTreeTests {
             hasPendingHistory: { await harness.hasPendingHistory },
             pause: { try await cadence.idle() },
             catchUpPause: { try await cadence.catchUp() },
-            expiryPause: { _ in
-                // Cadence owns a frozen clock; unrelated test scheduling cannot expire its snapshots.
-                let (ticks, continuation) = AsyncStream<Void>.makeStream()
-                defer { continuation.finish() }
-                for await _ in ticks {}
-                try Task.checkCancellation()
-            },
+            expiryPause: sidebarFrozenExpiry,
             now: { now }
         )
         poller.update(topology: fixtures.topology(), connected: true)
@@ -487,6 +482,7 @@ struct SidebarCopilotTreeTests {
             hasPendingHistory: { await harness.hasPendingHistory },
             pause: { try await cadence.idle() },
             catchUpPause: { try await cadence.catchUp() },
+            expiryPause: sidebarFrozenExpiry,
             now: { now }
         )
         poller.update(topology: fixtures.topology(), connected: true)
@@ -678,6 +674,14 @@ func sidebarEventually(
         try? await Task.sleep(for: .milliseconds(5))
     }
     Issue.record("Condition did not settle", sourceLocation: sourceLocation)
+}
+
+// Fixtures with fixed `now` must not expire on unrelated wall-clock scheduling.
+nonisolated func sidebarFrozenExpiry(_: TimeInterval) async throws {
+    let (ticks, continuation) = AsyncStream<Void>.makeStream()
+    defer { continuation.finish() }
+    for await _ in ticks {}
+    try Task.checkCancellation()
 }
 
 private actor SidebarCadenceHarness {
