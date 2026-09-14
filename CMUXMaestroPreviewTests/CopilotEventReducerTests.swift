@@ -2,6 +2,8 @@ import Foundation
 import Testing
 @testable import CMUXMaestroPreview
 
+// Run large synchronous replay fixtures individually, not across every executor worker.
+@Suite(.serialized)
 nonisolated struct CopilotEventReducerTests {
     @Test func completedInvocationsCannotStarveFreshBlockedSubagent() throws {
         var reducer = CopilotEventReducer(sessionID: UUID())

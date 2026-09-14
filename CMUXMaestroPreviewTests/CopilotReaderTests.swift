@@ -3,6 +3,8 @@ import Foundation
 import Testing
 @testable import CMUXMaestroPreview
 
+// These disk-heavy scenarios share the test executor with short process-readiness checks.
+@Suite(.serialized)
 nonisolated struct CopilotReaderTests {
     @MainActor
     @Test func unchangedOverflowCatchupPublishesFreshTreeOnNormalCadence() async throws {
