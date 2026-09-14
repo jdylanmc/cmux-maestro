@@ -193,6 +193,18 @@
       "skillPath": ".agents/skills/status-report/SKILL.md",
       "computedHash": "951dbd99f7661232d464d35a2a29e3603c9353bfdb9703a1d64fcfad1a6e8b1e"
     },
+    "swiftui-design-principles": {
+      "source": "arjitj2/swiftui-design-principles",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "2692dc771633b2915c1b75000009c1a9198af3e3f994ae46d175b48e008edc57"
+    },
+    "swiftui-design-skill": {
+      "source": "wholiver/swiftui-design-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "e566cd9af70769555a866c11a8037f326a699f600de200a9dde8518122fb0b32"
+    },
     "swiftui-expert-skill": {
       "source": "avdlee/swiftui-agent-skill",
       "sourceType": "github",
