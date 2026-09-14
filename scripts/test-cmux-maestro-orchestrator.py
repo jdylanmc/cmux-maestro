@@ -270,6 +270,10 @@ print(json.dumps({
              "promptCacheBreakState": {}},
 }))
 print(json.dumps({"type": "assistant.idle", "data": {}}))
+for _ in range(3):
+    print(json.dumps({"type": "session.background_tasks_changed", "data": {}}))
+if "[BACKGROUND_NOTICE_WITH_CONTENT]" in prompt:
+    print(json.dumps({"type": "session.background_tasks_changed", "data": {"tasks": ["unverified"]}}))
 if "[AFTER_FINAL_TOOL]" in prompt:
     print(json.dumps({"type": "tool.execution_start", "data": {"toolName": "bash"}}))
 if "[AFTER_FINAL_CONTENT]" in prompt:
@@ -738,6 +742,7 @@ class OrchestratorTests(unittest.TestCase):
             ("[AFTER_FINAL_TOOL]", "report-missing"),
             ("[AFTER_FINAL_CONTENT]", "report-missing"),
             ("[BOOKKEEPING_WITH_CONTENT]", "report-missing"),
+            ("[BACKGROUND_NOTICE_WITH_CONTENT]", "report-missing"),
             ("[AFTER_FINAL_MALFORMED]", "turn-failed"),
             ("[AFTER_RESULT_BOOKKEEPING]", "turn-failed"),
         ]

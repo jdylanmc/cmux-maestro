@@ -1084,6 +1084,8 @@ def event_has_permission_denial(event):
 
 
 def terminal_bookkeeping(event):
+    if event.get("type") == "session.background_tasks_changed":
+        return isinstance(event.get("data"), dict) and not event["data"]
     if event.get("type") not in {
         "assistant.turn_end", "session.usage_checkpoint", "assistant.idle",
     }:

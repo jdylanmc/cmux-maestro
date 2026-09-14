@@ -18,9 +18,10 @@ PROFILES = {
     "unsigned": (".Validation.Unsigned", BASE_ID + ".validation.unsigned.sidebar"),
     "tests": (".Validation.Tests", BASE_ID + ".validation.tests.sidebar"),
 }
+ORCHESTRATION_READ_PATH = "/Library/Application Support/CMUXMaestroPreview/Orchestration/observer/"
 READ_PATHS = [
     "/Library/Application Support/CMUXMaestroPreview/Copilot/",
-    "/Library/Application Support/CMUXMaestroPreview/Orchestration/observer/",
+    ORCHESTRATION_READ_PATH,
     "/.copilot/session-state/",
 ]
 SANDBOX_KEY = "com.apple.security.app-sandbox"
@@ -82,7 +83,19 @@ def verify_settings(rows, mode):
             require(settings.get("CODE_SIGNING_ALLOWED") == "NO", "Validation unexpectedly enables signing.")
 
 
-def verify_metadata(app, mode, *, expected_build=APP_BUILD_VERSION):
+def verify_orchestration_resources(app, *, required=True):
+    resources = Path(app) / "Contents/Resources"
+    controller = resources / "cmux-maestro-orchestrator.py"
+    skill = resources / "SKILL.md"
+    if not required and not any(path.exists() or path.is_symlink() for path in (controller, skill)):
+        return
+    require(controller.is_file() and 0 < controller.stat().st_size <= 1_048_576,
+            "Bundled orchestration controller is missing or oversized.")
+    require(skill.is_file() and 0 < skill.stat().st_size <= 65_536,
+            "Bundled orchestration skill is missing or oversized.")
+
+
+def verify_metadata(app, mode, *, expected_build=APP_BUILD_VERSION, require_orchestration=True):
     suffix, point = PROFILES[mode]
     app = Path(app)
     extension = app / "Contents/Extensions/CMUX Maestro Preview Extension.appex"
@@ -102,13 +115,7 @@ def verify_metadata(app, mode, *, expected_build=APP_BUILD_VERSION):
             "App and sidebar must have the same valid build version.")
     if expected_build is not None:
         require(version == expected_build, "App or sidebar native feature build version is stale.")
-    resources = app / "Contents/Resources"
-    controller = resources / "cmux-maestro-orchestrator.py"
-    skill = resources / "SKILL.md"
-    require(controller.is_file() and 0 < controller.stat().st_size <= 1_048_576,
-            "Bundled orchestration controller is missing or oversized.")
-    require(skill.is_file() and 0 < skill.stat().st_size <= 65_536,
-            "Bundled orchestration skill is missing or oversized.")
+    verify_orchestration_resources(app, required=require_orchestration)
     return extension, child
 
 
@@ -129,7 +136,8 @@ def verify_local_preview(app, *, current=True, runner=subprocess.run):
     This separate API is used only with an owned install/rollback receipt.
     """
     extension, child = verify_metadata(
-        app, "production", expected_build=APP_BUILD_VERSION if current else None
+        app, "production", expected_build=APP_BUILD_VERSION if current else None,
+        require_orchestration=current,
     )
     app = Path(app)
     helper = app / "Contents/Helpers/CMUXMaestroCopilotHook"
@@ -161,6 +169,8 @@ def verify_local_preview(app, *, current=True, runner=subprocess.run):
                 paths = profile.get(READ_KEY, [])
                 require(isinstance(paths, list) and all(isinstance(path, str) for path in paths)
                         and set(paths) <= set(READ_PATHS), "Rollback expands approved read-only access.")
+                if ORCHESTRATION_READ_PATH in paths:
+                    verify_orchestration_resources(app)
                 require(set(profile) <= {SANDBOX_KEY, READ_KEY, "com.apple.security.get-task-allow"},
                         "Unknown rollback sidebar entitlement.")
         else:

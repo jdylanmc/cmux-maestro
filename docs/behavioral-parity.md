@@ -58,6 +58,13 @@ Managed report fixtures include the real terminal sequence: `final_answer`,
 Only non-content terminal bookkeeping is permitted; later assistant/tool work
 and post-result events remain rejected. Policy denial requires a failed tool's
 structured error code, not words found inside successful output.
+Resumed-session empty `session.background_tasks_changed` invalidations are also
+accepted as notifications, never as proof that background work finished.
+
+Owned pre-orchestration installs may lack the newer controller/skill assets when
+their signed profile has no orchestration grant. Their exact receipts remain
+required for status, preparation, recovery, update and rollback. New sources and
+any profile granting orchestration access still require the complete asset pair.
 
 ## Intentional differences and explicit limits
 
