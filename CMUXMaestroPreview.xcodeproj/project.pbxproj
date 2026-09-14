@@ -427,10 +427,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C09100000000000000000005 /* SidebarView.swift in Test Sources */,
 				D10400000000000000000001 /* SidebarPreferences.swift in Sources */,
 				C09100000000000000000001 /* SidebarLayout.swift in Test Sources */,
 				C09100000000000000000002 /* SidebarBranchSummary.swift in Test Sources */,
-				C09100000000000000000005 /* SidebarView.swift in Test Sources */,
 				D12700000000000000000001 /* SidebarPreferenceStore.swift in Test Sources */,
 				D10400000000000000000002 /* SidebarConnectionState.swift in Sources */,
 				D10500000000000000000001 /* HierarchySnapshot.swift in Sources */,

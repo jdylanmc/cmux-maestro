@@ -6,8 +6,20 @@ nonisolated enum CopilotSetupAction: Equatable, Sendable {
     case install, uninstall
 }
 
+nonisolated enum CopilotSetupAccess {
+    static let productionBundleIdentifier = "com.jdylanmc.CMUXMaestroPreview"
+
+    static func allowsChanges(bundleIdentifier: String?) -> Bool {
+        bundleIdentifier == productionBundleIdentifier
+    }
+
+    static var currentAppAllowsChanges: Bool {
+        allowsChanges(bundleIdentifier: Bundle.main.bundleIdentifier)
+    }
+}
+
 nonisolated enum CopilotSetupResult: Equatable, Sendable {
-    case installed, uninstalled, unavailable, failed(Int32), timedOut, cancelled
+    case installed, uninstalled, unavailable, failed(Int32), timedOut, cancelled, validationOnly
 
     var message: String {
         switch self {
@@ -23,6 +35,8 @@ nonisolated enum CopilotSetupResult: Equatable, Sendable {
             "Copilot setup timed out and its installer processes were stopped. Check your CLI installation before retrying."
         case .cancelled:
             "Copilot setup was cancelled and its installer processes were stopped."
+        case .validationOnly:
+            "This validation copy cannot install or uninstall Copilot integration. Use the installed CMUX Maestro Preview app."
         }
     }
 }
@@ -321,17 +335,21 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
 nonisolated struct CopilotSetup {
     let files: any CopilotSetupFileSystem
     let runner: any CopilotSetupProcessRunner
+    private let allowsChanges: Bool
 
     init(files: any CopilotSetupFileSystem = LocalCopilotSetupFiles(),
-         runner: any CopilotSetupProcessRunner = LocalCopilotSetupRunner()) {
+         runner: any CopilotSetupProcessRunner = LocalCopilotSetupRunner(),
+         bundleIdentifier: String? = Bundle.main.bundleIdentifier) {
         self.files = files
         self.runner = runner
+        allowsChanges = CopilotSetupAccess.allowsChanges(bundleIdentifier: bundleIdentifier)
     }
 
     // Only the explicit consent buttons call this; constructing the app performs
     // no discovery, writes, CLI invocations or provider observation.
     func perform(_ action: CopilotSetupAction, selected: URL?, path: String,
                  root: URL, helper: URL) async -> CopilotSetupResult {
+        guard allowsChanges else { return .validationOnly }
         do {
             let executable = try files.executable(selected: selected, path: path)
             let arguments: [String]

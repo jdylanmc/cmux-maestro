@@ -51,6 +51,55 @@ nonisolated struct CopilotFileStamp: Equatable, Sendable {
     }
 }
 
+// Exclusively owned by one reader actor (or a synchronous helper call). Holding
+// DIR, rather than a pathname or a prefix, preserves readdir's opaque position.
+nonisolated final class CopilotDirectoryStream: @unchecked Sendable {
+    private var stream: UnsafeMutablePointer<DIR>?
+    private(set) var finished = false
+
+    init(at directory: Int32) throws {
+        let copy = openat(directory, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        guard copy >= 0 else { throw CopilotFileError.current() }
+        guard let opened = fdopendir(copy) else {
+            close(copy)
+            throw CopilotFileError.current()
+        }
+        stream = opened
+    }
+
+    deinit { if let stream { closedir(stream) } }
+
+    func closeStream() {
+        if let stream { closedir(stream) }
+        stream = nil
+        finished = true
+    }
+
+    func next() throws -> String? {
+        do {
+            try Task.checkCancellation()
+            guard let stream else { return nil }
+            while true {
+                errno = 0
+                guard let entry = readdir(stream) else {
+                    if errno != 0 { throw CopilotFileError.current() }
+                    closeStream()
+                    return nil
+                }
+                let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                    $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) {
+                        String(cString: $0)
+                    }
+                }
+                if name != "." && name != ".." { return name }
+            }
+        } catch {
+            closeStream()
+            throw error
+        }
+    }
+}
+
 // File descriptors anchor each traversal. No resolve-then-open symlink window,
 // and no path from a transcript is ever passed into these helpers.
 nonisolated enum CopilotFileAccess {
@@ -132,28 +181,10 @@ nonisolated enum CopilotFileAccess {
     }
 
     static func names(at directory: Int32, limit: Int) throws -> (names: [String], limited: Bool) {
-        // A fresh directory description avoids sharing the stream offset with the caller.
-        let copy = openat(directory, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
-        guard copy >= 0 else { throw CopilotFileError.current() }
-        guard let stream = fdopendir(copy) else {
-            close(copy)
-            throw CopilotFileError.current()
-        }
-        defer { closedir(stream) }
+        let stream = try CopilotDirectoryStream(at: directory)
+        defer { stream.closeStream() }
         var names: [String] = []
-        while true {
-            try Task.checkCancellation()
-            errno = 0
-            guard let entry = readdir(stream) else {
-                if errno != 0 { throw CopilotFileError.current() }
-                break
-            }
-            let name = withUnsafePointer(to: &entry.pointee.d_name) {
-                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) {
-                    String(cString: $0)
-                }
-            }
-            if name == "." || name == ".." { continue }
+        while let name = try stream.next() {
             guard names.count < limit else { return (names.sorted(), true) }
             names.append(name)
         }

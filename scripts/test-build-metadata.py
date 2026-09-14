@@ -132,12 +132,20 @@ class BuildMetadataTests(unittest.TestCase):
                     "CURRENT_PROJECT_VERSION": metadata.APP_BUILD_VERSION,
                     "OTHER_CODE_SIGN_FLAGS": "--identifier " + metadata.BASE_ID + suffix + ending
                     if target == "CMUXMaestroCopilotHook" else "",
+                    "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG" if mode == "production" else "DEBUG CMUX_VALIDATION",
                 }})
             metadata.verify_settings(rows, mode)
             flags = rows[2]["buildSettings"].pop("OTHER_CODE_SIGN_FLAGS")
             with self.assertRaises(ValueError):
                 metadata.verify_settings(rows, mode)
             rows[2]["buildSettings"]["OTHER_CODE_SIGN_FLAGS"] = flags
+            valid_conditions = rows[0]["buildSettings"]["SWIFT_ACTIVE_COMPILATION_CONDITIONS"]
+            rows[0]["buildSettings"]["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = (
+                "DEBUG CMUX_VALIDATION" if mode == "production" else "DEBUG"
+            )
+            with self.assertRaises(ValueError):
+                metadata.verify_settings(rows, mode)
+            rows[0]["buildSettings"]["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = valid_conditions
             rows[1]["buildSettings"]["CMUX_SIDEBAR_EXTENSION_POINT_ID"] = "unexpected.point"
             with self.assertRaises(ValueError):
                 metadata.verify_settings(rows, mode)
@@ -148,6 +156,7 @@ class BuildMetadataTests(unittest.TestCase):
             suffix, point = metadata.PROFILES[mode]
             self.assertIn("CMUX_BUNDLE_ID_SUFFIX=" + suffix, script)
             self.assertIn("CMUX_SIDEBAR_EXTENSION_POINT_ID=" + point, script)
+            self.assertIn("SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) CMUX_VALIDATION", script)
             self.assertIn("--settings", script)
             self.assertIn("--app", script)
             self.assertNotIn("REGISTER_APP_WITH_LAUNCH_SERVICES", script)
