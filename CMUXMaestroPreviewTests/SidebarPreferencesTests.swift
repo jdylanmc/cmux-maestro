@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 
 @MainActor
@@ -62,6 +64,51 @@ struct SidebarPreferencesTests {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
         body(fixture.defaults, fixture.historyFile, fixture.attentionFile)
+    }
+
+    @Test
+    func renderedContentClearsTheHostsOverlaidFooter() async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let model = SidebarConnectionModel(copilot: SidebarCopilotPolling(
+            read: { _ in .init(generatedAt: Date(), sessions: [], issues: [], isComplete: true) }
+        ))
+        defer { model.setVisible(false) }
+        model.showConnected(workspaceCount: 1, surfaceCount: 1)
+
+        for mode in SidebarMode.allCases {
+            preferences.selectedMode = mode
+            for size in [NSSize(width: 240, height: 400), NSSize(width: 349, height: 941)] {
+                let frame = NSRect(origin: .zero, size: size)
+                let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
+                    .environment(\.colorScheme, .light)
+                    .background(Color.white))
+                window.contentView = hosting
+                defer { window.contentView = nil; window.close() }
+                hosting.frame = frame
+                hosting.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(20))
+                hosting.layoutSubtreeIfNeeded()
+                #expect(!window.isVisible)
+                let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+
+                let reservedRows = Int(50 * CGFloat(bitmap.pixelsHigh) / size.height)
+                var paintedPixels = 0
+                for y in (bitmap.pixelsHigh - reservedRows)..<bitmap.pixelsHigh {
+                    for x in 0..<bitmap.pixelsWide {
+                        let color = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                        if min(color.redComponent, color.greenComponent, color.blueComponent) < 0.99 {
+                            paintedPixels += 1
+                        }
+                    }
+                }
+                #expect(paintedPixels == 0, "\(mode.rawValue) paints into the host's 50-point footer")
+            }
+        }
     }
 
     private func set(_ state: SidebarConnectionState, on connection: SidebarConnectionModel) {
