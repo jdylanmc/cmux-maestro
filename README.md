@@ -263,6 +263,52 @@ likewise do not end or unblock unrelated children. Process liveness, work state
 and attention remain independent. Process presence, idle time, file modification
 time and expired history never imply success, progress, or a hung agent.
 
+Copilot reuses turn IDs such as `0` and `1` in later interactions. When supplied,
+`data.interactionId` scopes accepted starts and replay protection together with
+the owner and turn ID. It is an opaque, nonempty string bounded to 256 UTF-8 bytes,
+not a counter or an inferred user-message epoch. Retired interaction identities
+use the existing bounded replay guard. A new primary interaction does not reset
+still-running children or their pending requests.
+
+An end with an explicit interaction ID must match the current accepted owner
+turn. Ends without that field retain legacy pairing when the turn identity is
+unambiguous. For reused IDs, they require a current causal parent or a uniquely
+matched tool completion whose start was tied to the current turn. Only envelope
+IDs/parent links are used across ignored payload-bearing events: no prompt,
+arguments, results or message content is decoded for this purpose. Tracking is
+bounded to one causal tip per active owner and one origin per retained tool,
+not an accumulated transcript graph.
+Optional interaction/turn tags on `tool.execution_complete` are validated against
+its recorded tool origin, or the current accepted owner turn when no origin was
+recorded. Explicit contradictions cannot complete current work or advance its
+causal tip. Matching tags do not create missing tool ownership.
+
+All tool-associated events, including tool-backed subagent events and unjoined
+shell notifications, are excluded from generic parent bridging.
+Accepted tool starts, completions and partial results advance a causal tip only
+through a known tool whose recorded origin is the current accepted owner turn.
+An old or missing origin cannot be replaced by a later `parentId`, even when tags
+are nil or the raw turn ID matches. Partial results decode only bounded optional
+tool/turn/interaction metadata, never output content. A matching current partial
+may advance the single tip, but does not change work state or manufacture an
+outcome. Non-tool envelope bridges retain their bounded current-parent behavior.
+
+Missing/gapped causal evidence for a reused nil-interaction end produces
+`ambiguousTurn` and unknown primary state, not a fabricated completion. Pending
+requests and background work survive, and a later proven end can recover the
+current outcome; the observed ambiguity keeps that transcript projection partial.
+Explicitly mismatched ends and exact old event replays cannot close the new turn.
+Contradictory clocks on a proven match retain identity with unknown timing.
+Legacy-only streams keep their existing replay behavior; missing interaction
+metadata cannot silently reinterpret an already-used explicit turn identity.
+A provider record incorrectly labeled or parented as current is not distinguishable
+from current evidence by this metadata-only reader.
+
+Normal tool failure may coexist with **Turn finished** and an idle primary turn.
+An accepted primary `session.error` or `abort` retains its existing failed/cancelled
+policy instead; it is not relabeled as normal turn completion. A fresh accepted
+interaction can subsequently establish working state.
+
 Outstanding nonblocking evidence is intentionally bounded: only the latest
 accepted error/abort outcome per owner, plus the latest primary-turn completion.
 Successful historical child completions are history, not attention. Fresh
@@ -355,7 +401,9 @@ Telemetry and the remaining backlog are not claimed by this feature.
   the primary owner; tool ordering uses the bounded retained-tool list.
   Request/tool-only unknown owners use event-scoped lifecycles, never permanent
   agent-ID tombstones.
-- Spawn replay keys use the spawn tool ID; turn replay keys use owner + turn ID.
+- Spawn replay keys use the spawn tool ID; turn replay keys use owner +
+  interaction ID + turn ID when interaction metadata is present, otherwise the
+  legacy owner + turn ID namespace.
   A new spawn tool or previously unseen scoped turn is fresh activity, even for
   a retained or retired terminal agent. Completions pair with the row's current
   spawn, so a late old completion cannot finish a newer lifecycle. A turn alone

@@ -22,11 +22,13 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
     let resolvedByHook: Bool?
     let timestamp: Date?
     let turnID: String?
+    let interactionID: String?
+    let parentEventID: String?
 
     private static let knownTypes: Set<String> = [
         "session.start", "session.resume", "session.idle", "session.model_change", "session.shutdown",
         "session.error", "abort", "assistant.turn_start", "assistant.turn_end",
-        "tool.execution_start", "tool.execution_complete", "subagent.started",
+        "tool.execution_start", "tool.execution_complete", "tool.execution_partial_result", "subagent.started",
         "subagent.completed", "subagent.failed", "subagent.configured", "skill.invoked",
         "permission.requested", "permission.completed", "user_input.requested", "user_input.completed",
         "system.notification"
@@ -37,11 +39,11 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
             && ["subagent.", "tool.execution_", "assistant.turn_"].contains(where: { type.hasPrefix($0) })
     }
 
-    private enum Keys: String, CodingKey { case id, type, agentId, data, timestamp }
+    private enum Keys: String, CodingKey { case id, type, agentId, data, timestamp, parentId }
     private enum Fields: String, CodingKey {
         case toolCallId, parentId, toolName, agentDisplayName, name, model
         case selectedModel, newModel, currentModel, requestId, success, cancelled
-        case shutdownType, sessionId, version, turnId, trigger, kind, resolvedByHook
+        case shutdownType, sessionId, version, turnId, interactionId, trigger, kind, resolvedByHook
     }
     private enum NotificationFields: String, CodingKey { case type, shellId, exitCode }
 
@@ -51,6 +53,11 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
         id = UUID(uuidString: rawID)?.uuidString ?? rawID
         type = try outer.decode(String.self, forKey: .type)
         agentID = try outer.decodeIfPresent(String.self, forKey: .agentId)
+        if let parent = try? outer.decode(String.self, forKey: .parentId), Self.validID(parent) {
+            parentEventID = UUID(uuidString: parent)?.uuidString ?? parent
+        } else {
+            parentEventID = nil
+        }
         // Public event timestamps are RFC 3339 strings, not epoch numbers.
         // Bad/missing timing must not discard otherwise valid terminal evidence.
         if let text = try? outer.decode(String.self, forKey: .timestamp), text.utf8.count <= 64 {
@@ -67,7 +74,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
         var request: String?, didSucceed: Bool?, wasCancelled: Bool?, shutdown: String?
         var session: UUID?, format: Int?
         var shell: String?, exitCode: Int?
-        var hookResolved: Bool?, turn: String?
+        var hookResolved: Bool?, turn: String?, interaction: String?
         if Self.knownTypes.contains(type) {
             let data = try outer.nestedContainer(keyedBy: Fields.self, forKey: .data)
             switch type {
@@ -85,6 +92,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
                 selectedModel = try data.decodeIfPresent(String.self, forKey: .currentModel)
             case "assistant.turn_start", "assistant.turn_end":
                 turn = try data.decode(String.self, forKey: .turnId)
+                interaction = try data.decodeIfPresent(String.self, forKey: .interactionId)
                 selectedModel = try data.decodeIfPresent(String.self, forKey: .model)
             case "tool.execution_start":
                 tool = try data.decode(String.self, forKey: .toolCallId)
@@ -93,6 +101,12 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
             case "tool.execution_complete":
                 tool = try data.decode(String.self, forKey: .toolCallId)
                 didSucceed = try data.decode(Bool.self, forKey: .success)
+                turn = try data.decodeIfPresent(String.self, forKey: .turnId)
+                interaction = try data.decodeIfPresent(String.self, forKey: .interactionId)
+            case "tool.execution_partial_result":
+                tool = try data.decodeIfPresent(String.self, forKey: .toolCallId)
+                turn = try data.decodeIfPresent(String.self, forKey: .turnId)
+                interaction = try data.decodeIfPresent(String.self, forKey: .interactionId)
             case "subagent.started", "subagent.completed", "subagent.failed":
                 tool = try data.decode(String.self, forKey: .toolCallId)
                 label = try data.decode(String.self, forKey: .agentDisplayName)
@@ -123,6 +137,11 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
             default: break
             }
         }
+        if let interaction {
+            guard !interaction.isEmpty, interaction.utf8.count <= 256,
+                  !interaction.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+            else { throw Self.invalid(decoder) }
+        }
         for identifier in [tool, parent, request, shell, turn].compactMap({ $0 }) {
             guard Self.validID(identifier) else { throw Self.invalid(decoder) }
         }
@@ -141,6 +160,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
         shellExitCode = exitCode
         resolvedByHook = hookResolved
         turnID = turn
+        interactionID = interaction
     }
 
     private static func validID(_ value: String) -> Bool {
@@ -269,16 +289,27 @@ nonisolated struct CopilotEventReducer: Sendable {
         var lifecycle: String?
         var spawnTool: String?
         var turnID: String?
+        var interactionID: String?
     }
     private struct Owner: Hashable, Sendable { let agentID: String? }
     private struct Turn: Sendable {
         let id: String
+        let interactionID: String?
+        let eventID: String
         let startedAt: Date?
+        var causalTip: String
+        var requiresCausalProof: Bool
+    }
+    private struct TurnOrigin: Sendable {
+        let eventID: String
+        let turnID: String
+        let interactionID: String?
     }
     private struct Tool: Sendable {
         let agentID: String?
         let name: String?
         let startedAt: Date?
+        let turnOrigin: TurnOrigin?
         var executing = true
         var completed = false
     }
@@ -296,6 +327,7 @@ nonisolated struct CopilotEventReducer: Sendable {
     private var rootStartedAt: Date?
     private var resumedAt: Date?
     private var rootTurnID: String?
+    private var rootInteractionID: String?
     private var work: [String: Work] = [:]
     private var order: [String] = []
     private var toolOwners: [String: Tool] = [:]
@@ -316,7 +348,9 @@ nonisolated struct CopilotEventReducer: Sendable {
     private var unsupportedSession = false
 
     var canPublishProjection: Bool {
-        !unsupportedSession && issues.allSatisfy { $0 == .unsupportedFormat || $0 == .readLimitReached }
+        !unsupportedSession && issues.allSatisfy {
+            $0 == .unsupportedFormat || $0 == .readLimitReached || $0 == .ambiguousTurn
+        }
     }
 
     init(
@@ -347,11 +381,12 @@ nonisolated struct CopilotEventReducer: Sendable {
 
     var retentionCounts: (
         work: Int, owners: Int, agents: Int, requests: Int, tombstones: Int, replayWords: Int,
-        events: Int, eventReplayWords: Int, turns: Int, outcomes: Int, activities: Int
+        events: Int, eventReplayWords: Int, turns: Int, outcomes: Int, activities: Int, interactionOwners: Int
     ) {
         (work.count, toolOwners.count, agentForTool.count, pending.count, replay.retainedCount,
          replay.filterWordCount, seenLifecycleEvents.retainedCount, seenLifecycleEvents.filterWordCount,
-         turns.count, outcomes.count + (primaryCompletion == nil ? 0 : 1), lastToolActivity.count)
+         turns.count, outcomes.count + (primaryCompletion == nil ? 0 : 1), lastToolActivity.count,
+         work.values.filter { $0.interactionID != nil }.count + (rootInteractionID == nil ? 0 : 1))
     }
 
     mutating func value() -> CopilotReducedState {
@@ -407,7 +442,10 @@ nonisolated struct CopilotEventReducer: Sendable {
                 return
             }
         }
-        if event.type == "tool.execution_partial_result" { return }
+        if event.type == "tool.execution_partial_result" {
+            observeToolCausality(event)
+            return
+        }
         // An obsolete completion cannot degrade a newer invocation even when
         // the replay ledger can no longer admit new event identities.
         if event.type == "subagent.completed" || event.type == "subagent.failed" {
@@ -421,19 +459,10 @@ nonisolated struct CopilotEventReducer: Sendable {
                 return
             }
             guard invocation.agentID == event.agentID, !invocation.completed else { return }
-        }
-        if event.type == "assistant.turn_end" {
-            let current: String?
-            if let id = event.agentID {
-                guard let item = work[id], !Self.terminal(item.state) else { return }
-                current = item.turnID
-            } else {
-                current = rootTurnID
-            }
-            if let current, current != event.turnID { return }
-            if turns[Owner(agentID: event.agentID)] == nil, let turn = event.turnID,
-               rejectReplay(Self.turnKey(turn, owner: event.agentID)) {
-                return
+            if let origin = invocation.turnOrigin {
+                guard turnTagsMatch(event, turnID: origin.turnID, interactionID: origin.interactionID) else { return }
+            } else if let current = turns[Owner(agentID: event.agentID)] {
+                guard turnTagsMatch(event, turnID: current.id, interactionID: current.interactionID) else { return }
             }
         }
         let start = startIdentity(for: event)
@@ -465,10 +494,12 @@ nonisolated struct CopilotEventReducer: Sendable {
                 return
             }
         }
+        defer { observeCausalEvent(event) }
         switch event.type {
         case "session.start":
             if let model = event.model { rootModel = model }
         case "session.resume":
+            retireInteractions()
             ended = false
             rootState = .unknown
             clearSignals()
@@ -483,6 +514,7 @@ nonisolated struct CopilotEventReducer: Sendable {
             if !ended && rootState != .failed && rootState != .cancelled { rootState = .idle }
         case "session.shutdown":
             guard !isStale(event, owner: nil) else { return }
+            retireInteractions()
             if event.shutdownType == "error" {
                 if rootState != .failed { recordOutcome(.error, owner: nil, event: event) }
                 rootState = .failed
@@ -513,7 +545,10 @@ nonisolated struct CopilotEventReducer: Sendable {
             }
         case "assistant.turn_start":
             guard let turn = event.turnID else { return }
-            let key = Self.turnKey(turn, owner: event.agentID)
+            let key = Self.turnKey(turn, owner: event.agentID, interaction: event.interactionID)
+            let reusedRawTurn = replay.match(Self.rawTurnKey(turn, owner: event.agentID)) != .absent
+                || (event.interactionID != nil && replay.match(Self.turnKey(turn, owner: event.agentID)) != .absent)
+            guard prepareInteraction(event) else { limitLifecycle(event); return }
             if let id = event.agentID {
                 if let previous = work[id], !Self.terminal(previous.state) {
                     guard remember(key) else { limitLifecycle(event); return }
@@ -521,6 +556,7 @@ nonisolated struct CopilotEventReducer: Sendable {
                     work[id]?.startedAt = event.timestamp
                     work[id]?.terminalEvent = nil
                     work[id]?.turnID = turn
+                    if let interaction = event.interactionID { work[id]?.interactionID = interaction }
                     work[id]?.state = .working
                     setModel(event.model, agent: id)
                 } else {
@@ -529,13 +565,15 @@ nonisolated struct CopilotEventReducer: Sendable {
                     if !insert(Work(
                         id: id, parent: "unresolved-owner", kind: .unknown,
                         name: "Unknown agent", state: .working, model: event.model,
-                        startedAt: event.timestamp, lifecycle: key, turnID: turn
+                        startedAt: event.timestamp, lifecycle: key, turnID: turn,
+                        interactionID: event.interactionID
                     ), validatedStart: true) { failAdmission(event); return }
                 }
             } else {
                 guard remember(key) else { limitLifecycle(event); return }
                 ended = false
                 rootTurnID = turn
+                if let interaction = event.interactionID { rootInteractionID = interaction }
                 rootState = .working
                 setModel(event.model, agent: nil)
             }
@@ -548,18 +586,39 @@ nonisolated struct CopilotEventReducer: Sendable {
             } else {
                 outcomes.removeValue(forKey: owner)
             }
-            turns[owner] = Turn(id: turn, startedAt: event.timestamp)
+            turns[owner] = Turn(
+                id: turn, interactionID: event.interactionID, eventID: event.id,
+                startedAt: event.timestamp, causalTip: event.id, requiresCausalProof: reusedRawTurn
+            )
             lastToolActivity.removeValue(forKey: owner)
             stopTools(owner: owner)
         case "assistant.turn_end":
             guard let turn = event.turnID else { return }
             let owner = Owner(agentID: event.agentID)
             let activeTurn = turns[owner]
-            guard activeTurn == nil || activeTurn?.id == turn else { return }
+            if let id = event.agentID, work[id]?.state.isTerminal != false { return }
+            if let activeTurn {
+                guard activeTurn.id == turn else { return }
+                if let interaction = event.interactionID {
+                    guard interaction == activeTurn.interactionID else { return }
+                } else if activeTurn.requiresCausalProof && !isCausallyLinked(event, to: activeTurn) {
+                    markTurnUnknown(owner: event.agentID)
+                    addIssue(.ambiguousTurn)
+                    return
+                }
+            } else {
+                // Missing-start legacy evidence can establish idle, never a primary
+                // completion. It cannot be assigned to a known interaction namespace.
+                guard event.interactionID == nil, currentInteraction(owner: event.agentID) == nil,
+                      replay.match(Self.rawTurnKey(turn, owner: event.agentID)) == .absent else { return }
+                let current = event.agentID.flatMap { work[$0]?.turnID } ?? (event.agentID == nil ? rootTurnID : nil)
+                guard current == nil || current == turn,
+                      !rejectReplay(Self.turnKey(turn, owner: event.agentID)) else { return }
+            }
             turns.removeValue(forKey: owner)
             if event.agentID == nil {
                 rootTurnID = turn
-                remember(Self.turnKey(turn, owner: nil))
+                remember(Self.turnKey(turn, owner: nil, interaction: activeTurn?.interactionID))
                 if !ended && !Self.terminal(rootState) {
                     rootState = .idle
                     if let activeTurn {
@@ -568,9 +627,7 @@ nonisolated struct CopilotEventReducer: Sendable {
                     }
                 }
             } else if let id = event.agentID, let item = work[id], !Self.terminal(item.state) {
-                guard item.turnID == nil || item.turnID == turn else { return }
-                if item.turnID == nil && rejectReplay(Self.turnKey(turn, owner: id)) { return }
-                remember(Self.turnKey(turn, owner: id))
+                remember(Self.turnKey(turn, owner: id, interaction: activeTurn?.interactionID))
                 work[id]?.turnID = turn
                 work[id]?.state = .idle
             } else {
@@ -592,7 +649,14 @@ nonisolated struct CopilotEventReducer: Sendable {
                     }
                     removeTool(retired)
                 }
-                toolOwners[tool] = Tool(agentID: event.agentID, name: event.toolName, startedAt: event.timestamp)
+                let currentTurn = turns[Owner(agentID: event.agentID)]
+                let origin = currentTurn.flatMap {
+                    !$0.requiresCausalProof || isCausallyLinked(event, to: $0)
+                        ? TurnOrigin(eventID: $0.eventID, turnID: $0.id, interactionID: $0.interactionID) : nil
+                }
+                toolOwners[tool] = Tool(
+                    agentID: event.agentID, name: event.toolName, startedAt: event.timestamp, turnOrigin: origin
+                )
                 toolOrder.append(tool)
             }
             guard remember("start-tool:\(tool)") else { limitLifecycle(event); return }
@@ -627,6 +691,7 @@ nonisolated struct CopilotEventReducer: Sendable {
                     startedAt: event.timestamp
                 ), validatedStart: true)
             }
+            observeToolCausality(event)
         case "tool.execution_complete":
             guard let tool = event.toolCallID else { return }
             guard let invocation = toolOwners[tool] else {
@@ -635,6 +700,7 @@ nonisolated struct CopilotEventReducer: Sendable {
             }
             guard invocation.agentID == event.agentID, !invocation.completed else { return }
             let evidence = completionEvidence(event, startedAt: invocation.startedAt)
+            observeToolCausality(event)
             toolOwners[tool]?.completed = true
             toolOwners[tool]?.executing = false
             if invocation.executing, let name = invocation.name {
@@ -745,7 +811,7 @@ nonisolated struct CopilotEventReducer: Sendable {
         case "tool.execution_start":
             return event.toolCallID.map { "start-tool:\($0)" }
         case "assistant.turn_start":
-            return event.turnID.map { Self.turnKey($0, owner: event.agentID) }
+            return event.turnID.map { Self.turnKey($0, owner: event.agentID, interaction: event.interactionID) }
         default: return nil
         }
     }
@@ -759,6 +825,10 @@ nonisolated struct CopilotEventReducer: Sendable {
             // adopting any owner state, model, timestamp or executing activity.
             keys += ["tool:\(tool)", "work:shell:\(tool)"]
         }
+        if event.type == "assistant.turn_start", let interaction = event.interactionID,
+           interaction != currentInteraction(owner: event.agentID) {
+            keys.append(Self.interactionKey(interaction, owner: event.agentID))
+        }
         var uncertain = false
         for key in keys {
             switch replay.match(key) {
@@ -766,11 +836,20 @@ nonisolated struct CopilotEventReducer: Sendable {
             case .uncertain: uncertain = true
             case .absent: break
             }
+            if event.type == "assistant.turn_start", event.interactionID == nil, let turn = event.turnID,
+               replay.match(Self.rawTurnKey(turn, owner: event.agentID)) != .absent {
+                uncertain = true
+            }
         }
         return uncertain ? .uncertain : .absent
     }
 
     private mutating func demoteTerminalForColdStart(_ event: CopilotEventProjection) {
+        if event.type == "assistant.turn_start",
+           let active = turns[Owner(agentID: event.agentID)], active.id == event.turnID,
+           active.interactionID != event.interactionID {
+            turns[Owner(agentID: event.agentID)]?.requiresCausalProof = true
+        }
         let id: String?
         switch event.type {
         case "subagent.started":
@@ -802,6 +881,11 @@ nonisolated struct CopilotEventReducer: Sendable {
 
     private mutating func limitLifecycle(_ event: CopilotEventProjection) {
         addIssue(.readLimitReached)
+        if event.type == "assistant.turn_start" || event.type == "assistant.turn_end" {
+            markTurnUnknown(owner: event.agentID)
+            demoteTerminalForColdStart(event)
+            return
+        }
         rootState = .unknown
         clearActivities()
         demoteNonterminalChildren()
@@ -869,6 +953,7 @@ nonisolated struct CopilotEventReducer: Sendable {
         } ?? false
         if let previous = work[item.id], enriching {
             inserted.turnID = previous.turnID
+            inserted.interactionID = previous.interactionID
             inserted.startedAt = previous.startedAt ?? item.startedAt
             if inserted.model == nil { inserted.model = previous.model }
         }
@@ -890,6 +975,8 @@ nonisolated struct CopilotEventReducer: Sendable {
             if work[item.id] != nil {
                 guard removeSpawnJoins(for: item.id) else { return false }
                 if !enriching {
+                    if work[item.id]?.interactionID != item.interactionID,
+                       !retireInteraction(owner: item.id) { return false }
                     retireRequests(owner: item.id)
                     outcomes.removeValue(forKey: Owner(agentID: item.id))
                     clearActivity(owner: Owner(agentID: item.id))
@@ -912,6 +999,7 @@ nonisolated struct CopilotEventReducer: Sendable {
         guard let id = order.first(where: {
             Self.terminal(work[$0]?.state ?? .unknown) && !protected.contains($0)
         }) else { return false }
+        guard retireInteraction(owner: id) else { return false }
         guard remember(work[id]?.lifecycle ?? "work:\(id)") else { return false }
         let tools = agentForTool.filter { $0.value == id }.map(\.key).sorted()
         for tool in tools {
@@ -946,9 +1034,87 @@ nonisolated struct CopilotEventReducer: Sendable {
         return true
     }
 
-    private static func turnKey(_ turn: String, owner: String?) -> String {
+    private static func turnKey(_ turn: String, owner: String?, interaction: String? = nil) -> String {
         let owner = owner ?? ""
+        if let interaction {
+            return "interaction-turn:\(owner.utf8.count):\(owner):\(interaction.utf8.count):\(interaction):\(turn)"
+        }
         return "turn:\(owner.utf8.count):\(owner):\(turn)"
+    }
+
+    private static func interactionKey(_ interaction: String, owner: String?) -> String {
+        let owner = owner ?? ""
+        return "retired-interaction:\(owner.utf8.count):\(owner):\(interaction)"
+    }
+
+    private static func rawTurnKey(_ turn: String, owner: String?) -> String {
+        let owner = owner ?? ""
+        return "interaction-raw-turn:\(owner.utf8.count):\(owner):\(turn)"
+    }
+
+    private func currentInteraction(owner: String?) -> String? {
+        owner.flatMap { work[$0]?.interactionID } ?? (owner == nil ? rootInteractionID : nil)
+    }
+
+    private mutating func prepareInteraction(_ event: CopilotEventProjection) -> Bool {
+        guard let interaction = event.interactionID, let turn = event.turnID else { return true }
+        if let previous = currentInteraction(owner: event.agentID), previous != interaction {
+            guard remember(Self.interactionKey(previous, owner: event.agentID)) else { return false }
+        }
+        return remember(Self.rawTurnKey(turn, owner: event.agentID))
+    }
+
+    private mutating func retireInteraction(owner: String?) -> Bool {
+        guard let interaction = currentInteraction(owner: owner) else { return true }
+        guard remember(Self.interactionKey(interaction, owner: owner)) else { return false }
+        if let owner { work[owner]?.interactionID = nil } else { rootInteractionID = nil }
+        return true
+    }
+
+    private mutating func retireInteractions() {
+        _ = retireInteraction(owner: nil)
+        for id in order { _ = retireInteraction(owner: id) }
+    }
+
+    private func isCausallyLinked(_ event: CopilotEventProjection, to turn: Turn) -> Bool {
+        guard let parent = event.parentEventID else { return false }
+        return parent == turn.causalTip || parent == turn.eventID
+    }
+
+    private func turnTagsMatch(
+        _ event: CopilotEventProjection, turnID: String, interactionID: String?
+    ) -> Bool {
+        (event.turnID == nil || event.turnID == turnID)
+            && (event.interactionID == nil || event.interactionID == interactionID)
+    }
+
+    private mutating func observeCausalEvent(_ event: CopilotEventProjection) {
+        // One tip per active owner, not a transcript graph. Unknown gaps fail
+        // closed; ignored payload-bearing events contribute only their envelope.
+        guard event.type != "assistant.turn_start", event.type != "assistant.turn_end",
+              !event.type.hasPrefix("tool.execution_"), event.toolCallID == nil, event.shellID == nil else { return }
+        let owner = Owner(agentID: event.agentID)
+        guard let turn = turns[owner], event.id != turn.eventID,
+              isCausallyLinked(event, to: turn) else { return }
+        turns[owner]?.causalTip = event.id
+    }
+
+    private mutating func observeToolCausality(_ event: CopilotEventProjection) {
+        // Tool identity outranks a later parent link, including for partial output.
+        // Missing/old origin never inherits the current turn through generic fallback.
+        guard let id = event.toolCallID, let tool = toolOwners[id],
+              tool.agentID == event.agentID, !tool.completed, let origin = tool.turnOrigin else { return }
+        let owner = Owner(agentID: tool.agentID)
+        guard let current = turns[owner], current.eventID == origin.eventID,
+              turnTagsMatch(event, turnID: origin.turnID, interactionID: origin.interactionID) else { return }
+        turns[owner]?.causalTip = event.id
+    }
+    private mutating func markTurnUnknown(owner: String?) {
+        if let owner {
+            if work[owner]?.state.isTerminal == false { work[owner]?.state = .unknown }
+        } else if !rootState.isTerminal {
+            rootState = .unknown
+        }
     }
 
     private static func requestKey(_ request: Request) -> String {
