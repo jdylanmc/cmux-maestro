@@ -14,6 +14,15 @@ struct SidebarCopilotNode: Identifiable, Equatable {
     let model: String?
     let ancestryUnresolved: Bool
     var hasChildren: Bool
+    var terminalEvent: CopilotTerminalEvent? = nil
+    var terminalTimestamp: Date? = nil
+    var historyAncestor = false
+
+    func dismissibleOutcome(sessionID: UUID) -> SidebarDismissedOutcome? {
+        guard state.isTerminal, !historyAncestor, let terminalEvent else { return nil }
+        let key = SidebarDismissedOutcome(sessionID: sessionID, childID: id, eventID: terminalEvent.id)
+        return key.isValid ? key : nil
+    }
 }
 
 struct SidebarCopilotSession: Identifiable, Equatable {
@@ -29,8 +38,10 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     let treeDegraded: Bool
     let omittedChildrenCount: Int
     let omittedActiveChildrenCount: Int
+    var hiddenHistoryCount = 0
 
     var knownRunningChildren: Int { nodes.filter { $0.state == .working }.count }
+    var retainedHistoryCount: Int { nodes.filter { $0.state.isTerminal && !$0.historyAncestor }.count }
     var shortID: String { String(id.uuidString.prefix(8)).lowercased() }
 
     func visibleNodes(collapsed: Set<String>) -> [SidebarCopilotNode] {
@@ -51,6 +62,7 @@ struct SidebarCopilotTree: Equatable {
     var sessions: [SidebarCopilotSession]
     var issues: [CopilotIssue]
     var generatedAt: Date?
+    var nextHistoryExpiry: Date? = nil
 
     static let waiting = SidebarCopilotTree(
         availability: .waiting, sessions: [], issues: [], generatedAt: nil
@@ -71,6 +83,13 @@ struct SidebarCopilotTree: Equatable {
 
     var omittedChildrenCount: Int { sessions.reduce(0) { $0 + $1.omittedChildrenCount } }
     var omittedActiveChildrenCount: Int { sessions.reduce(0) { $0 + $1.omittedActiveChildrenCount } }
+    var retainedHistoryCount: Int { sessions.reduce(0) { $0 + $1.retainedHistoryCount } }
+    var hiddenHistoryCount: Int { sessions.reduce(0) { $0 + $1.hiddenHistoryCount } }
+    var dismissibleOutcomes: Set<SidebarDismissedOutcome> {
+        Set(sessions.flatMap { session in
+            session.nodes.compactMap { $0.dismissibleOutcome(sessionID: session.id) }
+        })
+    }
 
     var summary: String {
         switch availability {
@@ -105,7 +124,8 @@ struct SidebarCopilotTree: Equatable {
     static func project(
         _ snapshot: CopilotSnapshot,
         onto topology: SidebarTopology,
-        now: Date
+        now: Date,
+        history: SidebarHistorySettings = SidebarHistorySettings()
     ) -> SidebarCopilotTree {
         guard topology.canReadSessions else { return .waiting }
         guard isFresh(snapshot.generatedAt, now: now) else {
@@ -116,6 +136,7 @@ struct SidebarCopilotTree: Equatable {
         let groups = Dictionary(grouping: snapshot.sessions, by: \.sessionID)
         var rejected = groups.values.contains { $0.count != 1 }
         var sessions: [SidebarCopilotSession] = []
+        var nextExpiry: Date?
         for observation in snapshot.sessions {
             guard groups[observation.sessionID]?.count == 1,
                   let workspaceID = topology.workspaceBySurface[observation.surfaceID],
@@ -124,9 +145,39 @@ struct SidebarCopilotTree: Equatable {
                 rejected = true
                 continue
             }
-            let tree = childTree(observation.children, liveness: observation.liveness)
+            let groups = Dictionary(grouping: observation.children, by: \.id)
+            let validated = observation.children.filter { !$0.id.isEmpty && groups[$0.id]?.count == 1 }
+            var hidden: Set<String> = []
+            for child in validated {
+                if history.isDismissed(sessionID: observation.sessionID, child: child) {
+                    hidden.insert(child.id)
+                } else if let deadline = history.deadline(for: child, observedAt: observation.observedAt, now: now) {
+                    if deadline <= now {
+                        hidden.insert(child.id)
+                    } else {
+                        nextExpiry = min(nextExpiry ?? deadline, deadline)
+                    }
+                }
+            }
+            let byID = Dictionary(uniqueKeysWithValues: validated.map { ($0.id, $0) })
+            var retained = Set(validated.map(\.id)).subtracting(hidden)
+            var walked: Set<String> = []
+            for child in validated where retained.contains(child.id) {
+                var parent = child.parentID
+                while let id = parent, let ancestor = byID[id], walked.insert(id).inserted {
+                    retained.insert(id)
+                    parent = ancestor.parentID
+                }
+            }
+            // Filter history before display caps; retain structural ancestry for
+            // every surviving state, including idle and unknown, not just running work.
+            let tree = childTree(
+                validated.filter { retained.contains($0.id) }, liveness: observation.liveness,
+                historyAncestors: hidden.intersection(retained), observedAt: observation.observedAt, now: now
+            )
+            let degraded = tree.degraded || validated.count != observation.children.count
             let complete = snapshot.isComplete && snapshot.issues.isEmpty
-                && observation.liveness == .alive && !tree.degraded
+                && observation.liveness == .alive && !degraded
             sessions.append(SidebarCopilotSession(
                 id: observation.sessionID,
                 workspaceID: workspaceID,
@@ -137,9 +188,10 @@ struct SidebarCopilotTree: Equatable {
                 observedAt: observation.observedAt,
                 nodes: tree.nodes,
                 childrenComplete: complete,
-                treeDegraded: tree.degraded,
+                treeDegraded: degraded,
                 omittedChildrenCount: tree.omitted,
-                omittedActiveChildrenCount: tree.omittedActive
+                omittedActiveChildrenCount: tree.omittedActive,
+                hiddenHistoryCount: hidden.count
             ))
         }
         return SidebarCopilotTree(
@@ -147,7 +199,8 @@ struct SidebarCopilotTree: Equatable {
                 && !sessions.contains(where: \.treeDegraded) ? .ready : .partial,
             sessions: sessions,
             issues: snapshot.issues,
-            generatedAt: snapshot.generatedAt
+            generatedAt: snapshot.generatedAt,
+            nextHistoryExpiry: nextExpiry
         )
     }
 
@@ -167,7 +220,8 @@ struct SidebarCopilotTree: Equatable {
     }
 
     private static func childTree(
-        _ children: [CopilotChildWork], liveness: CopilotLiveness
+        _ children: [CopilotChildWork], liveness: CopilotLiveness,
+        historyAncestors: Set<String>, observedAt: Date, now: Date
     ) -> (nodes: [SidebarCopilotNode], degraded: Bool, omitted: Int, omittedActive: Int) {
         let groups = Dictionary(grouping: children, by: \.id)
         let validated = children.filter { !$0.id.isEmpty && groups[$0.id]?.count == 1 }
@@ -228,7 +282,10 @@ struct SidebarCopilotTree: Equatable {
                 state: trustworthyState(child.state, liveness: liveness),
                 model: displayMetadata(child.model),
                 ancestryUnresolved: unresolved,
-                hasChildren: false
+                hasChildren: false,
+                terminalEvent: child.terminalEvent,
+                terminalTimestamp: SidebarHistorySettings.knownTimestamp(child.terminalEvent, observedAt: observedAt, now: now),
+                historyAncestor: historyAncestors.contains(child.id)
             ))
             guard depth < maximumDepth else {
                 if !descendants.isEmpty { degraded = true }

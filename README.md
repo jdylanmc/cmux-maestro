@@ -92,6 +92,89 @@ symlinked state directories are not supported. Missing lifecycle events can
 leave completion/status unknown, and agent IDs are not automatically native
 child-session IDs. No title/transcript heuristics repair missing identity.
 
+## Completed work history
+
+The sidebar's **gear** opens native history settings, shared by **Hierarchy** and
+**Taskboard**. Finished, failed and cancelled child outcomes are retained for
+**15 seconds** by default; choose **1 minute**, **5 minutes**, **1 hour**, or
+**Never**. Retention starts at the accepted terminal event's RFC 3339 timestamp,
+not the poll, first display, or application launch. Missing, malformed, or
+future timing is shown as **Completion age unknown** and never automatically
+expired while unknown. Source events are not deleted.
+
+Use a row's separate **Dismiss** button, or **Clear completed** for eligible
+retained outcomes on current-window surfaces (including collapsed branches,
+excluding display-capped/off-window/expired work). These controls never focus,
+cancel, approve, prompt, or otherwise control an agent. Working, blocked, idle,
+and unknown work stays visible under the existing display limits. A hidden
+terminal parent remains as **child context** when descendants still need it.
+Running counts and retained/hidden history counts are separate; empty history
+is not evidence that a session has finished.
+
+History uses a versioned `CMUXMaestroPreview/sidebar-history.json` record in the
+extension container's Application Support directory. Coordinated, atomic
+read-modify-write actions preserve other windows' retention and dismissals,
+including separate extension processes. Existing windows observe changes through
+file presentation (no polling daemon); same-process windows update immediately.
+The selected view remains in `UserDefaults` and is not changed by history actions.
+
+On first use, the existing `sidebar.completedHistory.v1` defaults record is
+validated within the same coordinated transaction and migrated once. The file
+is authoritative thereafter, even if another process has stale legacy defaults.
+Only after a successful file write/read is the old key removed. Invalid legacy
+or file data stays untouched until an explicit reset; failed migration can be
+retried. No settings are mirrored back into the old history key.
+
+Dismissal keys contain only provider-session UUID,
+child ID and accepted terminal-event UUID—not labels, paths, or source content.
+Reloads, duplicate events and surface/workspace moves preserve identity; new
+work or a new terminal outcome does not inherit an old dismissal. Fresh lifecycle
+identities—not comparisons against possibly future wall-clock timestamps—reopen
+work. Retired invocation and agent-scoped turn identities remain tombstoned,
+independent of current tool mappings. Repeated starts cannot reopen old work,
+even with a new event UUID.
+Records are
+bounded to **2,048 dismissals / 1 MiB**; a full store refuses a new batch rather
+than evicting old keys silently. **Restore dismissed history** frees that store;
+retention still applies, so select **Never** to reveal older work.
+
+Malformed stored settings fail open: history hiding is disabled and a bounded
+notice offers **Reset history settings**. Ordinary retention/dismiss/restore
+actions never overwrite corrupt data. Reset explicitly restores 15-second retention
+and clears dismissals; restore clears only dismissals at its coordinated turn,
+preserving the latest retention. Later dismissals remain later actions, not a
+resurrected window snapshot. Neither action changes the selected view. Storage
+I/O failures also fail open with a notice; capacity rejection keeps the last
+valid record and rejects the entire batch. History deadlines use a
+single cancellable timer, are not reset by refresh, and stop on hide, disconnect,
+or access loss. Existing observation freshness remains an independent limit.
+Reducer replay protection keeps up to 65,536 exact recent lifecycle event UUIDs
+and 4,096 exact recent start/work/tool/resolved-request keys per session.
+Each ledger spills into its own fixed 128-KiB filter rather than rejecting new
+events at the exact-window boundary; spilled bits are never cleared within a
+transcript generation. Cold matches are uncertain and report partial data.
+Actual filter saturation fails closed; it never silently forgets anti-replay
+evidence. Cold start-identity matches cannot distinguish old replay from a fresh
+start's false positive. A matching agent row that is already terminal is exposed
+as unknown, clearing its obsolete terminal outcome and completion pairing so
+prior dismissal/expiry cannot hide potentially active work. A terminal root
+similarly becomes unknown on an uncertain root turn. Neither case claims fresh
+activity or adopts the unprocessed event's model. Live/blocked rows, pending
+requests and unrelated root state remain unchanged; exact replay is a no-op.
+On unprocessed fresh lifecycle evidence,
+uncertain new starts demote affected work to unknown and clear obsolete terminal
+evidence, so a prior dismissal cannot hide possibly active work. Unresolved
+lifecycle scope is demoted conservatively; uncertainty alone does not resolve
+known pending requests. Session identity/schema checks run
+before all deduplication and capacity guards.
+Complete, identity-verified reads publish conservative semantic degradation as
+current partial data, including unknown lifecycle state and replay limits.
+Malformed events, incompatible session schemas, identity changes and torn reads
+still cannot publish unvalidated replacement state.
+
+This is completed-child-work management only. Session attention/acknowledgement
+and broader presentation preferences are separate, not implemented here.
+
 ### Bounded retention and discovery
 
 - The 256-row reducer budget retires the oldest terminal **leaf**, not active,
@@ -110,8 +193,10 @@ child-session IDs. No title/transcript heuristics repair missing identity.
 - Work/lifecycle/tool/request replay keys keep up to 4,096 exact recent tombstones.
   Older identities spill into a deterministic 128-KiB replay filter; its bits are
   never cleared within a transcript generation. This bounded filter has no false
-  negatives, but can have false positives: a cold match suppresses resurrection
+  negatives, but can have false positives: a cold match rejects fresh admission
   **and reports `readLimitReached`**, rather than claiming exact replay knowledge.
+  Terminal agent/root state fails open to unknown as described above; an uncertain
+  start-identity match does not demote live work.
   At half occupancy it fails closed; it never forgets history to admit more work.
   True active-capacity exhaustion also reports a limit without fabricating
   completion. Transcript replacement reconstructs this state from the new log.
@@ -130,7 +215,9 @@ child-session IDs. No title/transcript heuristics repair missing identity.
 - Capture a fixed prefix length and observation time for each catch-up pass;
   later appends do not extend that lease forever. A verified complete prefix may
   be published with its captured observation time and `loadingHistory` when
-  newer bytes remain; this is not a current/complete snapshot. Torn or malformed
+  newer bytes remain; this is not a current/complete snapshot. A verified current
+  EOF uses the verification time, including after multi-batch reconstruction on
+  normal polling cadence. Torn or malformed
   prefixes cannot become fabricated complete evidence. A failed observation
   cannot pin every later session indefinitely.
 - A binding rerouted during a read is deliberately omitted, **not** returned
@@ -149,22 +236,15 @@ child-session IDs. No title/transcript heuristics repair missing identity.
   EOF, torn final lines, and warnings alone never request a fast retry. No sandbox
   entitlement or ancestor traversal permission is broadened.
 
-**Downstream integration (PR #27 history / PR #28 attention):** merge the
-retention policy into the richer reducer, not a wholesale reducer replacement.
-Preserve terminal timestamps/event IDs, request ownership and resolved-request
-tombstones, started-lifecycle/event replay guards, attention ordering, and
-`canPublishProjection`. Apply bounded spill/fail-closed handling to those richer
-guards too; retaining their old fixed event/tombstone rejection caps would merely
-move the starvation point. Retiring a row must clean its terminal attention,
-turn/activity/outcome state and obsolete tool joins without discarding pending
-requests, unknown placeholders, or required ancestors. Keep history presentation
-limits separate from ingestion/admission limits. Keep agent identity distinct
-from lifecycle identity: history/attention terminal records and replay guards
-must preserve current-spawn/turn pairing, allow fresh scoped starts after row
-retirement, and never attach an old completion to a new spawn. Carry finite
-catch-up watermarks, staged-binding revalidation, and overflow scheduling together
-with the reader. Re-run the continuous-session, reconstruction, exact versus fresh
-lifecycle replay, multi-batch overflow, append-traffic, and attention tests together.
+**Downstream attention integration (PR #28):** preserve this combined reducer's
+accepted terminal UUID/timestamp, current-spawn/turn pairing, bounded event/start/
+resolved-request guards, and `canPublishProjection` distinctions. Attention
+retirement must also clean obsolete turn/activity/outcome state without
+discarding pending requests, unknown placeholders or required ancestors.
+History presentation limits remain separate from ingestion limits; a prior
+terminal dismissal cannot hide a fresh lifecycle using the same agent ID.
+Carry finite reader watermarks, staged-binding revalidation, EOF freshness and
+overflow scheduling together, and rerun these regressions with attention tests.
 
 ## Requirements
 
@@ -183,6 +263,12 @@ clearance for the current CMUX overlaid footer. The SDK provides no footer-inset
 contract; a rendered-strip regression test checks that both sidebar modes leave
 this area clear. Reverify the clearance when host chrome changes.
 
+Workspace containers use eager layout inside the scroll view; their child trees
+retain the existing projection limits. This avoids the lazy root-placement loop
+observed during remote accessibility scrolling. An offscreen AppKit regression
+exercises repeated scrolling and mode changes; live accessibility scrolling and
+continued history updates remain part of deployment acceptance.
+
 ## Build and test
 
 ```sh
@@ -190,6 +276,20 @@ this area clear. Reverify the clearance when host chrome changes.
 ./scripts/build-unsigned.sh
 ./scripts/test.sh
 ```
+
+Focused history/preference checks (including two real child processes, coordinated
+writer contention, and automatic observation/projection convergence):
+
+```sh
+./scripts/test.sh -only-testing:CMUXMaestroPreviewTests/SidebarPreferencesTests \
+  -only-testing:CMUXMaestroPreviewTests/SidebarHistoryTests \
+  -only-testing:CMUXMaestroPreviewTests/SidebarHistoryPollingTests \
+  -only-testing:CMUXMaestroPreviewTests/SidebarPreferenceCoordinationTests
+```
+
+The test runner compiles a fixture-only client from the production preference
+sources. Tests inject unique defaults suites and files beneath
+`.build/preference-coordination/`; they never mutate production preferences.
 
 Xcode can register macOS app outputs with LaunchServices even when signing is
 disabled. Validation builds therefore use isolated identities **and** isolated

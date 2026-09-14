@@ -6,6 +6,7 @@ DERIVED_DATA="$ROOT/.build/tests"
 export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 
 "$ROOT/scripts/fetch-sdk.sh"
+bash "$ROOT/scripts/build-preference-test-client.sh"
 mkdir -p "$DERIVED_DATA"
 SETTINGS=(
     CODE_SIGNING_ALLOWED=NO
@@ -28,7 +29,7 @@ xcodebuild \
     -configuration Debug \
     -derivedDataPath "$DERIVED_DATA" \
     "${SETTINGS[@]}" \
-    test
+    test "$@"
 
 python3 "$ROOT/scripts/verify-build-metadata.py" --mode tests \
     --app "$DERIVED_DATA/Build/Products/Debug/CMUX Maestro Preview.app"

@@ -8,11 +8,16 @@ nonisolated struct CopilotReaderLimits: Sendable {
     let bytesPerSession: Int
     let linesPerSession: Int
     let maximumLineBytes: Int
+    let maximumLifecycleEvents: Int
+    let maximumReplayFilterWords: Int
+    let maximumRelationships: Int
 
     init(
         maximumSessions: Int = 64, maximumBindings: Int = 1024,
         bytesPerRead: Int = 8_388_608, bytesPerSession: Int = 4_194_304,
-        linesPerSession: Int = 2048, maximumLineBytes: Int = 1_048_576
+        linesPerSession: Int = 2048, maximumLineBytes: Int = 1_048_576,
+        maximumLifecycleEvents: Int = 65_536, maximumReplayFilterWords: Int = 16_384,
+        maximumRelationships: Int = 4096
     ) {
         self.maximumSessions = max(1, maximumSessions)
         self.maximumBindings = max(1, maximumBindings)
@@ -20,6 +25,9 @@ nonisolated struct CopilotReaderLimits: Sendable {
         self.bytesPerSession = max(1, bytesPerSession)
         self.linesPerSession = max(1, linesPerSession)
         self.maximumLineBytes = max(1, maximumLineBytes)
+        self.maximumLifecycleEvents = max(1, maximumLifecycleEvents)
+        self.maximumReplayFilterWords = max(1, maximumReplayFilterWords)
+        self.maximumRelationships = max(1, maximumRelationships)
     }
 }
 
@@ -298,7 +306,11 @@ actor CopilotSessionReader {
                 }
                 var tail = tails[record.sessionID]
                 if tail.map({ Self.sameBindingIdentity($0.record, record) }) != true {
-                    tail = Tail(record: record, reducer: CopilotEventReducer(sessionID: record.sessionID))
+                    tail = Tail(record: record, reducer: CopilotEventReducer(
+                        sessionID: record.sessionID, maximumRelationships: limits.maximumRelationships,
+                        maximumLifecycleEvents: limits.maximumLifecycleEvents,
+                        maximumReplayFilterWords: limits.maximumReplayFilterWords
+                    ))
                 }
                 var candidate = tail!
                 var sessionIssues: [CopilotIssue] = []
@@ -506,7 +518,11 @@ actor CopilotSessionReader {
         if reset {
             let saved = tail.lastComplete
             let savedAt = tail.lastCompleteAt
-            tail = Tail(record: tail.record, reducer: CopilotEventReducer(sessionID: tail.record.sessionID))
+            tail = Tail(record: tail.record, reducer: CopilotEventReducer(
+                sessionID: tail.record.sessionID, maximumRelationships: limits.maximumRelationships,
+                maximumLifecycleEvents: limits.maximumLifecycleEvents,
+                maximumReplayFilterWords: limits.maximumReplayFilterWords
+            ))
             tail.lastComplete = saved
             tail.lastCompleteAt = savedAt
         }
@@ -576,7 +592,9 @@ actor CopilotSessionReader {
         var issues = tail.reducer.issues
         let reachedBoundary = tail.offset >= targetSize
         if reachedBoundary {
-            if tail.partial.isEmpty && !tail.droppingOversizedLine && issues.isEmpty {
+            if tail.partial.isEmpty && !tail.droppingOversizedLine && tail.reducer.canPublishProjection {
+                // A verified boundary can publish conservative semantic limits,
+                // but malformed data, invalid schemas and identity errors cannot.
                 tail.lastComplete = value
                 // Verified current EOF is fresh; an older prefix with unread
                 // appends must retain its captured age.

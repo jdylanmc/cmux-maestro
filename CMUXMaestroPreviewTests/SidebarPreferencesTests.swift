@@ -11,16 +11,16 @@ struct SidebarPreferencesTests {
     }
 
     @Test
-    func defaultsToHierarchy() {
-        withIsolatedDefaults { defaults in
-            #expect(SidebarPreferences(defaults: defaults).selectedMode == .hierarchy)
+    func defaultsToHierarchy() throws {
+        try withIsolatedDefaults { defaults, file in
+            #expect(SidebarPreferences(defaults: defaults, historyFile: file).selectedMode == .hierarchy)
         }
     }
 
     @Test
-    func switchesImmediatelyWithoutChangingAnyConnectionState() {
-        withIsolatedDefaults { defaults in
-            let preferences = SidebarPreferences(defaults: defaults)
+    func switchesImmediatelyWithoutChangingAnyConnectionState() throws {
+        try withIsolatedDefaults { defaults, file in
+            let preferences = SidebarPreferences(defaults: defaults, historyFile: file)
             let connection = SidebarConnectionModel()
             let states: [SidebarConnectionState] = [
                 .waiting,
@@ -39,32 +39,37 @@ struct SidebarPreferencesTests {
     }
 
     @Test
-    func persistsThroughReconstruction() {
-        withIsolatedDefaults { defaults in
-            let original = SidebarPreferences(defaults: defaults)
+    func persistsThroughReconstruction() throws {
+        try withIsolatedDefaults { defaults, file in
+            let original = SidebarPreferences(defaults: defaults, historyFile: file)
             original.selectedMode = .taskboard
 
-            let reconstructed = SidebarPreferences(defaults: defaults)
+            let reconstructed = SidebarPreferences(defaults: defaults, historyFile: file)
 
             #expect(reconstructed.selectedMode == .taskboard)
         }
     }
 
     @Test
-    func invalidPersistedValueFallsBackToHierarchy() {
-        withIsolatedDefaults { defaults in
+    func invalidPersistedValueFallsBackToHierarchy() throws {
+        try withIsolatedDefaults { defaults, file in
             defaults.set("unknown-mode", forKey: "sidebar.selectedMode")
 
-            #expect(SidebarPreferences(defaults: defaults).selectedMode == .hierarchy)
+            #expect(SidebarPreferences(defaults: defaults, historyFile: file).selectedMode == .hierarchy)
         }
+    }
+
+    private func withIsolatedDefaults(_ body: (UserDefaults, URL) -> Void) throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        body(fixture.defaults, fixture.historyFile)
     }
 
     @Test
     func renderedContentClearsTheHostsOverlaidFooter() async throws {
-        let suite = "SidebarFooterTests.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let preferences = SidebarPreferences(defaults: defaults)
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
         let model = SidebarConnectionModel(copilot: SidebarCopilotPolling(
             read: { _ in .init(generatedAt: Date(), sessions: [], issues: [], isComplete: true) }
         ))
@@ -104,12 +109,68 @@ struct SidebarPreferencesTests {
             }
         }
     }
-    private func withIsolatedDefaults(_ body: (UserDefaults) -> Void) {
-        let suiteName = "SidebarPreferencesTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        body(defaults)
+
+    @Test func renderedHierarchyRemainsResponsiveAcrossScrollingAndModeChanges() async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = SidebarPreferences(defaults: fixture.defaults, historyFile: fixture.historyFile)
+        preferences.setRetention(.never)
+        let data = SidebarTreeFixtures()
+        let now = Date(timeIntervalSince1970: 2_000)
+        let children = (0..<40).map { index in
+            data.child("scroll-\(index)", state: index.isMultiple(of: 2) ? .working : .blocked)
+        }
+        let snapshot = data.snapshot(sessions: [data.session(children: children, now: now)], now: now)
+        let polling = SidebarCopilotPolling(
+            read: { _ in snapshot }, pause: { try await Task.sleep(for: .seconds(60)) },
+            expiryPause: { _ in
+                let (ticks, continuation) = AsyncStream<Void>.makeStream()
+                defer { continuation.finish() }
+                for await _ in ticks {}
+                try Task.checkCancellation()
+            }, now: { now }
+        )
+        let model = SidebarConnectionModel(copilot: polling)
+        model.replaceHierarchy(with: data.hierarchy())
+        model.showConnected(workspaceCount: 2, surfaceCount: 2)
+        polling.update(topology: data.topology(), connected: true)
+        model.setVisible(true)
+        defer { model.setVisible(false) }
+        await sidebarEventually { polling.tree.sessions.count == 1 }
+
+        let frame = NSRect(x: 0, y: 0, width: 240, height: 500)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        hosting.frame = frame
+        for _ in 0..<3 {
+            for mode in SidebarMode.allCases {
+                preferences.selectedMode = mode
+                hosting.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(20))
+                hosting.layoutSubtreeIfNeeded()
+                let scroll = try #require(firstScrollView(in: hosting))
+                let document = try #require(scroll.documentView)
+                #expect(document.bounds.height > scroll.contentView.bounds.height)
+                for y in [max(0, document.bounds.height - scroll.contentView.bounds.height), 0] {
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    try await Task.sleep(for: .milliseconds(20))
+                    hosting.layoutSubtreeIfNeeded()
+                    #expect(document.bounds.height.isFinite)
+                    #expect(document.bounds.width <= scroll.contentView.bounds.width + 0.5)
+                    #expect(polling.tree.sessions.first?.nodes.count == children.count)
+                }
+                #expect(!window.isVisible)
+            }
+        }
+    }
+
+    private func firstScrollView(in view: NSView) -> NSScrollView? {
+        if let scroll = view as? NSScrollView { return scroll }
+        return view.subviews.lazy.compactMap { firstScrollView(in: $0) }.first
     }
 
     private func set(_ state: SidebarConnectionState, on connection: SidebarConnectionModel) {

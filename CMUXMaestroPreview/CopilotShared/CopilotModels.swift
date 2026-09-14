@@ -2,6 +2,8 @@ import Foundation
 
 nonisolated enum CopilotWorkState: String, Codable, Equatable, Sendable {
     case working, idle, blocked, completed, failed, cancelled, unknown
+
+    var isTerminal: Bool { self == .completed || self == .failed || self == .cancelled }
 }
 
 nonisolated enum CopilotLiveness: String, Codable, Equatable, Sendable {
@@ -12,6 +14,11 @@ nonisolated enum CopilotWorkKind: String, Codable, Equatable, Sendable {
     case subagent, skill, shell, unknown
 }
 
+nonisolated struct CopilotTerminalEvent: Codable, Equatable, Sendable {
+    let id: UUID
+    let timestamp: Date?
+}
+
 nonisolated struct CopilotChildWork: Codable, Equatable, Sendable {
     let id: String
     let parentID: String?
@@ -19,10 +26,11 @@ nonisolated struct CopilotChildWork: Codable, Equatable, Sendable {
     let name: String
     let state: CopilotWorkState
     let model: String?
+    let terminalEvent: CopilotTerminalEvent?
 
     init(
         id: String, parentID: String?, kind: CopilotWorkKind, name: String,
-        state: CopilotWorkState, model: String?
+        state: CopilotWorkState, model: String?, terminalEvent: CopilotTerminalEvent? = nil
     ) {
         self.id = id
         self.parentID = parentID
@@ -30,6 +38,7 @@ nonisolated struct CopilotChildWork: Codable, Equatable, Sendable {
         self.name = name
         self.state = state
         self.model = model
+        self.terminalEvent = terminalEvent
     }
 }
 

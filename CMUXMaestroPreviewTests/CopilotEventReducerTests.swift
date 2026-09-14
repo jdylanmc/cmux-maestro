@@ -5,6 +5,310 @@ import Testing
 // Run large synchronous replay fixtures individually, not across every executor worker.
 @Suite(.serialized)
 nonisolated struct CopilotEventReducerTests {
+    @Test func acceptedCompletionCarriesDurableEvidenceNotObservationTime() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "subagent.started", agent: "child", [
+            "toolCallId": "spawn", "agentDisplayName": "Child"
+        ])
+        let completion = try copilotTestEvent("subagent.completed", data: [
+            "toolCallId": "spawn", "agentDisplayName": "Child"
+        ])
+        reducer.consume(completion)
+        let encoded = try JSONEncoder().encode(reducer.value().children)
+        let children = try #require(JSONSerialization.jsonObject(with: encoded) as? [[String: Any]])
+        #expect(children.first?["terminalEvent"] != nil)
+    }
+
+    @Test(arguments: [
+        "2026-09-12T12:00:00Z", "2026-09-12T12:00:00.123Z",
+        "2026-09-12T14:30:00+02:30", "2026-09-12T07:00:00.123-05:00"
+    ])
+    func parsesPublicTimestampForms(_ timestamp: String) throws {
+        let data = try event("subagent.completed", id: UUID(), timestamp: timestamp, [
+            "toolCallId": "spawn", "agentDisplayName": "Child"
+        ])
+        let projected = try JSONDecoder().decode(CopilotEventProjection.self, from: data)
+        let seconds = try #require(projected.timestamp?.timeIntervalSince1970)
+        #expect(abs(seconds - (timestamp.contains(".123") ? 1_789_214_400.123 : 1_789_214_400)) < 0.0001)
+    }
+
+    @Test func malformedAndMissingTimestampsKeepTerminalIdentityAndWireCompatibility() throws {
+        for timestamp: Any? in [nil, "not-a-date", 12345, NSNull()] {
+            var reducer = CopilotEventReducer(sessionID: UUID())
+            try feed(&reducer, "subagent.started", agent: "child", ["toolCallId": "spawn", "agentDisplayName": "Child"])
+            let id = UUID()
+            reducer.consume(try event("subagent.completed", id: id, timestamp: timestamp, [
+                "toolCallId": "spawn", "agentDisplayName": "Child"
+            ]))
+            let child = try #require(reducer.value().children.first)
+            #expect(child.state == .completed)
+            #expect(child.terminalEvent?.id == id)
+            #expect(child.terminalEvent?.timestamp == nil)
+        }
+        let legacy = Data(#"{"id":"child","kind":"subagent","name":"Child","state":"completed"}"#.utf8)
+        #expect(try JSONDecoder().decode(CopilotChildWork.self, from: legacy).terminalEvent == nil)
+    }
+
+    @Test(arguments: [CopilotWorkState.completed, .failed, .cancelled])
+    func acceptedOutcomeSurvivesDuplicatesLateCompletionAndReconstruction(_ state: CopilotWorkState) throws {
+        let session = UUID()
+        let start = try copilotTestEvent("subagent.started", agent: "child", data: [
+            "toolCallId": "spawn", "agentDisplayName": "Child"
+        ])
+        let id = UUID()
+        let completion = try event(state == .failed ? "subagent.failed" : "subagent.completed",
+            id: id, timestamp: "2026-09-12T12:00:01.250Z", [
+                "toolCallId": "spawn", "agentDisplayName": "Child", "cancelled": state == .cancelled
+            ])
+        let late = try event("subagent.completed", id: UUID(), timestamp: "2026-09-12T13:00:00Z", [
+            "toolCallId": "spawn", "agentDisplayName": "Child"
+        ])
+        var first = CopilotEventReducer(sessionID: session)
+        var rebuilt = CopilotEventReducer(sessionID: session)
+        for line in [start, completion, completion, start, late] {
+            first.consume(line)
+            rebuilt.consume(line)
+        }
+        let child = try #require(first.value().children.first)
+        #expect(child.state == state)
+        #expect(child.terminalEvent?.id == id)
+        #expect(child.terminalEvent?.timestamp == Date(timeIntervalSince1970: 1_789_214_401.25))
+        #expect(first.value() == rebuilt.value())
+    }
+
+    @Test func reusedChildRejectsOldToolCompletionAndAcceptsNewOutcome() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumRelationships: 1)
+        for tool in ["old", "new"] {
+            try feed(&reducer, "subagent.started", agent: "same", ["toolCallId": tool, "agentDisplayName": "Same label"])
+            #expect(reducer.value().children.first?.state == .working)
+            #expect(reducer.value().children.first?.terminalEvent == nil)
+            if tool == "new" {
+                try feed(&reducer, "subagent.failed", ["toolCallId": "old", "agentDisplayName": "Same label"])
+                #expect(reducer.value().children.first?.state == .working)
+            }
+            try feed(&reducer, "subagent.completed", ["toolCallId": tool, "agentDisplayName": "Same label"])
+        }
+        #expect(reducer.value().children.first?.state == .completed)
+        #expect(!reducer.issues.contains(.readLimitReached))
+    }
+
+    @Test func oldStartsAndCaseVariantDuplicatesCannotResurrectFinishedWork() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let start = try copilotTestEvent("subagent.started", agent: "child", data: [
+            "toolCallId": "spawn", "agentDisplayName": "Child"
+        ])
+        reducer.consume(start)
+        try feed(&reducer, "subagent.completed", ["toolCallId": "spawn", "agentDisplayName": "Child"])
+        let ended = reducer.value()
+        var duplicate = try #require(JSONSerialization.jsonObject(with: start) as? [String: Any])
+        duplicate["id"] = (duplicate["id"] as? String)?.lowercased()
+        reducer.consume(try JSONSerialization.data(withJSONObject: duplicate))
+        #expect(reducer.value() == ended)
+        var stale = duplicate
+        stale["id"] = UUID().uuidString
+        stale["timestamp"] = "2026-09-11T00:00:00Z"
+        reducer.consume(try JSONSerialization.data(withJSONObject: stale))
+        #expect(reducer.value() == ended)
+    }
+
+    @Test func replayProtectionExhaustionFailsExplicitlyUnknown() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumLifecycleEvents: 2, maximumReplayFilterWords: 1)
+        try feed(&reducer, "subagent.started", agent: "child", ["toolCallId": "spawn", "agentDisplayName": "Child"])
+        try feed(&reducer, "assistant.turn_start", ["turnId": "1"])
+        for row in try copilotTestReplayPressure() { reducer.consume(row) }
+        try feed(&reducer, "subagent.completed", ["toolCallId": "spawn", "agentDisplayName": "Child"])
+        #expect(reducer.value().state == .unknown)
+        #expect(reducer.value().children.first?.state == .unknown)
+        #expect(reducer.value().children.first?.terminalEvent == nil)
+        #expect(reducer.issues.contains(.readLimitReached))
+    }
+
+    @Test(arguments: [4, 65_536])
+    func retiredInvocationIdentityCannotReopenAfterMappingMovesToNewInvocation(_ limit: Int) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumLifecycleEvents: limit)
+        for tool in ["old", "new"] {
+            try feed(&reducer, "subagent.started", agent: "child", ["toolCallId": tool, "agentDisplayName": "Child"])
+            try feed(&reducer, "subagent.completed", ["toolCallId": tool, "agentDisplayName": "Child"])
+        }
+        let ended = reducer.value()
+        try feed(&reducer, "subagent.started", agent: "child", ["toolCallId": "old", "agentDisplayName": "Old label"])
+        #expect(reducer.value() == ended)
+        try feed(&reducer, "subagent.failed", ["toolCallId": "old", "agentDisplayName": "Old label"])
+        #expect(reducer.value() == ended)
+    }
+
+    @Test func retiredTurnIdentitiesAreScopedAndCannotReopenRootOrChildWork() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        for agent: String? in [nil, "child", "sibling"] {
+            if let agent {
+                try feed(&reducer, "subagent.started", agent: agent, ["toolCallId": agent, "agentDisplayName": agent])
+            }
+            for turn in ["old", "new"] {
+                try feed(&reducer, "assistant.turn_start", agent: agent, ["turnId": turn])
+                if let agent {
+                    #expect(reducer.value().children.first { $0.id == agent }?.state == .working)
+                } else {
+                    #expect(reducer.value().state == .working)
+                }
+                try feed(&reducer, "assistant.turn_end", agent: agent, ["turnId": turn])
+            }
+        }
+        let idle = reducer.value()
+        for agent: String? in [nil, "child", "sibling"] {
+            try feed(&reducer, "assistant.turn_start", agent: agent, ["turnId": "old"])
+            #expect(reducer.value() == idle)
+        }
+    }
+
+    @Test func repeatedShellInvocationIdentityCannotReopenTerminalShell() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "tool.execution_start", ["toolCallId": "shell", "toolName": "bash"])
+        try feed(&reducer, "tool.execution_complete", ["toolCallId": "shell", "success": false])
+        let ended = reducer.value()
+        try feed(&reducer, "tool.execution_start", ["toolCallId": "shell", "toolName": "bash"])
+        #expect(reducer.value() == ended)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func sessionSafetyChecksPrecedeReplayAndCapacityGuards(_ atCap: Bool, duplicateID: Bool) throws {
+        for invalidVersion in [false, true] {
+            let session = UUID()
+            var reducer = CopilotEventReducer(sessionID: session, maximumLifecycleEvents: atCap ? 2 : 20)
+            let start = try copilotTestEvent("subagent.started", agent: "child", data: [
+                "toolCallId": "task", "agentDisplayName": "Child"
+            ])
+            reducer.consume(start)
+            try feed(&reducer, "subagent.completed", ["toolCallId": "task", "agentDisplayName": "Child"])
+            let startObject = try #require(JSONSerialization.jsonObject(with: start) as? [String: Any])
+            let id = duplicateID ? try #require(UUID(uuidString: startObject["id"] as? String ?? "")) : UUID()
+            reducer.consume(try event("session.start", id: id, timestamp: nil, [
+                "sessionId": invalidVersion ? session.uuidString : UUID().uuidString,
+                "version": invalidVersion ? 0 : 1
+            ]))
+            #expect(reducer.issues.contains(invalidVersion ? .unsupportedFormat : .identityChanged))
+            #expect(!reducer.canPublishProjection)
+        }
+    }
+
+    @Test(arguments: [CopilotWorkState.completed, .failed, .cancelled])
+    func capacityPreservesTerminalProtectionButCannotHideAnUnprocessedRestart(_ state: CopilotWorkState) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumLifecycleEvents: 2, maximumReplayFilterWords: 1)
+        try feed(&reducer, "subagent.started", agent: "child", ["toolCallId": "old", "agentDisplayName": "Child"])
+        try feed(&reducer, state == .failed ? "subagent.failed" : "subagent.completed", [
+            "toolCallId": "old", "agentDisplayName": "Child", "cancelled": state == .cancelled
+        ])
+        let terminal = reducer.value().children.first?.terminalEvent
+        for row in try copilotTestReplayPressure() { reducer.consume(row) }
+        try feed(&reducer, "subagent.completed", ["toolCallId": "old", "agentDisplayName": "Child"])
+        #expect(reducer.value().children.first?.state == state)
+        #expect(reducer.value().children.first?.terminalEvent == terminal)
+        try feed(&reducer, "subagent.started", agent: "child", ["toolCallId": "new", "agentDisplayName": "Child"])
+        #expect(reducer.value().children.first?.state == .unknown)
+        #expect(reducer.value().children.first?.terminalEvent == nil)
+        #expect(reducer.canPublishProjection)
+    }
+
+    @Test(arguments: [false, true])
+    func lifecycleUncertaintyDemotesTerminalScopeWithoutFabricatingAnOutcome(_ unresolvedScope: Bool) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumLifecycleEvents: 4)
+        for child in ["affected", "unrelated"] {
+            try feed(&reducer, "subagent.started", agent: child, ["toolCallId": child, "agentDisplayName": child])
+            try feed(&reducer, "subagent.failed", ["toolCallId": child, "agentDisplayName": child])
+        }
+        let unrelated = reducer.value().children.last?.terminalEvent
+        try feed(&reducer, "subagent.future_lifecycle", agent: unresolvedScope ? nil : "affected", [:])
+        #expect(reducer.value().children.first?.state == .unknown)
+        #expect(reducer.value().children.first?.terminalEvent == nil)
+        #expect(reducer.value().children.last?.state == (unresolvedScope ? .unknown : .failed))
+        #expect(reducer.value().children.last?.terminalEvent == (unresolvedScope ? nil : unrelated))
+    }
+
+    @Test func replayedRootTurnAtCapacityCannotReopenEndedSession() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumLifecycleEvents: 5)
+        for turn in ["old", "new"] {
+            try feed(&reducer, "assistant.turn_start", ["turnId": turn])
+            try feed(&reducer, "assistant.turn_end", ["turnId": turn])
+        }
+        try feed(&reducer, "session.shutdown", ["shutdownType": "routine"])
+        #expect(reducer.value().state == .completed)
+        try feed(&reducer, "assistant.turn_start", ["turnId": "old"])
+        #expect(reducer.value().state == .completed)
+        #expect(reducer.issues.isEmpty)
+    }
+
+    @Test(arguments: ["subagent.started", "assistant.turn_start"], [false, true])
+    func futureTimingCannotSuppressANewLifecycleIdentity(_ type: String, futureStart: Bool) throws {
+        let session = UUID()
+        let initial = try event("subagent.started", id: UUID(),
+            timestamp: futureStart ? "2099-01-01T00:00:00Z" : "2026-09-12T12:00:00Z",
+            ["toolCallId": "old", "agentDisplayName": "Child"], agent: "child")
+        let completion = try event("subagent.completed", id: UUID(), timestamp: "2099-01-01T01:00:00Z",
+            ["toolCallId": "old", "agentDisplayName": "Child"])
+        let fresh = try event(type, id: UUID(), timestamp: "2026-09-12T12:00:01Z",
+            ["toolCallId": "new", "agentDisplayName": "Child", "turnId": "new-turn"], agent: "child")
+        for _ in 0..<2 {
+            var reducer = CopilotEventReducer(sessionID: session)
+            for row in [initial, completion, fresh] { reducer.consume(row) }
+            #expect(reducer.value().children.first?.state == .working)
+            #expect(reducer.value().children.first?.terminalEvent == nil)
+        }
+    }
+
+    @Test(arguments: ["abort", "session.error"])
+    func rejectedStaleChildTerminalEventKeepsCurrentPendingRequests(_ type: String) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "subagent.started", agent: "child", ["toolCallId": "task", "agentDisplayName": "Child"])
+        try feed(&reducer, "permission.requested", agent: "child", ["requestId": "permission"])
+        try feed(&reducer, "user_input.requested", agent: "child", ["requestId": "input"])
+        #expect(reducer.value().children.first?.state == .blocked)
+        reducer.consume(try event(type, id: UUID(), timestamp: "2026-09-12T11:59:00Z", [:], agent: "child"))
+        #expect(reducer.value().children.first?.state == .blocked)
+        #expect(reducer.value().children.first?.terminalEvent == nil)
+        try feed(&reducer, "permission.completed", agent: "child", ["requestId": "permission"])
+        #expect(reducer.value().children.first?.state == .blocked)
+        try feed(&reducer, "user_input.completed", agent: "child", ["requestId": "input"])
+        #expect(reducer.value().children.first?.state == .working)
+    }
+
+    @Test func shellAndScopedAbortUseAcceptedTerminalEvidence() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "tool.execution_start", ["toolCallId": "shell", "toolName": "bash"])
+        try feed(&reducer, "tool.execution_complete", ["toolCallId": "shell", "success": false])
+        let failed = reducer.value().children.first?.terminalEvent
+        try feed(&reducer, "tool.execution_complete", ["toolCallId": "shell", "success": true])
+        #expect(reducer.value().children.first?.terminalEvent == failed)
+        try feed(&reducer, "subagent.started", agent: "child", ["toolCallId": "task", "agentDisplayName": "Child"])
+        try feed(&reducer, "abort", agent: "child", [:])
+        #expect(reducer.value().children.last?.state == .cancelled)
+        #expect(reducer.value().children.last?.terminalEvent != nil)
+        try feed(&reducer, "system.notification", [
+            "kind": ["type": "shell_completed", "shellId": "background", "exitCode": 0]
+        ])
+        #expect(reducer.value().children.last?.terminalEvent != nil)
+    }
+
+    @Test func staleCompletionAndUnsupportedLifecycleDoNotFabricateProgress() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "subagent.started", agent: "child", ["toolCallId": "task", "agentDisplayName": "Child"])
+        reducer.consume(try event("subagent.completed", id: UUID(), timestamp: "2026-09-11T12:00:00Z", [
+            "toolCallId": "task", "agentDisplayName": "Child"
+        ]))
+        #expect(reducer.value().children.first?.state == .working)
+        try feed(&reducer, "subagent.future_lifecycle", agent: "child", [:])
+        #expect(reducer.value().children.first?.state == .unknown)
+        #expect(reducer.value().children.first?.terminalEvent == nil)
+        #expect(reducer.issues.contains(.unsupportedFormat))
+    }
+
+    private func event(
+        _ type: String, id: UUID, timestamp: Any?, _ data: [String: Any], agent: String? = nil
+    ) throws -> Data {
+        var event: [String: Any] = ["id": id.uuidString, "type": type, "data": data]
+        if let timestamp { event["timestamp"] = timestamp }
+        if let agent { event["agentId"] = agent }
+        return try JSONSerialization.data(withJSONObject: event)
+    }
+
     @Test func completedInvocationsCannotStarveFreshBlockedSubagent() throws {
         var reducer = CopilotEventReducer(sessionID: UUID())
         for index in 0..<256 {
@@ -54,9 +358,12 @@ nonisolated struct CopilotEventReducerTests {
         #expect(reducer.value().children.first(where: { $0.id == "child" })?.state == .working)
     }
 
-    @Test(arguments: [false, true])
-    func freshSpawnReusesAgentIDButOldLifecycleReplayCannotAffectIt(retire: Bool) throws {
-        var reducer = CopilotEventReducer(sessionID: UUID(), maximumWorkItems: 1)
+    @Test(arguments: [false, true], [false, true])
+    func freshSpawnReusesAgentIDButOldLifecycleReplayCannotAffectIt(retire: Bool, spill: Bool) throws {
+        var reducer = CopilotEventReducer(
+            sessionID: UUID(), maximumWorkItems: 1, maximumRelationships: spill ? 4 : 4096,
+            maximumLifecycleEvents: spill ? 2 : 65_536
+        )
         let toolA = try copilotTestEvent("tool.execution_start", agent: "parent-a", data: [
             "toolCallId": "tool-a", "toolName": "task"
         ])
@@ -95,12 +402,15 @@ nonisolated struct CopilotEventReducerTests {
             "toolCallId": "tool-a", "agentDisplayName": "A", "parentId": "parent-a"
         ])
         try feed(&reducer, "assistant.turn_start", agent: "worker", ["turnId": "turn-a"])
+        try feed(&reducer, "assistant.turn_end", agent: "worker", ["turnId": "turn-a"])
+        try feed(&reducer, "subagent.failed", ["toolCallId": "tool-a", "agentDisplayName": "A"])
+        try feed(&reducer, "permission.requested", agent: "worker", ["requestId": "request-a"])
         #expect(reducer.value().children.first == fresh)
         try feed(&reducer, "permission.completed", ["requestId": "request-b"])
         #expect(reducer.value().children.first?.state == .working)
         try feed(&reducer, "subagent.completed", ["toolCallId": "tool-b", "agentDisplayName": "B"])
         #expect(reducer.value().children.first?.state == .completed)
-        #expect(reducer.issues.isEmpty)
+        #expect(reducer.issues == (spill ? [.readLimitReached] : []))
     }
 
     @Test func turnOwnersAreScopedAndEnrichmentCannotDiscardPendingRequests() throws {
@@ -128,8 +438,12 @@ nonisolated struct CopilotEventReducerTests {
 
     @Test func repeatedAgentLifecyclesStayBoundedAndReconstructDeterministically() throws {
         let session = UUID()
-        var original = CopilotEventReducer(sessionID: session, maximumWorkItems: 1, maximumRelationships: 32)
-        var rebuilt = CopilotEventReducer(sessionID: session, maximumWorkItems: 1, maximumRelationships: 32)
+        var original = CopilotEventReducer(
+            sessionID: session, maximumWorkItems: 1, maximumRelationships: 32, maximumLifecycleEvents: 8
+        )
+        var rebuilt = CopilotEventReducer(
+            sessionID: session, maximumWorkItems: 1, maximumRelationships: 32, maximumLifecycleEvents: 8
+        )
         for index in 0..<128 {
             let rows = [
                 try copilotTestEvent("subagent.started", agent: "worker", data: [
@@ -156,6 +470,8 @@ nonisolated struct CopilotEventReducerTests {
         #expect(original.retentionCounts.agents <= 1)
         #expect(original.retentionCounts.tombstones <= 32)
         #expect(original.retentionCounts.replayWords == 16_384)
+        #expect(original.retentionCounts.events <= 8)
+        #expect(original.retentionCounts.eventReplayWords == 16_384)
     }
 
     @Test(arguments: [false, true])
@@ -195,11 +511,11 @@ nonisolated struct CopilotEventReducerTests {
 
     @Test func continuousHistoryReclaimsRelationshipCapsAndRebuildsDeterministically() throws {
         let session = UUID()
-        var reducer = CopilotEventReducer(sessionID: session)
-        var rebuilt = CopilotEventReducer(sessionID: session)
-        // Cross BOTH original caps in the same session, without resume/reset.
+        var reducer = CopilotEventReducer(sessionID: session, maximumLifecycleEvents: 32)
+        var rebuilt = CopilotEventReducer(sessionID: session, maximumLifecycleEvents: 32)
+        // Cross the work, relationship, and exact event windows without reset.
         for index in 0..<5000 {
-            for row in [
+            for (offset, row) in [
                 try copilotTestEvent("tool.execution_start", data: ["toolCallId": "shell-\(index)", "toolName": "bash"]),
                 try copilotTestEvent("tool.execution_complete", data: ["toolCallId": "shell-\(index)", "success": true]),
                 try copilotTestEvent("tool.execution_start", data: ["toolCallId": "agent-\(index)", "toolName": "task"]),
@@ -209,9 +525,12 @@ nonisolated struct CopilotEventReducerTests {
                 try copilotTestEvent("subagent.completed", data: [
                     "toolCallId": "agent-\(index)", "agentDisplayName": "Worker"
                 ])
-            ] {
-                reducer.consume(row)
-                rebuilt.consume(row)
+            ].enumerated() {
+                var stable = try #require(JSONSerialization.jsonObject(with: row) as? [String: Any])
+                stable["id"] = String(format: "E0000000-0000-0000-0000-%012X", index * 5 + offset)
+                let data = try JSONSerialization.data(withJSONObject: stable)
+                reducer.consume(data)
+                rebuilt.consume(data)
             }
         }
         let fresh = try copilotTestEvent("subagent.started", agent: "fresh", data: [
@@ -231,6 +550,8 @@ nonisolated struct CopilotEventReducerTests {
         #expect(counts.requests == 1)
         #expect(counts.tombstones <= 4096)
         #expect(counts.replayWords == 16_384)
+        #expect(counts.events <= 32)
+        #expect(counts.eventReplayWords == 16_384)
         // Cold tombstones are conservative, explicitly uncertain, and not erased.
         try feed(&reducer, "tool.execution_start", ["toolCallId": "shell-0", "toolName": "bash"])
         try feed(&reducer, "subagent.started", agent: "agent-0", [
@@ -253,6 +574,115 @@ nonisolated struct CopilotEventReducerTests {
         #expect(guardState.retainedCount == 2)
         #expect(guardState.filterWordCount == 2)
         #expect(remembered.allSatisfy { guardState.match($0) != .absent })
+    }
+
+    @Test(arguments: [CopilotWorkState.completed, .failed, .cancelled], ["subagent.started", "assistant.turn_start"])
+    func unsaturatedColdStartCollisionCannotKeepObsoleteTerminalEvidence(
+        outcome: CopilotWorkState, type: String
+    ) throws {
+        var reducer = CopilotEventReducer(
+            sessionID: UUID(), maximumRelationships: 2, maximumReplayFilterWords: 1
+        )
+        let start = try copilotTestEvent("subagent.started", agent: "worker", data: [
+            "toolCallId": "spawn-a", "agentDisplayName": "A", "model": "known-child-model"
+        ])
+        reducer.consume(start)
+        try feed(&reducer, outcome == .failed ? "subagent.failed" : "subagent.completed", [
+            "toolCallId": "spawn-a", "agentDisplayName": "A", "cancelled": outcome == .cancelled
+        ])
+        try feed(&reducer, "session.model_change", ["newModel": "known-root-model"])
+        for row in try copilotTestColdStartPressure() { reducer.consume(row) }
+        #expect(reducer.issues.isEmpty)
+        let terminal = reducer.value()
+        reducer.consume(start)
+        #expect(reducer.value() == terminal)
+        try feed(&reducer, type, agent: "worker", [
+            "toolCallId": "fresh-457", "turnId": "fresh-turn-135",
+            "agentDisplayName": "Unattested B", "model": "unattested-model"
+        ])
+        let uncertain = reducer.value()
+        #expect(uncertain.children.first?.state == .unknown)
+        #expect(uncertain.children.first?.terminalEvent == nil)
+        #expect(uncertain.children.first?.model == "known-child-model")
+        #expect(uncertain.state == terminal.state)
+        #expect(uncertain.model == terminal.model)
+        #expect(reducer.canPublishProjection)
+        #expect(reducer.issues == [.readLimitReached])
+        try feed(&reducer, "subagent.completed", ["toolCallId": "spawn-a", "agentDisplayName": "A"])
+        #expect(reducer.value() == uncertain)
+    }
+
+    @Test func unsaturatedColdStartsCannotChangeLiveInvocationOrItsPendingRequest() throws {
+        var reducer = CopilotEventReducer(
+            sessionID: UUID(), maximumRelationships: 2, maximumReplayFilterWords: 1
+        )
+        try feed(&reducer, "subagent.started", agent: "worker", ["toolCallId": "spawn-a", "agentDisplayName": "A"])
+        try feed(&reducer, "subagent.completed", ["toolCallId": "spawn-a", "agentDisplayName": "A"])
+        for row in try copilotTestColdStartPressure() { reducer.consume(row) }
+        try feed(&reducer, "subagent.started", agent: "worker", [
+            "toolCallId": "spawn-b", "agentDisplayName": "B", "model": "live-model"
+        ])
+        try feed(&reducer, "permission.requested", agent: "worker", ["requestId": "pending-b"])
+        #expect(reducer.issues.isEmpty)
+        let live = reducer.value()
+        #expect(live.children.first?.state == .blocked)
+        for tool in ["spawn-a", "fresh-457"] {
+            try feed(&reducer, "subagent.started", agent: "worker", [
+                "toolCallId": tool, "agentDisplayName": "Unattested", "model": "unattested-model"
+            ])
+            #expect(reducer.value() == live)
+        }
+        try feed(&reducer, "assistant.turn_start", agent: "worker", [
+            "turnId": "fresh-turn-135", "model": "unattested-model"
+        ])
+        try feed(&reducer, "subagent.completed", ["toolCallId": "spawn-a", "agentDisplayName": "A"])
+        #expect(reducer.value() == live)
+        #expect(reducer.retentionCounts.requests == 1)
+        #expect(reducer.issues == [.readLimitReached])
+        try feed(&reducer, "permission.completed", ["requestId": "pending-b"])
+        #expect(reducer.value().children.first?.state == .working)
+    }
+
+    @Test func coldRootTurnDemotesOnlyTerminalRootWithoutAdoptingUnattestedModel() throws {
+        var reducer = CopilotEventReducer(
+            sessionID: UUID(), maximumRelationships: 2, maximumReplayFilterWords: 1
+        )
+        try feed(&reducer, "subagent.started", agent: "worker", ["toolCallId": "spawn-a", "agentDisplayName": "A"])
+        for row in try copilotTestColdStartPressure() { reducer.consume(row) }
+        try feed(&reducer, "session.shutdown", ["shutdownType": "routine", "currentModel": "known-root-model"])
+        let terminal = reducer.value()
+        try feed(&reducer, "assistant.turn_start", ["turnId": "noise-3"])
+        #expect(reducer.value() == terminal)
+        try feed(&reducer, "assistant.turn_start", ["turnId": "root-fresh-47", "model": "unattested-model"])
+        #expect(reducer.value().state == .unknown)
+        #expect(reducer.value().model == "known-root-model")
+        #expect(reducer.value().children == terminal.children)
+        #expect(reducer.issues == [.readLimitReached])
+        try feed(&reducer, "assistant.turn_end", ["turnId": "noise-3"])
+        #expect(reducer.value().state == .unknown)
+    }
+
+    @Test func saturatedReplayKeepsPendingRequestsAndRejectsObsoleteInvocationCompletions() throws {
+        var reducer = CopilotEventReducer(
+            sessionID: UUID(), maximumLifecycleEvents: 2, maximumReplayFilterWords: 1
+        )
+        try feed(&reducer, "subagent.started", agent: "worker", ["toolCallId": "a", "agentDisplayName": "A"])
+        try feed(&reducer, "assistant.turn_start", agent: "worker", ["turnId": "turn-a"])
+        try feed(&reducer, "subagent.completed", ["toolCallId": "a", "agentDisplayName": "A"])
+        try feed(&reducer, "subagent.started", agent: "worker", ["toolCallId": "b", "agentDisplayName": "B"])
+        try feed(&reducer, "permission.requested", agent: "worker", ["requestId": "pending-b"])
+        #expect(reducer.value().children.first?.state == .blocked)
+        for row in try copilotTestReplayPressure() { reducer.consume(row) }
+        let limited = reducer.value()
+        #expect(limited.children.first?.state == .blocked)
+        #expect(limited.children.first?.terminalEvent == nil)
+        #expect(reducer.retentionCounts.requests == 1)
+        #expect(reducer.issues == [.readLimitReached])
+        try feed(&reducer, "subagent.started", agent: "worker", ["toolCallId": "a", "agentDisplayName": "A"])
+        try feed(&reducer, "subagent.failed", ["toolCallId": "a", "agentDisplayName": "A"])
+        try feed(&reducer, "assistant.turn_end", agent: "worker", ["turnId": "turn-a"])
+        #expect(reducer.value() == limited)
+        #expect(reducer.canPublishProjection)
     }
 
     @Test func completedToolOwnersStillJoinDelayedStartsAndRetireUnderPressure() throws {
@@ -499,6 +929,31 @@ nonisolated struct CopilotEventReducerTests {
     ) throws {
         reducer.consume(try copilotTestEvent(type, agent: agent, data: data))
     }
+}
+
+nonisolated func copilotTestReplayPressure() throws -> [Data] {
+    // Exhaust the deliberately tiny one-word filter, not just its exact window.
+    try (0..<128).map { index in
+        try JSONSerialization.data(withJSONObject: [
+            "id": String(format: "F0000000-0000-0000-0000-%012X", index),
+            "type": "session.model_change", "data": ["newModel": "pressure"]
+        ])
+    }
+}
+
+nonisolated func copilotTestColdStartPressure() throws -> [Data] {
+    var replay = CopilotReplayGuard(capacity: 2, wordCount: 1)
+    for key in ["subagent:spawn-a"] + (0..<4).map({ "turn:0::noise-\($0)" }) {
+        let remembered = replay.remember(key)
+        #expect(remembered)
+    }
+    #expect(replay.occupiedBits == 18)
+    #expect(replay.occupiedBits < 32)
+    for key in ["subagent:spawn-a", "subagent:fresh-457", "turn:6:worker:fresh-turn-135", "turn:0::root-fresh-47"] {
+        #expect(replay.match(key) == .uncertain)
+    }
+    #expect(replay.match("subagent:spawn-b") == .absent)
+    return try (0..<4).map { try copilotTestEvent("assistant.turn_start", data: ["turnId": "noise-\($0)"]) }
 }
 
 nonisolated func copilotTestEvent(
