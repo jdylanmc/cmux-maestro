@@ -618,6 +618,8 @@ identifier to `codesign`; otherwise a command-line tool can retain its
 linker-generated identifier despite `PRODUCT_BUNDLE_IDENTIFIER`. Publication
 and installation verify the effective helper identity. Rebuild older products
 with linker-generated helper IDs; they are not accepted as install sources.
+The helper's optional `com.apple.application-identifier` entitlement must match
+that exact identity. It does not permit additional access entitlements.
 
 The command confirms the exact production bundle ID and canonical path in
 both LaunchServices and the extension registry—not merely exit status zero.
