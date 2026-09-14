@@ -6,12 +6,14 @@ struct SidebarPreferenceFixture {
     let defaults: UserDefaults
     var historyFile: URL { root.appendingPathComponent("history.json") }
     var attentionFile: URL { root.appendingPathComponent("attention.json") }
+    var layoutFile: URL { root.appendingPathComponent("layout.json") }
 
     @MainActor
-    func preferences(historyFile: URL? = nil, attentionFile: URL? = nil) -> SidebarPreferences {
+    func preferences(historyFile: URL? = nil, attentionFile: URL? = nil, layoutFile: URL? = nil) -> SidebarPreferences {
         SidebarPreferences(
             defaults: defaults, historyFile: historyFile ?? self.historyFile,
-            attentionFile: attentionFile ?? self.attentionFile
+            attentionFile: attentionFile ?? self.attentionFile,
+            layoutStore: .init(file: .init(url: layoutFile ?? self.layoutFile))
         )
     }
 

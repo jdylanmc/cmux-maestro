@@ -24,6 +24,9 @@ final class SidebarPreferences {
     private static let historyKey = "sidebar.completedHistory.v1"
     private static let attentionKey = "sidebar.attention.v1"
     private let defaults: UserDefaults
+    private let layoutStore: SidebarLayoutStore
+    var layout: SidebarLayoutSettings { layoutStore.value.settings }
+    var layoutNotice: String? { layoutStore.value.notice }
     private let historyStore: SidebarPreferenceStore<SidebarHistorySettings>
     private let attentionStore: SidebarPreferenceStore<SidebarAttentionSettings>
     var history: SidebarHistorySettings { historyStore.value.settings }
@@ -43,12 +46,14 @@ final class SidebarPreferences {
         self.init(
             defaults: .standard,
             historyFile: root.appendingPathComponent("CMUXMaestroPreview/sidebar-history.json"),
-            attentionFile: root.appendingPathComponent("CMUXMaestroPreview/sidebar-attention.json")
+            attentionFile: root.appendingPathComponent("CMUXMaestroPreview/sidebar-attention.json"),
+            layoutStore: .shared
         )
     }
 
-    init(defaults: UserDefaults, historyFile: URL, attentionFile: URL) {
+    init(defaults: UserDefaults, historyFile: URL, attentionFile: URL, layoutStore: SidebarLayoutStore) {
         self.defaults = defaults
+        self.layoutStore = layoutStore
         selectedMode = defaults.string(forKey: Self.selectedModeKey)
             .flatMap(SidebarMode.init(rawValue:)) ?? .hierarchy
         historyStore = SidebarPreferenceStore(file: .init(url: historyFile), legacy: {
@@ -72,6 +77,12 @@ final class SidebarPreferences {
             defaults.removeObject(forKey: Self.attentionKey)
         })
     }
+
+    func setDensity(_ density: SidebarDensity) { layoutStore.apply(.density(density)) }
+    func setExpanded(_ expanded: Bool, for id: SidebarExpansionID) { layoutStore.apply(.expansion(id, expanded)) }
+    func expandAll() { layoutStore.apply(.expandAll) }
+    func resetLayout() { layoutStore.apply(.reset) }
+    func refreshLayout() { layoutStore.refresh() }
 
     func setRetention(_ retention: SidebarHistoryRetention) {
         historyStore.apply { $0.retention = retention }

@@ -92,9 +92,72 @@ symlinked state directories are not supported. Missing lifecycle events can
 leave completion/status unknown, and agent IDs are not automatically native
 child-session IDs. No title/transcript heuristics repair missing identity.
 
+## Sidebar layout
+
+The sidebar **gear** includes **Compact** (the original spacing) and
+**Comfortable** (more room and larger native detail text) density. Both
+Hierarchy and Taskboard keep the same data, counts, paths and independent
+focus, dismissal and acknowledgement actions. Narrow rows stack actions;
+full paths remain available to accessibility and tooltips.
+
+Hierarchy expansion persists by workspace/surface UUID and provider/session/
+child identity—not names, paths or the current window. Moves and reloads keep
+the setting; new identities start expanded. Reusing the same child ID in a
+different session/provider does not inherit a collapse. Returning with the
+same full identity intentionally does. Collapsed ancestors retain visible
+running, blocked and attention summaries; incomplete counts stay labelled.
+Collapse never dismisses or acknowledges work and never changes retention.
+Taskboard still shows the full retained projection regardless of tree collapse.
+
+Only density overrides and collapsed identities are stored, in a versioned
+`CMUXMaestroPreview/sidebar-layout.json` record in the extension container's
+Application Support directory. Coordinated, atomic action-level writes merge
+across views/processes rather than replacing a stale window snapshot. Local
+views synchronize immediately; native file-presentation notifications refresh
+other processes, with reloads on host/observation updates, activation and
+appearance as well.
+Storage is bounded to **2,048 overrides / 1 MiB**. Oldest collapse overrides
+are evicted first, which only **expands** branches. Off-window state is never
+pruned based on a current snapshot. Unreadable or unknown-schema settings
+expand all branches and show a recoverable notice; only **Reset layout
+settings** replaces that record. **Expand all branches** preserves density;
+layout reset restores Compact and does not alter history or attention settings.
+
+Layout's file/store types are thin adapters over the same preference coordinator
+used by history and acknowledgements; only layout's mutations and safe eviction
+policy remain feature-specific. The existing layout path and version-1 schema
+are unchanged: no layout migration or rewrite occurs on open. Missing layout
+files mean Compact and fully expanded, and reads/refreshes do not create a file.
+This lazy mode is explicit; history/acknowledgement migration-on-open is unchanged.
+Lazy stores observe the nearest existing container so first-file creation in
+another process also reaches already-open views, without writing defaults first.
+All three records stay separate. Tests and offscreen renders inject all three
+storage paths and never fall back to the production layout singleton.
+
+### Synthetic layout review images
+
+`./scripts/test.sh` writes offscreen SwiftUI/AppKit PNGs to
+`.build/layout-validation/offscreen/`. CI uploads only those PNGs as the
+**sidebar-layout-offscreen** artifact (14-day retention), including when tests
+fail after producing images. Review both densities at 240 pixels in dark mode,
+increased contrast, and long synthetic path/model/nested-label scenarios, in
+addition to the light-mode expansion matrix at 240 and 320 pixels. Filenames
+identify density, scenario, view mode and width.
+The renderer checks the actual SwiftUI color-scheme and contrast environment.
+Its fixed synthetic clock also owns the injected freshness timer; elapsed CI
+wall time cannot expire a fixture whose logical clock has not advanced.
+Contrast uses the SDK's writable `_colorSchemeContrast` backing key only in
+tests, paired with native high-contrast AppKit appearances; no system display
+preferences are changed.
+
+All metadata is synthetic and local preferences are isolated for the render
+test. Its AppKit windows are never shown; this is not a desktop capture, live
+CMUX-host visual proof, system VoiceOver verification or a pixel-baseline
+comparison. No transcripts, real workspace paths or desktop images are uploaded.
+
 ## Completed work history
 
-The sidebar's **gear** opens native history settings, shared by **Hierarchy** and
+The sidebar's **gear** also opens native history settings, shared by **Hierarchy** and
 **Taskboard**. Finished, failed and cancelled child outcomes are retained for
 **15 seconds** by default; choose **1 minute**, **5 minutes**, **1 hour**, or
 **Never**. Retention starts at the accepted terminal event's RFC 3339 timestamp,
@@ -320,8 +383,7 @@ tests, not the hook. Existing snapshot behavior is unchanged. New live model
 fields are optional for backward Codable compatibility. Reader identity,
 partial-read, corruption, freshness and replay-cap safeguards still apply;
 untrusted or unavailable evidence cannot fabricate an outcome or an action.
-Broader presentation preferences, telemetry and the remaining backlog are not
-claimed by this feature.
+Telemetry and the remaining backlog are not claimed by this feature.
 
 ### Bounded retention and discovery
 
@@ -421,15 +483,16 @@ The CMUX ExtensionKit package is pinned to CMUX commit
 `ae7fbce99f98c98df5ccf915e548dd080d33cfa8`. It is fetched into ignored
 `vendor/CmuxExtensionKit/`; no CMUX source changes are required.
 
-**Host footer compatibility:** the native view reserves 50 points of bottom
-clearance for the current CMUX overlaid footer. The SDK provides no footer-inset
-contract; a rendered-strip regression test checks that both sidebar modes leave
-this area clear. Reverify the clearance when host chrome changes.
+**Host footer compatibility:** the native view reserves an absolute 50 points of
+bottom clearance for the current CMUX overlaid footer, independent of density.
+The SDK provides no footer-inset contract; a rendered-strip regression test checks
+both sidebar modes and densities leave this area clear. Reverify the clearance
+when host chrome changes.
 
 Workspace containers use eager layout inside the scroll view; their child trees
 retain the existing projection limits. This avoids the lazy root-placement loop
 observed during remote accessibility scrolling. An offscreen AppKit regression
-exercises repeated scrolling and mode changes; live accessibility scrolling and
+exercises repeated scrolling and mode changes in both densities; live accessibility scrolling and
 continued history updates remain part of deployment acceptance.
 
 ## Build and test

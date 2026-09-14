@@ -32,11 +32,13 @@ nonisolated struct SidebarPreferenceFile<Value: SidebarPreferenceValue>: Sendabl
         self.url = url.standardizedFileURL
     }
 
-    func read(presenter: NSFilePresenter? = nil) -> SidebarPreferenceRead<Value> {
+    func read(presenter: NSFilePresenter? = nil, defaultsWhenMissing: Bool = false) -> SidebarPreferenceRead<Value> {
+        if defaultsWhenMissing && !FileManager.default.fileExists(atPath: url.path) { return .init() }
         var result = unreadable
         var error: NSError?
         NSFileCoordinator(filePresenter: presenter).coordinate(readingItemAt: url, options: [], error: &error) {
-            result = readUncoordinated($0)
+            result = defaultsWhenMissing && !FileManager.default.fileExists(atPath: $0.path)
+                ? .init() : readUncoordinated($0)
         }
         return error == nil ? result : unreadable
     }
@@ -123,6 +125,7 @@ private enum SidebarPreferenceStores {
 @MainActor
 final class SidebarPreferenceStore<Value: SidebarPreferenceValue> {
     private let file: SidebarPreferenceFile<Value>
+    private let defaultsWhenMissing: Bool
     @ObservationIgnored private let legacy: () throws -> Value?
     @ObservationIgnored private let migrated: () -> Void
     @ObservationIgnored private var presenter: SidebarPreferencePresenter?
@@ -130,16 +133,23 @@ final class SidebarPreferenceStore<Value: SidebarPreferenceValue> {
 
     init(
         file: SidebarPreferenceFile<Value>,
+        initializeMissingFile: Bool = true,
         legacy: @escaping () throws -> Value? = { nil },
         migrated: @escaping () -> Void = {}
     ) {
         self.file = file
+        defaultsWhenMissing = !initializeMissingFile
         self.legacy = legacy
         self.migrated = migrated
-        value = file.update(initializeOnly: true, legacy: legacy) { _ in }
-        if value.notice == nil { migrated() }
+        // Layout has always been read-only until an action; history/attention retain migration-on-open.
+        if initializeMissingFile {
+            value = file.update(initializeOnly: true, legacy: legacy) { _ in }
+            if value.notice == nil { migrated() }
+        } else {
+            value = file.read(defaultsWhenMissing: true)
+        }
         SidebarPreferenceStores.all.add(self)
-        let presenter = SidebarPreferencePresenter(url: file.url) { [weak self] in
+        let presenter = SidebarPreferencePresenter(url: file.url, observeCreation: defaultsWhenMissing) { [weak self] in
             Task { @MainActor [weak self] in self?.refresh() }
         }
         self.presenter = presenter
@@ -162,8 +172,8 @@ final class SidebarPreferenceStore<Value: SidebarPreferenceValue> {
         }
     }
 
-    private func refresh() {
-        let next = file.read(presenter: presenter)
+    func refresh() {
+        let next = file.read(presenter: presenter, defaultsWhenMissing: defaultsWhenMissing)
         if next != value { value = next }
     }
 }
@@ -172,14 +182,38 @@ private nonisolated final class SidebarPreferencePresenter: NSObject, NSFilePres
     let presentedItemURL: URL?
     let presentedItemOperationQueue: OperationQueue
     private let changed: @Sendable () -> Void
+    private let target: URL
 
-    init(url: URL, changed: @escaping @Sendable () -> Void) {
-        presentedItemURL = url
+    init(url: URL, observeCreation: Bool, changed: @escaping @Sendable () -> Void) {
+        target = url
+        if observeCreation {
+            // Presenting a nonexistent file does not reliably report its first creation.
+            // Watch the nearest existing container without creating layout state on read.
+            var container = url.deletingLastPathComponent()
+            while container.path != "/" {
+                var directory: ObjCBool = false
+                if FileManager.default.fileExists(atPath: container.path, isDirectory: &directory), directory.boolValue { break }
+                container.deleteLastPathComponent()
+            }
+            presentedItemURL = container
+        } else {
+            presentedItemURL = url
+        }
         self.changed = changed
         presentedItemOperationQueue = OperationQueue()
         presentedItemOperationQueue.maxConcurrentOperationCount = 1
         super.init()
     }
 
-    func presentedItemDidChange() { changed() }
+    func presentedItemDidChange() {
+        if presentedItemURL == target { changed() }
+    }
+
+    func presentedSubitemDidAppear(at url: URL) { subitemChanged(url) }
+    func presentedSubitemDidChange(at url: URL) { subitemChanged(url) }
+
+    private func subitemChanged(_ url: URL) {
+        let path = url.standardizedFileURL.path
+        if path == target.path || target.path.hasPrefix(path + "/") { changed() }
+    }
 }

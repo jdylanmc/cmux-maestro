@@ -13,15 +13,15 @@ struct SidebarPreferencesTests {
 
     @Test
     func defaultsToHierarchy() throws {
-        try withIsolatedDefaults { defaults, file, attentionFile in
-            #expect(SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile).selectedMode == .hierarchy)
+        try withIsolatedDefaults { defaults, file, attentionFile, layoutStore in
+            #expect(SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore).selectedMode == .hierarchy)
         }
     }
 
     @Test
     func switchesImmediatelyWithoutChangingAnyConnectionState() throws {
-        try withIsolatedDefaults { defaults, file, attentionFile in
-            let preferences = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile)
+        try withIsolatedDefaults { defaults, file, attentionFile, layoutStore in
+            let preferences = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore)
             let connection = SidebarConnectionModel()
             let states: [SidebarConnectionState] = [
                 .waiting,
@@ -41,11 +41,11 @@ struct SidebarPreferencesTests {
 
     @Test
     func persistsThroughReconstruction() throws {
-        try withIsolatedDefaults { defaults, file, attentionFile in
-            let original = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile)
+        try withIsolatedDefaults { defaults, file, attentionFile, layoutStore in
+            let original = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore)
             original.selectedMode = .taskboard
 
-            let reconstructed = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile)
+            let reconstructed = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore)
 
             #expect(reconstructed.selectedMode == .taskboard)
         }
@@ -53,24 +53,25 @@ struct SidebarPreferencesTests {
 
     @Test
     func invalidPersistedValueFallsBackToHierarchy() throws {
-        try withIsolatedDefaults { defaults, file, attentionFile in
+        try withIsolatedDefaults { defaults, file, attentionFile, layoutStore in
             defaults.set("unknown-mode", forKey: "sidebar.selectedMode")
 
-            #expect(SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile).selectedMode == .hierarchy)
+            #expect(SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore).selectedMode == .hierarchy)
         }
     }
 
-    private func withIsolatedDefaults(_ body: (UserDefaults, URL, URL) -> Void) throws {
+    private func withIsolatedDefaults(_ body: (UserDefaults, URL, URL, SidebarLayoutStore) -> Void) throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
-        body(fixture.defaults, fixture.historyFile, fixture.attentionFile)
+        body(fixture.defaults, fixture.historyFile, fixture.attentionFile, .init(file: .init(url: fixture.layoutFile)))
     }
 
-    @Test
-    func renderedContentClearsTheHostsOverlaidFooter() async throws {
+    @Test(arguments: SidebarDensity.allCases)
+    func renderedContentClearsTheHostsOverlaidFooter(density: SidebarDensity) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
         let preferences = fixture.preferences()
+        preferences.setDensity(density)
         let model = SidebarConnectionModel(copilot: SidebarCopilotPolling(
             read: { _ in .init(generatedAt: Date(), sessions: [], issues: [], isComplete: true) }
         ))
@@ -111,10 +112,12 @@ struct SidebarPreferencesTests {
         }
     }
 
-    @Test func renderedHierarchyRemainsResponsiveAcrossScrollingAndModeChanges() async throws {
+    @Test(arguments: SidebarDensity.allCases)
+    func renderedHierarchyRemainsResponsiveAcrossScrollingAndModeChanges(density: SidebarDensity) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
         let preferences = fixture.preferences()
+        preferences.setDensity(density)
         preferences.setRetention(.never)
         let data = SidebarTreeFixtures()
         let now = Date(timeIntervalSince1970: 2_000)

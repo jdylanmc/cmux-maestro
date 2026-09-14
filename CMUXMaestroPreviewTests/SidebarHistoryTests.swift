@@ -117,15 +117,15 @@ struct SidebarHistoryTests {
     }
 
     @Test func persistedPreferencesReconstructAndRestoreWithoutChangingMode() throws {
-        try withDefaults { defaults, file, attentionFile in
-            let prefs = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile)
+        try withDefaults { defaults, file, attentionFile, layoutStore in
+            let prefs = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore)
             #expect(prefs.history.retention == .fifteenSeconds)
             #expect(FileManager.default.fileExists(atPath: file.path))
             #expect(defaults.object(forKey: "sidebar.completedHistory.v1") == nil)
             prefs.selectedMode = .taskboard
             prefs.setRetention(.never)
             prefs.dismiss([key("child")])
-            let reconstructed = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile)
+            let reconstructed = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore)
             #expect(reconstructed.history == prefs.history)
             #expect(reconstructed.selectedMode == .taskboard)
             #expect(project([child("child", age: 1)], history: reconstructed.history).retainedHistoryCount == 0)
@@ -156,9 +156,9 @@ struct SidebarHistoryTests {
             ]))
         ]
         for stored: Any in invalid + ["wrong-storage-type"] {
-            try withDefaults { defaults, file, attentionFile in
+            try withDefaults { defaults, file, attentionFile, layoutStore in
                 defaults.set(stored, forKey: "sidebar.completedHistory.v1")
-                let prefs = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile)
+                let prefs = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore)
                 #expect(prefs.history.retention == .never)
                 #expect(prefs.history.dismissed.isEmpty)
                 #expect((prefs.historyNotice?.count ?? 0) > 0)
@@ -174,15 +174,15 @@ struct SidebarHistoryTests {
                 prefs.resetHistory()
                 #expect(prefs.historyNotice == nil)
                 #expect(defaults.object(forKey: "sidebar.completedHistory.v1") == nil)
-                #expect(SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile).history == SidebarHistorySettings())
+                #expect(SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore).history == SidebarHistorySettings())
             }
             await Task.yield()
         }
     }
 
     @Test func dismissalStorageBoundRejectsWholeBatchWithoutEvictingExistingRecords() throws {
-        try withDefaults { defaults, file, attentionFile in
-            let prefs = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile)
+        try withDefaults { defaults, file, attentionFile, layoutStore in
+            let prefs = SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore)
             let full = Set((0..<SidebarHistorySettings.maximumDismissals).map { key("child-\($0)") })
             prefs.dismiss(full)
             #expect(prefs.history.dismissed == full)
@@ -194,14 +194,15 @@ struct SidebarHistoryTests {
             #expect(prefs.historyNotice == nil)
             let oversized = SidebarHistorySettings(dismissed: full.union([key("extra")]))
             try JSONEncoder().encode(oversized).write(to: file, options: .atomic)
-            #expect(SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile).history.retention == .never)
+            #expect(SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore).history.retention == .never)
         }
     }
 
     @Test func bothViewsConsumeSameHistoryProjectionAndUseDistinctDismissButtons() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let view = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarView.swift"), encoding: .utf8)
-        #expect(view.contains("HierarchyContent(model: model, dismiss: dismiss, acknowledge: acknowledge)"))
+        #expect(view.contains("model: model, layout: preferences.layout,"))
+        #expect(view.contains("dismiss: dismiss, acknowledge: acknowledge"))
         #expect(view.contains("tree: model.copilot.tree, hierarchy: model.hierarchy"))
         #expect(view.components(separatedBy: "DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)").count == 3)
         #expect(view.contains(".popover(isPresented: $showingHistory)"))
@@ -233,9 +234,9 @@ struct SidebarHistoryTests {
         )
     }
 
-    private func withDefaults(_ body: (UserDefaults, URL, URL) throws -> Void) throws {
+    private func withDefaults(_ body: (UserDefaults, URL, URL, SidebarLayoutStore) throws -> Void) throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
-        try body(fixture.defaults, fixture.historyFile, fixture.attentionFile)
+        try body(fixture.defaults, fixture.historyFile, fixture.attentionFile, .init(file: .init(url: fixture.layoutFile)))
     }
 }

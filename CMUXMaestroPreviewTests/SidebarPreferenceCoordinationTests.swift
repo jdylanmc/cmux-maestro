@@ -265,11 +265,14 @@ final class PreferenceTestChild {
     private let output = Pipe()
     private let lines: AsyncStream<String>
 
-    init(_ fixture: SidebarPreferenceFixture) throws {
+    init(_ fixture: SidebarPreferenceFixture, layoutFile: URL? = nil) throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         process = Process()
         process.executableURL = root.appendingPathComponent(".build/preference-coordination/preference-test-client")
-        process.arguments = [fixture.historyFile.path, fixture.suiteName, fixture.attentionFile.path]
+        process.arguments = [
+            fixture.historyFile.path, fixture.suiteName, fixture.attentionFile.path,
+            (layoutFile ?? fixture.layoutFile).path
+        ]
         process.standardInput = input
         process.standardOutput = output
         let (stream, continuation) = AsyncStream<String>.makeStream()
