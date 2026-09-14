@@ -798,7 +798,7 @@ private struct TaskboardContent: View {
         }
         if tree.sessions.allSatisfy({ $0.nodes.isEmpty }) {
             SidebarNotice(
-                title: tree.hasCompleteCounts ? "No visible child tasks" : "Taskboard data unavailable",
+                title: SidebarPresentation.emptyChildHistoryTitle(complete: tree.hasCompleteCounts),
                 detail: "History may hide ended work; this does not mean the session is finished. Workspace focus remains in Hierarchy."
             )
         } else {

@@ -121,6 +121,10 @@ enum SidebarPresentation {
         return warnings
     }
 
+    static func emptyChildHistoryTitle(complete: Bool) -> String {
+        complete ? "No visible child tasks" : "Child history unavailable"
+    }
+
     static func attention(_ signals: [AgentAttention], state: CopilotWorkState, degraded: Bool) -> [String] {
         var result = AgentAttentionKind.allCases.compactMap { kind -> String? in
             let count = signals.filter { $0.kind == kind }.count
