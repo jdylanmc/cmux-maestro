@@ -81,7 +81,7 @@ nonisolated struct CopilotSessionObservation: Codable, Equatable, Sendable {
 nonisolated enum CopilotIssue: String, Codable, Equatable, Sendable {
     case integrationNotInstalled, noIdentityRecords, stateUnavailable
     case permissionDenied, malformedData, unsupportedFormat, loadingHistory
-    case identityChanged, ambiguousIdentity, readLimitReached
+    case identityChanged, ambiguousIdentity, ambiguousTurn, readLimitReached
 }
 
 nonisolated struct CopilotSnapshot: Codable, Equatable, Sendable {
