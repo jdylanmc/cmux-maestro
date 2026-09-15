@@ -32,6 +32,7 @@ MAX_POLICY_RULE = 512
 MAX_POLICY_RULES = 16
 MAX_REPORT_MESSAGE = 8_192
 MAX_DISPLAY_METADATA = 120
+GIT_EVIDENCE_STATUSES = {"verified", "unavailable"}
 STALE_SECONDS = 600
 HEARTBEAT_SECONDS = 15
 STARTUP_SECONDS = 8
@@ -105,7 +106,15 @@ def sanitize_label(value):
 
 def git_display_metadata(cwd):
     """Return bounded labels from an explicitly assigned directory."""
-    git = trusted_executable("CMUX_MAESTRO_GIT", "/usr/bin/git")
+    captured_at = now()
+    unavailable = {
+        "worktreeLabel": None, "branchLabel": None,
+        "gitEvidenceStatus": "unavailable", "gitEvidenceAt": captured_at,
+    }
+    try:
+        git = trusted_executable("CMUX_MAESTRO_GIT", "/usr/bin/git")
+    except OrchestrationError:
+        return unavailable
 
     def label(value):
         if value is None:
@@ -142,13 +151,61 @@ def git_display_metadata(cwd):
 
     root = query("rev-parse", "--show-toplevel")
     if root is None:
-        return {"worktreeLabel": label(cwd.name), "branchLabel": None}
+        return unavailable
     worktree = label(Path(root).name)
+    if worktree is None:
+        return unavailable
     branch = label(query("symbolic-ref", "--quiet", "--short", "HEAD"))
     return {
         "worktreeLabel": worktree,
         "branchLabel": branch,
+        "gitEvidenceStatus": "verified",
+        "gitEvidenceAt": captured_at,
     }
+
+
+def absent_git_metadata():
+    return {
+        "worktreeLabel": None, "branchLabel": None,
+        "gitEvidenceStatus": None, "gitEvidenceAt": None,
+    }
+
+
+def collect_git_evidence(state, node_ids):
+    """Probe each distinct assigned cwd once, without holding the state lock."""
+    targets = [
+        node for identifier, node in state["nodes"].items()
+        if identifier in node_ids and node.get("workingDirectory") is not None
+    ]
+    by_directory = {}
+    for node in targets:
+        directory = node["workingDirectory"]
+        if directory not in by_directory:
+            by_directory[directory] = git_display_metadata(Path(directory))
+    return {
+        node["id"]: {
+            "runId": node["runId"],
+            "workingDirectory": node["workingDirectory"],
+            "metadata": by_directory[node["workingDirectory"]],
+        }
+        for node in targets
+    }
+
+
+def apply_git_evidence(state, evidence):
+    for identifier, captured in evidence.items():
+        node = state["nodes"].get(identifier)
+        if (
+            node is None
+            or node["runId"] != captured["runId"]
+            or node.get("workingDirectory") != captured["workingDirectory"]
+        ):
+            continue
+        metadata = captured["metadata"]
+        for field in (
+            "worktreeLabel", "branchLabel", "gitEvidenceStatus", "gitEvidenceAt"
+        ):
+            node[field] = metadata[field]
 
 
 def assigned_directory(value):
@@ -324,6 +381,28 @@ def validate_state(state):
             value = node.get(field)
             if value is not None:
                 bounded_text(value, f"stored {field}", MAX_DISPLAY_METADATA)
+        evidence_status = node.get("gitEvidenceStatus")
+        evidence_at = node.get("gitEvidenceAt")
+        if evidence_status is None:
+            if evidence_at is not None or node.get("worktreeLabel") is not None or node.get("branchLabel") is not None:
+                raise OrchestrationError("Stored Git evidence is incomplete.")
+        else:
+            if evidence_status not in GIT_EVIDENCE_STATUSES or evidence_at is None:
+                raise OrchestrationError("Stored Git evidence status is invalid.")
+            captured = parse_date(evidence_at, "stored Git evidence time")
+            if captured > now_date() + datetime.timedelta(minutes=5):
+                raise OrchestrationError("Stored Git evidence timestamp is invalid.")
+            if evidence_status == "verified" and node.get("worktreeLabel") is None:
+                raise OrchestrationError("Verified Git evidence requires a worktree label.")
+            if evidence_status == "unavailable" and (
+                node.get("worktreeLabel") is not None or node.get("branchLabel") is not None
+            ):
+                raise OrchestrationError("Unavailable Git evidence cannot retain labels.")
+        session_id = node.get("copilotSessionId")
+        if session_id is not None:
+            canonical_uuid(session_id, "stored Copilot session ID")
+        if role == "coordinator" and session_id is not None:
+            raise OrchestrationError("Coordinator cannot claim a controlled Copilot session.")
         boundary_generation = node.get("verifiedBoundaryGeneration")
         if (
             boundary_generation is not None
@@ -540,6 +619,7 @@ class Store:
         state.setdefault("retainedResources", [])
         for node in state["nodes"].values():
             candidate = "archiving" not in node
+            legacy_git_evidence = "gitEvidenceStatus" not in node
             node.setdefault("archiving", False)
             node.setdefault("lastControlAt", node.get("updatedAt"))
             node.setdefault("pendingReport", None)
@@ -548,6 +628,11 @@ class Store:
             node.setdefault("toolPolicy", {"allow": [], "deny": []})
             node.setdefault("worktreeLabel", None)
             node.setdefault("branchLabel", None)
+            node.setdefault("gitEvidenceStatus", None)
+            node.setdefault("gitEvidenceAt", None)
+            if legacy_git_evidence:
+                node["worktreeLabel"] = None
+                node["branchLabel"] = None
             if candidate and node.get("role") == "worker":
                 node["phase"] = "process-disappeared"
                 node["availability"] = "unavailable"
@@ -580,8 +665,11 @@ class Store:
             "generation": item["generation"],
             "phase": item["phase"],
             "availability": item["availability"],
+            "copilotSessionId": item.get("copilotSessionId"),
             "worktreeLabel": item.get("worktreeLabel"),
             "branchLabel": item.get("branchLabel"),
+            "gitEvidenceStatus": item.get("gitEvidenceStatus"),
+            "gitEvidenceAt": item.get("gitEvidenceAt"),
             "createdAt": item["createdAt"],
             "updatedAt": item["updatedAt"],
         } for item in nodes[:MAX_NODES]]
@@ -824,17 +912,17 @@ def process_matches(node):
     return bool(process and process_start(process["pid"]) == process["start"])
 
 
-def new_root(workspace, surface, pane, label, cwd=None):
+def new_root(workspace, surface, pane, label, cwd=None, metadata=None):
     identifier, run_id, token = str(uuid.uuid4()), str(uuid.uuid4()), secrets.token_hex(32)
     timestamp = now()
-    metadata = git_display_metadata(cwd) if cwd is not None else {
-        "worktreeLabel": None, "branchLabel": None,
-    }
+    metadata = metadata or absent_git_metadata()
     node = {
         "id": identifier, "runId": run_id, "parentId": None, "role": "coordinator",
         "label": label, "workspaceId": workspace, "surfaceId": surface, "paneId": pane,
         "copilotSessionId": None, "workingDirectory": str(cwd) if cwd is not None else None,
         "worktreeLabel": metadata["worktreeLabel"], "branchLabel": metadata["branchLabel"],
+        "gitEvidenceStatus": metadata["gitEvidenceStatus"],
+        "gitEvidenceAt": metadata["gitEvidenceAt"],
         "generation": 0,
         "phase": "registered", "availability": "active", "createdAt": timestamp,
         "updatedAt": timestamp, "lastControlAt": timestamp, "tokenHash": token_hash(token),
@@ -851,6 +939,7 @@ def command_register(args, root, cmux):
     require_current_surface(workspace, surface)
     label = sanitize_label(bounded_text(args.name, "name", MAX_LABEL))
     cwd = assigned_directory(args.cwd)
+    metadata = git_display_metadata(cwd) if cwd is not None else absent_git_metadata()
     pane = cmux.validate_surface(workspace, surface)
 
     def register(state):
@@ -858,7 +947,7 @@ def command_register(args, root, cmux):
             raise OrchestrationError("Orchestration node limit reached.")
         if any(node.get("surfaceId") == surface for node in state["nodes"].values()):
             raise OrchestrationError("This CMUX surface has a live registered owner.")
-        node, token = new_root(workspace, surface, pane, label, cwd)
+        node, token = new_root(workspace, surface, pane, label, cwd, metadata)
         state["nodes"][node["id"]] = node
         return {
             "coordinatorId": node["id"], "runId": node["runId"], "controlToken": token,
@@ -973,6 +1062,8 @@ def command_spawn(args, root, cmux):
             "surfaceId": None, "paneId": pane, "copilotSessionId": session_id,
             "workingDirectory": str(cwd), "generation": 1, "phase": "launching",
             "worktreeLabel": metadata["worktreeLabel"], "branchLabel": metadata["branchLabel"],
+            "gitEvidenceStatus": metadata["gitEvidenceStatus"],
+            "gitEvidenceAt": metadata["gitEvidenceAt"],
             "availability": "busy", "createdAt": timestamp, "updatedAt": timestamp,
             "lastControlAt": timestamp, "tokenHash": token_hash(worker_token),
             "task": task, "result": None, "pendingReport": None, "supervisor": None,
@@ -1357,6 +1448,9 @@ def run_copilot_turn(root, worker_id, token, node):
             if process.poll() is None and time.monotonic() >= next_heartbeat:
                 generation = node["generation"]
                 supervisor = node.get("supervisor")
+                git_evidence = collect_git_evidence(
+                    {"nodes": {worker_id: node}}, {worker_id}
+                )
 
                 def heartbeat(state):
                     current = state["nodes"].get(worker_id)
@@ -1366,6 +1460,7 @@ def run_copilot_turn(root, worker_id, token, node):
                         and current.get("supervisor") == supervisor
                     ):
                         current["updatedAt"] = now()
+                        apply_git_evidence(state, git_evidence)
                 mutate(root, heartbeat, wait=2)
                 next_heartbeat = time.monotonic() + heartbeat_interval
     finally:
@@ -1463,6 +1558,9 @@ def command_runtime(args, root):
                 ) = run_copilot_turn(
                     root, worker_id, args.token, claimed
                 )
+                git_evidence = collect_git_evidence(
+                    {"nodes": {worker_id: claimed}}, {worker_id}
+                )
 
                 def finish(state):
                     current = state["nodes"].get(worker_id)
@@ -1496,14 +1594,18 @@ def command_runtime(args, root):
                         current["result"] = diagnostic
                     current["pendingReport"] = None
                     current["updatedAt"] = now()
+                    apply_git_evidence(state, git_evidence)
                 mutate(root, finish, wait=2)
                 last_heartbeat = time.monotonic()
                 continue
             if time.monotonic() - last_heartbeat >= HEARTBEAT_SECONDS:
+                git_evidence = collect_git_evidence(state, {worker_id})
+
                 def heartbeat(state):
                     current = state["nodes"].get(worker_id)
                     if current and current.get("supervisor") == {"pid": pid, "start": start}:
                         current["updatedAt"] = now()
+                        apply_git_evidence(state, git_evidence)
                 mutate(root, heartbeat, wait=2)
                 last_heartbeat = time.monotonic()
             time.sleep(0.1)
@@ -1559,6 +1661,7 @@ def command_follow_up(args, root, cmux):
     if not process_matches(target):
         raise OrchestrationError("Worker supervisor identity is stale; no task was queued.")
     expected = (target["generation"], target["phase"], target.get("supervisor"))
+    git_evidence = collect_git_evidence(snapshot, {actor["id"], target["id"]})
 
     def queue(state):
         current_actor = authorize(state, args.actor_id, args.token)
@@ -1582,6 +1685,7 @@ def command_follow_up(args, root, cmux):
             "turn-queued", "busy", now()
         )
         current_actor["lastControlAt"] = now()
+        apply_git_evidence(state, git_evidence)
         return {
             "workerId": current["id"], "sessionId": current["copilotSessionId"],
             "surfaceId": current["surfaceId"], "generation": current["generation"],
@@ -1603,6 +1707,9 @@ def command_status(args, root, cmux):
             process_matches(node) if node["role"] == "worker" else True,
         ) for node in targets
     }
+    git_evidence = collect_git_evidence(
+        snapshot, {actor["id"], *(node["id"] for node in targets)}
+    )
 
     def refresh(state):
         current_actor = authorize(state, args.actor_id, args.token)
@@ -1620,6 +1727,7 @@ def command_status(args, root, cmux):
                 node["phase"], node["availability"], node["updatedAt"] = (
                     "process-disappeared", "unavailable", now()
                 )
+        apply_git_evidence(state, git_evidence)
         return {"runId": current_actor["runId"], "workers": [{
             "workerId": node["id"], "parentId": node["parentId"], "name": node["label"],
             "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
@@ -1724,6 +1832,7 @@ def command_recover(args, root, cmux):
     pane = cmux.validate_surface(workspace, surface)
     label = sanitize_label(bounded_text(args.name, "name", MAX_LABEL))
     cwd = assigned_directory(args.cwd)
+    metadata = git_display_metadata(cwd) if cwd is not None else absent_git_metadata()
     snapshot = read_state(root)
     roots = [
         node for node in snapshot["nodes"].values()
@@ -1767,7 +1876,7 @@ def command_recover(args, root, cmux):
         for node in list(state["nodes"].values()):
             if node["runId"] == current["runId"]:
                 del state["nodes"][node["id"]]
-        node, token = new_root(workspace, surface, pane, label, cwd)
+        node, token = new_root(workspace, surface, pane, label, cwd, metadata)
         state["nodes"][node["id"]] = node
         return {
             "coordinatorId": node["id"], "runId": node["runId"],

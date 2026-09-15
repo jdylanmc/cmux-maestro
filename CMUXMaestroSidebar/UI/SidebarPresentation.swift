@@ -164,6 +164,77 @@ enum SidebarPresentation {
         ]
     }
 
+    static func managedNodeDetails(
+        _ node: SidebarOrchestrationNode,
+        hierarchy: HierarchySnapshot,
+        tree: SidebarCopilotTree,
+        now: Date = Date()
+    ) -> [SidebarDetailLine] {
+        var result: [SidebarDetailLine] = []
+        if let model = managedModel(for: node, in: tree, now: now) {
+            result.append(.init(title: "Model", value: model))
+        }
+        if node.hasFreshGitEvidence(at: now) {
+            if let branch = node.branchLabel {
+                result.append(.init(title: "Branch", value: branch))
+            }
+            if let worktree = node.worktreeLabel {
+                result.append(.init(title: "Worktree", value: worktree))
+            }
+            if let captured = node.gitEvidenceAt {
+                result.append(.init(title: "Git evidence", value: "Verified \(date(captured))"))
+            }
+        } else if let captured = node.gitEvidenceAt {
+            let status = node.gitEvidenceStatus == "unavailable" ? "Unavailable" : "Stale"
+            result.append(.init(title: "Git evidence", value: "\(status) · \(date(captured))"))
+        }
+        let paths = hierarchy.pathContext(
+            workspaceID: node.workspaceId, surfaceID: node.surfaceId
+        )
+        result += [
+            .init(title: "Working directory", value: paths.workingDirectory.pathDisplayText),
+            .init(title: "Role", value: node.role.capitalized)
+        ]
+        if let sessionID = node.copilotSessionId {
+            result.append(.init(title: "Copilot session", value: sessionID.uuidString))
+        }
+        result += [
+            .init(title: "Worker ID", value: node.id.uuidString),
+            .init(title: "Run ID", value: node.runId.uuidString),
+            .init(title: "Workspace ID", value: node.workspaceId.uuidString),
+            .init(title: "Surface ID", value: node.surfaceId.uuidString)
+        ]
+        return result
+    }
+
+    static func managedModel(
+        for node: SidebarOrchestrationNode,
+        in tree: SidebarCopilotTree,
+        now: Date = Date()
+    ) -> String? {
+        guard tree.availability == .ready || tree.availability == .partial,
+              let generatedAt = tree.generatedAt,
+              SidebarCopilotTree.isFresh(generatedAt, now: now) else {
+            return nil
+        }
+        let matches: [SidebarCopilotSession]
+        if let sessionID = node.copilotSessionId {
+            matches = tree.sessions.filter {
+                $0.id == sessionID && $0.surfaceID == node.surfaceId
+                    && SidebarCopilotTree.isFresh($0.observedAt, now: now)
+            }
+        } else if node.role == "coordinator" {
+            matches = tree.sessions.filter {
+                $0.surfaceID == node.surfaceId
+                    && SidebarCopilotTree.isFresh($0.observedAt, now: now)
+            }
+        } else {
+            return nil
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0].model
+    }
+
     static func nodeDetails(_ node: SidebarCopilotNode, session: SidebarCopilotSession) -> [SidebarDetailLine] {
         var result: [SidebarDetailLine] = [
             .init(title: "Name", value: node.name),

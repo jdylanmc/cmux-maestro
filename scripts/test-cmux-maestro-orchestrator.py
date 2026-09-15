@@ -500,8 +500,234 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(private["workingDirectory"], str(worktree))
         self.assertEqual(observed["worktreeLabel"], "display-worktree")
         self.assertEqual(observed["branchLabel"], "feature/hierarchy")
+        self.assertEqual(observed["gitEvidenceStatus"], "verified")
+        self.assertIsNotNone(observed["gitEvidenceAt"])
+        self.assertIsNone(observed["copilotSessionId"])
         self.assertNotIn("workingDirectory", observed)
         self.assertNotIn(str(worktree), json.dumps(observed))
+
+    def test_git_evidence_refreshes_branch_detachment_and_missing_directory(self):
+        worktree = self.h.path / "refresh-worktree"
+        worktree.mkdir()
+        subprocess.run(
+            ["/usr/bin/git", "init", "-q", "-b", "branch-a", str(worktree)],
+            check=True, capture_output=True, text=True,
+        )
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(worktree), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(worktree), "config", "user.name", "Test"],
+            check=True,
+        )
+        (worktree / "tracked").write_text("one")
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(worktree), "add", "tracked"], check=True
+        )
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(worktree), "commit", "-qm", "initial"], check=True
+        )
+        surface = "00000000-0000-4000-8000-000000000091"
+        self.h.add_surface(surface)
+        env = self.h.env.copy()
+        env["CMUX_SURFACE_ID"] = surface
+        registration = self.h.run(
+            "register", "--workspace", self.h.workspace, "--surface", surface,
+            "--cwd", str(worktree), "--name", "Refresh coordinator", env=env,
+        )
+        identifier = registration["coordinatorId"]
+        token = registration["controlToken"]
+        initial = self.h.state()["nodes"][identifier]
+        self.assertEqual(initial["branchLabel"], "branch-a")
+
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(worktree), "switch", "-qc", "branch-b"],
+            check=True,
+        )
+        self.h.run("status", "--actor-id", identifier, "--token", token, env=env)
+        switched = self.h.state()["nodes"][identifier]
+        self.assertEqual(switched["branchLabel"], "branch-b")
+        self.assertGreaterEqual(switched["gitEvidenceAt"], initial["gitEvidenceAt"])
+
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(worktree), "checkout", "-q", "--detach"],
+            check=True,
+        )
+        self.h.run("status", "--actor-id", identifier, "--token", token, env=env)
+        detached = self.h.state()["nodes"][identifier]
+        self.assertEqual(detached["worktreeLabel"], "refresh-worktree")
+        self.assertIsNone(detached["branchLabel"])
+        self.assertEqual(detached["gitEvidenceStatus"], "verified")
+
+        moved = self.h.path / "moved-refresh-worktree"
+        worktree.rename(moved)
+        self.h.run("status", "--actor-id", identifier, "--token", token, env=env)
+        missing = self.h.state()["nodes"][identifier]
+        self.assertIsNone(missing["worktreeLabel"])
+        self.assertIsNone(missing["branchLabel"])
+        self.assertEqual(missing["gitEvidenceStatus"], "unavailable")
+
+    def test_only_successful_git_root_produces_worktree_label(self):
+        non_git = self.h.path / "ordinary-directory"
+        non_git.mkdir()
+        observed = self._register_with_cwd(
+            non_git, "00000000-0000-4000-8000-000000000092"
+        )
+        self.assertIsNone(observed["worktreeLabel"])
+        self.assertIsNone(observed["branchLabel"])
+        self.assertEqual(observed["gitEvidenceStatus"], "unavailable")
+
+        repository = self.h.path / "main-repository"
+        repository.mkdir()
+        subprocess.run(
+            ["/usr/bin/git", "init", "-q", "-b", "main", str(repository)], check=True
+        )
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(repository), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(repository), "config", "user.name", "Test"],
+            check=True,
+        )
+        (repository / "tracked").write_text("one")
+        subprocess.run(["/usr/bin/git", "-C", str(repository), "add", "tracked"], check=True)
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(repository), "commit", "-qm", "initial"], check=True
+        )
+        linked = self.h.path / "linked-worktree"
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(repository), "worktree", "add", "-q", "-b",
+             "linked-branch", str(linked)],
+            check=True,
+        )
+        observed = self._register_with_cwd(
+            linked, "00000000-0000-4000-8000-000000000093"
+        )
+        self.assertEqual(observed["worktreeLabel"], "linked-worktree")
+        self.assertEqual(observed["branchLabel"], "linked-branch")
+        self.assertEqual(observed["gitEvidenceStatus"], "verified")
+
+    def test_failed_malformed_overlong_and_timed_out_git_never_publish_labels(self):
+        cwd = self.h.path / "probe-directory"
+        cwd.mkdir()
+        behaviors = {
+            "failure": "#!/bin/sh\nexit 7\n",
+            "malformed": "#!/bin/sh\nprintf '\\377\\376'\n",
+            "overlong-label": "#!/bin/sh\npython3 -c 'print(\"x\" * 121)'\n",
+            "overlong": "#!/bin/sh\npython3 -c 'print(\"x\" * 5000)'\n",
+            "timeout": "#!/bin/sh\nsleep 2\n",
+        }
+        for index, (name, source) in enumerate(behaviors.items(), start=94):
+            fake_git = self.h.path / f"git-{name}"
+            fake_git.write_text(source)
+            fake_git.chmod(0o755)
+            env = self.h.env.copy()
+            env["CMUX_MAESTRO_GIT"] = str(fake_git)
+            observed = self._register_with_cwd(
+                cwd, f"00000000-0000-4000-8000-0000000000{index}", env=env
+            )
+            self.assertIsNone(observed["worktreeLabel"], name)
+            self.assertIsNone(observed["branchLabel"], name)
+            self.assertEqual(observed["gitEvidenceStatus"], "unavailable", name)
+
+    def test_follow_up_refreshes_exact_worker_git_evidence_and_publishes_session_identity(self):
+        worktree = self.h.path / "worker-worktree"
+        worktree.mkdir()
+        subprocess.run(
+            ["/usr/bin/git", "init", "-q", "-b", "branch-a", str(worktree)], check=True
+        )
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(worktree), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(worktree), "config", "user.name", "Test"],
+            check=True,
+        )
+        (worktree / "tracked").write_text("one")
+        subprocess.run(["/usr/bin/git", "-C", str(worktree), "add", "tracked"], check=True)
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(worktree), "commit", "-qm", "initial"], check=True
+        )
+        worker = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Git worker", "--cwd", str(worktree), "--task", "first turn",
+        )
+        idle = self.h.wait_node(
+            worker["workerId"], lambda node: node["availability"] == "idle"
+        )
+        self.assertEqual(idle["branchLabel"], "branch-a")
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(worktree), "switch", "-qc", "branch-b"],
+            check=True,
+        )
+        self.h.run(
+            "follow-up", "--actor-id", self.h.node, "--token", self.h.token,
+            "--worker-id", worker["workerId"], "--task", "second turn",
+        )
+        refreshed = self.h.wait_node(
+            worker["workerId"], lambda node: node["branchLabel"] == "branch-b"
+        )
+        self.assertGreaterEqual(refreshed["gitEvidenceAt"], idle["gitEvidenceAt"])
+        public = json.loads((self.h.root / "observer" / "current.json").read_text())
+        observed = next(
+            node for node in public["nodes"] if node["id"] == worker["workerId"]
+        )
+        self.assertEqual(observed["copilotSessionId"], worker["sessionId"])
+        self.assertNotIn("workingDirectory", observed)
+
+    def test_git_probe_runs_outside_global_state_mutation_lock(self):
+        cwd = self.h.path / "probe-lock-worktree"
+        cwd.mkdir()
+        ready = self.h.path / "git-probe.ready"
+        release = self.h.path / "git-probe.release"
+        fake_git = self.h.path / "git-blocking"
+        fake_git.write_text(
+            "#!/bin/sh\n"
+            f"touch '{ready}'\n"
+            f"while [ ! -e '{release}' ]; do sleep 0.02; done\n"
+            "case \"$*\" in\n"
+            f"  *show-toplevel*) printf '%s\\n' '{cwd}' ;;\n"
+            "  *symbolic-ref*) printf '%s\\n' 'branch-a' ;;\n"
+            "esac\n"
+        )
+        fake_git.chmod(0o755)
+        surface = "00000000-0000-4000-8000-000000000098"
+        self.h.add_surface(surface)
+        env = self.h.env.copy()
+        env["CMUX_SURFACE_ID"] = surface
+        env["CMUX_MAESTRO_GIT"] = str(fake_git)
+        registration = self.h.start(
+            "register", "--workspace", self.h.workspace, "--surface", surface,
+            "--cwd", str(cwd), "--name", "Blocking probe", env=env,
+        )
+        deadline = time.monotonic() + 3
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(ready.exists())
+        started = time.monotonic()
+        self.h.run("status", "--actor-id", self.h.node, "--token", self.h.token)
+        self.assertLess(time.monotonic() - started, 1)
+        release.write_text("release")
+        completed = self.h.finish(registration, timeout=5)
+        self.assertEqual(completed["returncode"], 0)
+
+    def _register_with_cwd(self, cwd, surface, env=None):
+        self.h.add_surface(surface)
+        caller = (env or self.h.env).copy()
+        caller["CMUX_SURFACE_ID"] = surface
+        registration = self.h.run(
+            "register", "--workspace", self.h.workspace, "--surface", surface,
+            "--cwd", str(cwd), "--name", "Metadata coordinator", env=caller,
+            timeout=20,
+        )
+        public = json.loads((self.h.root / "observer" / "current.json").read_text())
+        return next(
+            node for node in public["nodes"]
+            if node["id"] == registration["coordinatorId"]
+        )
 
     def test_concurrent_startup_handshake_and_exact_identity(self):
         worker = self.h.spawn("[DELAY] [STDERR]")

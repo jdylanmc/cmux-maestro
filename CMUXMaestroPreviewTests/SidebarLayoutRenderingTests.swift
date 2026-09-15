@@ -8,9 +8,17 @@ struct SidebarLayoutRenderingTests {
     @Test func syntheticSidebarRendersAtNarrowWidthsInBothDensitiesAndModes() async throws {
         let fixtures = SidebarTreeFixtures()
         let model = makeModel(fixtures: fixtures, longMetadata: false)
+        let unmanagedBaseline = makeModel(
+            fixtures: fixtures, longMetadata: false, childLimit: 0
+        )
         let longModel = makeModel(fixtures: fixtures, longMetadata: true)
         let managedModel = makeManagedModel(fixtures: fixtures)
-        defer { model.setVisible(false); longModel.setVisible(false); managedModel.setVisible(false) }
+        defer {
+            model.setVisible(false)
+            unmanagedBaseline.setVisible(false)
+            longModel.setVisible(false)
+            managedModel.setVisible(false)
+        }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let folder = root.appendingPathComponent(".build/layout-validation/offscreen")
         let state = root.appendingPathComponent(".build/layout-tests/\(UUID())")
@@ -91,6 +99,14 @@ struct SidebarLayoutRenderingTests {
             destination: folder.appendingPathComponent("unmanaged-light-340x600.png")
         )
         #expect(unmanagedMetrics.documentWidth <= unmanagedMetrics.viewportWidth + 0.5)
+        #expect(unmanagedMetrics.documentHeight <= 380)
+        let unmanagedBaselineMetrics = try await render(
+            model: unmanagedBaseline, preferences: preferences, width: 340, height: 600,
+            appearance: .light,
+            destination: folder.appendingPathComponent("unmanaged-baseline-light-340x600.png")
+        )
+        #expect(unmanagedBaselineMetrics.documentHeight <= unmanagedMetrics.documentHeight)
+        #expect((unmanagedMetrics.documentHeight - unmanagedBaselineMetrics.documentHeight) / 3 <= 40)
     }
 
     @Test func managedRowsStayWithinCompactHeightBudgetAtThreeHundredWidth() async throws {
@@ -140,6 +156,7 @@ struct SidebarLayoutRenderingTests {
         let firstRootID = UUID()
         let secondRootID = UUID()
         let now = Date()
+        let sessionIDs = (0..<nodeCount).map { _ in UUID() }
         let labels = [
             "Coordinator", "Implementation", "Implementation",
             "Verification", "Documentation", "Release workspace"
@@ -165,10 +182,12 @@ struct SidebarLayoutRenderingTests {
                 surfaceId: surface, generation: role == "coordinator" ? 0 : 1,
                 phase: phases[index],
                 availability: role == "coordinator" ? "active" : index == 1 ? "busy" : "idle",
+                copilotSessionId: role == "worker" ? sessionIDs[index] : nil,
                 worktreeLabel: secondWorkspace ? "release-worktree" : index == 0
                     ? "cmux-maestro-hierarchy-first" : "worker-\(index)",
                 branchLabel: secondWorkspace ? "release/next" : index == 2
                     ? "feat/a-deliberately-long-nested-verification-branch" : "feat/worker-\(index)",
+                gitEvidenceStatus: "verified", gitEvidenceAt: now,
                 createdAt: now.addingTimeInterval(-Double(index)), updatedAt: now
             )
         }
@@ -182,7 +201,10 @@ struct SidebarLayoutRenderingTests {
                     role: node.role, label: node.label, workspaceId: node.workspaceId,
                     surfaceId: node.surfaceId, generation: node.generation,
                     phase: node.phase, availability: node.availability,
+                    copilotSessionId: node.copilotSessionId,
                     worktreeLabel: node.worktreeLabel, branchLabel: node.branchLabel,
+                    gitEvidenceStatus: node.gitEvidenceStatus,
+                    gitEvidenceAt: node.gitEvidenceAt,
                     createdAt: node.createdAt, updatedAt: node.updatedAt
                 )
             }
@@ -199,9 +221,20 @@ struct SidebarLayoutRenderingTests {
         )
         let copilot = SidebarCopilotPolling(
             read: {
-                _ in CopilotSnapshot(
-                    generatedAt: now, sessions: [], issues: [], isComplete: true
-                )
+                _ in CopilotSnapshot(generatedAt: now, sessions: nestedNodes.map { node in
+                    CopilotSessionObservation(
+                        sessionID: node.copilotSessionId ?? sessionIDs[
+                            surfaces.firstIndex(of: node.surfaceId)!
+                        ],
+                        surfaceID: node.surfaceId,
+                        launchWorkspaceID: node.workspaceId,
+                        liveness: .alive,
+                        state: node.availability == "busy" ? .working : .idle,
+                        model: node.role == "coordinator"
+                            ? "coordinator-model" : "worker-model",
+                        children: [], observedAt: now
+                    )
+                }, issues: [], isComplete: true)
             },
             pause: { try await Task.sleep(for: .seconds(60)) },
             now: { now }
@@ -249,7 +282,9 @@ struct SidebarLayoutRenderingTests {
         return model
     }
 
-    private func makeModel(fixtures: SidebarTreeFixtures, longMetadata: Bool) -> SidebarConnectionModel {
+    private func makeModel(
+        fixtures: SidebarTreeFixtures, longMetadata: Bool, childLimit: Int? = nil
+    ) -> SidebarConnectionModel {
         let now = Date()
         let rootLabel = "Synthetic coordinator reviewing deeply nested layout and accessibility coverage"
         let childLabel = "Synthetic child verifying long metadata without losing running or blocked status"
@@ -263,6 +298,9 @@ struct SidebarLayoutRenderingTests {
                 name: "Synthetic nested coordinator for the deliberately long presentation fixture",
                 state: .idle, model: nil
             ))
+            if let childLimit {
+                children = Array(children.prefix(childLimit))
+            }
         }
         children.append(.init(
             id: "running", parentID: longMetadata ? "nested" : "root", kind: .subagent,

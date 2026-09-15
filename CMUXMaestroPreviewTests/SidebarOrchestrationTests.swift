@@ -222,20 +222,31 @@ struct SidebarOrchestrationTests {
     @Test func displayMetadataIsOptionalBoundedAndControlCharacterFree() throws {
         let workspace = UUID()
         let run = UUID()
+        let captured = Date()
         let valid = node(
             run: run, role: "coordinator", parent: nil, workspace: workspace,
-            worktreeLabel: "cmux-maestro", branchLabel: "feat/hierarchy-first"
+            worktreeLabel: "cmux-maestro", branchLabel: "feat/hierarchy-first",
+            gitEvidenceStatus: "verified", gitEvidenceAt: captured
         )
         try SidebarOrchestrationReader.validate(.init(
             version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [valid]
         ))
         for invalid in [
             node(run: run, role: "coordinator", parent: nil, workspace: workspace,
-                 worktreeLabel: String(repeating: "x", count: 121)),
+                 worktreeLabel: String(repeating: "x", count: 121),
+                 gitEvidenceStatus: "verified", gitEvidenceAt: captured),
             node(run: run, role: "coordinator", parent: nil, workspace: workspace,
-                 branchLabel: "feat/unsafe\nbranch"),
+                 worktreeLabel: "worktree", branchLabel: "feat/unsafe\nbranch",
+                 gitEvidenceStatus: "verified", gitEvidenceAt: captured),
             node(run: run, role: "coordinator", parent: nil, workspace: workspace,
-                 worktreeLabel: "")
+                 worktreeLabel: "", gitEvidenceStatus: "verified", gitEvidenceAt: captured),
+            node(run: run, role: "coordinator", parent: nil, workspace: workspace,
+                 worktreeLabel: "retained", gitEvidenceStatus: "unavailable",
+                 gitEvidenceAt: captured),
+            node(run: run, role: "coordinator", parent: nil, workspace: workspace,
+                 worktreeLabel: nil, gitEvidenceStatus: "verified", gitEvidenceAt: captured),
+            node(run: run, role: "coordinator", parent: nil, workspace: workspace,
+                 gitEvidenceStatus: "unexpected", gitEvidenceAt: captured)
         ] {
             #expect(throws: CopilotFileError.self) {
                 try SidebarOrchestrationReader.validate(.init(
@@ -282,8 +293,11 @@ struct SidebarOrchestrationTests {
         surface: UUID = UUID(),
         phase: String? = nil,
         availability: String? = nil,
+        copilotSessionId: UUID? = nil,
         worktreeLabel: String? = nil,
-        branchLabel: String? = nil
+        branchLabel: String? = nil,
+        gitEvidenceStatus: String? = nil,
+        gitEvidenceAt: Date? = nil
     ) -> SidebarOrchestrationNode {
         let timestamp = Date()
         return SidebarOrchestrationNode(
@@ -292,7 +306,9 @@ struct SidebarOrchestrationTests {
             workspaceId: workspace, surfaceId: surface, generation: role == "worker" ? 1 : 0,
             phase: phase ?? (role == "worker" ? "turn-running" : "registered"),
             availability: availability ?? (role == "worker" ? "busy" : "active"),
+            copilotSessionId: copilotSessionId,
             worktreeLabel: worktreeLabel, branchLabel: branchLabel,
+            gitEvidenceStatus: gitEvidenceStatus, gitEvidenceAt: gitEvidenceAt,
             createdAt: timestamp, updatedAt: timestamp
         )
     }

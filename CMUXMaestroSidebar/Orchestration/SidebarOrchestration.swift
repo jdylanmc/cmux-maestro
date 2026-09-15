@@ -13,15 +13,20 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
     let generation: Int
     let phase: String
     let availability: String
+    let copilotSessionId: UUID?
     let worktreeLabel: String?
     let branchLabel: String?
+    let gitEvidenceStatus: String?
+    let gitEvidenceAt: Date?
     let createdAt: Date
     let updatedAt: Date
 
     init(
         id: UUID, runId: UUID, parentId: UUID?, role: String, label: String,
         workspaceId: UUID, surfaceId: UUID, generation: Int, phase: String,
-        availability: String, worktreeLabel: String? = nil, branchLabel: String? = nil,
+        availability: String, copilotSessionId: UUID? = nil,
+        worktreeLabel: String? = nil, branchLabel: String? = nil,
+        gitEvidenceStatus: String? = nil, gitEvidenceAt: Date? = nil,
         createdAt: Date, updatedAt: Date
     ) {
         self.id = id
@@ -34,8 +39,11 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
         self.generation = generation
         self.phase = phase
         self.availability = availability
+        self.copilotSessionId = copilotSessionId
         self.worktreeLabel = worktreeLabel
         self.branchLabel = branchLabel
+        self.gitEvidenceStatus = gitEvidenceStatus
+        self.gitEvidenceAt = gitEvidenceAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -44,6 +52,12 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
         !["reported-completed", "reported-failed", "launch-failed",
           "startup-failed", "turn-failed", "process-disappeared",
           "terminal-disappeared", "resource-retired"].contains(phase)
+    }
+
+    func hasFreshGitEvidence(at date: Date) -> Bool {
+        guard gitEvidenceStatus == "verified", let gitEvidenceAt else { return false }
+        let age = date.timeIntervalSince(gitEvidenceAt)
+        return age >= -1 && age <= SidebarOrchestrationReader.gitEvidenceFreshInterval
     }
 }
 
@@ -114,6 +128,7 @@ nonisolated enum SidebarOrchestrationReader {
     static let maximumDepth = 8
     static let futureTolerance: TimeInterval = 300
     static let staleInterval: TimeInterval = 60
+    static let gitEvidenceFreshInterval: TimeInterval = 60
 
     static func read() throws -> SidebarOrchestrationSnapshot {
         let owner = getuid()
@@ -164,6 +179,10 @@ nonisolated enum SidebarOrchestrationReader {
                   validState(node) else {
                 throw CopilotFileError.unsafePath
             }
+            guard validGitEvidence(node, generatedAt: snapshot.generatedAt),
+                  node.role == "worker" || node.copilotSessionId == nil else {
+                throw CopilotFileError.unsafePath
+            }
 
             if node.parentId == nil {
                 rootsByRun[node.runId, default: 0] += 1
@@ -194,6 +213,28 @@ nonisolated enum SidebarOrchestrationReader {
         guard let value else { return true }
         return !value.isEmpty && value.utf8.count <= 120
             && !value.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+    }
+
+    private static func validGitEvidence(
+        _ node: SidebarOrchestrationNode, generatedAt: Date
+    ) -> Bool {
+        switch node.gitEvidenceStatus {
+        case nil:
+            // Version-1 observers written before evidence timestamps remain
+            // decodable, but hasFreshGitEvidence never presents their labels.
+            return node.gitEvidenceAt == nil
+        case "verified":
+            guard let captured = node.gitEvidenceAt, node.worktreeLabel != nil else {
+                return false
+            }
+            return captured <= generatedAt.addingTimeInterval(1)
+        case "unavailable":
+            guard let captured = node.gitEvidenceAt else { return false }
+            return captured <= generatedAt.addingTimeInterval(1)
+                && node.worktreeLabel == nil && node.branchLabel == nil
+        default:
+            return false
+        }
     }
 
     static func isStale(_ snapshot: SidebarOrchestrationSnapshot, now: Date = Date()) -> Bool {

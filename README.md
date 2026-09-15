@@ -159,17 +159,27 @@ durable disclosure by stable node identity. Each row leads with its safe name,
 then a muted Git branch/worktree line when the external controller verified those
 facts from the explicitly assigned working directory. The worktree label is the
 verified repository root basename; the branch label comes from `git symbolic-ref`.
-Detached `HEAD`, non-Git directories, timeouts, invalid output, and overlong output
-omit the branch rather than guessing. The sandboxed sidebar never runs Git and
-never receives the private full assigned path through observer metadata.
+Detached `HEAD` omits the branch while retaining the verified worktree. Non-Git
+directories, missing directories, timeouts, invalid output, overlong output and
+failed root queries publish no Git labels rather than calling a directory a
+worktree. The controller refreshes exact assigned-directory evidence at bounded
+worker heartbeats, turn boundaries, follow-up queueing and explicit status checks.
+Each projection carries a separate Git evidence status and capture time; stale or
+unavailable evidence is omitted from ordinary rows and qualified only in deliberate
+inspection. Probes are batched by assigned directory and run outside the global
+state mutation lock. The sandboxed sidebar never runs Git and never receives the
+private full assigned path through observer metadata.
 
 Small native state glyphs distinguish working, available/finished, blocked,
 failed and uncertain states without color alone. Ordinary rows do not repeat
 status prose or diagnostic walls; blocked/failed state, incomplete ancestry,
 omitted active work and attention remain concise and visible. Selecting the state
-glyph opens one detail surface below the outline. Verified model metadata appears
-there only when the observed exact session supplied it. Context usage/window size
-is omitted because the current producer has no documented numeric source;
+glyph opens one detail surface below the outline. Managed workers resolve verified
+model metadata only when both their controller-issued Copilot session UUID and
+surface match one fresh observation. Coordinators use one fresh, unambiguous
+observation on their exact surface. Same names, directories, stale observations,
+surface mismatches and ambiguous coordinator sessions never participate. Context
+usage/window size is omitted because the current producer has no documented numeric source;
 cumulative API tokens and context tiers are not presented as context occupancy.
 Full authorized paths and stable IDs remain in deliberate inspection. Focus,
 expansion, dismissal and acknowledgement remain independent actions.

@@ -294,7 +294,9 @@ struct SidebarView: View {
     @ViewBuilder private var selectionDetails: some View {
         if let selectedManagedID,
            let selected = model.orchestration.snapshot.nodes.first(where: { $0.id == selectedManagedID }) {
-            ManagedSelectionDetails(node: selected, hierarchy: model.hierarchy)
+            ManagedSelectionDetails(
+                node: selected, hierarchy: model.hierarchy, tree: model.copilot.tree
+            )
         } else if let selectedUnmanaged {
             UnmanagedSelectionDetails(
                 selection: selectedUnmanaged,
@@ -538,6 +540,7 @@ struct ManagedHierarchyContent: View {
                             activeDescendants: row.activeDescendants,
                             expanded: layout.isExpanded(.managed(row.node.id)),
                             selected: selectedID == row.node.id,
+                            evidenceDate: Date(),
                             navigation: navigation,
                             toggleExpanded: {
                                 setExpanded(.managed(row.node.id), !layout.isExpanded(.managed(row.node.id)))
@@ -585,6 +588,7 @@ private struct ManagedNodeRow: View {
     let activeDescendants: Int
     let expanded: Bool
     let selected: Bool
+    let evidenceDate: Date
     let navigation: SidebarNavigation
     let toggleExpanded: () -> Void
     let select: () -> Void
@@ -650,6 +654,7 @@ private struct ManagedNodeRow: View {
     }
 
     private var metadataLine: String? {
+        guard node.hasFreshGitEvidence(at: evidenceDate) else { return nil }
         switch (node.branchLabel, node.worktreeLabel) {
         case let (branch?, worktree?) where branch != worktree:
             return "\(branch)  ·  \(worktree)"
@@ -732,6 +737,7 @@ private struct WorkspaceOutlineHeader: View {
 private struct ManagedSelectionDetails: View {
         let node: SidebarOrchestrationNode
         let hierarchy: HierarchySnapshot
+        let tree: SidebarCopilotTree
 
         var body: some View {
             VStack(alignment: .leading, spacing: 4) {
@@ -741,27 +747,14 @@ private struct ManagedSelectionDetails: View {
                     Text(SidebarOrchestrationPhase(rawValue: node.phase)?.title(availability: node.availability) ?? "Unrecognized state")
                         .sidebarFont(.caption2).foregroundStyle(.secondary)
                 }
-                SidebarMetadataDetails(lines: detailLines)
+                SidebarMetadataDetails(lines: SidebarPresentation.managedNodeDetails(
+                    node, hierarchy: hierarchy, tree: tree, now: Date()
+                ))
             }
             .padding(.top, 4)
             .accessibilityIdentifier("managed-selection-details")
         }
 
-        private var detailLines: [SidebarDetailLine] {
-            var lines: [SidebarDetailLine] = []
-            if let branch = node.branchLabel { lines.append(.init(title: "Branch", value: branch)) }
-            if let worktree = node.worktreeLabel { lines.append(.init(title: "Worktree", value: worktree)) }
-            let paths = hierarchy.pathContext(workspaceID: node.workspaceId, surfaceID: node.surfaceId)
-            lines += [
-                .init(title: "Working directory", value: paths.workingDirectory.pathDisplayText),
-                .init(title: "Role", value: node.role.capitalized),
-                .init(title: "Worker ID", value: node.id.uuidString),
-                .init(title: "Run ID", value: node.runId.uuidString),
-                .init(title: "Workspace ID", value: node.workspaceId.uuidString),
-                .init(title: "Surface ID", value: node.surfaceId.uuidString)
-            ]
-            return lines
-        }
 }
 
 private struct CopilotOverview: View {

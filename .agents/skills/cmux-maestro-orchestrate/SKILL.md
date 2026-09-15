@@ -29,9 +29,10 @@ title, directory, screen contents, or current focus:
 ```
 
 Retain the returned `coordinatorId` and `controlToken` privately for this
-orchestration run. `--cwd` is explicit display provenance for the coordinator's
-worktree and Git branch; omit it rather than guessing when the current directory
-is not the assigned task root.
+orchestration run. `--cwd` is explicit probe provenance for the coordinator's
+verified Git worktree and branch. Non-Git directories produce no Git labels;
+omit it rather than guessing when the current directory is not the assigned task
+root. The controller refreshes this bounded evidence during lifecycle checks.
 
 ## Spawn
 
