@@ -153,22 +153,34 @@ policy controls, not an operating-system sandbox. Shell access is never a
 default and requires an explicit task-level caller decision; wildcard,
 all-resource and `--allow-all` grants are never injected.
 
-The hierarchy uses distinct native icons and accents: blue workspace stacks,
-teal terminals, purple Copilot sessions, pink child agents and amber skills.
-State badges pair a symbol and short label with blue Working, amber Blocked,
-green Finished or red Failed. Idle, Cancelled and Unknown have distinct neutral
-symbols; color is never the only state cue. Process ended/unconfirmed ownership
-is shown separately from task completion. Selected workspaces have a subtle
-accent edge rather than another nested card.
+The default view is a restrained workspace outline. Quiet workspace headers
+contain explicit coordinator → worker → nested-worker rows, with guide lines and
+durable disclosure by stable node identity. Each row leads with its safe name,
+then a muted Git branch/worktree line when the external controller verified those
+facts from the explicitly assigned working directory. The worktree label is the
+verified repository root basename; the branch label comes from `git symbolic-ref`.
+Detached `HEAD`, non-Git directories, timeouts, invalid output, and overlong output
+omit the branch rather than guessing. The sandboxed sidebar never runs Git and
+never receives the private full assigned path through observer metadata.
 
-Rows lead with the workspace/surface name or task type/name and current state,
-not a stack of diagnostic cards. A separate **ⓘ Details** disclosure on each row
-reveals model/context availability, process evidence, timestamps, history counts,
-stable IDs, and granted paths. It never focuses, dismisses, or acknowledges work;
-title focus, expansion, dismissal, and acknowledgement remain separate controls.
-Unknown task state, unresolved ancestry, incomplete evidence, blocking requests,
-and outstanding attention stay visible without opening Details. Taskboard also
-shows each primary session's state, even when it has no attention or child rows.
+Small native state glyphs distinguish working, available/finished, blocked,
+failed and uncertain states without color alone. Ordinary rows do not repeat
+status prose or diagnostic walls; blocked/failed state, incomplete ancestry,
+omitted active work and attention remain concise and visible. Selecting the state
+glyph opens one detail surface below the outline. Verified model metadata appears
+there only when the observed exact session supplied it. Context usage/window size
+is omitted because the current producer has no documented numeric source;
+cumulative API tokens and context tiers are not presented as context occupancy.
+Full authorized paths and stable IDs remain in deliberate inspection. Focus,
+expansion, dismissal and acknowledgement remain independent actions.
+
+When no managed graph exists, the same compact treatment groups real CMUX
+surfaces and valid inferred Copilot sessions beneath workspace headers. Working
+directory basenames are explicitly described as directory labels, never Git
+branches. Uncertain ownership and incomplete evidence remain honest glyphs or
+summaries, and incidental diagnostics stay behind selection or settings.
+Taskboard remains available from the compact view/settings menu and retains each
+primary session's state even when it has no attention or child rows.
 
 A healthy overview is one compact summary line; observation timing and history
 totals are in its Details disclosure. Availability failures, partial/unknown data,
@@ -229,10 +241,11 @@ storage paths and never fall back to the production layout singleton.
 **sidebar-layout-offscreen** artifact (14-day retention), including when tests
 fail after producing images. Review both densities at 240 pixels in dark mode,
 increased contrast, and long synthetic path/model/nested-label scenarios, in
-addition to the light-mode expansion matrix at 240 and 349 pixels. All renders
-use a 941-point viewport height. The existing scenario matrix now covers both
-widths in both modes and densities (56 images). Filenames
-identify density, scenario, view mode and width.
+addition to the light-mode expansion matrix at 240 and 349 pixels. Dedicated
+`managed-*-340x600.png` and `unmanaged-light-340x600.png` fixtures exercise two
+workspaces, duplicate names, nested ancestry, long branches and mixed lifecycle
+states at the target sidebar density. The broader matrix uses a 941-point
+viewport. Filenames identify density, scenario, view mode and width.
 The renderer checks the actual SwiftUI color-scheme and contrast environment.
 Per-image JSON records measured scroll viewport/document geometry; metadata-only
 panels are also rendered at both widths to check horizontal containment. Clarity

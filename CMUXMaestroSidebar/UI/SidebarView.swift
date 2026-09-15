@@ -54,15 +54,12 @@ private extension SidebarTone {
 
 struct SidebarKindIcon: View {
     let visual: SidebarVisual
-    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         Image(systemName: visual.symbol)
-            .font(.system(size: 14, weight: .semibold))
+            .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(visual.tone.color)
-            .frame(width: 26, height: 26)
-            .background(visual.tone.color.opacity(contrast == .increased ? 0.24 : 0.12),
-                        in: RoundedRectangle(cornerRadius: 6))
+            .frame(width: 18, height: 22)
             .accessibilityLabel(visual.title)
             .help(visual.title)
     }
@@ -70,19 +67,15 @@ struct SidebarKindIcon: View {
 
 struct SidebarStateBadge: View {
     let visual: SidebarVisual
-    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        Label(visual.title, systemImage: visual.symbol)
-            .sidebarFont(.caption2, weight: .medium)
+        Image(systemName: visual.symbol)
+            .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(visual.tone.color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(visual.tone.color.opacity(contrast == .increased ? 0.20 : 0.10),
-                        in: RoundedRectangle(cornerRadius: 5))
-            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: 18, height: 20)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(visual.title)
+            .help(visual.title)
     }
 }
 
@@ -135,6 +128,8 @@ struct SidebarView: View {
     @Bindable private var preferences: SidebarPreferences
     @State private var showingHistory = false
     @State private var showingOtherActivity = false
+    @State private var selectedManagedID: UUID?
+    @State private var selectedUnmanaged: UnmanagedSelection?
     @Environment(\.scenePhase) private var scenePhase
 
     init(model: SidebarConnectionModel, preferences: SidebarPreferences) {
@@ -150,30 +145,27 @@ struct SidebarView: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: preferences.layout.density.spacing(6)) {
-            HStack {
-                Text("Maestro").font(.headline)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Workspaces").sidebarFont(.subheadline, weight: .semibold)
                 Spacer()
-                Button { showingHistory.toggle() } label: {
-                    Image(systemName: "gearshape")
+                Menu {
+                    Picker("View", selection: $preferences.selectedMode) {
+                        ForEach(SidebarMode.allCases) { mode in
+                            Label(mode.title, systemImage: mode == .hierarchy ? "list.bullet.indent" : "rectangle.3.group")
+                                .tag(mode)
+                        }
+                    }
+                    Divider()
+                    Button("Sidebar settings…") { showingHistory = true }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                         .frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
                 }
                 .buttonStyle(.borderless)
-                .help("Sidebar layout, completed work history and attention settings")
-                .accessibilityLabel("Sidebar settings")
+                .help("View and sidebar settings")
+                .accessibilityLabel("View and sidebar settings")
                 .accessibilityIdentifier("sidebar-history-settings")
                 .popover(isPresented: $showingHistory) { historySettings }
-            }
-            Picker("Sidebar view", selection: $preferences.selectedMode) {
-                ForEach(SidebarMode.allCases) { mode in Text(mode.title).tag(mode) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .accessibilityLabel("Sidebar view")
-
-            if model.orchestration.snapshot.nodes.isEmpty {
-                CopilotOverview(tree: model.copilot.tree)
-            } else {
-                ManagedOverview(polling: model.orchestration)
             }
             ManagedSourceNotice(
                 availability: model.orchestration.availability,
@@ -218,7 +210,16 @@ struct SidebarView: View {
                         otherActivity
                     } else {
                         ManagedHierarchyContent(
-                            polling: model.orchestration, navigation: model.navigation
+                            polling: model.orchestration, hierarchy: model.hierarchy,
+                            navigation: model.navigation, layout: preferences.layout,
+                            setExpanded: { preferences.setExpanded($1, for: $0) },
+                            selectedID: Binding(
+                                get: { selectedManagedID },
+                                set: {
+                                    selectedManagedID = $0
+                                    if $0 != nil { selectedUnmanaged = nil }
+                                }
+                            )
                         )
                         DisclosureGroup("Other sessions/activity", isExpanded: $showingOtherActivity) {
                             otherActivity.padding(.top, 4)
@@ -230,6 +231,8 @@ struct SidebarView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .accessibilityIdentifier("sidebar-mode-content")
+
+            selectionDetails
 
             if let message = model.navigation.status.message, model.navigation.status != .selected {
                 Text(message)
@@ -271,12 +274,32 @@ struct SidebarView: View {
             HierarchyContent(
                 model: model, layout: preferences.layout,
                 setExpanded: { preferences.setExpanded($1, for: $0) },
-                dismiss: dismiss, acknowledge: acknowledge
+                dismiss: dismiss, acknowledge: acknowledge,
+                selection: Binding(
+                    get: { selectedUnmanaged },
+                    set: {
+                        selectedUnmanaged = $0
+                        if $0 != nil { selectedManagedID = nil }
+                    }
+                )
             )
         case .taskboard:
             TaskboardContent(
                 tree: model.copilot.tree, hierarchy: model.hierarchy,
                 navigation: model.navigation, dismiss: dismiss, acknowledge: acknowledge
+            )
+        }
+    }
+
+    @ViewBuilder private var selectionDetails: some View {
+        if let selectedManagedID,
+           let selected = model.orchestration.snapshot.nodes.first(where: { $0.id == selectedManagedID }) {
+            ManagedSelectionDetails(node: selected, hierarchy: model.hierarchy)
+        } else if let selectedUnmanaged {
+            UnmanagedSelectionDetails(
+                selection: selectedUnmanaged,
+                tree: model.copilot.tree,
+                hierarchy: model.hierarchy
             )
         }
     }
@@ -301,6 +324,10 @@ struct SidebarView: View {
     private var settingsContents: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Layout").font(.headline)
+            Picker("View", selection: $preferences.selectedMode) {
+                ForEach(SidebarMode.allCases) { mode in Text(mode.title).tag(mode) }
+            }
+            .accessibilityIdentifier("sidebar-mode-picker")
             Picker("Density", selection: Binding(
                 get: { preferences.layout.density },
                 set: { preferences.setDensity($0) }
@@ -462,32 +489,87 @@ private struct ManagedSourceNotice: View {
 private struct ManagedDisplayNode: Identifiable {
     let node: SidebarOrchestrationNode
     let depth: Int
+    let hasChildren: Bool
+    let activeDescendants: Int
     var id: UUID { node.id }
+}
+
+private enum UnmanagedSelection: Equatable {
+    case workspace(UUID)
+    case surface(workspaceID: UUID, surfaceID: UUID)
+    case session(UUID)
+    case child(sessionID: UUID, childID: String)
 }
 
 struct ManagedHierarchyContent: View {
     let polling: SidebarOrchestrationPolling
+    let hierarchy: HierarchySnapshot
     let navigation: SidebarNavigation
+    let layout: SidebarLayoutSettings
+    let setExpanded: (SidebarExpansionID, Bool) -> Void
+    @Binding var selectedID: UUID?
 
-    private var rows: [ManagedDisplayNode] {
+    private func rows(for roots: [SidebarOrchestrationNode]) -> [ManagedDisplayNode] {
         var result: [ManagedDisplayNode] = []
         func append(_ node: SidebarOrchestrationNode, depth: Int) {
-            result.append(.init(node: node, depth: min(depth, 8)))
-            for child in polling.children(of: node.id).sorted(by: sort) {
-                append(child, depth: depth + 1)
+            let children = polling.children(of: node.id).sorted(by: sort)
+            let descendants = descendantCount(of: node.id)
+            result.append(.init(
+                node: node, depth: min(depth, 8), hasChildren: !children.isEmpty,
+                activeDescendants: descendants
+            ))
+            if layout.isExpanded(.managed(node.id)) {
+                for child in children { append(child, depth: depth + 1) }
             }
         }
-        for root in polling.roots.sorted(by: sort) { append(root, depth: 0) }
+        for root in roots.sorted(by: sort) { append(root, depth: 0) }
         return result
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(rows) { row in
-                ManagedNodeRow(node: row.node, depth: row.depth, navigation: navigation)
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(workspaceGroups, id: \.id) { group in
+                VStack(alignment: .leading, spacing: 2) {
+                    WorkspaceOutlineHeader(workspace: group.workspace, navigation: navigation)
+                    ForEach(rows(for: group.roots)) { row in
+                        ManagedNodeRow(
+                            node: row.node, depth: row.depth,
+                            hasChildren: row.hasChildren,
+                            activeDescendants: row.activeDescendants,
+                            expanded: layout.isExpanded(.managed(row.node.id)),
+                            selected: selectedID == row.node.id,
+                            navigation: navigation,
+                            toggleExpanded: {
+                                setExpanded(.managed(row.node.id), !layout.isExpanded(.managed(row.node.id)))
+                            },
+                            select: { selectedID = row.node.id }
+                        )
+                    }
+                }
             }
         }
         .accessibilityIdentifier("managed-orchestration")
+    }
+
+    private var workspaceGroups: [(id: UUID, workspace: HierarchyWorkspace?, roots: [SidebarOrchestrationNode])] {
+        Dictionary(grouping: polling.roots, by: \.workspaceId)
+            .map { id, roots in
+                (id, hierarchy.workspaces.first(where: { $0.id == id }), roots)
+            }
+            .sorted { workspaceTitle($0.workspace) < workspaceTitle($1.workspace) }
+    }
+
+    private func workspaceTitle(_ workspace: HierarchyWorkspace?) -> String {
+        guard let workspace, case .available(let title) = workspace.title, !title.isEmpty else {
+            return "Workspace"
+        }
+        return title
+    }
+
+    private func descendantCount(of id: UUID) -> Int {
+        polling.children(of: id).reduce(0) {
+            $0 + ($1.isActive ? 1 : 0) + descendantCount(of: $1.id)
+        }
     }
 
     private func sort(_ lhs: SidebarOrchestrationNode, _ rhs: SidebarOrchestrationNode) -> Bool {
@@ -499,49 +581,64 @@ struct ManagedHierarchyContent: View {
 private struct ManagedNodeRow: View {
     let node: SidebarOrchestrationNode
     let depth: Int
+    let hasChildren: Bool
+    let activeDescendants: Int
+    let expanded: Bool
+    let selected: Bool
     let navigation: SidebarNavigation
-    @State private var showingDetails = false
+    let toggleExpanded: () -> Void
+    let select: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 5) {
-                FocusButton(
-                    target: .surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
-                    navigation: navigation, label: "Focus \(node.label)"
-                ) {
-                    HStack(spacing: 5) {
-                        Image(systemName: statePhase?.symbolName(role: node.role) ?? "terminal")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 16)
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(node.label).sidebarFont(.caption, weight: .medium).lineLimit(1)
-                            Text(stateTitle).sidebarFont(.caption2)
-                                .foregroundStyle(stateColor).lineLimit(1)
-                        }
+        HStack(spacing: 4) {
+            if hasChildren {
+                ExpandButton(expanded: expanded, label: node.label, toggle: toggleExpanded)
+            } else {
+                Color.clear.frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
+            }
+            Button(action: select) {
+                Image(systemName: stateSymbol)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(stateColor)
+                    .frame(width: 16, height: 24)
+            }
+            .buttonStyle(.plain)
+            .help(stateTitle)
+            .accessibilityLabel("\(node.label), \(stateTitle). Show details")
+            .accessibilityIdentifier("select-managed-\(node.id)")
+            FocusButton(
+                target: .surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
+                navigation: navigation, label: "Focus \(node.label)"
+            ) {
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        Text(node.label).sidebarFont(.caption, weight: .medium).lineLimit(1)
                         Spacer(minLength: 0)
+                        if activeDescendants > 0 && !node.isActive {
+                            Label("\(activeDescendants)", systemImage: "waveform.path")
+                                .sidebarFont(.caption2).foregroundStyle(.secondary)
+                                .help("\(activeDescendants) active descendant\(activeDescendants == 1 ? "" : "s")")
+                        }
+                    }
+                    if let metadataLine {
+                        Text(metadataLine)
+                            .sidebarFont(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                 }
-                SidebarDetailsButton(
-                    expanded: $showingDetails, label: node.label,
-                    id: "details-managed-\(node.id)"
-                )
-            }
-            if showingDetails {
-                SidebarMetadataDetails(lines: [
-                    .init(title: "Role", value: node.role.capitalized),
-                    .init(title: "State", value: stateTitle),
-                    .init(title: "Worker ID", value: node.id.uuidString),
-                    .init(title: "Run ID", value: node.runId.uuidString),
-                    .init(title: "Parent ID", value: node.parentId?.uuidString ?? "None"),
-                    .init(title: "Workspace ID", value: node.workspaceId.uuidString),
-                    .init(title: "Surface ID", value: node.surfaceId.uuidString),
-                    .init(title: "Generation", value: "\(node.generation)")
-                ])
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(.leading, CGFloat(depth * 12))
-        .padding(.vertical, 1)
+        .padding(.vertical, 2)
+        .padding(.trailing, 4)
+        .background {
+            if selected {
+                RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.07))
+            }
+        }
         .overlay(alignment: .leading) {
             if depth > 0 {
                 Rectangle().fill(.quaternary).frame(width: 1)
@@ -552,8 +649,34 @@ private struct ManagedNodeRow: View {
         .accessibilityIdentifier("managed-node-\(node.id)")
     }
 
+    private var metadataLine: String? {
+        switch (node.branchLabel, node.worktreeLabel) {
+        case let (branch?, worktree?) where branch != worktree:
+            return "\(branch)  ·  \(worktree)"
+        case let (branch?, _): return branch
+        case let (_, worktree?): return worktree
+        default: return nil
+        }
+    }
+
     private var stateTitle: String {
-        statePhase?.title(availability: node.availability) ?? "Unknown state"
+        statePhase?.title(availability: node.availability) ?? "Unrecognized state"
+    }
+
+    private var stateSymbol: String {
+        switch statePhase {
+        case .registered: "circle.fill"
+        case .launching, .turnQueued: "clock"
+        case .turnRunning: "arrow.triangle.2.circlepath"
+        case .reportedCompleted: "checkmark.circle"
+        case .reportedBlocked: "hand.raised.fill"
+        case .reportedFailed, .turnFailed, .launchFailed, .startupFailed: "exclamationmark.circle.fill"
+        case .reportMissing: "doc.badge.ellipsis"
+        case .permissionDenied: "exclamationmark.shield"
+        case .processDisappeared, .terminalDisappeared: "bolt.slash"
+        case .resourceRetired: "archivebox"
+        case .none: "questionmark.circle"
+        }
     }
 
     private var stateColor: Color {
@@ -562,14 +685,83 @@ private struct ManagedNodeRow: View {
         case .reportedBlocked, .reportMissing, .permissionDenied: .orange
         case .reportedFailed, .turnFailed, .processDisappeared,
              .terminalDisappeared, .launchFailed, .startupFailed: .red
-        case .registered, .launching, .turnQueued, .turnRunning,
-             .resourceRetired, .none: .secondary
+        case .turnRunning, .registered: .green
+        case .launching, .turnQueued: .blue
+        case .resourceRetired, .none: .secondary
         }
     }
 
     private var statePhase: SidebarOrchestrationPhase? {
         SidebarOrchestrationPhase(rawValue: node.phase)
     }
+}
+
+private struct WorkspaceOutlineHeader: View {
+        let workspace: HierarchyWorkspace?
+        let navigation: SidebarNavigation
+
+        var body: some View {
+            if let workspace {
+                FocusButton(target: .workspace(workspace.id), navigation: navigation, label: "Focus workspace \(title)") {
+                    HStack(spacing: 5) {
+                        Image(systemName: "square.stack.3d.up")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(title.uppercased())
+                            .sidebarFont(.caption2, weight: .semibold)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                .accessibilityIdentifier("managed-workspace-\(workspace.id)")
+            } else {
+                Label("WORKSPACE", systemImage: "square.stack.3d.up")
+                    .sidebarFont(.caption2, weight: .semibold)
+                    .foregroundStyle(.secondary)
+            }
+        }
+
+        private var title: String {
+            if let workspace, case .available(let title) = workspace.title, !title.isEmpty {
+                return title
+            }
+            return "Workspace"
+        }
+    }
+
+private struct ManagedSelectionDetails: View {
+        let node: SidebarOrchestrationNode
+        let hierarchy: HierarchySnapshot
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(node.label).sidebarFont(.caption, weight: .semibold).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text(SidebarOrchestrationPhase(rawValue: node.phase)?.title(availability: node.availability) ?? "Unrecognized state")
+                        .sidebarFont(.caption2).foregroundStyle(.secondary)
+                }
+                SidebarMetadataDetails(lines: detailLines)
+            }
+            .padding(.top, 4)
+            .accessibilityIdentifier("managed-selection-details")
+        }
+
+        private var detailLines: [SidebarDetailLine] {
+            var lines: [SidebarDetailLine] = []
+            if let branch = node.branchLabel { lines.append(.init(title: "Branch", value: branch)) }
+            if let worktree = node.worktreeLabel { lines.append(.init(title: "Worktree", value: worktree)) }
+            let paths = hierarchy.pathContext(workspaceID: node.workspaceId, surfaceID: node.surfaceId)
+            lines += [
+                .init(title: "Working directory", value: paths.workingDirectory.pathDisplayText),
+                .init(title: "Role", value: node.role.capitalized),
+                .init(title: "Worker ID", value: node.id.uuidString),
+                .init(title: "Run ID", value: node.runId.uuidString),
+                .init(title: "Workspace ID", value: node.workspaceId.uuidString),
+                .init(title: "Surface ID", value: node.surfaceId.uuidString)
+            ]
+            return lines
+        }
 }
 
 private struct CopilotOverview: View {
@@ -615,6 +807,7 @@ private struct HierarchyContent: View {
     let setExpanded: (SidebarExpansionID, Bool) -> Void
     let dismiss: (SidebarDismissedOutcome) -> Void
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
+    @Binding var selection: UnmanagedSelection?
 
     var body: some View {
         if !model.hierarchy.receivedSnapshot {
@@ -630,7 +823,7 @@ private struct HierarchyContent: View {
                     sessions: model.copilot.tree.sessions.filter { $0.workspaceID == workspace.id },
                     countsComplete: model.copilot.tree.hasCompleteCounts,
                     navigation: model.navigation, layout: layout, setExpanded: setExpanded,
-                    dismiss: dismiss, acknowledge: acknowledge
+                    dismiss: dismiss, acknowledge: acknowledge, selection: $selection
                 )
             }
         }
@@ -646,15 +839,15 @@ private struct WorkspaceRow: View {
     let setExpanded: (SidebarExpansionID, Bool) -> Void
     let dismiss: (SidebarDismissedOutcome) -> Void
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
+    @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
-    @State private var showingDetails = false
     private var expanded: Bool { layout.isExpanded(.workspace(workspace.id)) }
 
     private var title: String {
         if case .available(let title) = workspace.title {
             return title.isEmpty ? "Untitled workspace" : title
         }
-        return "Workspace metadata unavailable"
+        return "Workspace"
     }
 
     private var accessibilityStatus: String {
@@ -671,10 +864,17 @@ private struct WorkspaceRow: View {
                 ExpandButton(expanded: expanded, label: title) {
                     setExpanded(.workspace(workspace.id), !expanded)
                 }
+                Button {
+                    selection = .workspace(workspace.id)
+                } label: {
+                    SidebarKindIcon(visual: SidebarPresentation.workspace)
+                }
+                .buttonStyle(.plain)
+                .help("Show workspace details")
+                .accessibilityLabel("\(title). Show workspace details")
                 FocusButton(target: .workspace(workspace.id), navigation: navigation, label: "Focus workspace \(title)") {
                     HStack(spacing: 5) {
-                        SidebarKindIcon(visual: SidebarPresentation.workspace)
-                        Text(title).sidebarFont(.subheadline, weight: .semibold).lineLimit(2)
+                        Text(title.uppercased()).sidebarFont(.caption2, weight: .semibold).lineLimit(1)
                         Spacer(minLength: 0)
                         if case .available(true) = workspace.isSelected {
                             StatusBadge(symbol: "checkmark.circle.fill", label: "Selected")
@@ -688,19 +888,6 @@ private struct WorkspaceRow: View {
                     }
                 }
                 .accessibilityValue(accessibilityStatus)
-                SidebarDetailsButton(expanded: $showingDetails, label: title, id: "details-workspace-\(workspace.id)")
-            }
-            if let path = SidebarPresentation.briefPath(root: workspace.rootPath, project: workspace.projectRootPath) {
-                PathDetail(label: "Path", path: path)
-                    .padding(.leading, 34)
-            }
-            if showingDetails {
-                SidebarMetadataDetails(lines: [
-                    .init(title: "Workspace", value: title),
-                    .init(title: "Workspace ID", value: workspace.id.uuidString),
-                    .init(title: "Workspace path", value: workspace.rootPath.pathDisplayText),
-                    .init(title: "Project path", value: workspace.projectRootPath.pathDisplayText)
-                ])
             }
             if !expanded {
                 CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: sessions, complete: countsComplete))
@@ -718,24 +905,13 @@ private struct WorkspaceRow: View {
                             sessions: sessions.filter { $0.surfaceID == surface.id },
                             countsComplete: countsComplete,
                             navigation: navigation, layout: layout, setExpanded: setExpanded,
-                            dismiss: dismiss, acknowledge: acknowledge
+                            dismiss: dismiss, acknowledge: acknowledge, selection: $selection
                         )
                     }
                 }
             }
         }
-        .padding(.vertical, density.spacing(4))
-        .padding(.horizontal, 4)
-        .background {
-            if case .available(true) = workspace.isSelected {
-                RoundedRectangle(cornerRadius: 7).fill(.blue.opacity(0.06))
-            }
-        }
-        .overlay(alignment: .leading) {
-            if case .available(true) = workspace.isSelected {
-                RoundedRectangle(cornerRadius: 2).fill(.blue).frame(width: 2)
-            }
-        }
+        .padding(.vertical, density.spacing(2))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("workspace-\(workspace.id.uuidString)")
     }
@@ -751,8 +927,8 @@ private struct SurfaceRow: View {
     let setExpanded: (SidebarExpansionID, Bool) -> Void
     let dismiss: (SidebarDismissedOutcome) -> Void
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
+    @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
-    @State private var showingDetails = false
     private var expanded: Bool { layout.isExpanded(.surface(surface.id)) }
 
     private var title: String { surface.title.isEmpty ? "Untitled surface" : surface.title }
@@ -772,13 +948,20 @@ private struct SurfaceRow: View {
                         setExpanded(.surface(surface.id), !expanded)
                     }
                 }
+                Button {
+                    selection = .surface(workspaceID: workspaceID, surfaceID: surface.id)
+                } label: {
+                    SidebarKindIcon(visual: SidebarPresentation.surface(surface.kind))
+                }
+                .buttonStyle(.plain)
+                .help("Show \(surface.kind.title.lowercased()) details")
+                .accessibilityLabel("\(title). Show \(surface.kind.title.lowercased()) details")
                 FocusButton(
                     target: .surface(workspaceID: workspaceID, surfaceID: surface.id),
                     navigation: navigation, label: "Focus \(surface.kind.title) \(title)"
                 ) {
                     HStack(spacing: 5) {
-                        SidebarKindIcon(visual: SidebarPresentation.surface(surface.kind))
-                        Text(title).sidebarFont(.caption, weight: .medium).lineLimit(2)
+                        Text(title).sidebarFont(.caption, weight: .medium).lineLimit(1)
                         Spacer(minLength: 0)
                         if surface.isFocused { StatusBadge(symbol: "scope", label: "Focused") }
                         if surface.isPinned { StatusBadge(symbol: "pin.fill", label: "Pinned") }
@@ -786,15 +969,15 @@ private struct SurfaceRow: View {
                     }
                 }
                 .accessibilityValue(accessibilityStatus)
-                SidebarDetailsButton(expanded: $showingDetails, label: title, id: "details-surface-\(surface.id)")
             }
-            if showingDetails {
-                SidebarMetadataDetails(lines: [
-                    .init(title: "Surface", value: title),
-                    .init(title: "Type", value: surface.kind.title),
-                    .init(title: "Surface ID", value: surface.id.uuidString),
-                    .init(title: "Working directory", value: surface.workingDirectory.pathDisplayText)
-                ])
+            if let directoryLabel {
+                Label(directoryLabel, systemImage: "folder")
+                    .sidebarFont(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.leading, 28)
+                    .help("Working directory label; Git branch not verified by this source")
             }
             if !expanded {
                 CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: sessions, complete: countsComplete))
@@ -803,7 +986,7 @@ private struct SurfaceRow: View {
                 ForEach(sessions) { session in
                     CopilotSessionRow(
                         session: session, navigation: navigation, layout: layout, setExpanded: setExpanded,
-                        dismiss: dismiss, acknowledge: acknowledge
+                        dismiss: dismiss, acknowledge: acknowledge, selection: $selection
                     )
                 }
             }
@@ -816,6 +999,12 @@ private struct SurfaceRow: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("surface-\(surface.id.uuidString)")
     }
+
+    private var directoryLabel: String? {
+        guard case .available(let path) = surface.workingDirectory,
+              let path, !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path).lastPathComponent
+    }
 }
 
 private struct CopilotSessionRow: View {
@@ -825,9 +1014,9 @@ private struct CopilotSessionRow: View {
     let setExpanded: (SidebarExpansionID, Bool) -> Void
     let dismiss: (SidebarDismissedOutcome) -> Void
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
+    @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
-    @State private var showingDetails = false
     private var expanded: Bool { layout.isExpanded(.session(session.id)) }
 
     var body: some View {
@@ -836,6 +1025,14 @@ private struct CopilotSessionRow: View {
                 ExpandButton(expanded: expanded, label: "Copilot \(session.shortID)") {
                     setExpanded(.session(session.id), !expanded)
                 }
+                Button {
+                    selection = .session(session.id)
+                } label: {
+                    SidebarStateBadge(visual: SidebarPresentation.state(session.state))
+                }
+                .buttonStyle(.plain)
+                .help("\(SidebarPresentation.state(session.state).title). Show details")
+                .accessibilityLabel("Copilot \(session.shortID), \(SidebarPresentation.state(session.state).title). Show details")
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation, label: "Focus Copilot session \(session.shortID)"
@@ -847,10 +1044,6 @@ private struct CopilotSessionRow: View {
                     }
                 }
                 .accessibilityValue(session.state.rawValue)
-                SidebarDetailsButton(expanded: $showingDetails, label: "Copilot \(session.shortID)", id: "details-session-\(session.id)")
-            }
-            SidebarActionLayout {
-                SessionStateSummary(session: session)
                 AcknowledgeOutcomeButton(
                     attention: session.attention, sessionID: session.id, ownerID: nil,
                     degraded: session.attentionDegraded, acknowledge: acknowledge
@@ -858,11 +1051,11 @@ private struct CopilotSessionRow: View {
             }
             AttentionSummary(attention: session.attention, state: session.state, degraded: session.attentionDegraded)
             ExecutingActivity(activity: session.activity)
-            if showingDetails { SidebarMetadataDetails(lines: SidebarPresentation.sessionDetails(session)) }
             if !session.childrenComplete || session.treeDegraded {
-                Label("Children unavailable", systemImage: "ellipsis.circle")
+                Image(systemName: "ellipsis.circle")
                     .sidebarFont(.caption2).foregroundStyle(.secondary)
                     .help("Child history incomplete; missing work is not assumed finished")
+                    .accessibilityLabel("Child history incomplete")
             }
             if session.omittedActiveChildrenCount > 0 {
                 Text("\(session.omittedActiveChildrenCount) working/blocked tasks could not fit.")
@@ -873,14 +1066,13 @@ private struct CopilotSessionRow: View {
             }
             if expanded {
                 if session.nodes.isEmpty && session.childrenComplete {
-                    Text("No visible child tasks")
-                        .font(.caption2).foregroundStyle(.secondary)
+                    EmptyView()
                 }
                 ForEach(session.childRows(layout: layout)) { row in
                     let node = row.node
                     CopilotWorkRow(
                         node: node, session: session, navigation: navigation, dismiss: dismiss, acknowledge: acknowledge,
-                        expansion: row, setExpanded: setExpanded
+                        expansion: row, setExpanded: setExpanded, selection: $selection
                     )
                     .padding(.leading, density.indentation(depth: node.depth, unresolved: node.ancestryUnresolved, width: contentWidth))
                 }
@@ -904,8 +1096,31 @@ private struct CopilotWorkRow: View {
     var setExpanded: ((SidebarExpansionID, Bool) -> Void)? = nil
     var paths: HierarchyPathContext? = nil
     var taskboard = false
+    @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
-    @State private var showingDetails = false
+
+    init(
+        node: SidebarCopilotNode, session: SidebarCopilotSession,
+        navigation: SidebarNavigation,
+        dismiss: @escaping (SidebarDismissedOutcome) -> Void,
+        acknowledge: @escaping (Set<SidebarAcknowledgedOutcome>) -> Void,
+        expansion: SidebarChildRow? = nil,
+        setExpanded: ((SidebarExpansionID, Bool) -> Void)? = nil,
+        paths: HierarchyPathContext? = nil,
+        taskboard: Bool = false,
+        selection: Binding<UnmanagedSelection?> = .constant(nil)
+    ) {
+        self.node = node
+        self.session = session
+        self.navigation = navigation
+        self.dismiss = dismiss
+        self.acknowledge = acknowledge
+        self.expansion = expansion
+        self.setExpanded = setExpanded
+        self.paths = paths
+        self.taskboard = taskboard
+        self._selection = selection
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: density.spacing(3)) {
@@ -915,6 +1130,14 @@ private struct CopilotWorkRow: View {
                         setExpanded(expansion.expansionID, !expansion.expanded)
                     }
                 }
+                Button {
+                    selection = .child(sessionID: session.id, childID: node.id)
+                } label: {
+                    SidebarStateBadge(visual: SidebarPresentation.state(node.state))
+                }
+                .buttonStyle(.plain)
+                .help("\(SidebarPresentation.state(node.state).title). Show details")
+                .accessibilityLabel("\(node.name), \(SidebarPresentation.state(node.state).title). Show details")
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation, label: "Focus \(node.name), \(node.state.rawValue), Copilot \(session.shortID)"
@@ -925,10 +1148,8 @@ private struct CopilotWorkRow: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                SidebarDetailsButton(expanded: $showingDetails, label: node.name, id: "details-child-\(session.id)-\(node.id)")
             }
             SidebarActionLayout {
-                WorkStateLabel(state: node.state)
                 DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)
                 AcknowledgeOutcomeButton(
                     attention: node.attention, sessionID: session.id, ownerID: node.id,
@@ -938,23 +1159,77 @@ private struct CopilotWorkRow: View {
             AttentionSummary(attention: node.attention, state: node.state, degraded: node.attentionDegraded)
             ExecutingActivity(activity: node.activity)
             if node.ancestryUnresolved {
-                Label("Unresolved ancestry", systemImage: "questionmark.folder").sidebarFont(.caption).foregroundStyle(.orange)
-            }
-            if node.historyAncestor {
-                Text("Child context").sidebarFont(.caption2).foregroundStyle(.secondary)
-            } else if node.state.isTerminal && node.terminalTimestamp == nil {
-                Text("Completion age unknown").sidebarFont(.caption2).foregroundStyle(.secondary)
-            }
-            if showingDetails {
-                SidebarMetadataDetails(lines: SidebarPresentation.nodeDetails(node, session: session)
-                    + (paths.map(SidebarPresentation.paths) ?? []))
+                Image(systemName: "questionmark.folder")
+                    .sidebarFont(.caption2).foregroundStyle(.orange)
+                    .help("Unresolved ancestry")
+                    .accessibilityLabel("Unresolved ancestry")
             }
             if let summary = expansion?.collapsedSummary { CollapsedBranchSummary(summary: summary) }
         }
+
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, density.spacing(3))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("\(taskboard ? "taskboard" : "copilot")-child-\(session.id)-\(node.id)")
+    }
+}
+
+private struct UnmanagedSelectionDetails: View {
+    let selection: UnmanagedSelection
+    let tree: SidebarCopilotTree
+    let hierarchy: HierarchySnapshot
+
+    var body: some View {
+        if let detail {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(detail.title).sidebarFont(.caption, weight: .semibold).lineLimit(1)
+                SidebarMetadataDetails(lines: detail.lines)
+            }
+            .padding(.top, 4)
+            .accessibilityIdentifier("unmanaged-selection-details")
+        }
+    }
+
+    private var detail: (title: String, lines: [SidebarDetailLine])? {
+        switch selection {
+        case .workspace(let id):
+            guard let workspace = hierarchy.workspaces.first(where: { $0.id == id }) else { return nil }
+            let title: String
+            if case .available(let value) = workspace.title, !value.isEmpty {
+                title = value
+            } else {
+                title = "Workspace"
+            }
+            return (title, [
+                .init(title: "Workspace ID", value: workspace.id.uuidString),
+                .init(title: "Workspace path", value: workspace.rootPath.pathDisplayText),
+                .init(title: "Project path", value: workspace.projectRootPath.pathDisplayText)
+            ])
+        case .surface(let workspaceID, let surfaceID):
+            guard let workspace = hierarchy.workspaces.first(where: { $0.id == workspaceID }),
+                  case .available(let surfaces) = workspace.surfaces,
+                  let surface = surfaces.first(where: { $0.id == surfaceID }) else { return nil }
+            return (surface.title.isEmpty ? "Surface" : surface.title, [
+                .init(title: "Type", value: surface.kind.title),
+                .init(title: "Surface ID", value: surface.id.uuidString),
+                .init(title: "Working directory", value: surface.workingDirectory.pathDisplayText)
+            ])
+        case .session(let id):
+            guard let session = tree.sessions.first(where: { $0.id == id }) else { return nil }
+            let paths = hierarchy.pathContext(
+                workspaceID: session.workspaceID, surfaceID: session.surfaceID
+            )
+            return ("Copilot · \(session.shortID)",
+                    SidebarPresentation.sessionDetails(session) + SidebarPresentation.paths(paths))
+        case .child(let sessionID, let childID):
+            guard let session = tree.sessions.first(where: { $0.id == sessionID }),
+                  let node = session.nodes.first(where: { $0.id == childID }) else { return nil }
+            let paths = hierarchy.pathContext(
+                workspaceID: session.workspaceID, surfaceID: session.surfaceID
+            )
+            return (node.name,
+                    SidebarPresentation.nodeDetails(node, session: session) + SidebarPresentation.paths(paths))
+        }
     }
 }
 

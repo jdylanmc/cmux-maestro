@@ -139,13 +139,20 @@ struct SidebarClarityTests {
         #expect(!SidebarPresentation.collapsed(summary)[0].contains("0"))
     }
 
-    @Test func metadataRemainsHonestAndGrantedPathsSurvivePartialPathPermissions() throws {
+    @Test func selectionMetadataShowsOnlyObservedModelAndGrantedPaths() throws {
         let ended = node(state: .completed)
         let session = try #require(makeTree(nodes: [ended]).sessions.first)
         let details = SidebarPresentation.nodeDetails(ended, session: session)
-        #expect(details.contains(.init(title: "Model", value: "Model unknown")))
+        #expect(!details.contains { $0.title == "Model" })
         #expect(details.contains(.init(title: "Completion", value: "Completion age unknown")))
-        #expect(details.contains(.init(title: "Context usage", value: "Not reported by the current source")))
+        #expect(!details.contains { $0.title == "Context usage" })
+        let observed = SidebarCopilotNode(
+            id: "observed", parentID: nil, depth: 0, kind: .subagent,
+            name: "Observed", state: .working, model: "gpt-observed",
+            ancestryUnresolved: false, hasChildren: false
+        )
+        #expect(SidebarPresentation.nodeDetails(observed, session: session)
+            .contains(.init(title: "Model", value: "gpt-observed")))
         let full = "/synthetic/workspace/with/a/long/granted/path"
         let paths = HierarchyPathContext(rootPath: .available(full), projectRootPath: .unavailable, workingDirectory: .available(nil))
         #expect(SidebarPresentation.briefPath(root: paths.rootPath, project: paths.projectRootPath) == full)

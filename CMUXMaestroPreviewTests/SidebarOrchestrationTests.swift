@@ -219,6 +219,33 @@ struct SidebarOrchestrationTests {
         }
     }
 
+    @Test func displayMetadataIsOptionalBoundedAndControlCharacterFree() throws {
+        let workspace = UUID()
+        let run = UUID()
+        let valid = node(
+            run: run, role: "coordinator", parent: nil, workspace: workspace,
+            worktreeLabel: "cmux-maestro", branchLabel: "feat/hierarchy-first"
+        )
+        try SidebarOrchestrationReader.validate(.init(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [valid]
+        ))
+        for invalid in [
+            node(run: run, role: "coordinator", parent: nil, workspace: workspace,
+                 worktreeLabel: String(repeating: "x", count: 121)),
+            node(run: run, role: "coordinator", parent: nil, workspace: workspace,
+                 branchLabel: "feat/unsafe\nbranch"),
+            node(run: run, role: "coordinator", parent: nil, workspace: workspace,
+                 worktreeLabel: "")
+        ] {
+            #expect(throws: CopilotFileError.self) {
+                try SidebarOrchestrationReader.validate(.init(
+                    version: 1, generatedAt: Date(), complete: true,
+                    omittedCount: 0, nodes: [invalid]
+                ))
+            }
+        }
+    }
+
     @Test func everyAcceptedPhaseHasAnExplicitVisibleTitle() {
         let expected: [SidebarOrchestrationPhase: String] = [
             .registered: "Registered",
@@ -254,7 +281,9 @@ struct SidebarOrchestrationTests {
         workspace: UUID,
         surface: UUID = UUID(),
         phase: String? = nil,
-        availability: String? = nil
+        availability: String? = nil,
+        worktreeLabel: String? = nil,
+        branchLabel: String? = nil
     ) -> SidebarOrchestrationNode {
         let timestamp = Date()
         return SidebarOrchestrationNode(
@@ -263,6 +292,7 @@ struct SidebarOrchestrationTests {
             workspaceId: workspace, surfaceId: surface, generation: role == "worker" ? 1 : 0,
             phase: phase ?? (role == "worker" ? "turn-running" : "registered"),
             availability: availability ?? (role == "worker" ? "busy" : "active"),
+            worktreeLabel: worktreeLabel, branchLabel: branchLabel,
             createdAt: timestamp, updatedAt: timestamp
         )
     }

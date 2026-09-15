@@ -321,12 +321,13 @@ struct SidebarNavigationTests {
             contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarView.swift"),
             encoding: .utf8
         )
-        #expect(view.contains("SidebarPresentation.briefPath(root: workspace.rootPath, project: workspace.projectRootPath)"))
-        #expect(view.contains("value: workspace.rootPath.pathDisplayText"))
-        #expect(view.contains("value: workspace.projectRootPath.pathDisplayText"))
-        #expect(view.contains("value: surface.workingDirectory.pathDisplayText"))
+        #expect(view.contains("selection = .workspace(workspace.id)"))
+        #expect(view.contains("selection = .surface(workspaceID: workspaceID, surfaceID: surface.id)"))
+        #expect(view.contains(".init(title: \"Workspace path\", value: workspace.rootPath.pathDisplayText)"))
+        #expect(view.contains(".init(title: \"Project path\", value: workspace.projectRootPath.pathDisplayText)"))
+        #expect(view.contains(".init(title: \"Working directory\", value: surface.workingDirectory.pathDisplayText)"))
         #expect(view.contains("SidebarPresentation.paths(paths)"))
-        #expect(view.contains("paths.map(SidebarPresentation.paths)"))
+        #expect(view.contains("UnmanagedSelectionDetails("))
     }
 
     private func pathSnapshot(sequence: UInt64 = 1, hasPaths: Bool = true) -> CmuxSidebarSnapshot {

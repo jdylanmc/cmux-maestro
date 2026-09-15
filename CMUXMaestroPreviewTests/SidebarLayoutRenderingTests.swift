@@ -85,12 +85,19 @@ struct SidebarLayoutRenderingTests {
                 #expect(metrics.documentHeight <= metrics.viewportHeight + 0.5)
             }
         }
+        let unmanagedMetrics = try await render(
+            model: model, preferences: preferences, width: 340, height: 600,
+            appearance: .light,
+            destination: folder.appendingPathComponent("unmanaged-light-340x600.png")
+        )
+        #expect(unmanagedMetrics.documentWidth <= unmanagedMetrics.viewportWidth + 0.5)
     }
 
-    @Test func managedRootSummaryFitsDirectOneHundredTwentyPointBoundAtThreeHundredWidth() async throws {
+    @Test func managedRowsStayWithinCompactHeightBudgetAtThreeHundredWidth() async throws {
         let fixtures = SidebarTreeFixtures()
-        let model = makeManagedModel(fixtures: fixtures, nodeCount: 1)
-        defer { model.setVisible(false) }
+        let rootModel = makeManagedModel(fixtures: fixtures, nodeCount: 1)
+        let treeModel = makeManagedModel(fixtures: fixtures, nodeCount: 5)
+        defer { rootModel.setVisible(false); treeModel.setVisible(false) }
         let suite = "SidebarRootMeasure.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         let state = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -106,40 +113,86 @@ struct SidebarLayoutRenderingTests {
         )
         preferences.setDensity(.compact)
         preferences.selectedMode = .hierarchy
-        await sidebarEventually { model.orchestration.snapshot.nodes.count == 1 }
-        let view = NSHostingView(rootView: ManagedHierarchyContent(
-            polling: model.orchestration, navigation: model.navigation
-        ).frame(width: 300, alignment: .leading))
-        view.layoutSubtreeIfNeeded()
-        #expect(view.fittingSize.height <= 120)
+        await sidebarEventually { rootModel.orchestration.snapshot.nodes.count == 1 }
+        await sidebarEventually { treeModel.orchestration.snapshot.nodes.count == 5 }
+        func height(_ model: SidebarConnectionModel) -> Double {
+            let view = NSHostingView(rootView: ManagedHierarchyContent(
+                polling: model.orchestration, hierarchy: model.hierarchy,
+                navigation: model.navigation, layout: preferences.layout,
+                setExpanded: { _, _ in }, selectedID: .constant(nil)
+            ).frame(width: 300, alignment: .leading))
+            view.layoutSubtreeIfNeeded()
+            return view.fittingSize.height
+        }
+        let rootHeight = height(rootModel)
+        let treeHeight = height(treeModel)
+        #expect(rootHeight <= 120)
+        #expect((treeHeight - rootHeight) / 4 <= 40)
     }
 
     private func makeManagedModel(
-        fixtures: SidebarTreeFixtures, nodeCount: Int = 5
+        fixtures: SidebarTreeFixtures, nodeCount: Int = 6
     ) -> SidebarConnectionModel {
         let workspace = fixtures.workspaceA
         let surfaces = (0..<nodeCount).map { _ in UUID() }
-        let run = UUID()
-        let rootID = UUID()
+        let firstRun = UUID()
+        let secondRun = UUID()
+        let firstRootID = UUID()
+        let secondRootID = UUID()
         let now = Date()
-        let labels = ["Coordinator", "Implementation", "Verification", "Documentation", "Nested review"]
-        let phases = ["registered", "turn-running", "reported-blocked",
-                      "reported-completed", "report-missing"]
+        let labels = [
+            "Coordinator", "Implementation", "Implementation",
+            "Verification", "Documentation", "Release workspace"
+        ]
+        let phases = [
+            "registered", "turn-running", "reported-blocked",
+            "reported-completed", "report-missing", "registered"
+        ]
         let nodes = surfaces.enumerated().map { index, surface in
-            SidebarOrchestrationNode(
-                id: index == 0 ? rootID : UUID(), runId: run,
-                parentId: index == 0 ? nil : rootID,
-                role: index == 0 ? "coordinator" : "worker", label: labels[index],
-                workspaceId: workspace, surfaceId: surface, generation: index == 0 ? 0 : 1,
+            let secondWorkspace = index == 5
+            let role = index == 0 || secondWorkspace ? "coordinator" : "worker"
+            let parent: UUID? = index == 0 || secondWorkspace ? nil
+                : index == 2 ? surfaces.count > 1 ? nil : firstRootID
+                : firstRootID
+            let resolvedParent = index == 2 && nodeCount > 2
+                ? nil : parent
+            return SidebarOrchestrationNode(
+                id: index == 0 ? firstRootID : secondWorkspace ? secondRootID : UUID(),
+                runId: secondWorkspace ? secondRun : firstRun,
+                parentId: resolvedParent,
+                role: role, label: labels[index],
+                workspaceId: secondWorkspace ? fixtures.workspaceB : workspace,
+                surfaceId: surface, generation: role == "coordinator" ? 0 : 1,
                 phase: phases[index],
-                availability: index == 0 ? "active" : index == 1 ? "busy" : "idle",
+                availability: role == "coordinator" ? "active" : index == 1 ? "busy" : "idle",
+                worktreeLabel: secondWorkspace ? "release-worktree" : index == 0
+                    ? "cmux-maestro-hierarchy-first" : "worker-\(index)",
+                branchLabel: secondWorkspace ? "release/next" : index == 2
+                    ? "feat/a-deliberately-long-nested-verification-branch" : "feat/worker-\(index)",
                 createdAt: now.addingTimeInterval(-Double(index)), updatedAt: now
             )
+        }
+        let nestedNodes: [SidebarOrchestrationNode]
+        if nodeCount > 2 {
+            let childID = nodes[1].id
+            nestedNodes = nodes.enumerated().map { index, node in
+                guard index == 2 else { return node }
+                return SidebarOrchestrationNode(
+                    id: node.id, runId: node.runId, parentId: childID,
+                    role: node.role, label: node.label, workspaceId: node.workspaceId,
+                    surfaceId: node.surfaceId, generation: node.generation,
+                    phase: node.phase, availability: node.availability,
+                    worktreeLabel: node.worktreeLabel, branchLabel: node.branchLabel,
+                    createdAt: node.createdAt, updatedAt: node.updatedAt
+                )
+            }
+        } else {
+            nestedNodes = nodes
         }
         let orchestration = SidebarOrchestrationPolling(
             read: {
                 SidebarOrchestrationSnapshot(
-                    version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: nodes
+                    version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: nestedNodes
                 )
             },
             pause: { try await Task.sleep(for: .seconds(60)) }
@@ -162,19 +215,29 @@ struct SidebarLayoutRenderingTests {
                 isSelected: .available(true), isPinned: .available(false),
                 unreadCount: .available(0), rootPath: .available("/synthetic/managed"),
                 projectRootPath: .available("/synthetic/managed"),
-                surfaces: .available(surfaces.map {
+                surfaces: .available(Array(surfaces.prefix(min(nodeCount, 5))).map {
                     HierarchySurface(
                         id: $0, title: "Terminal", kind: .terminal, isFocused: false,
                         isPinned: false, unreadCount: 0,
                         workingDirectory: .available("/synthetic/managed")
                     )
                 })
-            )],
+            )] + (nodeCount > 5 ? [HierarchyWorkspace(
+                id: fixtures.workspaceB, title: .available("Release tools"), detail: .available(nil),
+                isSelected: .available(false), isPinned: .available(false),
+                unreadCount: .available(0), rootPath: .available("/synthetic/release"),
+                projectRootPath: .available("/synthetic/release"),
+                surfaces: .available([HierarchySurface(
+                    id: surfaces[5], title: "Terminal", kind: .terminal, isFocused: false,
+                    isPinned: false, unreadCount: 0,
+                    workingDirectory: .available("/synthetic/release")
+                )])
+            )] : []),
             windowID: fixtures.windowID
         )
         let model = SidebarConnectionModel(copilot: copilot, orchestration: orchestration)
         model.replaceHierarchy(with: hierarchy)
-        model.showConnected(workspaceCount: 1, surfaceCount: surfaces.count)
+        model.showConnected(workspaceCount: nodeCount > 5 ? 2 : 1, surfaceCount: surfaces.count)
         let topology = SidebarTopology(hierarchy)
         copilot.update(topology: topology, connected: true)
         orchestration.update(topology: topology, connected: true)
@@ -271,7 +334,7 @@ struct SidebarLayoutRenderingTests {
         try await Task.sleep(for: .milliseconds(10))
         model.setVisible(true)
         if managed {
-            await sidebarEventually { model.orchestration.snapshot.nodes.count == 5 }
+            await sidebarEventually { !model.orchestration.snapshot.nodes.isEmpty }
         } else {
             await sidebarEventually { model.copilot.tree.sessions.count == 1 }
         }

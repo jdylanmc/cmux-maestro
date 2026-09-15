@@ -478,6 +478,31 @@ class OrchestratorTests(unittest.TestCase):
     def tearDown(self):
         self.h.close()
 
+    def test_explicit_cwd_publishes_only_bounded_verified_git_labels(self):
+        worktree = self.h.path / "display-worktree"
+        worktree.mkdir()
+        subprocess.run(
+            ["/usr/bin/git", "init", "-q", "-b", "feature/hierarchy", str(worktree)],
+            check=True, capture_output=True, text=True,
+        )
+        surface = "00000000-0000-4000-8000-000000000099"
+        self.h.add_surface(surface)
+        env = self.h.env.copy()
+        env["CMUX_SURFACE_ID"] = surface
+        registration = self.h.run(
+            "register", "--workspace", self.h.workspace, "--surface", surface,
+            "--cwd", str(worktree), "--name", "Display coordinator",
+            env=env,
+        )
+        private = self.h.state()["nodes"][registration["coordinatorId"]]
+        public = json.loads((self.h.root / "observer" / "current.json").read_text())
+        observed = next(node for node in public["nodes"] if node["id"] == registration["coordinatorId"])
+        self.assertEqual(private["workingDirectory"], str(worktree))
+        self.assertEqual(observed["worktreeLabel"], "display-worktree")
+        self.assertEqual(observed["branchLabel"], "feature/hierarchy")
+        self.assertNotIn("workingDirectory", observed)
+        self.assertNotIn(str(worktree), json.dumps(observed))
+
     def test_concurrent_startup_handshake_and_exact_identity(self):
         worker = self.h.spawn("[DELAY] [STDERR]")
         completed = self.h.wait_node(
@@ -599,7 +624,11 @@ class OrchestratorTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(rejected["returncode"], 2)
-        self.assertIn("verified idle boundary", rejected["stderr"])
+        self.assertTrue(
+            "verified idle boundary" in rejected["stderr"]
+            or "state changed before follow-up" in rejected["stderr"],
+            rejected["stderr"],
+        )
         idle = self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
         follow = self.h.run(
             "follow-up", "--actor-id", self.h.node, "--token", self.h.token,

@@ -169,11 +169,10 @@ enum SidebarPresentation {
             .init(title: "Name", value: node.name),
             .init(title: "Kind", value: kind(node.kind)),
             .init(title: "State", value: node.state.rawValue),
-            .init(title: "Model", value: node.model ?? "Model unknown"),
-            .init(title: "Context usage", value: "Not reported by the current source"),
             .init(title: "Session", value: session.id.uuidString),
             .init(title: "Child ID", value: node.id)
         ]
+        if let model = node.model { result.insert(.init(title: "Model", value: model), at: 3) }
         if node.historyAncestor { result.append(.init(title: "History", value: "Kept for child context")) }
         if node.state.isTerminal {
             result.append(.init(title: "Completion", value: node.terminalTimestamp.map(date) ?? "Completion age unknown"))
@@ -183,11 +182,9 @@ enum SidebarPresentation {
     }
 
     static func sessionDetails(_ session: SidebarCopilotSession) -> [SidebarDetailLine] {
-        [
+        var result: [SidebarDetailLine] = [
             .init(title: "Session", value: session.id.uuidString),
             .init(title: "State", value: session.state.rawValue),
-            .init(title: "Model", value: session.model ?? "Model unknown"),
-            .init(title: "Context usage", value: "Not reported by the current source"),
             .init(title: "Process", value: session.liveness.rawValue),
             .init(title: "Observed", value: date(session.observedAt)),
             .init(title: "Known working children", value: "\(session.knownRunningChildren)"),
@@ -196,7 +193,9 @@ enum SidebarPresentation {
             .init(title: "Omitted children", value: "\(session.omittedChildrenCount)"),
             .init(title: "Child history", value: session.childrenComplete && !session.treeDegraded
                 ? "Complete" : "Incomplete; missing work is not assumed finished")
-        ] + activityDetails(session.activity) + attentionDetails(session.attention)
+        ]
+        if let model = session.model { result.insert(.init(title: "Model", value: model), at: 2) }
+        return result + activityDetails(session.activity) + attentionDetails(session.attention)
     }
 
     static func activityDetails(_ activity: AgentActivity?) -> [SidebarDetailLine] {

@@ -31,6 +31,7 @@ MAX_RESULT = 4_096
 MAX_POLICY_RULE = 512
 MAX_POLICY_RULES = 16
 MAX_REPORT_MESSAGE = 8_192
+MAX_DISPLAY_METADATA = 120
 STALE_SECONDS = 600
 HEARTBEAT_SECONDS = 15
 STARTUP_SECONDS = 8
@@ -100,6 +101,66 @@ def bounded_text(value, field, limit, *, empty=False):
 def sanitize_label(value):
     cleaned = "".join(character for character in value if character.isprintable())
     return " ".join(cleaned.split())[:MAX_LABEL] or "Unnamed worker"
+
+
+def git_display_metadata(cwd):
+    """Return bounded labels from an explicitly assigned directory."""
+    git = trusted_executable("CMUX_MAESTRO_GIT", "/usr/bin/git")
+
+    def label(value):
+        if value is None:
+            return None
+        value = value.strip()
+        if (
+            not value
+            or len(value.encode("utf-8")) > MAX_DISPLAY_METADATA
+            or any(ord(character) < 32 for character in value)
+        ):
+            return None
+        return value
+
+    def query(*arguments):
+        try:
+            result = subprocess.run(
+                [git, "-C", str(cwd), *arguments],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, timeout=1, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0 or len(result.stdout) > 4_096:
+            return None
+        try:
+            value = result.stdout.decode("utf-8", errors="strict").strip()
+        except UnicodeDecodeError:
+            return None
+        if not value:
+            return None
+        if any(character in value for character in ("\0", "\n", "\r")):
+            return None
+        return value
+
+    root = query("rev-parse", "--show-toplevel")
+    if root is None:
+        return {"worktreeLabel": label(cwd.name), "branchLabel": None}
+    worktree = label(Path(root).name)
+    branch = label(query("symbolic-ref", "--quiet", "--short", "HEAD"))
+    return {
+        "worktreeLabel": worktree,
+        "branchLabel": branch,
+    }
+
+
+def assigned_directory(value):
+    if value is None:
+        return None
+    try:
+        cwd = Path(value).expanduser().resolve(strict=True)
+    except OSError:
+        raise OrchestrationError("Working directory does not exist.")
+    if not cwd.is_dir():
+        raise OrchestrationError("Working directory must be a directory.")
+    return cwd
 
 
 def normalize_tool_policy(allow, deny, parent=None):
@@ -259,6 +320,10 @@ def validate_state(state):
             roots_by_run[node["runId"]] = roots_by_run.get(node["runId"], 0) + 1
         if not isinstance(node.get("generation"), int) or node["generation"] < 0:
             raise OrchestrationError("Stored generation is invalid.")
+        for field in ("worktreeLabel", "branchLabel"):
+            value = node.get(field)
+            if value is not None:
+                bounded_text(value, f"stored {field}", MAX_DISPLAY_METADATA)
         boundary_generation = node.get("verifiedBoundaryGeneration")
         if (
             boundary_generation is not None
@@ -481,6 +546,8 @@ class Store:
             node.setdefault("supervisor", None)
             node.setdefault("verifiedBoundaryGeneration", None)
             node.setdefault("toolPolicy", {"allow": [], "deny": []})
+            node.setdefault("worktreeLabel", None)
+            node.setdefault("branchLabel", None)
             if candidate and node.get("role") == "worker":
                 node["phase"] = "process-disappeared"
                 node["availability"] = "unavailable"
@@ -513,6 +580,8 @@ class Store:
             "generation": item["generation"],
             "phase": item["phase"],
             "availability": item["availability"],
+            "worktreeLabel": item.get("worktreeLabel"),
+            "branchLabel": item.get("branchLabel"),
             "createdAt": item["createdAt"],
             "updatedAt": item["updatedAt"],
         } for item in nodes[:MAX_NODES]]
@@ -755,13 +824,18 @@ def process_matches(node):
     return bool(process and process_start(process["pid"]) == process["start"])
 
 
-def new_root(workspace, surface, pane, label):
+def new_root(workspace, surface, pane, label, cwd=None):
     identifier, run_id, token = str(uuid.uuid4()), str(uuid.uuid4()), secrets.token_hex(32)
     timestamp = now()
+    metadata = git_display_metadata(cwd) if cwd is not None else {
+        "worktreeLabel": None, "branchLabel": None,
+    }
     node = {
         "id": identifier, "runId": run_id, "parentId": None, "role": "coordinator",
         "label": label, "workspaceId": workspace, "surfaceId": surface, "paneId": pane,
-        "copilotSessionId": None, "workingDirectory": None, "generation": 0,
+        "copilotSessionId": None, "workingDirectory": str(cwd) if cwd is not None else None,
+        "worktreeLabel": metadata["worktreeLabel"], "branchLabel": metadata["branchLabel"],
+        "generation": 0,
         "phase": "registered", "availability": "active", "createdAt": timestamp,
         "updatedAt": timestamp, "lastControlAt": timestamp, "tokenHash": token_hash(token),
         "task": None, "result": None, "pendingReport": None, "supervisor": None,
@@ -776,6 +850,7 @@ def command_register(args, root, cmux):
     surface = canonical_uuid(args.surface, "surface ID")
     require_current_surface(workspace, surface)
     label = sanitize_label(bounded_text(args.name, "name", MAX_LABEL))
+    cwd = assigned_directory(args.cwd)
     pane = cmux.validate_surface(workspace, surface)
 
     def register(state):
@@ -783,7 +858,7 @@ def command_register(args, root, cmux):
             raise OrchestrationError("Orchestration node limit reached.")
         if any(node.get("surfaceId") == surface for node in state["nodes"].values()):
             raise OrchestrationError("This CMUX surface has a live registered owner.")
-        node, token = new_root(workspace, surface, pane, label)
+        node, token = new_root(workspace, surface, pane, label, cwd)
         state["nodes"][node["id"]] = node
         return {
             "coordinatorId": node["id"], "runId": node["runId"], "controlToken": token,
@@ -841,12 +916,8 @@ def record_launch_failure(state, worker_id, surface=None):
 def command_spawn(args, root, cmux):
     task = bounded_text(args.task, "task", MAX_TASK)
     label = sanitize_label(bounded_text(args.name, "name", MAX_LABEL))
-    try:
-        cwd = Path(args.cwd).expanduser().resolve(strict=True)
-    except OSError:
-        raise OrchestrationError("Working directory does not exist.")
-    if not cwd.is_dir():
-        raise OrchestrationError("Working directory must be a directory.")
+    cwd = assigned_directory(args.cwd)
+    metadata = git_display_metadata(cwd)
     snapshot = read_state(root)
     actor = authorize(snapshot, args.actor_id, args.token)
     parent_policy = actor["toolPolicy"] if actor["role"] == "worker" else None
@@ -901,6 +972,7 @@ def command_spawn(args, root, cmux):
             "role": "worker", "label": label, "workspaceId": current["workspaceId"],
             "surfaceId": None, "paneId": pane, "copilotSessionId": session_id,
             "workingDirectory": str(cwd), "generation": 1, "phase": "launching",
+            "worktreeLabel": metadata["worktreeLabel"], "branchLabel": metadata["branchLabel"],
             "availability": "busy", "createdAt": timestamp, "updatedAt": timestamp,
             "lastControlAt": timestamp, "tokenHash": token_hash(worker_token),
             "task": task, "result": None, "pendingReport": None, "supervisor": None,
@@ -1651,6 +1723,7 @@ def command_recover(args, root, cmux):
     require_current_surface(workspace, surface)
     pane = cmux.validate_surface(workspace, surface)
     label = sanitize_label(bounded_text(args.name, "name", MAX_LABEL))
+    cwd = assigned_directory(args.cwd)
     snapshot = read_state(root)
     roots = [
         node for node in snapshot["nodes"].values()
@@ -1694,7 +1767,7 @@ def command_recover(args, root, cmux):
         for node in list(state["nodes"].values()):
             if node["runId"] == current["runId"]:
                 del state["nodes"][node["id"]]
-        node, token = new_root(workspace, surface, pane, label)
+        node, token = new_root(workspace, surface, pane, label, cwd)
         state["nodes"][node["id"]] = node
         return {
             "coordinatorId": node["id"], "runId": node["runId"],
@@ -1712,6 +1785,7 @@ def parser():
         command.add_argument("--workspace", required=True)
         command.add_argument("--surface", required=True)
         command.add_argument("--name", default="Coordinator")
+        command.add_argument("--cwd")
     spawn = commands.add_parser("spawn")
     spawn.add_argument("--actor-id", required=True)
     spawn.add_argument("--token", required=True)

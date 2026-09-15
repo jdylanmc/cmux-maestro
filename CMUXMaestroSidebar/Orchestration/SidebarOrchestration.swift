@@ -13,8 +13,32 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
     let generation: Int
     let phase: String
     let availability: String
+    let worktreeLabel: String?
+    let branchLabel: String?
     let createdAt: Date
     let updatedAt: Date
+
+    init(
+        id: UUID, runId: UUID, parentId: UUID?, role: String, label: String,
+        workspaceId: UUID, surfaceId: UUID, generation: Int, phase: String,
+        availability: String, worktreeLabel: String? = nil, branchLabel: String? = nil,
+        createdAt: Date, updatedAt: Date
+    ) {
+        self.id = id
+        self.runId = runId
+        self.parentId = parentId
+        self.role = role
+        self.label = label
+        self.workspaceId = workspaceId
+        self.surfaceId = surfaceId
+        self.generation = generation
+        self.phase = phase
+        self.availability = availability
+        self.worktreeLabel = worktreeLabel
+        self.branchLabel = branchLabel
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
 
     var isActive: Bool {
         !["reported-completed", "reported-failed", "launch-failed",
@@ -132,6 +156,7 @@ nonisolated enum SidebarOrchestrationReader {
         var rootsByRun: [UUID: Int] = [:]
         for node in snapshot.nodes {
             guard !node.label.isEmpty, node.label.utf8.count <= 100,
+                  boundedLabel(node.worktreeLabel), boundedLabel(node.branchLabel),
                   node.generation >= 0, node.createdAt <= node.updatedAt,
                   node.updatedAt <= now.addingTimeInterval(futureTolerance),
                   node.updatedAt <= snapshot.generatedAt.addingTimeInterval(futureTolerance),
@@ -139,6 +164,7 @@ nonisolated enum SidebarOrchestrationReader {
                   validState(node) else {
                 throw CopilotFileError.unsafePath
             }
+
             if node.parentId == nil {
                 rootsByRun[node.runId, default: 0] += 1
             }
@@ -162,6 +188,12 @@ nonisolated enum SidebarOrchestrationReader {
             }
             guard current.role == "coordinator" else { throw CopilotFileError.unsafePath }
         }
+    }
+
+    private static func boundedLabel(_ value: String?) -> Bool {
+        guard let value else { return true }
+        return !value.isEmpty && value.utf8.count <= 120
+            && !value.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
     }
 
     static func isStale(_ snapshot: SidebarOrchestrationSnapshot, now: Date = Date()) -> Bool {

@@ -24,11 +24,14 @@ title, directory, screen contents, or current focus:
 "$CMUX_MAESTRO_ORCHESTRATOR" register \
   --workspace "$CMUX_WORKSPACE_ID" \
   --surface "$CMUX_SURFACE_ID" \
+  --cwd "$PWD" \
   --name "Coordinator"
 ```
 
 Retain the returned `coordinatorId` and `controlToken` privately for this
-orchestration run.
+orchestration run. `--cwd` is explicit display provenance for the coordinator's
+worktree and Git branch; omit it rather than guessing when the current directory
+is not the assigned task root.
 
 ## Spawn
 
@@ -152,6 +155,7 @@ worker process or surface from that run remains:
 "$CMUX_MAESTRO_ORCHESTRATOR" recover \
   --workspace "$CMUX_WORKSPACE_ID" \
   --surface "$CMUX_SURFACE_ID" \
+  --cwd "$PWD" \
   --name "Coordinator"
 ```
 
