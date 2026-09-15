@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C03600000000000000000001 /* cmux-maestro-orchestrator.py in Resources */ = {isa = PBXBuildFile; fileRef = C03600000000000000000003; };
+		C03600000000000000000002 /* SKILL.md in Resources */ = {isa = PBXBuildFile; fileRef = C03600000000000000000004; };
+		C03600000000000000000005 /* SidebarOrchestration.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C03600000000000000000006; };
 		C09100000000000000000005 /* SidebarView.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09100000000000000000006; };
 		C09100000000000000000001 /* SidebarLayout.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09100000000000000000003; };
 		C09100000000000000000002 /* SidebarBranchSummary.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09100000000000000000004; };
@@ -95,6 +98,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C03600000000000000000003 /* cmux-maestro-orchestrator.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = scripts/cmux-maestro-orchestrator.py; sourceTree = SOURCE_ROOT; };
+		C03600000000000000000004 /* SKILL.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = .agents/skills/cmux-maestro-orchestrate/SKILL.md; sourceTree = SOURCE_ROOT; };
+		C03600000000000000000006 /* SidebarOrchestration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Orchestration/SidebarOrchestration.swift; sourceTree = SOURCE_ROOT; };
 		C09100000000000000000006 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarView.swift; sourceTree = SOURCE_ROOT; };
 		C09100000000000000000003 /* SidebarLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarLayout.swift; sourceTree = SOURCE_ROOT; };
 		C09100000000000000000004 /* SidebarBranchSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Copilot/SidebarBranchSummary.swift; sourceTree = SOURCE_ROOT; };
@@ -195,6 +201,9 @@
 		A3685BE02FCA3AEE00009F1B = {
 			isa = PBXGroup;
 			children = (
+				C03600000000000000000003 /* cmux-maestro-orchestrator.py */,
+				C03600000000000000000004 /* SKILL.md */,
+				C03600000000000000000006 /* SidebarOrchestration.swift */,
 				A3685BEB2FCA3AEE00009F1B /* CMUXMaestroPreview */,
 				A3685BF92FCA3AF000009F1B /* CMUXMaestroPreviewTests */,
 				A3685C252FCA3B2500009F1B /* CMUXMaestroSidebar */,
@@ -392,6 +401,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C03600000000000000000001 /* cmux-maestro-orchestrator.py in Resources */,
+				C03600000000000000000002 /* SKILL.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -431,6 +442,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C09100000000000000000005 /* SidebarView.swift in Test Sources */,
+				C03600000000000000000005 /* SidebarOrchestration.swift in Test Sources */,
 				D10400000000000000000001 /* SidebarPreferences.swift in Sources */,
 				C09100000000000000000001 /* SidebarLayout.swift in Test Sources */,
 				C09100000000000000000002 /* SidebarBranchSummary.swift in Test Sources */,

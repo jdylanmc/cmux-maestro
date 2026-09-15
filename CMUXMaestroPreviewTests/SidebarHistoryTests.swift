@@ -201,13 +201,15 @@ struct SidebarHistoryTests {
     @Test func bothViewsConsumeSameHistoryProjectionAndUseDistinctDismissButtons() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let view = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarView.swift"), encoding: .utf8)
+        let presentation = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarPresentation.swift"), encoding: .utf8)
         #expect(view.contains("model: model, layout: preferences.layout,"))
         #expect(view.contains("dismiss: dismiss, acknowledge: acknowledge"))
         #expect(view.contains("tree: model.copilot.tree, hierarchy: model.hierarchy"))
         #expect(view.components(separatedBy: "DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)").count == 2)
         #expect(view.components(separatedBy: "CopilotWorkRow(").count == 3)
         #expect(view.contains(".popover(isPresented: $showingHistory)"))
-        #expect(view.contains("Completion age unknown"))
+        #expect(view.contains("UnmanagedSelectionDetails("))
+        #expect(presentation.contains("Completion age unknown"))
         #expect(view.contains("model.copilot.tree.dismissibleOutcomes.contains(outcome)"))
         #expect(!view.contains("No recorded child tasks"))
     }

@@ -224,6 +224,24 @@ nonisolated enum CopilotFileAccess {
         return (record, before)
     }
 
+    static func readStableRegular(
+        at directory: Int32, filename: String, owner: UInt32, maximum: Int,
+        permissions: UInt16? = nil
+    ) throws -> Data {
+        let descriptor = try openRegular(
+            at: directory, name: filename, owner: owner, permissions: permissions
+        )
+        defer { close(descriptor) }
+        let before = try statFile(descriptor)
+        guard before.size > 0, before.size <= maximum else { throw CopilotFileError.tooLarge }
+        let bytes = try read(descriptor, offset: 0, count: maximum + 1)
+        guard bytes.count <= maximum, before == (try statFile(descriptor)),
+              before == (try statEntry(at: directory, name: filename)) else {
+            throw CopilotFileError.changed
+        }
+        return bytes
+    }
+
     private static func validComponent(_ value: String) -> Bool {
         !value.isEmpty && value != "." && value != ".." && !value.contains("/")
             && !value.utf8.contains(0)

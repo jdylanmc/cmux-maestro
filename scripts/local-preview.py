@@ -160,8 +160,27 @@ class MacOperations:
     def move(self, source, destination, *, exchange=False):
         atomic_rename(source, destination, exchange=exchange)
 
+    def confirmed_zombie(self, pid, uid):
+        """Confirm exited state from a fresh kernel STAT query, not a process label."""
+        result = self.run(
+            ["/bin/ps", "-p", str(pid), "-o", "pid=", "-o", "uid=", "-o", "stat="],
+            check=False, text=True,
+        )
+        if result.returncode or result.stderr.strip():
+            return False
+        rows = result.stdout.splitlines()
+        if len(rows) != 1:
+            return False
+        fields = rows[0].split()
+        return (
+            len(fields) == 3
+            and fields[0].isdecimal() and int(fields[0]) == pid
+            and fields[1].isdecimal() and int(fields[1]) == uid
+            and re.fullmatch(r"Z[+<>AELNSsVWX]*", fields[2]) is not None
+        )
+
     def assert_idle(self, *apps):
-        """Check same-user executable paths, not process names or command text."""
+        """Check executable paths and kernel exit state, never names or command text."""
         library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
         library.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
         library.proc_pidpath.restype = ctypes.c_int
@@ -176,6 +195,8 @@ class MacOperations:
                 try:
                     os.kill(pid, 0)
                 except ProcessLookupError:
+                    continue
+                if self.confirmed_zombie(pid, uid):
                     continue
                 raise ValueError(f"Cannot verify executable for live process {pid}; retry when it exits.")
             executable = Path(os.fsdecode(buffer.value)).resolve()

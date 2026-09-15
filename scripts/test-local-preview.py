@@ -13,7 +13,7 @@ import sys
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import uuid
 
 sys.dont_write_bytecode = True
@@ -122,6 +122,42 @@ class SyntheticMac(preview.MacOperations):
 
 
 class LocalPreviewTests(unittest.TestCase):
+    def test_unverifiable_process_is_skipped_only_for_matching_kernel_zombie_state(self):
+        pid = os.getpid() + 100_000
+        uid = os.getuid()
+        cases = [
+            (0, f"{pid} {uid} Z\n", "", True),
+            (0, f"{pid} {uid} Zs+\n", "", True),
+            (0, f"{pid} {uid} Ss\n", "", False),
+            (0, f"{pid + 1} {uid} Z\n", "", False),
+            (0, f"{pid} {uid + 1} Z\n", "", False),
+            (0, f"{pid} {uid} Zunknown\n", "", False),
+            (0, f"{pid} {uid} Z\n{pid} {uid} Z\n", "", False),
+            (0, "", "", False),
+            (1, f"{pid} {uid} Z\n", "", False),
+            (0, f"{pid} {uid} Z\n", "unavailable", False),
+        ]
+        for code, output, diagnostic, skipped in cases:
+            with self.subTest(code=code, output=output, diagnostic=diagnostic):
+                operations = preview.MacOperations()
+                library = SimpleNamespace(proc_pidpath=Mock(return_value=0))
+                with patch.object(preview.ctypes, "CDLL", return_value=library), patch.object(
+                    operations, "run",
+                    side_effect=[
+                        SimpleNamespace(stdout=f"{pid} {uid}\n"),
+                        SimpleNamespace(returncode=code, stdout=output, stderr=diagnostic),
+                    ],
+                ) as run, patch.object(preview.os, "kill") as probe:
+                    if skipped:
+                        operations.assert_idle(self.app)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "Cannot verify executable"):
+                            operations.assert_idle(self.app)
+                    probe.assert_called_once_with(pid, 0)
+                    self.assertEqual(run.call_args_list[-1].args[0], [
+                        "/bin/ps", "-p", str(pid), "-o", "pid=", "-o", "uid=", "-o", "stat=",
+                    ])
+
     def setUp(self):
         self.root = ROOT / ".build/local-preview-tests" / uuid.uuid4().hex
         self.home = self.root / "home"
@@ -141,13 +177,18 @@ class LocalPreviewTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.root)
 
-    def fixture(self, name, version="2", profile=None):
+    def fixture(self, name, version="2", profile=None, *, orchestration=True):
         app = self.root / f"{name}.app"
         extension = app / preview.EXTENSION
         (app / "Contents/MacOS").mkdir(parents=True)
         (extension / "Contents/MacOS").mkdir(parents=True)
         helper = app / "Contents/Helpers/CMUXMaestroCopilotHook"
         helper.parent.mkdir()
+        resources = app / "Contents/Resources"
+        resources.mkdir()
+        if orchestration:
+            (resources / "cmux-maestro-orchestrator.py").write_text("#!/usr/bin/env python3\n")
+            (resources / "SKILL.md").write_text("---\nname: cmux-maestro-orchestrate\n---\n")
         parent = {"CFBundleIdentifier": metadata.BASE_ID, "CFBundlePackageType": "APPL",
                   "CFBundleVersion": version, "CFBundleExecutable": "Preview"}
         child = {"CFBundleIdentifier": metadata.BASE_ID + ".Extension", "CFBundlePackageType": "XPC!",
@@ -361,6 +402,50 @@ class LocalPreviewTests(unittest.TestCase):
         self.assertEqual(self.receipt()["current"]["version"], "1")
         with self.assertRaises(ValueError):
             metadata.verify_metadata(older, "production")
+
+    def test_owned_pre_orchestration_install_can_prepare_upgrade_recover_and_rollback(self):
+        previous_paths = [
+            path for path in metadata.READ_PATHS if path != metadata.ORCHESTRATION_READ_PATH
+        ]
+        legacy = self.fixture(
+            "pre-orchestration",
+            profile={metadata.SANDBOX_KEY: True, metadata.READ_KEY: previous_paths},
+            orchestration=False,
+        )
+        with self.assertRaisesRegex(ValueError, "orchestration controller"):
+            self.operation("install", legacy)
+
+        verify_metadata = metadata.verify_metadata
+
+        def previous_metadata(app, mode, **kwargs):
+            kwargs["require_orchestration"] = False
+            return verify_metadata(app, mode, **kwargs)
+
+        with patch.object(metadata, "READ_PATHS", previous_paths), patch.object(
+            metadata, "verify_metadata", side_effect=previous_metadata
+        ):
+            self.operation("install", legacy)
+
+        self.assertIn("Verified installed preview", self.operation("status"))
+        self.operation("prepare_update")
+        self.operation("recover")
+        self.assertIn("Verified installed preview", self.operation("status"))
+        self.operation("install", self.new, update=True)
+        self.assertEqual((self.app / "payload").read_text(), "new")
+        self.operation("rollback")
+        self.assertEqual((self.app / "payload").read_text(), "pre-orchestration")
+        self.assertIn("Verified installed preview", self.operation("status"))
+        with self.assertRaisesRegex(ValueError, "orchestration controller"):
+            metadata.verify_metadata(legacy, "production")
+
+    def test_owned_modern_profile_cannot_omit_or_partially_drop_orchestration_assets(self):
+        missing = self.fixture("missing-modern-assets", orchestration=False)
+        partial = self.fixture("partial-modern-assets")
+        (partial / "Contents/Resources/SKILL.md").unlink()
+        for app in (missing, partial):
+            with self.subTest(app=app):
+                with self.assertRaisesRegex(ValueError, "orchestration"):
+                    metadata.verify_local_preview(app, current=False, runner=self.ops.run)
 
     def test_update_cannot_force_downgrade_or_adopt_validation_build(self):
         future = self.fixture("future", "3")

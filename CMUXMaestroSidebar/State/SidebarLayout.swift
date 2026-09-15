@@ -17,7 +17,7 @@ nonisolated enum SidebarDensity: String, Codable, CaseIterable, Identifiable, Se
 }
 
 nonisolated struct SidebarExpansionID: Hashable, Codable, Sendable {
-    enum Kind: String, Codable, Sendable { case workspace, surface, session, child }
+    enum Kind: String, Codable, Sendable { case workspace, surface, session, child, managed }
     let kind: Kind
     let id: UUID
     var provider: String? = nil
@@ -31,10 +31,11 @@ nonisolated struct SidebarExpansionID: Hashable, Codable, Sendable {
     static func child(_ childID: String, sessionID: UUID, provider: String = "copilot") -> Self {
         .init(kind: .child, id: sessionID, provider: provider, childID: childID)
     }
+    static func managed(_ id: UUID) -> Self { .init(kind: .managed, id: id) }
 
     var isValid: Bool {
         switch kind {
-        case .workspace, .surface:
+        case .workspace, .surface, .managed:
             return provider == nil && childID == nil
         case .session, .child:
             guard let provider, !provider.isEmpty, provider.utf8.count <= 64,

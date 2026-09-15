@@ -76,7 +76,7 @@ nonisolated enum CopilotPluginManifest {
 
 nonisolated protocol CopilotSetupFileSystem: Sendable {
     func executable(selected: URL?, path: String) throws -> URL
-    func preparePlugin(root: URL, helper: URL) throws -> URL
+    func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL
 }
 
 nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
@@ -103,8 +103,12 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         throw HookFiles.Failure.unavailable
     }
 
-    func preparePlugin(root: URL, helper: URL) throws -> URL {
-        guard FileManager.default.isExecutableFile(atPath: helper.path) else { throw HookFiles.Failure.unavailable }
+    func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
+        guard FileManager.default.isExecutableFile(atPath: helper.path),
+              FileManager.default.isReadableFile(atPath: controller.path),
+              FileManager.default.isReadableFile(atPath: skill.path) else {
+            throw HookFiles.Failure.unavailable
+        }
         let rootFD = try HookFiles.privateDirectory(root)
         defer { close(rootFD) }
         let plugin = root.appendingPathComponent("plugin", isDirectory: true)
@@ -113,7 +117,56 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         for (name, data) in try CopilotPluginManifest.files(helper: helper) {
             try HookFiles.atomicWrite(data, name: name, directory: directory)
         }
+        let skills = try HookFiles.privateDirectory(plugin.appendingPathComponent("skills", isDirectory: true))
+        defer { close(skills) }
+        let orchestrationSkill = try HookFiles.privateDirectory(
+            plugin.appendingPathComponent("skills/cmux-maestro-orchestrate", isDirectory: true)
+        )
+        defer { close(orchestrationSkill) }
+        let skillData = try boundedResource(skill, maximum: 65_536)
+        try HookFiles.atomicWrite(skillData, name: "SKILL.md", directory: orchestrationSkill)
+
+        let orchestration = root.deletingLastPathComponent()
+            .appendingPathComponent("Orchestration", isDirectory: true)
+        let orchestrationRoot = try HookFiles.privateDirectory(orchestration)
+        defer { close(orchestrationRoot) }
+        let bin = try HookFiles.privateDirectory(orchestration.appendingPathComponent("bin", isDirectory: true))
+        defer { close(bin) }
+        try executableWrite(
+            boundedResource(controller, maximum: 1_048_576),
+            name: "cmux-maestro-orchestrator", directory: bin
+        )
         return plugin
+    }
+
+    private func boundedResource(_ url: URL, maximum: Int) throws -> Data {
+        guard url.isFileURL, url.path.hasPrefix("/"), !url.path.contains("\0") else {
+            throw HookFiles.Failure.unavailable
+        }
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        guard values.isRegularFile == true, let size = values.fileSize, size > 0, size <= maximum else {
+            throw HookFiles.Failure.unavailable
+        }
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        guard data.count == size else { throw HookFiles.Failure.unavailable }
+        return data
+    }
+
+    private func executableWrite(_ data: Data, name: String, directory: Int32) throws {
+        let pending = ".pending-\(UUID().uuidString)"
+        let descriptor = openat(
+            directory, pending, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o700
+        )
+        guard descriptor >= 0 else { throw HookFiles.Failure.unavailable }
+        defer {
+            close(descriptor)
+            unlinkat(directory, pending, 0)
+        }
+        let written = data.withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress, $0.count) }
+        guard written == data.count, fchmod(descriptor, 0o700) == 0, fsync(descriptor) == 0,
+              renameat(directory, pending, directory, name) == 0 else {
+            throw HookFiles.Failure.unavailable
+        }
     }
 }
 
@@ -348,14 +401,16 @@ nonisolated struct CopilotSetup {
     // Only the explicit consent buttons call this; constructing the app performs
     // no discovery, writes, CLI invocations or provider observation.
     func perform(_ action: CopilotSetupAction, selected: URL?, path: String,
-                 root: URL, helper: URL) async -> CopilotSetupResult {
+                 root: URL, helper: URL, controller: URL, skill: URL) async -> CopilotSetupResult {
         guard allowsChanges else { return .validationOnly }
         do {
             let executable = try files.executable(selected: selected, path: path)
             let arguments: [String]
             switch action {
             case .install:
-                let plugin = try files.preparePlugin(root: root, helper: helper)
+                let plugin = try files.preparePlugin(
+                    root: root, helper: helper, controller: controller, skill: skill
+                )
                 arguments = ["--no-auto-update", "plugin", "install", plugin.path]
             case .uninstall:
                 arguments = ["--no-auto-update", "plugin", "uninstall", CopilotPluginManifest.name]

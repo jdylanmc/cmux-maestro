@@ -164,16 +164,88 @@ enum SidebarPresentation {
         ]
     }
 
+    static func managedNodeDetails(
+        _ node: SidebarOrchestrationNode,
+        hierarchy: HierarchySnapshot,
+        tree: SidebarCopilotTree,
+        now: Date = Date()
+    ) -> [SidebarDetailLine] {
+        var result: [SidebarDetailLine] = []
+        if let model = managedModel(for: node, in: tree, now: now) {
+            result.append(.init(title: "Model", value: model))
+        }
+        if node.hasFreshGitEvidence(at: now) {
+            if let branch = node.branchLabel {
+                result.append(.init(title: "Branch", value: branch))
+            }
+            if let worktree = node.worktreeLabel {
+                result.append(.init(title: "Worktree", value: worktree))
+            }
+            if let captured = node.gitEvidenceAt {
+                result.append(.init(title: "Git evidence", value: "Verified \(date(captured))"))
+            }
+        } else if let captured = node.gitEvidenceAt {
+            let status = node.gitEvidenceStatus == "unavailable" ? "Unavailable" : "Stale"
+            result.append(.init(title: "Git evidence", value: "\(status) · \(date(captured))"))
+        }
+        let paths = hierarchy.pathContext(
+            workspaceID: node.workspaceId, surfaceID: node.surfaceId
+        )
+        result += [
+            .init(title: "Working directory", value: paths.workingDirectory.pathDisplayText),
+            .init(title: "Role", value: node.role.capitalized)
+        ]
+        if let sessionID = node.copilotSessionId {
+            result.append(.init(title: "Copilot session", value: sessionID.uuidString))
+        }
+        result += [
+            .init(title: "Worker ID", value: node.id.uuidString),
+            .init(title: "Run ID", value: node.runId.uuidString),
+            .init(title: "Workspace ID", value: node.workspaceId.uuidString),
+            .init(title: "Surface ID", value: node.surfaceId.uuidString)
+        ]
+        return result
+    }
+
+    static func managedModel(
+        for node: SidebarOrchestrationNode,
+        in tree: SidebarCopilotTree,
+        now: Date = Date()
+    ) -> String? {
+        guard tree.availability == .ready || tree.availability == .partial,
+              let generatedAt = tree.generatedAt,
+              SidebarCopilotTree.isFresh(generatedAt, now: now) else {
+            return nil
+        }
+        let matches: [SidebarCopilotSession]
+        if let sessionID = node.copilotSessionId {
+            matches = tree.sessions.filter {
+                $0.id == sessionID && $0.surfaceID == node.surfaceId
+                    && $0.liveness == .alive
+                    && SidebarCopilotTree.isFresh($0.observedAt, now: now)
+            }
+        } else if node.role == "coordinator" {
+            matches = tree.sessions.filter {
+                $0.surfaceID == node.surfaceId
+                    && $0.liveness == .alive
+                    && SidebarCopilotTree.isFresh($0.observedAt, now: now)
+            }
+        } else {
+            return nil
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0].model
+    }
+
     static func nodeDetails(_ node: SidebarCopilotNode, session: SidebarCopilotSession) -> [SidebarDetailLine] {
         var result: [SidebarDetailLine] = [
             .init(title: "Name", value: node.name),
             .init(title: "Kind", value: kind(node.kind)),
             .init(title: "State", value: node.state.rawValue),
-            .init(title: "Model", value: node.model ?? "Model unknown"),
-            .init(title: "Context usage", value: "Not reported by the current source"),
             .init(title: "Session", value: session.id.uuidString),
             .init(title: "Child ID", value: node.id)
         ]
+        if let model = node.model { result.insert(.init(title: "Model", value: model), at: 3) }
         if node.historyAncestor { result.append(.init(title: "History", value: "Kept for child context")) }
         if node.state.isTerminal {
             result.append(.init(title: "Completion", value: node.terminalTimestamp.map(date) ?? "Completion age unknown"))
@@ -183,11 +255,9 @@ enum SidebarPresentation {
     }
 
     static func sessionDetails(_ session: SidebarCopilotSession) -> [SidebarDetailLine] {
-        [
+        var result: [SidebarDetailLine] = [
             .init(title: "Session", value: session.id.uuidString),
             .init(title: "State", value: session.state.rawValue),
-            .init(title: "Model", value: session.model ?? "Model unknown"),
-            .init(title: "Context usage", value: "Not reported by the current source"),
             .init(title: "Process", value: session.liveness.rawValue),
             .init(title: "Observed", value: date(session.observedAt)),
             .init(title: "Known working children", value: "\(session.knownRunningChildren)"),
@@ -196,7 +266,9 @@ enum SidebarPresentation {
             .init(title: "Omitted children", value: "\(session.omittedChildrenCount)"),
             .init(title: "Child history", value: session.childrenComplete && !session.treeDegraded
                 ? "Complete" : "Incomplete; missing work is not assumed finished")
-        ] + activityDetails(session.activity) + attentionDetails(session.attention)
+        ]
+        if let model = session.model { result.insert(.init(title: "Model", value: model), at: 2) }
+        return result + activityDetails(session.activity) + attentionDetails(session.attention)
     }
 
     static func activityDetails(_ activity: AgentActivity?) -> [SidebarDetailLine] {

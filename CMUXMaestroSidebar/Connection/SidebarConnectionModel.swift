@@ -29,6 +29,7 @@ extension SidebarConnectionModel {
         )
         let topology = SidebarTopology(hierarchy)
         copilot.update(topology: topology, connected: true)
+        orchestration.update(topology: topology, connected: true)
         navigation.update(
             topology: topology,
             connected: true,

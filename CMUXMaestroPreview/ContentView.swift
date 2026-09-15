@@ -30,7 +30,7 @@ struct ContentView: View {
 
             Text("One-time Copilot integration")
                 .font(.headline)
-            Text("The native sidebar reads validated session identities and durable event metadata locally, then displays sanitized agent trees. It cannot prompt, stop, or control Copilot. This app only installs the integration; it does not observe sessions.")
+            Text("The native sidebar reads validated session and orchestration metadata locally. Terminal-backed control stays outside the sandboxed extension; the sidebar can only observe and use CMUX's typed Focus action.")
                 .foregroundStyle(.secondary)
 
             HStack {
@@ -41,7 +41,7 @@ struct ContentView: View {
                     .disabled(busy)
             }
 
-            Text("Enable installs only the cmux-maestro-native plugin. Existing plugins and settings are preserved. Choose only a Copilot executable you trust.")
+            Text("Enable installs the cmux-maestro-native plugin, its orchestration skill, and the local controller command. Existing plugins and settings are preserved. Choose only a Copilot executable you trust.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -64,7 +64,7 @@ struct ContentView: View {
             }
 
             Divider()
-            Text("Next: enable CMUX Maestro Preview in CMUX’s Sidebar Extensions browser and select it. Restart or resume existing Copilot CLI sessions once to load the new plugin; future sessions work normally. Never restart sessions automatically.")
+            Text("Next: enable CMUX Maestro Preview in CMUX’s Sidebar Extensions browser and select it. Restart or resume existing Copilot CLI sessions once to load the plugin and orchestration skill; future sessions work normally. Never restart sessions automatically.")
                 .font(.callout)
             Text("Keep this app at its installed location. If you move or replace it, enable the integration again to refresh the bundled helper path. Uses the standard ~/.copilot/session-state location only.")
                 .font(.caption)
@@ -115,9 +115,15 @@ struct ContentView: View {
                 return
             }
             let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/CMUXMaestroCopilotHook")
+            guard let controller = Bundle.main.url(
+                forResource: "cmux-maestro-orchestrator", withExtension: "py"
+            ), let skill = Bundle.main.url(forResource: "SKILL", withExtension: "md") else {
+                result = .unavailable
+                return
+            }
             result = await CopilotSetup().perform(action, selected: executable,
                 path: ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
-                root: root, helper: helper)
+                root: root, helper: helper, controller: controller, skill: skill)
         }
     }
 }

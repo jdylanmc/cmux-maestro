@@ -7,6 +7,10 @@ struct CopilotSandboxTestMain {
         guard CommandLine.arguments.count == 2 else { exit(2) }
         let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         let allowed = root.appendingPathComponent("ancestor/deep/allowed", isDirectory: true)
+        let orchestration = root.appendingPathComponent(
+            "Library/Application Support/CMUXMaestroPreview/Orchestration",
+            isDirectory: true
+        )
         var failures = 0
 
         func check(_ label: String, _ operation: () throws -> Void) {
@@ -91,6 +95,28 @@ struct CopilotSandboxTestMain {
         }
         check("authorized subtree remains read-only") {
             try denied(allowed.appendingPathComponent("target/sample"), flags: O_WRONLY)
+        }
+        check("observer projection is readable through search-only ancestors") {
+            let observer = try CopilotFileAccess.openDirectory(
+                orchestration.appendingPathComponent("observer"), owner: getuid()
+            )
+            defer { close(observer) }
+            let file = try CopilotFileAccess.openRegular(
+                at: observer, name: "current.json", owner: getuid(), permissions: 0o600
+            )
+            defer { close(file) }
+            try require(
+                try CopilotFileAccess.read(file, offset: 0, count: 64)
+                    == Data("{\"version\":1}\n".utf8)
+            )
+        }
+        check("private orchestration siblings are denied") {
+            for relative in ["control/state.json", "bin/controller", "tasks/prompt", "results/raw"] {
+                try denied(orchestration.appendingPathComponent(relative), flags: O_RDONLY)
+            }
+        }
+        check("orchestration ancestor cannot be listed") {
+            try denied(orchestration, flags: O_RDONLY | O_DIRECTORY)
         }
         check("ancestor and sibling writes denied") {
             try denied(root.appendingPathComponent("ancestor/private"), flags: O_WRONLY)
