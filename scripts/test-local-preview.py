@@ -13,7 +13,7 @@ import sys
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import uuid
 
 sys.dont_write_bytecode = True
@@ -122,6 +122,42 @@ class SyntheticMac(preview.MacOperations):
 
 
 class LocalPreviewTests(unittest.TestCase):
+    def test_unverifiable_process_is_skipped_only_for_matching_kernel_zombie_state(self):
+        pid = os.getpid() + 100_000
+        uid = os.getuid()
+        cases = [
+            (0, f"{pid} {uid} Z\n", "", True),
+            (0, f"{pid} {uid} Zs+\n", "", True),
+            (0, f"{pid} {uid} Ss\n", "", False),
+            (0, f"{pid + 1} {uid} Z\n", "", False),
+            (0, f"{pid} {uid + 1} Z\n", "", False),
+            (0, f"{pid} {uid} Zunknown\n", "", False),
+            (0, f"{pid} {uid} Z\n{pid} {uid} Z\n", "", False),
+            (0, "", "", False),
+            (1, f"{pid} {uid} Z\n", "", False),
+            (0, f"{pid} {uid} Z\n", "unavailable", False),
+        ]
+        for code, output, diagnostic, skipped in cases:
+            with self.subTest(code=code, output=output, diagnostic=diagnostic):
+                operations = preview.MacOperations()
+                library = SimpleNamespace(proc_pidpath=Mock(return_value=0))
+                with patch.object(preview.ctypes, "CDLL", return_value=library), patch.object(
+                    operations, "run",
+                    side_effect=[
+                        SimpleNamespace(stdout=f"{pid} {uid}\n"),
+                        SimpleNamespace(returncode=code, stdout=output, stderr=diagnostic),
+                    ],
+                ) as run, patch.object(preview.os, "kill") as probe:
+                    if skipped:
+                        operations.assert_idle(self.app)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "Cannot verify executable"):
+                            operations.assert_idle(self.app)
+                    probe.assert_called_once_with(pid, 0)
+                    self.assertEqual(run.call_args_list[-1].args[0], [
+                        "/bin/ps", "-p", str(pid), "-o", "pid=", "-o", "uid=", "-o", "stat=",
+                    ])
+
     def setUp(self):
         self.root = ROOT / ".build/local-preview-tests" / uuid.uuid4().hex
         self.home = self.root / "home"
