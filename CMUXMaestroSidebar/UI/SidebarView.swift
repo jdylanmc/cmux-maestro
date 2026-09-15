@@ -1091,6 +1091,13 @@ private struct CopilotWorkRow: View {
     var taskboard = false
     @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
+    private var hasOutcomeActions: Bool {
+        node.dismissibleOutcome(sessionID: session.id) != nil
+            || !SidebarCopilotTree.acknowledgeable(
+                node.attention, sessionID: session.id, ownerID: node.id,
+                degraded: node.attentionDegraded
+            ).isEmpty
+    }
 
     init(
         node: SidebarCopilotNode, session: SidebarCopilotSession,
@@ -1142,14 +1149,20 @@ private struct CopilotWorkRow: View {
                     }
                 }
             }
-            SidebarActionLayout {
-                DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)
-                AcknowledgeOutcomeButton(
-                    attention: node.attention, sessionID: session.id, ownerID: node.id,
-                    degraded: node.attentionDegraded, acknowledge: acknowledge, ownerLabel: node.name
-                )
+            if hasOutcomeActions {
+                SidebarActionLayout {
+                    DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)
+                    AcknowledgeOutcomeButton(
+                        attention: node.attention, sessionID: session.id, ownerID: node.id,
+                        degraded: node.attentionDegraded, acknowledge: acknowledge, ownerLabel: node.name
+                    )
+                }
             }
-            AttentionSummary(attention: node.attention, state: node.state, degraded: node.attentionDegraded)
+            if !SidebarPresentation.attention(
+                node.attention, state: node.state, degraded: node.attentionDegraded
+            ).isEmpty {
+                AttentionSummary(attention: node.attention, state: node.state, degraded: node.attentionDegraded)
+            }
             ExecutingActivity(activity: node.activity)
             if node.ancestryUnresolved {
                 Image(systemName: "questionmark.folder")

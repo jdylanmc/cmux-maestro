@@ -221,11 +221,13 @@ enum SidebarPresentation {
         if let sessionID = node.copilotSessionId {
             matches = tree.sessions.filter {
                 $0.id == sessionID && $0.surfaceID == node.surfaceId
+                    && $0.liveness == .alive
                     && SidebarCopilotTree.isFresh($0.observedAt, now: now)
             }
         } else if node.role == "coordinator" {
             matches = tree.sessions.filter {
                 $0.surfaceID == node.surfaceId
+                    && $0.liveness == .alive
                     && SidebarCopilotTree.isFresh($0.observedAt, now: now)
             }
         } else {

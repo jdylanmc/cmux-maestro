@@ -11,11 +11,15 @@ struct SidebarLayoutRenderingTests {
         let unmanagedBaseline = makeModel(
             fixtures: fixtures, longMetadata: false, childLimit: 0
         )
+        let unmanagedOrdinary = makeModel(
+            fixtures: fixtures, longMetadata: false, childLimit: 2
+        )
         let longModel = makeModel(fixtures: fixtures, longMetadata: true)
         let managedModel = makeManagedModel(fixtures: fixtures)
         defer {
             model.setVisible(false)
             unmanagedBaseline.setVisible(false)
+            unmanagedOrdinary.setVisible(false)
             longModel.setVisible(false)
             managedModel.setVisible(false)
         }
@@ -93,6 +97,7 @@ struct SidebarLayoutRenderingTests {
                 #expect(metrics.documentHeight <= metrics.viewportHeight + 0.5)
             }
         }
+        preferences.expandAll()
         let unmanagedMetrics = try await render(
             model: model, preferences: preferences, width: 340, height: 600,
             appearance: .light,
@@ -105,8 +110,27 @@ struct SidebarLayoutRenderingTests {
             appearance: .light,
             destination: folder.appendingPathComponent("unmanaged-baseline-light-340x600.png")
         )
-        #expect(unmanagedBaselineMetrics.documentHeight <= unmanagedMetrics.documentHeight)
-        #expect((unmanagedMetrics.documentHeight - unmanagedBaselineMetrics.documentHeight) / 3 <= 40)
+        let ordinaryMetrics = try await render(
+            model: unmanagedOrdinary, preferences: preferences, width: 340, height: 600,
+            appearance: .light,
+            destination: folder.appendingPathComponent("unmanaged-ordinary-light-340x600.png")
+        )
+        unmanagedOrdinary.setVisible(true)
+        unmanagedBaseline.setVisible(true)
+        await sidebarEventually {
+            unmanagedOrdinary.copilot.tree.sessions.count == 1
+                && unmanagedBaseline.copilot.tree.sessions.count == 1
+        }
+        let ordinaryNodes = unmanagedOrdinary.copilot.tree.sessions.flatMap(\.nodes)
+        let fullCount = ordinaryNodes.count
+        let baselineCount = unmanagedBaseline.copilot.tree.sessions.flatMap(\.nodes).count
+        try #require(fullCount > baselineCount)
+        #expect(fullCount == 2)
+        #expect(baselineCount == 0)
+        #expect(ordinaryNodes.allSatisfy { $0.attention.isEmpty && $0.state != .blocked })
+        #expect(unmanagedBaselineMetrics.documentHeight < ordinaryMetrics.documentHeight)
+        #expect((ordinaryMetrics.documentHeight - unmanagedBaselineMetrics.documentHeight)
+                / Double(fullCount - baselineCount) <= 40)
     }
 
     @Test func managedRowsStayWithinCompactHeightBudgetAtThreeHundredWidth() async throws {
@@ -298,9 +322,6 @@ struct SidebarLayoutRenderingTests {
                 name: "Synthetic nested coordinator for the deliberately long presentation fixture",
                 state: .idle, model: nil
             ))
-            if let childLimit {
-                children = Array(children.prefix(childLimit))
-            }
         }
         children.append(.init(
             id: "running", parentID: longMetadata ? "nested" : "root", kind: .subagent,
@@ -313,6 +334,9 @@ struct SidebarLayoutRenderingTests {
                 .init(kind: .permission, evidence: .init(source: "copilot.events", eventID: fixtures.otherSessionID), occurredAt: now)
             ]
         ))
+        if let childLimit {
+            children = Array(children.prefix(childLimit))
+        }
         let snapshot = fixtures.snapshot(sessions: [
             .init(sessionID: fixtures.sessionID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,
                   liveness: .alive, state: .working,

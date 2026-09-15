@@ -176,9 +176,10 @@ status prose or diagnostic walls; blocked/failed state, incomplete ancestry,
 omitted active work and attention remain concise and visible. Selecting the state
 glyph opens one detail surface below the outline. Managed workers resolve verified
 model metadata only when both their controller-issued Copilot session UUID and
-surface match one fresh observation. Coordinators use one fresh, unambiguous
-observation on their exact surface. Same names, directories, stale observations,
-surface mismatches and ambiguous coordinator sessions never participate. Context
+surface match one fresh, live observation. Coordinators use one fresh, live,
+unambiguous observation on their exact surface. Same names, directories, stale
+or ended observations, unconfirmed owners, surface mismatches and ambiguous
+coordinator sessions never participate. Context
 usage/window size is omitted because the current producer has no documented numeric source;
 cumulative API tokens and context tiers are not presented as context occupancy.
 Full authorized paths and stable IDs remain in deliberate inspection. Focus,

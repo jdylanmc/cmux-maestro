@@ -223,6 +223,28 @@ struct SidebarClarityTests {
         #expect(SidebarPresentation.managedModel(for: worker, in: absent, now: now) == nil)
     }
 
+    @Test(arguments: [CopilotLiveness.dead, .ambiguous, .unknown])
+    func managedModelRejectsNonLiveOwners(liveness: CopilotLiveness) {
+        let sessionID = UUID()
+        let surfaceID = UUID()
+        let root = managedNode(role: "coordinator", surface: surfaceID)
+        let worker = managedNode(role: "worker", surface: surfaceID, sessionID: sessionID)
+        let inactive = managedSession(
+            id: sessionID, surface: surfaceID, model: "not-current", liveness: liveness
+        )
+        let tree = SidebarCopilotTree(
+            availability: .ready, sessions: [inactive], issues: [], generatedAt: now
+        )
+        #expect(SidebarPresentation.managedModel(for: root, in: tree, now: now) == nil)
+        #expect(SidebarPresentation.managedModel(for: worker, in: tree, now: now) == nil)
+        let current = managedSession(id: UUID(), surface: surfaceID, model: "current-model")
+        let reused = SidebarCopilotTree(
+            availability: .ready, sessions: [inactive, current], issues: [], generatedAt: now
+        )
+        #expect(SidebarPresentation.managedModel(for: root, in: reused, now: now) == "current-model")
+        #expect(SidebarPresentation.managedModel(for: worker, in: reused, now: now) == nil)
+    }
+
     @Test func realDetailsAndFocusHandlersAreIndependentAndKeepTypedNavigationGuards() async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
@@ -354,11 +376,11 @@ struct SidebarClarityTests {
     }
 
     private func managedSession(
-        id: UUID, surface: UUID, model: String?
+        id: UUID, surface: UUID, model: String?, liveness: CopilotLiveness = .alive
     ) -> SidebarCopilotSession {
         SidebarCopilotSession(
             id: id, workspaceID: fixtures.workspaceA, surfaceID: surface,
-            liveness: .alive, state: .working, model: model, observedAt: now,
+            liveness: liveness, state: .working, model: model, observedAt: now,
             nodes: [], childrenComplete: true, treeDegraded: false,
             omittedChildrenCount: 0, omittedActiveChildrenCount: 0
         )
