@@ -201,6 +201,22 @@ struct SidebarLayoutRenderingTests {
         #expect((treeHeight - rootHeight) / 4 <= 40)
     }
 
+    @Test func frozenManagedRenderFixtureDoesNotExpireOnWallClock() async throws {
+        let model = makeManagedModel(fixtures: SidebarTreeFixtures())
+        defer { model.setVisible(false) }
+        await sidebarEventually { model.copilot.tree.sessions.count == 6 }
+        try #require(model.copilot.tree.sessions.count == 6)
+        try await Task.sleep(for: .seconds(SidebarCopilotTree.maximumAge + 0.1))
+        #expect(model.copilot.tree.sessions.count == 6)
+    }
+
+    nonisolated private static func suspendFrozenClock(_: TimeInterval) async throws {
+        let (ticks, continuation) = AsyncStream<Void>.makeStream()
+        defer { continuation.finish() }
+        for await _ in ticks {}
+        try Task.checkCancellation()
+    }
+
     private func makeManagedModel(
         fixtures: SidebarTreeFixtures, nodeCount: Int = 6, mixed: Bool = false
     ) -> SidebarConnectionModel {
@@ -311,6 +327,7 @@ struct SidebarLayoutRenderingTests {
                 } + extraObservations, issues: mixed ? [.loadingHistory] : [], isComplete: !mixed)
             },
             pause: { try await Task.sleep(for: .seconds(60)) },
+            expiryPause: Self.suspendFrozenClock,
             now: { now }
         )
         let hierarchy = HierarchySnapshot(
@@ -416,13 +433,7 @@ struct SidebarLayoutRenderingTests {
         ], now: now)
         let polling = SidebarCopilotPolling(
             read: { _ in snapshot }, pause: { try await Task.sleep(for: .seconds(60)) },
-            expiryPause: { _ in
-                // The render clock never advances; suspend its timers until cancellation.
-                let (ticks, continuation) = AsyncStream<Void>.makeStream()
-                defer { continuation.finish() }
-                for await _ in ticks {}
-                try Task.checkCancellation()
-            }, now: { now }
+            expiryPause: Self.suspendFrozenClock, now: { now }
         )
         let original = fixtures.hierarchy()
         let path = "/synthetic/workspaces/long-project-name/worktrees/accessible-layout/components/deeply-nested-presentation"
