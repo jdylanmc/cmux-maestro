@@ -14,58 +14,63 @@ struct SidebarVisual: Equatable {
     let title: String
     let symbol: String
     let tone: SidebarTone
+
+    func titled(_ title: String) -> Self {
+        .init(title: title, symbol: symbol, tone: tone)
+    }
 }
 
 enum SidebarPresentation {
     static let minimumControlSize: Double = 24
 
-    static let workspace = SidebarVisual(title: "Workspace", symbol: "square.stack.3d.up.fill", tone: .blue)
-    static let session = SidebarVisual(title: "Copilot", symbol: "brain.head.profile", tone: .purple)
-
-    static func surface(_ kind: HierarchySurfaceKind) -> SidebarVisual {
-        switch kind {
-        case .terminal: .init(title: kind.title, symbol: "terminal.fill", tone: .teal)
-        case .browser: .init(title: kind.title, symbol: "globe", tone: .blue)
-        case .agentSession: session
-        case .project: .init(title: kind.title, symbol: "folder.fill", tone: .blue)
-        case .markdown, .filePreview: .init(title: kind.title, symbol: kind.symbolName, tone: .teal)
-        case .rightSidebarTool: .init(title: kind.title, symbol: kind.symbolName, tone: .purple)
-        case .unknown: .init(title: kind.title, symbol: kind.symbolName, tone: .neutral)
-        }
-    }
-
-    static func work(_ kind: CopilotWorkKind) -> SidebarVisual {
-        switch kind {
-        case .subagent: .init(title: "Agent", symbol: "person.crop.square.fill", tone: .pink)
-        case .skill: .init(title: "Skill", symbol: "sparkles", tone: .amber)
-        case .shell: .init(title: "Shell", symbol: "terminal.fill", tone: .teal)
-        case .unknown: .init(title: "Kind unknown", symbol: "questionmark.square.dashed", tone: .neutral)
-        }
-    }
-
     static func state(_ state: CopilotWorkState) -> SidebarVisual {
         switch state {
-        case .working: .init(title: "Working", symbol: "arrow.triangle.2.circlepath", tone: .blue)
-        case .blocked: .init(title: "Blocked", symbol: "hand.raised.fill", tone: .amber)
-        case .completed: .init(title: "Finished", symbol: "checkmark.circle.fill", tone: .green)
-        case .failed: .init(title: "Failed", symbol: "exclamationmark.circle.fill", tone: .red)
+        case .working: .init(title: "Working", symbol: "circle.fill", tone: .green)
+        case .blocked: .init(title: "Blocked", symbol: "pause.circle", tone: .amber)
+        case .completed: .init(title: "Finished", symbol: "checkmark.circle", tone: .neutral)
+        case .failed: .init(title: "Failed", symbol: "exclamationmark.circle", tone: .red)
         case .cancelled: .init(title: "Cancelled", symbol: "xmark.circle", tone: .neutral)
-        case .idle: .init(title: "Idle", symbol: "pause.circle", tone: .neutral)
-        case .unknown: .init(title: "Unknown", symbol: "questionmark.diamond", tone: .neutral)
+        case .idle: .init(title: "Idle", symbol: "circle", tone: .neutral)
+        case .unknown: .init(title: "Unknown", symbol: "circle.dashed", tone: .neutral)
         }
     }
 
     static func process(_ liveness: CopilotLiveness) -> SidebarVisual {
         switch liveness {
-        case .alive: .init(title: "Process alive", symbol: "waveform.path.ecg", tone: .green)
-        case .dead: .init(title: "Process ended", symbol: "power", tone: .red)
-        case .ambiguous: .init(title: "Unconfirmed owner", symbol: "person.crop.circle.badge.questionmark", tone: .amber)
-        case .unknown: .init(title: "Process unknown", symbol: "questionmark.circle", tone: .neutral)
+        case .alive: .init(title: "Process alive", symbol: "circle", tone: .neutral)
+        case .dead: .init(title: "Process ended", symbol: "minus.circle", tone: .neutral)
+        case .ambiguous: .init(title: "Unconfirmed owner", symbol: "circle.dashed", tone: .neutral)
+        case .unknown: .init(title: "Process unknown", symbol: "circle.dashed", tone: .neutral)
         }
     }
 
     static func kind(_ kind: CopilotWorkKind) -> String {
-        work(kind).title
+        switch kind {
+        case .subagent: "Agent"
+        case .skill: "Skill"
+        case .shell: "Shell"
+        case .unknown: "Kind unknown"
+        }
+    }
+
+    static func activityCaption(_ activity: AgentActivity?, runningShells: Int = 0) -> String? {
+        var caption: String?
+        if let activity, activity.kind == .executing,
+           let summary = activity.summary, summary.hasPrefix("Executing tool: "),
+           let tool = CopilotEventProjection.safeToolName(String(summary.dropFirst("Executing tool: ".count))) {
+            switch tool {
+            case "bash", "powershell", "local_shell": caption = "Running a command"
+            case "view", "read": caption = "Reading files"
+            case "rg", "grep", "glob": caption = "Searching files"
+            case "edit", "apply_patch", "create": caption = "Editing files"
+            case "task": caption = "Delegating work"
+            default: caption = "Using a tool"
+            }
+        }
+        guard runningShells > 0 else { return caption }
+        let commands = runningShells == 1 ? "Running a command" : "Running \(runningShells) commands"
+        guard let caption, caption != "Running a command" else { return commands }
+        return "\(caption) · \(runningShells) \(runningShells == 1 ? "command" : "commands")"
     }
 
     static func overview(_ tree: SidebarCopilotTree) -> String {
@@ -143,10 +148,56 @@ enum SidebarPresentation {
         if summary.running > 0 { counts.append("\(summary.running) known working") }
         if summary.blocked > 0 { counts.append("\(summary.blocked) blocked") }
         if summary.attention > 0 { counts.append(SidebarCountText.attention(summary.attention)) }
-        var result = counts.isEmpty ? ["Branch collapsed"] : [counts.joined(separator: " · ")]
+        var result = counts.isEmpty ? [] : [counts.joined(separator: " · ")]
         if summary.incomplete { result.append("States or counts incomplete") }
         if summary.omittedActive > 0 { result.append("\(summary.omittedActive) working/blocked tasks not shown") }
         return result
+    }
+
+    static func unmanagedSurfaces(
+        _ surfaces: [HierarchySurface], workspaceID: UUID, managed: [SidebarOrchestrationNode]
+    ) -> [HierarchySurface] {
+        let owned = Set(managed.filter { $0.workspaceId == workspaceID }.map(\.surfaceId))
+        return surfaces.filter { !owned.contains($0.id) }
+    }
+
+    static func sessionState(_ session: SidebarCopilotSession) -> SidebarVisual {
+        if session.state == .blocked { return state(.blocked) }
+        switch session.liveness {
+        case .alive: return state(session.state)
+        case .dead: return process(.dead)
+        case .ambiguous: return .init(title: "Unconfirmed owner", symbol: "circle.dashed", tone: .neutral)
+        case .unknown: return .init(title: "State unavailable", symbol: "circle.dashed", tone: .neutral)
+        }
+    }
+
+    static func managedState(
+        _ node: SidebarOrchestrationNode, availability: SidebarOrchestrationAvailability,
+        now: Date
+    ) -> SidebarVisual {
+        let age = now.timeIntervalSince(node.updatedAt)
+        guard (availability == .ready || availability == .partial),
+              age >= -1, age <= SidebarOrchestrationReader.staleInterval else {
+            return .init(title: "State unverified · last observation is not current",
+                         symbol: "circle.dashed", tone: .neutral)
+        }
+        let phase = SidebarOrchestrationPhase(rawValue: node.phase)
+        let title = phase?.title(availability: node.availability) ?? "Unrecognized state"
+        switch phase {
+        case .registered: return state(.idle).titled("Registered · activity not inferred")
+        case .launching, .turnQueued: return .init(title: title, symbol: "clock", tone: .neutral)
+        case .turnRunning: return state(.working).titled(title)
+        case .reportedCompleted: return state(.completed).titled(title)
+        case .reportedBlocked: return state(.blocked).titled(title)
+        case .reportedFailed, .turnFailed, .launchFailed, .startupFailed:
+            return state(.failed).titled(title)
+        case .reportMissing: return .init(title: title, symbol: "questionmark.circle", tone: .amber)
+        case .permissionDenied: return state(.blocked).titled(title)
+        case .processDisappeared, .terminalDisappeared:
+            return process(.dead).titled(title)
+        case .resourceRetired: return process(.dead).titled(title)
+        case .none: return state(.unknown).titled(title)
+        }
     }
 
     static func briefPath(root: HierarchyAvailability<String?>, project: HierarchyAvailability<String?>) -> String? {
@@ -164,16 +215,88 @@ enum SidebarPresentation {
         ]
     }
 
+    static func managedNodeDetails(
+        _ node: SidebarOrchestrationNode,
+        hierarchy: HierarchySnapshot,
+        tree: SidebarCopilotTree,
+        now: Date = Date()
+    ) -> [SidebarDetailLine] {
+        var result: [SidebarDetailLine] = []
+        if let model = managedModel(for: node, in: tree, now: now) {
+            result.append(.init(title: "Model", value: model))
+        }
+        if node.hasFreshGitEvidence(at: now) {
+            if let branch = node.branchLabel {
+                result.append(.init(title: "Branch", value: branch))
+            }
+            if let worktree = node.worktreeLabel {
+                result.append(.init(title: "Worktree", value: worktree))
+            }
+            if let captured = node.gitEvidenceAt {
+                result.append(.init(title: "Git evidence", value: "Verified \(date(captured))"))
+            }
+        } else if let captured = node.gitEvidenceAt {
+            let status = node.gitEvidenceStatus == "unavailable" ? "Unavailable" : "Stale"
+            result.append(.init(title: "Git evidence", value: "\(status) · \(date(captured))"))
+        }
+        let paths = hierarchy.pathContext(
+            workspaceID: node.workspaceId, surfaceID: node.surfaceId
+        )
+        result += [
+            .init(title: "Working directory", value: paths.workingDirectory.pathDisplayText),
+            .init(title: "Role", value: node.role.capitalized)
+        ]
+        if let sessionID = node.copilotSessionId {
+            result.append(.init(title: "Copilot session", value: sessionID.uuidString))
+        }
+        result += [
+            .init(title: "Worker ID", value: node.id.uuidString),
+            .init(title: "Run ID", value: node.runId.uuidString),
+            .init(title: "Workspace ID", value: node.workspaceId.uuidString),
+            .init(title: "Surface ID", value: node.surfaceId.uuidString)
+        ]
+        return result
+    }
+
+    static func managedModel(
+        for node: SidebarOrchestrationNode,
+        in tree: SidebarCopilotTree,
+        now: Date = Date()
+    ) -> String? {
+        guard tree.availability == .ready || tree.availability == .partial,
+              let generatedAt = tree.generatedAt,
+              SidebarCopilotTree.isFresh(generatedAt, now: now) else {
+            return nil
+        }
+        let matches: [SidebarCopilotSession]
+        if let sessionID = node.copilotSessionId {
+            matches = tree.sessions.filter {
+                $0.id == sessionID && $0.surfaceID == node.surfaceId
+                    && $0.liveness == .alive
+                    && SidebarCopilotTree.isFresh($0.observedAt, now: now)
+            }
+        } else if node.role == "coordinator" {
+            matches = tree.sessions.filter {
+                $0.surfaceID == node.surfaceId
+                    && $0.liveness == .alive
+                    && SidebarCopilotTree.isFresh($0.observedAt, now: now)
+            }
+        } else {
+            return nil
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0].model
+    }
+
     static func nodeDetails(_ node: SidebarCopilotNode, session: SidebarCopilotSession) -> [SidebarDetailLine] {
         var result: [SidebarDetailLine] = [
             .init(title: "Name", value: node.name),
             .init(title: "Kind", value: kind(node.kind)),
             .init(title: "State", value: node.state.rawValue),
-            .init(title: "Model", value: node.model ?? "Model unknown"),
-            .init(title: "Context usage", value: "Not reported by the current source"),
             .init(title: "Session", value: session.id.uuidString),
             .init(title: "Child ID", value: node.id)
         ]
+        if let model = node.model { result.insert(.init(title: "Model", value: model), at: 3) }
         if node.historyAncestor { result.append(.init(title: "History", value: "Kept for child context")) }
         if node.state.isTerminal {
             result.append(.init(title: "Completion", value: node.terminalTimestamp.map(date) ?? "Completion age unknown"))
@@ -183,11 +306,9 @@ enum SidebarPresentation {
     }
 
     static func sessionDetails(_ session: SidebarCopilotSession) -> [SidebarDetailLine] {
-        [
+        var result: [SidebarDetailLine] = [
             .init(title: "Session", value: session.id.uuidString),
             .init(title: "State", value: session.state.rawValue),
-            .init(title: "Model", value: session.model ?? "Model unknown"),
-            .init(title: "Context usage", value: "Not reported by the current source"),
             .init(title: "Process", value: session.liveness.rawValue),
             .init(title: "Observed", value: date(session.observedAt)),
             .init(title: "Known working children", value: "\(session.knownRunningChildren)"),
@@ -196,7 +317,9 @@ enum SidebarPresentation {
             .init(title: "Omitted children", value: "\(session.omittedChildrenCount)"),
             .init(title: "Child history", value: session.childrenComplete && !session.treeDegraded
                 ? "Complete" : "Incomplete; missing work is not assumed finished")
-        ] + activityDetails(session.activity) + attentionDetails(session.attention)
+        ]
+        if let model = session.model { result.insert(.init(title: "Model", value: model), at: 2) }
+        return result + activityDetails(session.activity) + attentionDetails(session.attention)
     }
 
     static func activityDetails(_ activity: AgentActivity?) -> [SidebarDetailLine] {

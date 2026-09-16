@@ -1,7 +1,7 @@
 # CMUX Maestro
 
-A compiled macOS CMUX sidebar that displays Copilot sessions and their durable
-agent hierarchy. The native sidebar reads locally; no companion daemon,
+A compiled macOS CMUX sidebar that displays Copilot sessions and explicit
+terminal-backed orchestration hierarchies. The native sidebar reads locally; no companion daemon,
 watcher, loopback server, XPC service, raw CMUX socket, or session-start ritual.
 The separate interpreted Maestro project is untouched and is not a dependency.
 
@@ -23,7 +23,8 @@ evidence, live acceptance scope, intentional differences and remaining limits.
 4. Restart or resume already-running Copilot CLI sessions **once** to load the
    newly installed plugin. Maestro never restarts them automatically. Launch
    future sessions normally inside CMUX; their hooks record validated identity
-   and the sidebar renders the tree directly from durable events.
+   and the sidebar renders the tree directly from durable events. Setup also
+   installs the bundled `cmux-maestro-orchestrate` skill and local controller.
 
 The containing app is an installer, not an observer. It may be closed after
 setup. A successful setup message means the selected CLI exited successfully;
@@ -37,7 +38,8 @@ signalled. CLI output remains suppressed.
 Setup passes `--no-auto-update` so a plugin change does not opt into upgrading
 the selected CLI.
 
-Only the distinct **`cmux-maestro-native`** plugin is installed. Existing
+Only the distinct **`cmux-maestro-native`** plugin, its bundled orchestration
+skill, and its private local controller are installed. Existing
 `maestro-cmux`, other plugins, provider settings, and sidebar selection are
 never replaced automatically. Moving/replacing the native app requires enabling
 the integration again: Copilot caches local plugin contents, and generated hooks
@@ -77,6 +79,13 @@ For individual future CLI launches, either `CMUX_COPILOT_HOOKS_DISABLED=1` or
   Own directories are `0700`, files `0600`; dates use milliseconds since 1970.
   The last diagnostic is a bounded generic status, never a hook payload, path,
   credential, transcript, or raw CLI error.
+- Terminal control runs in the installed standard-library Python controller at
+  `~/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/`.
+  Private prompts, results, control tokens and process identities remain under
+  `control/`; the sidebar sandbox grant reaches only the bounded sanitized
+  `observer/` directory and cannot read sibling control, binary, task or result data.
+  The controller uses exact CMUX workspace, pane and surface UUIDs. It never
+  infers ownership from labels, paths, focus, chronology, or terminal text.
 - The outer hook shell redirects both output streams and returns zero even
   when the helper is missing, fails, or crashes. Hooks cannot supply prompt
   content, tool decisions, or control commands.
@@ -100,36 +109,132 @@ child-session IDs. No title/transcript heuristics repair missing identity.
 
 ## Sidebar layout
 
-The hierarchy uses distinct native icons and accents: blue workspace stacks,
-teal terminals, purple Copilot sessions, pink child agents and amber skills.
-State badges pair a symbol and short label with blue Working, amber Blocked,
-green Finished or red Failed. Idle, Cancelled and Unknown have distinct neutral
-symbols; color is never the only state cue. Process ended/unconfirmed ownership
-is shown separately from task completion. Selected workspaces have a subtle
-accent edge rather than another nested card.
+When a coordinator explicitly registers a terminal-backed run, its coordinator
+→ worker → nested-worker relationships become the primary compact hierarchy.
+Every worker is a genuine unfocused terminal tab in the coordinator's current
+CMUX pane/workspace. Rows show safe labels and explicit lifecycle state; Details
+contains exact run, parent, worker, workspace, surface and generation IDs.
+Selecting a row uses the existing typed CMUX Focus action. Each workspace appears
+once: explicit managed agents and remaining terminals share its outline. Only an
+exact managed workspace/surface pair replaces an unmanaged terminal row; names,
+paths and guessed relationships never establish ownership. The Taskboard view
+keeps the complete inferred activity projection available independently.
 
-Rows lead with the workspace/surface name or task type/name and current state,
-not a stack of diagnostic cards. A separate **ⓘ Details** disclosure on each row
-reveals model/context availability, process evidence, timestamps, history counts,
-stable IDs, and granted paths. It never focuses, dismisses, or acknowledges work;
-title focus, expansion, dismissal, and acknowledgement remain separate controls.
-Unknown task state, unresolved ancestry, incomplete evidence, blocking requests,
-and outstanding attention stay visible without opening Details. Taskboard also
-shows each primary session's state, even when it has no attention or child rows.
+The installed skill exposes explicit `register`, `spawn`, `status`, `follow-up`,
+`focus`, worker `report`, `archive`, and exact stale-surface `recover` operations.
+Each terminal keeps a foreground supervisor that runs bounded noninteractive
+Copilot turns. Follow-up is privately queued only after a directly owned
+worker has a successful exact-session boundary for its current generation, then
+uses that worker's preassigned exact `--resume` session ID. Explicitly reported
+outcomes are preferred; a report-missing or permission-denied generation may be
+re-prompted without claiming that its earlier task succeeded.
+The supervisor multiplexes bounded JSON output and promptly forwards provider
+diagnostics while continuing current-generation heartbeats during silent turns;
+it never answers permission prompts. Noninteractive Copilot can deny a tool in
+JSON without offering an interactive prompt, so stderr inheritance is not a
+permission mechanism. Terminal existence and a zero CLI exit are
+not success: completed, blocked and failed states require both a successful
+exact-session process boundary and one strict generation-matched whole-final-
+message report. The report is versioned, identity-bound and permission-free;
+ordinary prose, fenced or extra JSON, tool-bearing final messages, and dual
+helper/final reports are refused. It remains a worker self-reported outcome,
+not independent artifact validation or reviewer acceptance. Missing reports,
+permission denials, nonzero
+or malformed turns, startup failure, process
+disappearance and terminal disappearance remain distinct. An explicit launch
+lease prevents archive from crossing CMUX surface creation/attachment, and any
+exact surface created before a later launch failure remains accounted. Eight
+still-live managed worker resources are allowed per workspace;
+reported completion does not free a slot. Archive retains bounded history and
+never kills processes or deletes tabs, so still-present archived worker tabs
+continue to consume the resource bound. Tool permissions are not auto-approved.
+Spawn accepts bounded caller-explicit `--allow-tool` and `--deny-tool` rules;
+the default adds no grants, denies win, and descendants cannot exceed their
+parent's explicit allows or remove inherited denies. These Copilot flags are
+policy controls, not an operating-system sandbox. Shell access is never a
+default and requires an explicit task-level caller decision; wildcard,
+all-resource and `--allow-all` grants are never injected.
 
-A healthy overview is one compact summary line; observation timing and history
-totals are in its Details disclosure. Availability failures, partial/unknown data,
-and omitted active work remain visible. Workspaces show one granted path with
-middle truncation and full-path help; complete path metadata remains in Details
-rather than repeating unavailable workspace/project/path lines on every row.
-The settings gear is still the single entry for density and stored preferences.
-No saved expansion, retention, acknowledgement, navigation, or source semantics
-are changed by this presentation.
+The default view is a restrained workspace outline. Quiet workspace headers
+contain explicit coordinator → worker → nested-worker rows, with guide lines and
+durable disclosure by stable node identity. Each row leads with its safe name,
+then a muted Git branch/worktree line when the external controller verified those
+facts from the explicitly assigned working directory. The worktree label is the
+verified repository root basename; the branch label comes from `git symbolic-ref`.
+Detached `HEAD` omits the branch while retaining the verified worktree. Non-Git
+directories, missing directories, timeouts, invalid output, overlong output and
+failed root queries publish no Git labels rather than calling a directory a
+worktree. The controller refreshes exact assigned-directory evidence at bounded
+worker heartbeats, turn boundaries, follow-up queueing and explicit status checks.
+Each projection carries a separate Git evidence status and capture time. Stale
+verified locations remain useful as **last verified** labels, with a clock glyph,
+explicit help and accessibility qualification; they are not presented as current
+Git state. Unavailable evidence is omitted. Probes are batched by assigned directory and run outside the global
+state mutation lock. The sandboxed sidebar never runs Git and never receives the
+private full assigned path through observer metadata.
+
+Small native state glyphs distinguish working, available/finished, blocked,
+failed and uncertain states without color alone. Ordinary rows do not repeat
+provider/category pictograms. The shared glyph family uses a filled green dot
+only for verified working activity, a neutral ring for idle/registered, a dashed
+ring for uncertain/stale evidence, and circular pause/check/error marks for
+blocked, finished and failed states. Workspace headers are text with chevrons;
+their trailing ellipsis menu offers Focus, Expand/Collapse and Details as separate
+actions. The header menu exposes the two view modes directly, plus settings.
+Settings and selected details have explicit Close controls; details are bounded
+and scroll independently rather than consuming the outline.
+Rows avoid repeated status prose or diagnostic walls; blocked/failed state, incomplete ancestry,
+omitted active work and attention remain concise and visible. Selecting the state
+glyph opens one detail surface below the outline. Managed workers resolve verified
+model metadata only when both their controller-issued Copilot session UUID and
+surface match one fresh, live observation. Coordinators use one fresh, live,
+unambiguous observation on their exact surface. Same names, directories, stale
+or ended observations, unconfirmed owners, surface mismatches and ambiguous
+coordinator sessions never participate. Context
+usage/window size is omitted because the current producer has no documented numeric source;
+cumulative API tokens and context tiers are not presented as context occupancy.
+Full authorized paths and stable IDs remain in deliberate inspection. Focus,
+expansion, dismissal and acknowledgement remain independent actions.
+
+For unmanaged terminals with exactly one observed session, its state and children
+are presented on the named terminal row instead of adding a duplicate provider/ID
+heading. Multiple sessions remain individually inspectable; none is guessed to be
+the current owner. Passive skill/shell history moves to the selected session's
+**Other activity** disclosure and remains in Taskboard. Agents, structural
+ancestors, active/blocked/failed work and outstanding attention stay in the outline.
+Ordinary running shell invocations are the exception: verified, unambiguous leaf
+commands fold into a quiet activity caption beneath their exact owning session or
+agent, such as "Running a command". Concurrent commands are counted; blocked,
+failed, attention-bearing, unresolved and structural shell rows stay visible.
+The complete shell records remain available in details and Taskboard. This is
+presentation-only: raw activity evidence, lifecycle state and counts are unchanged.
+Incomplete-history indicators and collapsed-branch counts sit beside their owning
+row, not on standalone diagnostic rows. A chevron needs no "Branch collapsed"
+caption. Registration is neutral, not a claim that an agent is running; stale
+managed evidence and unconfirmed/ended process ownership cannot show a live state.
+
+With or without a managed graph, the same outline groups real CMUX
+surfaces and valid inferred Copilot sessions beneath workspace headers. Working
+directory basenames are explicitly described as directory labels, never Git
+branches. Uncertain ownership and incomplete evidence remain honest glyphs or
+summaries, and incidental diagnostics stay behind selection or settings.
+Taskboard remains available from the compact view/settings menu and retains each
+primary session's state even when it has no attention or child rows.
+
+A healthy outline has no diagnostic paragraphs. Source availability is a header
+indicator with full help and accessibility text; incomplete evidence is marked on
+its owning row. Blockers, attention and omitted active work remain visible.
+Workspaces use quiet headings; directory labels sit beneath terminal names.
+Complete path metadata remains in Details rather than repeating unavailable
+workspace/project/path lines on every row.
+The header menu remains the entry for density and stored preferences. Saved
+expansion, retention, acknowledgement, navigation and source records are preserved;
+the outline's activity filtering is presentation-only.
 When several source warnings apply, the overview keeps the primary warning
 and omitted active-work count visible; its Details disclosure lists every reason.
 The current host's overlaid footer has 50 points of reserved clearance.
 
-The sidebar **gear** includes **Compact** (the original spacing) and
+The sidebar **menu** includes **Compact** (the original spacing) and
 **Comfortable** (more room and larger native detail text) density. Both
 Hierarchy and Taskboard keep the same data, counts, paths and independent
 focus, dismissal and acknowledgement actions. Narrow rows stack actions;
@@ -176,10 +281,11 @@ storage paths and never fall back to the production layout singleton.
 **sidebar-layout-offscreen** artifact (14-day retention), including when tests
 fail after producing images. Review both densities at 240 pixels in dark mode,
 increased contrast, and long synthetic path/model/nested-label scenarios, in
-addition to the light-mode expansion matrix at 240 and 349 pixels. All renders
-use a 941-point viewport height. The existing scenario matrix now covers both
-widths in both modes and densities (56 images). Filenames
-identify density, scenario, view mode and width.
+addition to the light-mode expansion matrix at 240 and 349 pixels. Dedicated
+`managed-*-340x600.png` and `unmanaged-light-340x600.png` fixtures exercise two
+workspaces, duplicate names, nested ancestry, long branches and mixed lifecycle
+states at the target sidebar density. The broader matrix uses a 941-point
+viewport. Filenames identify density, scenario, view mode and width.
 The renderer checks the actual SwiftUI color-scheme and contrast environment.
 Per-image JSON records measured scroll viewport/document geometry; metadata-only
 panels are also rendered at both widths to check horizontal containment. Clarity
@@ -905,6 +1011,10 @@ installation remain explicit manual verification gates.
 Installation follows GitHub's [local plugin
 instructions](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-creating):
 `copilot plugin install <absolute-path>`; uninstall uses the manifest name.
+The installed CLI currently accepts absolute local paths but warns that direct
+repository, URL, and local-path installation is deprecated for a future release.
+CMUX Maestro intentionally retains the working local-preview path; public
+marketplace or release infrastructure remains out of scope.
 Hook manifests follow the [command-hook
 reference](https://docs.github.com/en/copilot/reference/hooks-reference), including
 `version: 1`, `type: command`, `bash`, and `timeoutSec`.

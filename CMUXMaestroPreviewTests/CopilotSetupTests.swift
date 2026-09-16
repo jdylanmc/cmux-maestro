@@ -19,7 +19,9 @@ private struct SetupFileStub: CopilotSetupFileSystem {
         if fail { throw HookFiles.Failure.unavailable }
         return URL(fileURLWithPath: "/chosen/copilot")
     }
-    func preparePlugin(root: URL, helper: URL) throws -> URL { root.appendingPathComponent("plugin") }
+    func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
+        root.appendingPathComponent("plugin")
+    }
 }
 
 private final class SetupAccessSpy: CopilotSetupFileSystem, @unchecked Sendable {
@@ -37,7 +39,7 @@ private final class SetupAccessSpy: CopilotSetupFileSystem, @unchecked Sendable 
         return URL(fileURLWithPath: "/synthetic/copilot")
     }
 
-    func preparePlugin(root: URL, helper: URL) throws -> URL {
+    func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
         record()
         return root.appendingPathComponent("plugin")
     }
@@ -91,6 +93,8 @@ private final class SetupDeadlineClock: @unchecked Sendable {
 struct CopilotSetupTests {
     private let root = URL(fileURLWithPath: "/synthetic/integration")
     private let helper = URL(fileURLWithPath: "/Applications/Maestro's App.app/Contents/Helpers/CMUXMaestroCopilotHook")
+    private let controller = URL(fileURLWithPath: "/Applications/Maestro.app/Contents/Resources/cmux-maestro-orchestrator.py")
+    private let skill = URL(fileURLWithPath: "/Applications/Maestro.app/Contents/Resources/SKILL.md")
 
     @Test func buildNamespacesAndPublicationGuardsStaySeparate() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -113,8 +117,10 @@ struct CopilotSetupTests {
         let setup = CopilotSetup(files: SetupFileStub(fail: false), runner: runner,
                                  bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
         #expect(await runner.calls.isEmpty)
-        #expect(await setup.perform(.install, selected: nil, path: "", root: root, helper: helper) == .installed)
-        #expect(await setup.perform(.uninstall, selected: nil, path: "", root: root, helper: helper) == .uninstalled)
+        #expect(await setup.perform(.install, selected: nil, path: "", root: root, helper: helper,
+                                    controller: controller, skill: skill) == .installed)
+        #expect(await setup.perform(.uninstall, selected: nil, path: "", root: root, helper: helper,
+                                    controller: controller, skill: skill) == .uninstalled)
         #expect(await runner.calls == [
             ["/chosen/copilot", "--no-auto-update", "plugin", "install", "/synthetic/integration/plugin"],
             ["/chosen/copilot", "--no-auto-update", "plugin", "uninstall", "cmux-maestro-native"],
@@ -125,17 +131,21 @@ struct CopilotSetupTests {
         let failure = SetupRunnerSpy(result: .exited(7))
         let setup = CopilotSetup(files: SetupFileStub(fail: false), runner: failure,
                                  bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
-        #expect(await setup.perform(.install, selected: nil, path: "", root: root, helper: helper) == .failed(7))
+        #expect(await setup.perform(.install, selected: nil, path: "", root: root, helper: helper,
+                                    controller: controller, skill: skill) == .failed(7))
         let unavailable = CopilotSetup(files: SetupFileStub(fail: true), runner: failure,
                                        bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
-        #expect(await unavailable.perform(.install, selected: nil, path: "", root: root, helper: helper) == .unavailable)
+        #expect(await unavailable.perform(.install, selected: nil, path: "", root: root, helper: helper,
+                                          controller: controller, skill: skill) == .unavailable)
         #expect(await failure.calls.count == 1)
         let timeout = CopilotSetup(files: SetupFileStub(fail: false), runner: SetupRunnerSpy(result: .timedOut),
                                    bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
-        #expect(await timeout.perform(.install, selected: nil, path: "", root: root, helper: helper) == .timedOut)
+        #expect(await timeout.perform(.install, selected: nil, path: "", root: root, helper: helper,
+                                      controller: controller, skill: skill) == .timedOut)
         let cancelled = CopilotSetup(files: SetupFileStub(fail: false), runner: SetupRunnerSpy(result: .cancelled),
                                      bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
-        #expect(await cancelled.perform(.install, selected: nil, path: "", root: root, helper: helper) == .cancelled)
+        #expect(await cancelled.perform(.install, selected: nil, path: "", root: root, helper: helper,
+                                        controller: controller, skill: skill) == .cancelled)
     }
 
     @Test(arguments: [
@@ -149,7 +159,8 @@ struct CopilotSetupTests {
         let setup = CopilotSetup(files: files, runner: runner, bundleIdentifier: bundleIdentifier)
         for action: CopilotSetupAction in [.install, .uninstall] {
             #expect(await setup.perform(action, selected: helper, path: "/synthetic",
-                                        root: root, helper: helper) == .validationOnly)
+                                        root: root, helper: helper, controller: controller,
+                                        skill: skill) == .validationOnly)
         }
         #expect(files.calls == 0)
         #expect(await runner.calls.isEmpty)
@@ -161,7 +172,8 @@ struct CopilotSetupTests {
         let files = SetupAccessSpy()
         let runner = SetupRunnerSpy()
         let setup = CopilotSetup(files: files, runner: runner)
-        #expect(await setup.perform(.install, selected: nil, path: "", root: root, helper: helper) == .validationOnly)
+        #expect(await setup.perform(.install, selected: nil, path: "", root: root, helper: helper,
+                                    controller: controller, skill: skill) == .validationOnly)
         #expect(files.calls == 0)
         #expect(await runner.calls.isEmpty)
     }
@@ -558,9 +570,23 @@ struct CopilotSetupTests {
         let configuration = directory.appendingPathComponent("unrelated-settings.json")
         try Data("preserved".utf8).write(to: configuration)
         let local = LocalCopilotSetupFiles()
-        let plugin = try local.preparePlugin(root: directory.appendingPathComponent("integration"), helper: executable)
+        let controller = directory.appendingPathComponent("controller.py")
+        let skill = directory.appendingPathComponent("SKILL.md")
+        try Data("#!/usr/bin/env python3\n".utf8).write(to: controller)
+        try Data("---\nname: cmux-maestro-orchestrate\n---\n".utf8).write(to: skill)
+        let integration = directory.appendingPathComponent("integration")
+        let plugin = try local.preparePlugin(
+            root: integration, helper: executable, controller: controller, skill: skill
+        )
         #expect(try Data(contentsOf: plugin.appendingPathComponent("hooks.json"))
             == CopilotPluginManifest.files(helper: executable)["hooks.json"])
+        #expect(try Data(contentsOf: plugin.appendingPathComponent("skills/cmux-maestro-orchestrate/SKILL.md"))
+            == Data(contentsOf: skill))
+        let installed = directory.appendingPathComponent(
+            "Orchestration/bin/cmux-maestro-orchestrator"
+        )
+        #expect(FileManager.default.isExecutableFile(atPath: installed.path))
+        #expect(try Data(contentsOf: installed) == Data(contentsOf: controller))
         #expect(try String(contentsOf: configuration, encoding: .utf8) == "preserved")
         #expect(try local.executable(selected: executable, path: "") == executable)
         #expect(throws: (any Error).self) { try local.executable(selected: nil, path: ".:relative") }

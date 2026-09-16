@@ -70,6 +70,22 @@ try:
     (fixture / "ancestor" / "private").write_text("ANCESTOR")
     (allowed / "ancestor-link").symlink_to(allowed, target_is_directory=True)
     (allowed / "target-link").symlink_to(allowed / "target", target_is_directory=True)
+    orchestration = fixture / "Library/Application Support/CMUXMaestroPreview/Orchestration"
+    observer = orchestration / "observer"
+    observer.mkdir(parents=True)
+    (observer / "current.json").write_text('{"version":1}\n')
+    for relative, text in [
+        ("control/state.json", "PRIVATE STATE"),
+        ("bin/controller", "PRIVATE BINARY"),
+        ("tasks/prompt", "PRIVATE PROMPT"),
+        ("results/raw", "PRIVATE RESULT"),
+    ]:
+        path = orchestration / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    for path in orchestration.rglob("*"):
+        if path.is_file():
+            path.chmod(0o600)
 
     # Deny data access throughout the synthetic ancestors. Runtime startup
     # remains allowed outside the fixture; only the deep leaf is readable
@@ -83,6 +99,7 @@ try:
         f"(deny file-read-data (subpath {json.dumps(str(fixture))}))\n"
         f"(deny file-write* (subpath {json.dumps(str(fixture))}))\n"
         f"(allow file-read-data (subpath {json.dumps(str(allowed))}))\n"
+        f"(allow file-read-data (subpath {json.dumps(str(observer))}))\n"
     )
     process = subprocess.Popen(
         ["/usr/bin/sandbox-exec", "-p", profile, str(output / "shared-helper-probe"), str(fixture)],
