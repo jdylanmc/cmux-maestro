@@ -33,11 +33,31 @@ enum SidebarRenderingEvidence {
     }
 
     static func recognizedLines(in image: URL) throws -> [String] {
+        guard let source = NSBitmapImageRep(data: try Data(contentsOf: image))?.cgImage else {
+            throw ImageInspectionError.decodeFailed
+        }
+        // Hosted Macs capture at 1x. Give OCR the same legible input scale without changing the render.
+        let scale = max(1, (1_020 + source.width - 1) / source.width)
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil, width: source.width * scale, height: source.height * scale,
+                bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { throw ImageInspectionError.scaleFailed }
+        context.interpolationQuality = .high
+        context.draw(source, in: CGRect(
+            x: 0, y: 0, width: source.width * scale, height: source.height * scale
+        ))
+        guard let legible = context.makeImage() else { throw ImageInspectionError.scaleFailed }
         let request = VNRecognizeTextRequest()
         request.recognitionLanguages = ["en-US"]
         request.usesLanguageCorrection = false
         request.recognitionLevel = .accurate
-        try VNImageRequestHandler(url: image).perform([request])
+        try VNImageRequestHandler(cgImage: legible).perform([request])
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+    }
+
+    private enum ImageInspectionError: Error {
+        case decodeFailed, scaleFailed
     }
 }
