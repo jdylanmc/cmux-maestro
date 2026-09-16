@@ -3,6 +3,7 @@ import ast
 import json
 import os
 import re
+import runpy
 import signal
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 CONTROLLER = REPO / "scripts" / "cmux-maestro-orchestrator.py"
+CONTROLLER_API = runpy.run_path(str(CONTROLLER))
 
 FAKE_CMUX = r'''#!/usr/bin/env python3
 import fcntl, json, os, subprocess, sys, tempfile, uuid
@@ -424,6 +426,9 @@ class Harness:
 
     def state(self):
         return json.loads((self.root / "control" / "state.json").read_text())
+
+    def change_state(self, operation):
+        return CONTROLLER_API["mutate"](self.root, operation, wait=2)
 
     def cmux_data(self):
         return json.loads(self.cmux_state.read_text())
@@ -1230,10 +1235,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(fresh["returncode"], 2)
         self.assertIn("still current", fresh["stderr"])
 
-        state_path = self.h.root / "control" / "state.json"
-        state = self.h.state()
-        state["nodes"][self.h.node]["lastControlAt"] = "2000-01-01T00:00:00+00:00"
-        state_path.write_text(json.dumps(state))
+        def expire(state):
+            state["nodes"][self.h.node]["lastControlAt"] = "2000-01-01T00:00:00+00:00"
+        self.h.change_state(expire)
         recovered = self.h.run(
             "recover", "--workspace", self.h.workspace, "--surface", self.h.surface,
             "--name", "Recovered",
@@ -1244,10 +1248,9 @@ class OrchestratorTests(unittest.TestCase):
     def test_recovery_refuses_live_worker_and_preserves_other_root(self):
         worker = self.h.spawn()
         self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
-        state_path = self.h.root / "control" / "state.json"
-        state = self.h.state()
-        state["nodes"][self.h.node]["lastControlAt"] = "2000-01-01T00:00:00+00:00"
-        state_path.write_text(json.dumps(state))
+        def expire(state):
+            state["nodes"][self.h.node]["lastControlAt"] = "2000-01-01T00:00:00+00:00"
+        self.h.change_state(expire)
         refused = self.h.run(
             "recover", "--workspace", self.h.workspace, "--surface", self.h.surface,
             "--name", "Recovered", check=False,
@@ -1273,19 +1276,31 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn(second["coordinatorId"], self.h.state()["nodes"])
         self.assertIn(recovered["coordinatorId"], self.h.state()["nodes"])
 
+    def test_fixture_mutation_preserves_a_concurrent_idle_supervisor(self):
+        worker = self.h.spawn()
+        before = self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
+
+        def expire(state):
+            state["nodes"][self.h.node]["lastControlAt"] = "2000-01-01T00:00:00+00:00"
+            time.sleep(0.3)
+        self.h.change_state(expire)
+        after = self.h.state()["nodes"][worker["workerId"]]
+        self.assertEqual(after["supervisor"], before["supervisor"])
+        self.assertEqual(after["phase"], "reported-completed")
+        self.assertTrue(CONTROLLER_API["process_matches"](after))
+
     def test_archive_history_is_bounded(self):
-        state_path = self.h.root / "control" / "state.json"
-        state = self.h.state()
-        state["archives"] = [
-            {
-                "runId": str(uuid.uuid4()),
-                "coordinatorLabel": "Old",
-                "nodeCount": 1,
-                "archivedAt": "2020-01-01T00:00:00Z",
-            }
-            for _ in range(32)
-        ]
-        state_path.write_text(json.dumps(state))
+        def populate(state):
+            state["archives"] = [
+                {
+                    "runId": str(uuid.uuid4()),
+                    "coordinatorLabel": "Old",
+                    "nodeCount": 1,
+                    "archivedAt": "2020-01-01T00:00:00Z",
+                }
+                for _ in range(32)
+            ]
+        self.h.change_state(populate)
         self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token)
         archives = self.h.state()["archives"]
         self.assertEqual(len(archives), 32)
