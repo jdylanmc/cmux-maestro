@@ -108,7 +108,7 @@ struct SidebarLayoutRenderingTests {
         )
         #expect(mixedMetrics.documentHeight <= 400)
         // Read the pixels: offscreen hosting does not expose a system accessibility tree.
-        let lines = try SidebarRenderingEvidence.recognizedLines(in: mixedImage)
+        let lines = try SidebarRenderingEvidence.recognizedLines(in: mixedImage, dark: true)
         try JSONEncoder().encode(lines).write(to: mixedImage.appendingPathExtension("text.json"))
         for title in ["Managed workspace", "Context review", "Coordinator", "Implementation",
                       "Hierarchy recovery", "Readiness check", "Review latest changes"] {

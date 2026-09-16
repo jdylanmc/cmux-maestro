@@ -52,19 +52,6 @@ private extension SidebarTone {
     }
 }
 
-struct SidebarKindIcon: View {
-    let visual: SidebarVisual
-
-    var body: some View {
-        Image(systemName: visual.symbol)
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(visual.tone.color)
-            .frame(width: 18, height: 22)
-            .accessibilityLabel(visual.title)
-            .help(visual.title)
-    }
-}
-
 struct SidebarStateBadge: View {
     let visual: SidebarVisual
 
@@ -72,7 +59,7 @@ struct SidebarStateBadge: View {
         Image(systemName: visual.symbol)
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(visual.tone.color)
-            .frame(width: 18, height: 20)
+            .frame(width: 18, height: 24)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(visual.title)
             .help(visual.title)
@@ -114,9 +101,9 @@ private struct CollapsedBranchSummary: View {
         let lines = SidebarPresentation.collapsed(summary)
         if !lines.isEmpty {
             HStack(spacing: 4) {
-                if summary.running > 0 { Label("\(summary.running)", systemImage: "arrow.triangle.2.circlepath") }
-                if summary.blocked > 0 { Label("\(summary.blocked)", systemImage: "hand.raised") }
-                if summary.attention > 0 { Label("\(summary.attention)", systemImage: "bell.badge") }
+                if summary.running > 0 { Label("\(summary.running)", systemImage: SidebarPresentation.state(.working).symbol) }
+                if summary.blocked > 0 { Label("\(summary.blocked)", systemImage: SidebarPresentation.state(.blocked).symbol) }
+                if summary.attention > 0 { Label("\(summary.attention)", systemImage: "exclamationmark.circle") }
                 if summary.omittedActive > 0 { Label("+\(summary.omittedActive)", systemImage: "exclamationmark.triangle") }
                 if summary.incomplete {
                     Image(systemName: "info.circle")
@@ -172,10 +159,11 @@ struct SidebarView: View {
                     Divider()
                     Button("Sidebar settings…") { showingHistory = true }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Image(systemName: "ellipsis")
                         .frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
                 }
                 .buttonStyle(.borderless)
+                .menuIndicator(.hidden)
                 .help("View and sidebar settings")
                 .accessibilityLabel("View and sidebar settings")
                 .accessibilityIdentifier("sidebar-history-settings")
@@ -183,7 +171,7 @@ struct SidebarView: View {
             }
             if model.copilot.tree.attentionOwnerCount > 0 {
                 HStack {
-                    Label(SidebarCountText.attention(model.copilot.tree.attentionOwnerCount), systemImage: "bell.badge")
+                    Label(SidebarCountText.attention(model.copilot.tree.attentionOwnerCount), systemImage: "exclamationmark.circle")
                         .font(.caption).foregroundStyle(.orange)
                     Spacer(minLength: 0)
                     if !model.copilot.tree.acknowledgeableOutcomes.isEmpty {
@@ -475,15 +463,15 @@ private struct ManagedSourceNotice: View {
         case .waiting:
             return ("clock", "Managed orchestration evidence has not been published yet.")
         case .loading:
-            return ("arrow.clockwise", "Checking managed orchestration evidence.")
+            return ("clock", "Checking managed orchestration evidence.")
         case .partial:
-            return ("exclamationmark.triangle", "Managed orchestration evidence is incomplete.")
+            return ("info.circle", "Managed orchestration evidence is incomplete.")
         case .stale:
-            return ("clock.badge.exclamationmark", "Managed orchestration evidence is stale.")
+            return ("circle.dashed", "Managed orchestration evidence is stale.")
         case .unavailable:
-            return ("exclamationmark.triangle", "Managed orchestration evidence is unavailable.")
+            return ("exclamationmark.circle", "Managed orchestration evidence is unavailable.")
         case .ready where !hasNodes:
-            return ("checkmark.circle", "No managed work is registered on these surfaces.")
+            return nil
         case .ready, .hidden, .disconnected:
             return nil
         }
@@ -621,10 +609,7 @@ private struct ManagedNodeRow: View {
                 Color.clear.frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
             }
             Button(action: select) {
-                Image(systemName: stateVisual.symbol)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(stateVisual.tone.color)
-                    .frame(width: 16, height: 24)
+                SidebarStateBadge(visual: stateVisual)
             }
             .buttonStyle(.plain)
             .help(stateVisual.title)
@@ -639,7 +624,7 @@ private struct ManagedNodeRow: View {
                         Text(node.label).sidebarFont(.caption, weight: .medium).lineLimit(1)
                         Spacer(minLength: 0)
                         if activeDescendants > 0 && !expanded {
-                            Label("\(activeDescendants)", systemImage: "waveform.path")
+                            Label("\(activeDescendants)", systemImage: SidebarPresentation.state(.working).symbol)
                                 .sidebarFont(.caption2).foregroundStyle(.secondary)
                                 .help("\(activeDescendants) active descendant\(activeDescendants == 1 ? "" : "s")")
                         }
@@ -704,9 +689,7 @@ private struct WorkspaceOutlineHeader: View {
             if let workspace {
                 FocusButton(target: .workspace(workspace.id), navigation: navigation, label: "Focus workspace \(title)") {
                     HStack(spacing: 5) {
-                        Image(systemName: "square.stack.3d.up")
-                            .font(.system(size: 10, weight: .semibold))
-                        Text(title.uppercased())
+                        Text(title)
                             .sidebarFont(.caption2, weight: .semibold)
                             .lineLimit(1)
                         Spacer(minLength: 0)
@@ -715,7 +698,7 @@ private struct WorkspaceOutlineHeader: View {
                 }
                 .accessibilityIdentifier("managed-workspace-\(workspace.id)")
             } else {
-                Label("WORKSPACE", systemImage: "square.stack.3d.up")
+                Text("Workspace")
                     .sidebarFont(.caption2, weight: .semibold)
                     .foregroundStyle(.secondary)
             }
@@ -871,24 +854,11 @@ private struct WorkspaceRow: View {
                 ExpandButton(expanded: expanded, label: title) {
                     setExpanded(.workspace(workspace.id), !expanded)
                 }
-                Button {
-                    selection = .workspace(workspace.id)
-                } label: {
-                    Image(systemName: "square.stack.3d.up")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                        .frame(width: 16, height: 24)
-                }
-                .buttonStyle(.plain)
-                .help("Show workspace details")
-                .accessibilityLabel("\(title). Show workspace details")
                 FocusButton(target: .workspace(workspace.id), navigation: navigation, label: "Focus workspace \(title)") {
                     HStack(spacing: 5) {
                         Text(title).sidebarFont(.caption2, weight: .semibold)
                             .foregroundStyle(.secondary).lineLimit(1)
                         Spacer(minLength: 0)
-                        if case .available(true) = workspace.isSelected {
-                            StatusBadge(symbol: "checkmark.circle.fill", label: "Selected")
-                        }
                         if case .available(true) = workspace.isPinned {
                             StatusBadge(symbol: "pin.fill", label: "Pinned")
                         }
@@ -899,6 +869,15 @@ private struct WorkspaceRow: View {
                 }
                 .accessibilityValue(accessibilityStatus)
                 if !expanded { CollapsedBranchSummary(summary: summary) }
+                Button {
+                    selection = .workspace(workspace.id)
+                } label: {
+                    Image(systemName: "ellipsis").font(.caption2).foregroundStyle(.secondary)
+                        .frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
+                }
+                .buttonStyle(.plain)
+                .help("Show workspace details")
+                .accessibilityLabel("\(title). Show workspace details")
             }
             if expanded {
                 if !managedNodes.isEmpty {
@@ -993,7 +972,8 @@ private struct SurfaceRow: View {
                     if let singleSession {
                         SidebarStateBadge(visual: SidebarPresentation.sessionState(singleSession))
                     } else {
-                        Image(systemName: surface.kind.symbolName)
+                        Image(systemName: surface.kind == .terminal || surface.kind == .agentSession
+                              ? "circle.dashed" : surface.kind.symbolName)
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                             .frame(width: 18, height: 24)
                     }
@@ -1236,7 +1216,7 @@ private struct CopilotWorkRow: View {
                 }
                 if let summary = expansion?.collapsedSummary { CollapsedBranchSummary(summary: summary) }
                 if node.ancestryUnresolved {
-                    Image(systemName: "questionmark.folder")
+                    Image(systemName: "questionmark.circle")
                         .sidebarFont(.caption2).foregroundStyle(.orange)
                         .help("Unresolved ancestry")
                         .accessibilityLabel("Unresolved ancestry")
@@ -1419,10 +1399,7 @@ private struct TaskboardSessionRow: View {
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation, label: "Focus Copilot session \(session.shortID)"
                 ) {
-                    HStack(spacing: 6) {
-                        SidebarKindIcon(visual: SidebarPresentation.session)
-                        Text("Copilot · \(session.shortID)").sidebarFont(.caption, weight: .semibold)
-                    }
+                    Text("Copilot · \(session.shortID)").sidebarFont(.caption, weight: .semibold)
                 }
                 Spacer(minLength: 0)
                 SidebarDetailsButton(expanded: $showingDetails, label: "Copilot \(session.shortID)", id: "details-session-\(session.id)")
@@ -1437,7 +1414,7 @@ private struct TaskboardSessionRow: View {
             AttentionSummary(attention: session.attention, state: session.state, degraded: session.attentionDegraded)
             ExecutingActivity(activity: session.activity)
             if !session.childrenComplete || session.treeDegraded {
-                Label("Children unavailable", systemImage: "ellipsis.circle")
+                Label("Children unavailable", systemImage: "info.circle")
                     .sidebarFont(.caption2).foregroundStyle(.secondary)
                     .help("Child history incomplete; missing work is not assumed finished")
             }
@@ -1458,7 +1435,7 @@ private struct AttentionSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(SidebarPresentation.attention(attention, state: state, degraded: degraded), id: \.self) { text in
-                Label(text, systemImage: state == .blocked ? "hand.raised" : "bell.badge")
+                Label(text, systemImage: state == .blocked ? "pause.circle" : "exclamationmark.circle")
                     .sidebarFont(.caption).foregroundStyle(.orange)
             }
         }

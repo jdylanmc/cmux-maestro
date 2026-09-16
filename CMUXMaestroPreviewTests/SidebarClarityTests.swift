@@ -92,28 +92,40 @@ struct SidebarClarityTests {
         }
     }
 
-    @Test func entityIconsAndStateBadgesDoNotRelyOnColorAlone() {
-        let kinds = [
-            SidebarPresentation.workspace, SidebarPresentation.surface(.terminal),
-            SidebarPresentation.session, SidebarPresentation.work(.subagent),
-            SidebarPresentation.work(.skill)
-        ]
-        #expect(Set(kinds.map(\.symbol)).count == kinds.count)
-        #expect(Set(kinds.map(\.title)).count == kinds.count)
-        #expect(Set(kinds.map(\.tone)).count >= 4)
+    @Test func statusGlyphsUseOneFamilyWithoutRelyingOnColorAlone() {
         let states: [CopilotWorkState] = [.working, .idle, .blocked, .completed, .failed, .cancelled, .unknown]
         let visuals = states.map(SidebarPresentation.state)
         #expect(Set(visuals.map(\.symbol)).count == states.count)
         #expect(Set(visuals.map(\.title)).count == states.count)
-        for visual in kinds + visuals + [.alive, .dead, .ambiguous, .unknown].map(SidebarPresentation.process) {
+        #expect(visuals.allSatisfy { $0.symbol.contains("circle") })
+        for visual in visuals + [.alive, .dead, .ambiguous, .unknown].map(SidebarPresentation.process) {
             #expect(NSImage(systemSymbolName: visual.symbol, accessibilityDescription: visual.title) != nil)
         }
-        #expect(SidebarPresentation.state(.completed).tone == .green)
+        #expect(visuals.filter { $0.tone == .green } == [SidebarPresentation.state(.working)])
+        #expect(SidebarPresentation.state(.working).symbol == "circle.fill")
+        #expect(SidebarPresentation.state(.idle).symbol == "circle")
+        #expect(SidebarPresentation.state(.unknown).symbol == "circle.dashed")
+        #expect(SidebarPresentation.state(.completed).tone == .neutral)
         #expect(SidebarPresentation.state(.failed).tone == .red)
         #expect(SidebarPresentation.state(.blocked).tone == .amber)
         #expect(SidebarPresentation.state(.unknown).tone == .neutral)
+        #expect(SidebarPresentation.process(.alive).tone == .neutral)
         #expect(SidebarPresentation.process(.dead).title == "Process ended")
         #expect(SidebarPresentation.process(.dead).symbol != SidebarPresentation.state(.completed).symbol)
+    }
+
+    @Test func managedAndObservedWorkUseTheSameStatusGlyphs() {
+        let phases: [(String, CopilotWorkState)] = [
+            ("turn-running", .working), ("reported-blocked", .blocked),
+            ("reported-completed", .completed), ("reported-failed", .failed),
+            ("permission-denied", .blocked)
+        ]
+        for (phase, state) in phases {
+            let node = managedNode(role: "worker", surface: fixtures.surfaceA, phase: phase)
+            let managed = SidebarPresentation.managedState(node, availability: .ready, now: now)
+            #expect(managed.symbol == SidebarPresentation.state(state).symbol)
+            #expect(managed.tone == SidebarPresentation.state(state).tone)
+        }
     }
 
     @Test func compactWarningsRetainUrgentSignalsAndExposeEveryReasonInDetails() {
@@ -126,9 +138,7 @@ struct SidebarClarityTests {
     }
 
     @Test(arguments: [false, true])
-    func iconAndStatusPaletteRendersInLightAndDark(dark: Bool) throws {
-        let kinds = [SidebarPresentation.workspace, SidebarPresentation.surface(.terminal),
-                     SidebarPresentation.session, SidebarPresentation.work(.subagent), SidebarPresentation.work(.skill)]
+    func statusGlyphPaletteRendersInLightAndDark(dark: Bool) throws {
         let states: [CopilotWorkState] = [.working, .blocked, .completed, .failed, .idle, .cancelled, .unknown]
         let frame = NSRect(x: 0, y: 0, width: 349, height: 600)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
@@ -136,11 +146,12 @@ struct SidebarClarityTests {
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         let hosting = NSHostingView(rootView: VStack(alignment: .leading, spacing: 12) {
             Text("Visual key").font(.headline)
-            ForEach(kinds, id: \.title) { visual in
-                HStack { SidebarKindIcon(visual: visual); Text(visual.title) }
+            ForEach(states, id: \.self) { state in
+                HStack {
+                    SidebarStateBadge(visual: SidebarPresentation.state(state))
+                    Text(SidebarPresentation.state(state).title)
+                }
             }
-            Divider()
-            ForEach(states, id: \.self) { state in SidebarStateBadge(visual: SidebarPresentation.state(state)) }
             SidebarStateBadge(visual: SidebarPresentation.process(.dead))
         }
         .padding(16)
@@ -163,7 +174,7 @@ struct SidebarClarityTests {
                 }
             }
         }
-        #expect(coloredPixels > 100)
+        #expect(coloredPixels > 0)
         let png = try #require(bitmap.representation(using: .png, properties: [:]))
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/sidebar-clarity/visual-key")
@@ -442,13 +453,13 @@ struct SidebarClarityTests {
     }
 
     private func managedNode(
-        role: String, surface: UUID, sessionID: UUID? = nil
+        role: String, surface: UUID, sessionID: UUID? = nil, phase: String? = nil
     ) -> SidebarOrchestrationNode {
         SidebarOrchestrationNode(
             id: UUID(), runId: UUID(), parentId: role == "worker" ? UUID() : nil,
             role: role, label: "Same name", workspaceId: fixtures.workspaceA,
             surfaceId: surface, generation: role == "worker" ? 1 : 0,
-            phase: role == "worker" ? "turn-running" : "registered",
+            phase: phase ?? (role == "worker" ? "turn-running" : "registered"),
             availability: role == "worker" ? "busy" : "active",
             copilotSessionId: sessionID, createdAt: now, updatedAt: now
         )

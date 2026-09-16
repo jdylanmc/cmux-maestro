@@ -175,7 +175,12 @@ private full assigned path through observer metadata.
 
 Small native state glyphs distinguish working, available/finished, blocked,
 failed and uncertain states without color alone. Ordinary rows do not repeat
-status prose or diagnostic walls; blocked/failed state, incomplete ancestry,
+provider/category pictograms. The shared glyph family uses a filled green dot
+only for verified working activity, a neutral ring for idle/registered, a dashed
+ring for uncertain/stale evidence, and circular pause/check/error marks for
+blocked, finished and failed states. Workspace headers are text with chevrons;
+their trailing ellipsis button opens details independently from focus.
+Rows avoid repeated status prose or diagnostic walls; blocked/failed state, incomplete ancestry,
 omitted active work and attention remain concise and visible. Selecting the state
 glyph opens one detail surface below the outline. Managed workers resolve verified
 model metadata only when both their controller-issued Copilot session UUID and

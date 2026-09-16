@@ -14,58 +14,43 @@ struct SidebarVisual: Equatable {
     let title: String
     let symbol: String
     let tone: SidebarTone
+
+    func titled(_ title: String) -> Self {
+        .init(title: title, symbol: symbol, tone: tone)
+    }
 }
 
 enum SidebarPresentation {
     static let minimumControlSize: Double = 24
 
-    static let workspace = SidebarVisual(title: "Workspace", symbol: "square.stack.3d.up.fill", tone: .blue)
-    static let session = SidebarVisual(title: "Copilot", symbol: "brain.head.profile", tone: .purple)
-
-    static func surface(_ kind: HierarchySurfaceKind) -> SidebarVisual {
-        switch kind {
-        case .terminal: .init(title: kind.title, symbol: "terminal.fill", tone: .teal)
-        case .browser: .init(title: kind.title, symbol: "globe", tone: .blue)
-        case .agentSession: session
-        case .project: .init(title: kind.title, symbol: "folder.fill", tone: .blue)
-        case .markdown, .filePreview: .init(title: kind.title, symbol: kind.symbolName, tone: .teal)
-        case .rightSidebarTool: .init(title: kind.title, symbol: kind.symbolName, tone: .purple)
-        case .unknown: .init(title: kind.title, symbol: kind.symbolName, tone: .neutral)
-        }
-    }
-
-    static func work(_ kind: CopilotWorkKind) -> SidebarVisual {
-        switch kind {
-        case .subagent: .init(title: "Agent", symbol: "person.crop.square.fill", tone: .pink)
-        case .skill: .init(title: "Skill", symbol: "sparkles", tone: .amber)
-        case .shell: .init(title: "Shell", symbol: "terminal.fill", tone: .teal)
-        case .unknown: .init(title: "Kind unknown", symbol: "questionmark.square.dashed", tone: .neutral)
-        }
-    }
-
     static func state(_ state: CopilotWorkState) -> SidebarVisual {
         switch state {
-        case .working: .init(title: "Working", symbol: "arrow.triangle.2.circlepath", tone: .blue)
-        case .blocked: .init(title: "Blocked", symbol: "hand.raised.fill", tone: .amber)
-        case .completed: .init(title: "Finished", symbol: "checkmark.circle.fill", tone: .green)
-        case .failed: .init(title: "Failed", symbol: "exclamationmark.circle.fill", tone: .red)
+        case .working: .init(title: "Working", symbol: "circle.fill", tone: .green)
+        case .blocked: .init(title: "Blocked", symbol: "pause.circle", tone: .amber)
+        case .completed: .init(title: "Finished", symbol: "checkmark.circle", tone: .neutral)
+        case .failed: .init(title: "Failed", symbol: "exclamationmark.circle", tone: .red)
         case .cancelled: .init(title: "Cancelled", symbol: "xmark.circle", tone: .neutral)
-        case .idle: .init(title: "Idle", symbol: "pause.circle", tone: .neutral)
-        case .unknown: .init(title: "Unknown", symbol: "questionmark.diamond", tone: .neutral)
+        case .idle: .init(title: "Idle", symbol: "circle", tone: .neutral)
+        case .unknown: .init(title: "Unknown", symbol: "circle.dashed", tone: .neutral)
         }
     }
 
     static func process(_ liveness: CopilotLiveness) -> SidebarVisual {
         switch liveness {
-        case .alive: .init(title: "Process alive", symbol: "waveform.path.ecg", tone: .green)
-        case .dead: .init(title: "Process ended", symbol: "power", tone: .red)
-        case .ambiguous: .init(title: "Unconfirmed owner", symbol: "person.crop.circle.badge.questionmark", tone: .amber)
-        case .unknown: .init(title: "Process unknown", symbol: "questionmark.circle", tone: .neutral)
+        case .alive: .init(title: "Process alive", symbol: "circle", tone: .neutral)
+        case .dead: .init(title: "Process ended", symbol: "minus.circle", tone: .neutral)
+        case .ambiguous: .init(title: "Unconfirmed owner", symbol: "circle.dashed", tone: .neutral)
+        case .unknown: .init(title: "Process unknown", symbol: "circle.dashed", tone: .neutral)
         }
     }
 
     static func kind(_ kind: CopilotWorkKind) -> String {
-        work(kind).title
+        switch kind {
+        case .subagent: "Agent"
+        case .skill: "Skill"
+        case .shell: "Shell"
+        case .unknown: "Kind unknown"
+        }
     }
 
     static func overview(_ tree: SidebarCopilotTree) -> String {
@@ -160,7 +145,7 @@ enum SidebarPresentation {
         if session.state == .blocked { return state(.blocked) }
         switch session.liveness {
         case .alive: return state(session.state)
-        case .dead: return .init(title: "Process ended", symbol: "power", tone: .neutral)
+        case .dead: return process(.dead)
         case .ambiguous: return .init(title: "Unconfirmed owner", symbol: "circle.dashed", tone: .neutral)
         case .unknown: return .init(title: "State unavailable", symbol: "circle.dashed", tone: .neutral)
         }
@@ -174,24 +159,24 @@ enum SidebarPresentation {
         guard (availability == .ready || availability == .partial),
               age >= -1, age <= SidebarOrchestrationReader.staleInterval else {
             return .init(title: "State unverified · last observation is not current",
-                         symbol: "clock.badge.exclamationmark", tone: .neutral)
+                         symbol: "circle.dashed", tone: .neutral)
         }
         let phase = SidebarOrchestrationPhase(rawValue: node.phase)
         let title = phase?.title(availability: node.availability) ?? "Unrecognized state"
         switch phase {
-        case .registered: return .init(title: "Registered · activity not inferred", symbol: "circle", tone: .neutral)
-        case .launching, .turnQueued: return .init(title: title, symbol: "clock", tone: .blue)
-        case .turnRunning: return .init(title: title, symbol: "arrow.triangle.2.circlepath", tone: .green)
-        case .reportedCompleted: return .init(title: title, symbol: "checkmark.circle", tone: .green)
-        case .reportedBlocked: return .init(title: title, symbol: "hand.raised.fill", tone: .amber)
+        case .registered: return state(.idle).titled("Registered · activity not inferred")
+        case .launching, .turnQueued: return .init(title: title, symbol: "clock", tone: .neutral)
+        case .turnRunning: return state(.working).titled(title)
+        case .reportedCompleted: return state(.completed).titled(title)
+        case .reportedBlocked: return state(.blocked).titled(title)
         case .reportedFailed, .turnFailed, .launchFailed, .startupFailed:
-            return .init(title: title, symbol: "exclamationmark.circle.fill", tone: .red)
-        case .reportMissing: return .init(title: title, symbol: "doc.badge.ellipsis", tone: .amber)
-        case .permissionDenied: return .init(title: title, symbol: "exclamationmark.shield", tone: .amber)
+            return state(.failed).titled(title)
+        case .reportMissing: return .init(title: title, symbol: "questionmark.circle", tone: .amber)
+        case .permissionDenied: return state(.blocked).titled(title)
         case .processDisappeared, .terminalDisappeared:
-            return .init(title: title, symbol: "bolt.slash", tone: .neutral)
-        case .resourceRetired: return .init(title: title, symbol: "archivebox", tone: .neutral)
-        case .none: return .init(title: title, symbol: "circle.dashed", tone: .neutral)
+            return process(.dead).titled(title)
+        case .resourceRetired: return process(.dead).titled(title)
+        case .none: return state(.unknown).titled(title)
         }
     }
 
