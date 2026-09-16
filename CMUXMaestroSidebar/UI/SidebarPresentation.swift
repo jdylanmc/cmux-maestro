@@ -143,10 +143,56 @@ enum SidebarPresentation {
         if summary.running > 0 { counts.append("\(summary.running) known working") }
         if summary.blocked > 0 { counts.append("\(summary.blocked) blocked") }
         if summary.attention > 0 { counts.append(SidebarCountText.attention(summary.attention)) }
-        var result = counts.isEmpty ? ["Branch collapsed"] : [counts.joined(separator: " · ")]
+        var result = counts.isEmpty ? [] : [counts.joined(separator: " · ")]
         if summary.incomplete { result.append("States or counts incomplete") }
         if summary.omittedActive > 0 { result.append("\(summary.omittedActive) working/blocked tasks not shown") }
         return result
+    }
+
+    static func unmanagedSurfaces(
+        _ surfaces: [HierarchySurface], workspaceID: UUID, managed: [SidebarOrchestrationNode]
+    ) -> [HierarchySurface] {
+        let owned = Set(managed.filter { $0.workspaceId == workspaceID }.map(\.surfaceId))
+        return surfaces.filter { !owned.contains($0.id) }
+    }
+
+    static func sessionState(_ session: SidebarCopilotSession) -> SidebarVisual {
+        if session.state == .blocked { return state(.blocked) }
+        switch session.liveness {
+        case .alive: return state(session.state)
+        case .dead: return .init(title: "Process ended", symbol: "power", tone: .neutral)
+        case .ambiguous: return .init(title: "Unconfirmed owner", symbol: "circle.dashed", tone: .neutral)
+        case .unknown: return .init(title: "State unavailable", symbol: "circle.dashed", tone: .neutral)
+        }
+    }
+
+    static func managedState(
+        _ node: SidebarOrchestrationNode, availability: SidebarOrchestrationAvailability,
+        now: Date
+    ) -> SidebarVisual {
+        let age = now.timeIntervalSince(node.updatedAt)
+        guard (availability == .ready || availability == .partial),
+              age >= -1, age <= SidebarOrchestrationReader.staleInterval else {
+            return .init(title: "State unverified · last observation is not current",
+                         symbol: "clock.badge.exclamationmark", tone: .neutral)
+        }
+        let phase = SidebarOrchestrationPhase(rawValue: node.phase)
+        let title = phase?.title(availability: node.availability) ?? "Unrecognized state"
+        switch phase {
+        case .registered: return .init(title: "Registered · activity not inferred", symbol: "circle", tone: .neutral)
+        case .launching, .turnQueued: return .init(title: title, symbol: "clock", tone: .blue)
+        case .turnRunning: return .init(title: title, symbol: "arrow.triangle.2.circlepath", tone: .green)
+        case .reportedCompleted: return .init(title: title, symbol: "checkmark.circle", tone: .green)
+        case .reportedBlocked: return .init(title: title, symbol: "hand.raised.fill", tone: .amber)
+        case .reportedFailed, .turnFailed, .launchFailed, .startupFailed:
+            return .init(title: title, symbol: "exclamationmark.circle.fill", tone: .red)
+        case .reportMissing: return .init(title: title, symbol: "doc.badge.ellipsis", tone: .amber)
+        case .permissionDenied: return .init(title: title, symbol: "exclamationmark.shield", tone: .amber)
+        case .processDisappeared, .terminalDisappeared:
+            return .init(title: title, symbol: "bolt.slash", tone: .neutral)
+        case .resourceRetired: return .init(title: title, symbol: "archivebox", tone: .neutral)
+        case .none: return .init(title: title, symbol: "circle.dashed", tone: .neutral)
+        }
     }
 
     static func briefPath(root: HierarchyAvailability<String?>, project: HierarchyAvailability<String?>) -> String? {

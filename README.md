@@ -114,9 +114,11 @@ When a coordinator explicitly registers a terminal-backed run, its coordinator
 Every worker is a genuine unfocused terminal tab in the coordinator's current
 CMUX pane/workspace. Rows show safe labels and explicit lifecycle state; Details
 contains exact run, parent, worker, workspace, surface and generation IDs.
-Selecting a row uses the existing typed CMUX Focus action. Inferred/unmanaged
-observations remain available under **Other sessions/activity** and are never
-attached to the managed graph by guesswork.
+Selecting a row uses the existing typed CMUX Focus action. Each workspace appears
+once: explicit managed agents and remaining terminals share its outline. Only an
+exact managed workspace/surface pair replaces an unmanaged terminal row; names,
+paths and guessed relationships never establish ownership. The Taskboard view
+keeps the complete inferred activity projection available independently.
 
 The installed skill exposes explicit `register`, `spawn`, `status`, `follow-up`,
 `focus`, worker `report`, `archive`, and exact stale-surface `recover` operations.
@@ -164,9 +166,10 @@ directories, missing directories, timeouts, invalid output, overlong output and
 failed root queries publish no Git labels rather than calling a directory a
 worktree. The controller refreshes exact assigned-directory evidence at bounded
 worker heartbeats, turn boundaries, follow-up queueing and explicit status checks.
-Each projection carries a separate Git evidence status and capture time; stale or
-unavailable evidence is omitted from ordinary rows and qualified only in deliberate
-inspection. Probes are batched by assigned directory and run outside the global
+Each projection carries a separate Git evidence status and capture time. Stale
+verified locations remain useful as **last verified** labels, with a clock glyph,
+explicit help and accessibility qualification; they are not presented as current
+Git state. Unavailable evidence is omitted. Probes are batched by assigned directory and run outside the global
 state mutation lock. The sandboxed sidebar never runs Git and never receives the
 private full assigned path through observer metadata.
 
@@ -185,7 +188,18 @@ cumulative API tokens and context tiers are not presented as context occupancy.
 Full authorized paths and stable IDs remain in deliberate inspection. Focus,
 expansion, dismissal and acknowledgement remain independent actions.
 
-When no managed graph exists, the same compact treatment groups real CMUX
+For unmanaged terminals with exactly one observed session, its state and children
+are presented on the named terminal row instead of adding a duplicate provider/ID
+heading. Multiple sessions remain individually inspectable; none is guessed to be
+the current owner. Passive skill/shell history moves to the selected session's
+**Other activity** disclosure and remains in Taskboard. Agents, structural
+ancestors, active/blocked/failed work and outstanding attention stay in the outline.
+Incomplete-history indicators and collapsed-branch counts sit beside their owning
+row, not on standalone diagnostic rows. A chevron needs no "Branch collapsed"
+caption. Registration is neutral, not a claim that an agent is running; stale
+managed evidence and unconfirmed/ended process ownership cannot show a live state.
+
+With or without a managed graph, the same outline groups real CMUX
 surfaces and valid inferred Copilot sessions beneath workspace headers. Working
 directory basenames are explicitly described as directory labels, never Git
 branches. Uncertain ownership and incomplete evidence remain honest glyphs or
@@ -193,19 +207,20 @@ summaries, and incidental diagnostics stay behind selection or settings.
 Taskboard remains available from the compact view/settings menu and retains each
 primary session's state even when it has no attention or child rows.
 
-A healthy overview is one compact summary line; observation timing and history
-totals are in its Details disclosure. Availability failures, partial/unknown data,
-and omitted active work remain visible. Workspaces show one granted path with
-middle truncation and full-path help; complete path metadata remains in Details
-rather than repeating unavailable workspace/project/path lines on every row.
-The settings gear is still the single entry for density and stored preferences.
-No saved expansion, retention, acknowledgement, navigation, or source semantics
-are changed by this presentation.
+A healthy outline has no diagnostic paragraphs. Source availability is a header
+indicator with full help and accessibility text; incomplete evidence is marked on
+its owning row. Blockers, attention and omitted active work remain visible.
+Workspaces use quiet headings; directory labels sit beneath terminal names.
+Complete path metadata remains in Details rather than repeating unavailable
+workspace/project/path lines on every row.
+The header menu remains the entry for density and stored preferences. Saved
+expansion, retention, acknowledgement, navigation and source records are preserved;
+the outline's activity filtering is presentation-only.
 When several source warnings apply, the overview keeps the primary warning
 and omitted active-work count visible; its Details disclosure lists every reason.
 The current host's overlaid footer has 50 points of reserved clearance.
 
-The sidebar **gear** includes **Compact** (the original spacing) and
+The sidebar **menu** includes **Compact** (the original spacing) and
 **Comfortable** (more room and larger native detail text) density. Both
 Hierarchy and Taskboard keep the same data, counts, paths and independent
 focus, dismissal and acknowledgement actions. Narrow rows stack actions;

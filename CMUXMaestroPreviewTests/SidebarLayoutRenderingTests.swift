@@ -16,12 +16,14 @@ struct SidebarLayoutRenderingTests {
         )
         let longModel = makeModel(fixtures: fixtures, longMetadata: true)
         let managedModel = makeManagedModel(fixtures: fixtures)
+        let mixedModel = makeManagedModel(fixtures: fixtures, nodeCount: 2, mixed: true)
         defer {
             model.setVisible(false)
             unmanagedBaseline.setVisible(false)
             unmanagedOrdinary.setVisible(false)
             longModel.setVisible(false)
             managedModel.setVisible(false)
+            mixedModel.setVisible(false)
         }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let folder = root.appendingPathComponent(".build/layout-validation/offscreen")
@@ -98,6 +100,23 @@ struct SidebarLayoutRenderingTests {
             }
         }
         preferences.expandAll()
+        let mixedImage = folder.appendingPathComponent("mixed-incomplete-outline-dark-340x940.png")
+        let mixedMetrics = try await render(
+            model: mixedModel, preferences: preferences, width: 340, height: 940,
+            appearance: .dark, managed: true,
+            destination: mixedImage
+        )
+        #expect(mixedMetrics.documentHeight <= 400)
+        // Read the pixels: offscreen hosting does not expose a system accessibility tree.
+        let lines = try SidebarRenderingEvidence.recognizedLines(in: mixedImage)
+        try JSONEncoder().encode(lines).write(to: mixedImage.appendingPathExtension("text.json"))
+        for title in ["Managed workspace", "Context review", "Coordinator", "Implementation",
+                      "Hierarchy recovery", "Readiness check", "Review latest changes"] {
+            #expect(lines.filter { $0.contains(title) }.count == 1, "Expected one rendered \(title): \(lines)")
+        }
+        #expect(lines.filter { $0.contains("Session ") }.count == 2)
+        #expect(!lines.contains { $0.contains("Earlier skill") || $0.contains("Branch collapsed")
+            || $0.contains("Other sessions/activity") })
         let unmanagedMetrics = try await render(
             model: model, preferences: preferences, width: 340, height: 600,
             appearance: .light,
@@ -171,7 +190,7 @@ struct SidebarLayoutRenderingTests {
     }
 
     private func makeManagedModel(
-        fixtures: SidebarTreeFixtures, nodeCount: Int = 6
+        fixtures: SidebarTreeFixtures, nodeCount: Int = 6, mixed: Bool = false
     ) -> SidebarConnectionModel {
         let workspace = fixtures.workspaceA
         let surfaces = (0..<nodeCount).map { _ in UUID() }
@@ -181,6 +200,25 @@ struct SidebarLayoutRenderingTests {
         let secondRootID = UUID()
         let now = Date()
         let sessionIDs = (0..<nodeCount).map { _ in UUID() }
+        let extraSurfaces = mixed ? [UUID(), UUID(), UUID()] : []
+        let extraObservations: [CopilotSessionObservation] = mixed
+            ? (0..<4).map { index in
+                let last = index == 3
+                return CopilotSessionObservation(
+                    sessionID: UUID(), surfaceID: extraSurfaces[min(index, 2)],
+                    launchWorkspaceID: index >= 2 ? fixtures.workspaceB : workspace,
+                    liveness: last ? .alive : .unknown, state: last ? .idle : .unknown,
+                    model: nil,
+                    children: last ? (0..<3).map {
+                        CopilotChildWork(id: "passive-\($0)", parentID: nil, kind: .skill,
+                                         name: "Earlier skill \($0)", state: .unknown, model: nil)
+                    } : [],
+                    observedAt: now,
+                    attention: last ? [.init(kind: .turnFinished, evidence: .init(
+                        source: "copilot.events", eventID: UUID()
+                    ), occurredAt: now)] : nil
+                )
+            } : []
         let labels = [
             "Coordinator", "Implementation", "Implementation",
             "Verification", "Documentation", "Release workspace"
@@ -258,7 +296,7 @@ struct SidebarLayoutRenderingTests {
                             ? "coordinator-model" : "worker-model",
                         children: [], observedAt: now
                     )
-                }, issues: [], isComplete: true)
+                } + extraObservations, issues: mixed ? [.loadingHistory] : [], isComplete: !mixed)
             },
             pause: { try await Task.sleep(for: .seconds(60)) },
             now: { now }
@@ -278,6 +316,12 @@ struct SidebarLayoutRenderingTests {
                         isPinned: false, unreadCount: 0,
                         workingDirectory: .available("/synthetic/managed")
                     )
+                } + extraSurfaces.prefix(2).enumerated().map { index, id in
+                    HierarchySurface(
+                        id: id, title: index == 0 ? "Hierarchy recovery" : "Readiness check",
+                        kind: .terminal, isFocused: false, isPinned: false, unreadCount: 0,
+                        workingDirectory: .available("/synthetic/review-worktree")
+                    )
                 })
             )] + (nodeCount > 5 ? [HierarchyWorkspace(
                 id: fixtures.workspaceB, title: .available("Release tools"), detail: .available(nil),
@@ -288,6 +332,15 @@ struct SidebarLayoutRenderingTests {
                     id: surfaces[5], title: "Terminal", kind: .terminal, isFocused: false,
                     isPinned: false, unreadCount: 0,
                     workingDirectory: .available("/synthetic/release")
+                )])
+            )] : mixed ? [HierarchyWorkspace(
+                id: fixtures.workspaceB, title: .available("Context review"), detail: .available(nil),
+                isSelected: .available(false), isPinned: .available(false), unreadCount: .available(0),
+                rootPath: .available("/synthetic/context"), projectRootPath: .available("/synthetic/context"),
+                surfaces: .available([HierarchySurface(
+                    id: extraSurfaces[2], title: "Review latest changes", kind: .terminal,
+                    isFocused: false, isPinned: false, unreadCount: 0,
+                    workingDirectory: .available("/synthetic/context-worktree")
                 )])
             )] : []),
             windowID: fixtures.windowID

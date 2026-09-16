@@ -1,4 +1,5 @@
 import AppKit
+import Vision
 
 @MainActor
 enum SidebarRenderingEvidence {
@@ -18,6 +19,7 @@ enum SidebarRenderingEvidence {
             if let scroll = child as? NSScrollView { scrollViews.append(scroll) }
             child.subviews.forEach(visit)
         }
+
         visit(view)
         let scroll = scrollViews.max { $0.bounds.height < $1.bounds.height }
         return Metrics(
@@ -28,5 +30,14 @@ enum SidebarRenderingEvidence {
             documentHeight: Double(scroll?.documentView?.bounds.height ?? 0),
             visibleHostWindows: NSApp.windows.filter(\.isVisible).count
         )
+    }
+
+    static func recognizedLines(in image: URL) throws -> [String] {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLanguages = ["en-US"]
+        request.usesLanguageCorrection = false
+        request.recognitionLevel = .accurate
+        try VNImageRequestHandler(url: image).perform([request])
+        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
     }
 }

@@ -13,6 +13,85 @@ struct SidebarClarityTests {
         #expect(SidebarPresentation.emptyChildHistoryTitle(complete: false) == "Child history unavailable")
     }
 
+    @Test func unifiedOutlineClaimsOnlyExactManagedWorkspaceSurfacePairs() throws {
+        let surface = HierarchySurface(
+            id: fixtures.surfaceA, title: "Duplicate title", kind: .terminal,
+            isFocused: true, isPinned: false, unreadCount: 0, workingDirectory: .available(nil)
+        )
+        let other = HierarchySurface(
+            id: fixtures.surfaceB, title: "Duplicate title", kind: .terminal,
+            isFocused: false, isPinned: false, unreadCount: 0, workingDirectory: .available(nil)
+        )
+        let managed = managedNode(role: "coordinator", surface: fixtures.surfaceA)
+        #expect(SidebarPresentation.unmanagedSurfaces(
+            [surface, other], workspaceID: fixtures.workspaceA, managed: [managed]
+        ).map(\.id) == [fixtures.surfaceB])
+        #expect(SidebarPresentation.unmanagedSurfaces(
+            [surface], workspaceID: fixtures.workspaceB, managed: [managed]
+        ).map(\.id) == [fixtures.surfaceA])
+        #expect(SidebarPresentation.unmanagedSurfaces(
+            [surface, other], workspaceID: fixtures.workspaceA, managed: []
+        ).count == 2)
+    }
+
+    @Test func staleManagedStateAndRegistrationNeverClaimRunning() {
+        let root = managedNode(role: "coordinator", surface: fixtures.surfaceA)
+        let worker = managedNode(role: "worker", surface: fixtures.surfaceB)
+        #expect(SidebarPresentation.managedState(root, availability: .ready, now: now).tone == .neutral)
+        #expect(SidebarPresentation.managedState(worker, availability: .ready, now: now).tone == .green)
+        for availability: SidebarOrchestrationAvailability in [.stale, .unavailable, .loading, .disconnected] {
+            let visual = SidebarPresentation.managedState(worker, availability: availability, now: now)
+            #expect(visual.tone == .neutral)
+            #expect(visual.title.contains("unverified"))
+            #expect(NSImage(systemSymbolName: visual.symbol, accessibilityDescription: visual.title) != nil)
+        }
+        #expect(SidebarPresentation.managedState(
+            worker, availability: .ready, now: now.addingTimeInterval(61)
+        ).tone == .neutral)
+        var summary = SidebarBranchSummary(sessions: [])
+        summary.include(managed: [worker], availability: .stale, now: now)
+        #expect(summary.running == 0)
+        #expect(summary.incomplete)
+        #expect(SidebarPresentation.collapsed(SidebarBranchSummary(sessions: [])).isEmpty)
+    }
+
+    @Test func outlineMovesPassiveToolActivityToDetailsButRetainsWorkAndAncestors() throws {
+        let nodes: [SidebarCopilotNode] = [
+            .init(id: "passive-skill", parentID: nil, depth: 0, kind: .skill,
+                  name: "Explain", state: .unknown, model: nil, ancestryUnresolved: false, hasChildren: false),
+            .init(id: "ancestor", parentID: nil, depth: 0, kind: .skill,
+                  name: "Delegate", state: .idle, model: nil, ancestryUnresolved: false, hasChildren: true),
+            .init(id: "agent", parentID: "ancestor", depth: 1, kind: .subagent,
+                  name: "Worker", state: .idle, model: nil, ancestryUnresolved: false, hasChildren: false),
+            .init(id: "blocked", parentID: nil, depth: 0, kind: .shell,
+                  name: "Permission", state: .blocked, model: nil, ancestryUnresolved: false, hasChildren: false),
+            .init(id: "working", parentID: nil, depth: 0, kind: .skill,
+                  name: "Executing", state: .working, model: nil, ancestryUnresolved: false, hasChildren: false),
+            .init(id: "attention", parentID: nil, depth: 0, kind: .skill,
+                  name: "Outcome", state: .idle, model: nil, ancestryUnresolved: false, hasChildren: false,
+                  attention: [signal(.turnFinished)])
+        ]
+        let session = try #require(makeTree(nodes: nodes).sessions.first)
+        let primaryIDs = ["ancestor", "agent", "blocked", "working", "attention"]
+        #expect(session.outlineNodes.map(\.id) == primaryIDs)
+        #expect(session.secondaryActivity.map(\.id) == ["passive-skill"])
+        #expect(session.outlineChildRows(layout: .init()).map(\.id) == primaryIDs)
+        #expect(session.nodes == nodes)
+        var collapsed = SidebarLayoutSettings()
+        collapsed.setExpanded(false, for: .child("ancestor", sessionID: session.id))
+        #expect(!session.outlineChildRows(layout: collapsed).contains { $0.id == "agent" })
+        #expect(session.outlineNodes.first?.hasChildren == true)
+    }
+
+    @Test func endedOrUnconfirmedSessionsNeverBorrowWorkingColor() {
+        for liveness: CopilotLiveness in [.dead, .unknown, .ambiguous] {
+            let session = managedSession(
+                id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil, liveness: liveness
+            )
+            #expect(SidebarPresentation.sessionState(session).tone == .neutral)
+        }
+    }
+
     @Test func entityIconsAndStateBadgesDoNotRelyOnColorAlone() {
         let kinds = [
             SidebarPresentation.workspace, SidebarPresentation.surface(.terminal),

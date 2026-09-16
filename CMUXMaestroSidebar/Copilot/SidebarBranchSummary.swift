@@ -46,6 +46,28 @@ struct SidebarBranchSummary: Equatable {
         }
     }
 
+    mutating func include(
+        managed nodes: [SidebarOrchestrationNode],
+        availability: SidebarOrchestrationAvailability, now: Date
+    ) {
+        for node in nodes {
+            let age = now.timeIntervalSince(node.updatedAt)
+            guard (availability == .ready || availability == .partial),
+                  age >= -1, age <= SidebarOrchestrationReader.staleInterval else {
+                incomplete = true
+                continue
+            }
+            switch SidebarOrchestrationPhase(rawValue: node.phase) {
+            case .turnRunning: running += 1
+            case .reportedBlocked: blocked += 1
+            case .reportMissing, .permissionDenied, .reportedFailed, .turnFailed,
+                 .launchFailed, .startupFailed: attention += 1
+            case .none: incomplete = true
+            default: break
+            }
+        }
+    }
+
     var lines: [String] {
         var result = ["\(running) known running · \(blocked) blocked · \(SidebarCountText.attention(attention))"]
         if omittedActive > 0 { result.append("\(omittedActive) additional working/blocked tasks exceed display limits") }
@@ -63,6 +85,42 @@ struct SidebarChildRow: Identifiable, Equatable {
 }
 
 extension SidebarCopilotSession {
+    var outlineNodes: [SidebarCopilotNode] {
+        let byID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        var retained = Set(nodes.filter {
+            ($0.kind != .skill && $0.kind != .shell)
+                || $0.state == .working || $0.state == .blocked || $0.state == .failed
+                || !$0.attention.isEmpty || $0.attentionDegraded || $0.ancestryUnresolved
+        }.map(\.id))
+        for node in nodes where retained.contains(node.id) {
+            var parent = node.parentID
+            while let id = parent, let ancestor = byID[id], retained.insert(id).inserted {
+                parent = ancestor.parentID
+            }
+        }
+        return nodes.filter { retained.contains($0.id) }.map { node in
+            var row = node
+            row.hasChildren = nodes.contains { $0.parentID == node.id && retained.contains($0.id) }
+            return row
+        }
+    }
+
+    var secondaryActivity: [SidebarCopilotNode] {
+        let primary = Set(outlineNodes.map(\.id))
+        return nodes.filter { !primary.contains($0.id) }
+    }
+
+    func outlineChildRows(layout: SidebarLayoutSettings) -> [SidebarChildRow] {
+        let primary = Dictionary(uniqueKeysWithValues: outlineNodes.map { ($0.id, $0) })
+        return childRows(layout: layout).compactMap { row in
+            guard let node = primary[row.id] else { return nil }
+            return SidebarChildRow(
+                node: node, expansionID: row.expansionID, expanded: row.expanded,
+                collapsedSummary: node.hasChildren ? row.collapsedSummary : nil
+            )
+        }
+    }
+
     func childRows(layout: SidebarLayoutSettings) -> [SidebarChildRow] {
         let collapsed = Set(nodes.compactMap { node in
             layout.isExpanded(.child(node.id, sessionID: id)) ? nil : node.id
