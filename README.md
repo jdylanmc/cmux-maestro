@@ -179,7 +179,10 @@ provider/category pictograms. The shared glyph family uses a filled green dot
 only for verified working activity, a neutral ring for idle/registered, a dashed
 ring for uncertain/stale evidence, and circular pause/check/error marks for
 blocked, finished and failed states. Workspace headers are text with chevrons;
-their trailing ellipsis button opens details independently from focus.
+their trailing ellipsis menu offers Focus, Expand/Collapse and Details as separate
+actions. The header menu exposes the two view modes directly, plus settings.
+Settings and selected details have explicit Close controls; details are bounded
+and scroll independently rather than consuming the outline.
 Rows avoid repeated status prose or diagnostic walls; blocked/failed state, incomplete ancestry,
 omitted active work and attention remain concise and visible. Selecting the state
 glyph opens one detail surface below the outline. Managed workers resolve verified
@@ -199,6 +202,12 @@ heading. Multiple sessions remain individually inspectable; none is guessed to b
 the current owner. Passive skill/shell history moves to the selected session's
 **Other activity** disclosure and remains in Taskboard. Agents, structural
 ancestors, active/blocked/failed work and outstanding attention stay in the outline.
+Ordinary running shell invocations are the exception: verified, unambiguous leaf
+commands fold into a quiet activity caption beneath their exact owning session or
+agent, such as "Running a command". Concurrent commands are counted; blocked,
+failed, attention-bearing, unresolved and structural shell rows stay visible.
+The complete shell records remain available in details and Taskboard. This is
+presentation-only: raw activity evidence, lifecycle state and counts are unchanged.
 Incomplete-history indicators and collapsed-branch counts sit beside their owning
 row, not on standalone diagnostic rows. A chevron needs no "Branch collapsed"
 caption. Registration is neutral, not a claim that an agent is running; stale

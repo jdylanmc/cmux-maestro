@@ -92,6 +92,53 @@ struct SidebarClarityTests {
         }
     }
 
+    @Test func commandActivityIsFoldedOnlyIntoItsExactOwnerWithoutHidingProblems() throws {
+        func shell(_ id: String, parent: String? = nil, state: CopilotWorkState = .working,
+                   attention: [AgentAttention] = []) -> SidebarCopilotNode {
+            .init(id: id, parentID: parent, depth: parent == nil ? 0 : 1, kind: .shell,
+                  name: "bash invocation", state: state, model: nil, ancestryUnresolved: false,
+                  hasChildren: false, attention: attention)
+        }
+        let nodes: [SidebarCopilotNode] = [
+            shell("first"), shell("second"),
+            .init(id: "owner", parentID: nil, depth: 0, kind: .subagent, name: "Worker",
+                  state: .working, model: nil, ancestryUnresolved: false, hasChildren: true),
+            shell("child", parent: "owner"),
+            shell("blocked", state: .blocked), shell("failed", state: .failed),
+            shell("attention", attention: [signal(.permission)]),
+            shell("unresolved", parent: "missing"),
+            shell("ancestor"),
+            .init(id: "descendant", parentID: "ancestor", depth: 1, kind: .subagent, name: "Nested worker",
+                  state: .working, model: nil, ancestryUnresolved: false, hasChildren: false)
+        ]
+        let session = try #require(makeTree(nodes: nodes).sessions.first)
+        #expect(session.foldedShellIDs == ["first", "second", "child"])
+        #expect(session.foldedShellCount(parentID: nil) == 2)
+        #expect(session.foldedShellCount(parentID: "owner") == 1)
+        #expect(session.foldedShellCount(parentID: "different-owner") == 0)
+        #expect(session.outlineNodes.map(\.id) == [
+            "owner", "blocked", "failed", "attention", "unresolved", "ancestor", "descendant"
+        ])
+        #expect(session.secondaryActivity.map(\.id) == ["first", "second", "child"])
+        #expect(session.nodes == nodes)
+    }
+
+    @Test func activityCaptionsAreConciseAndKeepRawProducerEvidenceSeparate() {
+        let shell = AgentActivity(kind: .executing, summary: "Executing tool: bash", lastEventAt: now)
+        #expect(SidebarPresentation.activityCaption(shell) == "Running a command")
+        #expect(SidebarPresentation.activityCaption(shell, runningShells: 2) == "Running 2 commands")
+        #expect(shell.summary == "Executing tool: bash")
+        let read = AgentActivity(kind: .executing, summary: "Executing tool: view", lastEventAt: now)
+        #expect(SidebarPresentation.activityCaption(read, runningShells: 1) == "Reading files · 1 command")
+        #expect(SidebarPresentation.activityCaption(
+            .init(kind: .idle, summary: "Last completed tool: bash", lastEventAt: now)
+        ) == nil)
+        #expect(SidebarPresentation.activityCaption(
+            .init(kind: .executing, summary: "unverified prompt text", lastEventAt: now)
+        ) == nil)
+        #expect(SidebarPresentation.activityCaption(nil, runningShells: 1) == "Running a command")
+    }
+
     @Test func statusGlyphsUseOneFamilyWithoutRelyingOnColorAlone() {
         let states: [CopilotWorkState] = [.working, .idle, .blocked, .completed, .failed, .cancelled, .unknown]
         let visuals = states.map(SidebarPresentation.state)

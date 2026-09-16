@@ -53,6 +53,26 @@ enum SidebarPresentation {
         }
     }
 
+    static func activityCaption(_ activity: AgentActivity?, runningShells: Int = 0) -> String? {
+        var caption: String?
+        if let activity, activity.kind == .executing,
+           let summary = activity.summary, summary.hasPrefix("Executing tool: "),
+           let tool = CopilotEventProjection.safeToolName(String(summary.dropFirst("Executing tool: ".count))) {
+            switch tool {
+            case "bash", "powershell", "local_shell": caption = "Running a command"
+            case "view", "read": caption = "Reading files"
+            case "rg", "grep", "glob": caption = "Searching files"
+            case "edit", "apply_patch", "create": caption = "Editing files"
+            case "task": caption = "Delegating work"
+            default: caption = "Using a tool"
+            }
+        }
+        guard runningShells > 0 else { return caption }
+        let commands = runningShells == 1 ? "Running a command" : "Running \(runningShells) commands"
+        guard let caption, caption != "Running a command" else { return commands }
+        return "\(caption) · \(runningShells) \(runningShells == 1 ? "command" : "commands")"
+    }
+
     static func overview(_ tree: SidebarCopilotTree) -> String {
         guard !tree.sessions.isEmpty else { return "No current Copilot sessions" }
         var parts = ["\(tree.sessions.count) \(tree.sessions.count == 1 ? "session" : "sessions")"]

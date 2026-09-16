@@ -85,12 +85,30 @@ struct SidebarChildRow: Identifiable, Equatable {
 }
 
 extension SidebarCopilotSession {
+    var foldedShellIDs: Set<String> {
+        guard liveness == .alive else { return [] }
+        let knownIDs = Set(nodes.map(\.id))
+        let parentIDs = Set(nodes.compactMap(\.parentID))
+        return Set(nodes.filter {
+            $0.kind == .shell && $0.state == .working
+                && $0.attention.isEmpty && !$0.attentionDegraded && !$0.ancestryUnresolved
+                && !parentIDs.contains($0.id)
+                && ($0.parentID.map { knownIDs.contains($0) } ?? true)
+        }.map(\.id))
+    }
+
+    func foldedShellCount(parentID: String?) -> Int {
+        let folded = foldedShellIDs
+        return nodes.filter { $0.parentID == parentID && folded.contains($0.id) }.count
+    }
+
     var outlineNodes: [SidebarCopilotNode] {
         let byID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        let folded = foldedShellIDs
         var retained = Set(nodes.filter {
-            ($0.kind != .skill && $0.kind != .shell)
+            !folded.contains($0.id) && (($0.kind != .skill && $0.kind != .shell)
                 || $0.state == .working || $0.state == .blocked || $0.state == .failed
-                || !$0.attention.isEmpty || $0.attentionDegraded || $0.ancestryUnresolved
+                || !$0.attention.isEmpty || $0.attentionDegraded || $0.ancestryUnresolved)
         }.map(\.id))
         for node in nodes where retained.contains(node.id) {
             var parent = node.parentID

@@ -14,6 +14,7 @@ struct SidebarLayoutRenderingTests {
         let unmanagedOrdinary = makeModel(
             fixtures: fixtures, longMetadata: false, childLimit: 2
         )
+        let commandModel = makeModel(fixtures: fixtures, longMetadata: false, shellActivity: true)
         let longModel = makeModel(fixtures: fixtures, longMetadata: true)
         let managedModel = makeManagedModel(fixtures: fixtures)
         let mixedModel = makeManagedModel(fixtures: fixtures, nodeCount: 2, mixed: true)
@@ -21,6 +22,7 @@ struct SidebarLayoutRenderingTests {
             model.setVisible(false)
             unmanagedBaseline.setVisible(false)
             unmanagedOrdinary.setVisible(false)
+            commandModel.setVisible(false)
             longModel.setVisible(false)
             managedModel.setVisible(false)
             mixedModel.setVisible(false)
@@ -90,7 +92,7 @@ struct SidebarLayoutRenderingTests {
         ] {
             let metrics = try await render(
                 model: managedModel, preferences: preferences, width: width, height: 600,
-                appearance: appearance, managed: true,
+                appearance: appearance, managed: true, expectedSessions: 6,
                 destination: folder.appendingPathComponent(
                     "managed-\(appearance.name)-\(width)x600.png"
                 )
@@ -103,7 +105,7 @@ struct SidebarLayoutRenderingTests {
         let mixedImage = folder.appendingPathComponent("mixed-incomplete-outline-dark-340x940.png")
         let mixedMetrics = try await render(
             model: mixedModel, preferences: preferences, width: 340, height: 940,
-            appearance: .dark, managed: true,
+            appearance: .dark, managed: true, expectedSessions: 6,
             destination: mixedImage
         )
         #expect(mixedMetrics.documentHeight <= 400)
@@ -150,6 +152,16 @@ struct SidebarLayoutRenderingTests {
         #expect(unmanagedBaselineMetrics.documentHeight < ordinaryMetrics.documentHeight)
         #expect((ordinaryMetrics.documentHeight - unmanagedBaselineMetrics.documentHeight)
                 / Double(fullCount - baselineCount) <= 40)
+        let commandImage = folder.appendingPathComponent("command-activity-light-340x600.png")
+        let commandMetrics = try await render(
+            model: commandModel, preferences: preferences, width: 340, height: 600,
+            destination: commandImage
+        )
+        let commandLines = try SidebarRenderingEvidence.recognizedLines(in: commandImage)
+        #expect(commandLines.filter { $0.contains("Running a command") }.count == 1)
+        #expect(!commandLines.contains { $0.contains("Executing tool:") || $0.contains("bash invocation") })
+        #expect(commandMetrics.documentHeight > unmanagedBaselineMetrics.documentHeight)
+        #expect(commandMetrics.documentHeight <= unmanagedBaselineMetrics.documentHeight + 20)
     }
 
     @Test func managedRowsStayWithinCompactHeightBudgetAtThreeHundredWidth() async throws {
@@ -360,7 +372,7 @@ struct SidebarLayoutRenderingTests {
     }
 
     private func makeModel(
-        fixtures: SidebarTreeFixtures, longMetadata: Bool, childLimit: Int? = nil
+        fixtures: SidebarTreeFixtures, longMetadata: Bool, childLimit: Int? = nil, shellActivity: Bool = false
     ) -> SidebarConnectionModel {
         let now = Date()
         let rootLabel = "Synthetic coordinator reviewing deeply nested layout and accessibility coverage"
@@ -390,11 +402,17 @@ struct SidebarLayoutRenderingTests {
         if let childLimit {
             children = Array(children.prefix(childLimit))
         }
+        if shellActivity {
+            children = [.init(id: "shell:command", parentID: nil, kind: .shell, name: "bash invocation",
+                              state: .working, model: nil)]
+        }
         let snapshot = fixtures.snapshot(sessions: [
             .init(sessionID: fixtures.sessionID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,
                   liveness: .alive, state: .working,
                   model: longMetadata ? "synthetic-model-with-a-deliberately-long-display-name-for-narrow-layout-review" : nil,
-                  children: children, observedAt: now)
+                  children: children, observedAt: now,
+                  activity: shellActivity ? .init(kind: .executing, summary: "Executing tool: bash",
+                                                 lastEventAt: now) : nil)
         ], now: now)
         let polling = SidebarCopilotPolling(
             read: { _ in snapshot }, pause: { try await Task.sleep(for: .seconds(60)) },
@@ -443,16 +461,12 @@ struct SidebarLayoutRenderingTests {
     private func render(
         model: SidebarConnectionModel, preferences: SidebarPreferences, width: Int,
         height: Int = 941, appearance: RenderAppearance = .light, managed: Bool = false,
+        expectedSessions: Int = 1,
         destination: URL
     ) async throws -> SidebarRenderingEvidence.Metrics {
         // Yield between renders so unrelated asynchronous navigation tests can service their deadlines.
         try await Task.sleep(for: .milliseconds(10))
         model.setVisible(true)
-        if managed {
-            await sidebarEventually { !model.orchestration.snapshot.nodes.isEmpty }
-        } else {
-            await sidebarEventually { model.copilot.tree.sessions.count == 1 }
-        }
         let frame = NSRect(x: 0, y: 0, width: width, height: height)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -467,6 +481,13 @@ struct SidebarLayoutRenderingTests {
         window.contentView = view
         defer { window.contentView = nil; window.close() }
         view.frame = frame
+        view.layoutSubtreeIfNeeded()
+        // onAppear can refresh history and clear observations; wait after mounting, for both sources.
+        await sidebarEventually {
+            model.copilot.tree.sessions.count == expectedSessions
+                && (!managed || !model.orchestration.snapshot.nodes.isEmpty)
+        }
+        try #require(model.copilot.tree.sessions.count == expectedSessions)
         view.layoutSubtreeIfNeeded()
         #expect(!window.isVisible)
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
