@@ -341,6 +341,7 @@ struct SidebarView: View {
         }
         .frame(width: 300)
         .frame(maxHeight: 600)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("sidebar-settings-panel")
     }
 
@@ -757,6 +758,7 @@ private struct ManagedSelectionDetails: View {
                 .frame(maxHeight: 180)
             }
             .padding(.top, 4)
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("managed-selection-details")
         }
 
@@ -1335,6 +1337,7 @@ private struct UnmanagedSelectionDetails: View {
                 .frame(maxHeight: 180)
             }
             .padding(.top, 4)
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("unmanaged-selection-details")
         }
     }
