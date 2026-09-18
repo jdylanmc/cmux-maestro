@@ -597,7 +597,7 @@ struct SidebarHistoryReaderTests {
         #expect(try project(initial, fixture: fixture, history: dismissed, attention: acknowledgedA).hiddenHistoryCount == 1)
         clock.advance(15)
         let expired = try await reader.read(surfaceIDs: [fixture.surface])
-        #expect(try project(expired, fixture: fixture, attention: acknowledgedA).hiddenHistoryCount == 1)
+        #expect(try project(expired, fixture: fixture, attention: acknowledgedA).hiddenHistoryCount == (outcome == .failed ? 0 : 1))
 
         if retire {
             // Presentation acknowledgement is not an ingestion signal. A new
@@ -673,12 +673,12 @@ struct SidebarHistoryReaderTests {
             acknowledged: acknowledgedA.acknowledged.union(visible.acknowledgeableOutcomes)
         )
         #expect(try project(finished, fixture: fixture, attention: acknowledgedB).nextHistoryExpiry
-            == clock.read().addingTimeInterval(15))
+            == (outcome == .failed ? nil : clock.read().addingTimeInterval(15)))
         clock.advance(15)
         let refreshed = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(try project(refreshed, fixture: fixture, attention: acknowledgedB).sessions.first?.nodes.contains {
             $0.id == "worker"
-        } == false)
+        } == (outcome == .failed))
         let finalRebuilt = try await self.reader(fixture, clock: clock, limits: limits).read(surfaceIDs: [fixture.surface])
         #expect(finalRebuilt.sessions == refreshed.sessions)
         #expect(try project(finalRebuilt, fixture: fixture, history: dismissed).sessions.first?.nodes.contains {

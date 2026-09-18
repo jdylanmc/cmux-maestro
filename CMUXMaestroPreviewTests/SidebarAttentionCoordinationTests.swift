@@ -233,11 +233,11 @@ struct SidebarAttentionCoordinationTests {
         try b.send("ack blocked")
         #expect(try await b.line() == "applying")
         #expect(try await b.line() == "done")
-        try await eventually { projection.tree.hiddenHistoryCount == 2 }
+        try await eventually { projection.tree.hiddenHistoryCount == 0 }
         #expect(preferences.attention.acknowledged.count == 2)
-        #expect(projection.tree.sessions.first?.nodes.map(\.id) == ["a", "blocked"])
-        #expect(projection.tree.sessions.first?.nodes.first?.historyAncestor == true)
-        #expect(projection.tree.sessions.first?.nodes.last?.attention.first?.kind == .permission)
+        #expect(projection.tree.sessions.first?.nodes.map(\.id) == ["a", "blocked", "b"])
+        #expect(projection.tree.sessions.first?.nodes.first?.historyAncestor == false)
+        #expect(projection.tree.sessions.first?.nodes.first(where: { $0.id == "blocked" })?.attention.first?.kind == .permission)
         #expect(preferences.selectedMode == .taskboard)
         #expect(projection.updates >= 5)
     }

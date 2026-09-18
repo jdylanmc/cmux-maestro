@@ -108,15 +108,25 @@ struct SidebarLayoutRenderingTests {
             appearance: .dark, managed: true, expectedSessions: 6,
             destination: mixedImage
         )
-        #expect(mixedMetrics.documentHeight <= 400)
+        #expect(mixedMetrics.documentHeight <= 420)
         // Read the pixels: offscreen hosting does not expose a system accessibility tree.
         let lines = try SidebarRenderingEvidence.recognizedLines(in: mixedImage, dark: true)
+        // Recognize the title lane separately: Vision otherwise joins the robot with "Coordinator".
+        let titleLines = try SidebarRenderingEvidence.recognizedLines(
+            in: mixedImage, dark: true, excludingLeadingFraction: 64.0 / 340.0
+        )
         try JSONEncoder().encode(lines).write(to: mixedImage.appendingPathExtension("text.json"))
-        for title in ["Managed workspace", "Context review", "Coordinator", "Implementation",
-                      "Hierarchy recovery", "Readiness check", "Review latest changes"] {
+        for title in ["Coordinator", "Implementation", "Hierarchy recovery", "Readiness check"] {
+            #expect(titleLines.filter { $0.contains(title) }.count == 1, "Expected one title-lane \(title): \(titleLines)")
+        }
+        for title in ["Managed workspace", "Context review"] {
             #expect(lines.filter { $0.contains(title) }.count == 1, "Expected one rendered \(title): \(lines)")
         }
-        #expect(lines.filter { $0.contains("Session ") }.count == 2)
+        #expect(!lines.contains { $0.contains("Copilot agent") || $0.lowercased().contains("session ") })
+        #expect(!lines.contains { $0.contains("counts incomplete") || $0.contains("0 agents") || $0.contains("Other tabs") })
+        #expect(lines.contains { $0.contains("Agent") && $0.contains("review-worktree") })
+        #expect(lines.contains { $0.contains("State unavailable") })
+        #expect(lines.contains { $0.contains("Terminal") })
         #expect(!lines.contains { $0.contains("Earlier skill") || $0.contains("Branch collapsed")
             || $0.contains("Other sessions/activity") })
         let unmanagedMetrics = try await render(
@@ -278,6 +288,9 @@ struct SidebarLayoutRenderingTests {
                 branchLabel: secondWorkspace ? "release/next" : index == 2
                     ? "feat/a-deliberately-long-nested-verification-branch" : "feat/worker-\(index)",
                 gitEvidenceStatus: "verified", gitEvidenceAt: now,
+                gitChangesStatus: "verified",
+                gitChanges: .init(files: 3, insertions: 42, deletions: 7, untrackedFiles: 1, binaryFiles: 0),
+                gitChangesAt: now,
                 createdAt: now.addingTimeInterval(-Double(index)), updatedAt: now
             )
         }
@@ -295,6 +308,8 @@ struct SidebarLayoutRenderingTests {
                     worktreeLabel: node.worktreeLabel, branchLabel: node.branchLabel,
                     gitEvidenceStatus: node.gitEvidenceStatus,
                     gitEvidenceAt: node.gitEvidenceAt,
+                    gitChangesStatus: node.gitChangesStatus, gitChanges: node.gitChanges,
+                    gitChangesAt: node.gitChangesAt,
                     createdAt: node.createdAt, updatedAt: node.updatedAt
                 )
             }
@@ -501,7 +516,13 @@ struct SidebarLayoutRenderingTests {
         try #require(model.copilot.tree.sessions.count == expectedSessions)
         view.layoutSubtreeIfNeeded()
         #expect(!window.isVisible)
-        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        // Keep logical sidebar widths unchanged while giving OCR stable Retina-resolution text.
+        let bitmap = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: width * 2, pixelsHigh: height * 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        bitmap.size = view.bounds.size
         view.cacheDisplay(in: view.bounds, to: bitmap)
         #expect(evidence.colorScheme == appearance.colorScheme)
         #expect(evidence.contrast == appearance.contrast)

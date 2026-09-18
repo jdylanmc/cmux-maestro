@@ -102,7 +102,8 @@ struct SidebarAttentionTests {
         #expect(after.attentionOwnerCount == 1)
         #expect(after.hiddenHistoryCount == 1)
         #expect(after.acknowledgeableOutcomes.isEmpty)
-        #expect(project([session(children: [failed])], attention: acknowledged).sessions.first?.nodes.isEmpty == true)
+        #expect(project([session(children: [failed])], attention: acknowledged).sessions.first?.nodes.count == 1)
+        #expect(project([session(children: [failed])], history: history, attention: acknowledged).sessions.first?.nodes.isEmpty == true)
     }
 
     @Test func unknownOrDeadLivenessNeverImpliesCompletionButKeepsPendingEvidence() {
@@ -233,10 +234,10 @@ struct SidebarAttentionTests {
         #expect(view.contains("model.copilot.updateAttention(preferences.attention)"))
         #expect(view.contains("sidebar-acknowledge-all"))
         #expect(view.contains("taskboard-session-attention-"))
-        #expect(view.components(separatedBy: "attention: node.attention, sessionID: session.id, ownerID: node.id,").count == 2)
-        #expect(view.components(separatedBy: "attention: session.attention, sessionID: session.id, ownerID: nil,").count == 3)
-        #expect(view.components(separatedBy: "degraded: node.attentionDegraded, acknowledge: acknowledge").count == 2)
-        #expect(view.components(separatedBy: "degraded: session.attentionDegraded, acknowledge: acknowledge").count == 3)
+        #expect(!view.contains("Button(\"Acknowledge\")"))
+        #expect(view.contains("navigation.select(target, onSuccess: onSuccess)"))
+        #expect(view.contains("acknowledge: acknowledge, selection: $selection"))
+        #expect(view.contains("SidebarPresentation.focusInteraction(from: old, to: new)"))
         #expect(view.contains("Button(action: focus)"))
         #expect(presentation.contains("Blocking reason unavailable"))
         #expect(presentation.contains("Activity time unknown"))

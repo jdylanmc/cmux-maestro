@@ -26,6 +26,13 @@ struct SidebarCopilotNode: Identifiable, Equatable {
         let key = SidebarDismissedOutcome(sessionID: sessionID, childID: id, eventID: terminalEvent.id)
         return key.isValid ? key : nil
     }
+
+    func dismissibleFailure(sessionID: UUID) -> SidebarDismissedOutcome? {
+        guard state == .failed, !historyAncestor, !attentionDegraded,
+              !attention.contains(where: { $0.kind.isBlocking }), let terminalEvent else { return nil }
+        let key = SidebarDismissedOutcome(sessionID: sessionID, childID: id, eventID: terminalEvent.id)
+        return key.isValid ? key : nil
+    }
 }
 
 struct SidebarCopilotSession: Identifiable, Equatable {
@@ -36,7 +43,7 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     let state: CopilotWorkState
     let model: String?
     let observedAt: Date
-    let nodes: [SidebarCopilotNode]
+    var nodes: [SidebarCopilotNode]
     let childrenComplete: Bool
     let treeDegraded: Bool
     let omittedChildrenCount: Int

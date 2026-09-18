@@ -7,6 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C09300000000000000000001 /* CopilotAssetEnvelope.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C09300000000000000000003; };
+		C09300000000000000000002 /* CopilotAssetEnvelope.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09300000000000000000003; };
+		C09200000000000000000003 /* maestro-icon in Resources */ = {isa = PBXBuildFile; fileRef = C09200000000000000000004; };
+		C09200000000000000000001 /* NerdFonts in Test Resources */ = {isa = PBXBuildFile; fileRef = C09200000000000000000002; };
+		C09200000000000000000005 /* NerdFonts in App Resources */ = {isa = PBXBuildFile; fileRef = C09200000000000000000002; };
+		C09200000000000000000006 /* NerdFonts in Sidebar Resources */ = {isa = PBXBuildFile; fileRef = C09200000000000000000002; };
+		C09200000000000000000007 /* SidebarGlyphs.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09200000000000000000008; };
 		C03600000000000000000001 /* cmux-maestro-orchestrator.py in Resources */ = {isa = PBXBuildFile; fileRef = C03600000000000000000003; };
 		C03600000000000000000002 /* SKILL.md in Resources */ = {isa = PBXBuildFile; fileRef = C03600000000000000000004; };
 		C03600000000000000000005 /* SidebarOrchestration.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C03600000000000000000006; };
@@ -98,6 +105,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C09300000000000000000003 /* CopilotAssetEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/CopilotAssetEnvelope.swift; sourceTree = SOURCE_ROOT; };
+		C09200000000000000000004 /* maestro-icon */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ".agents/skills/maestro-icon"; sourceTree = SOURCE_ROOT; };
+		C09200000000000000000002 /* NerdFonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/NerdFonts; sourceTree = SOURCE_ROOT; };
+		C09200000000000000000008 /* SidebarGlyphs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarGlyphs.swift; sourceTree = SOURCE_ROOT; };
 		C03600000000000000000003 /* cmux-maestro-orchestrator.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = scripts/cmux-maestro-orchestrator.py; sourceTree = SOURCE_ROOT; };
 		C03600000000000000000004 /* SKILL.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = .agents/skills/cmux-maestro-orchestrate/SKILL.md; sourceTree = SOURCE_ROOT; };
 		C03600000000000000000006 /* SidebarOrchestration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Orchestration/SidebarOrchestration.swift; sourceTree = SOURCE_ROOT; };
@@ -201,6 +212,10 @@
 		A3685BE02FCA3AEE00009F1B = {
 			isa = PBXGroup;
 			children = (
+				C09300000000000000000003 /* CopilotAssetEnvelope.swift */,
+				C09200000000000000000002 /* NerdFonts */,
+				C09200000000000000000008 /* SidebarGlyphs.swift */,
+				C09200000000000000000004 /* maestro-icon */,
 				C03600000000000000000003 /* cmux-maestro-orchestrator.py */,
 				C03600000000000000000004 /* SKILL.md */,
 				C03600000000000000000006 /* SidebarOrchestration.swift */,
@@ -402,6 +417,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				C03600000000000000000001 /* cmux-maestro-orchestrator.py in Resources */,
+				C09200000000000000000003 /* maestro-icon in Resources */,
+				C09200000000000000000005 /* NerdFonts in App Resources */,
 				C03600000000000000000002 /* SKILL.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -410,6 +427,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C09200000000000000000001 /* NerdFonts in Test Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -417,6 +435,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C09200000000000000000006 /* NerdFonts in Sidebar Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -442,6 +461,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C09100000000000000000005 /* SidebarView.swift in Test Sources */,
+				C09200000000000000000007 /* SidebarGlyphs.swift in Test Sources */,
 				C03600000000000000000005 /* SidebarOrchestration.swift in Test Sources */,
 				D10400000000000000000001 /* SidebarPreferences.swift in Sources */,
 				C09100000000000000000001 /* SidebarLayout.swift in Test Sources */,
@@ -459,6 +479,7 @@
 				C06100000000000000000305,
 				C06100000000000000000306,
 				C06100000000000000000307,
+				C09300000000000000000002 /* CopilotAssetEnvelope.swift in Test Sources */,
 				C06100000000000000000501,
 				C06100000000000000000502,
 				C06100000000000000000503,
@@ -478,6 +499,7 @@
 				C06100000000000000000105,
 				C06100000000000000000106,
 				C06100000000000000000107,
+				C09300000000000000000001 /* CopilotAssetEnvelope.swift in Sidebar Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

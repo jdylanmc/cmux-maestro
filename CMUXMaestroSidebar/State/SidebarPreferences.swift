@@ -17,12 +17,28 @@ enum SidebarMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum SidebarAgentIconStyle: String, CaseIterable, Identifiable {
+    case maestro, copilot
+    var id: Self { self }
+    var title: String { self == .maestro ? "Maestro bot" : "Copilot" }
+}
+
+enum SidebarTerminalIconStyle: String, CaseIterable, Identifiable {
+    case ghost, cli
+    var id: Self { self }
+    var title: String { self == .ghost ? "Ghost" : ">_" }
+    var glyph: String { self == .ghost ? "md-ghost" : "md-console_line" }
+}
+
 @Observable
 @MainActor
 final class SidebarPreferences {
     private static let selectedModeKey = "sidebar.selectedMode"
     private static let historyKey = "sidebar.completedHistory.v1"
     private static let attentionKey = "sidebar.attention.v1"
+    private static let showEndedKey = "sidebar.showEnded"
+    private static let agentIconStyleKey = "sidebar.agentIconStyle"
+    private static let terminalIconStyleKey = "sidebar.terminalIconStyle"
     private let defaults: UserDefaults
     private let layoutStore: SidebarLayoutStore
     var layout: SidebarLayoutSettings { layoutStore.value.settings }
@@ -33,6 +49,15 @@ final class SidebarPreferences {
     var historyNotice: String? { historyStore.value.notice }
     var attention: SidebarAttentionSettings { attentionStore.value.settings }
     var attentionNotice: String? { attentionStore.value.notice }
+    var showEnded: Bool {
+        didSet { defaults.set(showEnded, forKey: Self.showEndedKey) }
+    }
+    var agentIconStyle: SidebarAgentIconStyle {
+        didSet { defaults.set(agentIconStyle.rawValue, forKey: Self.agentIconStyleKey) }
+    }
+    var terminalIconStyle: SidebarTerminalIconStyle {
+        didSet { defaults.set(terminalIconStyle.rawValue, forKey: Self.terminalIconStyleKey) }
+    }
 
     var selectedMode: SidebarMode {
         didSet {
@@ -54,6 +79,11 @@ final class SidebarPreferences {
     init(defaults: UserDefaults, historyFile: URL, attentionFile: URL, layoutStore: SidebarLayoutStore) {
         self.defaults = defaults
         self.layoutStore = layoutStore
+        showEnded = defaults.bool(forKey: Self.showEndedKey)
+        agentIconStyle = defaults.string(forKey: Self.agentIconStyleKey)
+            .flatMap(SidebarAgentIconStyle.init(rawValue:)) ?? .maestro
+        terminalIconStyle = defaults.string(forKey: Self.terminalIconStyleKey)
+            .flatMap(SidebarTerminalIconStyle.init(rawValue:)) ?? .ghost
         selectedMode = defaults.string(forKey: Self.selectedModeKey)
             .flatMap(SidebarMode.init(rawValue:)) ?? .hierarchy
         historyStore = SidebarPreferenceStore(file: .init(url: historyFile), legacy: {
@@ -102,7 +132,7 @@ final class SidebarPreferences {
     }
 
     func restoreDismissed() {
-        historyStore.apply { $0.dismissed = [] }
+        historyStore.apply { $0.dismissed = []; $0.dismissedManaged = nil }
     }
 
     func resetHistory() { historyStore.apply(reset: true) { _ in } }
@@ -124,4 +154,16 @@ final class SidebarPreferences {
     }
 
     func resetAcknowledgements() { attentionStore.apply(reset: true) { _ in } }
+
+    func dismissManaged(_ outcome: SidebarDismissedManagedOutcome) {
+        historyStore.apply {
+            $0.dismissedManaged = ($0.dismissedManaged ?? []).union([outcome])
+            guard $0.isValid,
+                  try JSONEncoder().encode($0).count <= SidebarHistorySettings.maximumStoredBytes else {
+                throw SidebarPreferenceRejection(
+                    notice: "Dismissal storage is full or invalid. Nothing new was hidden. Restore dismissed history to free space."
+                )
+            }
+        }
+    }
 }

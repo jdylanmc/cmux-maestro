@@ -574,6 +574,14 @@ struct CopilotSetupTests {
         let skill = directory.appendingPathComponent("SKILL.md")
         try Data("#!/usr/bin/env python3\n".utf8).write(to: controller)
         try Data("---\nname: cmux-maestro-orchestrate\n---\n".utf8).write(to: skill)
+        let iconSkillDirectory = directory.appendingPathComponent("maestro-icon", isDirectory: true)
+        try FileManager.default.createDirectory(at: iconSkillDirectory, withIntermediateDirectories: true)
+        let iconSkill = iconSkillDirectory.appendingPathComponent("SKILL.md")
+        try Data("---\nname: maestro-icon\n---\n".utf8).write(to: iconSkill)
+        try FileManager.default.copyItem(
+            at: repository.appendingPathComponent("Resources/NerdFonts"),
+            to: directory.appendingPathComponent("NerdFonts")
+        )
         let integration = directory.appendingPathComponent("integration")
         let plugin = try local.preparePlugin(
             root: integration, helper: executable, controller: controller, skill: skill
@@ -582,11 +590,15 @@ struct CopilotSetupTests {
             == CopilotPluginManifest.files(helper: executable)["hooks.json"])
         #expect(try Data(contentsOf: plugin.appendingPathComponent("skills/cmux-maestro-orchestrate/SKILL.md"))
             == Data(contentsOf: skill))
+        #expect(try Data(contentsOf: plugin.appendingPathComponent("skills/maestro-icon/SKILL.md"))
+            == Data(contentsOf: iconSkill))
         let installed = directory.appendingPathComponent(
             "Orchestration/bin/cmux-maestro-orchestrator"
         )
         #expect(FileManager.default.isExecutableFile(atPath: installed.path))
         #expect(try Data(contentsOf: installed) == Data(contentsOf: controller))
+        #expect(try Data(contentsOf: installed.deletingLastPathComponent().appendingPathComponent("NerdFonts/glyphnames.json"))
+            == Data(contentsOf: repository.appendingPathComponent("Resources/NerdFonts/glyphnames.json")))
         #expect(try String(contentsOf: configuration, encoding: .utf8) == "preserved")
         #expect(try local.executable(selected: executable, path: "") == executable)
         #expect(throws: (any Error).self) { try local.executable(selected: nil, path: ".:relative") }

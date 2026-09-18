@@ -104,10 +104,22 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
     }
 
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
+        let iconSkill = skill.deletingLastPathComponent().appendingPathComponent("maestro-icon/SKILL.md")
         guard FileManager.default.isExecutableFile(atPath: helper.path),
               FileManager.default.isReadableFile(atPath: controller.path),
-              FileManager.default.isReadableFile(atPath: skill.path) else {
+              FileManager.default.isReadableFile(atPath: skill.path),
+              FileManager.default.isReadableFile(atPath: iconSkill.path) else {
             throw HookFiles.Failure.unavailable
+        }
+        let iconSkillData = try boundedResource(iconSkill, maximum: 65_536)
+        let glyphRoot = skill.deletingLastPathComponent().appendingPathComponent("NerdFonts", isDirectory: true)
+        let glyphFiles: [(String, Int)] = [
+            ("glyphnames.json", 2_097_152), ("presets.json", 32_768), ("manifest.json", 8_192),
+            ("SymbolsNerdFont-Regular.ttf", 4_194_304), ("LICENSE", 16_384),
+            ("NOTICE.md", 16_384), ("GLYPH-SOURCES.md", 32_768)
+        ]
+        let glyphData = try glyphFiles.map { name, limit in
+            (name, try boundedResource(glyphRoot.appendingPathComponent(name), maximum: limit))
         }
         let rootFD = try HookFiles.privateDirectory(root)
         defer { close(rootFD) }
@@ -125,6 +137,11 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         defer { close(orchestrationSkill) }
         let skillData = try boundedResource(skill, maximum: 65_536)
         try HookFiles.atomicWrite(skillData, name: "SKILL.md", directory: orchestrationSkill)
+        let iconSkillDirectory = try HookFiles.privateDirectory(
+            plugin.appendingPathComponent("skills/maestro-icon", isDirectory: true)
+        )
+        defer { close(iconSkillDirectory) }
+        try HookFiles.atomicWrite(iconSkillData, name: "SKILL.md", directory: iconSkillDirectory)
 
         let orchestration = root.deletingLastPathComponent()
             .appendingPathComponent("Orchestration", isDirectory: true)
@@ -132,6 +149,13 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         defer { close(orchestrationRoot) }
         let bin = try HookFiles.privateDirectory(orchestration.appendingPathComponent("bin", isDirectory: true))
         defer { close(bin) }
+        let glyphDirectory = try HookFiles.privateDirectory(
+            orchestration.appendingPathComponent("bin/NerdFonts", isDirectory: true)
+        )
+        defer { close(glyphDirectory) }
+        for (name, data) in glyphData {
+            try HookFiles.atomicWrite(data, name: name, directory: glyphDirectory)
+        }
         try executableWrite(
             boundedResource(controller, maximum: 1_048_576),
             name: "cmux-maestro-orchestrator", directory: bin

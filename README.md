@@ -173,17 +173,60 @@ Git state. Unavailable evidence is omitted. Probes are batched by assigned direc
 state mutation lock. The sandboxed sidebar never runs Git and never receives the
 private full assigned path through observer metadata.
 
-Small native state glyphs distinguish working, available/finished, blocked,
-failed and uncertain states without color alone. Ordinary rows do not repeat
-provider/category pictograms. The shared glyph family uses a filled green dot
-only for verified working activity, a neutral ring for idle/registered, a dashed
-ring for uncertain/stale evidence, and circular pause/check/error marks for
-blocked, finished and failed states. Workspace headers are text with chevrons;
+Managed rows show the worktree name with a branch-tree icon. Fresh Git evidence
+also carries a changed-file count and **+green / -red** tracked-text line counts
+against `HEAD` (staged and unstaged changes combined). File totals include
+untracked files and binary changes; line totals exclude them and submodule
+contents. Renames count once. Conflicts, unborn `HEAD`, failed or oversized
+probes, and stale evidence never become zero counts. Counts are sampled, not an
+atomic snapshot of concurrent edits. Missing current counts remain unavailable.
+Count freshness uses its own timestamp, independent of branch metadata refreshed
+by older supervisors.
+Only bounded aggregates cross into the sandbox; paths and file contents do not.
+Existing controller versions omit these optional fields. Refresh the native
+integration explicitly to install the new controller; existing supervisors and
+sessions are not restarted or taken over to populate counts.
+
+Nonblocking notices use a Design 06-inspired green, with a darker light-mode
+variant; blocked and failed states are red. Words and symbols distinguish attention from active work or
+successful outcomes. Generic Copilot session names and short IDs no longer lead
+outline rows: shared-surface titles and state lead instead, while exact session
+identity remains in details.
+
+Agent icons are drawn from the bundled **Nerd Fonts Symbols 3.5.1** font and its
+pinned glyph-name catalog. No system font installation or uploaded images are
+required. The catalog offers **10,994 drawable names**; the intentionally empty
+`cod-blank` entry is excluded. Role favorites are presets, not the selection limit.
+Ordinary terminal tabs use `md-ghost`; browsers use `fa-edge` (U+F282).
+**Sidebar settings → Agent icon** chooses the fallback robot or Copilot glyph for
+sessions without an explicit selection.
+
+Working agent rows have a subtle pulsing green background; blocked rows have a
+steady subtle red background. Idle/unknown rows do not pulse or glow. Reduce
+Motion replaces the working pulse with a steady subtle tint. The glow stays on
+each agent's own row, not its descendants, and never intercepts input.
+Identity colors do not change this treatment. Icons have no wand decoration;
+choosing an icon or role preset does not imply orchestration ownership.
+State remains explicit in row text and accessibility labels. Coordinator
+activity comes only from a fresh, unique, live Copilot observation on its exact
+workspace/surface; registration or child activity alone cannot start a pulse.
+**Sidebar settings → Terminal icon** offers Ghost and plain `>_` styles.
+Workspace summaries are action-only: questions/approval requests show **needs
+input**, and other explicit blockers show **blocked**. Quiet workspaces show no
+summary line. The top alert count uses the same rules; routine turn completions
+do not inflate it. Managed and observed representations on the same exact
+workspace/surface count once, and collapsed descendants still contribute.
+Last-reported managed blockers stay visible with freshness qualified in help.
+Agent totals, idle counts and repeated completeness warnings are not primary UI;
+source diagnostics remain in details. Glyphs have 2 pt insets in their existing
+24 pt slots.
+Standalone state keys retain pause/check/error symbols for blocked, finished and
+failed states. Workspace headers are text with chevrons;
 their trailing ellipsis menu offers Focus, Expand/Collapse and Details as separate
 actions. The header menu exposes the two view modes directly, plus settings.
 Settings and selected details have explicit Close controls; details are bounded
 and scroll independently rather than consuming the outline.
-Rows avoid repeated status prose or diagnostic walls; blocked/failed state, incomplete ancestry,
+Rows use concise state labels rather than diagnostic walls; blocked/failed state, incomplete ancestry,
 omitted active work and attention remain concise and visible. Selecting the state
 glyph opens one detail surface below the outline. Managed workers resolve verified
 model metadata only when both their controller-issued Copilot session UUID and
@@ -193,8 +236,9 @@ or ended observations, unconfirmed owners, surface mismatches and ambiguous
 coordinator sessions never participate. Context
 usage/window size is omitted because the current producer has no documented numeric source;
 cumulative API tokens and context tiers are not presented as context occupancy.
-Full authorized paths and stable IDs remain in deliberate inspection. Focus,
-expansion, dismissal and acknowledgement remain independent actions.
+Full authorized paths and stable IDs remain in deliberate inspection. Successful
+tab focus and opening details mark that scope's nonblocking notices as read.
+Expansion never marks anything read; no interaction approves or answers a request.
 
 For unmanaged terminals with exactly one observed session, its state and children
 are presented on the named terminal row instead of adding a duplicate provider/ID
@@ -303,10 +347,67 @@ test. Its AppKit windows are never shown; this is not a desktop capture, live
 CMUX-host visual proof, system VoiceOver verification or a pixel-baseline
 comparison. No transcripts, real workspace paths or desktop images are uploaded.
 
+## Choose your session icon: `maestro-icon`
+
+The bundled `maestro-icon` skill searches the local Nerd Fonts catalog and saves
+a glyph and/or identity color for **the invoking Maestro-managed session only**.
+Workers use their injected identity/token; coordinators use their own retained
+registration credentials. The command checks the caller's exact workspace and
+surface and accepts no other-session target. It does not rename, focus, register,
+recover, archive, approve, stop, or grant tools to any agent.
+
+```sh
+MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/cmux-maestro-orchestrator"
+"$MAESTRO" icons --search ghost
+"$MAESTRO" icons --search bug --limit 20 --offset 0
+"$MAESTRO" icon \
+  --actor-id "$CMUX_MAESTRO_WORKER_ID" \
+  --token "$CMUX_MAESTRO_CONTROL_TOKEN" \
+  --icon nf-md-bug_check --color teal
+```
+
+The [cheat sheet](https://www.nerdfonts.com/cheat-sheet) is a visual reference.
+`nf-` prefixes and preset names are accepted and resolve to canonical glyph
+names. Removed, empty, or unsupported glyphs are rejected without changing the
+previous selection. Searches are paged and capped at 100 results. The palette
+is `theme`, `green`, `teal`, `blue`, `purple`, `pink`, `red`, and `gray`; no orange.
+Omitting glyph or color preserves that part of the selection.
+
+All new registrations and workers default to `md-robot`.
+`register`/`spawn` accept optional `--icon` and `--color` startup choices.
+Saved choices survive follow-ups and are cosmetic: they never refresh execution
+or Git timestamps. A bounded, private `observer/icons.json` projection matches
+node/run/workspace/surface identity and survives older supervisors republishing
+`current.json` without cosmetic fields. The sidebar remains read-only over its
+existing observer-directory grant.
+
+The glyph font and catalog are pinned to upstream commit
+`b894ea7803af6aade63d60a4381e006098ec9c4d`; their hashes, upstream license and
+glyph-source notices live under `Resources/NerdFonts/`. Tests check the whole
+selectable catalog against actual font outlines. Missing resources or unknown
+stored glyphs show explicit unavailable indicators rather than font fallback.
+
+Refresh Copilot integration through the stable app's existing explicit consent
+flow to install the new skill, controller and catalog. Cached CLI plugins are not
+rewritten or restarted automatically. Standalone, unregistered sessions are not
+yet supported by this skill.
+
 ## Completed work history
 
-The sidebar's **gear** also opens native history settings, shared by **Hierarchy** and
-**Taskboard**. Finished, failed and cancelled child outcomes are retained for
+The sidebar's **ellipsis menu → Sidebar settings** opens history controls shared by
+**Hierarchy** and **Taskboard**. The default active outline hides finished/cancelled
+children and confirmed ended processes, including their otherwise redundant
+surface rows. Managed workers leave when a terminal outcome is known; active
+descendants, blockers, unknown state and unread errors keep necessary context.
+This only filters the sidebar: terminals, sessions and controller ownership are
+never closed, stopped or archived.
+
+**Show ended agents** reveals observations still retained by history.
+Failed rows remain until explicitly dismissed with their **×** control; focusing
+or inspecting them only marks nonblocking notices read. Questions, permissions,
+uncertain attention and live descendants protect rows from dismissal. Legacy
+automatic "viewed failure" markers no longer hide rows.
+Finished and cancelled child outcomes are retained for
 **15 seconds** by default; choose **1 minute**, **5 minutes**, **1 hour**, or
 **Never**. Retention starts at the accepted terminal event's RFC 3339 timestamp,
 not the poll, first display, or application launch. Missing, malformed, or
@@ -471,6 +572,18 @@ Outstanding attention protects rows from history retention and dismissal.
 Acknowledging an error/abort then allows ordinary history retention to apply;
 required parent context and current blocking descendants stay visible. No timer
 auto-acknowledges anything. History and acknowledgement resets are independent.
+Nonblocking notices are marked read when their tab is successfully focused or
+their details are opened, without a separate acknowledgement button. A confirmed
+host focus transition also marks that tab read; initial mount, passive polling,
+hover, expansion and failed/cancelled navigation do not. Sidebar focus captures
+the notices present at the click and revalidates them after host acceptance, so
+later notices and changed blockers are not cleared by a stale click.
+The menu retains **Mark all nonblocking notices as read** as an explicit fallback.
+Explicit child dismissals are keyed by exact session/child/terminal-event identity;
+managed failure dismissals use node/generation/phase. These history fields share
+the existing 2,048-entry / 1 MiB limit, survive reloads, and never hide a new
+generation or completion event. **Restore dismissed history** clears these read
+dismissals. Marking a notice read never dismisses its failed row.
 The reader also protects current-cycle outcome owners from terminal-leaf
 retirement. Local acknowledgement changes presentation, not the provider's
 ingestion state; a verified new primary turn or fresh owner activity establishes
@@ -591,6 +704,12 @@ Telemetry and the remaining backlog are not claimed by this feature.
   normal polling cadence. Torn or malformed
   prefixes cannot become fabricated complete evidence. A failed observation
   cannot pin every later session indefinitely.
+- Oversized `session.binary_asset` events retain a bounded, validated outer
+  envelope while their opaque `data` object is discarded incrementally. Uploaded
+  screenshots therefore cannot permanently invalidate later working/idle state.
+  Root identity, type, parent-event metadata, duplicate-key rejection, nesting
+  bounds and complete-record boundaries still apply. Other oversized events and
+  malformed envelopes remain fail-closed; the 1 MiB retained-line limit is not raised.
 - A binding rerouted during a read is deliberately omitted, **not** returned
   with its superseded surface/session identity as an ambiguous row. Other
   verified granted sessions remain visible; the snapshot reports
