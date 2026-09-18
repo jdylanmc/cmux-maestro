@@ -5,9 +5,11 @@ import argparse
 import codecs
 import datetime
 import fcntl
+import functools
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import selectors
@@ -33,6 +35,11 @@ MAX_POLICY_RULES = 16
 MAX_REPORT_MESSAGE = 8_192
 MAX_DISPLAY_METADATA = 120
 GIT_EVIDENCE_STATUSES = {"verified", "unavailable"}
+MAX_GIT_COUNT = 1_000_000_000
+GIT_CHANGE_FIELDS = {"files", "insertions", "deletions", "untrackedFiles", "binaryFiles"}
+NERD_FONTS_VERSION = "3.5.1"
+GLYPH_CATALOG_SHA256 = "d2fa6615a38eb527462cb71ff17aa44b1d6453d437ed263ab8d5b458393669e8"
+ICON_COLORS = ("theme", "green", "teal", "blue", "purple", "pink", "red", "gray")
 STALE_SECONDS = 600
 HEARTBEAT_SECONDS = 15
 STARTUP_SECONDS = 8
@@ -58,6 +65,73 @@ REPORT_KEYS = {
 
 class OrchestrationError(Exception):
     pass
+
+
+@functools.lru_cache(maxsize=1)
+def glyph_catalog():
+    directory = Path(__file__).resolve().parent / "NerdFonts"
+    if not directory.is_dir():
+        directory = Path(__file__).resolve().parents[1] / "Resources" / "NerdFonts"
+    try:
+        with (directory / "glyphnames.json").open("rb") as stream:
+            data = stream.read(2_097_153)
+        if len(data) > 2_097_152 or hashlib.sha256(data).hexdigest() != GLYPH_CATALOG_SHA256:
+            raise OrchestrationError("The pinned Nerd Fonts catalog is invalid; refresh Maestro integration.")
+        raw = json.loads(data)
+        if raw.pop("METADATA")["version"] != NERD_FONTS_VERSION:
+            raise OrchestrationError("The Nerd Fonts catalog version does not match this controller.")
+        raw.pop("cod-blank", None)
+        with (directory / "presets.json").open("rb") as stream:
+            preset_data = stream.read(32_769)
+        if len(preset_data) > 32_768:
+            raise OrchestrationError("The icon preset catalog exceeds its size limit.")
+        presets = json.loads(preset_data)
+        if not isinstance(presets, list) or len(presets) > 64:
+            raise OrchestrationError("The icon preset catalog is invalid.")
+        seen = set()
+        for preset in presets:
+            identifier = preset["id"]
+            if (
+                not isinstance(identifier, str) or not re.fullmatch(r"[a-z0-9_-]{1,128}", identifier)
+                or identifier in seen or preset["glyph"] not in raw
+                or preset["color"] not in ICON_COLORS
+            ):
+                raise OrchestrationError("The icon preset catalog is invalid.")
+            seen.add(identifier)
+        return raw, presets
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise OrchestrationError("Nerd Fonts resources are unavailable; refresh Maestro integration.") from error
+
+
+def resolve_icon(value):
+    if not isinstance(value, str) or len(value) > 128:
+        raise OrchestrationError("Choose a Nerd Font glyph name from the catalog.")
+    name = value.lower()
+    if name.startswith("nf-"):
+        name = name[3:]
+    glyphs, presets = glyph_catalog()
+    aliases = {item["id"]: item["glyph"] for item in presets}
+    name = aliases.get(name, name)
+    if name not in glyphs:
+        raise OrchestrationError("Choose a drawable glyph from bundled Nerd Fonts 3.5.1; use icons --search.")
+    return name
+
+
+def command_icons(args):
+    glyphs, presets = glyph_catalog()
+    query = (args.search or "").strip().lower()
+    if len(query) > 128 or args.offset < 0 or not 1 <= args.limit <= 100:
+        raise OrchestrationError("Use a search of at most 128 characters, a nonnegative offset, and limit 1...100.")
+    if query.startswith("nf-"):
+        query = query[3:]
+    aliases = {item["glyph"] for item in presets if query in item["id"] or query in item["name"].lower()}
+    names = sorted(name for name, glyph in glyphs.items()
+                   if query in name or query == glyph["code"].lower() or name in aliases)
+    return {
+        "fontVersion": NERD_FONTS_VERSION, "total": len(names), "offset": args.offset,
+        "icons": [{"id": name, **glyphs[name]} for name in names[args.offset:args.offset + args.limit]],
+        "presets": presets, "colors": list(ICON_COLORS),
+    }
 
 
 def now_date():
@@ -110,6 +184,7 @@ def git_display_metadata(cwd):
     unavailable = {
         "worktreeLabel": None, "branchLabel": None,
         "gitEvidenceStatus": "unavailable", "gitEvidenceAt": captured_at,
+        "gitChangesStatus": "unavailable", "gitChanges": None, "gitChangesAt": captured_at,
     }
     try:
         git = trusted_executable("CMUX_MAESTRO_GIT", "/usr/bin/git")
@@ -129,18 +204,11 @@ def git_display_metadata(cwd):
         return value
 
     def query(*arguments):
-        try:
-            result = subprocess.run(
-                [git, "-C", str(cwd), *arguments],
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, timeout=1, check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return None
-        if result.returncode != 0 or len(result.stdout) > 4_096:
+        output = git_change_query(git, cwd, *arguments)
+        if output is None or len(output) > 4_096:
             return None
         try:
-            value = result.stdout.decode("utf-8", errors="strict").strip()
+            value = output.decode("utf-8", errors="strict").strip()
         except UnicodeDecodeError:
             return None
         if not value:
@@ -156,18 +224,125 @@ def git_display_metadata(cwd):
     if worktree is None:
         return unavailable
     branch = label(query("symbolic-ref", "--quiet", "--short", "HEAD"))
+    changes = git_change_counts(git, Path(root))
     return {
         "worktreeLabel": worktree,
         "branchLabel": branch,
         "gitEvidenceStatus": "verified",
         "gitEvidenceAt": captured_at,
+        "gitChangesStatus": "verified" if changes is not None else "unavailable",
+        "gitChanges": changes,
+        "gitChangesAt": captured_at,
     }
+
+
+def git_change_query(git, cwd, *arguments):
+    """Read only bounded machine output; never run diff drivers or file watchers."""
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update({"GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"})
+    try:
+        with subprocess.Popen(
+            [git, "--no-optional-locks", "-c", "core.fsmonitor=false",
+             "-c", "core.hooksPath=/dev/null", "-C", str(cwd), *arguments],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env=environment,
+        ) as process:
+            try:
+                deadline = time.monotonic() + 1
+                output = bytearray()
+                with selectors.DefaultSelector() as selector:
+                    selector.register(process.stdout, selectors.EVENT_READ)
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0 or not selector.select(remaining):
+                            return None
+                        chunk = os.read(process.stdout.fileno(), 65_536)
+                        if not chunk:
+                            break
+                        output.extend(chunk)
+                        if len(output) > MAX_BYTES:
+                            return None
+                if process.wait(timeout=max(0.001, deadline - time.monotonic())) != 0:
+                    return None
+                return bytes(output)
+            finally:
+                if process.poll() is None:
+                    # Only our short-lived Git probe, never an agent or terminal.
+                    process.kill()
+                process.wait()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def parse_git_change_counts(numstat, untracked):
+    if (numstat and not numstat.endswith(b"\0")) or (untracked and not untracked.endswith(b"\0")):
+        return None
+    records = numstat.split(b"\0")[:-1]
+    paths = set()
+    totals = dict.fromkeys(GIT_CHANGE_FIELDS, 0)
+    index = 0
+    while index < len(records):
+        fields = records[index].split(b"\t", 2)
+        index += 1
+        if len(fields) != 3:
+            return None
+        added, deleted, path = fields
+        if not path:
+            if index + 1 >= len(records) or not records[index] or not records[index + 1]:
+                return None
+            path = records[index + 1]
+            index += 2
+        if path in paths:
+            return None
+        paths.add(path)
+        if added == deleted == b"-":
+            totals["binaryFiles"] += 1
+        elif added.isdigit() and deleted.isdigit() and len(added) <= 10 and len(deleted) <= 10:
+            totals["insertions"] += int(added)
+            totals["deletions"] += int(deleted)
+        else:
+            return None
+    other_paths = untracked.split(b"\0")[:-1]
+    if any(not path for path in other_paths) or len(set(other_paths)) != len(other_paths):
+        return None
+    totals["untrackedFiles"] = len(set(other_paths) - paths)
+    totals["files"] = len(paths | set(other_paths))
+    return totals if valid_git_changes(totals) else None
+
+
+def valid_git_changes(changes):
+    return (
+        isinstance(changes, dict) and set(changes) == GIT_CHANGE_FIELDS
+        and all(type(value) is int and 0 <= value <= MAX_GIT_COUNT for value in changes.values())
+        and changes["untrackedFiles"] + changes["binaryFiles"] <= changes["files"]
+        and (changes["files"] > changes["untrackedFiles"] + changes["binaryFiles"]
+             or changes["insertions"] == changes["deletions"] == 0)
+    )
+
+
+def git_change_counts(git, cwd):
+    head = git_change_query(git, cwd, "rev-parse", "--verify", "HEAD")
+    if head is None or not head.strip():
+        return None
+    if git_change_query(git, cwd, "ls-files", "--unmerged", "-z") != b"":
+        return None
+    numstat = git_change_query(
+        git, cwd, "diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all",
+        "--find-renames", "--numstat", "-z", "HEAD", "--",
+    )
+    untracked = git_change_query(git, cwd, "ls-files", "--others", "--exclude-standard", "-z")
+    if numstat is None or untracked is None:
+        return None
+    if git_change_query(git, cwd, "rev-parse", "--verify", "HEAD") != head:
+        return None
+    return parse_git_change_counts(numstat, untracked)
 
 
 def absent_git_metadata():
     return {
         "worktreeLabel": None, "branchLabel": None,
         "gitEvidenceStatus": None, "gitEvidenceAt": None,
+        "gitChangesStatus": None, "gitChanges": None, "gitChangesAt": None,
     }
 
 
@@ -203,7 +378,8 @@ def apply_git_evidence(state, evidence):
             continue
         metadata = captured["metadata"]
         for field in (
-            "worktreeLabel", "branchLabel", "gitEvidenceStatus", "gitEvidenceAt"
+            "worktreeLabel", "branchLabel", "gitEvidenceStatus", "gitEvidenceAt",
+            "gitChangesStatus", "gitChanges", "gitChangesAt",
         ):
             node[field] = metadata[field]
 
@@ -371,6 +547,13 @@ def validate_state(state):
         role = node.get("role")
         if role not in {"coordinator", "worker"}:
             raise OrchestrationError("Stored node role is invalid.")
+        if node.get("iconId") is not None:
+            if not isinstance(node["iconId"], str) or not re.fullmatch(r"[a-z0-9_-]{1,128}", node["iconId"]):
+                raise OrchestrationError("Stored session glyph name is invalid.")
+        if node.get("iconColor") is not None and (
+            not isinstance(node["iconColor"], str) or node["iconColor"] not in ICON_COLORS
+        ):
+            raise OrchestrationError("Stored session icon color is not in the palette.")
         if (role == "coordinator") != (parent is None):
             raise OrchestrationError("Stored coordinator ancestry is invalid.")
         if role == "coordinator":
@@ -383,6 +566,17 @@ def validate_state(state):
                 bounded_text(value, f"stored {field}", MAX_DISPLAY_METADATA)
         evidence_status = node.get("gitEvidenceStatus")
         evidence_at = node.get("gitEvidenceAt")
+        changes_status = node.get("gitChangesStatus")
+        changes = node.get("gitChanges")
+        changes_at = node.get("gitChangesAt")
+        if changes_status == "verified":
+            if not valid_git_changes(changes) or changes_at is None:
+                raise OrchestrationError("Stored Git change counts are invalid.")
+        elif changes_status not in {None, "unavailable"} or changes is not None:
+            raise OrchestrationError("Unavailable Git changes cannot retain counts.")
+        if changes_at is not None:
+            if changes_status is None or parse_date(changes_at, "stored Git counts time") > now_date() + datetime.timedelta(minutes=5):
+                raise OrchestrationError("Stored Git counts timestamp is invalid.")
         if evidence_status is None:
             if evidence_at is not None or node.get("worktreeLabel") is not None or node.get("branchLabel") is not None:
                 raise OrchestrationError("Stored Git evidence is incomplete.")
@@ -630,6 +824,11 @@ class Store:
             node.setdefault("branchLabel", None)
             node.setdefault("gitEvidenceStatus", None)
             node.setdefault("gitEvidenceAt", None)
+            node.setdefault("gitChangesStatus", None)
+            node.setdefault("gitChanges", None)
+            node.setdefault("gitChangesAt", None)
+            node.setdefault("iconId", None)
+            node.setdefault("iconColor", None)
             if legacy_git_evidence:
                 node["worktreeLabel"] = None
                 node["branchLabel"] = None
@@ -645,6 +844,17 @@ class Store:
             raise OrchestrationError("Control state exceeds its safe limit.")
         self._atomic(self.control_fd, "state.json", encoded)
         self._atomic(self.observer_fd, "current.json", self._projection(state))
+        icons = [{
+            "nodeId": node["id"], "runId": node["runId"],
+            "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
+            "iconId": node.get("iconId"), "iconColor": node.get("iconColor"),
+        } for node in state["nodes"].values() if node.get("surfaceId") is not None
+            and (node.get("iconId") is not None or node.get("iconColor") is not None)]
+        # Older supervisors may republish current.json without cosmetic fields.
+        # A separate bounded projection preserves selections without hot-patching them.
+        self._atomic(self.observer_fd, "icons.json", json.dumps(
+            {"version": 1, "icons": icons}, sort_keys=True, separators=(",", ":")
+        ).encode() + b"\n")
 
     def _projection(self, state):
         nodes = sorted(
@@ -659,6 +869,8 @@ class Store:
             "runId": item["runId"],
             "parentId": item["parentId"],
             "role": item["role"],
+            "iconId": item.get("iconId"),
+            "iconColor": item.get("iconColor"),
             "label": item["label"],
             "workspaceId": item["workspaceId"],
             "surfaceId": item["surfaceId"],
@@ -670,6 +882,9 @@ class Store:
             "branchLabel": item.get("branchLabel"),
             "gitEvidenceStatus": item.get("gitEvidenceStatus"),
             "gitEvidenceAt": item.get("gitEvidenceAt"),
+            "gitChangesStatus": item.get("gitChangesStatus"),
+            "gitChanges": item.get("gitChanges"),
+            "gitChangesAt": item.get("gitChangesAt"),
             "createdAt": item["createdAt"],
             "updatedAt": item["updatedAt"],
         } for item in nodes[:MAX_NODES]]
@@ -912,17 +1127,22 @@ def process_matches(node):
     return bool(process and process_start(process["pid"]) == process["start"])
 
 
-def new_root(workspace, surface, pane, label, cwd=None, metadata=None):
+def new_root(workspace, surface, pane, label, cwd=None, metadata=None, icon_id=None, icon_color=None):
     identifier, run_id, token = str(uuid.uuid4()), str(uuid.uuid4()), secrets.token_hex(32)
     timestamp = now()
     metadata = metadata or absent_git_metadata()
     node = {
         "id": identifier, "runId": run_id, "parentId": None, "role": "coordinator",
+        "iconId": resolve_icon(icon_id or "maestro"),
+        "iconColor": icon_color,
         "label": label, "workspaceId": workspace, "surfaceId": surface, "paneId": pane,
         "copilotSessionId": None, "workingDirectory": str(cwd) if cwd is not None else None,
         "worktreeLabel": metadata["worktreeLabel"], "branchLabel": metadata["branchLabel"],
         "gitEvidenceStatus": metadata["gitEvidenceStatus"],
         "gitEvidenceAt": metadata["gitEvidenceAt"],
+        "gitChangesStatus": metadata["gitChangesStatus"],
+        "gitChanges": metadata["gitChanges"],
+        "gitChangesAt": metadata["gitChangesAt"],
         "generation": 0,
         "phase": "registered", "availability": "active", "createdAt": timestamp,
         "updatedAt": timestamp, "lastControlAt": timestamp, "tokenHash": token_hash(token),
@@ -947,7 +1167,7 @@ def command_register(args, root, cmux):
             raise OrchestrationError("Orchestration node limit reached.")
         if any(node.get("surfaceId") == surface for node in state["nodes"].values()):
             raise OrchestrationError("This CMUX surface has a live registered owner.")
-        node, token = new_root(workspace, surface, pane, label, cwd, metadata)
+        node, token = new_root(workspace, surface, pane, label, cwd, metadata, args.icon, args.color)
         state["nodes"][node["id"]] = node
         return {
             "coordinatorId": node["id"], "runId": node["runId"], "controlToken": token,
@@ -1059,11 +1279,16 @@ def command_spawn(args, root, cmux):
         state["nodes"][identifier] = {
             "id": identifier, "runId": current["runId"], "parentId": current["id"],
             "role": "worker", "label": label, "workspaceId": current["workspaceId"],
+            "iconId": resolve_icon(args.icon or "maestro"),
+            "iconColor": args.color,
             "surfaceId": None, "paneId": pane, "copilotSessionId": session_id,
             "workingDirectory": str(cwd), "generation": 1, "phase": "launching",
             "worktreeLabel": metadata["worktreeLabel"], "branchLabel": metadata["branchLabel"],
             "gitEvidenceStatus": metadata["gitEvidenceStatus"],
             "gitEvidenceAt": metadata["gitEvidenceAt"],
+            "gitChangesStatus": metadata["gitChangesStatus"],
+            "gitChanges": metadata["gitChanges"],
+            "gitChangesAt": metadata["gitChangesAt"],
             "availability": "busy", "createdAt": timestamp, "updatedAt": timestamp,
             "lastControlAt": timestamp, "tokenHash": token_hash(worker_token),
             "task": task, "result": None, "pendingReport": None, "supervisor": None,
@@ -1694,6 +1919,34 @@ def command_follow_up(args, root, cmux):
     return mutate(root, queue)
 
 
+def command_icon(args, root, cmux):
+    if args.icon is None and args.color is None:
+        raise OrchestrationError("Choose an icon, a color, or both.")
+    icon = resolve_icon(args.icon) if args.icon is not None else None
+    snapshot = read_state(root)
+    actor = authorize(snapshot, args.actor_id, args.token)
+    require_current_surface(actor["workspaceId"], actor["surfaceId"])
+    cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
+
+    def select_icon(state):
+        current = authorize(state, args.actor_id, args.token)
+        if (current["runId"], current["workspaceId"], current["surfaceId"]) != (
+            actor["runId"], actor["workspaceId"], actor["surfaceId"]
+        ):
+            raise OrchestrationError("Session ownership changed during icon selection.")
+        if args.color is not None and args.color not in ICON_COLORS:
+            raise OrchestrationError("Choose a color from the palette.")
+        if icon is not None:
+            current["iconId"] = icon
+        if args.color is not None:
+            current["iconColor"] = args.color
+        # Cosmetic edits must not refresh execution state or Git evidence.
+        return {"workerId": current["id"], "iconId": current.get("iconId"),
+                "iconColor": current.get("iconColor")}
+
+    return mutate(root, select_icon)
+
+
 def command_status(args, root, cmux):
     snapshot = read_state(root)
     actor = authorize(snapshot, args.actor_id, args.token)
@@ -1730,6 +1983,8 @@ def command_status(args, root, cmux):
         apply_git_evidence(state, git_evidence)
         return {"runId": current_actor["runId"], "workers": [{
             "workerId": node["id"], "parentId": node["parentId"], "name": node["label"],
+            "iconId": node.get("iconId"),
+            "iconColor": node.get("iconColor"),
             "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
             "sessionId": node["copilotSessionId"], "generation": node["generation"],
             "phase": node["phase"], "availability": node["availability"],
@@ -1876,7 +2131,7 @@ def command_recover(args, root, cmux):
         for node in list(state["nodes"].values()):
             if node["runId"] == current["runId"]:
                 del state["nodes"][node["id"]]
-        node, token = new_root(workspace, surface, pane, label, cwd, metadata)
+        node, token = new_root(workspace, surface, pane, label, cwd, metadata, args.icon, args.color)
         state["nodes"][node["id"]] = node
         return {
             "coordinatorId": node["id"], "runId": node["runId"],
@@ -1889,12 +2144,18 @@ def command_recover(args, root, cmux):
 def parser():
     result = argparse.ArgumentParser(prog="cmux-maestro-orchestrator")
     commands = result.add_subparsers(dest="command", required=True)
+    icons = commands.add_parser("icons", help="Search pinned Nerd Font glyphs; no registration required")
+    icons.add_argument("--search")
+    icons.add_argument("--offset", type=int, default=0)
+    icons.add_argument("--limit", type=int, default=20)
     for name in ("register", "recover"):
         command = commands.add_parser(name)
         command.add_argument("--workspace", required=True)
         command.add_argument("--surface", required=True)
         command.add_argument("--name", default="Coordinator")
         command.add_argument("--cwd")
+        command.add_argument("--icon")
+        command.add_argument("--color", choices=ICON_COLORS)
     spawn = commands.add_parser("spawn")
     spawn.add_argument("--actor-id", required=True)
     spawn.add_argument("--token", required=True)
@@ -1903,6 +2164,13 @@ def parser():
     spawn.add_argument("--cwd", required=True)
     spawn.add_argument("--allow-tool", action="append", default=[])
     spawn.add_argument("--deny-tool", action="append", default=[])
+    spawn.add_argument("--icon")
+    spawn.add_argument("--color", choices=ICON_COLORS)
+    icon = commands.add_parser("icon", help="Choose an icon for the authenticated caller's own session")
+    icon.add_argument("--actor-id", required=True)
+    icon.add_argument("--token", required=True)
+    icon.add_argument("--icon")
+    icon.add_argument("--color", choices=ICON_COLORS)
     runtime = commands.add_parser("runtime")
     runtime.add_argument("--worker-id", required=True)
     runtime.add_argument("--token", required=True)
@@ -1928,6 +2196,9 @@ def parser():
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
+        if args.command == "icons":
+            print(json.dumps({"ok": True, **command_icons(args)}, sort_keys=True))
+            return 0
         root = default_root()
         cmux = None if args.command in {"runtime", "report"} else Cmux()
         if args.command == "register":
@@ -1946,6 +2217,8 @@ def main(argv=None):
             output = command_focus(args, root, cmux)
         elif args.command == "archive":
             output = command_archive(args, root, cmux)
+        elif args.command == "icon":
+            output = command_icon(args, root, cmux)
         else:
             output = command_status(args, root, cmux)
         print(json.dumps({"ok": True, **output}, sort_keys=True))

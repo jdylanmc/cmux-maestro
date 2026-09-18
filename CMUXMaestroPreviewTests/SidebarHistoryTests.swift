@@ -8,7 +8,7 @@ struct SidebarHistoryTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let eventID = UUID(uuidString: "30000000-0000-0000-0000-000000000003")!
 
-    @Test(arguments: [CopilotWorkState.completed, .failed, .cancelled])
+    @Test(arguments: [CopilotWorkState.completed, .cancelled])
     func preciseExpiryBoundaryAndNever(_ state: CopilotWorkState) throws {
         let child = child("ended", state: state, age: 15)
         let before = project([child], at: now.addingTimeInterval(-0.001))
@@ -22,6 +22,15 @@ struct SidebarHistoryTests {
         #expect(never.retainedHistoryCount == 1)
         #expect(never.nextHistoryExpiry == nil)
         #expect(never.dismissibleOutcomes.count == 1)
+    }
+
+    @Test func failuresRemainUntilExplicitlyDismissedRatherThanAgingOut() {
+        let failed = child("failed", state: .failed, age: 86_400)
+        let retained = project([failed])
+        #expect(retained.retainedHistoryCount == 1)
+        #expect(retained.nextHistoryExpiry == nil)
+        let dismissed = project([failed], history: .init(dismissed: retained.dismissibleOutcomes))
+        #expect(dismissed.sessions.first?.nodes.isEmpty == true)
     }
 
     @Test(arguments: SidebarHistoryRetention.allCases)
@@ -204,7 +213,8 @@ struct SidebarHistoryTests {
         let presentation = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarPresentation.swift"), encoding: .utf8)
         #expect(view.contains("model: model, layout: preferences.layout,"))
         #expect(view.contains("dismiss: dismiss, acknowledge: acknowledge"))
-        #expect(view.contains("tree: model.copilot.tree, hierarchy: model.hierarchy"))
+        #expect(view.contains("tree: visibleWork.tree, hierarchy: model.hierarchy"))
+        #expect(view.contains("visibleWork: visibleWork,"))
         #expect(view.components(separatedBy: "DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)").count == 2)
         #expect(view.components(separatedBy: "CopilotWorkRow(").count == 3)
         #expect(view.contains(".popover(isPresented: $showingHistory)"))

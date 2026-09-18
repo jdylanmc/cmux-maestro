@@ -6,6 +6,57 @@ import Testing
 struct SidebarNavigationTests {
     private let fixtures = SidebarTreeFixtures()
 
+    @Test func seenCallbackRunsOnlyAfterSuccessfulCurrentNavigation() async {
+        let recorder = SidebarHostRecorder()
+        let model = SidebarConnectionModel()
+        model.update(context: context(recorder: recorder))
+        let target = SidebarNavigationTarget.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA)
+        var seen = 0
+        model.navigation.select(target) { seen += 1 }
+        await sidebarEventually { recorder.actions.count == 1 }
+        #expect(seen == 0)
+        recorder.reply(0, .rejected("not selected"))
+        await sidebarEventually { model.navigation.status == .rejected }
+        #expect(seen == 0)
+        model.navigation.select(target) { seen += 1 }
+        await sidebarEventually { recorder.actions.count == 2 }
+        recorder.reply(1, .accepted)
+        await sidebarEventually { model.navigation.status == .selected }
+        #expect(seen == 1)
+        model.navigation.select(target) { seen += 1 }
+        await sidebarEventually { recorder.actions.count == 3 }
+        model.setVisible(false)
+        recorder.reply(2, .accepted)
+        await Task.yield()
+        #expect(seen == 1)
+        model.navigation.select(.surface(workspaceID: fixtures.workspaceA, surfaceID: UUID())) { seen += 1 }
+        #expect(seen == 1)
+    }
+
+    @Test func focusInteractionsRequireARealTransitionNotInitialMountOrPolling() {
+        func hierarchy(focused: UUID) -> HierarchySnapshot {
+            .init(
+                sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+                workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: false,
+                workspaces: [.init(
+                    id: fixtures.workspaceA, title: .available("Workspace"), detail: .available(nil),
+                    isSelected: .available(true), isPinned: .available(false), unreadCount: .available(0),
+                    rootPath: .unavailable, projectRootPath: .unavailable,
+                    surfaces: .available([fixtures.surfaceA, fixtures.surfaceB].map {
+                        .init(id: $0, title: "Tab", kind: .terminal, isFocused: $0 == focused,
+                              isPinned: false, unreadCount: 0, workingDirectory: .unavailable)
+                    })
+                )], windowID: fixtures.windowID
+            )
+        }
+        let first = hierarchy(focused: fixtures.surfaceA)
+        let second = hierarchy(focused: fixtures.surfaceB)
+        #expect(SidebarPresentation.focusInteraction(from: .empty, to: first) == nil)
+        #expect(SidebarPresentation.focusInteraction(from: first, to: first) == nil)
+        #expect(SidebarPresentation.focusInteraction(from: first, to: second)
+                == .surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceB))
+    }
+
     @Test
     func navigationUsesTypedHostAndCurrentWorkspaceAfterSurfaceMove() async {
         let recorder = SidebarHostRecorder()

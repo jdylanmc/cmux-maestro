@@ -4,6 +4,7 @@ import json
 import os
 import re
 import runpy
+import shlex
 import signal
 import subprocess
 import sys
@@ -483,6 +484,179 @@ class OrchestratorTests(unittest.TestCase):
     def tearDown(self):
         self.h.close()
 
+    def test_icon_catalog_is_pinned_searchable_bounded_and_read_only(self):
+        env = self.h.env.copy()
+        unused = self.h.path / "catalog-must-not-create-state"
+        env["CMUX_MAESTRO_ROOT"] = str(unused)
+        env.pop("CMUX_WORKSPACE_ID")
+        env.pop("CMUX_SURFACE_ID")
+        catalog = self.h.run("icons", "--search", "nf-fa-edge", env=env)
+        self.assertEqual(catalog["fontVersion"], "3.5.1")
+        self.assertEqual(catalog["icons"], [{"id": "fa-edge", "char": "\uf282", "code": "f282"}])
+        self.assertNotIn("orange", catalog["colors"])
+        self.assertFalse(unused.exists())
+        first = self.h.run("icons", "--limit", "3")
+        second = self.h.run("icons", "--limit", "3", "--offset", "3")
+        self.assertEqual(first["total"], 10994)
+        self.assertEqual(len(first["icons"]), 3)
+        self.assertFalse({x["id"] for x in first["icons"]} & {x["id"] for x in second["icons"]})
+        self.assertNotEqual(self.h.run("icons", "--limit", "101", check=False)["returncode"], 0)
+
+    def test_icon_changes_only_owned_session_appearance_and_preserves_execution_evidence(self):
+        before = self.h.state()
+        self.assertEqual(before["nodes"][self.h.node]["iconId"], "md-robot")
+        result = self.h.run("icon", "--actor-id", self.h.node, "--token", self.h.token,
+                            "--icon", "nf-md-duck", "--color", "teal")
+        self.assertEqual(result["iconId"], "md-duck")
+        self.assertEqual(result["iconColor"], "teal")
+        after = self.h.state()
+        before["nodes"][self.h.node]["iconId"] = "md-duck"
+        before["nodes"][self.h.node]["iconColor"] = "teal"
+        self.assertEqual(after, before)
+        icons_path = self.h.root / "observer" / "icons.json"
+        icons = json.loads(icons_path.read_text())
+        self.assertEqual(icons["icons"][0]["nodeId"], self.h.node)
+        self.assertEqual(icons["icons"][0]["iconId"], "md-duck")
+        self.assertEqual(icons_path.stat().st_mode & 0o777, 0o600)
+        projection_path = self.h.root / "observer" / "current.json"
+        old_projection = json.loads(projection_path.read_text())
+        for node in old_projection["nodes"]:
+            node.pop("iconId", None)
+            node.pop("iconColor", None)
+        projection_path.write_text(json.dumps(old_projection))
+        self.assertEqual(json.loads(icons_path.read_text()), icons)
+        self.h.run("status", "--actor-id", self.h.node, "--token", self.h.token)
+        self.assertEqual(self.h.state()["nodes"][self.h.node]["iconId"], "md-duck")
+        color_only = self.h.run("icon", "--actor-id", self.h.node, "--token", self.h.token, "--color", "blue")
+        self.assertEqual(color_only["iconId"], "md-duck")
+        glyph_only = self.h.run("icon", "--actor-id", self.h.node, "--token", self.h.token, "--icon", "browser")
+        self.assertEqual(glyph_only["iconId"], "fa-edge")
+        self.assertEqual(glyph_only["iconColor"], "blue")
+
+    def test_icon_rejects_other_callers_invalid_tokens_targets_and_unknown_glyphs(self):
+        before = self.h.state()
+        bad_env = self.h.env.copy()
+        bad_env["CMUX_SURFACE_ID"] = str(uuid.uuid4())
+        denied = self.h.run("icon", "--actor-id", self.h.node, "--token", self.h.token,
+                            "--icon", "md-duck", check=False, env=bad_env)
+        self.assertNotEqual(denied["returncode"], 0)
+        for arguments in [
+            ["--icon", "nf-mdi-altimeter"],
+            ["--icon", "cod-blank"],
+            ["--icon", "../../private"],
+            ["--color", "orange"],
+            ["--icon", "md-duck", "--worker-id", self.h.node],
+            [],
+        ]:
+            result = self.h.run("icon", "--actor-id", self.h.node, "--token", self.h.token,
+                                *arguments, check=False)
+            self.assertNotEqual(result["returncode"], 0)
+        wrong_token = self.h.run("icon", "--actor-id", self.h.node, "--token", "wrong",
+                                "--icon", "md-duck", check=False)
+        self.assertNotEqual(wrong_token["returncode"], 0)
+        self.assertEqual(self.h.state(), before)
+
+    def test_worker_startup_icon_survives_follow_up_and_cannot_be_changed_with_parent_token(self):
+        worker = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Icon worker", "--cwd", str(REPO), "--task", "Complete the bounded task.",
+            "--icon", "canary", "--color", "purple"
+        )
+        identifier = worker["workerId"]
+        completed = self.h.wait_node(identifier, lambda node: node["phase"] == "reported-completed")
+        self.assertEqual(completed["iconId"], "md-bird")
+        self.assertEqual(completed["iconColor"], "purple")
+        denied = self.h.run("icon", "--actor-id", identifier, "--token", self.h.token,
+                            "--icon", "md-duck", check=False)
+        self.assertNotEqual(denied["returncode"], 0)
+        runtime = shlex.split(self.h.cmux_data()["buffers"][worker["surfaceId"]])
+        worker_token = runtime[runtime.index("--token") + 1]
+        worker_env = self.h.env.copy()
+        worker_env["CMUX_SURFACE_ID"] = worker["surfaceId"]
+        chosen = self.h.run("icon", "--actor-id", identifier, "--token", worker_token,
+                            "--icon", "md-duck", "--color", "teal", env=worker_env)
+        self.assertEqual(chosen["iconId"], "md-duck")
+        self.h.run("follow-up", "--actor-id", self.h.node, "--token", self.h.token,
+                   "--worker-id", identifier, "--task", "Complete one follow-up.")
+        followed = self.h.wait_node(identifier, lambda node: node["generation"] == 2 and node["phase"] == "reported-completed")
+        self.assertEqual(followed["iconId"], "md-duck")
+        self.assertEqual(followed["iconColor"], "teal")
+
+    def test_git_counts_cover_net_head_changes_untracked_binary_and_refresh(self):
+        worktree = self.h.path / "changes"
+        worktree.mkdir()
+
+        def git(*arguments):
+            return subprocess.run(
+                ["/usr/bin/git", "-C", str(worktree), *arguments],
+                check=True, capture_output=True,
+            )
+
+        git("init", "-q", "-b", "main")
+        git("config", "user.email", "test@example.com")
+        git("config", "user.name", "Test")
+        (worktree / "text").write_text("one\ntwo\n")
+        (worktree / "binary").write_bytes(b"\0old")
+        git("add", ".")
+        git("commit", "-qm", "initial")
+        (worktree / "text").write_text("one\nthree\nfour\n")
+        git("add", "text")
+        (worktree / "text").write_text("one\nthree\nfour\nfive\n")
+        (worktree / "binary").write_bytes(b"\0new")
+        (worktree / "untracked").write_text("not counted as added lines\n")
+        subdirectory = worktree / "subdirectory"
+        subdirectory.mkdir()
+        observed = self._register_with_cwd(
+            subdirectory, "00000000-0000-4000-8000-000000000090"
+        )
+        expected = {"files": 3, "insertions": 3, "deletions": 1,
+                    "untrackedFiles": 1, "binaryFiles": 1}
+        self.assertEqual(observed["gitChangesStatus"], "verified")
+        self.assertEqual(observed["gitChanges"], expected)
+        public = json.loads((self.h.root / "observer" / "current.json").read_text())
+        projected = next(node for node in public["nodes"] if node["id"] == observed["id"])
+        self.assertEqual(projected["gitChanges"], expected)
+        self.assertNotIn("untracked\"", json.dumps(projected))
+        git("add", ".")
+        git("commit", "-qm", "changes")
+        clean = CONTROLLER_API["git_display_metadata"](worktree)
+        self.assertEqual(clean["gitChanges"], dict.fromkeys(expected, 0))
+        git("mv", "text", "renamed")
+        renamed = CONTROLLER_API["git_display_metadata"](worktree)
+        self.assertEqual(renamed["gitChanges"]["files"], 1)
+        self.assertEqual(renamed["gitChanges"]["insertions"], 0)
+        self.assertEqual(renamed["gitChanges"]["deletions"], 0)
+
+    def test_git_count_parser_rejects_partial_invalid_and_excessive_evidence(self):
+        parse = CONTROLLER_API["parse_git_change_counts"]
+        for numstat, untracked in [
+            (b"1\t2\tpath", b""), (b"1\t2\tpath\0", b"partial"),
+            (b"-\t2\tpath\0", b""), (b"1\t2\t\0old\0", b""),
+            (b"1\t2\tpath\0" + b"1\t2\tpath\0", b""),
+            (b"1000000001\t0\tpath\0", b""), (b"bogus\0", b""),
+        ]:
+            self.assertIsNone(parse(numstat, untracked), (numstat, untracked))
+        self.assertEqual(
+            parse(b"1\t2\twith\ttab\nand-newline\0", b"other\npath\0"),
+            {"files": 2, "insertions": 1, "deletions": 2, "untrackedFiles": 1, "binaryFiles": 0},
+        )
+        for changes in [
+            {"files": True, "insertions": 0, "deletions": 0, "untrackedFiles": 0, "binaryFiles": 0},
+            {"files": 0, "insertions": 1, "deletions": 0, "untrackedFiles": 0, "binaryFiles": 0},
+        ]:
+            self.assertFalse(CONTROLLER_API["valid_git_changes"](changes))
+
+    def test_git_count_probe_bounds_output_and_time(self):
+        for name, source in {
+            "oversized": "#!/usr/bin/env python3\nimport sys\nsys.stdout.buffer.write(b'x' * 1100000)\n",
+            "timeout": "#!/usr/bin/env python3\nimport time\ntime.sleep(2)\n",
+            "failure": "#!/bin/sh\nexit 7\n",
+        }.items():
+            executable = self.h.path / name
+            executable.write_text(source)
+            executable.chmod(0o755)
+            self.assertIsNone(CONTROLLER_API["git_change_query"](str(executable), self.h.path, "diff"))
+
     def test_explicit_cwd_publishes_only_bounded_verified_git_labels(self):
         worktree = self.h.path / "display-worktree"
         worktree.mkdir()
@@ -507,6 +681,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(observed["branchLabel"], "feature/hierarchy")
         self.assertEqual(observed["gitEvidenceStatus"], "verified")
         self.assertIsNotNone(observed["gitEvidenceAt"])
+        self.assertEqual(observed["gitChangesStatus"], "unavailable")
+        self.assertIsNone(observed["gitChanges"])
         self.assertIsNone(observed["copilotSessionId"])
         self.assertNotIn("workingDirectory", observed)
         self.assertNotIn(str(worktree), json.dumps(observed))
@@ -741,6 +917,7 @@ class OrchestratorTests(unittest.TestCase):
             lambda node: node["phase"] == "reported-completed" and node["availability"] == "idle",
         )
         self.assertGreater(completed["supervisor"]["pid"], 0)
+        self.assertEqual(completed["iconId"], "md-robot")
         self.assertEqual(completed["result"], "bounded completed")
         first = self.h.calls()[0]["args"]
         self.assertIn("--session-id", first)

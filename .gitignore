@@ -4,6 +4,8 @@
 !.agents/skills/macos-build/SKILL.md
 !.agents/skills/cmux-maestro-orchestrate/
 !.agents/skills/cmux-maestro-orchestrate/SKILL.md
+!.agents/skills/maestro-icon/
+!.agents/skills/maestro-icon/SKILL.md
 .build/
 .skill-log/
 DerivedData/

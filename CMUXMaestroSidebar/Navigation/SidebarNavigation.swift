@@ -113,7 +113,7 @@ final class SidebarNavigation {
         return nil
     }
 
-    func select(_ target: SidebarNavigationTarget) {
+    func select(_ target: SidebarNavigationTarget, onSuccess: @escaping @MainActor () -> Void = {}) {
         generation &+= 1
         let token = generation
         task?.cancel()
@@ -148,6 +148,7 @@ final class SidebarNavigation {
             self.watchdog = nil
             self.activeTarget = nil
             self.task = nil
+            if self.status == .selected { onSuccess() }
         }
         let timeout = timeout
         watchdog = Task { [weak self] in

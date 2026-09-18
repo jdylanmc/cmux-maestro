@@ -1,0 +1,10 @@
+{
+  "version": "3.5.1",
+  "repository": "https://github.com/ryanoasis/nerd-fonts",
+  "revision": "b894ea7803af6aade63d60a4381e006098ec9c4d",
+  "sha256": {
+    "SymbolsNerdFont-Regular.ttf": "2839f0a572d4559f3f17a6fb74b8772e183f0c0a47150998ab194932cad55829",
+    "glyphnames.json": "d2fa6615a38eb527462cb71ff17aa44b1d6453d437ed263ab8d5b458393669e8",
+    "LICENSE": "84a7a98c82140fb12c37fe42b93805baa16024cb3e5acc599b7ffe612c55d847"
+  }
+}

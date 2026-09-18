@@ -42,9 +42,11 @@ nonisolated struct SidebarHistorySettings: Codable, Equatable, Sendable {
     var version = 1
     var retention: SidebarHistoryRetention = .fifteenSeconds
     var dismissed: Set<SidebarDismissedOutcome> = []
+    var dismissedManaged: Set<SidebarDismissedManagedOutcome>? = nil
 
     var isValid: Bool {
-        version == 1 && dismissed.count <= Self.maximumDismissals && dismissed.allSatisfy(\.isValid)
+        version == 1 && dismissed.count + (dismissedManaged?.count ?? 0) <= Self.maximumDismissals
+            && dismissed.allSatisfy(\.isValid) && (dismissedManaged?.allSatisfy(\.isValid) ?? true)
     }
 
     func isDismissed(sessionID: UUID, child: CopilotChildWork) -> Bool {
@@ -53,7 +55,7 @@ nonisolated struct SidebarHistorySettings: Codable, Equatable, Sendable {
     }
 
     func deadline(for child: CopilotChildWork, observedAt: Date, now: Date) -> Date? {
-        guard child.state.isTerminal, let duration = retention.duration,
+        guard child.state.isTerminal, child.state != .failed, let duration = retention.duration,
               let timestamp = Self.knownTimestamp(child.terminalEvent, observedAt: observedAt, now: now) else {
             return nil
         }
@@ -68,6 +70,16 @@ nonisolated struct SidebarHistorySettings: Codable, Equatable, Sendable {
         guard let timestamp = date, timestamp.timeIntervalSince1970.isFinite,
               timestamp <= observedAt, timestamp <= now else { return nil }
         return timestamp
+    }
+}
+
+nonisolated struct SidebarDismissedManagedOutcome: Codable, Hashable, Sendable {
+    let nodeID: UUID
+    let generation: Int
+    let phase: String
+
+    var isValid: Bool {
+        generation > 0 && ["reported-failed", "turn-failed", "launch-failed", "startup-failed"].contains(phase)
     }
 }
 

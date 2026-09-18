@@ -2,6 +2,75 @@ import Darwin
 import Foundation
 import Observation
 
+nonisolated enum SidebarGlyphName {
+    static func isValid(_ name: String) -> Bool {
+        !name.isEmpty && name.utf8.count <= 128 && name.utf8.allSatisfy {
+            (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95
+        }
+    }
+}
+
+nonisolated enum SidebarAvatarColor: String, Codable, CaseIterable, Identifiable, Sendable {
+    case theme, green, teal, blue, purple, pink, red, gray
+    var id: Self { self }
+    var title: String { self == .theme ? "Theme default" : rawValue.capitalized }
+}
+
+nonisolated struct SidebarIconOverrides: Codable, Equatable, Sendable {
+    struct Entry: Codable, Equatable, Sendable {
+        let nodeId: UUID
+        let runId: UUID
+        let workspaceId: UUID
+        let surfaceId: UUID
+        let iconId: String?
+        let iconColor: SidebarAvatarColor?
+    }
+    let version: Int
+    let icons: [Entry]
+
+    func applying(to snapshot: SidebarOrchestrationSnapshot) throws -> SidebarOrchestrationSnapshot {
+        guard version == 1, icons.count <= SidebarOrchestrationReader.maximumNodes,
+              Set(icons.map(\.nodeId)).count == icons.count,
+              icons.allSatisfy({
+                  ($0.iconId != nil || $0.iconColor != nil)
+                      && ($0.iconId.map(SidebarGlyphName.isValid) ?? true)
+              }) else {
+            throw CopilotFileError.unsafePath
+        }
+        let byID = Dictionary(uniqueKeysWithValues: icons.map { ($0.nodeId, $0) })
+        let nodes = snapshot.nodes.map { node in
+            guard let icon = byID[node.id], icon.runId == node.runId,
+                  icon.workspaceId == node.workspaceId, icon.surfaceId == node.surfaceId else { return node }
+            var updated = node
+            updated.iconId = icon.iconId
+            updated.iconColor = icon.iconColor
+            return updated
+        }
+        return .init(version: snapshot.version, generatedAt: snapshot.generatedAt,
+                     complete: snapshot.complete, omittedCount: snapshot.omittedCount, nodes: nodes)
+    }
+}
+
+nonisolated struct SidebarGitChanges: Codable, Equatable, Sendable {
+    let files: Int
+    let insertions: Int
+    let deletions: Int
+    let untrackedFiles: Int
+    let binaryFiles: Int
+
+    var isValid: Bool {
+        [files, insertions, deletions, untrackedFiles, binaryFiles].allSatisfy {
+            (0...1_000_000_000).contains($0)
+        } && untrackedFiles + binaryFiles <= files
+            && (files > untrackedFiles + binaryFiles || (insertions == 0 && deletions == 0))
+    }
+
+    var description: String {
+        "\(files) changed \(files == 1 ? "file" : "files") · +\(insertions) / −\(deletions) lines vs HEAD. "
+            + "Includes \(untrackedFiles) untracked and \(binaryFiles) binary files; their lines and submodule contents are excluded."
+    }
+}
+
 nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     let runId: UUID
@@ -14,10 +83,15 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
     let phase: String
     let availability: String
     let copilotSessionId: UUID?
+    var iconId: String?
+    var iconColor: SidebarAvatarColor?
     let worktreeLabel: String?
     let branchLabel: String?
     let gitEvidenceStatus: String?
     let gitEvidenceAt: Date?
+    let gitChangesStatus: String?
+    let gitChanges: SidebarGitChanges?
+    let gitChangesAt: Date?
     let createdAt: Date
     let updatedAt: Date
 
@@ -25,8 +99,12 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
         id: UUID, runId: UUID, parentId: UUID?, role: String, label: String,
         workspaceId: UUID, surfaceId: UUID, generation: Int, phase: String,
         availability: String, copilotSessionId: UUID? = nil,
+        iconId: String? = nil,
+        iconColor: SidebarAvatarColor? = nil,
         worktreeLabel: String? = nil, branchLabel: String? = nil,
         gitEvidenceStatus: String? = nil, gitEvidenceAt: Date? = nil,
+        gitChangesStatus: String? = nil, gitChanges: SidebarGitChanges? = nil,
+        gitChangesAt: Date? = nil,
         createdAt: Date, updatedAt: Date
     ) {
         self.id = id
@@ -40,10 +118,15 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
         self.phase = phase
         self.availability = availability
         self.copilotSessionId = copilotSessionId
+        self.iconId = iconId
+        self.iconColor = iconColor
         self.worktreeLabel = worktreeLabel
         self.branchLabel = branchLabel
         self.gitEvidenceStatus = gitEvidenceStatus
         self.gitEvidenceAt = gitEvidenceAt
+        self.gitChangesStatus = gitChangesStatus
+        self.gitChanges = gitChanges
+        self.gitChangesAt = gitChangesAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -58,6 +141,14 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
         guard gitEvidenceStatus == "verified", let gitEvidenceAt else { return false }
         let age = date.timeIntervalSince(gitEvidenceAt)
         return age >= -1 && age <= SidebarOrchestrationReader.gitEvidenceFreshInterval
+    }
+
+    func currentGitChanges(at date: Date) -> SidebarGitChanges? {
+        guard hasFreshGitEvidence(at: date), gitChangesStatus == "verified",
+              let gitChanges, gitChanges.isValid, let gitChangesAt,
+              (-1...SidebarOrchestrationReader.gitEvidenceFreshInterval).contains(date.timeIntervalSince(gitChangesAt))
+        else { return nil }
+        return gitChanges
     }
 }
 
@@ -156,7 +247,16 @@ nonisolated enum SidebarOrchestrationReader {
         }
         let snapshot = try decoder.decode(SidebarOrchestrationSnapshot.self, from: data)
         try validate(snapshot)
-        return snapshot
+        let iconData: Data
+        do {
+            iconData = try CopilotFileAccess.readStableRegular(
+                at: observer, filename: "icons.json", owner: owner,
+                maximum: 65_536, permissions: 0o600
+            )
+        } catch CopilotFileError.missing {
+            return snapshot
+        }
+        return try JSONDecoder().decode(SidebarIconOverrides.self, from: iconData).applying(to: snapshot)
     }
 
     static func validate(_ snapshot: SidebarOrchestrationSnapshot, now: Date = Date()) throws {
@@ -171,6 +271,7 @@ nonisolated enum SidebarOrchestrationReader {
         var rootsByRun: [UUID: Int] = [:]
         for node in snapshot.nodes {
             guard !node.label.isEmpty, node.label.utf8.count <= 100,
+                  node.iconId.map(SidebarGlyphName.isValid) ?? true,
                   boundedLabel(node.worktreeLabel), boundedLabel(node.branchLabel),
                   node.generation >= 0, node.createdAt <= node.updatedAt,
                   node.updatedAt <= now.addingTimeInterval(futureTolerance),
@@ -218,6 +319,19 @@ nonisolated enum SidebarOrchestrationReader {
     private static func validGitEvidence(
         _ node: SidebarOrchestrationNode, generatedAt: Date
     ) -> Bool {
+        switch node.gitChangesStatus {
+        case "verified":
+            guard node.gitChanges?.isValid == true, node.gitChangesAt != nil else {
+                return false
+            }
+        case nil, "unavailable":
+            guard node.gitChanges == nil else { return false }
+        default:
+            return false
+        }
+        if let captured = node.gitChangesAt {
+            guard node.gitChangesStatus != nil, captured <= generatedAt.addingTimeInterval(1) else { return false }
+        }
         switch node.gitEvidenceStatus {
         case nil:
             // Version-1 observers written before evidence timestamps remain

@@ -43,6 +43,7 @@ actor CopilotSessionReader {
         var offset: Int64 = 0
         var partial = Data()
         var droppingOversizedLine = false
+        var assetEnvelope: CopilotAssetEnvelope?
         var reducer: CopilotEventReducer
         var prefix = Data()
         var anchor = Data()
@@ -555,20 +556,30 @@ actor CopilotSessionReader {
                     if end - consumed <= limits.maximumLineBytes - tail.partial.count {
                         tail.partial.append(chunk[consumed..<end])
                     } else {
+                        var envelope = CopilotAssetEnvelope(maximumBytes: limits.maximumLineBytes)
+                        envelope.consume(tail.partial)
+                        envelope.consume(Data(chunk[consumed..<end]))
+                        tail.assetEnvelope = envelope
                         tail.partial.removeAll(keepingCapacity: false)
                         tail.droppingOversizedLine = true
-                        tail.reducer.markMalformed()
-                        tail.reducer.markLimited()
                     }
+                } else {
+                    tail.assetEnvelope?.consume(Data(chunk[consumed..<end]))
                 }
                 consumed = end
                 if newline != nil {
                     if !tail.droppingOversizedLine {
                         if tail.partial.last == 13 { tail.partial.removeLast() }
                         tail.reducer.consume(tail.partial, observedAt: now)
+                    } else if let metadata = tail.assetEnvelope?.projectedBinaryAsset {
+                        tail.reducer.consume(metadata, observedAt: now)
+                    } else {
+                        tail.reducer.markMalformed()
+                        tail.reducer.markLimited()
                     }
                     tail.partial.removeAll(keepingCapacity: true)
                     tail.droppingOversizedLine = false
+                    tail.assetEnvelope = nil
                     lines += 1
                     consumed += 1
                 }

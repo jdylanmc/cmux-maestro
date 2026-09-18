@@ -8,6 +8,395 @@ struct SidebarClarityTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test func workspaceAttentionOmitsQuietWorkAndRoutineCompletionNotices() {
+        var tree = makeTree(nodes: [node(state: .working), node(state: .idle), node(state: .completed)])
+        tree.sessions[0].attention = [signal(.turnFinished)]
+        let summary = SidebarPresentation.workspaceAttention(
+            sessions: tree.sessions, managed: [], availability: .stale, now: now
+        )
+        #expect(summary.total == 0)
+        #expect(summary.label == nil)
+        #expect(summary.detail.isEmpty)
+        #expect(SidebarPresentation.workspaceAttention(
+            sessions: [], managed: [], availability: .unavailable, now: now
+        ).label == nil)
+    }
+
+    @Test func workspaceAttentionCountsQuestionsAndApprovalsWithoutManagedDuplicates() {
+        var tree = makeTree(nodes: [node(state: .blocked, attention: [signal(.permission)])])
+        tree.sessions[0].attention = [signal(.answer)]
+        let managed = managedNode(
+            role: "worker", surface: fixtures.surfaceA, sessionID: fixtures.sessionID, phase: "reported-blocked"
+        )
+        let summary = SidebarPresentation.workspaceAttention(
+            sessions: tree.sessions, managed: [managed], availability: .ready, now: now
+        )
+        #expect(summary.needsInput == 2)
+        #expect(summary.questions == 1)
+        #expect(summary.approvals == 1)
+        #expect(summary.blocked == 0)
+        #expect(summary.label == "2 need input")
+        #expect(summary.total == 2)
+    }
+
+    @Test func workspaceAttentionKeepsLastReportedBlocksWithoutInventingAQuestion() {
+        let managed = managedNode(role: "worker", surface: fixtures.surfaceA, phase: "reported-blocked")
+        let summary = SidebarPresentation.workspaceAttention(
+            sessions: [], managed: [managed], availability: .stale, now: now.addingTimeInterval(120)
+        )
+        #expect(summary.label == "1 blocked")
+        #expect(summary.needsInput == 0)
+        #expect(summary.questions == 0)
+        #expect(summary.lastReportedBlocked == 1)
+        #expect(summary.detail.contains("live state unverified"))
+    }
+
+    @Test func glyphHasTwoPointInsetsInsideItsExistingTwentyFourPointSlot() throws {
+        let frame = NSRect(x: 0, y: 0, width: 24, height: 24)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = NSHostingView(rootView: SidebarGlyphIcon(name: "md-square", tint: .black).background(.white))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        hosting.frame = frame
+        hosting.layoutSubtreeIfNeeded()
+        #expect(hosting.fittingSize == frame.size)
+        let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        let scale = Double(bitmap.pixelsWide) / 24
+        for (x, y) in [(1.0, 12.0), (22.5, 12.0), (12.0, 1.0), (12.0, 22.5)] {
+            let color = try #require(bitmap.colorAt(x: Int(x * scale), y: Int(y * scale))?.usingColorSpace(.deviceRGB))
+            #expect(color.redComponent > 0.95 && color.greenComponent > 0.95 && color.blueComponent > 0.95)
+        }
+        let inner = try #require(bitmap.colorAt(x: Int(3 * scale), y: Int(12 * scale))?.usingColorSpace(.deviceRGB))
+        #expect(inner.redComponent < 0.05 && inner.greenComponent < 0.05 && inner.blueComponent < 0.05)
+    }
+
+    @Test func activityGlowsSeparateWorkingBlockedIdleAndReducedMotion() {
+        #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(.working), reduceMotion: false) == .pulse)
+        #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(.working), reduceMotion: true) == .steadyWorking)
+        for state: CopilotWorkState in [.blocked, .failed] {
+            #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(state), reduceMotion: false) == .steadyAlert)
+            #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(state), reduceMotion: true) == .steadyAlert)
+        }
+        for state: CopilotWorkState in [.idle, .unknown, .completed, .cancelled] {
+            #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(state), reduceMotion: false) == .none)
+        }
+    }
+
+    @Test func coordinatorActivityRequiresFreshUniqueOwnedCopilotEvidence() {
+        let root = managedNode(role: "coordinator", surface: fixtures.surfaceA)
+        let session = managedSession(id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil)
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+        let running = SidebarPresentation.managedState(root, availability: .ready, now: now, tree: tree)
+        #expect(running == SidebarPresentation.state(.working))
+        let summary = SidebarPresentation.workspaceSummary(
+            surfaces: [], sessions: [session], managed: [root], orchestrationAvailability: .ready,
+            countsComplete: true, now: now, observations: tree
+        )
+        #expect(summary.agentCount == 1)
+        #expect(summary.states.map(\.title) == ["Working"])
+        var stale = tree
+        stale.generatedAt = now.addingTimeInterval(-9)
+        #expect(SidebarPresentation.managedState(root, availability: .ready, now: now, tree: stale).tone == .neutral)
+        var ambiguous = tree
+        ambiguous.sessions.append(managedSession(id: UUID(), surface: fixtures.surfaceA, model: nil))
+        #expect(SidebarPresentation.managedState(root, availability: .ready, now: now, tree: ambiguous).tone == .neutral)
+    }
+
+    @Test func bundledNerdFontCoversCatalogAndRequestedBrowserGlyph() throws {
+        let catalog = try SidebarGlyphCatalog.shared.get()
+        #expect(catalog.glyphs.count == 10_994)
+        #expect(catalog.glyph(named: "cod-blank") == nil)
+        #expect(catalog.glyph(named: "nf-fa-edge")?.code == "f282")
+        #expect(catalog.glyph(named: "browser")?.name == "fa-edge")
+        #expect(catalog.glyph(named: "ghostty")?.name == "md-ghost")
+        #expect(catalog.glyph(named: "nf-mdi-altimeter") == nil)
+        #expect(catalog.path(for: "../../font.ttf") == nil)
+        let missing = catalog.glyphs.keys.filter { catalog.path(for: $0) == nil }.sorted()
+        #expect(missing.isEmpty, "Glyphs without drawable outlines: \(missing.prefix(20))")
+        #expect(!SidebarAvatarColor.allCases.map(\.rawValue).contains("orange"))
+    }
+
+    @Test(arguments: [false, true])
+    func renderNerdFontPresetCatalog(dark: Bool) throws {
+        let catalog = try SidebarGlyphCatalog.shared.get()
+        let frame = NSRect(x: 0, y: 0, width: 900, height: 640)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        let hosting = NSHostingView(rootView: VStack(alignment: .leading, spacing: 16) {
+            Text("Nerd Fonts · synthetic icon preview").font(.headline)
+            Text("Favorites, not limits · 10,994 searchable names · 24 pt icons").font(.caption).foregroundStyle(.secondary)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: 4),
+                      alignment: .leading, spacing: 16) {
+                ForEach(catalog.presets) { preset in
+                    HStack(spacing: 8) {
+                        if preset.id == "ghostty" {
+                            SidebarTerminalIcon()
+                        } else if preset.id == "cli" {
+                            SidebarTerminalIcon(style: .cli)
+                        } else if preset.id == "browser" {
+                            SidebarGlyphIcon(name: preset.glyph)
+                        } else {
+                            SidebarAgentIcon(
+                                visual: SidebarPresentation.state(.working),
+                                avatar: preset.glyph, color: preset.color
+                            )
+                        }
+                        VStack(alignment: .leading) {
+                            Text(preset.name).font(.caption)
+                            Text(preset.glyph).font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .background {
+                        if !["ghostty", "cli", "browser"].contains(preset.id) {
+                            SidebarActivityBackground(visual: SidebarPresentation.state(.working), suppressAnimation: true)
+                        }
+                    }
+                }
+            }
+            Divider()
+            Text("Runtime state · working pulses live; this preview is static").font(.caption.weight(.semibold))
+            HStack(spacing: 20) {
+                ForEach([CopilotWorkState.working, .blocked, .idle, .unknown, .failed], id: \.self) { state in
+                    HStack(spacing: 6) {
+                        SidebarAgentIcon(visual: SidebarPresentation.state(state), avatar: "md-robot")
+                        Text(SidebarPresentation.state(state).title).font(.caption)
+                    }
+                    .frame(width: 140, alignment: .leading)
+                    .padding(6)
+                    .background { SidebarActivityBackground(visual: SidebarPresentation.state(state), suppressAnimation: true) }
+                }
+            }
+            Text("Identity palette · state remains independent").font(.caption.weight(.semibold))
+            HStack(spacing: 16) {
+                ForEach(SidebarAvatarColor.allCases) { color in
+                    VStack(spacing: 4) {
+                        SidebarAgentIcon(visual: SidebarPresentation.state(.working), avatar: "md-bird", color: color)
+                        Text(color.title).font(.caption2)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(nsColor: .windowBackgroundColor)))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        hosting.frame = frame
+        hosting.layoutSubtreeIfNeeded()
+        let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        #expect(png.count > 1_024)
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/sidebar-clarity/nerd-font-catalog")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try png.write(to: folder.appendingPathComponent(dark ? "dark.png" : "light.png"))
+    }
+
+    @Test func iconChoicePersistsWithoutChangingWorkOrAttention() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        #expect(preferences.agentIconStyle == .maestro)
+        #expect(preferences.terminalIconStyle == .ghost)
+        let history = preferences.history
+        let attention = preferences.attention
+        let layout = preferences.layout
+        preferences.agentIconStyle = .copilot
+        preferences.terminalIconStyle = .cli
+        #expect(fixture.preferences().agentIconStyle == .copilot)
+        #expect(fixture.preferences().terminalIconStyle == .cli)
+        #expect(preferences.history == history)
+        #expect(preferences.attention == attention)
+        #expect(preferences.layout == layout)
+        #expect(try SidebarGlyphCatalog.shared.get().path(for: "oct-copilot") != nil)
+    }
+
+    @Test(arguments: [false, true])
+    func compareBothAgentIconStylesAtSidebarSize(dark: Bool) throws {
+        _ = try SidebarGlyphCatalog.shared.get()
+        let frame = NSRect(x: 0, y: 0, width: 680, height: 380)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        let rows: [(String, CopilotWorkState)] = [
+            ("Orchestrator", .working), ("Implementation", .working),
+            ("Waiting for input", .blocked), ("Idle agent", .idle),
+            ("Unknown agent", .unknown), ("Failed agent", .failed)
+        ]
+        let hosting = NSHostingView(rootView: VStack(alignment: .leading, spacing: 16) {
+            Text("Synthetic comparison · actual sidebar icon size").font(.caption).foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 24) {
+                ForEach(SidebarAgentIconStyle.allCases) { style in
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(style.title).font(.headline)
+                        ForEach(rows, id: \.0) { label, state in
+                            HStack(spacing: 8) {
+                                SidebarAgentIcon(
+                                    visual: SidebarPresentation.state(state), style: style
+                                )
+                                Text(label).font(.caption)
+                            }
+                        }
+                        HStack(spacing: 8) {
+                            SidebarTerminalIcon()
+                            Text("Terminal").font(.caption)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(nsColor: .windowBackgroundColor)))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        hosting.frame = frame
+        hosting.layoutSubtreeIfNeeded()
+        let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        #expect(png.count > 1_024)
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/sidebar-clarity/icon-comparison")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try png.write(to: folder.appendingPathComponent(dark ? "dark.png" : "light.png"))
+    }
+
+    @Test func activeOutlineHidesEndedProcessesButPreservesBlockersUnknownAndLiveAncestry() throws {
+        let parent = SidebarCopilotNode(
+            id: "parent", parentID: nil, depth: 0, kind: .subagent, name: "Ended parent",
+            state: .completed, model: nil, ancestryUnresolved: false, hasChildren: true
+        )
+        let child = SidebarCopilotNode(
+            id: "child", parentID: "parent", depth: 1, kind: .subagent, name: "Working child",
+            state: .working, model: nil, ancestryUnresolved: false, hasChildren: false
+        )
+        var tree = makeTree(nodes: [parent, child, node(state: .completed), node(state: .cancelled), node(state: .unknown)])
+        let ended = managedSession(id: UUID(), surface: fixtures.surfaceB, model: nil, liveness: .dead)
+        tree.sessions.append(ended)
+        let visible = SidebarVisibleWork(tree: tree, managed: [], history: .init(), showEnded: false)
+        #expect(visible.tree.sessions.count == 1)
+        #expect(visible.tree.sessions[0].nodes.map(\.id) == ["parent", "child", "unknown"])
+        #expect(visible.hiddenSurfaces == [fixtures.surfaceB])
+        #expect(tree.sessions.count == 2)
+        #expect(SidebarVisibleWork(tree: tree, managed: [], history: .init(), showEnded: true).tree == tree)
+
+        var protected = ended
+        protected.attention = [signal(.permission)]
+        tree.sessions = [protected]
+        #expect(SidebarVisibleWork(tree: tree, managed: [], history: .init(), showEnded: false).tree.sessions.count == 1)
+        let replacement = managedSession(id: UUID(), surface: fixtures.surfaceB, model: nil)
+        tree.sessions = [ended, replacement]
+        let reused = SidebarVisibleWork(tree: tree, managed: [], history: .init(), showEnded: false)
+        #expect(reused.tree.sessions.map(\.id) == [replacement.id])
+        #expect(reused.hiddenSurfaces.isEmpty)
+    }
+
+    @Test func readingFailureIsScopedPersistentAndDoesNotClearNewNoticesOrBlockers() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        var failure = node(state: .failed, attention: [signal(.error)])
+        failure.terminalEvent = .init(id: UUID(), timestamp: now)
+        let tree = makeTree(nodes: [failure, node(state: .blocked, attention: [signal(.permission)])])
+        let session = try #require(tree.sessions.first)
+        let target = SidebarSeenTarget.child(sessionID: session.id, childID: failure.id)
+        let captured = SidebarSeenWork.capture(target, tree: tree)
+        preferences.markSeen(captured, in: tree)
+        #expect(preferences.attention.acknowledged == captured.notices)
+        #expect(preferences.history.dismissed.isEmpty)
+        let restored = fixture.preferences()
+        #expect(restored.history.dismissed.isEmpty)
+        var acknowledged = tree
+        acknowledged.sessions[0].nodes[0].attention = []
+        let visible = SidebarVisibleWork(tree: acknowledged, managed: [], history: restored.history, showEnded: false)
+        #expect(visible.tree.sessions[0].nodes.map(\.id) == ["failed", "blocked"])
+
+        var changed = tree
+        changed.sessions[0].nodes[0].attention = [
+            .init(kind: .error, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
+        ]
+        changed.sessions[0].nodes[0].terminalEvent = .init(id: UUID(), timestamp: now)
+        preferences.markSeen(captured, in: changed)
+        #expect(preferences.attention.acknowledged == captured.notices)
+        #expect(preferences.history.dismissed.isEmpty)
+        #expect(SidebarVisibleWork(tree: changed, managed: [], history: preferences.history, showEnded: false)
+            .tree.sessions[0].nodes.count == 2)
+
+        changed.sessions[0].nodes[0].attention.append(signal(.answer))
+        let blocked = SidebarSeenWork.capture(target, tree: changed)
+        #expect(blocked.notices.isEmpty)
+        #expect(changed.sessions[0].nodes[0].dismissibleOutcome(sessionID: session.id) == nil)
+    }
+
+    @Test func managedRetirementKeepsLiveDescendantsAndDoesNotHideNewGenerations() throws {
+        let root = managedNode(role: "coordinator", surface: fixtures.surfaceA)
+        let failed = SidebarOrchestrationNode(
+            id: UUID(), runId: root.runId, parentId: root.id, role: "worker", label: "Failed worker",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceB, generation: 1,
+            phase: "reported-failed", availability: "idle", createdAt: now, updatedAt: now
+        )
+        let key = SidebarDismissedManagedOutcome(nodeID: failed.id, generation: 1, phase: failed.phase)
+        let history = SidebarHistorySettings(dismissedManaged: [key])
+        let tree = makeTree(nodes: [])
+        let hidden = SidebarVisibleWork(
+            tree: tree, managed: [root, failed], history: history, showEnded: false
+        )
+        #expect(hidden.managed.map(\.id) == [root.id])
+        #expect(hidden.hiddenSurfaces.contains(fixtures.surfaceB))
+        #expect(SidebarVisibleWork(tree: tree, managed: [root, failed], history: history,
+                                  showEnded: true).managed.count == 2)
+        let next = SidebarOrchestrationNode(
+            id: failed.id, runId: root.runId, parentId: root.id, role: "worker", label: failed.label,
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceB, generation: 2,
+            phase: "turn-running", availability: "busy", createdAt: now, updatedAt: now
+        )
+        #expect(SidebarVisibleWork(tree: tree, managed: [root, next], history: history,
+                                  showEnded: false).managed.count == 2)
+        let child = SidebarOrchestrationNode(
+            id: UUID(), runId: root.runId, parentId: failed.id, role: "worker", label: "Live child",
+            workspaceId: fixtures.workspaceA, surfaceId: UUID(), generation: 1,
+            phase: "turn-running", availability: "busy", createdAt: now, updatedAt: now
+        )
+        #expect(SidebarVisibleWork(tree: tree, managed: [root, failed, child], history: history,
+                                  showEnded: false).managed.count == 3)
+    }
+
+    @Test func failedManagedRowsRequireExplicitDismissalAndLegacySeenFlagsAreIgnored() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let failed = managedNode(role: "worker", surface: fixtures.surfaceA, phase: "turn-failed")
+        var tree = makeTree(nodes: [])
+        let outcome = try #require(SidebarPresentation.dismissibleManagedFailure(failed, tree: tree))
+        let seen = SidebarSeenWork.capture(.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA), tree: tree)
+        preferences.markSeen(seen, in: tree)
+        #expect(preferences.history.dismissedManaged == nil)
+        #expect(SidebarVisibleWork(tree: tree, managed: [failed], history: preferences.history, showEnded: false).managed.count == 1)
+        preferences.dismissManaged(outcome)
+        #expect(fixture.preferences().history.dismissedManaged == [outcome])
+        #expect(SidebarVisibleWork(tree: tree, managed: [failed], history: preferences.history, showEnded: false).managed.isEmpty)
+
+        let legacy: [String: Any] = [
+            "version": 1, "retention": "fifteenSeconds", "dismissed": [],
+            "viewedManaged": [["nodeID": failed.id.uuidString, "generation": 1, "phase": "turn-failed"]]
+        ]
+        let decoded = try JSONDecoder().decode(SidebarHistorySettings.self, from: JSONSerialization.data(withJSONObject: legacy))
+        #expect(decoded.dismissedManaged == nil)
+        #expect(SidebarVisibleWork(tree: tree, managed: [failed], history: decoded, showEnded: false).managed.count == 1)
+
+        tree.sessions[0].attention = [signal(.permission)]
+        #expect(SidebarPresentation.dismissibleManagedFailure(failed, tree: tree) == nil)
+        tree.sessions = [managedSession(id: UUID(), surface: fixtures.surfaceA, model: nil)]
+        #expect(SidebarPresentation.dismissibleManagedFailure(failed, tree: tree) == nil)
+    }
+
     @Test func emptyChildNoticeDoesNotClaimTheWholeTaskboardIsUnavailable() {
         #expect(SidebarPresentation.emptyChildHistoryTitle(complete: true) == "No visible child tasks")
         #expect(SidebarPresentation.emptyChildHistoryTitle(complete: false) == "Child history unavailable")
@@ -32,6 +421,73 @@ struct SidebarClarityTests {
         #expect(SidebarPresentation.unmanagedSurfaces(
             [surface, other], workspaceID: fixtures.workspaceA, managed: []
         ).count == 2)
+    }
+
+    @Test func workspaceSummaryCountsDistinctAgentsStatesAndOtherTabTypes() {
+        let managedSurface = fixtures.surfaceA
+        let browserSurface = fixtures.surfaceB
+        let terminalSurface = UUID()
+        let managed = managedNode(
+            role: "worker", surface: managedSurface, sessionID: fixtures.sessionID
+        )
+        let managedObservation = managedSession(
+            id: fixtures.sessionID, surface: managedSurface, model: nil
+        )
+        let unmanagedSession = SidebarCopilotSession(
+            id: fixtures.otherSessionID, workspaceID: fixtures.workspaceA,
+            surfaceID: terminalSurface, liveness: .alive, state: .idle, model: nil,
+            observedAt: now, nodes: [
+                .init(id: "agent", parentID: nil, depth: 0, kind: .subagent,
+                      name: "Nested agent", state: .blocked, model: nil,
+                      ancestryUnresolved: false, hasChildren: false),
+                .init(id: "shell", parentID: nil, depth: 0, kind: .shell,
+                      name: "Command", state: .working, model: nil,
+                      ancestryUnresolved: false, hasChildren: false)
+            ], childrenComplete: true, treeDegraded: false,
+            omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        let summary = SidebarPresentation.workspaceSummary(
+            surfaces: [
+                .init(id: managedSurface, title: "Managed", kind: .terminal,
+                      isFocused: false, isPinned: false, unreadCount: 0,
+                      workingDirectory: .available(nil)),
+                .init(id: terminalSurface, title: "Agent", kind: .terminal,
+                      isFocused: false, isPinned: false, unreadCount: 0,
+                      workingDirectory: .available(nil)),
+                .init(id: browserSurface, title: "Docs", kind: .browser,
+                      isFocused: false, isPinned: false, unreadCount: 0,
+                      workingDirectory: .available(nil))
+            ],
+            sessions: [managedObservation, unmanagedSession],
+            managed: [managed],
+            orchestrationAvailability: .ready,
+            countsComplete: true,
+            now: now
+        )
+        #expect(summary.agentCount == 3)
+        #expect(summary.states.map { "\($0.title):\($0.count)" } == [
+            "Working:1", "Blocked:1", "Idle:1"
+        ])
+        #expect(summary.tabs == [.init(kind: .browser, count: 1)])
+        #expect(summary.agentLine == "3 agents · 1 working · 1 blocked · 1 idle")
+        #expect(summary.tabLine == "1 browser")
+        #expect(!summary.incomplete)
+    }
+
+    @Test func workspaceSummaryKeepsStaleAndUnknownEvidenceExplicit() {
+        let managed = managedNode(role: "worker", surface: fixtures.surfaceA)
+        let unknown = managedSession(
+            id: fixtures.sessionID, surface: fixtures.surfaceB, model: nil,
+            liveness: .ambiguous
+        )
+        let summary = SidebarPresentation.workspaceSummary(
+            surfaces: [], sessions: [unknown], managed: [managed],
+            orchestrationAvailability: .stale, countsComplete: false, now: now
+        )
+        #expect(summary.agentCount == 2)
+        #expect(summary.states.map { "\($0.title):\($0.count)" } == ["Unknown:2"])
+        #expect(summary.incomplete)
+        #expect(summary.agentLine.contains("counts incomplete"))
     }
 
     @Test func staleManagedStateAndRegistrationNeverClaimRunning() {
@@ -154,7 +610,7 @@ struct SidebarClarityTests {
         #expect(SidebarPresentation.state(.unknown).symbol == "circle.dashed")
         #expect(SidebarPresentation.state(.completed).tone == .neutral)
         #expect(SidebarPresentation.state(.failed).tone == .red)
-        #expect(SidebarPresentation.state(.blocked).tone == .amber)
+        #expect(SidebarPresentation.state(.blocked).tone == .red)
         #expect(SidebarPresentation.state(.unknown).tone == .neutral)
         #expect(SidebarPresentation.process(.alive).tone == .neutral)
         #expect(SidebarPresentation.process(.dead).title == "Process ended")
@@ -193,6 +649,18 @@ struct SidebarClarityTests {
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         let hosting = NSHostingView(rootView: VStack(alignment: .leading, spacing: 12) {
             Text("Visual key").font(.headline)
+            HStack {
+                SidebarAgentIcon(visual: SidebarPresentation.state(.working))
+                Text("Agent · Working")
+            }
+            HStack {
+                SidebarAgentIcon(visual: SidebarPresentation.state(.working))
+                Text("Orchestrator · Working")
+            }
+            HStack {
+                SidebarTerminalIcon()
+                Text("Terminal")
+            }
             ForEach(states, id: \.self) { state in
                 HStack {
                     SidebarStateBadge(visual: SidebarPresentation.state(state))
@@ -200,6 +668,8 @@ struct SidebarClarityTests {
                 }
             }
             SidebarStateBadge(visual: SidebarPresentation.process(.dead))
+            Text("Synthetic Git changes").font(.caption)
+            GitChangeBadge(changes: .init(files: 3, insertions: 42, deletions: 7, untrackedFiles: 1, binaryFiles: 0))
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -212,9 +682,13 @@ struct SidebarClarityTests {
         hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
         #expect(!window.isVisible)
         var coloredPixels = 0
+        var greenPixels = 0
+        var redPixels = 0
         for y in stride(from: 0, to: bitmap.pixelsHigh, by: 2) {
             for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
                 let color = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                if color.greenComponent > color.redComponent + 0.12 { greenPixels += 1 }
+                if color.redComponent > color.greenComponent + 0.12 { redPixels += 1 }
                 if max(color.redComponent, color.greenComponent, color.blueComponent)
                     - min(color.redComponent, color.greenComponent, color.blueComponent) > 0.15 {
                     coloredPixels += 1
@@ -222,6 +696,8 @@ struct SidebarClarityTests {
             }
         }
         #expect(coloredPixels > 0)
+        #expect(greenPixels > 10)
+        #expect(redPixels > 10)
         let png = try #require(bitmap.representation(using: .png, properties: [:]))
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/sidebar-clarity/visual-key")
@@ -459,6 +935,15 @@ struct SidebarClarityTests {
     @Test func presentationDoesNotNestSecondaryInteractiveControlsInsideFocusLabels() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let source = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarView.swift"), encoding: .utf8)
+        #expect(!source.contains(".orange"))
+        #expect(!source.contains("Text(\"Copilot agent\")"))
+        #expect(source.contains("avatar: node.iconId, color: node.iconColor"))
+        #expect(!source.contains("isOrchestrating:"))
+        #expect(source.contains("dismiss-managed-"))
+        #expect(source.contains("Image(systemName: surface.kind.symbolName)"))
+        #expect(source.contains("else if surface.kind == .terminal"))
+        #expect(source.contains("SidebarTerminalIcon()"))
+        #expect(NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: "Worktree") != nil)
         let expression = try NSRegularExpression(pattern: #"FocusButton\([\s\S]*?\)\s*\{"#)
         let text = source as NSString
         let ranges = expression.matches(in: source, range: NSRange(location: 0, length: text.length))
