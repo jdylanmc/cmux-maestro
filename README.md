@@ -194,6 +194,9 @@ still-live managed worker resources are allowed per workspace;
 reported completion does not free a slot. Archive retains bounded history and
 never kills processes or deletes tabs, so still-present archived worker tabs
 continue to consume the resource bound. Tool permissions are not auto-approved.
+Read-only controller snapshots use shared locks; state mutations remain
+exclusive. Idle supervisors therefore do not serialize their status reads
+behind the mutation lock as a workspace approaches its worker limit.
 Spawn accepts bounded caller-explicit `--allow-tool` and `--deny-tool` rules;
 the default adds no grants, denies win, and descendants cannot exceed their
 parent's explicit allows or remove inherited denies. These Copilot flags are

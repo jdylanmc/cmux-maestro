@@ -806,9 +806,10 @@ def validate_state(state):
 
 
 class Store:
-    def __init__(self, root, *, blocking=False):
+    def __init__(self, root, *, blocking=False, read_only=False):
         self.root = root
         self.blocking = blocking
+        self.read_only = read_only
         self.root_fd = None
         self.control_fd = None
         self.observer_fd = None
@@ -827,7 +828,9 @@ class Store:
             info = os.fstat(self.lock_fd)
             if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
                 raise OrchestrationError("Control lock is not a private regular file.")
-            operation = fcntl.LOCK_EX | (0 if self.blocking else fcntl.LOCK_NB)
+            operation = (fcntl.LOCK_SH if self.read_only else fcntl.LOCK_EX) | (
+                0 if self.blocking else fcntl.LOCK_NB
+            )
             try:
                 fcntl.flock(self.lock_fd, operation)
             except BlockingIOError:
@@ -983,6 +986,8 @@ class Store:
                 node["result"] = "Legacy worker requires explicit archive before reuse."
 
     def write(self, state):
+        if self.read_only:
+            raise OrchestrationError("Read-only orchestration access cannot publish mutations.")
         validate_state(state)
         encoded = json.dumps(state, sort_keys=True, separators=(",", ":")).encode() + b"\n"
         if len(encoded) > MAX_BYTES:
@@ -1073,11 +1078,11 @@ class Store:
         os.fsync(directory)
 
 
-def with_store(root, operation, *, wait=1):
+def with_store(root, operation, *, wait=1, read_only=False):
     deadline = time.monotonic() + wait
     while True:
         try:
-            with Store(root) as store:
+            with Store(root, read_only=read_only) as store:
                 return operation(store)
         except OrchestrationError as error:
             if "operation is active" not in str(error) or time.monotonic() >= deadline:
@@ -1095,7 +1100,7 @@ def mutate(root, operation, *, wait=1):
 
 
 def read_state(root, *, wait=1):
-    return with_store(root, lambda store: json.loads(json.dumps(store.read())), wait=wait)
+    return with_store(root, lambda store: json.loads(json.dumps(store.read())), wait=wait, read_only=True)
 
 
 def remove_launch_credential(root, worker_id):

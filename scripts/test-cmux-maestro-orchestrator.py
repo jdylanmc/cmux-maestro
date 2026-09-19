@@ -539,6 +539,20 @@ class OrchestratorTests(unittest.TestCase):
     def tearDown(self):
         self.h.close()
 
+    def test_read_only_control_checks_share_lock_but_cannot_publish(self):
+        store_type = CONTROLLER_API["Store"]
+        error_type = CONTROLLER_API["OrchestrationError"]
+        with store_type(self.h.root, read_only=True) as first:
+            with store_type(self.h.root, read_only=True) as second:
+                self.assertEqual(first.read(), second.read())
+                with self.assertRaisesRegex(error_type, "Read-only"):
+                    second.write(second.read())
+                with self.assertRaisesRegex(error_type, "operation is active"):
+                    with store_type(self.h.root):
+                        self.fail("A writer must not cross active readers.")
+        with store_type(self.h.root) as writer:
+            writer.write(writer.read())
+
     def test_local_subscription_and_model_are_pinned_without_leaking_or_changing_git_auth(self):
         h = Harness(interactive=True)
         try:
