@@ -7,7 +7,11 @@ description: Launch chat-ready interactive Copilot workers in CMUX terminal tabs
 
 Use this skill only when the user explicitly delegates work to another Copilot
 session. Each worker receives a real terminal tab in the coordinator's current
-CMUX pane and workspace. Never create a window or split.
+CMUX pane and workspace. The spawn operation never creates a window or split.
+After attachment, the owning coordinator may arrange the exact returned worker
+surface into another pane in the same workspace through CMUX's typed surface
+operations. Never move it to another workspace/window, infer it by title, or
+rearrange a surface the run does not own.
 
 Set the command path once:
 

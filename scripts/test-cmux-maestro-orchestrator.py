@@ -1435,6 +1435,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("cmux-maestro.worker-report", skill)
         self.assertIn('"phase":"final_answer"', skill)
         self.assertIn("do not call a tool", skill)
+        self.assertIn("owning coordinator may arrange the exact returned worker", skill)
+        self.assertIn("another workspace/window", skill)
 
     def test_terminal_bookkeeping_does_not_admit_late_work_or_post_result_events(self):
         cases = [
