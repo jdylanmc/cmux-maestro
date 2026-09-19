@@ -1,6 +1,6 @@
 ---
 name: cmux-maestro-orchestrate
-description: Spawn and coordinate bounded Copilot workers in background CMUX terminal tabs with explicit ownership and lifecycle reporting.
+description: Launch chat-ready interactive Copilot workers in CMUX terminal tabs with explicit ownership and bounded permissions. Humans can continue the conversation directly in each worker tab.
 ---
 
 # CMUX Maestro Orchestration
@@ -34,6 +34,28 @@ verified Git worktree and branch. Non-Git directories produce no Git labels;
 omit it rather than guessing when the current directory is not the assigned task
 root. The controller refreshes this bounded evidence during lifecycle checks.
 
+## Require the dedicated Maestro launch settings
+
+Before the first spawn, verify the installed controller supports and reports the
+private Agent launch settings:
+
+```sh
+"$CMUX_MAESTRO_ORCHESTRATOR" launch-settings
+```
+
+Proceed only when the response has `ok: true`, `accountPinned: true`,
+`modelPinned: true`, `accountAvailable: true`, and `ready: true`. The response
+intentionally reveals neither the account name nor the model. If the command is
+unavailable, any field is false, or the settings are unreadable, stop before
+creating a worker and direct the human to the installed CMUX Maestro app's
+**Agent launch settings**. Never substitute the coordinator's account, active
+GitHub CLI account, ambient token, Copilot default, or a hardcoded model.
+
+The controller resolves the selected account credential only at launch, passes
+it privately through `COPILOT_GITHUB_TOKEN`, and supplies the configured model.
+An unavailable account fails closed before a terminal is created. Do not add
+account or model arguments to the skill command.
+
 ## Spawn
 
 ```sh
@@ -42,6 +64,7 @@ root. The controller refreshes this bounded evidence during lifecycle checks.
   --token "$CONTROL_TOKEN" \
   --name "Focused worker name" \
   --cwd "/absolute/working/directory" \
+  --require-pinned-launch-settings \
   --task "Bounded objective, constraints, validation, and stop condition"
 ```
 
@@ -54,6 +77,7 @@ tools for this task, pass each exact supported Copilot rule separately:
   --token "$CONTROL_TOKEN" \
   --name "Authorized implementation worker" \
   --cwd "/absolute/working/directory" \
+  --require-pinned-launch-settings \
   --task "Bounded implementation and validation" \
   --allow-tool "read" \
   --allow-tool "edit" \
@@ -67,13 +91,24 @@ justified; it is never a default. Denies win. A descendant receives no additiona
 grants by default and may request only a subset of its parent's explicit allows;
 inherited denies cannot be removed. Policies remain private.
 
-The command creates exactly one unfocused terminal tab beside the actor. A
-foreground supervisor runs one bounded noninteractive Copilot turn with a
-preassigned stable session ID, then remains in that terminal for authenticated
-follow-ups. Workers may spawn descendants through the same command using their injected
+The command creates exactly one unfocused terminal tab beside the actor and
+launches normal interactive Copilot with the supplied initial task. The account
+and model come only from the verified local **Agent launch settings**. This
+skill always requires both settings and never falls back to normal Copilot
+defaults. No personal account or model is shipped as a project default. Input and
+output belong directly to that terminal: the human can type follow-ups, answer
+questions, and continue after the first task finishes. A foreground supervisor
+maintains ownership and metadata without intercepting terminal input. Launch
+uses a private one-time credential, never a token typed into shell history.
+
+Do not create headless-worker tabs. For explicitly requested background work,
+prefer the provider's normal tabless subagent facilities; this skill does not
+offer a new headless launch mode.
+
+Workers may spawn descendants through the same command using their injected
 `CMUX_MAESTRO_WORKER_ID` and `CMUX_MAESTRO_CONTROL_TOKEN`. Respect the depth
-and eight-live-worker workspace limit; a completed report does not release a
-live terminal/supervisor slot. Reuse an idle worker instead of retrying fanout
+and eight-live-worker workspace limit; finishing an initial task does not release
+an open interactive session or terminal slot. Reuse an idle worker instead of retrying fanout
 failures in a loop.
 
 For an explicitly delegated descendant, use only the injected worker identity:
@@ -84,25 +119,28 @@ For an explicitly delegated descendant, use only the injected worker identity:
   --token "$CMUX_MAESTRO_CONTROL_TOKEN" \
   --name "Bounded descendant" \
   --cwd "/absolute/working/directory" \
+  --require-pinned-launch-settings \
   --task "Bounded objective, constraints, validation, and stop condition"
 ```
 
-## Inspect, follow up, and focus
+## Inspect and focus
 
 ```sh
 "$CMUX_MAESTRO_ORCHESTRATOR" status \
   --actor-id "$COORDINATOR_ID" --token "$CONTROL_TOKEN"
-
-"$CMUX_MAESTRO_ORCHESTRATOR" follow-up \
-  --actor-id "$COORDINATOR_ID" --token "$CONTROL_TOKEN" \
-  --worker-id "$WORKER_ID" --task "One bounded follow-up"
 
 "$CMUX_MAESTRO_ORCHESTRATOR" focus \
   --actor-id "$COORDINATOR_ID" --token "$CONTROL_TOKEN" \
   --worker-id "$WORKER_ID"
 ```
 
-Follow-up is queued privately and allowed only for a directly owned worker that
+Humans send follow-ups directly in the worker's Copilot interface. Programmatic
+follow-up is refused for interactive workers pending workspace messaging (#38).
+Never use `send`, `send-key`, pasted prompts, or terminal keystrokes to work
+around this boundary; a human may be using the same input.
+
+For existing legacy bounded workers only, `follow-up` remains privately queued
+and allowed only for a directly owned worker that
 has a verified successful exact-session boundary for its current generation.
 That includes an explicitly reported blocked, completed, or failed outcome and
 a bounded recovery from report-missing or permission-denied without claiming
@@ -111,9 +149,16 @@ uses that worker's preassigned exact `--resume` session ID. No prompt is typed
 into a terminal, and there is no fallback to `--continue`, a display name, the
 focused terminal, or a recent session.
 
-## Worker reporting
+## Interactive completion and legacy reporting
 
-The required report is permission-free. End the turn with exactly one compact
+Interactive workers converse normally. Do not append a machine-report contract
+or turn their final answer into lifecycle JSON. Their observed working, idle,
+blocked and ended states come from validated session evidence. An interactive
+process exit is not proof that its task succeeded.
+
+Only an existing legacy bounded worker whose injected execution mode is
+`bounded` uses the following compatibility protocol. Its report is permission-free.
+End the turn with exactly one compact
 JSON object as the entire final assistant message, with no code fence, prose,
 or tool request:
 
@@ -146,7 +191,11 @@ Archive an owned run before reusing its coordinator surface:
   --actor-id "$COORDINATOR_ID" --token "$CONTROL_TOKEN"
 ```
 
-Archive asks idle supervisors to exit but never kills a process or deletes a
+Close interactive sessions normally before archiving; archive refuses while an
+interactive session or its supervisor is live. Existing sessions are never
+automatically converted, restarted or closed by an update.
+
+For legacy bounded workers, archive asks idle supervisors to exit but never kills a process or deletes a
 terminal. Still-present worker terminals remain counted as retained resources.
 If the coordinator token is lost, `recover` may issue a new run only after the
 exact current caller workspace/surface matches, ownership is stale, and no

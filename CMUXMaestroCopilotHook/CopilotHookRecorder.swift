@@ -105,7 +105,9 @@ nonisolated struct CopilotHookRecorder {
         }
     }
 
-    func record(payload: Data, environment: [String: String]) -> HookOutcome {
+    func record(
+        payload: Data, environment: [String: String], appearance: CopilotSessionAppearance? = nil
+    ) -> HookOutcome {
         guard !Self.isDisabled(environment) else { return .disabled }
         guard payload.count <= 65_536,
               let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
@@ -115,6 +117,9 @@ nonisolated struct CopilotHookRecorder {
               let workspace = Self.canonicalUUID(environment["CMUX_WORKSPACE_ID"]),
               let surface = Self.canonicalUUID(environment["CMUX_SURFACE_ID"])
         else { return diagnose(.invalidInput) }
+        if let appearance, (!appearance.isValid || appearance.sessionID != session) {
+            return diagnose(.invalidInput)
+        }
 
         do {
             guard case .found(let own) = process(processID), own.uid == getuid() else { return diagnose(.noOwner) }
@@ -164,6 +169,12 @@ nonisolated struct CopilotHookRecorder {
                 guard let (existing, _) = try? CopilotFileAccess.readIdentity(
                     at: bindings, filename: name, owner: own.uid
                 ) else { return diagnose(.superseded) }
+                if appearance != nil {
+                    guard existing.sessionID == session, existing.surfaceID == surface,
+                          existing.launchWorkspaceID == workspace, owner.owns(existing) else {
+                        return diagnose(.noOwner)
+                    }
+                }
                 switch process(existing.ownerPID) {
                 case .found(let live):
                     if live.uid != own.uid || (live.owns(existing)
@@ -174,8 +185,9 @@ nonisolated struct CopilotHookRecorder {
                     return diagnose(.superseded)
                 case .dead: break
                 }
-            } else if errno != ENOENT {
-                return diagnose(.unavailable)
+            } else {
+                if appearance != nil { return diagnose(.noOwner) }
+                if errno != ENOENT { return diagnose(.unavailable) }
             }
 
             // Reopen the named source and marker immediately before committing:
@@ -191,7 +203,36 @@ nonisolated struct CopilotHookRecorder {
                   try verifier.verifyStable(proof, record: record, sessionDirectory: currentSource).status == .alive,
                   ancestors.allSatisfy({ process($0.pid) == .found($0) }) else { return diagnose(.noOwner) }
 
-            try HookFiles.atomicWrite(CopilotIdentityJSON.encode(record), name: name, directory: bindings)
+            if let appearance {
+                let appearanceName = "appearance-\(session.uuidString.lowercased()).json"
+                var selected = appearance
+                do {
+                    let data = try CopilotFileAccess.readStableRegular(
+                        at: bindings, filename: appearanceName, owner: own.uid, maximum: 4096, permissions: 0o600
+                    )
+                    let previous = try JSONDecoder().decode(CopilotSessionAppearance.self, from: data)
+                    guard previous.sessionID == session, previous.isValid else { return diagnose(.unavailable) }
+                    selected.iconId = appearance.iconId ?? previous.iconId
+                    selected.iconColor = appearance.iconColor ?? previous.iconColor
+                } catch CopilotFileError.missing {
+                    // The first own-session choice has no previous appearance.
+                }
+                let finalBindings = try CopilotFileAccess.openDirectory(bindingURL, owner: own.uid)
+                defer { close(finalBindings) }
+                let finalSource = try CopilotFileAccess.openDirectory(sourceURL, owner: own.uid)
+                defer { close(finalSource) }
+                guard bindingsMetadata.sameFile(as: try CopilotFileAccess.statFile(finalBindings)),
+                      sourceMetadata.sameFile(as: try CopilotFileAccess.statFile(finalSource)) else {
+                    return diagnose(.noOwner)
+                }
+                guard try verifier.verifyStable(proof, record: record, sessionDirectory: currentSource).status == .alive,
+                      ancestors.allSatisfy({ process($0.pid) == .found($0) }) else { return diagnose(.noOwner) }
+                try HookFiles.atomicWrite(
+                    JSONEncoder().encode(selected), name: appearanceName, directory: bindings
+                )
+            } else {
+                try HookFiles.atomicWrite(CopilotIdentityJSON.encode(record), name: name, directory: bindings)
+            }
             return .recorded
         } catch {
             return diagnose(.unavailable)

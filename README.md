@@ -120,10 +120,56 @@ exact managed workspace/surface pair replaces an unmanaged terminal row; names,
 paths and guessed relationships never establish ownership. The Taskboard view
 keeps the complete inferred activity projection available independently.
 
-The installed skill exposes explicit `register`, `spawn`, `status`, `follow-up`,
-`focus`, worker `report`, `archive`, and exact stale-surface `recover` operations.
-Each terminal keeps a foreground supervisor that runs bounded noninteractive
-Copilot turns. Follow-up is privately queued only after a directly owned
+The installed skill exposes explicit `launch-settings`, `register`, `spawn`,
+`status`, `focus`, `archive`, and exact stale-surface `recover` operations.
+`launch-settings` reports only whether a pinned account and model are configured
+and whether the selected account is currently available; it never returns the
+account name, model identifier, or credential. The skill requires that readiness
+and passes `spawn --require-pinned-launch-settings`, so a missing/default account
+or model fails before CMUX creates a terminal. **New workers are
+interactive Copilot sessions**, launched with `--interactive` and the initial
+task. Their terminal is a normal conversation: humans can type follow-ups and
+answer permission/questions directly, and completing a task does not close it.
+A foreground supervisor inherits terminal I/O rather than capturing a JSON
+stream. Ctrl-C goes to Copilot without terminating the supervisor; normal
+session exit is recorded without claiming task success. New workers cannot be
+launched in headless mode. Tabless background work belongs to the provider's
+normal subagent facilities, not misleading chat-like terminal tabs.
+
+Interactive startup uses the host's command launch, not input typed into an
+interactive shell. A bounded one-time credential stays in the private control
+directory and is consumed only after exact workspace/surface attachment.
+The terminal command contains no token. Both supervisor and provider process
+anchors retain the existing resource bounds.
+
+Programmatic follow-ups are refused for interactive workers pending #38.
+No prompt is injected into a live terminal. Close interactive Copilot normally
+before archiving; archive does not interrupt it. Existing legacy workers are
+preserved and visibly labeled **Legacy worker** rather than silently converted.
+
+### Local agent launch settings
+
+The containing app's **Settings** window provides **Launch agents with
+subscription:** and an optional worker-model setting. The dropdown lists
+configured GitHub.com accounts from GitHub CLI without displaying credentials;
+it does not infer subscription plan names. **Use Copilot default** leaves
+authentication and model selection to Copilot.
+
+Preferences live only in the user's private Application Support
+`CMUXMaestroPreview/Orchestration/worker-settings.json`, not in this repository.
+The project ships no account or model pin. A configured account is resolved from
+its stored credential at launch and passed only through `COPILOT_GITHUB_TOKEN`.
+Unavailable credentials fail closed before a new terminal is created; there is
+no silent fallback to a different account. Tokens are not written to settings,
+state, launch tickets, arguments, observer files, or logs. Git identity and the
+active `gh` account are not switched. Changes affect only future workers. Direct
+controller callers may retain Copilot defaults by omitting the requirement flag;
+the bundled orchestration skill deliberately does not and always requires the
+pinned Maestro account and model.
+
+### Legacy bounded-worker compatibility
+
+Existing bounded workers retain `follow-up` and `report`. Follow-up is privately queued only after a directly owned
 worker has a successful exact-session boundary for its current generation, then
 uses that worker's preassigned exact `--resume` session ID. Explicitly reported
 outcomes are preferred; a report-missing or permission-denied generation may be
@@ -148,6 +194,9 @@ still-live managed worker resources are allowed per workspace;
 reported completion does not free a slot. Archive retains bounded history and
 never kills processes or deletes tabs, so still-present archived worker tabs
 continue to consume the resource bound. Tool permissions are not auto-approved.
+Read-only controller snapshots use shared locks; state mutations remain
+exclusive. Idle supervisors therefore do not serialize their status reads
+behind the mutation lock as a workspace approaches its worker limit.
 Spawn accepts bounded caller-explicit `--allow-tool` and `--deny-tool` rules;
 the default adds no grants, denies win, and descendants cannot exceed their
 parent's explicit allows or remove inherited denies. These Copilot flags are
@@ -201,10 +250,13 @@ Ordinary terminal tabs use `md-ghost`; browsers use `fa-edge` (U+F282).
 **Sidebar settings → Agent icon** chooses the fallback robot or Copilot glyph for
 sessions without an explicit selection.
 
-Working agent rows have a subtle pulsing green background; blocked rows have a
+Working agent rows have a pale pastel-green shimmer moving left to right; blocked rows have a
 steady subtle red background. Idle/unknown rows do not pulse or glow. Reduce
-Motion replaces the working pulse with a steady subtle tint. The glow stays on
+Motion replaces the working shimmer with a steady subtle tint. The glow stays on
 each agent's own row, not its descendants, and never intercepts input.
+The selected workspace's uniquely focused surface has a glowing left border,
+separate from activity and icon color. Other workspaces' remembered focus does
+not light a border, and ambiguous/unavailable focus evidence does not guess.
 Identity colors do not change this treatment. Icons have no wand decoration;
 choosing an icon or role preset does not imply orchestration ownership.
 State remains explicit in row text and accessibility labels. Coordinator
@@ -350,7 +402,7 @@ comparison. No transcripts, real workspace paths or desktop images are uploaded.
 ## Choose your session icon: `maestro-icon`
 
 The bundled `maestro-icon` skill searches the local Nerd Fonts catalog and saves
-a glyph and/or identity color for **the invoking Maestro-managed session only**.
+a glyph and/or identity color for **the invoking session only**.
 Workers use their injected identity/token; coordinators use their own retained
 registration credentials. The command checks the caller's exact workspace and
 surface and accepts no other-session target. It does not rename, focus, register,
@@ -364,6 +416,10 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
   --actor-id "$CMUX_MAESTRO_WORKER_ID" \
   --token "$CMUX_MAESTRO_CONTROL_TOKEN" \
   --icon nf-md-bug_check --color teal
+
+# Standalone session: use the exact UUID from this CLI session's own context.
+"$MAESTRO" icon --self --session-id "<current-session-uuid>" \
+  --icon md-robot --color teal
 ```
 
 The [cheat sheet](https://www.nerdfonts.com/cheat-sheet) is a visual reference.
@@ -389,8 +445,16 @@ stored glyphs show explicit unavailable indicators rather than font fallback.
 
 Refresh Copilot integration through the stable app's existing explicit consent
 flow to install the new skill, controller and catalog. Cached CLI plugins are not
-rewritten or restarted automatically. Standalone, unregistered sessions are not
-yet supported by this skill.
+rewritten or restarted automatically.
+
+Standalone Copilot sessions can use `icon --self --session-id <current-session-uuid>`
+instead of orchestration credentials. The native helper verifies the caller's
+actual live CLI ancestor, PID/start tuple, in-use marker and existing binding.
+It refuses another surface/session, stale or ambiguous proof, and never creates
+an orchestration run. Appearance records stay under the existing private
+bindings grant, separate from ordinary hook refreshes; malformed appearance
+data cannot invalidate lifecycle evidence. No transcript or process arguments
+are read for authorization.
 
 ## Completed work history
 

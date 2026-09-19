@@ -8,6 +8,56 @@ struct SidebarClarityTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test func focusedBorderUsesOnlyTheSelectedWorkspacesUniqueFocusedSurface() {
+        let a = UUID(), b = UUID(), surfaceA = UUID(), surfaceB = UUID()
+        func workspace(_ id: UUID, selected: Bool, surface: UUID) -> HierarchyWorkspace {
+            .init(
+                id: id, title: .available("Workspace"), detail: .unavailable,
+                isSelected: .available(selected), isPinned: .available(false), unreadCount: .available(0),
+                rootPath: .unavailable, projectRootPath: .unavailable,
+                surfaces: .available([.init(
+                    id: surface, title: "Tab", kind: .terminal, isFocused: true, isPinned: false,
+                    unreadCount: 0, workingDirectory: .unavailable
+                )])
+            )
+        }
+        func hierarchy(_ workspaces: [HierarchyWorkspace]) -> HierarchySnapshot {
+            .init(sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+                  workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: false,
+                  workspaces: workspaces, windowID: UUID())
+        }
+        let normal = hierarchy([workspace(a, selected: true, surface: surfaceA),
+                                workspace(b, selected: false, surface: surfaceB)])
+        #expect(SidebarPresentation.focusedSurface(in: normal) == .surface(workspaceID: a, surfaceID: surfaceA))
+        #expect(SidebarPresentation.focusedSurface(in: hierarchy([
+            workspace(a, selected: true, surface: surfaceA), workspace(b, selected: true, surface: surfaceB)
+        ])) == nil)
+        #expect(SidebarPresentation.focusedSurface(in: hierarchy([
+            workspace(a, selected: true, surface: surfaceA), workspace(b, selected: false, surface: surfaceA)
+        ])) == nil)
+        #expect(SidebarPresentation.focusedSurface(in: .empty) == nil)
+    }
+
+    @Test func interactiveWorkerRemainsVisibleWhenIdleAndNeverInfersActivityFromItsMode() {
+        let worker = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: UUID(), role: "worker", label: "Interactive worker",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 1,
+            phase: "turn-running", availability: "busy", copilotSessionId: fixtures.sessionID,
+            executionMode: .interactive, createdAt: now, updatedAt: now
+        )
+        let session = SidebarCopilotSession(
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .alive, state: .idle, model: nil, observedAt: now, nodes: [],
+            childrenComplete: true, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+        #expect(SidebarPresentation.managedState(worker, availability: .ready, now: now, tree: tree).title == "Idle")
+        #expect(SidebarVisibleWork(tree: tree, managed: [worker], history: .init(), showEnded: false).managed.count == 1)
+        #expect(SidebarPresentation.managedState(worker, availability: .ready, now: now).tone == .neutral)
+        #expect(SidebarPresentation.managedState(worker, availability: .ready, now: now)
+            .title.contains("session state unavailable"))
+    }
+
     @Test func workspaceAttentionOmitsQuietWorkAndRoutineCompletionNotices() {
         var tree = makeTree(nodes: [node(state: .working), node(state: .idle), node(state: .completed)])
         tree.sessions[0].attention = [signal(.turnFinished)]
@@ -73,7 +123,7 @@ struct SidebarClarityTests {
     }
 
     @Test func activityGlowsSeparateWorkingBlockedIdleAndReducedMotion() {
-        #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(.working), reduceMotion: false) == .pulse)
+        #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(.working), reduceMotion: false) == .shimmer)
         #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(.working), reduceMotion: true) == .steadyWorking)
         for state: CopilotWorkState in [.blocked, .failed] {
             #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(state), reduceMotion: false) == .steadyAlert)
@@ -158,7 +208,7 @@ struct SidebarClarityTests {
                 }
             }
             Divider()
-            Text("Runtime state · working pulses live; this preview is static").font(.caption.weight(.semibold))
+            Text("Runtime state · working shimmers live; this preview is static").font(.caption.weight(.semibold))
             HStack(spacing: 20) {
                 ForEach([CopilotWorkState.working, .blocked, .idle, .unknown, .failed], id: \.self) { state in
                     HStack(spacing: 6) {

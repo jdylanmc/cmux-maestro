@@ -36,6 +36,8 @@ struct SidebarCopilotNode: Identifiable, Equatable {
 }
 
 struct SidebarCopilotSession: Identifiable, Equatable {
+    var iconId: String? = nil
+    var iconColor: String? = nil
     let id: UUID
     let workspaceID: UUID
     let surfaceID: UUID
@@ -232,6 +234,7 @@ struct SidebarCopilotTree: Equatable {
             let complete = snapshot.isComplete && snapshot.issues.isEmpty
                 && observation.liveness == .alive && !degraded
             sessions.append(SidebarCopilotSession(
+                iconId: observation.iconId, iconColor: observation.iconColor,
                 id: observation.sessionID,
                 workspaceID: workspaceID,
                 surfaceID: observation.surfaceID,
