@@ -376,6 +376,29 @@ actor CopilotSessionReader {
         }
         // A later session's I/O can race an earlier binding, including revocation.
         // Validate the entire published set and the path to our anchored index.
+        observations = try observations.map { observation in
+            try Task.checkCancellation()
+            var result = observation
+            do {
+                let data = try CopilotFileAccess.readStableRegular(
+                    at: bindings, filename: "appearance-\(observation.sessionID.uuidString.lowercased()).json",
+                    owner: verifier.uid, maximum: 4096, permissions: 0o600
+                )
+                let appearance = try JSONDecoder().decode(CopilotSessionAppearance.self, from: data)
+                guard appearance.sessionID == observation.sessionID, appearance.isValid else {
+                    issues.append(.appearanceUnavailable)
+                    return result
+                }
+                result.iconId = appearance.iconId
+                result.iconColor = appearance.iconColor
+            } catch CopilotFileError.missing {
+                // No explicit standalone icon has been chosen.
+            } catch {
+                try Self.rethrowCancellation(error)
+                issues.append(.appearanceUnavailable)
+            }
+            return result
+        }
         observations = observations.filter { observation in
             guard let entry = bindingsByID[observation.sessionID],
                   (try? bindingRemainsValid(

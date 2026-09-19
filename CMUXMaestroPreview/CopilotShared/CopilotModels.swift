@@ -29,7 +29,6 @@ nonisolated struct CopilotChildWork: Codable, Equatable, Sendable {
     let terminalEvent: CopilotTerminalEvent?
     let attention: [AgentAttention]?
     let activity: AgentActivity?
-
     init(
         id: String, parentID: String?, kind: CopilotWorkKind, name: String,
         state: CopilotWorkState, model: String?, terminalEvent: CopilotTerminalEvent? = nil,
@@ -48,6 +47,8 @@ nonisolated struct CopilotChildWork: Codable, Equatable, Sendable {
 }
 
 nonisolated struct CopilotSessionObservation: Codable, Equatable, Sendable {
+    var iconId: String? = nil
+    var iconColor: String? = nil
     let sessionID: UUID
     let surfaceID: UUID
     let launchWorkspaceID: UUID
@@ -82,6 +83,7 @@ nonisolated enum CopilotIssue: String, Codable, Equatable, Sendable {
     case integrationNotInstalled, noIdentityRecords, stateUnavailable
     case permissionDenied, malformedData, unsupportedFormat, loadingHistory
     case identityChanged, ambiguousIdentity, ambiguousTurn, readLimitReached
+    case appearanceUnavailable
 }
 
 nonisolated struct CopilotSnapshot: Codable, Equatable, Sendable {

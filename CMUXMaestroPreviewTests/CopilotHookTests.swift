@@ -28,6 +28,47 @@ struct CopilotHookTests: Sendable {
 
     private var payload: Data { Data("{\"sessionId\":\"\(session.uuidString)\"}".utf8) }
 
+    @Test func ownSessionAppearanceNeedsExistingProofAndSurvivesHookRefreshes() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        let choice = CMUXMaestroPreview.CopilotSessionAppearance(sessionID: session, iconId: "md-duck", iconColor: "teal")
+        #expect(recorder(root).record(payload: payload, environment: environment, appearance: choice) == .noOwner)
+        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        let before = try binding(root)
+        #expect(recorder(root).record(payload: payload, environment: environment, appearance: choice) == .recorded)
+        #expect(try binding(root) == before)
+        let file = root.appendingPathComponent("integration/bindings/appearance-\(session.uuidString.lowercased()).json")
+        let selected = try JSONDecoder().decode(CMUXMaestroPreview.CopilotSessionAppearance.self, from: Data(contentsOf: file))
+        #expect(selected == choice)
+        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        #expect(try JSONDecoder().decode(CMUXMaestroPreview.CopilotSessionAppearance.self, from: Data(contentsOf: file)) == choice)
+        let colorOnly = CMUXMaestroPreview.CopilotSessionAppearance(sessionID: session, iconId: nil, iconColor: "blue")
+        #expect(recorder(root).record(payload: payload, environment: environment, appearance: colorOnly) == .recorded)
+        let recolored = try JSONDecoder().decode(CMUXMaestroPreview.CopilotSessionAppearance.self, from: Data(contentsOf: file))
+        #expect(recolored.iconId == "md-duck")
+        #expect(recolored.iconColor == "blue")
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("Orchestration").path))
+    }
+
+    @Test func ownSessionAppearanceRejectsDifferentSurfaceInvalidColorAndUncertainOwner() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        let choice = CMUXMaestroPreview.CopilotSessionAppearance(sessionID: session, iconId: "md-duck", iconColor: "teal")
+        let different = environment.merging(["CMUX_SURFACE_ID": UUID().uuidString]) { _, value in value }
+        #expect(recorder(root).record(payload: payload, environment: different, appearance: choice) == .noOwner)
+        let invalid = CMUXMaestroPreview.CopilotSessionAppearance(sessionID: session, iconId: "md-duck", iconColor: "orange")
+        #expect(recorder(root).record(payload: payload, environment: environment, appearance: invalid) == .invalidInput)
+        #expect(recorder(root, process: { _ in .unavailable }).record(
+            payload: payload, environment: environment, appearance: choice
+        ) == .noOwner)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(
+            "integration/bindings/appearance-\(session.uuidString.lowercased()).json"
+        ).path))
+    }
+
     private func fixture() throws -> URL {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/hook-fixtures/\(UUID().uuidString)")

@@ -117,6 +117,110 @@ def resolve_icon(value):
     return name
 
 
+def validate_launch_settings(value):
+    if (not isinstance(value, dict) or set(value) - {"version", "copilotAccount", "model"}
+            or type(value.get("version")) is not int or value["version"] != 1):
+        raise OrchestrationError("Worker launch settings are invalid.")
+    for key, pattern in (
+        ("copilotAccount", r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}"),
+        ("model", r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}"),
+    ):
+        candidate = value.get(key)
+        if candidate is not None and (not isinstance(candidate, str) or re.fullmatch(pattern, candidate) is None):
+            raise OrchestrationError(f"Worker {key} setting is invalid.")
+    return value
+
+
+def worker_launch_settings(root):
+    data = with_store(root, lambda store: store._read_regular(
+        "worker-settings.json", 8192, private=True, directory=store.root_fd
+    ))
+    if data is None:
+        return {"version": 1}
+    try:
+        return validate_launch_settings(json.loads(data))
+    except (ValueError, TypeError) as error:
+        raise OrchestrationError("Worker launch settings are unreadable; no default account was substituted.") from error
+
+
+def command_launch_settings(root):
+    settings = worker_launch_settings(root)
+    account_pinned = settings.get("copilotAccount") is not None
+    model_pinned = settings.get("model") is not None
+    account_available = False
+    if account_pinned:
+        try:
+            resolve_copilot_token(settings["copilotAccount"])
+            account_available = True
+        except OrchestrationError:
+            account_available = False
+    return {
+        "accountPinned": account_pinned,
+        "modelPinned": model_pinned,
+        "accountAvailable": account_available,
+        "ready": account_pinned and model_pinned and account_available,
+    }
+
+
+def github_cli():
+    for candidate in ("gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"):
+        if candidate != "gh" and not Path(candidate).is_file():
+            continue
+        if candidate == "gh" and not shutil_which(candidate) and not os.environ.get("CMUX_MAESTRO_GH"):
+            continue
+        return trusted_executable("CMUX_MAESTRO_GH", candidate)
+    raise OrchestrationError("GitHub CLI is unavailable; install it to choose a pinned Copilot subscription.")
+
+
+def github_lookup_environment():
+    environment = os.environ.copy()
+    for key in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "COPILOT_GITHUB_TOKEN"):
+        environment.pop(key, None)
+    environment["GH_HOST"] = "github.com"
+    environment["GH_PROMPT_DISABLED"] = "1"
+    return environment
+
+
+def resolve_copilot_token(account):
+    if account is None:
+        return None
+    try:
+        response = subprocess.run(
+            [github_cli(), "auth", "token", "--hostname", "github.com", "--user", account],
+            env=github_lookup_environment(), capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise OrchestrationError("The selected Copilot subscription could not be accessed; no fallback account was used.") from error
+    token = response.stdout.strip()
+    if response.returncode or not token or len(token) > 4096 or any(character.isspace() for character in token):
+        raise OrchestrationError("The selected Copilot subscription is unavailable; sign in to that account before launching.")
+    return token
+
+
+def command_accounts():
+    try:
+        response = subprocess.run(
+            [github_cli(), "auth", "status", "--hostname", "github.com", "--json", "hosts",
+             "--jq", '.hosts["github.com"] | .[:64] | map({login,state})'],
+            env=github_lookup_environment(), capture_output=True, text=True, timeout=10,
+        )
+        if response.returncode or len(response.stdout) > 65_536:
+            raise OrchestrationError("Unable to list configured GitHub accounts.")
+        entries = json.loads(response.stdout)
+        if not isinstance(entries, list) or len(entries) > 64:
+            raise ValueError()
+        accounts = []
+        for entry in entries:
+            login = entry["login"]
+            if not isinstance(login, str):
+                raise ValueError()
+            validate_launch_settings({"version": 1, "copilotAccount": login})
+            accounts.append({"login": login, "available": entry.get("state") == "success"})
+        return {"accounts": sorted(accounts, key=lambda value: value["login"].lower())}
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
+        raise OrchestrationError("Unable to list configured GitHub accounts; use gh auth login to add one.") from error
+
+
 def command_icons(args):
     glyphs, presets = glyph_catalog()
     query = (args.search or "").strip().lower()
@@ -547,6 +651,19 @@ def validate_state(state):
         role = node.get("role")
         if role not in {"coordinator", "worker"}:
             raise OrchestrationError("Stored node role is invalid.")
+        mode = node.get("executionMode", "bounded")
+        if mode not in {"bounded", "interactive"}:
+            raise OrchestrationError("Stored execution mode is invalid.")
+        if node.get("launchSettings") is not None:
+            validate_launch_settings(node["launchSettings"])
+        provider = node.get("providerProcess")
+        if provider is not None and (
+            not isinstance(provider, dict) or set(provider) != {"pid", "start"}
+            or type(provider["pid"]) is not int or provider["pid"] <= 0
+            or not isinstance(provider["start"], str) or not 1 <= len(provider["start"]) <= 100
+            or mode != "interactive" or role != "worker"
+        ):
+            raise OrchestrationError("Stored interactive process identity is invalid.")
         if node.get("iconId") is not None:
             if not isinstance(node["iconId"], str) or not re.fullmatch(r"[a-z0-9_-]{1,128}", node["iconId"]):
                 raise OrchestrationError("Stored session glyph name is invalid.")
@@ -620,8 +737,11 @@ def validate_state(state):
             role == "coordinator" and phase == "registered" and availability == "active"
         ) or (
             role == "worker" and (
-                (phase in {"launching", "turn-queued", "turn-running"} and availability == "busy")
-                or (phase in {
+                (phase == "launching" and availability == "busy")
+                or (phase == "turn-running" and availability == "busy")
+                or (mode == "bounded" and phase == "turn-queued" and availability == "busy")
+                or (phase == "turn-failed" and availability == "idle")
+                or (mode == "bounded" and phase in {
                     "reported-blocked", "reported-completed", "reported-failed",
                     "report-missing", "permission-denied", "turn-failed",
                 } and availability == "idle")
@@ -770,25 +890,39 @@ class Store:
         return descriptor
 
     def read(self):
+        payload = self._read_regular("state.json", MAX_BYTES)
+        if payload is None:
+            return empty_state()
+        try:
+            state = json.loads(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise OrchestrationError("Control state is malformed.")
+        self._normalize_candidate_state(state)
+        validate_state(state)
+        return state
+
+    def _read_regular(self, name, maximum, *, private=False, directory=None):
+        directory = self.control_fd if directory is None else directory
         try:
             descriptor = os.open(
-                "state.json", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=self.control_fd
+                name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory
             )
         except FileNotFoundError:
-            return empty_state()
+            return None
         try:
             before = os.fstat(descriptor)
             if (
                 not stat.S_ISREG(before.st_mode)
                 or before.st_uid != os.getuid()
                 or before.st_size <= 0
-                or before.st_size > MAX_BYTES
+                or before.st_size > maximum
+                or (private and before.st_mode & 0o077)
             ):
                 raise OrchestrationError("Control state is not a safe owned regular file.")
-            payload = os.read(descriptor, MAX_BYTES + 1)
+            payload = os.read(descriptor, maximum + 1)
             after = os.fstat(descriptor)
             entry = os.stat(
-                "state.json", dir_fd=self.control_fd, follow_symlinks=False
+                name, dir_fd=directory, follow_symlinks=False
             )
             stamps = lambda value: (
                 value.st_dev, value.st_ino, value.st_mtime_ns, value.st_size
@@ -797,13 +931,22 @@ class Store:
                 raise OrchestrationError("Control state changed while reading.")
         finally:
             os.close(descriptor)
+        return payload
+
+    def launch_token(self, worker_id):
+        payload = self._read_regular(f"launch-{worker_id}.json", 4096, private=True)
+        if payload is None:
+            raise OrchestrationError("Private launch credential is unavailable.")
         try:
-            state = json.loads(payload)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            raise OrchestrationError("Control state is malformed.")
-        self._normalize_candidate_state(state)
-        validate_state(state)
-        return state
+            value = json.loads(payload)
+            token = value["token"]
+            if set(value) != {"workerId", "token"} or value["workerId"] != worker_id:
+                raise ValueError()
+            if not isinstance(token, str) or re.fullmatch(r"[a-f0-9]{64}", token) is None:
+                raise ValueError()
+            return token
+        except (ValueError, KeyError, TypeError):
+            raise OrchestrationError("Private launch credential is invalid.")
 
     @staticmethod
     def _normalize_candidate_state(state):
@@ -829,6 +972,8 @@ class Store:
             node.setdefault("gitChangesAt", None)
             node.setdefault("iconId", None)
             node.setdefault("iconColor", None)
+            if node.get("role") == "worker":
+                node.setdefault("executionMode", "bounded")
             if legacy_git_evidence:
                 node["worktreeLabel"] = None
                 node["branchLabel"] = None
@@ -869,6 +1014,7 @@ class Store:
             "runId": item["runId"],
             "parentId": item["parentId"],
             "role": item["role"],
+            "executionMode": item.get("executionMode"),
             "iconId": item.get("iconId"),
             "iconColor": item.get("iconColor"),
             "label": item["label"],
@@ -927,31 +1073,38 @@ class Store:
         os.fsync(directory)
 
 
-def mutate(root, operation, *, wait=1):
+def with_store(root, operation, *, wait=1):
     deadline = time.monotonic() + wait
     while True:
         try:
             with Store(root) as store:
-                state = store.read()
-                result = operation(state)
-                store.write(state)
-                return result
+                return operation(store)
         except OrchestrationError as error:
             if "operation is active" not in str(error) or time.monotonic() >= deadline:
                 raise
             time.sleep(0.05)
+
+
+def mutate(root, operation, *, wait=1):
+    def apply(store):
+        state = store.read()
+        result = operation(state)
+        store.write(state)
+        return result
+    return with_store(root, apply, wait=wait)
 
 
 def read_state(root, *, wait=1):
-    deadline = time.monotonic() + wait
-    while True:
+    return with_store(root, lambda store: json.loads(json.dumps(store.read())), wait=wait)
+
+
+def remove_launch_credential(root, worker_id):
+    def remove(store):
         try:
-            with Store(root) as store:
-                return json.loads(json.dumps(store.read()))
-        except OrchestrationError as error:
-            if "operation is active" not in str(error) or time.monotonic() >= deadline:
-                raise
-            time.sleep(0.05)
+            os.unlink(f"launch-{worker_id}.json", dir_fd=store.control_fd)
+        except FileNotFoundError:
+            pass
+    with_store(root, remove, wait=2)
 
 
 class Cmux:
@@ -1020,10 +1173,12 @@ class Cmux:
                 return pane
         raise OrchestrationError("The exact surface is not in a current pane of that workspace.")
 
-    def create_surface(self, workspace, pane, cwd):
+    def create_surface(self, workspace, pane, cwd, command=None):
+        arguments = ["--command", command] if command is not None else []
         response = self.run(
             "new-surface", "--type", "terminal", "--pane", pane,
             "--workspace", workspace, "--working-directory", cwd, "--focus", "false",
+            *arguments,
         )
         candidates = [
             value for value in self.ids(response, {"id", "surfaceid", "uuid"})
@@ -1123,8 +1278,8 @@ def process_start(pid):
 
 
 def process_matches(node):
-    process = node.get("supervisor")
-    return bool(process and process_start(process["pid"]) == process["start"])
+    return any(process and process_start(process["pid"]) == process["start"]
+               for process in (node.get("supervisor"), node.get("providerProcess")))
 
 
 def new_root(workspace, surface, pane, label, cwd=None, metadata=None, icon_id=None, icon_color=None):
@@ -1229,6 +1384,16 @@ def command_spawn(args, root, cmux):
     metadata = git_display_metadata(cwd)
     snapshot = read_state(root)
     actor = authorize(snapshot, args.actor_id, args.token)
+    launch_settings = worker_launch_settings(root)
+    if args.require_pinned_launch_settings and (
+        launch_settings.get("copilotAccount") is None
+        or launch_settings.get("model") is None
+    ):
+        raise OrchestrationError(
+            "Pinned Maestro account and model settings are required; configure Agent launch settings before spawning."
+        )
+    # Check availability before creating a terminal; never persist the credential.
+    resolve_copilot_token(launch_settings.get("copilotAccount"))
     parent_policy = actor["toolPolicy"] if actor["role"] == "worker" else None
     tool_policy = normalize_tool_policy(args.allow_tool, args.deny_tool, parent_policy)
     pane = cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
@@ -1279,6 +1444,8 @@ def command_spawn(args, root, cmux):
         state["nodes"][identifier] = {
             "id": identifier, "runId": current["runId"], "parentId": current["id"],
             "role": "worker", "label": label, "workspaceId": current["workspaceId"],
+            "executionMode": "interactive",
+            "launchSettings": launch_settings,
             "iconId": resolve_icon(args.icon or "maestro"),
             "iconColor": args.color,
             "surfaceId": None, "paneId": pane, "copilotSessionId": session_id,
@@ -1304,7 +1471,15 @@ def command_spawn(args, root, cmux):
     mutate(root, reserve)
     surface = None
     try:
-        surface = cmux.create_surface(actor["workspaceId"], pane, str(cwd))
+        def credential(store):
+            store._atomic(store.control_fd, f"launch-{identifier}.json", json.dumps(
+                {"workerId": identifier, "token": worker_token}
+            ).encode())
+        with_store(root, credential)
+        bootstrap = shlex.join([
+            str(Path(__file__).resolve()), "runtime", "--worker-id", identifier
+        ])
+        surface = cmux.create_surface(actor["workspaceId"], pane, str(cwd), command=bootstrap)
 
         def created(state):
             launch = state["launches"].get(identifier)
@@ -1340,15 +1515,11 @@ def command_spawn(args, root, cmux):
             launch["state"], launch["updatedAt"] = "starting", now()
         mutate(root, attach)
         cmux.rename(actor["workspaceId"], surface, label)
-        bootstrap = " ".join([
-            shlex.quote(str(Path(__file__).resolve())), "runtime",
-            "--worker-id", shlex.quote(identifier), "--token", shlex.quote(worker_token),
-        ])
-        cmux.start(actor["workspaceId"], surface, bootstrap)
     except Exception:
         def failed(state):
             record_launch_failure(state, identifier, surface)
         mutate(root, failed, wait=1)
+        remove_launch_credential(root, identifier)
         raise
     deadline = time.monotonic() + timeout("CMUX_MAESTRO_STARTUP_SECONDS", STARTUP_SECONDS)
     while time.monotonic() < deadline:
@@ -1370,6 +1541,7 @@ def command_spawn(args, root, cmux):
                 "startup-failed", "unavailable", now()
             )
     mutate(root, startup_failed, wait=1)
+    remove_launch_credential(root, identifier)
     raise OrchestrationError("Worker supervisor did not acknowledge startup within the bound.")
 
 
@@ -1491,6 +1663,91 @@ def terminal_bookkeeping(event):
     }.intersection(data)
 
 
+def worker_environment(worker_id, token, node):
+    environment = os.environ.copy()
+    environment.update({
+        "CMUX_MAESTRO_WORKER_ID": worker_id,
+        "CMUX_MAESTRO_CONTROL_TOKEN": token,
+        "CMUX_MAESTRO_RUN_ID": node["runId"],
+        "CMUX_MAESTRO_GENERATION": str(node["generation"]),
+        "CMUX_MAESTRO_ORCHESTRATOR": str(Path(__file__).resolve()),
+        "CMUX_MAESTRO_EXECUTION_MODE": node.get("executionMode", "bounded"),
+    })
+    account = (node.get("launchSettings") or {}).get("copilotAccount")
+    subscription = resolve_copilot_token(account)
+    if subscription is not None:
+        environment["COPILOT_GITHUB_TOKEN"] = subscription
+    return environment
+
+
+def run_interactive_session(root, worker_id, token, node):
+    copilot = trusted_executable("CMUX_MAESTRO_COPILOT", "copilot")
+    arguments = [
+        copilot, "--no-auto-update", "--interactive", node["task"],
+        "--session-id", node["copilotSessionId"], "--name", node["label"],
+        "-C", node["workingDirectory"],
+    ]
+    model = (node.get("launchSettings") or {}).get("model")
+    if model is not None:
+        arguments += ["--model", model]
+    for rule in node["toolPolicy"]["allow"]:
+        arguments.extend(["--allow-tool", rule])
+    for rule in node["toolPolicy"]["deny"]:
+        arguments.extend(["--deny-tool", rule])
+    if not all(os.isatty(fd) for fd in (0, 1, 2)):
+        raise OrchestrationError("Interactive workers require a real terminal; no headless fallback is allowed.")
+    previous_interrupt = signal.signal(signal.SIGINT, lambda _signum, _frame: None)
+    try:
+        try:
+            process = subprocess.Popen(
+                arguments, cwd=node["workingDirectory"],
+                env=worker_environment(worker_id, token, node),
+            )
+        except OSError as error:
+            raise OrchestrationError(f"Interactive Copilot launch failed: {error}") from error
+        provider_start = process_start(process.pid)
+        if provider_start is None and process.poll() is None:
+            raise OrchestrationError("Interactive Copilot process identity is unavailable.")
+        anchor = {"pid": process.pid, "start": provider_start} if provider_start else None
+
+        def attach(state):
+            current = authorize(state, worker_id, token)
+            if current["generation"] != node["generation"] or current["phase"] != "turn-running":
+                raise OrchestrationError("Interactive session ownership changed during launch.")
+            current["providerProcess"] = anchor
+        mutate(root, attach, wait=2)
+        interval = timeout("CMUX_MAESTRO_HEARTBEAT_SECONDS", HEARTBEAT_SECONDS)
+        if interval <= 0:
+            raise OrchestrationError("Interactive heartbeat interval is invalid.")
+        next_heartbeat = time.monotonic() + interval
+        while process.poll() is None:
+            if time.monotonic() >= next_heartbeat:
+                snapshot = read_state(root, wait=2)
+                evidence = collect_git_evidence(snapshot, {worker_id})
+                def heartbeat(state):
+                    current = authorize(state, worker_id, token)
+                    if current.get("providerProcess") != anchor or current["generation"] != node["generation"]:
+                        raise OrchestrationError("Interactive session ownership changed.")
+                    current["updatedAt"] = now()
+                    apply_git_evidence(state, evidence)
+                mutate(root, heartbeat, wait=2)
+                next_heartbeat = time.monotonic() + interval
+            time.sleep(0.1)
+        code = process.wait()
+        def ended(state):
+            current = authorize(state, worker_id, token)
+            if current.get("providerProcess") != anchor:
+                raise OrchestrationError("Interactive session ownership changed before exit.")
+            current["phase"] = "process-disappeared" if code == 0 else "turn-failed"
+            current["availability"] = "unavailable" if code == 0 else "idle"
+            current["result"] = f"Interactive Copilot session exited with status {code}; no task outcome is inferred."
+            current["updatedAt"] = now()
+        mutate(root, ended, wait=2)
+        return {"workerId": worker_id, "interactive": True, "exitCode": code}
+    finally:
+        signal.signal(signal.SIGINT, previous_interrupt)
+
+
 def run_copilot_turn(root, worker_id, token, node):
     copilot = trusted_executable("CMUX_MAESTRO_COPILOT", "copilot")
     prompt = node["task"] + report_instruction(node)
@@ -1514,14 +1771,7 @@ def run_copilot_turn(root, worker_id, token, node):
     for rule in node["toolPolicy"]["deny"]:
         arguments.extend(["--deny-tool", rule])
     arguments.extend(["-C", node["workingDirectory"]])
-    environment = os.environ.copy()
-    environment.update({
-        "CMUX_MAESTRO_WORKER_ID": worker_id,
-        "CMUX_MAESTRO_CONTROL_TOKEN": token,
-        "CMUX_MAESTRO_RUN_ID": node["runId"],
-        "CMUX_MAESTRO_GENERATION": str(node["generation"]),
-        "CMUX_MAESTRO_ORCHESTRATOR": str(Path(__file__).resolve()),
-    })
+    environment = worker_environment(worker_id, token, node)
     heartbeat_interval = timeout("CMUX_MAESTRO_HEARTBEAT_SECONDS", HEARTBEAT_SECONDS)
     if heartbeat_interval <= 0:
         return (
@@ -1734,6 +1984,21 @@ def command_runtime(args, root):
     start = process_start(pid)
     if not start:
         raise OrchestrationError("Cannot establish supervisor process identity.")
+    deadline = time.monotonic() + timeout("CMUX_MAESTRO_STARTUP_SECONDS", STARTUP_SECONDS)
+    while True:
+        state = read_state(root, wait=2)
+        node = state["nodes"].get(worker_id)
+        launch = state["launches"].get(worker_id)
+        if not node or node["phase"] != "launching" or not launch:
+            raise OrchestrationError("Worker launch lease is no longer active.")
+        if launch["state"] == "starting" and node.get("surfaceId"):
+            require_current_surface(node["workspaceId"], node["surfaceId"])
+            break
+        if time.monotonic() >= deadline:
+            raise OrchestrationError("Worker attachment did not finish within the startup bound.")
+        time.sleep(0.05)
+    if args.token is None:
+        args.token = with_store(root, lambda store: store.launch_token(worker_id), wait=2)
 
     def started(state):
         node = authorize(state, worker_id, args.token)
@@ -1746,15 +2011,23 @@ def command_runtime(args, root):
         ):
             raise OrchestrationError("Worker runtime is not in the launch phase.")
         node["supervisor"] = {"pid": pid, "start": start}
-        node["phase"], node["availability"], node["updatedAt"] = "turn-queued", "busy", now()
+        if node.get("executionMode") == "interactive":
+            node["phase"], node["availability"] = "turn-running", "busy"
+        else:
+            node["phase"], node["availability"] = "turn-queued", "busy"
+        node["updatedAt"] = now()
         del state["launches"][worker_id]
-    mutate(root, started, wait=2)
+        return json.loads(json.dumps(node))
+    started_node = mutate(root, started, wait=2)
+    remove_launch_credential(root, worker_id)
     def stop_supervisor(_signum, _frame):
         raise SystemExit(143)
     signal.signal(signal.SIGTERM, stop_supervisor)
     signal.signal(signal.SIGHUP, stop_supervisor)
     last_heartbeat = 0.0
     try:
+        if started_node.get("executionMode") == "interactive":
+            return run_interactive_session(root, worker_id, args.token, started_node)
         while True:
             state = read_state(root, wait=2)
             node = state["nodes"].get(worker_id)
@@ -1841,6 +2114,18 @@ def command_runtime(args, root):
                 node and not node.get("archiving")
                 and node.get("supervisor") == {"pid": pid, "start": start}
             ):
+                if node.get("executionMode") == "interactive":
+                    if node["phase"] in {"process-disappeared", "turn-failed"}:
+                        return
+                    provider = node.get("providerProcess")
+                    if provider and process_start(provider["pid"]) == provider["start"]:
+                        node["result"] = "Supervisor ended while the interactive Copilot process remains live."
+                        return
+                    node["phase"], node["availability"], node["updatedAt"] = (
+                        "turn-failed", "idle", now()
+                    )
+                    node["result"] = "Interactive runtime ended before a clean session exit; no task outcome is inferred."
+                    return
                 node["phase"], node["availability"], node["updatedAt"] = (
                     "process-disappeared", "unavailable", now()
                 )
@@ -1858,6 +2143,8 @@ def command_report(args, root):
         node = authorize(state, actor_id, token, allow_archiving=True)
         if node["role"] != "worker":
             raise OrchestrationError("Only workers can report lifecycle state.")
+        if node.get("executionMode") == "interactive":
+            raise OrchestrationError("Interactive sessions do not accept managed turn reports.")
         if args.generation != node["generation"]:
             raise OrchestrationError("Late or mismatched worker generation report refused.")
         if node["phase"] != "turn-running" or not process_matches(node):
@@ -1882,6 +2169,8 @@ def command_follow_up(args, root, cmux):
     snapshot = read_state(root)
     actor = authorize(snapshot, args.actor_id, args.token)
     target = ensure_owned(snapshot, actor, args.worker_id, direct=True)
+    if target.get("executionMode") == "interactive":
+        raise OrchestrationError("This worker is interactive. Talk to it directly in its tab; programmatic messaging is not supported yet.")
     cmux.validate_surface(target["workspaceId"], target["surfaceId"])
     if not process_matches(target):
         raise OrchestrationError("Worker supervisor identity is stale; no task was queued.")
@@ -1919,7 +2208,50 @@ def command_follow_up(args, root, cmux):
     return mutate(root, queue)
 
 
+def command_self_icon(args):
+    if args.actor_id is not None or args.token is not None:
+        raise OrchestrationError("Self-session selection cannot use a managed actor or token.")
+    session = canonical_uuid(args.session_id, "current session ID")
+    if args.icon is None and args.color is None:
+        raise OrchestrationError("Choose a glyph, a color, or both.")
+    glyph = resolve_icon(args.icon) if args.icon is not None else None
+    config_path = Path(__file__).resolve().parent / "identity-helper.json"
+    try:
+        descriptor = os.open(config_path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 4096:
+                raise OrchestrationError("The installed identity-helper configuration is not private.")
+            config = json.loads(os.read(descriptor, 4097))
+        finally:
+            os.close(descriptor)
+        if set(config) != {"helper"} or not isinstance(config["helper"], str) or not Path(config["helper"]).is_absolute():
+            raise ValueError()
+    except (OSError, ValueError, TypeError) as error:
+        raise OrchestrationError("Refresh Maestro integration to enable standalone session icons.") from error
+    helper = trusted_executable("CMUX_MAESTRO_IDENTITY_HELPER", config["helper"])
+    arguments = [helper, "icon", "--session-id", session]
+    if glyph is not None:
+        arguments += ["--icon", glyph]
+    if args.color is not None:
+        arguments += ["--color", args.color]
+    try:
+        process = subprocess.run(arguments, capture_output=True, text=True, timeout=5)
+        value = json.loads(process.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+        raise OrchestrationError("Own-session identity verification did not complete.") from error
+    if process.returncode != 0 or not isinstance(value, dict) or value.get("ok") is not True:
+        raise OrchestrationError("This caller could not prove ownership of that session; no icon was changed.")
+    if str(value.get("sessionId", "")).lower() != session or (
+        glyph is not None and value.get("iconId") != glyph
+    ) or (args.color is not None and value.get("iconColor") != args.color):
+        raise OrchestrationError("The identity helper returned a mismatched selection.")
+    return {key: value[key] for key in ("sessionId", "iconId", "iconColor") if key in value}
+
+
 def command_icon(args, root, cmux):
+    if args.session_id is not None:
+        raise OrchestrationError("Use --self for a standalone session, not managed credentials.")
     if args.icon is None and args.color is None:
         raise OrchestrationError("Choose an icon, a color, or both.")
     icon = resolve_icon(args.icon) if args.icon is not None else None
@@ -1983,6 +2315,7 @@ def command_status(args, root, cmux):
         apply_git_evidence(state, git_evidence)
         return {"runId": current_actor["runId"], "workers": [{
             "workerId": node["id"], "parentId": node["parentId"], "name": node["label"],
+            "executionMode": node.get("executionMode"),
             "iconId": node.get("iconId"),
             "iconColor": node.get("iconColor"),
             "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
@@ -2028,6 +2361,9 @@ def command_archive(args, root, cmux):
 
     def begin(state):
         current = authorize(state, args.actor_id, args.token, allow_archiving=True)
+        if any(node["runId"] == current["runId"] and node.get("executionMode") == "interactive"
+               and process_matches(node) for node in state["nodes"].values()):
+            raise OrchestrationError("Close interactive sessions normally before archiving; no input or process will be interrupted.")
         if any(
             launch["runId"] == current["runId"]
             for launch in state["launches"].values()
@@ -2144,6 +2480,11 @@ def command_recover(args, root, cmux):
 def parser():
     result = argparse.ArgumentParser(prog="cmux-maestro-orchestrator")
     commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser("accounts", help="List configured GitHub account names without credentials")
+    commands.add_parser(
+        "launch-settings",
+        help="Report whether pinned Maestro account and model settings are ready without revealing them",
+    )
     icons = commands.add_parser("icons", help="Search pinned Nerd Font glyphs; no registration required")
     icons.add_argument("--search")
     icons.add_argument("--offset", type=int, default=0)
@@ -2164,16 +2505,19 @@ def parser():
     spawn.add_argument("--cwd", required=True)
     spawn.add_argument("--allow-tool", action="append", default=[])
     spawn.add_argument("--deny-tool", action="append", default=[])
+    spawn.add_argument("--require-pinned-launch-settings", action="store_true")
     spawn.add_argument("--icon")
     spawn.add_argument("--color", choices=ICON_COLORS)
     icon = commands.add_parser("icon", help="Choose an icon for the authenticated caller's own session")
-    icon.add_argument("--actor-id", required=True)
-    icon.add_argument("--token", required=True)
+    icon.add_argument("--actor-id")
+    icon.add_argument("--token")
+    icon.add_argument("--self", action="store_true", dest="own_session")
+    icon.add_argument("--session-id")
     icon.add_argument("--icon")
     icon.add_argument("--color", choices=ICON_COLORS)
     runtime = commands.add_parser("runtime")
     runtime.add_argument("--worker-id", required=True)
-    runtime.add_argument("--token", required=True)
+    runtime.add_argument("--token")
     report = commands.add_parser("report")
     report.add_argument("--worker-id")
     report.add_argument("--token")
@@ -2196,12 +2540,20 @@ def parser():
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
+        if args.command == "accounts":
+            print(json.dumps({"ok": True, **command_accounts()}, sort_keys=True))
+            return 0
         if args.command == "icons":
             print(json.dumps({"ok": True, **command_icons(args)}, sort_keys=True))
             return 0
+        if args.command == "icon" and args.own_session:
+            print(json.dumps({"ok": True, **command_self_icon(args)}, sort_keys=True))
+            return 0
         root = default_root()
-        cmux = None if args.command in {"runtime", "report"} else Cmux()
-        if args.command == "register":
+        cmux = None if args.command in {"launch-settings", "runtime", "report"} else Cmux()
+        if args.command == "launch-settings":
+            output = command_launch_settings(root)
+        elif args.command == "register":
             output = command_register(args, root, cmux)
         elif args.command == "recover":
             output = command_recover(args, root, cmux)
@@ -2221,6 +2573,9 @@ def main(argv=None):
             output = command_icon(args, root, cmux)
         else:
             output = command_status(args, root, cmux)
+        if args.command == "runtime" and output.get("interactive"):
+            print(f"Interactive Copilot session ended (exit {output['exitCode']}).")
+            return 0 if output["exitCode"] == 0 else 1
         print(json.dumps({"ok": True, **output}, sort_keys=True))
         return 0
     except OrchestrationError as error:

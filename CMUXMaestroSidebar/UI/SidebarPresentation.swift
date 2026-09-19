@@ -21,7 +21,7 @@ struct SidebarVisual: Equatable {
 }
 
 enum SidebarActivityTreatment: Equatable {
-    case pulse, steadyWorking, steadyAlert, none
+    case shimmer, steadyWorking, steadyAlert, none
 }
 
 struct SidebarWorkspaceStateCount: Equatable, Identifiable {
@@ -277,7 +277,7 @@ enum SidebarPresentation {
 
     static func activityTreatment(_ visual: SidebarVisual, reduceMotion: Bool) -> SidebarActivityTreatment {
         switch visual.tone {
-        case .green: reduceMotion ? .steadyWorking : .pulse
+        case .green: reduceMotion ? .steadyWorking : .shimmer
         case .red: .steadyAlert
         default: .none
         }
@@ -290,12 +290,13 @@ enum SidebarPresentation {
         return current
     }
 
-    private static func focusedSurface(in hierarchy: HierarchySnapshot) -> SidebarSeenTarget? {
-        guard hierarchy.workspaceListAvailable, hierarchy.surfaceMetadataAvailable else { return nil }
+    static func focusedSurface(in hierarchy: HierarchySnapshot) -> SidebarSeenTarget? {
+        let topology = SidebarTopology(hierarchy)
+        guard topology.canReadSessions else { return nil }
         let selected = hierarchy.workspaces.filter { $0.isSelected == .available(true) }
         guard selected.count == 1, case .available(let surfaces) = selected[0].surfaces else { return nil }
         let focused = surfaces.filter(\.isFocused)
-        guard focused.count == 1 else { return nil }
+        guard focused.count == 1, topology.workspaceBySurface[focused[0].id] == selected[0].id else { return nil }
         return .surface(workspaceID: selected[0].id, surfaceID: focused[0].id)
     }
 
@@ -381,7 +382,8 @@ enum SidebarPresentation {
             (.ambiguousIdentity, "Session identity is unconfirmed"),
             (.ambiguousTurn, "Turn identity is unconfirmed"),
             (.stateUnavailable, "Copilot state unavailable"),
-            (.readLimitReached, "History read limit reached")
+            (.readLimitReached, "History read limit reached"),
+            (.appearanceUnavailable, "Session icon metadata unavailable")
         ] where tree.issues.contains(issue) { result.append(message) }
         if tree.omittedActiveChildrenCount > 0 {
             result.append("\(tree.omittedActiveChildrenCount) working/blocked tasks beyond display limits")
@@ -505,6 +507,13 @@ enum SidebarPresentation {
         _ node: SidebarOrchestrationNode, availability: SidebarOrchestrationAvailability,
         now: Date, tree: SidebarCopilotTree? = nil
     ) -> SidebarVisual {
+        if node.executionMode == .interactive, node.phase == "turn-running",
+           [.ready, .partial, .stale].contains(availability) {
+            if let tree, let session = managedSession(for: node, in: tree, now: now) {
+                return sessionState(session)
+            }
+            return state(.unknown).titled("Interactive · session state unavailable")
+        }
         if let session = coordinatorSession(node, availability: availability, tree: tree, now: now) {
             return sessionState(session)
         }
@@ -587,6 +596,14 @@ enum SidebarPresentation {
             .init(title: "Working directory", value: paths.workingDirectory.pathDisplayText),
             .init(title: "Role", value: node.role.capitalized)
         ]
+        if node.role == "worker" {
+            result.append(.init(
+                title: "Interaction",
+                value: node.executionMode == .interactive
+                    ? "Interactive Copilot session · talk directly in its tab"
+                    : "Legacy bounded worker · coordinator follow-up required"
+            ))
+        }
         let warnings = overviewWarnings(tree)
         if !warnings.isEmpty {
             result.append(.init(title: "Observation warnings", value: warnings.joined(separator: "\n")))
@@ -656,6 +673,8 @@ enum SidebarPresentation {
             .init(title: "Kind", value: kind(node.kind)),
             .init(title: "State", value: node.state.rawValue),
             .init(title: "Session", value: session.id.uuidString),
+            .init(title: "Session glyph", value: session.iconId ?? "Sidebar default"),
+            .init(title: "Icon color", value: session.iconColor ?? "theme"),
             .init(title: "Child ID", value: node.id)
         ]
         if let model = node.model { result.insert(.init(title: "Model", value: model), at: 3) }

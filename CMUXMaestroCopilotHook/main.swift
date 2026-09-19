@@ -64,5 +64,51 @@ private func run() {
     _ = recorder.record(payload: input, environment: environment)
 }
 
+private func setOwnAppearance() -> Int32 {
+    let arguments = Array(CommandLine.arguments.dropFirst(2))
+    guard arguments.count % 2 == 0 else { return 2 }
+    var values: [String: String] = [:]
+    for offset in stride(from: 0, to: arguments.count, by: 2) {
+        let key = arguments[offset]
+        guard ["--session-id", "--icon", "--color"].contains(key), values[key] == nil else { return 2 }
+        values[key] = arguments[offset + 1]
+    }
+    guard let session = CopilotHookRecorder.canonicalUUID(values["--session-id"]),
+          let root = try? CopilotPaths.integrationRoot(), let sessions = try? CopilotPaths.sessionStateRoot()
+    else { return 2 }
+    let appearance = CopilotSessionAppearance(sessionID: session, iconId: values["--icon"], iconColor: values["--color"])
+    guard appearance.isValid else { return 2 }
+    if let glyph = appearance.iconId {
+        guard let executable = Bundle.main.executableURL else { return 2 }
+        let catalogURL = executable.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/NerdFonts/glyphnames.json")
+        guard let size = try? catalogURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              size <= 2_097_152,
+              let data = try? Data(contentsOf: catalogURL),
+              let catalog = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              catalog[glyph] != nil, glyph != "cod-blank" else { return 2 }
+    }
+    let environment = ProcessInfo.processInfo.environment
+    let recorder = CopilotHookRecorder(
+        integrationRoot: root, sessionStateRoot: sessions, processID: getpid(),
+        process: { @Sendable pid in CopilotProcessProbe.read(pid) }
+    )
+    guard let payload = try? JSONSerialization.data(withJSONObject: ["sessionId": session.uuidString]) else { return 2 }
+    let outcome = recorder.record(payload: payload, environment: environment, appearance: appearance)
+    var result: [String: Any] = ["ok": outcome == .recorded, "status": outcome.rawValue, "sessionId": session.uuidString]
+    if let icon = appearance.iconId { result["iconId"] = icon }
+    if let color = appearance.iconColor { result["iconColor"] = color }
+    guard let encoded = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) else { return 2 }
+    FileHandle.standardOutput.write(encoded + Data([10]))
+    return outcome == .recorded ? 0 : 2
+}
+
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "icon" {
+    #if CMUX_VALIDATION || MAESTRO_HOOK_TESTING
+    exit(2)
+    #else
+    exit(setOwnAppearance())
+    #endif
+}
 run()
 exit(0)

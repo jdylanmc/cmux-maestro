@@ -32,7 +32,10 @@ enum SidebarRenderingEvidence {
         )
     }
 
-    static func recognizedLines(in image: URL, dark: Bool = false, excludingLeadingFraction: CGFloat = 0) throws -> [String] {
+    static func recognizedLines(
+        in image: URL, dark: Bool = false, excludingLeadingFraction: CGFloat = 0,
+        naturalLanguage: Bool = false
+    ) throws -> [String] {
         guard let raw = NSBitmapImageRep(data: try Data(contentsOf: image))?.cgImage else {
             throw ImageInspectionError.decodeFailed
         }
@@ -61,7 +64,7 @@ enum SidebarRenderingEvidence {
         guard let legible = context.makeImage() else { throw ImageInspectionError.scaleFailed }
         let request = VNRecognizeTextRequest()
         request.recognitionLanguages = ["en-US"]
-        request.usesLanguageCorrection = false
+        request.usesLanguageCorrection = naturalLanguage
         request.recognitionLevel = .accurate
         try VNImageRequestHandler(cgImage: legible).perform([request])
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }

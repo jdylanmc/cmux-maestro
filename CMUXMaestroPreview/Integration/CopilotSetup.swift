@@ -149,6 +149,10 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         defer { close(orchestrationRoot) }
         let bin = try HookFiles.privateDirectory(orchestration.appendingPathComponent("bin", isDirectory: true))
         defer { close(bin) }
+        try HookFiles.atomicWrite(
+            JSONSerialization.data(withJSONObject: ["helper": helper.path], options: [.sortedKeys]),
+            name: "identity-helper.json", directory: bin
+        )
         let glyphDirectory = try HookFiles.privateDirectory(
             orchestration.appendingPathComponent("bin/NerdFonts", isDirectory: true)
         )

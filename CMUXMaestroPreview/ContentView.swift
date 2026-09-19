@@ -64,6 +64,9 @@ struct ContentView: View {
             }
 
             Divider()
+            SettingsLink {
+                Label("Agent launch settings…", systemImage: "gearshape")
+            }
             Text("Next: enable CMUX Maestro Preview in CMUX’s Sidebar Extensions browser and select it. Restart or resume existing Copilot CLI sessions once to load the plugin and orchestration skill; future sessions work normally. Never restart sessions automatically.")
                 .font(.callout)
             Text("Keep this app at its installed location. If you move or replace it, enable the integration again to refresh the bundled helper path. Uses the standard ~/.copilot/session-state location only.")

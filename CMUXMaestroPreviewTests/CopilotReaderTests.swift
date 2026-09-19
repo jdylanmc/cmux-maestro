@@ -590,6 +590,26 @@ nonisolated struct CopilotReaderTests {
         #expect(repaired.sessions[0].state == .working)
     }
 
+    @Test func standaloneAppearanceDoesNotChangeLifecycleAndMalformedAppearanceDoesNotPoisonIt() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("assistant.turn_start", data: ["turnId": "current"])])
+        let file = fixture.bindings.appendingPathComponent("appearance-\(fixture.sessionID.uuidString.lowercased()).json")
+        let choice = CopilotSessionAppearance(sessionID: fixture.sessionID, iconId: "md-duck", iconColor: "blue")
+        try JSONEncoder().encode(choice).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        let reader = fixture.reader()
+        let chosen = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(chosen.sessions.first?.iconId == "md-duck")
+        #expect(chosen.sessions.first?.iconColor == "blue")
+        #expect(chosen.sessions.first?.state == .working)
+        try Data("malformed".utf8).write(to: file)
+        let invalid = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(invalid.issues.contains(.appearanceUnavailable))
+        #expect(invalid.sessions.first?.state == .working)
+        #expect(invalid.sessions.first?.iconId == nil)
+    }
+
     @Test func malformedAndOversizedRowsDoNotFabricateCurrentState() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }

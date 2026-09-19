@@ -1,11 +1,11 @@
 ---
 name: maestro-icon
-description: Choose a Nerd Font glyph and optional identity color for your own Maestro-managed session. Use when asked to pick or change your session icon, avatar, glyph, or color in the Maestro sidebar.
+description: Choose a Nerd Font glyph and optional identity color for your own Copilot session in Maestro. Supports registered workers and verified standalone sessions without creating a coordinator or supervisor.
 ---
 
 # Maestro Icon
 
-Choose one icon for the invoking agent's own registered session. This changes
+Choose one icon for the invoking agent's own session. This changes
 only its sidebar appearance. Never assign another session's icon, change
 execution state, or create, recover, archive, rename, focus, or stop an agent.
 
@@ -43,9 +43,14 @@ current choice; use `theme` to restore the default.
 - Never search control files, process arguments, shell history, another agent's
   output, or other sessions for credentials. Never infer identity from a title,
   working directory, selected tab, or recent session.
-- If your own authenticated identity is unavailable, stop and report that
-  `maestro-icon` currently requires a Maestro-managed session. Do not register
-  or recover a run as a side effect. Standalone sessions are not yet supported.
+- A standalone session uses the exact session UUID supplied by its current CLI
+  session context (for example its own session-state directory identity), not a
+  guessed recent session. Use the `--self --session-id` path below. The native
+  helper verifies the calling process's live Copilot ancestor, PID/start identity,
+  in-use marker, existing binding and exact CMUX surface before writing.
+- If neither identity is available, stop and explain the missing own-session
+  proof. Never register or recover a run as a side effect, and never describe an
+  unverified session as managed.
 
 ## Pick and save
 
@@ -70,6 +75,18 @@ Never print or record the token in an answer, public log, or repository file.
 Normal tool permissions still apply; do not request broad shell grants or
 bypass a denied command just to change an icon.
 
+For a standalone session:
+
+```sh
+"$MAESTRO" icon --self \
+  --session-id "<your-exact-current-session-uuid>" \
+  --icon "md-robot" --color "<palette-color>"
+```
+
+This does not create orchestration state, a coordinator or a supervisor. It
+requires the native integration's current-session binding. If proof fails,
+report that no icon changed; do not search other sessions or override identity.
+
 Icon and color are independently optional, but supply at least one. Require
 `ok: true` and the resolved canonical glyph name (`iconId`) and/or `iconColor`
 in the response before reporting
@@ -83,4 +100,4 @@ follow-up turns in the same managed session.
 
 Choosing the `orchestrator` preset does not grant orchestration authority.
 The runtime-derived row glow is independent of the chosen glyph and color:
-working pulses subtly green, blocked is steady red, and idle does not pulse.
+working has a pastel-green left-to-right shimmer, blocked is steady red, and idle stays still.

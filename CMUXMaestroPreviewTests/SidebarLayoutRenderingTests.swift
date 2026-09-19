@@ -113,7 +113,7 @@ struct SidebarLayoutRenderingTests {
         let lines = try SidebarRenderingEvidence.recognizedLines(in: mixedImage, dark: true)
         // Recognize the title lane separately: Vision otherwise joins the robot with "Coordinator".
         let titleLines = try SidebarRenderingEvidence.recognizedLines(
-            in: mixedImage, dark: true, excludingLeadingFraction: 64.0 / 340.0
+            in: mixedImage, dark: true, excludingLeadingFraction: 64.0 / 340.0, naturalLanguage: true
         )
         try JSONEncoder().encode(lines).write(to: mixedImage.appendingPathExtension("text.json"))
         for title in ["Coordinator", "Implementation", "Hierarchy recovery", "Readiness check"] {
@@ -125,7 +125,7 @@ struct SidebarLayoutRenderingTests {
         #expect(!lines.contains { $0.contains("Copilot agent") || $0.lowercased().contains("session ") })
         #expect(!lines.contains { $0.contains("counts incomplete") || $0.contains("0 agents") || $0.contains("Other tabs") })
         #expect(lines.contains { $0.contains("Agent") && $0.contains("review-worktree") })
-        #expect(lines.contains { $0.contains("State unavailable") })
+        #expect(titleLines.contains { $0.contains("State unavailable") })
         #expect(lines.contains { $0.contains("Terminal") })
         #expect(!lines.contains { $0.contains("Earlier skill") || $0.contains("Branch collapsed")
             || $0.contains("Other sessions/activity") })

@@ -24,11 +24,19 @@ private struct SidebarTerminalIconStyleKey: EnvironmentKey {
     static let defaultValue = SidebarTerminalIconStyle.ghost
 }
 
+private struct SidebarFocusedSurfaceKey: EnvironmentKey {
+    static let defaultValue: SidebarSeenTarget? = nil
+}
+
 final class SidebarIconResources: NSObject {
     static let bundle = Bundle(for: SidebarIconResources.self)
 }
 
 private extension EnvironmentValues {
+    var sidebarFocusedSurface: SidebarSeenTarget? {
+        get { self[SidebarFocusedSurfaceKey.self] }
+        set { self[SidebarFocusedSurfaceKey.self] = newValue }
+    }
     var sidebarDismissManaged: ((SidebarDismissedManagedOutcome) -> Void)? {
         get { self[SidebarDismissManagedKey.self] }
         set { self[SidebarDismissManagedKey.self] = newValue }
@@ -144,20 +152,32 @@ struct SidebarActivityBackground: View {
     let visual: SidebarVisual
     var suppressAnimation = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    private let mint = Color(red: 0.68, green: 0.92, blue: 0.79)
 
     var body: some View {
         Group {
             switch SidebarPresentation.activityTreatment(visual, reduceMotion: reduceMotion || suppressAnimation) {
-            case .pulse:
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(.green)
-                    .phaseAnimator([false, true]) { content, bright in
-                        content.opacity(bright ? 0.085 : 0.025)
-                    } animation: { _ in
-                        .easeInOut(duration: 1.5)
+            case .shimmer:
+                GeometryReader { geometry in
+                    let width = max(48, geometry.size.width * 0.35)
+                    ZStack(alignment: .leading) {
+                        mint.opacity(colorScheme == .dark ? 0.035 : 0.06)
+                        LinearGradient(
+                            colors: [.clear, mint.opacity(colorScheme == .dark ? 0.17 : 0.26), .clear],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                        .frame(width: width)
+                        .phaseAnimator([false, true]) { content, trailing in
+                            content.offset(x: trailing ? geometry.size.width : -width)
+                        } animation: { trailing in
+                            trailing ? .linear(duration: 2.6) : .linear(duration: 0)
+                        }
                     }
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
             case .steadyWorking:
-                RoundedRectangle(cornerRadius: 4).fill(.green.opacity(0.05))
+                RoundedRectangle(cornerRadius: 4).fill(mint.opacity(colorScheme == .dark ? 0.07 : 0.11))
             case .steadyAlert:
                 RoundedRectangle(cornerRadius: 4).fill(.red.opacity(0.065))
             case .none:
@@ -166,6 +186,29 @@ struct SidebarActivityBackground: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+private struct SidebarFocusBorder: ViewModifier {
+    let workspaceID: UUID
+    let surfaceID: UUID
+    @Environment(\.sidebarFocusedSurface) private var target
+    private var focused: Bool { target == .surface(workspaceID: workspaceID, surfaceID: surfaceID) }
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .leading) {
+                if focused {
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(width: 2)
+                        .shadow(color: .accentColor.opacity(0.65), radius: 3)
+                        .padding(.vertical, 2)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .accessibilityAddTraits(focused ? .isSelected : [])
     }
 }
 
@@ -289,6 +332,11 @@ struct SidebarView: View {
         )
     }
 
+    private var focusedSurface: SidebarSeenTarget? {
+        guard case .connected = model.state else { return nil }
+        return SidebarPresentation.focusedSurface(in: model.hierarchy)
+    }
+
     private var content: some View {
         VStack(alignment: .leading, spacing: preferences.layout.density.spacing(6)) {
             HStack(alignment: .firstTextBaseline) {
@@ -390,6 +438,7 @@ struct SidebarView: View {
         .environment(\.sidebarDensity, preferences.layout.density)
         .environment(\.sidebarAgentIconStyle, preferences.agentIconStyle)
         .environment(\.sidebarTerminalIconStyle, preferences.terminalIconStyle)
+        .environment(\.sidebarFocusedSurface, focusedSurface)
         .environment(\.sidebarPrepareSeen, prepareSeen)
         .environment(\.sidebarDismissManaged, dismissManaged)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -955,6 +1004,7 @@ private struct ManagedNodeRow: View {
             }
         }
         .background { SidebarActivityBackground(visual: stateVisual) }
+        .modifier(SidebarFocusBorder(workspaceID: node.workspaceId, surfaceID: node.surfaceId))
         .padding(.leading, CGFloat(depth * 12))
         .padding(.vertical, 2)
         .padding(.trailing, 4)
@@ -990,6 +1040,9 @@ private struct ManagedNodeRow: View {
     }
 
     private var stateCaption: String {
+        if node.role == "worker", node.executionMode != .interactive {
+            return "Legacy worker · \(stateVisual.title)"
+        }
         if stateVisual.title.hasPrefix("State unverified") { return "State unverified" }
         if stateVisual.title.hasPrefix("Registered") { return "Registered" }
         return stateVisual.title
@@ -1345,7 +1398,8 @@ private struct SurfaceRow: View {
                 } label: {
                     if let singleSession {
                         SidebarAgentIcon(
-                            visual: SidebarPresentation.sessionState(singleSession)
+                            visual: SidebarPresentation.sessionState(singleSession),
+                            avatar: singleSession.iconId, color: singleSession.iconColor.flatMap(SidebarAvatarColor.init(rawValue:))
                         )
                     } else if surface.kind == .agentSession {
                         SidebarAgentIcon(visual: SidebarPresentation.state(.unknown))
@@ -1395,6 +1449,7 @@ private struct SurfaceRow: View {
                     SidebarActivityBackground(visual: SidebarPresentation.sessionState(singleSession))
                 }
             }
+            .modifier(SidebarFocusBorder(workspaceID: workspaceID, surfaceID: surface.id))
             if let singleSession {
                 CopilotSessionContents(
                     session: singleSession, expanded: expanded,
@@ -1461,7 +1516,8 @@ private struct CopilotSessionRow: View {
                     selection = .session(session.id)
                 } label: {
                     SidebarAgentIcon(
-                        visual: SidebarPresentation.sessionState(session)
+                        visual: SidebarPresentation.sessionState(session),
+                        avatar: session.iconId, color: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:))
                     )
                 }
                 .buttonStyle(.plain)
@@ -1833,7 +1889,13 @@ private struct TaskboardSessionRow: View {
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation, label: "Focus Copilot session \(session.shortID)"
                 ) {
-                    Text(title).sidebarFont(.caption, weight: .semibold).lineLimit(1)
+                    HStack(spacing: 4) {
+                        SidebarAgentIcon(
+                            visual: SidebarPresentation.sessionState(session),
+                            avatar: session.iconId, color: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:))
+                        )
+                        Text(title).sidebarFont(.caption, weight: .semibold).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
                 Button { selection = .session(session.id) } label: {
@@ -1859,6 +1921,7 @@ private struct TaskboardSessionRow: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("taskboard-session-attention-\(session.id)")
         .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session)) }
+        .modifier(SidebarFocusBorder(workspaceID: session.workspaceID, surfaceID: session.surfaceID))
     }
 }
 

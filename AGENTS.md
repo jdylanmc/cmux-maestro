@@ -36,16 +36,20 @@ do not copy its source or history, modify it, or make this project depend on it.
   grant and use typed host navigation; never add
   raw prompts/results/tokens, a daemon, loopback server, socket client, focus
   inference, automatic tool approval, or automatic terminal/process cleanup.
-- Keep each worker's bounded Copilot turns behind its foreground terminal
-  supervisor. Reported outcomes require a strict whole-final-message generation
+- New workers are interactive Copilot sessions with inherited terminal I/O and
+  direct human follow-ups. Do not create new headless-worker tabs, inject
+  follow-ups into an interactive terminal, or infer task completion from an
+  interactive session's exit. Preserve existing legacy bounded workers.
+  Legacy reported outcomes require a strict whole-final-message generation
   report plus verified process/result boundary. Report-missing or permission-
   denied recovery requires that exact current-generation boundary and exact
   session resume. Archive/recovery must never guess ownership, kill a process,
   delete a terminal, or bypass the still-live resource bound.
 - Preserve the launch lease across external surface creation and attachment.
   Archive must not cross an active lease, and every exact created surface must
-  remain owned or retained. Keep turn I/O bounded while heartbeats and visible
-  provider diagnostics continue; never infer success or approve a prompt.
+  remain owned or retained. Interactive I/O belongs to the terminal, not a JSON
+  capture loop; legacy turn I/O stays bounded while heartbeats and visible
+  provider diagnostics continue. Never infer success or approve a prompt.
 - Keep Copilot tool policy explicit, bounded and private. Add no grants by
   default; preserve denies and descendant non-escalation. Provider policy flags
   are not an operating-system sandbox or a lifecycle reporting channel.

@@ -26,6 +26,23 @@ nonisolated struct CopilotIdentityRecord: Codable, Equatable, Sendable {
     }
 }
 
+nonisolated struct CopilotSessionAppearance: Codable, Equatable, Sendable {
+    var version = 1
+    let sessionID: UUID
+    var iconId: String?
+    var iconColor: String?
+
+    var isValid: Bool {
+        version == 1 && (iconId != nil || iconColor != nil)
+            && (iconId.map {
+                !$0.isEmpty && $0.utf8.count <= 128 && $0.utf8.allSatisfy {
+                    (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95
+                }
+            } ?? true)
+            && (iconColor.map { ["theme", "green", "teal", "blue", "purple", "pink", "red", "gray"].contains($0) } ?? true)
+    }
+}
+
 nonisolated enum CopilotIdentityJSON {
     static func encode(_ record: CopilotIdentityRecord) throws -> Data {
         let encoder = JSONEncoder()

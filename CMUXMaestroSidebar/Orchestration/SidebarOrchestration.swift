@@ -2,6 +2,10 @@ import Darwin
 import Foundation
 import Observation
 
+nonisolated enum SidebarWorkerMode: String, Codable, Sendable {
+    case bounded, interactive
+}
+
 nonisolated enum SidebarGlyphName {
     static func isValid(_ name: String) -> Bool {
         !name.isEmpty && name.utf8.count <= 128 && name.utf8.allSatisfy {
@@ -83,6 +87,7 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
     let phase: String
     let availability: String
     let copilotSessionId: UUID?
+    let executionMode: SidebarWorkerMode?
     var iconId: String?
     var iconColor: SidebarAvatarColor?
     let worktreeLabel: String?
@@ -99,6 +104,7 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
         id: UUID, runId: UUID, parentId: UUID?, role: String, label: String,
         workspaceId: UUID, surfaceId: UUID, generation: Int, phase: String,
         availability: String, copilotSessionId: UUID? = nil,
+        executionMode: SidebarWorkerMode? = nil,
         iconId: String? = nil,
         iconColor: SidebarAvatarColor? = nil,
         worktreeLabel: String? = nil, branchLabel: String? = nil,
@@ -118,6 +124,7 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
         self.phase = phase
         self.availability = availability
         self.copilotSessionId = copilotSessionId
+        self.executionMode = executionMode
         self.iconId = iconId
         self.iconColor = iconColor
         self.worktreeLabel = worktreeLabel
@@ -368,9 +375,11 @@ nonisolated enum SidebarOrchestrationReader {
         }
         switch phase {
         case .launching, .turnQueued, .turnRunning:
+            if phase == .turnQueued && node.executionMode == .interactive { return false }
             return node.availability == "busy"
         case .reportedBlocked, .reportedCompleted, .reportedFailed,
              .reportMissing, .permissionDenied, .turnFailed:
+            guard node.executionMode != .interactive || phase == .turnFailed else { return false }
             return node.availability == "idle"
         case .processDisappeared, .terminalDisappeared, .launchFailed,
              .startupFailed, .resourceRetired:

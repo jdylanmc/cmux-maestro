@@ -2,10 +2,12 @@
 import ast
 import json
 import os
+import pty
 import re
 import runpy
 import shlex
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,7 +22,7 @@ CONTROLLER = REPO / "scripts" / "cmux-maestro-orchestrator.py"
 CONTROLLER_API = runpy.run_path(str(CONTROLLER))
 
 FAKE_CMUX = r'''#!/usr/bin/env python3
-import fcntl, json, os, subprocess, sys, tempfile, uuid
+import fcntl, json, os, runpy, shlex, subprocess, sys, tempfile, uuid
 from pathlib import Path
 
 state_path = Path(os.environ["FAKE_CMUX_STATE"])
@@ -68,6 +70,33 @@ try:
         state["surfaces"].append(surface)
         state["buffers"][surface] = ""
         result = {"surface_id": surface, "pane_id": state["pane"], "workspace_id": workspace}
+        bootstrap = value("--command")
+        if bootstrap:
+            command_args = shlex.split(bootstrap)
+            worker_id = command_args[command_args.index("--worker-id") + 1]
+            control = Path(os.environ["CMUX_MAESTRO_ROOT"]) / "control"
+            ticket = json.loads((control / ("launch-" + worker_id + ".json")).read_text())
+            state.setdefault("tokens", {})[worker_id] = ticket["token"]
+            if os.environ.get("FAKE_SESSION_MODE") == "bounded":
+                api = runpy.run_path(os.environ["CMUX_MAESTRO_CONTROLLER"])
+                # Simulate a persisted pre-interactive worker, without exposing a production legacy-spawn switch.
+                api["mutate"](Path(os.environ["CMUX_MAESTRO_ROOT"]),
+                              lambda stored: stored["nodes"][worker_id].pop("executionMode", None))
+            env = os.environ.copy()
+            env["CMUX_WORKSPACE_ID"] = workspace
+            env["CMUX_SURFACE_ID"] = surface
+            output = open(state_path.parent / ("runtime-" + surface + ".log"), "ab", buffering=0)
+            terminal = os.open(env["FAKE_PTY_SLAVE"], os.O_RDWR) if env.get("FAKE_PTY_SLAVE") else None
+            process = subprocess.Popen(
+                command_args, stdin=terminal if terminal is not None else subprocess.DEVNULL,
+                stdout=terminal if terminal is not None else output,
+                stderr=terminal if terminal is not None else output,
+                env=env, start_new_session=True,
+            )
+            if terminal is not None:
+                os.close(terminal)
+            state["pids"].append(process.pid)
+            state["buffers"][surface] = bootstrap
     elif command == "list-pane-surfaces":
         if value("--pane") != state["pane"]:
             raise SystemExit("wrong pane")
@@ -119,20 +148,35 @@ finally:
 '''
 
 FAKE_COPILOT = r'''#!/usr/bin/env python3
-import json, os, subprocess, sys, time, uuid
+import json, os, signal, subprocess, sys, time, uuid
 from pathlib import Path
 args = sys.argv[1:]
 def value(flag):
     return args[args.index(flag) + 1] if flag in args else None
 session = value("--session-id") or value("--resume")
-prompt = value("-p")
+prompt = value("-p") or value("--interactive") or ""
 record = {
     "args": args,
     "generation": os.environ.get("CMUX_MAESTRO_GENERATION"),
     "session": session,
+    "tty": [os.isatty(fd) for fd in (0, 1, 2)],
+    "pinnedSubscription": os.environ.get("COPILOT_GITHUB_TOKEN") == "synthetic-work-token",
+    "gitTokenUnchanged": os.environ.get("GH_TOKEN") == "synthetic-personal-token",
 }
 with open(os.environ["FAKE_COPILOT_CALLS"], "a") as stream:
     stream.write(json.dumps(record) + "\n")
+if "--interactive" in args:
+    ready = Path(os.environ["FAKE_INTERACTIVE_READY"])
+    received = Path(os.environ["FAKE_INTERACTIVE_INPUT"])
+    signal.signal(signal.SIGINT, lambda *_: ready.with_suffix(".interrupted").write_text("yes"))
+    ready.write_text("ready")
+    print("Interactive ready", flush=True)
+    for line in sys.stdin:
+        if line.strip() == "exit":
+            break
+        received.write_text(line)
+        print("Human follow-up received", flush=True)
+    raise SystemExit(0)
 if "[STDERR]" in prompt:
     print("visible permission diagnostic", file=sys.stderr, flush=True)
 if "[STDERR_WAIT]" in prompt:
@@ -325,7 +369,7 @@ raise SystemExit(exit_code)
 
 
 class Harness:
-    def __init__(self):
+    def __init__(self, interactive=False):
         self.temp = tempfile.TemporaryDirectory()
         self.path = Path(self.temp.name).resolve()
         self.root = self.path / "orchestration"
@@ -336,6 +380,8 @@ class Harness:
         self.copilot_calls = self.path / "copilot-calls.jsonl"
         self.stderr_ready = self.path / "stderr-ready"
         self.policy_results = self.path / "policy-results.jsonl"
+        self.terminal_master = None
+        self.terminal_slave = None
         self.cmux = self.path / "cmux"
         self.copilot = self.path / "copilot"
         self.cmux.write_text(FAKE_CMUX)
@@ -349,6 +395,7 @@ class Harness:
             "CMUX_MAESTRO_CONTROLLER": str(CONTROLLER),
             "CMUX_MAESTRO_ROOT": str(self.root),
             "CMUX_MAESTRO_TESTING": "1",
+            "FAKE_SESSION_MODE": "interactive" if interactive else "bounded",
             "FAKE_CMUX_STATE": str(self.cmux_state),
             "FAKE_COPILOT_CALLS": str(self.copilot_calls),
             "FAKE_STDERR_READY": str(self.stderr_ready),
@@ -359,6 +406,11 @@ class Harness:
             "CMUX_WORKSPACE_ID": self.workspace,
             "CMUX_SURFACE_ID": self.surface,
         })
+        if interactive:
+            self.terminal_master, self.terminal_slave = pty.openpty()
+            self.env["FAKE_PTY_SLAVE"] = os.ttyname(self.terminal_slave)
+            self.env["FAKE_INTERACTIVE_READY"] = str(self.path / "interactive-ready")
+            self.env["FAKE_INTERACTIVE_INPUT"] = str(self.path / "interactive-input")
         self.registration = self.run(
             "register", "--workspace", self.workspace, "--surface", self.surface,
             "--name", "Coordinator",
@@ -474,6 +526,9 @@ class Harness:
                     except ProcessLookupError:
                         break
                     time.sleep(0.02)
+        for descriptor in (self.terminal_master, self.terminal_slave):
+            if descriptor is not None:
+                os.close(descriptor)
         self.temp.cleanup()
 
 
@@ -483,6 +538,183 @@ class OrchestratorTests(unittest.TestCase):
 
     def tearDown(self):
         self.h.close()
+
+    def test_local_subscription_and_model_are_pinned_without_leaking_or_changing_git_auth(self):
+        h = Harness(interactive=True)
+        try:
+            gh = h.path / "gh"
+            gh.write_text(
+                "#!/usr/bin/env python3\nimport os,sys,json\n"
+                "assert not any(os.environ.get(k) for k in ['GH_TOKEN','GITHUB_TOKEN','COPILOT_GITHUB_TOKEN'])\n"
+                "if sys.argv[1:3]==['auth','status']:\n"
+                " print(json.dumps([{'login':'work-user','state':'success'}]));sys.exit(0)\n"
+                "assert sys.argv[sys.argv.index('--user')+1]=='work-user'\n"
+                "if os.environ.get('FAKE_SUBSCRIPTION_MISSING'):sys.exit(1)\n"
+                "print('synthetic-work-token')\n"
+            )
+            gh.chmod(0o700)
+            h.env.update({
+                "CMUX_MAESTRO_GH": str(gh),
+                "GH_TOKEN": "synthetic-personal-token",
+                "COPILOT_GITHUB_TOKEN": "synthetic-other-token",
+                "FAKE_SUBSCRIPTION_MISSING": "1",
+            })
+            settings = h.root / "worker-settings.json"
+            settings.write_text(json.dumps({"version": 1, "copilotAccount": "work-user", "model": "example-large-model"}))
+            settings.chmod(0o600)
+            self.assertEqual(h.run("accounts")["accounts"], [{"login": "work-user", "available": True}])
+            self.assertEqual(h.run("launch-settings"), {
+                "accountAvailable": False,
+                "accountPinned": True,
+                "modelPinned": True,
+                "ok": True,
+                "ready": False,
+                "returncode": 0,
+                "stderr": "",
+            })
+            rejected = h.run("spawn", "--actor-id", h.node, "--token", h.token, "--cwd", str(REPO),
+                             "--name", "Must not launch", "--task", "No fallback",
+                             "--require-pinned-launch-settings", check=False)
+            self.assertNotEqual(rejected["returncode"], 0)
+            self.assertFalse(any("new-surface" in call for call in h.cmux_data()["calls"]))
+            del h.env["FAKE_SUBSCRIPTION_MISSING"]
+            self.assertEqual(h.run("launch-settings"), {
+                "accountAvailable": True,
+                "accountPinned": True,
+                "modelPinned": True,
+                "ok": True,
+                "ready": True,
+                "returncode": 0,
+                "stderr": "",
+            })
+            worker = h.spawn("Use local launch preferences.")
+            h.wait_node(worker["workerId"], lambda node: node.get("providerProcess") is not None)
+            deadline = time.monotonic() + 5
+            while not h.calls() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            call = h.calls()[0]
+            self.assertTrue(call["pinnedSubscription"])
+            self.assertTrue(call["gitTokenUnchanged"])
+            self.assertEqual(call["args"][call["args"].index("--model") + 1], "example-large-model")
+            self.assertNotIn("synthetic-work-token", json.dumps(h.state()))
+            self.assertNotIn("synthetic-work-token", json.dumps(h.cmux_data()))
+            os.write(h.terminal_master, b"exit\n")
+            h.wait_node(worker["workerId"], lambda node: node["phase"] == "process-disappeared")
+        finally:
+            h.close()
+
+    def test_required_launch_settings_reject_defaults_before_creating_a_surface(self):
+        rejected = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--cwd", str(REPO), "--name", "Must not launch",
+            "--task", "Require the dedicated account.",
+            "--require-pinned-launch-settings", check=False,
+        )
+        self.assertNotEqual(rejected["returncode"], 0)
+        self.assertIn("Pinned Maestro account and model settings are required", rejected["stderr"])
+        self.assertFalse(any("new-surface" in call for call in self.h.cmux_data()["calls"]))
+
+    def test_standalone_icon_uses_identity_helper_without_mutating_orchestration(self):
+        package = self.h.path / "standalone-bin"
+        package.mkdir()
+        script = package / "controller"
+        shutil.copyfile(CONTROLLER, script)
+        fonts = package / "NerdFonts"
+        fonts.mkdir()
+        for name in ("glyphnames.json", "presets.json"):
+            shutil.copyfile(REPO / "Resources" / "NerdFonts" / name, fonts / name)
+        helper = package / "identity-helper"
+        helper.write_text(
+            "#!/usr/bin/env python3\nimport json,sys,os\n"
+            "a=sys.argv\n"
+            "v=lambda k:a[a.index(k)+1] if k in a else None\n"
+            "r={'ok':os.environ.get('FAKE_SELF_DENIED')!='1','sessionId':v('--session-id')}\n"
+            "r.update({k:v(f) for k,f in [('iconId','--icon'),('iconColor','--color')] if v(f) is not None})\n"
+            "print(json.dumps(r))\n"
+        )
+        helper.chmod(0o700)
+        config = package / "identity-helper.json"
+        config.write_text(json.dumps({"helper": str(helper)}))
+        config.chmod(0o600)
+        session = str(uuid.uuid4())
+        before = self.h.state()
+        command = [sys.executable, str(script), "icon", "--self", "--session-id", session,
+                   "--icon", "nf-md-duck", "--color", "teal"]
+        result = subprocess.run(command, env=self.h.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["iconId"], "md-duck")
+        self.assertEqual(json.loads(result.stdout)["sessionId"], session)
+        self.assertEqual(self.h.state(), before)
+        denied_env = {**self.h.env, "FAKE_SELF_DENIED": "1"}
+        denied = subprocess.run(command, env=denied_env, capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertIn("no icon was changed", denied.stderr)
+        self.assertEqual(self.h.state(), before)
+
+    def test_default_worker_is_interactive_and_accepts_human_input_without_turn_reports(self):
+        h = Harness(interactive=True)
+        try:
+            worker = h.spawn("Review this task, then remain available.", allow=("read",))
+            identifier = worker["workerId"]
+            node = h.wait_node(identifier, lambda item: item["phase"] == "turn-running" and item.get("providerProcess"))
+            self.assertEqual(node["executionMode"], "interactive")
+            self.assertEqual(node["availability"], "busy")
+            deadline = time.monotonic() + 5
+            while not (h.path / "interactive-ready").exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue((h.path / "interactive-ready").exists())
+            call = h.calls()[0]
+            self.assertEqual(call["tty"], [True, True, True])
+            self.assertIn("--interactive", call["args"])
+            self.assertNotIn("--model", call["args"])
+            self.assertNotIn("-p", call["args"])
+            self.assertNotIn("--output-format", call["args"])
+            self.assertNotIn("cmux-maestro.worker-report", " ".join(call["args"]))
+            self.assertIn("--allow-tool", call["args"])
+            self.assertNotIn("--allow-all", call["args"])
+            self.assertFalse((h.root / "control" / f"launch-{identifier}.json").exists())
+            rejected = h.run("follow-up", "--actor-id", h.node, "--token", h.token,
+                             "--worker-id", identifier, "--task", "Must not be typed", check=False)
+            self.assertNotEqual(rejected["returncode"], 0)
+            self.assertIn("interactive", rejected["stderr"])
+            archived = h.run("archive", "--actor-id", h.node, "--token", h.token, check=False)
+            self.assertNotEqual(archived["returncode"], 0)
+            self.assertFalse(h.state()["nodes"][identifier]["archiving"])
+            os.write(h.terminal_master, b"A direct human follow-up\n")
+            deadline = time.monotonic() + 5
+            while not (h.path / "interactive-input").exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertEqual((h.path / "interactive-input").read_text(), "A direct human follow-up\n")
+            self.assertEqual(h.state()["nodes"][identifier]["phase"], "turn-running")
+            self.assertFalse(any("send" in call for call in h.cmux_data()["calls"]))
+            os.write(h.terminal_master, b"exit\n")
+            ended = h.wait_node(identifier, lambda item: item["phase"] == "process-disappeared")
+            self.assertEqual(ended["availability"], "unavailable")
+            self.assertIsNone(ended["verifiedBoundaryGeneration"])
+            self.assertIn("no task outcome", ended["result"])
+        finally:
+            h.close()
+
+    def test_interactive_ctrl_c_does_not_terminate_the_supervisor(self):
+        h = Harness(interactive=True)
+        try:
+            worker = h.spawn("Remain interactive.")
+            node = h.wait_node(worker["workerId"], lambda item: item.get("providerProcess") is not None)
+            deadline = time.monotonic() + 5
+            while not (h.path / "interactive-ready").exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue((h.path / "interactive-ready").exists())
+            os.killpg(node["supervisor"]["pid"], signal.SIGINT)
+            deadline = time.monotonic() + 5
+            while not (h.path / "interactive-ready.interrupted").exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue((h.path / "interactive-ready.interrupted").exists())
+            self.assertTrue(CONTROLLER_API["process_matches"](h.state()["nodes"][worker["workerId"]]))
+            self.assertEqual(h.state()["nodes"][worker["workerId"]]["phase"], "turn-running")
+            os.write(h.terminal_master, b"exit\n")
+            h.wait_node(worker["workerId"], lambda item: item["phase"] == "process-disappeared")
+        finally:
+            h.close()
 
     def test_icon_catalog_is_pinned_searchable_bounded_and_read_only(self):
         env = self.h.env.copy()
@@ -569,8 +801,7 @@ class OrchestratorTests(unittest.TestCase):
         denied = self.h.run("icon", "--actor-id", identifier, "--token", self.h.token,
                             "--icon", "md-duck", check=False)
         self.assertNotEqual(denied["returncode"], 0)
-        runtime = shlex.split(self.h.cmux_data()["buffers"][worker["surfaceId"]])
-        worker_token = runtime[runtime.index("--token") + 1]
+        worker_token = self.h.cmux_data()["tokens"][identifier]
         worker_env = self.h.env.copy()
         worker_env["CMUX_SURFACE_ID"] = worker["surfaceId"]
         chosen = self.h.run("icon", "--actor-id", identifier, "--token", worker_token,
@@ -924,7 +1155,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("--resume", first)
         self.assertNotIn("--allow-all", first)
         sends = [call for call in self.h.cmux_data()["calls"] if "send" in call]
-        self.assertEqual(len(sends), 1)
+        self.assertEqual(len(sends), 0)
+        created = next(call for call in self.h.cmux_data()["calls"] if "new-surface" in call)
+        self.assertIn("--command", created)
+        self.assertNotIn("--token", created[created.index("--command") + 1])
         log = self.h.path / f"runtime-{worker['surfaceId']}.log"
         self.assertIn("visible permission diagnostic", log.read_text())
 
@@ -1050,7 +1284,7 @@ class OrchestratorTests(unittest.TestCase):
         calls = self.h.calls()
         self.assertEqual(calls[1]["args"][calls[1]["args"].index("--resume") + 1], worker["sessionId"])
         send_calls = [call for call in self.h.cmux_data()["calls"] if "send" in call]
-        self.assertEqual(len(send_calls), 1, "follow-up must use the private queue, not terminal input")
+        self.assertEqual(len(send_calls), 0, "legacy follow-up must use the private queue, not terminal input")
 
     def test_missing_report_and_invalid_boundary_transition_automatically(self):
         missing = self.h.spawn("[NO_REPORT]")

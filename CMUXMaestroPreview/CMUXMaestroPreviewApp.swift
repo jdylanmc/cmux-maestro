@@ -12,6 +12,9 @@ struct CMUXMaestroPreviewApp: App {
         WindowGroup {
             ContentView()
         }
+        Settings {
+            WorkerLaunchSettingsView()
+        }
         #endif
     }
 }
