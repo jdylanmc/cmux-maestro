@@ -5,6 +5,115 @@ import Testing
 @MainActor
 struct HierarchySnapshotTests {
     @Test
+    func paneOutlineMatchesSplitRootsAndSecondaryTabsInsteadOfAgentOwnership() throws {
+        let model = SidebarConnectionModel()
+        let workspaceID = UUID()
+        let ids = (0..<5).map { _ in UUID() }
+        let paneIDs = (0..<4).map { _ in UUID() }
+        let titles = ["PM", "Discovery", "Developer 1", "Developer 2", "Shepherd"]
+        let panes: [CmuxSidebarPane] = [
+            .init(id: paneIDs[0], surfaceIDs: [ids[0]]),
+            .init(id: paneIDs[1], surfaceIDs: [ids[1]]),
+            .init(id: paneIDs[2], surfaceIDs: [ids[2], ids[3]]),
+            .init(id: paneIDs[3], surfaceIDs: [ids[4]]),
+        ]
+        model.update(context: context(.init(
+            sequence: 1, selectedWorkspaceID: workspaceID, grantedReadScopes: allHierarchyScopes,
+            workspaces: [.init(
+                id: workspaceID, title: "Joe Mode",
+                surfaces: ids.indices.reversed().map {
+                    .init(id: ids[$0], title: titles[$0], kind: .terminal, isFocused: $0 == 3)
+                }, panes: panes
+            )]
+        )))
+        let workspace = try #require(model.hierarchy.workspaces.first)
+        let outline = SidebarPaneOutline(workspace: workspace, hiddenSurfaces: [])
+        #expect(outline.notice == nil)
+        #expect(outline.groups.map(\.paneID) == paneIDs.map(Optional.some))
+        #expect(outline.groups.map(\.root.title) == ["PM", "Discovery", "Developer 1", "Shepherd"])
+        #expect(outline.groups[2].tabs.map(\.title) == ["Developer 2"])
+        #expect(outline.groups[2].tabs.first?.isFocused == true)
+
+        let hiddenRoot = SidebarPaneOutline(workspace: workspace, hiddenSurfaces: [ids[2]])
+        #expect(hiddenRoot.groups[2].root.id == ids[2])
+        #expect(hiddenRoot.groups[2].isPlainAnchor)
+        #expect(hiddenRoot.groups[2].tabs.map(\.id) == [ids[3]])
+        let hiddenPane = SidebarPaneOutline(workspace: workspace, hiddenSurfaces: [ids[2], ids[3]])
+        #expect(hiddenPane.groups.map(\.root.id) == [ids[0], ids[1], ids[4]])
+        let hiddenSecondary = SidebarPaneOutline(workspace: workspace, hiddenSurfaces: [ids[3]])
+        #expect(hiddenSecondary.groups[2].tabs.isEmpty)
+        #expect(!hiddenSecondary.groups[2].isPlainAnchor)
+    }
+
+    @Test
+    func paneSnapshotsReplaceMovesReordersAndClosedAnchorsWithoutStalePlacement() throws {
+        let model = SidebarConnectionModel()
+        let workspaceID = UUID(), paneA = UUID(), paneB = UUID()
+        let a = UUID(), b = UUID(), c = UUID()
+        func update(_ sequence: UInt64, _ panes: [CmuxSidebarPane], _ ids: [UUID]) throws -> SidebarPaneOutline {
+            model.update(context: context(.init(
+                sequence: sequence, selectedWorkspaceID: workspaceID, grantedReadScopes: allHierarchyScopes,
+                workspaces: [.init(id: workspaceID, title: "Workspace",
+                                   surfaces: ids.map { .init(id: $0, title: "Same title") }, panes: panes)]
+            )))
+            return SidebarPaneOutline(workspace: try #require(model.hierarchy.workspaces.first), hiddenSurfaces: [])
+        }
+        let initial = try update(1, [.init(id: paneA, surfaceIDs: [a, b]), .init(id: paneB, surfaceIDs: [c])], [a, b, c])
+        #expect(initial.groups[0].tabs.map(\.id) == [b])
+        let moved = try update(2, [.init(id: paneB, surfaceIDs: [b, c]), .init(id: paneA, surfaceIDs: [a])], [a, b, c])
+        #expect(moved.groups.map(\.root.id) == [b, a])
+        #expect(moved.groups[0].tabs.map(\.id) == [c])
+        let closed = try update(3, [.init(id: paneB, surfaceIDs: [c])], [c])
+        #expect(closed.groups.map(\.root.id) == [c])
+        #expect(closed.groups[0].tabs.isEmpty)
+        #expect(closed.groups[0].id == .pane(paneB))
+    }
+
+    @Test
+    func missingDeniedAndInvalidPaneDataNeverInventGrouping() throws {
+        let model = SidebarConnectionModel()
+        let workspaceID = UUID(), a = UUID(), b = UUID(), pane = UUID()
+        var sequence: UInt64 = 0
+        func outline(_ panes: [CmuxSidebarPane]?, scopes: Set<CmuxExtensionScope>) throws -> SidebarPaneOutline {
+            sequence += 1
+            model.update(context: context(.init(
+                sequence: sequence, selectedWorkspaceID: workspaceID, grantedReadScopes: scopes,
+                workspaces: [.init(id: workspaceID, title: "Workspace",
+                                   surfaces: [a, b].map { .init(id: $0, title: "Identical") }, panes: panes)]
+            )))
+            return SidebarPaneOutline(workspace: try #require(model.hierarchy.workspaces.first), hiddenSurfaces: [])
+        }
+        let legacy = try outline(nil, scopes: allHierarchyScopes)
+        #expect(legacy.notice == "Pane layout unavailable")
+        #expect(legacy.groups.map(\.root.id) == [a, b])
+        #expect(legacy.groups.allSatisfy { $0.paneID == nil && $0.tabs.isEmpty })
+        let valid: [CmuxSidebarPane] = [.init(id: pane, surfaceIDs: [a, b])]
+        let denied = try outline(valid, scopes: [.workspaceMetadata])
+        #expect(denied.groups.isEmpty)
+        #expect(model.hierarchy.workspaces.first?.panes == .unavailable)
+        for invalid: [CmuxSidebarPane] in [
+            [.init(id: pane, surfaceIDs: [a]), .init(id: pane, surfaceIDs: [b])],
+            [.init(id: pane, surfaceIDs: [a, a])],
+            [.init(id: pane, surfaceIDs: [UUID()])],
+            [.init(id: pane, surfaceIDs: [a]), .init(id: UUID(), surfaceIDs: [a, b])],
+        ] {
+            let rejected = try outline(invalid, scopes: allHierarchyScopes)
+            #expect(rejected.notice == "Pane layout invalid; showing ungrouped tabs")
+            #expect(rejected.groups.map(\.root.id) == [a, b])
+            #expect(rejected.groups.allSatisfy { $0.paneID == nil })
+        }
+        let partial = try outline([.init(id: pane, surfaceIDs: [a])], scopes: allHierarchyScopes)
+        #expect(partial.groups.map(\.root.id) == [a, b])
+        #expect(partial.groups.last?.paneID == nil)
+        #expect(partial.notice == "Some tabs have no shared pane placement")
+        let empty = try outline([], scopes: allHierarchyScopes)
+        #expect(empty.groups.allSatisfy { $0.paneID == nil })
+        let restored = try outline(valid, scopes: allHierarchyScopes)
+        #expect(restored.notice == nil)
+        #expect(restored.groups.first?.tabs.map(\.id) == [b])
+    }
+
+    @Test
     func mapsEverySurfaceKindWithoutFilteringOrProviderData() throws {
         let workspaceID = id("10000000-0000-0000-0000-000000000001")
         let kinds = CmuxSidebarSurfaceKind.allCases

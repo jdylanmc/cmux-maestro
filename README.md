@@ -5,6 +5,17 @@ terminal-backed orchestration hierarchies. The native sidebar reads locally; no 
 watcher, loopback server, XPC service, raw CMUX socket, or session-start ritual.
 The separate interpreted Maestro project is untouched and is not a dependency.
 
+In **Workspaces**, panes are sibling roots represented by their first tab;
+remaining tabs are direct children in tab-bar order. This is visual placement,
+not agent ownership. Managed and manually opened tabs share the same layout.
+CMUX must publish the SDK's optional ordered `panes` metadata; older hosts show
+ungrouped tabs with **Pane layout unavailable**, never guessed parentage.
+Tab moves, reorders and closures follow each new host snapshot. Expansion is
+keyed to the pane, not whichever tab happens to be focused. A hidden/finished
+first-tab agent remains a plain tab anchor only while visible secondary tabs
+need it; its dismissed result is not restored. Closing that tab promotes the
+next actual tab. Taskboard retains its agent-oriented organization.
+
 See the [behavioral parity matrix](docs/behavioral-parity.md) for regression
 evidence, live acceptance scope, intentional differences and remaining limits.
 
@@ -811,7 +822,8 @@ acknowledgement guards, or the host's 50-point footer clearance.
   documented command hooks, with canonical session identity in hook input.
 
 The CMUX ExtensionKit package is pinned to CMUX commit
-`ae7fbce99f98c98df5ccf915e548dd080d33cfa8`. It is fetched into ignored
+`4a7f5a67c3260107623799127b781efe25ea824b` from `jdylanmc/cmux` (ordered pane
+metadata). It is fetched into ignored
 `vendor/CmuxExtensionKit/`; no CMUX source changes are required.
 
 **Host footer compatibility:** the native view reserves an absolute 50 points of

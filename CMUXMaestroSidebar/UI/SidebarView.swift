@@ -935,6 +935,7 @@ private struct ManagedNodeRow: View {
     let navigation: SidebarNavigation
     let toggleExpanded: () -> Void
     let select: () -> Void
+    var allowsDismissalWithChildren = false
     @Environment(\.sidebarDismissManaged) private var dismissManaged
 
     var body: some View {
@@ -991,7 +992,7 @@ private struct ManagedNodeRow: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if !hasChildren, let dismissManaged,
+            if (!hasChildren || allowsDismissalWithChildren), let dismissManaged,
                let outcome = SidebarPresentation.dismissibleManagedFailure(node, tree: copilotTree) {
                 Button { dismissManaged(outcome) } label: {
                     Image(systemName: "xmark").font(.caption2)
@@ -1233,10 +1234,6 @@ private struct WorkspaceRow: View {
     private var managedNodes: [SidebarOrchestrationNode] {
         displayManaged.filter { $0.workspaceId == workspace.id }
     }
-    private var unmanagedSessions: [SidebarCopilotSession] {
-        let surfaces = Set(managedNodes.map(\.surfaceId))
-        return sessions.filter { !surfaces.contains($0.surfaceID) }
-    }
     private var attentionSummary: SidebarWorkspaceAttention {
         SidebarPresentation.workspaceAttention(
             sessions: sessions, managed: managedNodes,
@@ -1306,31 +1303,19 @@ private struct WorkspaceRow: View {
             WorkspaceAttentionLabel(summary: attentionSummary)
                 .padding(.leading, SidebarPresentation.minimumControlSize + 5)
             if expanded {
-                if !managedNodes.isEmpty {
-                    ManagedHierarchyContent(
-                        polling: orchestration, hierarchy: hierarchy,
-                        navigation: navigation, layout: layout, setExpanded: setExpanded,
-                        selectedID: $managedSelection, workspaceID: workspace.id,
-                        showsWorkspaceHeaders: false, displayNodes: displayManaged, copilotTree: copilotTree
-                    )
-                }
                 switch workspace.surfaces {
                 case .unavailable:
                     Text("Surface metadata unavailable").font(.caption2).foregroundStyle(.secondary)
                 case .available(let surfaces) where surfaces.isEmpty:
                     Text("No shared surfaces").font(.caption2).foregroundStyle(.secondary)
-                case .available(let surfaces):
-                    ForEach(SidebarPresentation.unmanagedSurfaces(
-                        surfaces.filter { !hiddenSurfaces.contains($0.id) },
-                        workspaceID: workspace.id, managed: managedNodes
-                    )) { surface in
-                        SurfaceRow(
-                            workspaceID: workspace.id, surface: surface,
-                            sessions: unmanagedSessions.filter { $0.surfaceID == surface.id },
-                            countsComplete: countsComplete,
-                            navigation: navigation, layout: layout, setExpanded: setExpanded,
-                            dismiss: dismiss, acknowledge: acknowledge, selection: $selection
-                        )
+                case .available:
+                    let outline = SidebarPaneOutline(workspace: workspace, hiddenSurfaces: hiddenSurfaces)
+                    if let notice = outline.notice {
+                        Text(notice).sidebarFont(.caption2).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("pane-layout-notice-\(workspace.id)")
+                    }
+                    ForEach(outline.groups) { group in
+                        paneGroup(group)
                     }
                 }
             }
@@ -1339,6 +1324,79 @@ private struct WorkspaceRow: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("workspace-\(workspace.id.uuidString)")
     }
+
+    private func paneGroup(_ group: SidebarPaneGroup) -> some View {
+        let expansionID = group.paneID.map(SidebarExpansionID.pane)
+        let expanded = expansionID.map { layout.isExpanded($0) } ?? true
+        return VStack(alignment: .leading, spacing: density.spacing(2)) {
+            tabRow(group.root, paneExpansionID: expansionID, hasTabs: !group.tabs.isEmpty,
+                   plainAnchor: group.isPlainAnchor)
+            if expanded {
+                VStack(alignment: .leading, spacing: density.spacing(2)) {
+                    ForEach(group.tabs) { surface in
+                        tabRow(surface)
+                    }
+                }
+                .padding(.leading, 12)
+                .overlay(alignment: .leading) {
+                    if !group.tabs.isEmpty {
+                        Rectangle().fill(.quaternary).frame(width: 1).padding(.leading, 6)
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("pane-group-\(group.paneID ?? group.root.id)")
+    }
+
+    @ViewBuilder
+    private func tabRow(
+        _ surface: HierarchySurface, paneExpansionID: SidebarExpansionID? = nil,
+        hasTabs: Bool = false, plainAnchor: Bool = false
+    ) -> some View {
+        let surfaceSessions = plainAnchor ? [] : sessions.filter { $0.surfaceID == surface.id }
+        if !plainAnchor, let node = managedNodes.first(where: { $0.surfaceId == surface.id }) {
+            let expansionID = paneExpansionID ?? .managed(node.id)
+            let expanded = layout.isExpanded(expansionID)
+            let hasChildren = hasTabs || surfaceSessions.contains { !$0.outlineNodes.isEmpty }
+            VStack(alignment: .leading, spacing: density.spacing(2)) {
+                ManagedNodeRow(
+                    node: node, depth: 0, hasChildren: hasChildren, activeDescendants: 0,
+                    expanded: expanded, selected: managedSelection == node.id,
+                    evidenceDate: Date(), availability: orchestration.availability,
+                    copilotTree: copilotTree, navigation: navigation,
+                    toggleExpanded: { setExpanded(expansionID, !expanded) },
+                    select: { managedSelection = node.id },
+                    allowsDismissalWithChildren: !displayManaged.contains { $0.parentId == node.id }
+                )
+                ForEach(surfaceSessions) { session in
+                    CopilotSessionContents(
+                        session: session, expanded: expanded,
+                        navigation: navigation, layout: layout, setExpanded: setExpanded,
+                        dismiss: dismiss, acknowledge: acknowledge, selection: $selection
+                    )
+                }
+            }
+        } else {
+            SurfaceRow(
+                workspaceID: workspace.id, surface: surface, sessions: surfaceSessions,
+                countsComplete: countsComplete, navigation: navigation, layout: layout, setExpanded: setExpanded,
+                dismiss: dismiss, acknowledge: acknowledge, selection: $selection,
+                paneBranch: paneExpansionID.map { id in
+                    SidebarPaneBranch(
+                        hasTabs: hasTabs, expanded: layout.isExpanded(id),
+                        toggle: { setExpanded(id, !layout.isExpanded(id)) }
+                    )
+                }
+            )
+        }
+    }
+}
+
+private struct SidebarPaneBranch {
+    let hasTabs: Bool
+    let expanded: Bool
+    let toggle: () -> Void
 }
 
 private struct SurfaceRow: View {
@@ -1352,14 +1410,16 @@ private struct SurfaceRow: View {
     let dismiss: (SidebarDismissedOutcome) -> Void
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
+    var paneBranch: SidebarPaneBranch? = nil
     @Environment(\.sidebarDensity) private var density
     private var singleSession: SidebarCopilotSession? { sessions.count == 1 ? sessions.first : nil }
     private var expanded: Bool {
-        layout.isExpanded(.surface(surface.id))
+        paneBranch?.expanded ?? (layout.isExpanded(.surface(surface.id))
             && (singleSession.map { layout.isExpanded(.session($0.id)) } ?? true)
+        )
     }
     private var hasChildren: Bool {
-        singleSession.map { !$0.outlineNodes.isEmpty } ?? !sessions.isEmpty
+        (paneBranch?.hasTabs ?? false) || (singleSession.map { !$0.outlineNodes.isEmpty } ?? !sessions.isEmpty)
     }
 
     private var title: String { surface.title.isEmpty ? "Untitled surface" : surface.title }
@@ -1383,8 +1443,12 @@ private struct SurfaceRow: View {
             HStack(spacing: 4) {
                 if hasChildren {
                     ExpandButton(expanded: expanded, label: title) {
-                        setExpanded(.surface(surface.id), !expanded)
-                        if let singleSession { setExpanded(.session(singleSession.id), !expanded) }
+                        if let paneBranch {
+                            paneBranch.toggle()
+                        } else {
+                            setExpanded(.surface(surface.id), !expanded)
+                            if let singleSession { setExpanded(.session(singleSession.id), !expanded) }
+                        }
                     }
                 } else {
                     Color.clear.frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
@@ -1438,7 +1502,7 @@ private struct SurfaceRow: View {
                 if let singleSession {
                     SessionEvidenceBadge(session: singleSession)
                 }
-                if !expanded && hasChildren {
+                if !expanded && (singleSession.map { !$0.outlineNodes.isEmpty } ?? !sessions.isEmpty) {
                     CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: sessions, complete: countsComplete))
                 }
                 if surface.isPinned { StatusBadge(symbol: "pin.fill", label: "Pinned") }

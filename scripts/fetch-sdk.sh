@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CMUX_COMMIT="ae7fbce99f98c98df5ccf915e548dd080d33cfa8"
+CMUX_COMMIT="4a7f5a67c3260107623799127b781efe25ea824b"
 SDK_DIR="$ROOT/vendor/CmuxExtensionKit"
 STAMP="$SDK_DIR/.cmux-commit"
 INSTALL_LOCK="$ROOT/vendor/.cmux-sdk-install.lock"
@@ -64,7 +64,7 @@ trap 'exit 143' TERM
 mkdir -p "$FETCH_DIR"
 
 curl -fsSL \
-    "https://github.com/manaflow-ai/cmux/archive/$CMUX_COMMIT.tar.gz" \
+    "https://github.com/jdylanmc/cmux/archive/$CMUX_COMMIT.tar.gz" \
     -o "$ARCHIVE"
 tar -xzf "$ARCHIVE" -C "$FETCH_DIR" \
     --strip-components=3 \

@@ -286,7 +286,7 @@ run_contention_case() {
     second_destination="$(<"$case_root/control/second-destination")"
     [[ "$first_destination" != "$second_destination" ]]
 
-    EXPECTED_COMMIT="ae7fbce99f98c98df5ccf915e548dd080d33cfa8"
+    EXPECTED_COMMIT="4a7f5a67c3260107623799127b781efe25ea824b"
     [[ "$(<"$case_root/vendor/CmuxExtensionKit/.cmux-commit")" == "$EXPECTED_COMMIT" ]]
     [[ "$(<"$case_root/vendor/CmuxExtensionKit/payload")" == "first" ]]
 
