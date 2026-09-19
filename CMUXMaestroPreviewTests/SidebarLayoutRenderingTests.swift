@@ -1,10 +1,147 @@
 import AppKit
 import SwiftUI
 import Testing
+import Vision
+import ImageIO
 
 /// Offscreen synthetic SwiftUI/AppKit rendering only, not CMUX-host visual or system AX verification.
 @MainActor
 struct SidebarLayoutRenderingTests {
+    @Test func paneTabsRenderUnderTheirOwnRootAndCollapseIndependentlyOfAgentOwnership() async throws {
+        let workspaceID = UUID(), windowID = UUID(), runID = UUID(), coordinatorID = UUID()
+        let surfaces = (0..<5).map { _ in UUID() }
+        let sessionIDs = (0..<4).map { _ in UUID() }
+        let paneIDs = (0..<4).map { _ in UUID() }
+        let titles = ["Planning", "Discovery", "Developer 1", "Developer 2", "Shepherd"]
+        let now = Date()
+        let nodes = [0, 1, 2, 4].enumerated().map { index, surface in
+            SidebarOrchestrationNode(
+                id: index == 0 ? coordinatorID : UUID(), runId: runID,
+                parentId: index == 0 ? nil : coordinatorID,
+                role: index == 0 ? "coordinator" : "worker", label: titles[surface],
+                workspaceId: workspaceID, surfaceId: surfaces[surface], generation: index == 0 ? 0 : 1,
+                phase: index == 0 ? "registered" : "turn-running", availability: index == 0 ? "active" : "busy",
+                copilotSessionId: sessionIDs[index], executionMode: .interactive,
+                createdAt: now, updatedAt: now
+            )
+        }
+        let copilot = SidebarCopilotPolling(
+            read: { _ in .init(generatedAt: now, sessions: nodes.enumerated().map { index, node in
+                .init(sessionID: sessionIDs[index], surfaceID: node.surfaceId, launchWorkspaceID: workspaceID,
+                      liveness: .alive, state: .idle, model: nil, children: [], observedAt: now)
+            }, issues: [], isComplete: true) },
+            pause: { try await Task.sleep(for: .seconds(60)) }, expiryPause: Self.suspendFrozenClock, now: { now }
+        )
+        let orchestration = SidebarOrchestrationPolling(
+            read: { .init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: nodes) },
+            pause: { try await Task.sleep(for: .seconds(60)) }
+        )
+        let model = SidebarConnectionModel(copilot: copilot, orchestration: orchestration)
+        let hierarchy = HierarchySnapshot(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true, workspaceMetadataAvailable: true,
+            surfaceMetadataAvailable: true, workspacePathsAvailable: false,
+            workspaces: [.init(
+                id: workspaceID, title: .available("Pane layout"), detail: .available(nil),
+                isSelected: .available(true), isPinned: .available(false), unreadCount: .available(0),
+                rootPath: .unavailable, projectRootPath: .unavailable,
+                surfaces: .available(surfaces.indices.map {
+                    .init(id: surfaces[$0], title: titles[$0], kind: .terminal, isFocused: $0 == 3,
+                          isPinned: false, unreadCount: 0, workingDirectory: .unavailable)
+                }),
+                panes: .available([
+                    .init(id: paneIDs[0], surfaceIDs: [surfaces[0]]),
+                    .init(id: paneIDs[1], surfaceIDs: [surfaces[1]]),
+                    .init(id: paneIDs[2], surfaceIDs: [surfaces[2], surfaces[3]]),
+                    .init(id: paneIDs[3], surfaceIDs: [surfaces[4]]),
+                ])
+            )], windowID: windowID
+        )
+        model.replaceHierarchy(with: hierarchy)
+        model.showConnected(workspaceCount: 1, surfaceCount: 5)
+        let topology = SidebarTopology(hierarchy)
+        copilot.update(topology: topology, connected: true)
+        orchestration.update(topology: topology, connected: true)
+        model.navigation.update(topology: topology, connected: true, workspaceAllowed: true,
+                                surfaceAllowed: true, perform: { _ in })
+        defer { model.setVisible(false) }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let folder = root.appendingPathComponent(".build/layout-validation/offscreen")
+        let state = root.appendingPathComponent(".build/layout-tests/\(UUID())")
+        let suite = "PaneRendering.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: state) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let preferences = SidebarPreferences(
+            defaults: defaults, historyFile: state.appendingPathComponent("history.json"),
+            attentionFile: state.appendingPathComponent("attention.json"),
+            layoutStore: SidebarLayoutStore(file: .init(url: state.appendingPathComponent("layout.json")))
+        )
+        preferences.selectedMode = .hierarchy
+        for width in [240, 340] {
+            preferences.expandAll()
+            let image = folder.appendingPathComponent("pane-tabs-\(width).png")
+            _ = try await render(model: model, preferences: preferences, width: width, height: 600,
+                                 managed: true, expectedSessions: 4, destination: image)
+            let bounds = try await Task.detached { try Self.paneTitleBounds(in: image, titles: titles) }.value
+            for title in titles { #expect(bounds[title] != nil, "Missing \(title)") }
+            let developer = try #require(bounds["Developer 1"])
+            let secondary = try #require(bounds["Developer 2"])
+            #expect(abs((secondary.minX - developer.minX) * Double(width) - 12) < 3)
+            #expect(secondary.midY < developer.midY)
+            #expect(secondary.midY > (try #require(bounds["Shepherd"])).midY)
+            for title in ["Planning", "Discovery", "Shepherd"] {
+                #expect(abs((try #require(bounds[title])).minX - developer.minX) * Double(width) < 3)
+            }
+            preferences.setExpanded(false, for: .pane(paneIDs[2]))
+            let collapsed = folder.appendingPathComponent("pane-tabs-collapsed-\(width).png")
+            _ = try await render(model: model, preferences: preferences, width: width, height: 600,
+                                 managed: true, expectedSessions: 4, destination: collapsed)
+            let collapsedBounds = try await Task.detached { try Self.paneTitleBounds(in: collapsed, titles: titles) }.value
+            #expect(collapsedBounds["Developer 2"] == nil)
+            #expect(collapsedBounds.count == 4)
+        }
+    }
+
+    nonisolated private static func paneTitleBounds(in image: URL, titles: [String]) throws -> [String: CGRect] {
+        let source = try #require(CGImageSourceCreateWithURL(image as CFURL, nil))
+        let raw = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        let inset = 128
+        let cropped = try #require(raw.cropping(to: CGRect(
+            x: inset, y: 0, width: raw.width - inset, height: raw.height
+        )))
+        let request = VNRecognizeTextRequest()
+        request.recognitionLanguages = ["en-US"]
+        request.recognitionLevel = .accurate
+        try VNImageRequestHandler(cgImage: cropped).perform([request])
+        let bitmap = NSBitmapImageRep(cgImage: raw)
+        var result: [String: CGRect] = [:]
+        for observation in request.results ?? [] {
+            guard let candidate = observation.topCandidates(1).first,
+                  let title = titles.first(where: { candidate.string.contains($0) }) else { continue }
+            #expect(result[title] == nil, "Duplicate rendered title \(title)")
+            let range = try #require(candidate.string.range(of: title))
+            let box = try #require(try candidate.boundingBox(for: range)).boundingBox
+            // The first text-ink scanline excludes the taller row icon below the title.
+            let top = max(0, Int((1 - box.maxY) * Double(raw.height)))
+            let bottom = min(raw.height, Int(ceil((1 - box.minY) * Double(raw.height))))
+            var firstInk: Int?
+            for y in top..<bottom {
+                firstInk = (inset..<raw.width).first { x in
+                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+                    return color.alphaComponent > 0.8 && color.redComponent < 0.35
+                        && color.greenComponent < 0.35 && color.blueComponent < 0.35
+                }
+                if firstInk != nil { break }
+            }
+            let left = try #require(firstInk)
+            result[title] = CGRect(
+                x: Double(left) / Double(raw.width),
+                y: box.minY, width: box.width, height: box.height
+            )
+        }
+        return result
+    }
+
     @Test func syntheticSidebarRendersAtNarrowWidthsInBothDensitiesAndModes() async throws {
         let fixtures = SidebarTreeFixtures()
         let model = makeModel(fixtures: fixtures, longMetadata: false)

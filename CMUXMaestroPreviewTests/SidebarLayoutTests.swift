@@ -63,7 +63,7 @@ struct SidebarLayoutTests {
         try withFile { file in
             let store = SidebarLayoutStore(file: file)
             let keys: [SidebarExpansionID] = [
-                .workspace(fixtures.workspaceA), .surface(fixtures.surfaceA), .session(fixtures.sessionID),
+                .workspace(fixtures.workspaceA), .pane(UUID()), .surface(fixtures.surfaceA), .session(fixtures.sessionID),
                 .child("root", sessionID: fixtures.sessionID)
             ]
             store.apply(.density(.comfortable))

@@ -105,6 +105,79 @@ struct HierarchyWorkspace: Equatable, Identifiable {
     let rootPath: HierarchyAvailability<String?>
     let projectRootPath: HierarchyAvailability<String?>
     let surfaces: HierarchyAvailability<[HierarchySurface]>
+    var panes: HierarchyPaneLayout = .unavailable
+}
+
+struct HierarchyPane: Equatable, Identifiable {
+    let id: UUID
+    let surfaceIDs: [UUID]
+}
+
+enum HierarchyPaneLayout: Equatable {
+    case unavailable
+    case invalid
+    case available([HierarchyPane])
+
+    init(panes: [HierarchyPane]?, surfaceIDs: [UUID]) {
+        guard let panes else { self = .unavailable; return }
+        let members = panes.flatMap(\.surfaceIDs)
+        guard Set(panes.map(\.id)).count == panes.count,
+              Set(surfaceIDs).count == surfaceIDs.count,
+              Set(members).count == members.count,
+              Set(members).isSubset(of: Set(surfaceIDs)) else {
+            self = .invalid
+            return
+        }
+        self = .available(panes)
+    }
+}
+
+struct SidebarPaneGroup: Identifiable, Equatable {
+    let paneID: UUID?
+    let root: HierarchySurface
+    let tabs: [HierarchySurface]
+    let isPlainAnchor: Bool
+    var id: SidebarExpansionID { paneID.map(SidebarExpansionID.pane) ?? .surface(root.id) }
+}
+
+struct SidebarPaneOutline {
+    let groups: [SidebarPaneGroup]
+    let notice: String?
+
+    init(workspace: HierarchyWorkspace, hiddenSurfaces: Set<UUID>) {
+        guard case .available(let surfaces) = workspace.surfaces else {
+            groups = []
+            notice = nil
+            return
+        }
+        var seen = Set<UUID>()
+        let unique = surfaces.filter { seen.insert($0.id).inserted }
+        let byID = Dictionary(uniqueKeysWithValues: unique.map { ($0.id, $0) })
+        var result: [SidebarPaneGroup] = []
+        var placed = Set<UUID>()
+        switch workspace.panes {
+        case .available(let panes):
+            for pane in panes {
+                guard let first = pane.surfaceIDs.first, let root = byID[first] else { continue }
+                placed.formUnion(pane.surfaceIDs)
+                let tabs = pane.surfaceIDs.dropFirst().filter { !hiddenSurfaces.contains($0) }.compactMap { byID[$0] }
+                let hidden = hiddenSurfaces.contains(first)
+                if !hidden || !tabs.isEmpty {
+                    result.append(.init(paneID: pane.id, root: root, tabs: tabs, isPlainAnchor: hidden))
+                }
+            }
+            notice = unique.contains { !placed.contains($0.id) && !hiddenSurfaces.contains($0.id) }
+                ? "Some tabs have no shared pane placement" : nil
+        case .unavailable:
+            notice = "Pane layout unavailable"
+        case .invalid:
+            notice = "Pane layout invalid; showing ungrouped tabs"
+        }
+        result += unique.filter { !placed.contains($0.id) && !hiddenSurfaces.contains($0.id) }.map {
+            .init(paneID: nil, root: $0, tabs: [], isPlainAnchor: false)
+        }
+        groups = result
+    }
 }
 
 struct HierarchySurface: Equatable, Identifiable {

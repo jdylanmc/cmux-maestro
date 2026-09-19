@@ -88,7 +88,12 @@ extension SidebarConnectionModel {
             projectRootPath: hasWorkspacePaths ? .available(workspace.projectRootPath) : .unavailable,
             surfaces: hasSurfaceMetadata
                 ? .available(workspace.surfaces.map { map(surface: $0, hasWorkspacePaths: hasWorkspacePaths) })
-                : .unavailable
+                : .unavailable,
+            panes: hasSurfaceMetadata
+                ? .init(
+                    panes: workspace.panes?.map { .init(id: $0.id, surfaceIDs: $0.surfaceIDs) },
+                    surfaceIDs: workspace.surfaces.map(\.id)
+                ) : .unavailable
         )
     }
 
