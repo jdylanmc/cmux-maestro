@@ -18,6 +18,8 @@ jobs:
           node --test scripts/test-native-adapter.mjs
       - name: Verify terminal orchestration contracts
         run: python3 scripts/test-cmux-maestro-orchestrator.py
+      - name: Fetch pinned SDK for build settings resolution
+        run: ./scripts/fetch-sdk.sh
       - name: Verify build and registration metadata contracts
         run: python3 scripts/test-build-metadata.py
       - name: Verify local preview transactions and recovery

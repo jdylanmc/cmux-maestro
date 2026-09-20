@@ -322,7 +322,8 @@ There is no adoption, restart, unsafe replay or automatic process cleanup.
   `copilot-sdk/docs/extensions.md`. This integration is provider-version-sensitive.
   A different loader/process topology fails closed instead of guessing ownership.
 
-Offline commands:
+Offline commands (first run `./scripts/fetch-sdk.sh` to restore the pinned SDK
+required by the metadata check's Xcode build-settings resolution):
 
 ```sh
 python3 scripts/test-maestro-native.py

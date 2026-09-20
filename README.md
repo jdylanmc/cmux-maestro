@@ -892,7 +892,10 @@ and reject it for production. Tests cover both the zero-window host and
 zero-side-effect install/uninstall denial; fake production setup tests explicitly
 inject the production identity.
 
-Focused, isolated setup, hook, and sandbox checks (no SDK fetch or app launch):
+Focused, isolated setup, hook, and sandbox checks (no app launch):
+
+Before the metadata check, run `./scripts/fetch-sdk.sh` to restore the pinned SDK
+required by Xcode build-settings resolution.
 
 ```sh
 ./scripts/test-copilot-hook.sh
