@@ -36,11 +36,11 @@ this Mac, and be current. The app profile must authorize its one private
 `<AppIdentifierPrefix>.com.jdylanmc.CMUXMaestroPreview` keychain access group.
 The extension retains its existing sandbox/read-only grants and receives no
 keychain group. The helper is signed by the same identity without new grants.
-Its exact code-signature namespace is set independently through
-`CMUX_HELPER_SIGNING_IDENTIFIER`, with `PRODUCT_BUNDLE_IDENTIFIER` empty:
-Xcode otherwise synthesizes an application-identifier entitlement for the
-command-line target even with base entitlement injection disabled. The helper
-disables base entitlement injection and has no entitlement file or third profile.
+Its exact code-signature namespace uses `PRODUCT_BUNDLE_IDENTIFIER` and explicit
+`codesign --identifier`. Xcode can synthesize an application-identifier entitlement
+even with base entitlement injection disabled or an empty bundle identifier;
+neither setting is an entitlement-removal mechanism. The helper has no Xcode
+source entitlement file or third profile.
 There is no special `com.apple.developer.secure-enclave` entitlement.
 
 After explicit local build consent, supply these **local environment variables**:
@@ -50,6 +50,19 @@ profile names or UUIDs). Then run `./scripts/build-development.sh`. No personal
 team, identity or profile values belong in repository defaults. The script uses
 manual signing, checks resolved namespaces before a clean build, and checks signed
 components, effective entitlements and embedded profile metadata afterward.
+Between the Xcode build and final verification, `sign-development-helper.py`
+checks generated paths, namespaces and the selected signer, refusing any helper
+privileges beyond the known exact application identity and optional Boolean
+debugging grant. It then signs the top-level helper with that same explicit
+identity, its exact `.CopilotHook` identifier, hardened runtime,
+`--timestamp=none` and the checked-in **empty** `helper-development.entitlements`.
+After verifying zero helper entitlement keys, it embeds that identical helper
+and re-signs the enclosing app with
+`--preserve-metadata=identifier,requirements,entitlements,flags,runtime` and
+`--timestamp=none`. App entitlements and both embedded profiles are retained;
+the extension is not re-signed. Any failed step stops the build before success.
+The existing strict development verifier remains the final gate; this packaging
+step does not establish runtime readiness, install the app or grant permissions.
 The clean is scoped to this checkout's `.build/development` derived products so
 an incrementally cached, copy-on-sign embedded helper cannot retain old grants.
 It never creates/imports certificates, downloads profiles or uses

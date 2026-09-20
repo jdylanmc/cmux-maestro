@@ -18,6 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("metadata", ROOT / "scripts/verify-build-metadata.py")
 metadata = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(metadata)
+spec = importlib.util.spec_from_file_location("development_signing", ROOT / "scripts/sign-development-helper.py")
+signing = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(signing)
 
 
 class BuildMetadataTests(unittest.TestCase):
@@ -148,8 +151,6 @@ class BuildMetadataTests(unittest.TestCase):
                 }})
             helper = rows[2]["buildSettings"]
             helper.update({
-                "PRODUCT_BUNDLE_IDENTIFIER": "",
-                "CMUX_HELPER_SIGNING_IDENTIFIER": metadata.BASE_ID + suffix + ".CopilotHook",
                 "CODE_SIGN_INJECT_BASE_ENTITLEMENTS": "NO",
                 "CODE_SIGN_ENTITLEMENTS": "",
                 "PROVISIONING_PROFILE_SPECIFIER": "",
@@ -160,9 +161,8 @@ class BuildMetadataTests(unittest.TestCase):
                 metadata.verify_settings(rows, mode)
             rows[2]["buildSettings"]["OTHER_CODE_SIGN_FLAGS"] = flags
             for key, value in (
-                ("PRODUCT_BUNDLE_IDENTIFIER", metadata.BASE_ID + suffix + ".CopilotHook"),
-                ("CMUX_HELPER_SIGNING_IDENTIFIER", metadata.BASE_ID + ".WrongHelper"),
-                ("CMUX_HELPER_SIGNING_IDENTIFIER", ""),
+                ("PRODUCT_BUNDLE_IDENTIFIER", metadata.BASE_ID + ".WrongHelper"),
+                ("PRODUCT_BUNDLE_IDENTIFIER", ""),
                 ("OTHER_CODE_SIGN_FLAGS", "--identifier " + metadata.BASE_ID + ".WrongHelper"),
                 ("CODE_SIGN_INJECT_BASE_ENTITLEMENTS", "YES"),
                 ("CODE_SIGN_ENTITLEMENTS", "unexpected.entitlements"),
@@ -225,12 +225,183 @@ class BuildMetadataTests(unittest.TestCase):
         self.assertLess(script.index('--source-entitlements'), script.index('"${SETTINGS[@]}" clean build'))
         self.assertIn('DERIVED_DATA="$ROOT/.build/development"', script)
         self.assertIn('-derivedDataPath "$DERIVED_DATA" "${SETTINGS[@]}" clean build', script)
+        self.assertIn("set -euo pipefail", script)
+        self.assertLess(script.index('"${SETTINGS[@]}" clean build'),
+                        script.index('python3 "$ROOT/scripts/sign-development-helper.py"'))
+        self.assertLess(script.index('python3 "$ROOT/scripts/sign-development-helper.py"'),
+                        script.index('--mode development --app "$APP"'))
+        self.assertLess(script.index('--mode development --app "$APP"'),
+                        script.index('echo "Development build verified'))
+        self.assertNotIn("||", script[script.index('"${SETTINGS[@]}" clean build'):])
         self.assertIn("CODE_SIGN_IDENTITY=-", (ROOT / "scripts/build-register.sh").read_text())
         entitlements = plistlib.loads((ROOT / "scripts/native-development.entitlements").read_bytes())
         self.assertEqual(set(entitlements), {"com.apple.application-identifier",
                          "com.apple.developer.team-identifier", "keychain-access-groups"})
         self.assertEqual(entitlements["keychain-access-groups"],
                          ["$(AppIdentifierPrefix)com.jdylanmc.CMUXMaestroPreview"])
+
+    def signing_fixture(self):
+        self.app = self.directory / "CMUX Maestro Preview.app"
+        self.extension = self.app / "Contents/Extensions/CMUX Maestro Preview Extension.appex"
+        (self.extension / "Contents").mkdir(parents=True, exist_ok=True)
+        self.fixture("development")
+        helper = self.directory / signing.HELPER_NAME
+        embedded = self.app / "Contents/Helpers" / signing.HELPER_NAME
+        embedded.parent.mkdir(exist_ok=True)
+        for path in (helper, embedded):
+            path.write_bytes(b"xcode-signed-helper")
+            path.chmod(0o700)
+        profiles = [target / "Contents/embedded.provisionprofile" for target in (self.app, self.extension)]
+        for index, path in enumerate(profiles):
+            path.write_bytes(b"untouched-profile-" + str(index).encode())
+        team, identity = "SYNTHETIC1", "Apple Development: Synthetic (SYNTHETIC1)"
+        identifiers = {self.app: metadata.BASE_ID, self.extension: metadata.BASE_ID + ".Extension",
+                       helper: metadata.BASE_ID + ".CopilotHook", embedded: metadata.BASE_ID + ".CopilotHook"}
+        expected_identifiers = dict(identifiers)
+        grants = {
+            self.app: {"com.apple.application-identifier": team + "." + metadata.BASE_ID,
+                       "com.apple.developer.team-identifier": team,
+                       "keychain-access-groups": [team + "." + metadata.BASE_ID]},
+            helper: {"com.apple.application-identifier": team + "." + identifiers[helper]},
+            embedded: {"com.apple.application-identifier": team + "." + identifiers[helper]},
+        }
+        calls = []
+        state = {"failure": None, "extra-final-grant": False, "bad-parent": False, "bad-profile": False}
+
+        def run(command, **kwargs):
+            calls.append(command)
+            self.assertEqual(kwargs, {"check": True, "capture_output": True})
+            self.assertEqual(command[0], "/usr/bin/codesign")
+            if len(calls) == state["failure"]:
+                raise subprocess.CalledProcessError(1, command)
+            target = Path(command[-1])
+            stdout, stderr = b"", b""
+            if "--force" in command:
+                if target == helper:
+                    helper.write_bytes(b"final-signed-helper")
+                    grants[helper] = {"unexpected": True} if state["extra-final-grant"] else {}
+                else:
+                    self.assertEqual(target, self.app)
+                    self.assertEqual(embedded.read_bytes(), b"final-signed-helper")
+                    self.assertEqual(grants[helper], {})
+                    if state["bad-parent"]:
+                        grants[self.app] = {}
+                    if state["bad-profile"]:
+                        profiles[1].write_bytes(b"changed")
+            elif "--verbose=4" in command:
+                stderr = (f"Identifier={identifiers[target]}\nTeamIdentifier={team}\n"
+                          f"Authority={identity}\nAuthority=Synthetic intermediate\n").encode()
+            elif "--entitlements" in command:
+                value = {} if target == embedded and embedded.read_bytes() == b"final-signed-helper" else grants[target]
+                stdout = plistlib.dumps(value)
+            else:
+                self.assertEqual(command, [
+                    "/usr/bin/codesign", "--verify", "--strict", "-R",
+                    f'=anchor apple generic and identifier "{expected_identifiers[target]}"', str(target),
+                ])
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr=stderr)
+
+        return helper, embedded, profiles, team, identity, identifiers, grants, calls, state, run
+
+    def test_development_finalization_signs_empty_helper_then_preserves_parent_metadata(self):
+        helper, embedded, profiles, team, identity, _, grants, calls, _, run = self.signing_fixture()
+        parent_grants = copy.deepcopy(grants[self.app])
+        profile_bytes = [path.read_bytes() for path in profiles]
+        signing.finalize_development_signing(self.directory, identity, team, runner=run)
+        self.assertEqual(metadata.plist(signing.EMPTY_ENTITLEMENTS), {})
+        self.assertEqual([command for command in calls if "--force" in command], [
+            ["/usr/bin/codesign", "--force", "--sign", identity, "--identifier",
+             metadata.BASE_ID + ".CopilotHook", "--options", "runtime", "--timestamp=none",
+             "--entitlements", str(signing.EMPTY_ENTITLEMENTS), str(helper)],
+            ["/usr/bin/codesign", "--force", "--sign", identity,
+             "--preserve-metadata=identifier,requirements,entitlements,flags,runtime",
+             "--timestamp=none", str(self.app)],
+        ])
+        self.assertEqual(helper.read_bytes(), embedded.read_bytes())
+        self.assertEqual(grants[helper], {})
+        self.assertEqual(grants[self.app], parent_grants)
+        self.assertEqual([path.read_bytes() for path in profiles], profile_bytes)
+        parent_sign = next(i for i, command in enumerate(calls) if "--force" in command and command[-1] == str(self.app))
+        self.assertEqual(calls[parent_sign - 1], [
+            "/usr/bin/codesign", "-d", "--entitlements", ":-", str(embedded),
+        ])
+        self.assertFalse(any("--deep" in command for command in calls if "--force" in command))
+
+    def test_every_failed_signing_command_stops_finalization(self):
+        fixture = self.signing_fixture()
+        signing.finalize_development_signing(self.directory, fixture[4], fixture[3], runner=fixture[-1])
+        expected = fixture[7]
+        for failure in range(1, len(expected) + 1):
+            with self.subTest(command=expected[failure - 1]):
+                _, _, _, team, identity, _, _, calls, state, run = self.signing_fixture()
+                state["failure"] = failure
+                with self.assertRaises(subprocess.CalledProcessError):
+                    signing.finalize_development_signing(self.directory, identity, team, runner=run)
+                self.assertEqual(calls, expected[:failure])
+
+    def test_failed_helper_embedding_never_reseals_parent(self):
+        _, _, _, team, identity, _, _, calls, _, run = self.signing_fixture()
+        with patch.object(signing.shutil, "copy2", side_effect=OSError("synthetic copy failure")):
+            with self.assertRaises(OSError):
+                signing.finalize_development_signing(self.directory, identity, team, runner=run)
+        self.assertEqual(len([command for command in calls if "--force" in command]), 1)
+
+    def test_finalization_refuses_unexpected_helper_privileges_before_writes(self):
+        for role in (0, 1):
+            for value in (
+                {"com.apple.application-identifier": "SYNTHETIC1."},
+                {"com.apple.application-identifier": metadata.BASE_ID + ".CopilotHook"},
+                {"com.apple.application-identifier": True},
+                {"keychain-access-groups": ["SYNTHETIC1." + metadata.BASE_ID]},
+                {"com.apple.developer.team-identifier": "SYNTHETIC1"},
+                {"com.apple.security.network.client": True},
+                {"com.apple.security.get-task-allow": "true"},
+            ):
+                with self.subTest(role=role, grants=value):
+                    fixture = self.signing_fixture()
+                    fixture[6][fixture[role]] = value
+                    with self.assertRaisesRegex(ValueError, "Unexpected helper privileges"):
+                        signing.finalize_development_signing(self.directory, fixture[4], fixture[3], runner=fixture[-1])
+                    self.assertFalse(any("--force" in command for command in fixture[7]))
+
+    def test_finalization_refuses_wrong_namespace_signer_and_redirected_products(self):
+        for fault in ("namespace", "signer", "symlink", "hardlink", "source-entitlements"):
+            with self.subTest(fault=fault):
+                helper, embedded, _, team, identity, identifiers, _, calls, _, run = self.signing_fixture()
+                if fault == "namespace":
+                    identifiers[helper] = metadata.BASE_ID + ".WrongHelper"
+                elif fault == "signer":
+                    identity = "Apple Development: Other (SYNTHETIC1)"
+                elif fault in ("symlink", "hardlink"):
+                    embedded.unlink()
+                    embedded.symlink_to(helper) if fault == "symlink" else os.link(helper, embedded)
+                empty = self.directory / "not-empty.entitlements"
+                empty.write_bytes(plistlib.dumps({"unexpected": True}))
+                with patch.object(signing, "EMPTY_ENTITLEMENTS",
+                                  empty if fault == "source-entitlements" else signing.EMPTY_ENTITLEMENTS):
+                    with self.assertRaises(ValueError):
+                        signing.finalize_development_signing(self.directory, identity, team, runner=run)
+                self.assertFalse(any("--force" in command for command in calls))
+                if fault in ("symlink", "hardlink"):
+                    embedded.unlink()
+
+    def test_finalization_checks_effective_empty_helper_and_unchanged_parent_and_profiles(self):
+        for fault in ("extra-final-grant", "bad-parent", "bad-profile"):
+            with self.subTest(fault=fault):
+                _, _, _, team, identity, _, _, calls, state, run = self.signing_fixture()
+                state[fault] = True
+                with self.assertRaises(ValueError):
+                    signing.finalize_development_signing(self.directory, identity, team, runner=run)
+                if fault == "extra-final-grant":
+                    self.assertEqual(len([command for command in calls if "--force" in command]), 1)
+
+    def test_finalization_cli_returns_failure_without_claiming_success(self):
+        with patch.object(signing, "finalize_development_signing", side_effect=ValueError("synthetic")), \
+             patch.dict(os.environ, {"CMUX_DEVELOPMENT_IDENTITY": "Apple Development: Synthetic",
+                                    "CMUX_DEVELOPMENT_TEAM": "SYNTHETIC1"}), \
+             patch("builtins.print") as output:
+            self.assertEqual(signing.main(), 1)
+            self.assertIn("no verified build produced", output.call_args.args[0])
 
     def test_keychain_selection_and_verifier_are_noninteractive(self):
         source = (ROOT / "CMUXMaestroPreview/Integration/NativeChildAuthorization.swift").read_text()
@@ -316,7 +487,7 @@ class BuildMetadataTests(unittest.TestCase):
             ):
                 metadata.verify_development(self.app, runner=signed)
 
-    def test_resolved_development_helper_does_not_inject_base_entitlements(self):
+    def test_resolved_development_helper_namespace_and_no_source_grants(self):
         for configuration in ("Debug", "Release"):
             with self.subTest(configuration=configuration):
                 result = subprocess.run([
@@ -334,8 +505,7 @@ class BuildMetadataTests(unittest.TestCase):
                 metadata.verify_settings(rows, "development")
                 targets = {row["target"]: row["buildSettings"] for row in rows}
                 helper = targets["CMUXMaestroCopilotHook"]
-                self.assertFalse(helper.get("PRODUCT_BUNDLE_IDENTIFIER"))
-                self.assertEqual(helper["CMUX_HELPER_SIGNING_IDENTIFIER"],
+                self.assertEqual(helper["PRODUCT_BUNDLE_IDENTIFIER"],
                                  metadata.BASE_ID + ".CopilotHook")
                 self.assertEqual(helper["CODE_SIGN_INJECT_BASE_ENTITLEMENTS"], "NO")
                 self.assertFalse(helper.get("CODE_SIGN_ENTITLEMENTS"))
@@ -460,10 +630,9 @@ class BuildMetadataTests(unittest.TestCase):
                 if target["name"] != "CMUXMaestroPreviewTests":
                     self.assertEqual(settings["CURRENT_PROJECT_VERSION"], metadata.APP_BUILD_VERSION)
                 if target["name"] == "CMUXMaestroCopilotHook":
-                    self.assertEqual(settings["PRODUCT_BUNDLE_IDENTIFIER"], "")
-                    self.assertEqual(settings["CMUX_HELPER_SIGNING_IDENTIFIER"],
+                    self.assertEqual(settings["PRODUCT_BUNDLE_IDENTIFIER"],
                                      metadata.BASE_ID + "$(CMUX_BUNDLE_ID_SUFFIX).CopilotHook")
-                    self.assertEqual(settings["OTHER_CODE_SIGN_FLAGS"], "--identifier $(CMUX_HELPER_SIGNING_IDENTIFIER)")
+                    self.assertEqual(settings["OTHER_CODE_SIGN_FLAGS"], "--identifier $(PRODUCT_BUNDLE_IDENTIFIER)")
                     self.assertEqual(settings["CODE_SIGN_INJECT_BASE_ENTITLEMENTS"], "NO")
                 else:
                     self.assertNotIn("CODE_SIGN_INJECT_BASE_ENTITLEMENTS", settings)

@@ -58,21 +58,15 @@ def verify_settings(rows, mode):
     ]:
         require(name in targets, "Missing resolved target settings.")
         settings = targets[name]
+        require(settings.get("PRODUCT_BUNDLE_IDENTIFIER") == BASE_ID + suffix + ending,
+                "Resolved target bundle identifier is outside its build namespace.")
         if name == "CMUXMaestroCopilotHook":
-            # A CLI signature needs an identifier, not Xcode's application identity entitlement.
-            require(not settings.get("PRODUCT_BUNDLE_IDENTIFIER"),
-                    "Identity helper must not declare an application bundle identifier.")
-            require(settings.get("CMUX_HELPER_SIGNING_IDENTIFIER") == BASE_ID + suffix + ending,
-                    "Resolved helper signing identifier is outside its build namespace.")
             require(settings.get("OTHER_CODE_SIGN_FLAGS") == "--identifier " + BASE_ID + suffix + ending,
                     "Identity helper signing must override its linker-generated identifier.")
             require(settings.get("CODE_SIGN_INJECT_BASE_ENTITLEMENTS") == "NO"
                     and not any(settings.get(key) for key in (
                         "CODE_SIGN_ENTITLEMENTS", "PROVISIONING_PROFILE", "PROVISIONING_PROFILE_SPECIFIER")),
-                    "Identity helper must not inject entitlements or use a provisioning profile.")
-        else:
-            require(settings.get("PRODUCT_BUNDLE_IDENTIFIER") == BASE_ID + suffix + ending,
-                    "Resolved target bundle identifier is outside its build namespace.")
+                    "Identity helper must disable base grants and have no entitlement file or profile.")
         if name in ("CMUXMaestroPreview", "CMUXMaestroSidebar"):
             require(settings.get("CMUX_SIDEBAR_EXTENSION_POINT_ID") == point,
                     "Resolved extension point is outside its build namespace.")

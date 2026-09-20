@@ -35,5 +35,6 @@ python3 "$ROOT/scripts/verify-build-metadata.py" --mode development \
     --source-entitlements "$ROOT/CMUXMaestroSidebar/CMUXMaestroSidebar.entitlements"
 xcodebuild -project "$ROOT/CMUXMaestroPreview.xcodeproj" -scheme CMUXMaestroPreview \
     -configuration Debug -derivedDataPath "$DERIVED_DATA" "${SETTINGS[@]}" clean build
+python3 "$ROOT/scripts/sign-development-helper.py"
 python3 "$ROOT/scripts/verify-build-metadata.py" --mode development --app "$APP"
 echo "Development build verified; not installed or explicitly registered. Runtime readiness and human signing still require local validation."

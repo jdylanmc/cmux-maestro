@@ -954,10 +954,13 @@ artifacts; no other development copies are discovered or deregistered.
 Source files are **never removed**.
 
 The helper target explicitly supplies its resolved production/validation
-identifier to `codesign` using `CMUX_HELPER_SIGNING_IDENTIFIER`; otherwise a
-command-line tool can retain its linker-generated identifier. Its
-`PRODUCT_BUNDLE_IDENTIFIER` is empty to prevent Xcode from synthesizing an
-application-identifier entitlement, and base entitlement injection is disabled.
+identifier to `codesign` using `PRODUCT_BUNDLE_IDENTIFIER`; otherwise a
+command-line tool can retain its linker-generated identifier. Disabling base
+entitlement injection does **not** prevent Xcode from generating an
+application-identifier entitlement. The optional development build explicitly
+re-signs the helper with an empty entitlement dictionary, embeds that exact
+helper, then re-signs the app preserving its existing signing metadata before
+strict verification. Unexpected helper privileges are refused, not stripped.
 Publication and installation verify the effective helper identity. Rebuild older products
 with linker-generated helper IDs; they are not accepted as install sources.
 For older ad-hoc install/rollback products, the helper's optional
