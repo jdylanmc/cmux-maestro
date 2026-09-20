@@ -175,7 +175,7 @@ import Testing
     }
 
     @Test func requestDiscoveryRetainsFixturesAndRejectsUnsafeReceiptReadback() throws {
-        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/setup-tests/approval-fixtures-\(UUID().uuidString)")
         let control = root.appendingPathComponent("control")
         try FileManager.default.createDirectory(at: control, withIntermediateDirectories: true,
