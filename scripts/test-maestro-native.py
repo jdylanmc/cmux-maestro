@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import runpy
 import shutil
+import signal
 import subprocess
 from types import SimpleNamespace
 import unittest
@@ -363,6 +364,161 @@ class NativeTests(unittest.TestCase):
         with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("ps", 2)):
             self.assertIsNone(read(44))
 
+    def test_native_binding_capture_and_every_resample_use_c_locale_and_utc(self):
+        run = API["run_interactive_session"]
+        check = API["native_bridge_caller_matches"]
+        start = "Sun Sep 20 00:00:00 2026"
+        process = SimpleNamespace(pid=42, poll=lambda: 0, wait=lambda: 0)
+        node = {**self.child, "task": "Bounded", "workingDirectory": str(ROOT)}
+        processes = {42: (1, "/usr/bin/node"), 44: (42, "/packaged/copilot"),
+                     45: (44, "/usr/bin/node")}
+        calls = []
+        def ps(command, **kwargs):
+            environment = kwargs["env"]
+            for key in ("LC_ALL", "LC_TIME", "LANG"):
+                self.assertEqual(environment[key], "C")
+            self.assertEqual(environment["TZ"], "UTC0")
+            pid = int(command[command.index("-p") + 1])
+            calls.append(pid)
+            parent, executable = processes[pid]
+            return SimpleNamespace(returncode=0, stdout=f"{parent} {start} {executable}\n")
+        replacements = {
+            "trusted_executable": lambda *_: "/offline/copilot",
+            "worker_environment": lambda *_: {},
+            "mutate": lambda root, operation, **_kwargs: self.mutate(root, operation),
+        }
+        # No installed French locale is needed: ps's explicit subprocess environment is the protocol.
+        for caller in ({"LC_ALL": "fr_FR.UTF-8", "LC_TIME": "fr_FR.UTF-8", "TZ": "Europe/Paris"},
+                       {"LC_ALL": "C", "LC_TIME": "C", "TZ": "America/Los_Angeles"}):
+            with self.subTest(caller=caller), patch.dict(os.environ, caller):
+                with patch.dict(run.__globals__, replacements), patch.object(os, "isatty", return_value=True):
+                    with patch.object(subprocess, "Popen", return_value=process), patch.object(subprocess, "run", side_effect=ps):
+                        self.state["nodes"][node["id"]].update(phase="turn-running", availability="busy")
+                        run(ROOT, node["id"], self.token, node)
+                bound = self.state["nodes"][node["id"]]
+                self.assertEqual(bound["providerProcess"], {
+                    "pid": 42, "start": "2026-09-20T00:00:00Z", "startFormat": "ps-c-utc-v1",
+                })
+                projection = API["Store"](ROOT)._projection(self.state).decode()
+                self.assertNotIn("startFormat", projection)
+                self.assertNotIn("2026-09-20T00:00:00Z", projection)
+                for bridge_environment in ({"HOME": "/offline", "PATH": "/usr/bin:/bin"},
+                                           {"LC_ALL": "fr_FR.UTF-8", "TZ": "Pacific/Auckland"}):
+                    calls.clear()
+                    with patch.dict(os.environ, bridge_environment, clear=True):
+                        with patch.object(subprocess, "run", side_effect=ps), patch.object(os, "getppid", return_value=45):
+                            self.assertTrue(check(bound))
+                            self.assertEqual(calls, [45, 44, 42, 45, 44, 42])
+                            self.assertTrue(API["process_matches"](bound))
+
+    def test_canonical_process_stamps_and_legacy_liveness_are_not_interchangeable(self):
+        read = API["native_process_identity"]
+        for text in ("dim. sept. 20 00:00:00 2026", "Sun Sep 31 00:00:00 2026",
+                     "Mon Sep 20 00:00:00 2026", "unparsed", "Sun Sep 20 25:00:00 2026"):
+            with self.subTest(text=text), patch.object(subprocess, "run", return_value=SimpleNamespace(
+                returncode=0, stdout=f"1 {text} /copilot",
+            )):
+                self.assertIsNone(read(42, canonical=True))
+        matches = API["process_matches"]
+        legacy = "dim. 20 sept. 2026 02:00:00"
+        canonical = {"pid": 42, "start": "2026-09-20T00:00:00Z", "startFormat": "ps-c-utc-v1"}
+        def ps(command, **kwargs):
+            if "env" in kwargs:
+                return SimpleNamespace(returncode=0, stdout="1 Sun Sep 20 00:00:00 2026 /copilot")
+            return SimpleNamespace(returncode=0, stdout=legacy)
+        with patch.object(subprocess, "run", side_effect=ps):
+            for field in ("supervisor", "providerProcess"):
+                self.assertTrue(matches({field: {"pid": 42, "start": legacy}}))
+                self.assertFalse(matches({field: {"pid": 42, "start": "Sun Sep 20 00:00:00 2026"}}))
+            self.assertTrue(matches({"providerProcess": canonical}))
+            for changed in ({"start": legacy}, {"start": "2026-09-20T00:00:01Z"},
+                            {"startFormat": "unknown"}):
+                self.assertFalse(matches({"providerProcess": {**canonical, **changed}}))
+        for changed in ({"start": legacy}, {"start": "2026-09-31T00:00:00Z"},
+                        {"startFormat": "unknown"}):
+            state = copy.deepcopy(self.state)
+            state["nodes"][self.child["id"]]["providerProcess"] = {**canonical, **changed}
+            with self.assertRaises(API["OrchestrationError"]):
+                API["validate_state"](state)
+
+    def test_canonical_native_chain_keeps_bounded_topology_and_second_sample_checks(self):
+        check = API["native_bridge_caller_matches"]
+        start = "2026-09-20T00:00:00Z"
+        processes = {
+            42: {"parent": 1, "start": start, "executable": "/usr/bin/node"},
+            44: {"parent": 42, "start": start, "executable": "/packaged/copilot"},
+            45: {"parent": 44, "start": start, "executable": "/usr/bin/node"},
+        }
+        node = {"providerProcess": {"pid": 42, "start": start, "startFormat": "ps-c-utc-v1"}}
+        def sample(pid, *, canonical):
+            self.assertTrue(canonical)
+            return copy.deepcopy(processes.get(pid))
+        with patch.dict(check.__globals__, {"native_process_identity": sample}), patch.object(os, "getppid", return_value=45):
+            self.assertTrue(check(node))
+            with patch.dict(processes[45], {"parent": 42}):
+                self.assertTrue(check(node))
+            for pid, changed in (
+                (44, {"parent": 1}), (44, {"executable": "/unrelated/node"}),
+                (44, {"start": "2026-09-19T23:59:59Z"}), (45, {"start": "not parsed"}),
+                (42, {"start": "2026-09-20T00:00:01Z"}), (45, {"parent": 46}),
+            ):
+                processes[46] = {**processes[44], "parent": 44}
+                with self.subTest(pid=pid, changed=changed), patch.dict(processes[pid], changed):
+                    self.assertFalse(check(node))
+            for pid, changed in ((45, {"parent": 1}), (44, {"parent": 1}),
+                                 (42, {"start": "2026-09-20T00:00:01Z"})):
+                counts = {}
+                def changed_sample(sample_pid, *, canonical):
+                    result = sample(sample_pid, canonical=canonical)
+                    counts[sample_pid] = counts.get(sample_pid, 0) + 1
+                    if sample_pid == pid and counts[sample_pid] > 1:
+                        result.update(changed)
+                    return result
+                with patch.dict(check.__globals__, {"native_process_identity": changed_sample}):
+                    self.assertFalse(check(node))
+            with patch.object(os, "getppid", side_effect=[45, 1]):
+                self.assertFalse(check(node))
+
+    def test_runtime_exit_checks_versioned_provider_without_reinterpreting_legacy_anchors(self):
+        runtime = API["command_runtime"]
+        legacy = "dim. 20 sept. 2026 02:00:00"
+        for canonical in (False, True):
+            for live in (False, True):
+                with self.subTest(canonical=canonical, live=live):
+                    state = copy.deepcopy(self.state)
+                    node = state["nodes"][self.child["id"]]
+                    node.update(phase="launching", availability="busy", providerProcess=None)
+                    state["launches"][node["id"]] = {
+                        "workerId": node["id"], "runId": node["runId"], "workspaceId": node["workspaceId"],
+                        "surfaceId": node["surfaceId"], "state": "starting",
+                        "createdAt": API["now"](), "updatedAt": API["now"](),
+                    }
+                    self.state = state
+                    anchor = {"pid": 42, "start": "2026-09-20T00:00:00Z" if canonical else legacy}
+                    if canonical:
+                        anchor["startFormat"] = "ps-c-utc-v1"
+                    def interrupted(*_args):
+                        self.mutate(ROOT, lambda stored: stored["nodes"][node["id"]].update(providerProcess=anchor))
+                        raise API["OrchestrationError"]("offline interrupted runtime")
+                    replacements = {
+                        "process_start": lambda pid: legacy if pid != 42 or live else "stale",
+                        "native_process_identity": lambda pid, **kwargs: {
+                            "start": "2026-09-20T00:00:00Z" if live else "2026-09-20T00:00:01Z"},
+                        "read_state": lambda *_args, **_kwargs: copy.deepcopy(self.state),
+                        "mutate": lambda root, operation, **_kwargs: self.mutate(root, operation),
+                        "require_current_surface": lambda *_: None,
+                        "remove_launch_credential": lambda *_: None,
+                        "run_interactive_session": interrupted,
+                    }
+                    with patch.dict(runtime.__globals__, replacements), patch.object(signal, "signal"):
+                        with self.assertRaisesRegex(API["OrchestrationError"], "offline interrupted"):
+                            runtime(SimpleNamespace(worker_id=node["id"], token=self.token), ROOT)
+                    remaining = self.state["nodes"][node["id"]]
+                    self.assertEqual(remaining["phase"], "turn-running" if live else "turn-failed")
+                    self.assertEqual(remaining["providerProcess"], anchor)
+                    if live:
+                        self.assertIn("remains live", remaining["result"])
+
     def test_native_launch_never_adopts_an_existing_identity(self):
         settings = {"version": 1, "copilotAccount": "example-user", "model": "example-model"}
         args = SimpleNamespace(
@@ -516,6 +672,103 @@ class NativeTests(unittest.TestCase):
                 result = self.native.launch_request(args, root, actor, settings, policy, cwd)
                 self.assertEqual(result["status"], "human-authorization-required")
                 self.assertNotEqual(result["requestId"], first["requestId"])
+
+    def test_fresh_activation_supersedes_prepared_scopes_and_refuses_old_reuse_tickets(self):
+        for reverse in (False, True):
+            with self.subTest(reverse=reverse):
+                root = self.policy_fixture()
+                other, other_token = self.child, self.token
+                self.args.actor_id, self.args.token = other["id"], other_token
+                self.prepare_policy(root)
+                self.sign_policy(root)
+                other_request = self.admit_policy(root)
+                other_grant = API["read_state"](root)["nativePolicyGrants"][0]
+                self.args.actor_id, self.args.token = self.actor["id"], self.token
+                policies = [{"allow": ["read"], "deny": ["web"]},
+                            {"allow": ["read"], "deny": ["web", "write"]}]
+                tickets = []
+                # Both signatures precede either activation.
+                for policy in policies:
+                    self.policy = policy
+                    self.assertEqual(self.prepare_policy(root)["status"], "human-authorization-required")
+                    self.sign_policy(root)
+                    tickets.append(self.args.native_request)
+                order = (1, 0) if reverse else (0, 1)
+                self.policy, self.args.native_request = policies[order[0]], tickets[order[0]]
+                self.admit_policy(root)
+                self.assertEqual(self.prepare_policy(root)["status"], "reuse-ready")
+                reuse_ticket = self.args.native_request
+                reuse_request = self.native.authorized_launch(
+                    self.args, root, self.actor, self.settings, self.policy, ROOT)
+                self.policy, self.args.native_request = policies[order[1]], tickets[order[1]]
+                self.admit_policy(root)
+                state = API["read_state"](root)
+                self.assertEqual(state["nativePolicyGrants"], [
+                    other_grant, {"id": tickets[order[1]], "scope": self.native.policy_scope(
+                        state, self.actor, self.settings, self.policy, ROOT, self.setup_value["setupId"])},
+                ])
+                self.policy, self.args.native_request = policies[order[0]], reuse_ticket
+                with self.assertRaisesRegex(API["OrchestrationError"], "no longer active"):
+                    self.admit_policy(root)
+                # A reuse ticket which passed preflight before activation also fails at reservation.
+                with self.assertRaisesRegex(API["OrchestrationError"], "no longer active"):
+                    API["mutate"](root, lambda candidate: self.native.consume_authorization(
+                        candidate, reuse_request, candidate["nodes"][self.actor["id"]]))
+                self.assertEqual(API["read_state"](root), state)
+                self.assertEqual(self.prepare_policy(root)["status"], "human-authorization-required")
+                self.args.actor_id, self.args.token = other["id"], other_token
+                self.policy = policies[0]
+                self.assertEqual(self.prepare_policy(root)["status"], "reuse-ready")
+                self.assertEqual(self.admit_policy(root)["policyGrantId"], other_request["requestId"])
+
+    def test_same_scope_pending_signatures_keep_the_active_grant_and_reuse_ticket(self):
+        root = self.policy_fixture()
+        tickets = []
+        for _ in range(2):
+            self.prepare_policy(root)
+            self.sign_policy(root)
+            tickets.append(self.args.native_request)
+        self.args.native_request = tickets[0]
+        first = self.admit_policy(root)
+        self.assertEqual(self.prepare_policy(root)["status"], "reuse-ready")
+        reuse_ticket = self.args.native_request
+        self.args.native_request = tickets[1]
+        second = self.admit_policy(root)
+        self.args.native_request = reuse_ticket
+        reused = self.admit_policy(root)
+        self.assertEqual(reused["policyGrantId"], first["requestId"])
+        self.assertEqual(len(API["read_state"](root)["nativePolicyGrants"]), 1)
+        for field in ("requestId", "workerId", "sessionId"):
+            self.assertEqual(len({request[field] for request in (first, second, reused)}), 3)
+
+    def test_rejected_reservation_does_not_supersede_or_consume(self):
+        root = self.policy_fixture()
+        tickets = []
+        policies = [self.policy, {"allow": ["read"], "deny": ["web", "write"]}]
+        for policy in policies:
+            self.policy = policy
+            self.prepare_policy(root)
+            self.sign_policy(root)
+            tickets.append(self.args.native_request)
+        self.policy, self.args.native_request = policies[0], tickets[0]
+        self.admit_policy(root)
+        baseline = API["read_state"](root)
+        self.policy, self.args.native_request = policies[1], tickets[1]
+        args = SimpleNamespace(**vars(self.args), command="spawn", cwd=str(ROOT),
+                               allow_tool=self.policy["allow"], deny_tool=self.policy["deny"],
+                               require_pinned_launch_settings=True, icon=None, color=None)
+        spawn = API["command_spawn"]
+        with patch.dict(spawn.__globals__, {
+            "native_messaging": lambda: self.native,
+            "resolve_copilot_token": lambda *_: None,
+            "git_display_metadata": lambda *_: API["absent_git_metadata"](),
+            "resource_observations": lambda *_: ({}, []),
+        }), patch.object(os.path, "lexists", return_value=True):
+            with self.assertRaisesRegex(API["OrchestrationError"], "new, unowned"):
+                spawn(args, root, SimpleNamespace(validate_surface=lambda *_: self.actor["paneId"]))
+        self.assertEqual(API["read_state"](root), baseline)
+        self.admit_policy(root)
+        self.assertEqual(API["read_state"](root)["nativePolicyGrants"][0]["id"], tickets[1])
 
     def test_reuse_rechecks_live_scope_at_admission(self):
         root = self.policy_fixture()
@@ -696,6 +949,7 @@ class NativeTests(unittest.TestCase):
             "trusted_executable": lambda *_: "/offline/copilot",
             "worker_environment": lambda *_: {"SYNTHETIC_ACCOUNT": "pinned-account"},
             "process_start": lambda *_: "offline", "mutate": lambda *_args, **_kwargs: None,
+            "native_process_identity": lambda *_args, **_kwargs: {"start": "2026-09-20T00:00:00Z"},
         }
         with patch.dict(run.__globals__, replacements), patch.object(os, "isatty", return_value=True):
             with patch.object(subprocess, "Popen", return_value=process) as popen:

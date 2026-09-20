@@ -117,7 +117,7 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) { nativeSetup = nil }
         } message: {
-            Text("Enable writes only Maestro’s loader in ~/.copilot/extensions. Each new native worker separately requires a displayed, one-time human-signed child policy. Disable leaves the loader inert for future loads, without terminating sessions.")
+            Text("Enable writes only Maestro’s loader in ~/.copilot/extensions. A human must first authorize the displayed run policy; workers in that run with the exact same policy can reuse that authorization with a one-time launch ticket for each worker. Disable prevents future authorization reuse and leaves the loader inert for future loads, without terminating existing sessions.")
         }
     }
 

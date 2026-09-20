@@ -257,10 +257,15 @@ class NativeMessaging:
             if request["policyGrantId"] is not None:
                 if not self.grant_matches(state, request, actor):
                     self.fail("Reusable native policy grant is no longer active.")
-            elif not any(grant["scope"] == request["policyScope"] for grant in grants):
-                if len(grants) >= 128:
-                    self.fail("Native policy grant retention bound reached.")
-                grants.append({"id": request["requestId"], "scope": request["policyScope"]})
+            else:
+                # Preparation can precede another admission; supersede scope under the lease lock.
+                grants[:] = [grant for grant in grants
+                             if grant["scope"]["actor"]["nodeId"] != actor["id"]
+                             or grant["scope"] == request["policyScope"]]
+                if not any(grant["scope"] == request["policyScope"] for grant in grants):
+                    if len(grants) >= 128:
+                        self.fail("Native policy grant retention bound reached.")
+                    grants.append({"id": request["requestId"], "scope": request["policyScope"]})
         used[:] = [entry for entry in used
                    if self.date(entry["expiresAt"], "authorization expiry") > current]
         if len(used) >= 128:

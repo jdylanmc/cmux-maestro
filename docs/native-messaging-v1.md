@@ -116,6 +116,12 @@ deeper chains fail closed. This process check supplements, and never invents,
 the logical session/worker/run/generation identity. A filesystem path or SDK
 `source` string alone is not authentication. No provider credentials are requested
 from the SDK, and no permission/user-input callbacks are registered.
+New native provider anchors carry the explicit `ps-c-utc-v1` start format:
+capture, liveness and every ancestry resample run `ps` in the C locale and UTC,
+then strictly parse its creation stamp into UTC. Caller locale/time zone and the
+bridge's reduced environment cannot change that representation. Existing
+unversioned provider/supervisor anchors retain their original local-string
+handling; no timezone is guessed and no global process-stamp migration occurs.
 
 Use `prepare-native` with the same actor, name, task, cwd and exact allow/deny
 arguments intended for `spawn`. Both pinned launch settings are required.
@@ -169,6 +175,12 @@ are checked again at admission. Changed scope needs fresh consent; archive and
 recovery remove grants, while disabling/re-enabling setup rotates its identity
 and makes prior grants/tickets unusable. Stale coordinator/worker ownership
 cannot reuse consent. Existing workers are never mutated or restarted.
+Fresh grant activation also invalidates different scopes for that actor inside
+the same locked ticket-consumption/launch-reservation transaction, even when both
+requests were prepared and signed before either launch. Other actors' grants and
+exact-scope grants remain intact. A superseded grant's previously prepared reuse
+ticket is refused, not promoted back into a grant. Rejected reservations do not
+persist grant invalidation or ticket consumption.
 
 Legacy v1 single-worker requests/receipts are rejected, **never promoted**.
 Their consumed-ticket tombstones retain their existing timeout semantics.

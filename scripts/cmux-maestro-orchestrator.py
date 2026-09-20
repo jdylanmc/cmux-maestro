@@ -688,12 +688,20 @@ def validate_state(state):
             validate_launch_settings(node["launchSettings"])
         provider = node.get("providerProcess")
         if provider is not None and (
-            not isinstance(provider, dict) or set(provider) != {"pid", "start"}
+            not isinstance(provider, dict) or set(provider) not in (
+                {"pid", "start"}, {"pid", "start", "startFormat"})
             or type(provider["pid"]) is not int or provider["pid"] <= 0
             or not isinstance(provider["start"], str) or not 1 <= len(provider["start"]) <= 100
             or mode != "interactive" or role != "worker"
         ):
             raise OrchestrationError("Stored interactive process identity is invalid.")
+        if provider is not None and "startFormat" in provider:
+            if provider["startFormat"] != "ps-c-utc-v1":
+                raise OrchestrationError("Stored native process start format is invalid.")
+            try:
+                native_start_date(provider["start"])
+            except ValueError as error:
+                raise OrchestrationError("Stored native process start stamp is invalid.") from error
         if node.get("iconId") is not None:
             if not isinstance(node["iconId"], str) or not re.fullmatch(r"[a-z0-9_-]{1,128}", node["iconId"]):
                 raise OrchestrationError("Stored session glyph name is invalid.")
@@ -1264,18 +1272,38 @@ def token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def native_process_identity(pid):
+def native_start_date(start):
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", start):
+        raise ValueError("Invalid canonical native process start stamp.")
+    return datetime.datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+
+
+def native_process_identity(pid, *, canonical=False):
     try:
+        options = {}
+        if canonical:
+            options["env"] = {**os.environ, "LC_ALL": "C", "LC_TIME": "C", "LANG": "C", "TZ": "UTC0"}
         result = subprocess.run(
             ["/bin/ps", "-p", str(pid), "-o", "ppid=", "-o", "lstart=", "-o", "comm="],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True, text=True, timeout=2, **options,
         )
         parts = result.stdout.strip().split(maxsplit=6)
         if result.returncode != 0 or len(parts) != 7 or not parts[0].isdigit():
             return None
         start = " ".join(parts[1:6])
+        if canonical:
+            # Parse ps's explicit C/UTC output without depending on Python's own locale.
+            weekdays = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+            months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+            if not re.fullmatch(r"[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}", start):
+                return None
+            stamp = datetime.datetime(int(parts[5]), months.index(parts[2]) + 1, int(parts[3]),
+                                      *map(int, parts[4].split(":")), tzinfo=datetime.timezone.utc)
+            if weekdays[stamp.weekday()] != parts[1]:
+                return None
+            start = stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
         return {"parent": int(parts[0]), "start": start, "executable": parts[6]}
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return None
 
 
@@ -1284,20 +1312,27 @@ def native_bridge_caller_matches(node):
     provider = node.get("providerProcess")
     if not provider:
         return False
+    canonical = "startFormat" in provider
+    if canonical and provider["startFormat"] != "ps-c-utc-v1":
+        return False
+    def sample(pid):
+        return native_process_identity(pid, canonical=True) if canonical else native_process_identity(pid)
+    def start_date(start):
+        return native_start_date(start) if canonical else datetime.datetime.strptime(start, "%a %b %d %H:%M:%S %Y")
     adapter_pid = os.getppid()
     anchor_pid = provider["pid"]
     snapshots = {}
-    adapter = native_process_identity(adapter_pid)
+    adapter = sample(adapter_pid)
     if adapter is None or adapter_pid == anchor_pid:
         return False
     snapshots[adapter_pid] = adapter
     if adapter["parent"] != anchor_pid:
-        launcher = native_process_identity(adapter["parent"])
+        launcher = sample(adapter["parent"])
         if (launcher is None or launcher["parent"] != anchor_pid
                 or Path(launcher["executable"]).name != "copilot"):
             return False
         snapshots[adapter["parent"]] = launcher
-    anchor = native_process_identity(anchor_pid)
+    anchor = sample(anchor_pid)
     if anchor is None or anchor["start"].split() != provider["start"].split():
         return False
     snapshots[anchor_pid] = anchor
@@ -1305,14 +1340,12 @@ def native_bridge_caller_matches(node):
         for pid, entry in snapshots.items():
             if pid != anchor_pid:
                 parent = snapshots.get(entry["parent"])
-                if parent is None or datetime.datetime.strptime(entry["start"], "%a %b %d %H:%M:%S %Y") < datetime.datetime.strptime(
-                    parent["start"], "%a %b %d %H:%M:%S %Y"
-                ):
+                if parent is None or start_date(entry["start"]) < start_date(parent["start"]):
                     return False
     except ValueError:
         return False
     # Re-sample every edge and creation stamp, including the anchor and our own parent.
-    return all(native_process_identity(pid) == entry for pid, entry in snapshots.items()) and os.getppid() == adapter_pid
+    return all(sample(pid) == entry for pid, entry in snapshots.items()) and os.getppid() == adapter_pid
 
 
 def authorize(state, actor_id, token, *, allow_archiving=False):
@@ -1378,8 +1411,18 @@ def process_start(pid):
 
 
 def process_matches(node):
-    return any(process and process_start(process["pid"]) == process["start"]
-               for process in (node.get("supervisor"), node.get("providerProcess")))
+    for process in (node.get("supervisor"), node.get("providerProcess")):
+        if not process:
+            continue
+        if "startFormat" in process:
+            if process["startFormat"] != "ps-c-utc-v1":
+                continue
+            snapshot = native_process_identity(process["pid"], canonical=True)
+            if snapshot is not None and snapshot["start"] == process["start"]:
+                return True
+        elif process_start(process["pid"]) == process["start"]:
+            return True
+    return False
 
 
 def new_root(workspace, surface, pane, label, cwd=None, metadata=None, icon_id=None, icon_color=None):
@@ -1843,10 +1886,16 @@ def run_interactive_session(root, worker_id, token, node):
             )
         except OSError as error:
             raise OrchestrationError(f"Interactive Copilot launch failed: {error}") from error
-        provider_start = process_start(process.pid)
+        if node.get("nativeMessaging"):
+            snapshot = native_process_identity(process.pid, canonical=True)
+            provider_start = snapshot["start"] if snapshot else None
+        else:
+            provider_start = process_start(process.pid)
         if provider_start is None and process.poll() is None:
             raise OrchestrationError("Interactive Copilot process identity is unavailable.")
         anchor = {"pid": process.pid, "start": provider_start} if provider_start else None
+        if anchor and node.get("nativeMessaging"):
+            anchor["startFormat"] = "ps-c-utc-v1"
 
         def attach(state):
             current = authorize(state, worker_id, token)
@@ -2256,7 +2305,7 @@ def command_runtime(args, root):
                     if node["phase"] in {"process-disappeared", "turn-failed"}:
                         return
                     provider = node.get("providerProcess")
-                    if provider and process_start(provider["pid"]) == provider["start"]:
+                    if process_matches({"providerProcess": provider}):
                         node["result"] = "Supervisor ended while the interactive Copilot process remains live."
                         return
                     node["phase"], node["availability"], node["updatedAt"] = (
