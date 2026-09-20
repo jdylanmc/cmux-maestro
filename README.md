@@ -142,7 +142,13 @@ directory and is consumed only after exact workspace/surface attachment.
 The terminal command contains no token. Both supervisor and provider process
 anchors retain the existing resource bounds.
 
-Programmatic follow-ups are refused for interactive workers pending #38.
+The legacy `follow-up` command remains refused for interactive workers.
+An optional, separately human-authorized [native messaging v1](docs/native-messaging-v1.md)
+slice adds bounded SDK enqueue delivery and explicit acknowledgement/reply tools
+for new opted-in workers. It does not complete #38. Enable its loader explicitly
+through Maestro; each launch additionally requires a displayed, one-time,
+OS-user-presence-signed child policy. Full parent-policy export, arbitrary peers,
+transcript sharing, allow-all and automatic session adoption remain unsupported.
 No prompt is injected into a live terminal. Close interactive Copilot normally
 before archiving; archive does not interrupt it. Existing legacy workers are
 preserved and visibly labeled **Legacy worker** rather than silently converted.

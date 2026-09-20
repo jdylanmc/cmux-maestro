@@ -134,10 +134,72 @@ For an explicitly delegated descendant, use only the injected worker identity:
   --worker-id "$WORKER_ID"
 ```
 
-Humans send follow-ups directly in the worker's Copilot interface. Programmatic
-follow-up is refused for interactive workers pending workspace messaging (#38).
+Humans send follow-ups directly in the worker's Copilot interface. The legacy
+`follow-up` command remains refused for interactive workers. Optional native
+messaging uses the distinct, explicitly authorized flow below.
 Never use `send`, `send-key`, pasted prompts, or terminal keystrokes to work
 around this boundary; a human may be using the same input.
+
+## Optional native messaging v1 (#38 slice, not whole-issue completion)
+
+Do not install or enable this automatically. A human must enable **Native
+Messaging** in the installed Maestro app after the base integration is enabled.
+Only the standard Copilot home is supported; never clear account/model
+environment or substitute a separate `COPILOT_HOME`.
+
+Use `prepare-native` with the same `--actor-id`, `--token`, `--name`, `--task`,
+`--cwd`, `--allow-tool` and `--deny-tool` arguments intended for `spawn`.
+Preparation requires both pinned launch settings and creates no worker. Show the
+returned request ID to the human. They must review the exact target/policy in
+**Agent launch settings → Native messaging child authorization** and authorize
+once using the native macOS user-presence prompt. Full parent-policy export is
+unsupported; this is an explicit human-authorized child policy, not inferred
+inheritance. Exact tool denies win; native managed rules remain enforced.
+Allow-all and path/URL-policy emulation are unsupported.
+
+After approval, use ordinary `spawn` with the identical arguments plus
+`--native-request REQUEST_ID`. There is no agent approval flag. Approvals expire
+after ten minutes, cannot be reused and are invalidated by target/settings or
+parent policy changes before launch. A failed launch also consumes the approval.
+The launched policy/account/model are snapshots; no running worker is changed.
+Never try to manufacture an approval file or bypass the app.
+
+The `native-message` command accepts a private bounded JSON request on **stdin**:
+
+```json
+{
+  "version": 1,
+  "operation": "capabilities",
+  "actorId": "<authenticated coordinator or parent worker ID>",
+  "token": "<existing private control token>",
+  "receiver": {
+    "nodeId": "<workerId>", "sessionId": "<exact sessionId>",
+    "generation": 1, "runId": "<runId>"
+  }
+}
+```
+
+Get identities from authenticated status/spawn, not terminal appearances. Require
+`status: "supported"` before proceeding. To queue, change operation to `send` and
+add `key` (stable sender idempotency key, ≤128 UTF-8 bytes), `body` (≤4096 bytes)
+and `ttlSeconds` (1–3600). Keep the same key/body/receiver/TTL for request retries.
+To inspect that pair's messages/replies use operation `read`, without send fields.
+Do not expose credentials in logs, shared prompts or observer metadata.
+
+`queued` is not delivered; `inflight`/`unknown` must never trigger a fresh-key
+retry. `delivered` means SDK enqueue acceptance only, not consumption or task
+completion. A worker explicitly calls `maestro_acknowledge` with the message ID,
+then `maestro_reply` with that ID and a bounded result when it has something to
+report. No idle/exit/output signal is task-completion evidence.
+
+Only direct owned parent/child pairs are supported; arbitrary peers,
+transcripts and terminal-injection fallback are unsupported. Uncertainty blocks
+the pair until explicit acknowledgement/reply. There are 64 unarchived records;
+bodies/replies are lazily scrubbed after 24 hours, while deduplication/order
+tombstones remain until run archive. Never automatically close sessions or
+archive a run to regain capacity. Crash/reload/replacement does not automatically
+adopt or re-register the session: stop and report unsupported/uncertain status.
+Humans can always continue directly in the native terminal.
 
 For existing legacy bounded workers only, `follow-up` remains privately queued
 and allowed only for a directly owned worker that

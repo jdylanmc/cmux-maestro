@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C03800000000000000000001 /* Native module in Resources */ = {isa = PBXBuildFile; fileRef = C03800000000000000000003; };
+		C03800000000000000000002 /* Native adapter in Resources */ = {isa = PBXBuildFile; fileRef = C03800000000000000000004; };
 		C09300000000000000000001 /* CopilotAssetEnvelope.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C09300000000000000000003; };
 		C09300000000000000000002 /* CopilotAssetEnvelope.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09300000000000000000003; };
 		C09200000000000000000003 /* maestro-icon in Resources */ = {isa = PBXBuildFile; fileRef = C09200000000000000000004; };
@@ -105,6 +107,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C03800000000000000000003 /* maestro_native.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = scripts/maestro_native.py; sourceTree = SOURCE_ROOT; };
+		C03800000000000000000004 /* native-messaging */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/native-messaging; sourceTree = SOURCE_ROOT; };
 		C09300000000000000000003 /* CopilotAssetEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/CopilotAssetEnvelope.swift; sourceTree = SOURCE_ROOT; };
 		C09200000000000000000004 /* maestro-icon */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ".agents/skills/maestro-icon"; sourceTree = SOURCE_ROOT; };
 		C09200000000000000000002 /* NerdFonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/NerdFonts; sourceTree = SOURCE_ROOT; };
@@ -212,6 +216,8 @@
 		A3685BE02FCA3AEE00009F1B = {
 			isa = PBXGroup;
 			children = (
+				C03800000000000000000003 /* maestro_native.py */,
+				C03800000000000000000004 /* native-messaging */,
 				C09300000000000000000003 /* CopilotAssetEnvelope.swift */,
 				C09200000000000000000002 /* NerdFonts */,
 				C09200000000000000000008 /* SidebarGlyphs.swift */,
@@ -417,6 +423,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				C03600000000000000000001 /* cmux-maestro-orchestrator.py in Resources */,
+				C03800000000000000000001 /* Native module in Resources */,
+				C03800000000000000000002 /* Native adapter in Resources */,
 				C09200000000000000000003 /* maestro-icon in Resources */,
 				C09200000000000000000005 /* NerdFonts in App Resources */,
 				C03600000000000000000002 /* SKILL.md in Resources */,

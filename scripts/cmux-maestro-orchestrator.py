@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import runpy
 from pathlib import Path
 import secrets
 import selectors
@@ -65,6 +66,31 @@ REPORT_KEYS = {
 
 class OrchestrationError(Exception):
     pass
+
+
+def native_messaging():
+    module = Path(__file__).resolve().with_name("maestro_native.py")
+    try:
+        return runpy.run_path(str(module))["NativeMessaging"](globals())
+    except OSError as error:
+        raise OrchestrationError("Native controller module is unavailable; refresh Maestro integration.") from error
+
+
+def native_request_input():
+    payload = sys.stdin.buffer.read(16385)
+    if len(payload) > 16384:
+        raise OrchestrationError("Native request exceeds its byte limit.")
+    try:
+        def fields(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("Duplicate native request field.")
+                value[key] = item
+            return value
+        return json.loads(payload, object_pairs_hook=fields)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise OrchestrationError("Native request is malformed.") from error
 
 
 @functools.lru_cache(maxsize=1)
@@ -587,7 +613,7 @@ def shutil_which(name):
 
 
 def trusted_executable(variable, fallback):
-    value = os.environ.get(variable)
+    value = os.environ.get(variable) if variable else None
     if value and os.environ.get("CMUX_MAESTRO_TESTING") != "1":
         raise OrchestrationError(f"{variable} is test-only.")
     candidate = Path(value or fallback)
@@ -624,6 +650,10 @@ def validate_state(state):
     state.setdefault("archives", [])
     state.setdefault("retainedResources", [])
     state.setdefault("launches", {})
+    if any(key in state for key in ("nativeMessages", "nativeAuthorizations")) or any(
+        node.get("nativeMessaging") for node in state["nodes"].values()
+    ):
+        native_messaging().validate(state)
     nodes = state["nodes"]
     launches = state["launches"]
     if not isinstance(launches, dict) or len(launches) > MAX_NODES:
@@ -893,7 +923,7 @@ class Store:
         return descriptor
 
     def read(self):
-        payload = self._read_regular("state.json", MAX_BYTES)
+        payload = self._read_regular("state.json", MAX_BYTES, private=True)
         if payload is None:
             return empty_state()
         try:
@@ -908,7 +938,7 @@ class Store:
         directory = self.control_fd if directory is None else directory
         try:
             descriptor = os.open(
-                name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory
+                name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
             )
         except FileNotFoundError:
             return None
@@ -1112,6 +1142,20 @@ def remove_launch_credential(root, worker_id):
     with_store(root, remove, wait=2)
 
 
+def remove_native_bridge_tickets(root, nodes, run_id):
+    sessions = [node["copilotSessionId"] for node in nodes.values()
+                if node["runId"] == run_id and node.get("nativeMessaging")]
+    if not sessions:
+        return
+    def remove(store):
+        for session in sessions:
+            try:
+                os.unlink(f"native-bridge-{session}.json", dir_fd=store.control_fd)
+            except FileNotFoundError:
+                pass
+    with_store(root, remove)
+
+
 class Cmux:
     def __init__(self):
         self.executable = trusted_executable("CMUX_MAESTRO_CMUX", "cmux")
@@ -1218,6 +1262,26 @@ class Cmux:
 
 def token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def native_bridge_caller_matches(node):
+    """Confirm the credential-bearing adapter is a child of the bound provider.
+
+    This is an additional caller check, never a source of logical session IDs.
+    The IDs and generation must independently match the private launch binding.
+    """
+    provider = node.get("providerProcess")
+    if not provider or process_start(provider["pid"]) != provider["start"]:
+        return False
+    adapter_pid = os.getppid()
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-p", str(adapter_pid), "-o", "ppid="],
+            capture_output=True, text=True, timeout=2,
+        )
+        return result.returncode == 0 and result.stdout.strip() == str(provider["pid"])
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def authorize(state, actor_id, token, *, allow_archiving=False):
@@ -1401,6 +1465,13 @@ def command_spawn(args, root, cmux):
     resolve_copilot_token(launch_settings.get("copilotAccount"))
     parent_policy = actor["toolPolicy"] if actor["role"] == "worker" else None
     tool_policy = normalize_tool_policy(args.allow_tool, args.deny_tool, parent_policy)
+    native_request = None
+    if args.command == "prepare-native":
+        return native_messaging().launch_request(args, root, actor, launch_settings, tool_policy, cwd)
+    if getattr(args, "native_request", None):
+        native_request = native_messaging().authorized_launch(
+            args, root, actor, launch_settings, tool_policy, cwd
+        )
     pane = cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
     if actor["role"] == "worker" and not process_matches(actor):
         raise OrchestrationError("Actor worker supervisor identity is stale.")
@@ -1408,9 +1479,18 @@ def command_spawn(args, root, cmux):
     identifier, session_id, worker_token = (
         str(uuid.uuid4()), str(uuid.uuid4()), secrets.token_hex(32)
     )
+    bridge_credential = secrets.token_hex(32) if native_request else None
+    if native_request:
+        identifier, session_id = native_request["workerId"], native_request["sessionId"]
 
     def reserve(state):
         current = authorize(state, args.actor_id, args.token)
+        if native_request:
+            native_messaging().consume_authorization(state, native_request, current)
+            if identifier in state["nodes"] or any(
+                item.get("copilotSessionId") == session_id for item in state["nodes"].values()
+            ) or os.path.lexists(Path.home() / ".copilot/session-state" / session_id):
+                raise OrchestrationError("Native launches require a new, unowned session and worker identity.")
         if (
             current["runId"], current["workspaceId"], current.get("surfaceId")
         ) != (actor["runId"], actor["workspaceId"], actor["surfaceId"]):
@@ -1472,6 +1552,11 @@ def command_spawn(args, root, cmux):
             "workspaceId": current["workspaceId"], "surfaceId": None,
             "state": "creating", "createdAt": timestamp, "updatedAt": timestamp,
         }
+        if native_request:
+            state["nodes"][identifier]["nativeMessaging"] = {
+                "version": 1, "credentialHash": token_hash(bridge_credential),
+                "registration": None, "heartbeat": None, "ready": False, "closed": False,
+            }
         current["lastControlAt"] = timestamp
     mutate(root, reserve)
     surface = None
@@ -1480,6 +1565,11 @@ def command_spawn(args, root, cmux):
             store._atomic(store.control_fd, f"launch-{identifier}.json", json.dumps(
                 {"workerId": identifier, "token": worker_token}
             ).encode())
+            if native_request:
+                store._atomic(store.control_fd, f"native-bridge-{session_id}.json", json.dumps({
+                    "version": 1, "identity": native_messaging().identity(store.read()["nodes"][identifier]),
+                    "credential": bridge_credential,
+                }).encode())
         with_store(root, credential)
         bootstrap = shlex.join([
             str(Path(__file__).resolve()), "runtime", "--worker-id", identifier
@@ -1678,6 +1768,8 @@ def worker_environment(worker_id, token, node):
         "CMUX_MAESTRO_ORCHESTRATOR": str(Path(__file__).resolve()),
         "CMUX_MAESTRO_EXECUTION_MODE": node.get("executionMode", "bounded"),
     })
+    if node.get("nativeMessaging"):
+        environment["CMUX_MAESTRO_NATIVE_SESSION"] = node["copilotSessionId"]
     account = (node.get("launchSettings") or {}).get("copilotAccount")
     subscription = resolve_copilot_token(account)
     if subscription is not None:
@@ -2413,12 +2505,18 @@ def command_archive(args, root, cmux):
                     "surfaceId": node["surfaceId"], "archivedAt": now(),
                 })
             del state["nodes"][node["id"]]
+        if "nativeMessages" in state:
+            state["nativeMessages"] = [
+                item for item in state["nativeMessages"] if item["receiver"]["runId"] != run_id
+            ]
         if len(state["retainedResources"]) > MAX_NODES:
             raise OrchestrationError(
                 "Retained live terminal limit reached; close archived worker tabs first."
             )
         return {"runId": run_id, "archived": True}
-    return mutate(root, finish, wait=1)
+    output = mutate(root, finish, wait=1)
+    remove_native_bridge_tickets(root, snapshot["nodes"], run_id)
+    return output
 
 
 def command_recover(args, root, cmux):
@@ -2472,6 +2570,10 @@ def command_recover(args, root, cmux):
         for node in list(state["nodes"].values()):
             if node["runId"] == current["runId"]:
                 del state["nodes"][node["id"]]
+        if "nativeMessages" in state:
+            state["nativeMessages"] = [
+                item for item in state["nativeMessages"] if item["receiver"]["runId"] != current["runId"]
+            ]
         node, token = new_root(workspace, surface, pane, label, cwd, metadata, args.icon, args.color)
         state["nodes"][node["id"]] = node
         return {
@@ -2479,13 +2581,17 @@ def command_recover(args, root, cmux):
             "controlToken": token, "recoveredRunId": previous["runId"],
             "workspaceId": workspace, "surfaceId": surface,
         }
-    return mutate(root, recover)
+    output = mutate(root, recover)
+    remove_native_bridge_tickets(root, snapshot["nodes"], previous["runId"])
+    return output
 
 
 def parser():
     result = argparse.ArgumentParser(prog="cmux-maestro-orchestrator")
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("accounts", help="List configured GitHub account names without credentials")
+    commands.add_parser("native-message", help="Versioned native messaging request on private stdin")
+    commands.add_parser("native-bridge", help="Generation-scoped adapter request on private stdin")
     commands.add_parser(
         "launch-settings",
         help="Report whether pinned Maestro account and model settings are ready without revealing them",
@@ -2511,8 +2617,16 @@ def parser():
     spawn.add_argument("--allow-tool", action="append", default=[])
     spawn.add_argument("--deny-tool", action="append", default=[])
     spawn.add_argument("--require-pinned-launch-settings", action="store_true")
+    spawn.add_argument("--native-request", help="Exact UI-authorized request; never an approval flag")
     spawn.add_argument("--icon")
     spawn.add_argument("--color", choices=ICON_COLORS)
+    prepare = commands.add_parser("prepare-native", parents=[], help="Request human authorization; does not launch")
+    for flag in ("actor-id", "token", "name", "task", "cwd"):
+        prepare.add_argument(f"--{flag}", required=True)
+    prepare.add_argument("--allow-tool", action="append", default=[])
+    prepare.add_argument("--deny-tool", action="append", default=[])
+    prepare.add_argument("--require-pinned-launch-settings", action="store_true", default=True)
+    prepare.set_defaults(native_request=None, icon=None, color=None)
     icon = commands.add_parser("icon", help="Choose an icon for the authenticated caller's own session")
     icon.add_argument("--actor-id")
     icon.add_argument("--token")
@@ -2555,14 +2669,19 @@ def main(argv=None):
             print(json.dumps({"ok": True, **command_self_icon(args)}, sort_keys=True))
             return 0
         root = default_root()
-        cmux = None if args.command in {"launch-settings", "runtime", "report"} else Cmux()
-        if args.command == "launch-settings":
+        cmux = None if args.command in {"launch-settings", "runtime", "report", "native-message", "native-bridge"} else Cmux()
+        if args.command in {"native-message", "native-bridge"}:
+            native = native_messaging()
+            output = (native.command if args.command == "native-message" else native.bridge)(
+                root, native_request_input()
+            )
+        elif args.command == "launch-settings":
             output = command_launch_settings(root)
         elif args.command == "register":
             output = command_register(args, root, cmux)
         elif args.command == "recover":
             output = command_recover(args, root, cmux)
-        elif args.command == "spawn":
+        elif args.command in {"spawn", "prepare-native"}:
             output = command_spawn(args, root, cmux)
         elif args.command == "runtime":
             output = command_runtime(args, root)
@@ -2584,7 +2703,18 @@ def main(argv=None):
         print(json.dumps({"ok": True, **output}, sort_keys=True))
         return 0
     except OrchestrationError as error:
-        print(json.dumps({"ok": False, "error": str(error)}, sort_keys=True), file=sys.stderr)
+        output = {"ok": False, "error": str(error)}
+        if args.command in {"native-message", "native-bridge"}:
+            output.update(protocol="cmux-maestro.native-messaging", version=1, status="error")
+        print(json.dumps(output, sort_keys=True), file=sys.stderr)
+        return 2
+    except OSError:
+        if args.command not in {"native-message", "native-bridge", "prepare-native"} and not getattr(args, "native_request", None):
+            raise
+        print(json.dumps({
+            "ok": False, "protocol": "cmux-maestro.native-messaging", "version": 1,
+            "status": "error", "error": "Private native storage is unavailable or unsafe.",
+        }, sort_keys=True), file=sys.stderr)
         return 2
 
 

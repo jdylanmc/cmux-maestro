@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var result: CopilotSetupResult?
     @State private var pendingAction: CopilotSetupAction?
     @State private var setupTask: Task<Void, Never>?
+    @State private var nativeSetup: Bool?
+    @State private var nativeNotice: String?
 
     var body: some View {
         if CopilotSetupAccess.currentAppAllowsChanges {
@@ -64,6 +66,13 @@ struct ContentView: View {
             }
 
             Divider()
+            HStack {
+                Button("Enable Native Messaging…") { nativeSetup = true }
+                Button("Disable Native Messaging…") { nativeSetup = false }
+            }.disabled(busy)
+            Text("Optional: installs an inert user extension for newly authorized Maestro workers only. Does not restart, adopt, or configure existing sessions. No permission callbacks or alternate Copilot home.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let nativeNotice { Text(nativeNotice).font(.caption) }
             SettingsLink {
                 Label("Agent launch settings…", systemImage: "gearshape")
             }
@@ -89,6 +98,22 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) { pendingAction = nil }
         } message: {
             Text("This explicitly runs the selected Copilot CLI to change only cmux-maestro-native. No CLI sessions will be restarted and no legacy integration will be removed.")
+        }
+        .alert("Change native messaging setup?", isPresented: Binding(
+            get: { nativeSetup != nil }, set: { if !$0 { nativeSetup = nil } }
+        )) {
+            Button("Confirm") {
+                do {
+                    try NativeMessagingSetup.setEnabled(nativeSetup == true)
+                    nativeNotice = "Setup updated for future loads. Existing sessions were not changed."
+                } catch {
+                    nativeNotice = "Setup unavailable. Enable the base integration first; only the standard Copilot home is supported."
+                }
+                nativeSetup = nil
+            }
+            Button("Cancel", role: .cancel) { nativeSetup = nil }
+        } message: {
+            Text("Enable writes only Maestro’s loader in ~/.copilot/extensions. Each new native worker separately requires a displayed, one-time human-signed child policy. Disable leaves the loader inert for future loads, without terminating sessions.")
         }
     }
 

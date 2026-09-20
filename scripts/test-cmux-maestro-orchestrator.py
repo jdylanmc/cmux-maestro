@@ -628,6 +628,35 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("Pinned Maestro account and model settings are required", rejected["stderr"])
         self.assertFalse(any("new-surface" in call for call in self.h.cmux_data()["calls"]))
 
+    def test_native_launch_requires_human_receipt_before_creating_a_surface(self):
+        gh = self.h.path / "native-gh"
+        gh.write_text("#!/bin/sh\nprintf '%s\\n' 'synthetic-native-test-credential'\n")
+        gh.chmod(0o700)
+        self.h.env["CMUX_MAESTRO_GH"] = str(gh)
+        settings = self.h.root / "worker-settings.json"
+        settings.write_text(json.dumps({
+            "version": 1, "copilotAccount": "example-user", "model": "example-model",
+        }))
+        settings.chmod(0o600)
+        arguments = (
+            "--actor-id", self.h.node, "--token", self.h.token,
+            "--cwd", str(REPO), "--name", "Native worker", "--task", "Exact bounded objective",
+            "--deny-tool", "web",
+        )
+        prepared = self.h.run("prepare-native", *arguments)
+        self.assertEqual(prepared["status"], "human-authorization-required")
+        request = self.h.root / "control" / ("native-request-" + prepared["requestId"] + ".json")
+        value = json.loads(request.read_text())
+        self.assertEqual(value["toolPolicy"], {"allow": [], "deny": ["web"]})
+        self.assertEqual(value["actor"]["nodeId"], self.h.node)
+        self.assertEqual(value["launchSettings"]["model"], "example-model")
+        self.assertEqual(request.stat().st_mode & 0o777, 0o600)
+        rejected = self.h.run("spawn", *arguments, "--native-request", prepared["requestId"], check=False)
+        self.assertNotEqual(rejected["returncode"], 0)
+        self.assertIn("genuine human authorization", rejected["stderr"])
+        self.assertFalse(any("new-surface" in call for call in self.h.cmux_data()["calls"]))
+        self.assertEqual(len(self.h.state()["nodes"]), 1)
+
     def test_standalone_icon_uses_identity_helper_without_mutating_orchestration(self):
         package = self.h.path / "standalone-bin"
         package.mkdir()

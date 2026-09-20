@@ -129,6 +129,9 @@ struct WorkerLaunchSettingsView: View {
                         Button("Save", action: save).buttonStyle(.borderedProminent).disabled(!loaded)
                         if let notice { Text(notice).font(.caption) }
                     }
+                    Section {
+                        NativeChildAuthorizationView()
+                    }
                 }
                 .formStyle(.grouped)
                 .task { await load() }
@@ -137,7 +140,7 @@ struct WorkerLaunchSettingsView: View {
                     .padding(24)
             }
         }
-        .frame(width: 600, height: 350)
+        .frame(width: 600, height: 540)
     }
 
     private func load() async {

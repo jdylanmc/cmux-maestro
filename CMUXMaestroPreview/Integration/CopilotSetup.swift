@@ -112,6 +112,10 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
             throw HookFiles.Failure.unavailable
         }
         let iconSkillData = try boundedResource(iconSkill, maximum: 65_536)
+        let nativeModuleData = try boundedResource(
+            controller.deletingLastPathComponent().appendingPathComponent("maestro_native.py"),
+            maximum: 131_072
+        )
         let glyphRoot = skill.deletingLastPathComponent().appendingPathComponent("NerdFonts", isDirectory: true)
         let glyphFiles: [(String, Int)] = [
             ("glyphnames.json", 2_097_152), ("presets.json", 32_768), ("manifest.json", 8_192),
@@ -163,6 +167,9 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         try executableWrite(
             boundedResource(controller, maximum: 1_048_576),
             name: "cmux-maestro-orchestrator", directory: bin
+        )
+        try HookFiles.atomicWrite(
+            nativeModuleData, name: "maestro_native.py", directory: bin
         )
         return plugin
     }

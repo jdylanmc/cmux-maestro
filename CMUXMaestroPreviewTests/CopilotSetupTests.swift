@@ -573,6 +573,9 @@ struct CopilotSetupTests {
         let controller = directory.appendingPathComponent("controller.py")
         let skill = directory.appendingPathComponent("SKILL.md")
         try Data("#!/usr/bin/env python3\n".utf8).write(to: controller)
+        try Data("# native controller module\n".utf8).write(
+            to: directory.appendingPathComponent("maestro_native.py")
+        )
         try Data("---\nname: cmux-maestro-orchestrate\n---\n".utf8).write(to: skill)
         let iconSkillDirectory = directory.appendingPathComponent("maestro-icon", isDirectory: true)
         try FileManager.default.createDirectory(at: iconSkillDirectory, withIntermediateDirectories: true)
