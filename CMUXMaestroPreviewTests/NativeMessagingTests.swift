@@ -4,15 +4,50 @@ import Testing
 
 @Suite struct NativeMessagingTests {
     private func request(id: String, mode: String = "interactive-exact-tools") throws -> Data {
-        try JSONSerialization.data(withJSONObject: [
-            "version": 1, "requestId": id, "actor": [:], "parentToolPolicy": [:],
-            "workerId": id, "sessionId": id, "launchSettings": [:], "toolPolicy": [:],
+        let actor: [String: Any] = ["nodeId": id, "runId": id, "sessionId": NSNull(), "generation": 0]
+        let settings: [String: Any] = ["version": 1, "copilotAccount": "example-user", "model": "example-model"]
+        let policy = ["allow": ["read"], "deny": ["web"]]
+        let scope: [String: Any] = [
+            "actor": actor, "coordinator": actor,
+            "actorAuthority": String(repeating: "a", count: 64),
+            "coordinatorAuthority": String(repeating: "a", count: 64),
+            "workspaceId": id, "setupId": id, "cwd": "/explicit/target",
+            "launchSettings": settings, "parentToolPolicy": policy, "toolPolicy": policy,
+        ]
+        return try JSONSerialization.data(withJSONObject: [
+            "version": 2, "requestId": id, "actor": actor, "parentToolPolicy": policy,
+            "approvalScope": "run-policy", "disclosure": NativeChildAuthorization.policyDisclosure,
+            "policyScope": scope, "policyGrantId": NSNull(),
+            "workerId": id, "sessionId": id, "launchSettings": settings, "toolPolicy": policy,
             "workerGeneration": 1,
             "mode": mode, "parentPolicy": "unknown-human-fallback",
             "cwd": "/explicit/target", "name": "Worker", "task": "Bounded task",
             "createdAt": "2026-09-20T00:00:00+00:00",
             "expiresAt": "2026-09-20T00:10:00+00:00",
         ], options: [.sortedKeys, .withoutEscapingSlashes])
+    }
+
+    @Test func reusableScopeRequiresExplicitDisclosureAndMatchingSnapshot() throws {
+        let id = UUID().uuidString.lowercased()
+        let now = ISO8601DateFormatter().date(from: "2026-09-20T00:05:00Z")!
+        let original = try JSONSerialization.jsonObject(with: request(id: id)) as! [String: Any]
+        for (key, value): (String, Any) in [
+            ("version", 1), ("approvalScope", "once"), ("disclosure", "This child only"),
+            ("policyGrantId", id), ("cwd", "/changed"),
+            ("launchSettings", ["version": 1, "copilotAccount": "changed", "model": "changed"]),
+            ("toolPolicy", ["allow": ["write"], "deny": []]),
+        ] {
+            var changed = original
+            changed[key] = value
+            #expect(throws: (any Error).self) {
+                try NativeChildAuthorization.validate(
+                    JSONSerialization.data(withJSONObject: changed), id: id, at: now
+                )
+            }
+        }
+        #expect(NativeChildAuthorization.policyDisclosure.contains("future workers with different tasks and labels"))
+        #expect(NativeChildAuthorization.policyDisclosure.contains("this actor only"))
+        #expect(NativeChildAuthorization.policyDisclosure.contains("No existing worker is changed"))
     }
 
     @Test func approvalBindsExactDisplayedBytesAndExpiry() throws {

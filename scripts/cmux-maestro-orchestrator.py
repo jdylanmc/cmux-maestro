@@ -650,7 +650,7 @@ def validate_state(state):
     state.setdefault("archives", [])
     state.setdefault("retainedResources", [])
     state.setdefault("launches", {})
-    if any(key in state for key in ("nativeMessages", "nativeAuthorizations")) or any(
+    if any(key in state for key in ("nativeMessages", "nativeAuthorizations", "nativePolicyGrants")) or any(
         node.get("nativeMessaging") for node in state["nodes"].values()
     ):
         native_messaging().validate(state)
@@ -1264,24 +1264,55 @@ def token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def native_bridge_caller_matches(node):
-    """Confirm the credential-bearing adapter is a child of the bound provider.
-
-    This is an additional caller check, never a source of logical session IDs.
-    The IDs and generation must independently match the private launch binding.
-    """
-    provider = node.get("providerProcess")
-    if not provider or process_start(provider["pid"]) != provider["start"]:
-        return False
-    adapter_pid = os.getppid()
+def native_process_identity(pid):
     try:
         result = subprocess.run(
-            ["/bin/ps", "-p", str(adapter_pid), "-o", "ppid="],
+            ["/bin/ps", "-p", str(pid), "-o", "ppid=", "-o", "lstart=", "-o", "comm="],
             capture_output=True, text=True, timeout=2,
         )
-        return result.returncode == 0 and result.stdout.strip() == str(provider["pid"])
+        parts = result.stdout.strip().split(maxsplit=6)
+        if result.returncode != 0 or len(parts) != 7 or not parts[0].isdigit():
+            return None
+        start = " ".join(parts[1:6])
+        return {"parent": int(parts[0]), "start": start, "executable": parts[6]}
     except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def native_bridge_caller_matches(node):
+    """Bounded adapter -> [packaged copilot] -> recorded provider check, not identity discovery."""
+    provider = node.get("providerProcess")
+    if not provider:
         return False
+    adapter_pid = os.getppid()
+    anchor_pid = provider["pid"]
+    snapshots = {}
+    adapter = native_process_identity(adapter_pid)
+    if adapter is None or adapter_pid == anchor_pid:
+        return False
+    snapshots[adapter_pid] = adapter
+    if adapter["parent"] != anchor_pid:
+        launcher = native_process_identity(adapter["parent"])
+        if (launcher is None or launcher["parent"] != anchor_pid
+                or Path(launcher["executable"]).name != "copilot"):
+            return False
+        snapshots[adapter["parent"]] = launcher
+    anchor = native_process_identity(anchor_pid)
+    if anchor is None or anchor["start"].split() != provider["start"].split():
+        return False
+    snapshots[anchor_pid] = anchor
+    try:
+        for pid, entry in snapshots.items():
+            if pid != anchor_pid:
+                parent = snapshots.get(entry["parent"])
+                if parent is None or datetime.datetime.strptime(entry["start"], "%a %b %d %H:%M:%S %Y") < datetime.datetime.strptime(
+                    parent["start"], "%a %b %d %H:%M:%S %Y"
+                ):
+                    return False
+    except ValueError:
+        return False
+    # Re-sample every edge and creation stamp, including the anchor and our own parent.
+    return all(native_process_identity(pid) == entry for pid, entry in snapshots.items()) and os.getppid() == adapter_pid
 
 
 def authorize(state, actor_id, token, *, allow_archiving=False):
@@ -1558,7 +1589,15 @@ def command_spawn(args, root, cmux):
                 "registration": None, "heartbeat": None, "ready": False, "closed": False,
             }
         current["lastControlAt"] = timestamp
-    mutate(root, reserve)
+    if native_request:
+        def reserve_native(store):
+            state = store.read()
+            native_messaging().check_launch_snapshot(store, native_request)
+            reserve(state)
+            store.write(state)
+        with_store(root, reserve_native)
+    else:
+        mutate(root, reserve)
     surface = None
     try:
         def credential(store):
@@ -1784,6 +1823,8 @@ def run_interactive_session(root, worker_id, token, node):
         "--session-id", node["copilotSessionId"], "--name", node["label"],
         "-C", node["workingDirectory"],
     ]
+    if node.get("nativeMessaging"):
+        arguments.append("--experimental")
     model = (node.get("launchSettings") or {}).get("model")
     if model is not None:
         arguments += ["--model", model]
@@ -2472,6 +2513,10 @@ def command_archive(args, root, cmux):
             if node["runId"] == current["runId"]:
                 node["archiving"] = True
                 node["updatedAt"] = now()
+        if "nativePolicyGrants" in state:
+            state["nativePolicyGrants"] = [
+                grant for grant in state["nativePolicyGrants"] if grant["scope"]["actor"]["runId"] != run_id
+            ]
     mutate(root, begin)
     deadline = time.monotonic() + timeout("CMUX_MAESTRO_ARCHIVE_SECONDS", ARCHIVE_SECONDS)
     while time.monotonic() < deadline:
@@ -2574,6 +2619,11 @@ def command_recover(args, root, cmux):
             state["nativeMessages"] = [
                 item for item in state["nativeMessages"] if item["receiver"]["runId"] != current["runId"]
             ]
+        if "nativePolicyGrants" in state:
+            state["nativePolicyGrants"] = [
+                grant for grant in state["nativePolicyGrants"]
+                if grant["scope"]["actor"]["runId"] != current["runId"]
+            ]
         node, token = new_root(workspace, surface, pane, label, cwd, metadata, args.icon, args.color)
         state["nodes"][node["id"]] = node
         return {
@@ -2617,10 +2667,10 @@ def parser():
     spawn.add_argument("--allow-tool", action="append", default=[])
     spawn.add_argument("--deny-tool", action="append", default=[])
     spawn.add_argument("--require-pinned-launch-settings", action="store_true")
-    spawn.add_argument("--native-request", help="Exact UI-authorized request; never an approval flag")
+    spawn.add_argument("--native-request", help="Exact one-time native launch ticket; never an approval flag")
     spawn.add_argument("--icon")
     spawn.add_argument("--color", choices=ICON_COLORS)
-    prepare = commands.add_parser("prepare-native", parents=[], help="Request human authorization; does not launch")
+    prepare = commands.add_parser("prepare-native", parents=[], help="Prepare a one-time ticket: request run-policy consent or reuse its exact grant; does not launch")
     for flag in ("actor-id", "token", "name", "task", "cwd"):
         prepare.add_argument(f"--{flag}", required=True)
     prepare.add_argument("--allow-tool", action="append", default=[])

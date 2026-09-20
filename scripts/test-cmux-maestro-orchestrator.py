@@ -653,7 +653,7 @@ class OrchestratorTests(unittest.TestCase):
                             "printf '%s\\n' '{\"supported\":true}'\n")
         verifier.chmod(0o700)
         setup = self.h.root / "native-setup.json"
-        setup.write_text(json.dumps({"version": 1, "verifier": str(verifier)}))
+        setup.write_text(json.dumps({"version": 1, "verifier": str(verifier), "setupId": str(uuid.uuid4())}))
         setup.chmod(0o600)
         prepared = self.h.run("prepare-native", *arguments)
         self.assertEqual(prepared["status"], "human-authorization-required")

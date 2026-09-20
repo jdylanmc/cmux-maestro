@@ -6,6 +6,11 @@ import SwiftUI
 
 nonisolated enum NativeChildAuthorization {
     static let keyTag = Data("com.jdylanmc.CMUXMaestroPreview.native-child-policy.v1".utf8)
+    static let policyDisclosure = "Authorize this actor only, in this coordinator run and workspace, to launch "
+        + "future workers with different tasks and labels under this exact directory, "
+        + "pinned account/model and requested tool-policy snapshot. Known denies remain; "
+        + "full native parent policy is unknown and native restrictions remain authoritative. "
+        + "Each launch needs its own one-time ticket. No existing worker is changed."
     enum Failure: Error { case unavailable, invalid }
 
     struct Request: Identifiable {
@@ -19,13 +24,49 @@ nonisolated enum NativeChildAuthorization {
               let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(value.keys) == ["version", "requestId", "actor", "parentToolPolicy", "workerId",
                   "sessionId", "launchSettings", "toolPolicy", "mode", "parentPolicy", "cwd",
-                  "name", "task", "createdAt", "expiresAt", "workerGeneration"],
-              value["version"] as? Int == 1, value["requestId"] as? String == id,
+                  "name", "task", "createdAt", "expiresAt", "workerGeneration",
+                  "approvalScope", "disclosure", "policyScope", "policyGrantId"],
+              value["version"] as? Int == 2, value["requestId"] as? String == id,
+              value["approvalScope"] as? String == "run-policy",
+              value["disclosure"] as? String == policyDisclosure,
+              value["policyGrantId"] is NSNull,
               value["mode"] as? String == "interactive-exact-tools",
               value["parentPolicy"] as? String == "unknown-human-fallback",
               value["workerGeneration"] as? Int == 1,
               let created = value["createdAt"] as? String,
               let expires = value["expiresAt"] as? String else { throw Failure.invalid }
+        guard let scope = value["policyScope"] as? [String: Any],
+              Set(scope.keys) == ["actor", "actorAuthority", "coordinator", "coordinatorAuthority",
+                  "workspaceId", "cwd", "parentToolPolicy", "launchSettings", "toolPolicy", "setupId"],
+              let actor = scope["actor"] as? [String: Any],
+              let coordinator = scope["coordinator"] as? [String: Any],
+              validIdentity(actor), validIdentity(coordinator),
+              coordinator["sessionId"] is NSNull, coordinator["generation"] as? Int == 0,
+              actor["runId"] as? String == coordinator["runId"] as? String,
+              let cwd = scope["cwd"] as? String, cwd.hasPrefix("/"),
+              let settings = value["launchSettings"] as? [String: Any],
+              Set(settings.keys) == ["version", "copilotAccount", "model"],
+              let decoded = try? JSONDecoder().decode(
+                WorkerLaunchSettings.self, from: JSONSerialization.data(withJSONObject: settings)
+              ), decoded.isValid, decoded.copilotAccount != nil, decoded.model != nil else { throw Failure.invalid }
+        for field in ["actor", "parentToolPolicy", "launchSettings", "toolPolicy", "cwd"] {
+            guard let signed = value[field] as? NSObject,
+                  let scoped = scope[field] as? NSObject, signed == scoped else { throw Failure.invalid }
+        }
+        for field in ["actorAuthority", "coordinatorAuthority"] {
+            guard let digest = scope[field] as? String,
+                  digest.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw Failure.invalid }
+        }
+        for field in ["workspaceId", "setupId"] {
+            guard validUUID(scope[field]) else { throw Failure.invalid }
+        }
+        for field in ["workerId", "sessionId"] {
+            guard validUUID(value[field]) else { throw Failure.invalid }
+        }
+        for field in ["parentToolPolicy", "toolPolicy"] {
+            guard let policy = value[field] as? [String: Any], Set(policy.keys) == ["allow", "deny"],
+                  policy["allow"] is [String], policy["deny"] is [String] else { throw Failure.invalid }
+        }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let plain = ISO8601DateFormatter()
@@ -34,6 +75,18 @@ nonisolated enum NativeChildAuthorization {
               start <= date, date < end, abs(end.timeIntervalSince(start) - 600) < 0.001,
               let display = String(data: data, encoding: .utf8) else { throw Failure.invalid }
         return Request(id: id, data: data, display: display)
+    }
+
+    private static func validUUID(_ value: Any?) -> Bool {
+        guard let value = value as? String else { return false }
+        return UUID(uuidString: value)?.uuidString.lowercased() == value
+    }
+
+    private static func validIdentity(_ value: [String: Any]) -> Bool {
+        Set(value.keys) == ["nodeId", "sessionId", "generation", "runId"]
+            && validUUID(value["nodeId"]) && validUUID(value["runId"])
+            && (value["sessionId"] is NSNull || validUUID(value["sessionId"]))
+            && (value["generation"] as? Int).map { $0 >= 0 } == true
     }
 
     static func requests(root: URL) throws -> [Request] {
@@ -157,7 +210,7 @@ struct NativeChildAuthorizationView: View {
     var body: some View {
         VStack(alignment: .leading) {
             Text("Native messaging child authorization").font(.headline)
-            Text("Full parent policy is unavailable. Authorize only this displayed child policy and exact target. Known denies remain; native managed restrictions still apply. Future parent changes affect future launches only. No allow-all, path or URL emulation.")
+            Text("Full parent policy is unavailable. Human authorization is an actor-specific run-policy snapshot, not live policy synchronization. Known denies and native managed restrictions remain. No allow-all, path or URL emulation.")
                 .font(.caption)
             HStack {
                 Button("Refresh requests", action: refresh)
@@ -169,14 +222,15 @@ struct NativeChildAuthorizationView: View {
         }
         .sheet(item: $selected) { request in
             VStack(alignment: .leading, spacing: 12) {
-                Text("Authorize this exact launch?").font(.headline)
+                Text("Authorize this actor’s run-policy snapshot?").font(.headline)
+                Text(NativeChildAuthorization.policyDisclosure).font(.caption)
                 ScrollView { Text(request.display).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-                Text("Signing requires macOS user presence. This expires in ten minutes and can launch once. Signing is not a task-completion or permission-approval callback.")
+                Text("Signing requires macOS user presence. This pending request expires in ten minutes; its first launch activates reusable consent for this exact actor, run and policy. Future matching tasks and labels need no further authentication, but each launch consumes a fresh one-time ticket. New runs or changed scopes require fresh consent. Disable setup, archive or recover to invalidate reuse. Signing is not task completion or a native permission callback.")
                     .font(.caption)
                 HStack {
-                    Button("Authorize once…") {
+                    Button("Authorize run policy…") {
                         perform { try NativeChildAuthorization.approve(request, root: $0) }
-                    }.disabled(!NativeSigningReadiness.current)
+                    }.disabled(!NativeSigningReadiness.current || (try? NativeChildAuthorization.validate(request.data, id: request.id)) == nil)
                     Button("Dismiss request", role: .destructive) {
                         perform { try NativeChildAuthorization.dismiss(request, root: $0) }
                     }

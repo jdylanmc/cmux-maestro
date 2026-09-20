@@ -37,7 +37,9 @@ nonisolated enum NativeMessagingSetup {
             try HookFiles.atomicWrite(data, name: name, directory: directory)
         }
         try HookFiles.atomicWrite(
-            JSONSerialization.data(withJSONObject: ["version": 1, "verifier": executable.path]),
+            JSONSerialization.data(withJSONObject: [
+                "version": 1, "verifier": executable.path, "setupId": UUID().uuidString.lowercased(),
+            ]),
             name: "native-setup.json", directory: rootFD
         )
     }

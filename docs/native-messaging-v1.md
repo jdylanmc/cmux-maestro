@@ -107,8 +107,12 @@ Setup does not restart or adopt sessions. The global loader exits before SDK
 join/tool registration unless the provider-supplied `SESSION_ID` equals the
 explicit launch binding. A private, generation-scoped bridge capability is
 authenticated by the existing locked controller. The controller additionally
-checks that its immediate caller is a child of the exact provider process
-recorded by the launcher. This process check supplements, and never invents,
+checks the bounded process chain from its adapter caller to the exact live
+provider PID/creation stamp recorded by the launcher. Supported paths are
+adapter → provider directly, or adapter → packaged `copilot` executable →
+recorded provider wrapper. Parent edges, executable identity and creation stamps
+are sampled again before acceptance; missing, stale, reparented, unrelated and
+deeper chains fail closed. This process check supplements, and never invents,
 the logical session/worker/run/generation identity. A filesystem path or SDK
 `source` string alone is not authentication. No provider credentials are requested
 from the SDK, and no permission/user-input callbacks are registered.
@@ -118,7 +122,9 @@ arguments intended for `spawn`. Both pinned launch settings are required.
 Preparation creates a bounded private request, not a terminal. Open Maestro's
 **Agent launch settings → Native messaging child authorization**, refresh, and
 review the exact request including account/model, task, parent identity, child
-worker/session IDs, directory, inherited denies and requested tools.
+worker/session IDs, directory, inherited denies and requested tools. Only
+opted-in native workers pass Copilot's per-launch `--experimental` flag.
+Ordinary workers and global `~/.copilot/settings.json` remain unchanged.
 
 Full authoritative parent-policy export is unavailable. The displayed request
 explicitly asks the human to authorize a child policy instead; it does not claim
@@ -128,7 +134,7 @@ winning and descendant grants constrained by the existing parent tool policy.
 Allow-all, path/URL-policy emulation and additional policy fields are unsupported.
 The provider remains responsible for its native managed restrictions.
 
-**Authorize once** signs the exact displayed bytes with a non-exportable Secure
+**Authorize run policy…** signs the exact displayed v2 request bytes with a non-exportable Secure
 Enclave key requiring macOS user presence. There is no software-key fallback and
 no controller command, boolean or environment override that approves a request.
 Machines lacking that facility cannot use this launch mode. The app's
@@ -137,15 +143,42 @@ controller, this trusts the installed app/controller and the user's OS account;
 it is not a sandbox against a hostile same-user process replacing installed code
 or configuration.
 
-Pass the returned ID as `spawn --native-request ID` with the same launch
-arguments. The controller verifies the signature before reserving a worker, and
-consumes the approval in the same locked transaction as the existing launch
-lease. Changed parent identity/tool policy, changed settings/target, ten-minute
-expiry, reused approval and unsupported fields are refused. Failed launches
-consume approvals too. The account/model and explicit policy are snapshots at
-launch; later parent/settings changes affect future launches only.
+The signed bytes explicitly declare `approvalScope: run-policy` and disclose
+that future matching workers may have **different tasks and labels**. Consent
+is actor-specific, not a grant to all descendants or peers. It binds the actor
+and real coordinator identities/authority, run, workspace, canonical directory,
+pinned launch settings, known parent policy and effective requested allow/deny
+policy, and an enabled-setup identity. Native policy is still authoritative.
 
-At most 16 pending requests are retained. Dismiss requests explicitly in the UI.
+Preparation returns `human-authorization-required` on the first request. Pass
+its ID as `spawn --native-request ID` with the same launch arguments after the
+human signs it. The controller verifies the fresh pending request's signature
+and atomically caches the narrowly scoped grant and consumes that launch ticket
+with the existing launch lease. Each pending request/ticket expires after ten
+minutes; an activated grant lasts only for its active run and exact scope,
+independently of that first request's timeout. An expired request cannot activate
+a grant.
+
+For the next worker, call `prepare-native` again. If the exact snapshot still
+matches, it returns `reuse-ready` with a **new** worker/session/request ticket
+referencing the previously verified grant; no new human authentication is needed.
+Use that ticket once with its exact name/task and arguments. Replayed or expired
+tickets are refused, including uncertain retries and launches that failed after
+reservation. A policy grant is not an idempotency override. Settings and setup
+are checked again at admission. Changed scope needs fresh consent; archive and
+recovery remove grants, while disabling/re-enabling setup rotates its identity
+and makes prior grants/tickets unusable. Stale coordinator/worker ownership
+cannot reuse consent. Existing workers are never mutated or restarted.
+
+Legacy v1 single-worker requests/receipts are rejected, **never promoted**.
+Their consumed-ticket tombstones retain their existing timeout semantics.
+Enable native setup in the updated signed app before preparing v2 requests;
+legacy setup records without a setup identity are unsupported. Messaging itself
+remains protocol v1. The signing pipeline and Secure Enclave key are unchanged.
+
+At most 16 request files are retained, including reusable launch tickets.
+Dismiss reviewed/consumed requests explicitly in the UI. Run-policy grants are
+bounded to 128 private records and never enter the observer projection.
 Disable Native Messaging to make future loader executions inert and prevent
 new authorized launches; this does not terminate existing opted-in sessions.
 
@@ -242,11 +275,12 @@ python3 scripts/test-cmux-maestro-orchestrator.py
 ```
 
 Live validation requires separate human approval of installation/setup and a new
-request. The implementation task does **not** authorize installation or paid
+run-policy request. The implementation task does **not** authorize installation or paid
 inference. After that approval, the operator should verify pinned account/model,
 runtime qualification, first-key creation and OS-mediated policy signing, then
 existing-key reuse and noninteractive verification in a separate process,
-one freshly launched worker, bounded send,
+one freshly launched worker, then a second matching worker with a new
+`reuse-ready` ticket and no additional authentication, bounded send,
 idempotent retry, explicit acknowledgement/reply, human-typed input, expired
 message refusal and disconnect uncertainty. Capture only explicit message IDs,
 receipts and intentionally supplied test bodies, not general session transcripts.

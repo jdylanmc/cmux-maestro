@@ -12,6 +12,14 @@ import uuid
 
 PROTOCOL = "cmux-maestro.native-messaging"
 VERSION = 1
+AUTHORIZATION_VERSION = 2
+POLICY_DISCLOSURE = (
+    "Authorize this actor only, in this coordinator run and workspace, to launch "
+    "future workers with different tasks and labels under this exact directory, "
+    "pinned account/model and requested tool-policy snapshot. Known denies remain; "
+    "full native parent policy is unknown and native restrictions remain authoritative. "
+    "Each launch needs its own one-time ticket. No existing worker is changed."
+)
 MAX_MESSAGES = 64
 MAX_BODY = 4096
 MAX_TTL = 3600
@@ -38,14 +46,22 @@ class NativeMessaging:
         return {"nodeId": node["id"], "sessionId": node.get("copilotSessionId"),
                 "generation": node["generation"], "runId": node["runId"]}
 
+    def setup(self, store):
+        raw = store._read_regular("native-setup.json", 4096, private=True, directory=store.root_fd)
+        try:
+            value = json.loads(raw) if raw is not None else {}
+            if set(value) != {"verifier", "version", "setupId"} or value["version"] != VERSION:
+                self.fail("Native messaging unsupported: enable setup in the updated signed Maestro app first.")
+            self.api["canonical_uuid"](value["setupId"], "native setup ID")
+            return value
+        except (ValueError, TypeError, KeyError) as error:
+            raise self.error("Native messaging unsupported: setup is invalid.") from error
+
     def require_signing_readiness(self, root):
         def read(store):
-            return store._read_regular("native-setup.json", 4096, private=True, directory=store.root_fd)
-        raw = self.api["with_store"](root, read, read_only=True)
+            return self.setup(store)
+        setup = self.api["with_store"](root, read, read_only=True)
         try:
-            setup = json.loads(raw) if raw is not None else {}
-            if set(setup) != {"verifier", "version"} or setup["version"] != VERSION:
-                self.fail("Native messaging unsupported: enable setup in a signed, provisioned Maestro app first.")
             verifier = self.api["trusted_executable"](None, setup["verifier"])
             checked = subprocess.run([verifier, "--maestro-native-readiness"],
                                      capture_output=True, timeout=10)
@@ -53,16 +69,66 @@ class NativeMessaging:
                 self.fail("Native messaging unsupported: app signing/provisioning or Secure Enclave readiness failed.")
         except (ValueError, TypeError, KeyError, OSError, subprocess.TimeoutExpired) as error:
             raise self.error("Native messaging unsupported: trusted app readiness is unavailable.") from error
+        return setup
+
+    def policy_scope(self, state, actor, settings, policy, cwd, setup_id):
+        coordinator = actor
+        for _ in range(self.api["MAX_DEPTH"] + 1):
+            if coordinator["parentId"] is None:
+                break
+            coordinator = state["nodes"][coordinator["parentId"]]
+        else:
+            self.fail("Native policy ancestry exceeds the depth bound.")
+        if (coordinator["role"] != "coordinator" or coordinator.get("archiving")
+                or actor.get("archiving") or coordinator["runId"] != actor["runId"]
+                or coordinator["workspaceId"] != actor["workspaceId"]):
+            self.fail("Native policy owner is no longer active.")
+        if actor["role"] == "worker" and not self.api["process_matches"](actor):
+            self.fail("Native policy actor process is stale.")
+        if (self.api["now_date"]() - self.date(coordinator["lastControlAt"], "last control")).total_seconds() > self.api["STALE_SECONDS"]:
+            self.fail("Native policy coordinator is stale; establish current ownership first.")
+        return {
+            "actor": self.identity(actor), "actorAuthority": actor["tokenHash"],
+            "coordinator": self.identity(coordinator), "coordinatorAuthority": coordinator["tokenHash"],
+            "workspaceId": actor["workspaceId"], "cwd": str(cwd),
+            "parentToolPolicy": actor["toolPolicy"], "launchSettings": settings,
+            "toolPolicy": policy, "setupId": setup_id,
+        }
+
+    def current_scope(self, state, request, actor):
+        return self.policy_scope(state, actor, request["launchSettings"], request["toolPolicy"],
+                                 request["cwd"], request["policyScope"]["setupId"])
+
+    def grant_matches(self, state, request, actor):
+        if self.current_scope(state, request, actor) != request["policyScope"]:
+            return False
+        return any(grant["id"] == request["policyGrantId"] and grant["scope"] == request["policyScope"]
+                   for grant in state.get("nativePolicyGrants", []))
+
+    def check_launch_snapshot(self, store, request):
+        setup = self.setup(store)
+        scope = request.get("policyScope")
+        if not isinstance(scope, dict) or scope.get("setupId") != setup["setupId"]:
+            self.fail("Native setup or launch settings changed; prepare fresh authorization.")
+        raw = store._read_regular("worker-settings.json", 8192, private=True, directory=store.root_fd)
+        try:
+            settings = self.api["validate_launch_settings"](json.loads(raw)) if raw else {"version": 1}
+        except (ValueError, TypeError) as error:
+            raise self.error("Native launch settings are unreadable.") from error
+        if settings != request["launchSettings"]:
+            self.fail("Native setup or launch settings changed; prepare fresh authorization.")
 
     def launch_request(self, args, root, actor, settings, policy, cwd):
-        self.require_signing_readiness(root)
+        setup = self.require_signing_readiness(root)
         if os.environ.get("COPILOT_HOME") is not None or os.environ.get("XDG_CONFIG_HOME") is not None:
             self.fail("Native messaging supports only the standard Copilot configuration home.")
         if not settings.get("copilotAccount") or not settings.get("model"):
             self.fail("Native launches require pinned account and model.")
         timestamp = self.api["now_date"]()
         request = {
-            "version": VERSION, "requestId": str(uuid.uuid4()),
+            "version": AUTHORIZATION_VERSION, "requestId": str(uuid.uuid4()),
+            "approvalScope": "run-policy", "disclosure": POLICY_DISCLOSURE,
+            "policyGrantId": None,
             "actor": self.identity(actor), "parentToolPolicy": actor["toolPolicy"],
             "workerId": str(uuid.uuid4()), "sessionId": str(uuid.uuid4()),
             "workerGeneration": 1,
@@ -73,24 +139,40 @@ class NativeMessaging:
             "createdAt": timestamp.isoformat(),
             "expiresAt": (timestamp + datetime.timedelta(minutes=10)).isoformat(),
         }
-        encoded = json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
-        if len(encoded) > 49152:
-            self.fail("Native authorization request is too large.")
-
         def write(store):
             state = store.read()
             current = self.api["authorize"](state, args.actor_id, args.token)
             if self.identity(current) != request["actor"] or current["toolPolicy"] != request["parentToolPolicy"]:
                 self.fail("Actor changed before policy authorization.")
+            request["policyScope"] = self.policy_scope(state, current, settings, policy, cwd, setup["setupId"])
+            self.check_launch_snapshot(store, request)
+            grants = state.setdefault("nativePolicyGrants", [])
+            # A changed snapshot for this actor never widens or revives its earlier grant.
+            grants[:] = [grant for grant in grants
+                         if grant["scope"]["actor"]["nodeId"] in state["nodes"]
+                         and grant["scope"]["setupId"] == setup["setupId"]
+                         and (grant["scope"]["actor"]["nodeId"] != current["id"]
+                              or grant["scope"] == request["policyScope"])]
+            for grant in grants:
+                if grant["scope"] == request["policyScope"]:
+                    request["policyGrantId"] = grant["id"]
+                    break
+            encoded = json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+            if len(encoded) > 49152:
+                self.fail("Native authorization request is too large.")
             # Requests are dismissed explicitly in the UI, never evicted while awaiting review.
             names = [name for name in os.listdir(store.control_fd)
                      if name.startswith("native-request-") and name.endswith(".json")]
             if len(names) >= 16:
                 self.fail("Pending native authorization limit reached; remove reviewed requests through Maestro.")
             store._atomic(store.control_fd, f"native-request-{request['requestId']}.json", encoded)
+            store.write(state)
         self.api["with_store"](root, write)
-        return {"status": "human-authorization-required", "requestId": request["requestId"],
-                "instruction": "Review this exact request in Maestro Agent launch settings."}
+        reused = request["policyGrantId"] is not None
+        return {"status": "reuse-ready" if reused else "human-authorization-required",
+                "requestId": request["requestId"], "approvalScope": "run-policy",
+                "instruction": ("Spawn with this fresh one-time ticket and the same launch arguments."
+                                if reused else "Review and authorize this actor's run-policy snapshot in Maestro Agent launch settings.")}
 
     def authorized_launch(self, args, root, actor, settings, policy, cwd):
         self.require_signing_readiness(root)
@@ -101,32 +183,26 @@ class NativeMessaging:
         def read(store):
             request = store._read_regular(f"native-request-{identifier}.json", 49152, private=True)
             receipt = store._read_regular(f"native-approval-{identifier}.json", 70000, private=True)
-            config = store._read_regular("native-setup.json", 4096, private=True, directory=store.root_fd)
-            if request is None or receipt is None or config is None:
+            setup = self.setup(store)
+            if request is None:
                 self.fail("Native launch requires explicit extension setup and genuine human authorization.")
-            return request, receipt, config
-        raw, receipt, config = self.api["with_store"](root, read, read_only=True)
+            return request, receipt, setup
+        raw, receipt, setup = self.api["with_store"](root, read, read_only=True)
         try:
-            request, signed, setup = json.loads(raw), json.loads(receipt), json.loads(config)
-            if set(signed) != {"request", "signature"} or base64.b64decode(signed["request"], validate=True) != raw:
-                self.fail("Human authorization does not cover this exact request.")
-            if set(setup) != {"verifier", "version"} or setup["version"] != VERSION:
-                self.fail("Native setup version is unsupported.")
-            verifier = self.api["trusted_executable"](None, setup["verifier"])
-            checked = subprocess.run([verifier, "--maestro-verify-native-authorization"],
-                                     input=receipt, capture_output=True, timeout=10)
-            if checked.returncode != 0 or checked.stdout.strip() != b'{"valid":true}':
-                self.fail("Human authorization signature could not be verified.")
-        except (ValueError, TypeError, KeyError, OSError, subprocess.TimeoutExpired) as error:
-            raise self.error("Native authorization is invalid or its trusted app is unavailable.") from error
+            request = json.loads(raw)
+        except (ValueError, TypeError) as error:
+            raise self.error("Native authorization is invalid.") from error
         expected = {
             "actor": self.identity(actor), "parentToolPolicy": actor["toolPolicy"],
             "launchSettings": settings, "toolPolicy": policy, "cwd": str(cwd),
             "name": args.name, "task": args.task, "mode": "interactive-exact-tools",
-            "parentPolicy": "unknown-human-fallback", "version": VERSION, "requestId": identifier,
+            "parentPolicy": "unknown-human-fallback", "version": AUTHORIZATION_VERSION, "requestId": identifier,
+            "approvalScope": "run-policy", "disclosure": POLICY_DISCLOSURE,
             "workerGeneration": 1,
         }
-        if set(request) != set(expected) | {"workerId", "sessionId", "createdAt", "expiresAt"}:
+        if not isinstance(request, dict) or set(request) != set(expected) | {
+            "workerId", "sessionId", "createdAt", "expiresAt", "policyScope", "policyGrantId",
+        }:
             self.fail("Native authorization contains unsupported policy fields.")
         if any(request.get(key) != value for key, value in expected.items()):
             self.fail("Native authorization target or policy changed; request fresh human authorization.")
@@ -136,6 +212,33 @@ class NativeMessaging:
             self.fail("Human authorization has expired or is not yet valid.")
         for field in ("workerId", "sessionId"):
             self.api["canonical_uuid"](request[field], field)
+        def check(store):
+            state = store.read()
+            current = self.api["authorize"](state, args.actor_id, args.token)
+            self.check_launch_snapshot(store, request)
+            if self.current_scope(state, request, current) != request["policyScope"]:
+                self.fail("Native run-policy scope changed; request fresh human authorization.")
+            if any(entry["id"] == identifier for entry in state.get("nativeAuthorizations", [])):
+                self.fail("Human authorization has already been consumed.")
+            if request["policyGrantId"] is not None:
+                self.api["canonical_uuid"](request["policyGrantId"], "policy grant ID")
+                if not self.grant_matches(state, request, current):
+                    self.fail("Reusable native policy grant is no longer active.")
+        self.api["with_store"](root, check, read_only=True)
+        if request["policyGrantId"] is None:
+            try:
+                if receipt is None:
+                    self.fail("Native launch requires genuine human authorization.")
+                signed = json.loads(receipt)
+                if set(signed) != {"request", "signature"} or base64.b64decode(signed["request"], validate=True) != raw:
+                    self.fail("Human authorization does not cover this exact request.")
+                verifier = self.api["trusted_executable"](None, setup["verifier"])
+                checked = subprocess.run([verifier, "--maestro-verify-native-authorization"],
+                                         input=receipt, capture_output=True, timeout=10)
+                if checked.returncode != 0 or checked.stdout.strip() != b'{"valid":true}':
+                    self.fail("Human authorization signature could not be verified.")
+            except (ValueError, TypeError, KeyError, OSError, subprocess.TimeoutExpired) as error:
+                raise self.error("Native authorization is invalid or its trusted app is unavailable.") from error
         return request
 
     def consume_authorization(self, state, request, actor):
@@ -147,6 +250,17 @@ class NativeMessaging:
         current = self.api["now_date"]()
         if current >= self.date(request["expiresAt"], "authorization expiry"):
             self.fail("Human authorization expired before launch.")
+        if request.get("version") == AUTHORIZATION_VERSION:
+            if self.current_scope(state, request, actor) != request["policyScope"]:
+                self.fail("Native run-policy owner or snapshot changed before launch.")
+            grants = state.setdefault("nativePolicyGrants", [])
+            if request["policyGrantId"] is not None:
+                if not self.grant_matches(state, request, actor):
+                    self.fail("Reusable native policy grant is no longer active.")
+            elif not any(grant["scope"] == request["policyScope"] for grant in grants):
+                if len(grants) >= 128:
+                    self.fail("Native policy grant retention bound reached.")
+                grants.append({"id": request["requestId"], "scope": request["policyScope"]})
         used[:] = [entry for entry in used
                    if self.date(entry["expiresAt"], "authorization expiry") > current]
         if len(used) >= 128:
@@ -154,6 +268,43 @@ class NativeMessaging:
         used.append({"id": request["requestId"], "expiresAt": request["expiresAt"]})
 
     def validate(self, state):
+        grants = state.get("nativePolicyGrants", [])
+        if not isinstance(grants, list) or len(grants) > 128:
+            self.fail("Native policy grant retention is invalid.")
+        grant_ids = set()
+        for grant in grants:
+            if not isinstance(grant, dict) or set(grant) != {"id", "scope"}:
+                self.fail("Stored native policy grant is malformed.")
+            self.api["canonical_uuid"](grant["id"], "policy grant ID")
+            if grant["id"] in grant_ids:
+                self.fail("Stored native policy grant IDs are duplicated.")
+            grant_ids.add(grant["id"])
+            scope = grant["scope"]
+            if not isinstance(scope, dict) or set(scope) != {
+                "actor", "actorAuthority", "coordinator", "coordinatorAuthority",
+                "workspaceId", "cwd", "parentToolPolicy", "launchSettings", "toolPolicy", "setupId",
+            }:
+                self.fail("Stored native policy scope is malformed.")
+            for field in ("actor", "coordinator"):
+                identity = scope[field]
+                if not isinstance(identity, dict) or set(identity) != {"nodeId", "sessionId", "generation", "runId"}:
+                    self.fail("Stored native policy identity is malformed.")
+                for key in ("nodeId", "runId"):
+                    self.api["canonical_uuid"](identity[key], key)
+                if identity["sessionId"] is not None:
+                    self.api["canonical_uuid"](identity["sessionId"], "session ID")
+                if type(identity["generation"]) is not int or identity["generation"] < 0:
+                    self.fail("Stored native policy generation is invalid.")
+                digest = scope[field + "Authority"]
+                if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                    self.fail("Stored native policy authority is invalid.")
+            for field in ("workspaceId", "setupId"):
+                self.api["canonical_uuid"](scope[field], field)
+            self.api["validate_launch_settings"](scope["launchSettings"])
+            for field in ("parentToolPolicy", "toolPolicy"):
+                self.api["validate_tool_policy"](scope[field])
+            if not isinstance(scope["cwd"], str) or not os.path.isabs(scope["cwd"]):
+                self.fail("Stored native policy directory is invalid.")
         used = state.get("nativeAuthorizations", [])
         if not isinstance(used, list) or len(used) > 128:
             self.fail("Native authorization retention is invalid.")

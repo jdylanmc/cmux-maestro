@@ -17,7 +17,8 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 API = runpy.run_path(str(ROOT / "scripts/cmux-maestro-orchestrator.py"))
-Native = runpy.run_path(str(ROOT / "scripts/maestro_native.py"))["NativeMessaging"]
+NATIVE = runpy.run_path(str(ROOT / "scripts/maestro_native.py"))
+Native = NATIVE["NativeMessaging"]
 
 
 def identifier():
@@ -234,10 +235,13 @@ class NativeTests(unittest.TestCase):
     def test_signed_request_verification_covers_target_and_policy(self):
         request_id = identifier()
         settings = {"version": 1, "copilotAccount": "example-user", "model": "example-model"}
-        args = SimpleNamespace(native_request=request_id, name="Worker", task="Bounded task")
+        args = SimpleNamespace(native_request=request_id, name="Worker", task="Bounded task",
+                               actor_id=self.actor["id"], token=self.token)
+        setup_id = identifier()
         timestamp = API["now_date"]()
         request = {
-            "version": 1, "requestId": request_id, "actor": self.native.identity(self.actor),
+            "version": 2, "requestId": request_id, "actor": self.native.identity(self.actor),
+            "approvalScope": "run-policy", "disclosure": NATIVE["POLICY_DISCLOSURE"], "policyGrantId": None,
             "parentToolPolicy": self.actor["toolPolicy"], "workerId": identifier(),
             "sessionId": identifier(), "launchSettings": settings,
             "workerGeneration": 1,
@@ -246,14 +250,18 @@ class NativeTests(unittest.TestCase):
             "parentPolicy": "unknown-human-fallback", "createdAt": timestamp.isoformat(),
             "expiresAt": (timestamp + datetime.timedelta(minutes=10)).isoformat(),
         }
+        request["policyScope"] = self.native.policy_scope(
+            self.state, self.actor, settings, request["toolPolicy"], ROOT, setup_id)
         raw = json.dumps(request).encode()
         receipt = json.dumps({"request": base64.b64encode(raw).decode(), "signature": "test-double"}).encode()
         files = {
             f"native-request-{request_id}.json": raw,
             f"native-approval-{request_id}.json": receipt,
-            "native-setup.json": b'{"version":1,"verifier":"/offline/verifier"}',
+            "native-setup.json": json.dumps({"version": 1, "verifier": "/offline/verifier", "setupId": setup_id}).encode(),
+            "worker-settings.json": json.dumps(settings).encode(),
         }
-        store = SimpleNamespace(root_fd=0, _read_regular=lambda name, *_args, **_kwargs: files.get(name))
+        store = SimpleNamespace(root_fd=0, read=lambda: self.state,
+                                _read_regular=lambda name, *_args, **_kwargs: files.get(name))
         self.api["with_store"] = lambda _root, operation, **_kwargs: operation(store)
         self.api["trusted_executable"] = lambda variable, fallback: fallback if variable is None else self.fail("override")
         def verify(command, **kwargs):
@@ -277,7 +285,7 @@ class NativeTests(unittest.TestCase):
 
     def test_unqualified_app_blocks_preparation_and_launch_without_writes(self):
         store = SimpleNamespace(root_fd=0, _read_regular=lambda *_args, **_kwargs:
-                                b'{"version":1,"verifier":"/offline/verifier"}')
+                                json.dumps({"version": 1, "verifier": "/offline/verifier", "setupId": identifier()}).encode())
         self.api["with_store"] = lambda _root, operation, **_kwargs: operation(store)
         self.api["trusted_executable"] = lambda _variable, fallback: fallback
         for response in (b'{"supported":false}', b'{"supported":true,"override":true}', b''):
@@ -297,13 +305,63 @@ class NativeTests(unittest.TestCase):
 
     def test_provider_parent_check_is_additional_not_inferred_identity(self):
         check = API["native_bridge_caller_matches"]
-        result = SimpleNamespace(returncode=0, stdout="42\n")
-        with patch.dict(check.__globals__, {"process_start": lambda _pid: "exact-start"}):
-            with patch.object(subprocess, "run", return_value=result):
-                self.assertTrue(check({"providerProcess": {"pid": 42, "start": "exact-start"}}))
-                self.assertFalse(check({"providerProcess": {"pid": 43, "start": "exact-start"}}))
-                self.assertFalse(check({"providerProcess": {"pid": 42, "start": "different-start"}}))
+        start = "Sun Sep 20 00:00:00 2026"
+        processes = {
+            42: {"parent": 1, "start": start, "executable": "/usr/bin/node"},
+            44: {"parent": 42, "start": start, "executable": "/packaged/copilot"},
+            45: {"parent": 44, "start": start, "executable": "/usr/bin/node"},
+        }
+        node = {"providerProcess": {"pid": 42, "start": start}}
+        with patch.dict(check.__globals__, {"native_process_identity": lambda pid: copy.deepcopy(processes.get(pid))}):
+            with patch.object(os, "getppid", return_value=45):
+                self.assertTrue(check(node))
+                processes[45]["parent"] = 42
+                self.assertTrue(check(node))
+                processes[45]["parent"] = 44
+                for changed in ({"parent": 40}, {"executable": "/unrelated/node"},
+                                {"start": "Sat Sep 19 00:00:00 2026"}):
+                    with patch.dict(processes[44], changed):
+                        self.assertFalse(check(node))
+                self.assertFalse(check({"providerProcess": {"pid": 42, "start": "stale"}}))
+                self.assertFalse(check({"providerProcess": {"pid": 43, "start": start}}))
                 self.assertFalse(check({}))
+                processes[46] = {**processes[44], "parent": 44}
+                processes[45]["parent"] = 46
+                self.assertFalse(check(node))  # No third ancestry edge.
+                processes[45]["parent"] = 44
+                def reparent(pid):
+                    value = copy.deepcopy(processes.get(pid))
+                    if pid == 42:
+                        processes[45]["parent"] = 1
+                    return value
+                with patch.dict(check.__globals__, {"native_process_identity": reparent}):
+                    self.assertFalse(check(node))
+                processes[45]["parent"] = 44
+                samples = {}
+                def reused_pid(pid):
+                    value = copy.deepcopy(processes.get(pid))
+                    samples[pid] = samples.get(pid, 0) + 1
+                    if pid == 42 and samples[pid] > 1:
+                        value["start"] = "Sun Sep 20 00:00:01 2026"
+                    return value
+                with patch.dict(check.__globals__, {"native_process_identity": reused_pid}):
+                    self.assertFalse(check(node))
+            with patch.object(os, "getppid", side_effect=[45, 1]):
+                self.assertFalse(check(node))
+
+    def test_native_process_snapshot_parsing_fails_closed(self):
+        read = API["native_process_identity"]
+        for result, expected in (
+            (SimpleNamespace(returncode=0, stdout="42 Sun Sep 20 00:00:00 2026 /a path/copilot\n"),
+             {"parent": 42, "start": "Sun Sep 20 00:00:00 2026", "executable": "/a path/copilot"}),
+            (SimpleNamespace(returncode=0, stdout=""), None),
+            (SimpleNamespace(returncode=1, stdout="42 Sun Sep 20 00:00:00 2026 /copilot"), None),
+            (SimpleNamespace(returncode=0, stdout="invalid Sun Sep 20 00:00:00 2026 /copilot"), None),
+        ):
+            with patch.object(subprocess, "run", return_value=result):
+                self.assertEqual(read(44), expected)
+        with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("ps", 2)):
+            self.assertIsNone(read(44))
 
     def test_native_launch_never_adopts_an_existing_identity(self):
         settings = {"version": 1, "copilotAccount": "example-user", "model": "example-model"}
@@ -319,7 +377,8 @@ class NativeTests(unittest.TestCase):
             "expiresAt": (API["now_date"]() + datetime.timedelta(minutes=10)).isoformat(),
         }
         native = SimpleNamespace(authorized_launch=lambda *_: request,
-                                 consume_authorization=self.native.consume_authorization)
+                                 consume_authorization=self.native.consume_authorization,
+                                 check_launch_snapshot=lambda *_: None)
         spawn = API["command_spawn"]
         replacements = {
             "read_state": lambda *_: self.state,
@@ -329,6 +388,7 @@ class NativeTests(unittest.TestCase):
             "resource_observations": lambda *_: ({}, []),
             "git_display_metadata": lambda *_: API["absent_git_metadata"](),
             "mutate": self.mutate,
+            "with_store": lambda _root, operation: operation(SimpleNamespace(read=lambda: copy.deepcopy(self.state))),
         }
         with patch.dict(spawn.__globals__, replacements):
             with patch.object(os.path, "lexists", return_value=True):
@@ -339,6 +399,317 @@ class NativeTests(unittest.TestCase):
                         spawn(args, ROOT, SimpleNamespace(validate_surface=lambda *_: self.actor["paneId"]))
         self.assertEqual(len(self.state["nodes"]), 2)
         self.assertNotIn("nativeAuthorizations", self.state)
+
+    def policy_fixture(self):
+        root = ROOT / ".build" / ("native-policy-" + identifier())
+        root.parent.mkdir(exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(root))
+        self.settings = {"version": 1, "copilotAccount": "example-user", "model": "example-model"}
+        self.policy = {"allow": ["read"], "deny": ["web"]}
+        self.setup_value = {"version": 1, "verifier": "/offline/verifier", "setupId": identifier()}
+        self.args = SimpleNamespace(actor_id=self.actor["id"], token=self.token,
+                                    name="First", task="First bounded task", native_request=None)
+        with API["Store"](root) as store:
+            store.write(self.state)
+            for name, value in (("native-setup.json", self.setup_value), ("worker-settings.json", self.settings)):
+                store._atomic(store.root_fd, name, json.dumps(value).encode())
+        self.api["with_store"] = API["with_store"]
+        self.api["trusted_executable"] = lambda _variable, fallback: fallback
+        def verify(command, **_kwargs):
+            self.assertEqual(command[0], "/offline/verifier")
+            return SimpleNamespace(returncode=0, stdout=b'{"supported":true}' if
+                                   command[-1] == "--maestro-native-readiness" else b'{"valid":true}')
+        verifier = patch.object(subprocess, "run", side_effect=verify)
+        self.verifier = verifier.start()
+        self.addCleanup(verifier.stop)
+        return root
+
+    def prepare_policy(self, root):
+        state = API["read_state"](root)
+        actor = state["nodes"][self.args.actor_id]
+        result = self.native.launch_request(self.args, root, actor, self.settings, self.policy, ROOT)
+        self.args.native_request = result["requestId"]
+        return result
+
+    def sign_policy(self, root):
+        def write(store):
+            raw = store._read_regular(f"native-request-{self.args.native_request}.json", 49152, private=True)
+            store._atomic(store.control_fd, f"native-approval-{self.args.native_request}.json",
+                          json.dumps({"request": base64.b64encode(raw).decode(), "signature": "offline-double"}).encode())
+        API["with_store"](root, write)
+
+    def admit_policy(self, root):
+        actor = API["read_state"](root)["nodes"][self.args.actor_id]
+        request = self.native.authorized_launch(self.args, root, actor, self.settings, self.policy, ROOT)
+        def consume(store):
+            state = store.read()
+            self.native.check_launch_snapshot(store, request)
+            self.native.consume_authorization(state, request, state["nodes"][self.args.actor_id])
+            store.write(state)
+        API["with_store"](root, consume)
+        return request
+
+    def test_run_policy_requires_first_signature_then_distinct_one_time_tickets(self):
+        root = self.policy_fixture()
+        self.assertEqual(self.prepare_policy(root)["status"], "human-authorization-required")
+        with self.assertRaisesRegex(API["OrchestrationError"], "genuine human authorization"):
+            self.admit_policy(root)
+        self.sign_policy(root)
+        first = self.admit_policy(root)
+        with self.assertRaisesRegex(API["OrchestrationError"], "already been consumed"):
+            self.admit_policy(root)
+        self.args.name, self.args.task = "Second", "Different bounded task"
+        self.assertEqual(self.prepare_policy(root)["status"], "reuse-ready")
+        second = self.admit_policy(root)
+        for field in ("requestId", "workerId", "sessionId"):
+            self.assertNotEqual(first[field], second[field])
+        self.assertEqual(second["policyGrantId"], first["requestId"])
+        self.assertEqual(sum(call.args[0][-1] == "--maestro-verify-native-authorization"
+                             for call in self.verifier.call_args_list), 1)
+        with self.assertRaisesRegex(API["OrchestrationError"], "already been consumed"):
+            self.admit_policy(root)
+        state = API["read_state"](root)
+        self.assertEqual(len(state["nativePolicyGrants"]), 1)
+        self.assertEqual(len(state["nativeAuthorizations"]), 2)
+        projection = API["Store"](root)._projection(state).decode()
+        for private in ("nativePolicyGrants", "policyScope", "example-model", "actorAuthority", "First bounded task"):
+            self.assertNotIn(private, projection)
+
+    def test_policy_mismatches_need_new_consent(self):
+        root = self.policy_fixture()
+        self.prepare_policy(root)
+        self.sign_policy(root)
+        first = self.admit_policy(root)
+        baseline = API["read_state"](root)
+        for field in ("account", "model", "cwd", "policy", "owner", "workspace", "run", "parent", "setup"):
+            with self.subTest(field=field):
+                state = copy.deepcopy(baseline)
+                args = copy.copy(self.args)
+                settings, policy = copy.deepcopy(self.settings), copy.deepcopy(self.policy)
+                setup = copy.deepcopy(self.setup_value)
+                cwd = ROOT
+                if field == "account":
+                    settings["copilotAccount"] = "other-user"
+                elif field == "model":
+                    settings["model"] = "other-model"
+                elif field == "cwd":
+                    cwd = ROOT / "scripts"
+                elif field == "policy":
+                    policy["deny"].append("write")
+                elif field == "owner":
+                    args.token = "new-owner"
+                    state["nodes"][self.actor["id"]]["tokenHash"] = API["token_hash"](args.token)
+                elif field in {"workspace", "run"}:
+                    key = "workspaceId" if field == "workspace" else "runId"
+                    value = identifier()
+                    for node in state["nodes"].values():
+                        node[key] = value
+                elif field == "parent":
+                    state["nodes"][self.actor["id"]]["toolPolicy"]["deny"] = ["write"]
+                elif field == "setup":
+                    setup["setupId"] = identifier()
+                with API["Store"](root) as store:
+                    store.write(state)
+                    store._atomic(store.root_fd, "worker-settings.json", json.dumps(settings).encode())
+                    store._atomic(store.root_fd, "native-setup.json", json.dumps(setup).encode())
+                actor = state["nodes"][self.actor["id"]]
+                result = self.native.launch_request(args, root, actor, settings, policy, cwd)
+                self.assertEqual(result["status"], "human-authorization-required")
+                self.assertNotEqual(result["requestId"], first["requestId"])
+
+    def test_reuse_rechecks_live_scope_at_admission(self):
+        root = self.policy_fixture()
+        self.prepare_policy(root)
+        self.sign_policy(root)
+        self.admit_policy(root)
+        self.prepare_policy(root)
+        baseline = API["read_state"](root)
+        for field in ("archiving", "stale", "owner", "generation", "grant"):
+            with self.subTest(field=field):
+                state = copy.deepcopy(baseline)
+                actor = state["nodes"][self.actor["id"]]
+                if field == "archiving":
+                    actor["archiving"] = True
+                elif field == "stale":
+                    actor["lastControlAt"] = (API["now_date"]() - datetime.timedelta(minutes=11)).isoformat()
+                elif field == "owner":
+                    state["nativePolicyGrants"][0]["scope"]["actorAuthority"] = "0" * 64
+                elif field == "generation":
+                    state["nativePolicyGrants"][0]["scope"]["actor"]["generation"] += 1
+                else:
+                    state["nativePolicyGrants"] = []
+                with API["Store"](root) as store:
+                    store.write(state)
+                with self.assertRaises(API["OrchestrationError"]):
+                    self.admit_policy(root)
+
+    def test_setup_disable_and_settings_race_block_prepared_ticket(self):
+        root = self.policy_fixture()
+        self.prepare_policy(root)
+        self.sign_policy(root)
+        self.admit_policy(root)
+        self.prepare_policy(root)
+        request = self.native.authorized_launch(self.args, root, self.actor, self.settings, self.policy, ROOT)
+        with API["Store"](root) as store:
+            store._atomic(store.root_fd, "worker-settings.json", json.dumps({**self.settings, "model": "changed"}).encode())
+            with self.assertRaisesRegex(API["OrchestrationError"], "settings changed"):
+                self.native.check_launch_snapshot(store, request)
+        (root / "native-setup.json").unlink()
+        with self.assertRaisesRegex(API["OrchestrationError"], "unsupported"):
+            self.prepare_policy(root)
+        with API["Store"](root) as store:
+            store._atomic(store.root_fd, "worker-settings.json", json.dumps(self.settings).encode())
+            store._atomic(store.root_fd, "native-setup.json", json.dumps({
+                **self.setup_value, "setupId": identifier(),
+            }).encode())
+        self.assertEqual(self.prepare_policy(root)["status"], "human-authorization-required")
+
+    def test_expired_pending_never_verified_but_active_grant_outlives_ticket(self):
+        root = self.policy_fixture()
+        self.prepare_policy(root)
+        self.sign_policy(root)
+        first = self.admit_policy(root)
+        self.prepare_policy(root)
+        future = API["now_date"]() + datetime.timedelta(minutes=11)
+        self.api["now_date"] = lambda: future
+        self.verifier.reset_mock()
+        with self.assertRaisesRegex(API["OrchestrationError"], "expired"):
+            self.admit_policy(root)
+        self.assertFalse(any(call.args[0][-1] == "--maestro-verify-native-authorization"
+                             for call in self.verifier.call_args_list))
+        API["mutate"](root, lambda state: state["nodes"][self.actor["id"]].update(lastControlAt=future.isoformat()))
+        self.assertEqual(self.prepare_policy(root)["status"], "reuse-ready")
+        self.assertEqual(self.admit_policy(root)["policyGrantId"], first["requestId"])
+
+    def test_legacy_one_worker_request_is_never_promoted(self):
+        root = self.policy_fixture()
+        self.prepare_policy(root)
+        path = root / "control" / f"native-request-{self.args.native_request}.json"
+        request = json.loads(path.read_text())
+        for field in ("approvalScope", "disclosure", "policyScope", "policyGrantId"):
+            request.pop(field)
+        request["version"] = 1
+        path.write_text(json.dumps(request))
+        self.sign_policy(root)
+        self.verifier.reset_mock()
+        with self.assertRaisesRegex(API["OrchestrationError"], "unsupported policy fields"):
+            self.admit_policy(root)
+        self.assertEqual(API["read_state"](root)["nativePolicyGrants"], [])
+        self.assertFalse(any(call.args[0][-1] == "--maestro-verify-native-authorization"
+                             for call in self.verifier.call_args_list))
+
+    def test_archive_and_recovery_remove_grants_without_changing_other_runs(self):
+        root = self.policy_fixture()
+        self.prepare_policy(root)
+        self.sign_policy(root)
+        self.admit_policy(root)
+        baseline = API["read_state"](root)
+        baseline["nodes"].pop(self.child["id"])
+        other, _ = API["new_root"](identifier(), identifier(), identifier(), "Other")
+        baseline["nodes"][other["id"]] = other
+        baseline["nativePolicyGrants"].append({
+            "id": identifier(),
+            "scope": self.native.policy_scope(baseline, other, self.settings, self.policy, ROOT,
+                                              self.setup_value["setupId"]),
+        })
+        cmux = SimpleNamespace(validate_surface=lambda *_: self.actor["paneId"])
+        for operation in ("command_archive", "command_recover"):
+            with self.subTest(operation=operation):
+                state = copy.deepcopy(baseline)
+                args = SimpleNamespace(actor_id=self.actor["id"], token=self.token,
+                                       workspace=self.actor["workspaceId"], surface=self.actor["surfaceId"],
+                                       name="Recovered", cwd=str(ROOT), icon=None, color=None)
+                if operation == "command_recover":
+                    state["nodes"][self.actor["id"]]["lastControlAt"] = (
+                        API["now_date"]() - datetime.timedelta(minutes=11)).isoformat()
+                with API["Store"](root) as store:
+                    store.write(state)
+                command = API[operation]
+                with patch.dict(command.__globals__, {
+                    "require_current_surface": lambda *_: None,
+                    "git_display_metadata": lambda *_: API["absent_git_metadata"](),
+                }):
+                    result = command(args, root, cmux)
+                remaining = API["read_state"](root)
+                self.assertEqual(len(remaining["nativePolicyGrants"]), 1)
+                self.assertEqual(remaining["nativePolicyGrants"][0]["scope"]["actor"]["nodeId"], other["id"])
+                self.assertNotIn(self.actor["id"], remaining["nodes"])
+                if operation == "command_recover":
+                    self.args.actor_id, self.args.token = result["coordinatorId"], result["controlToken"]
+                    self.assertEqual(self.prepare_policy(root)["status"], "human-authorization-required")
+
+    def test_actor_specific_grant_does_not_authorize_descendants_or_peers(self):
+        root = self.policy_fixture()
+        self.prepare_policy(root)
+        self.sign_policy(root)
+        self.admit_policy(root)
+        self.args.actor_id = self.child["id"]
+        self.args.token = self.token  # The fixture uses the same token but still requires exact identity.
+        self.assertEqual(self.prepare_policy(root)["status"], "human-authorization-required")
+        self.assertEqual(API["normalize_tool_policy"](["read"], ["write"],
+                         {"allow": ["read"], "deny": ["web"]}),
+                         {"allow": ["read"], "deny": ["web", "write"]})
+        with self.assertRaises(API["OrchestrationError"]):
+            API["normalize_tool_policy"](["write"], [], {"allow": ["read"], "deny": ["web"]})
+
+    def test_native_reservation_caches_consent_atomically_and_timeout_cannot_replay(self):
+        root = self.policy_fixture()
+        self.prepare_policy(root)
+        self.sign_policy(root)
+        args = SimpleNamespace(**vars(self.args), command="spawn", cwd=str(ROOT),
+                               allow_tool=self.policy["allow"], deny_tool=self.policy["deny"],
+                               require_pinned_launch_settings=True, icon=None, color=None)
+        spawned = []
+        def uncertain_creation(*_args, **_kwargs):
+            state = API["read_state"](root)
+            admitted = [node for node in state["nodes"].values() if node["phase"] == "launching"]
+            self.assertEqual(len(admitted), 1)
+            self.assertIn(admitted[0]["id"], state["launches"])
+            self.assertEqual(len(state["nativePolicyGrants"]), 1)
+            self.assertEqual(len(state["nativeAuthorizations"]), 1)
+            spawned.append(admitted[0]["id"])
+            raise API["OrchestrationError"]("offline creation timeout")
+        cmux = SimpleNamespace(validate_surface=lambda *_: self.actor["paneId"],
+                               create_surface=uncertain_creation)
+        spawn = API["command_spawn"]
+        with patch.dict(spawn.__globals__, {
+            "native_messaging": lambda: self.native,
+            "resolve_copilot_token": lambda *_: None,
+            "git_display_metadata": lambda *_: API["absent_git_metadata"](),
+            "resource_observations": lambda *_: ({}, []),
+        }), patch.object(os.path, "lexists", return_value=False):
+            with self.assertRaisesRegex(API["OrchestrationError"], "offline creation timeout"):
+                spawn(args, root, cmux)
+            with self.assertRaisesRegex(API["OrchestrationError"], "already been consumed"):
+                spawn(args, root, cmux)
+        self.assertEqual(len(spawned), 1)
+        self.args.name, self.args.task = "New worker", "Separate explicitly prepared objective"
+        self.assertEqual(self.prepare_policy(root)["status"], "reuse-ready")
+
+    def test_native_flag_is_launch_only_and_pins_and_denies_are_preserved(self):
+        run = API["run_interactive_session"]
+        process = SimpleNamespace(pid=42, poll=lambda: 0, wait=lambda: 0)
+        node = {**self.child, "task": "Bounded", "workingDirectory": str(ROOT),
+                "launchSettings": {"model": "pinned-model", "copilotAccount": "pinned-account"},
+                "toolPolicy": {"allow": ["read"], "deny": ["web"]}}
+        replacements = {
+            "trusted_executable": lambda *_: "/offline/copilot",
+            "worker_environment": lambda *_: {"SYNTHETIC_ACCOUNT": "pinned-account"},
+            "process_start": lambda *_: "offline", "mutate": lambda *_args, **_kwargs: None,
+        }
+        with patch.dict(run.__globals__, replacements), patch.object(os, "isatty", return_value=True):
+            with patch.object(subprocess, "Popen", return_value=process) as popen:
+                for opted_in in (True, False):
+                    if not opted_in:
+                        node.pop("nativeMessaging")
+                    run(ROOT, node["id"], self.token, node)
+                    argv = popen.call_args.args[0]
+                    self.assertEqual("--experimental" in argv, opted_in)
+                    for flag, value in (("--model", "pinned-model"), ("--deny-tool", "web"), ("--allow-tool", "read")):
+                        self.assertEqual(argv[argv.index(flag) + 1], value)
+                    self.assertNotIn("--allow-all", argv)
+                    self.assertNotIn("--yolo", argv)
+                    self.assertEqual(popen.call_args.kwargs["env"], {"SYNTHETIC_ACCOUNT": "pinned-account"})
 
 
 if __name__ == "__main__":

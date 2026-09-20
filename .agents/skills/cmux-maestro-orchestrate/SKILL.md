@@ -152,19 +152,34 @@ environment or substitute a separate `COPILOT_HOME`.
 
 Use `prepare-native` with the same `--actor-id`, `--token`, `--name`, `--task`,
 `--cwd`, `--allow-tool` and `--deny-tool` arguments intended for `spawn`.
-Preparation requires enabled setup, successful app readiness and both pinned
-launch settings, and creates no worker. Show the
-returned request ID to the human. They must review the exact target/policy in
-**Agent launch settings → Native messaging child authorization** and authorize
-once using the native macOS user-presence prompt. Full parent-policy export is
+Preparation requires enabled setup from the updated app, successful app readiness
+and both pinned launch settings, and creates no worker. It returns either
+`human-authorization-required` or `reuse-ready`.
+For `human-authorization-required`, show the request ID to the human. They must
+review **Agent launch settings → Native messaging child authorization** and
+choose **Authorize run policy…** using native macOS user presence. This explicitly
+covers this actor's future workers with different tasks/labels, only within the
+same coordinator run/workspace, canonical directory, pinned account/model and
+exact requested policy. It is not consent for peers or other descendants.
+Full parent-policy export is
 unsupported; this is an explicit human-authorized child policy, not inferred
 inheritance. Exact tool denies win; native managed rules remain enforced.
 Allow-all and path/URL-policy emulation are unsupported.
 
 After approval, use ordinary `spawn` with the identical arguments plus
-`--native-request REQUEST_ID`. There is no agent approval flag. Approvals expire
-after ten minutes, cannot be reused and are invalidated by target/settings or
-parent policy changes before launch. A failed launch also consumes the approval.
+`--native-request REQUEST_ID`. There is no agent approval flag. Pending requests
+and each one-time launch ticket expire after ten minutes. The first successful
+reservation verifies the human signature, caches the run-policy grant and
+consumes that launch ticket atomically with the launch lease. A failed launch
+after reservation still consumes the ticket; never replay it to retry a timeout.
+For each subsequent worker, call `prepare-native` again with that worker's
+name/task. On `reuse-ready`, spawn with the new request ID without another human
+authentication. Reuse lasts only for the active actor/run and exact policy
+snapshot, not the initial request's ten-minute window. Changed scope requires
+fresh consent; archive/recovery or disabling/re-enabling setup invalidates reuse.
+Legacy v1 single-worker requests are rejected, never upgraded to reusable consent.
+Refresh native setup in the updated signed app before using v2 requests.
+Only opted-in native launches add `--experimental`; no global preference is changed.
 The launched policy/account/model are snapshots; no running worker is changed.
 Never try to manufacture an approval file or bypass the app.
 
