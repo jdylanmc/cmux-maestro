@@ -364,6 +364,153 @@ class NativeTests(unittest.TestCase):
         with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("ps", 2)):
             self.assertIsNone(read(44))
 
+    def runtime_launch(self):
+        node = self.state["nodes"][self.child["id"]]
+        node.update(phase="launching", availability="busy", supervisor=None, providerProcess=None,
+                    task="Bounded", workingDirectory=str(ROOT))
+        node["nativeMessaging"].update(registration=None, heartbeat=None, ready=False)
+        self.state["launches"][node["id"]] = {
+            "workerId": node["id"], "runId": node["runId"], "workspaceId": node["workspaceId"],
+            "surfaceId": node["surfaceId"], "state": "starting",
+            "createdAt": API["now"](), "updatedAt": API["now"](),
+        }
+        return node
+
+    def test_runtime_publishes_canonical_supervisor_before_delayed_provider_attachment(self):
+        runtime = API["command_runtime"]
+        node = self.runtime_launch()
+        self.api.update(process_matches=API["process_matches"],
+                        native_bridge_caller_matches=API["native_bridge_caller_matches"])
+        processes = {41: (1, "/usr/bin/python3"), 42: (41, "/usr/bin/node"),
+                     44: (42, "/packaged/copilot"), 45: (44, "/usr/bin/node")}
+        start = "2026-09-20T00:00:00Z"
+        supervisor = {"pid": 41, "start": start, "startFormat": "ps-c-utc-v1"}
+        provider = {**supervisor, "pid": 42}
+        bridge_environment = {"HOME": "/offline", "PATH": "/usr/bin:/bin"}
+        events = []
+
+        def ps(command, **kwargs):
+            pid = int(command[command.index("-p") + 1])
+            environment = kwargs.get("env", os.environ)
+            if "env" not in kwargs:
+                # The old supervisor capture differs under the reduced bridge environment.
+                value = ("dim. 20 sept. 2026 02:00:00" if
+                         environment.get("TZ") == "Europe/Paris" else "Sun Sep 20 00:00:00 2026")
+                return SimpleNamespace(returncode=0, stdout=value)
+            for key in ("LC_ALL", "LC_TIME", "LANG"):
+                self.assertEqual(environment[key], "C")
+            self.assertEqual(environment["TZ"], "UTC0")
+            parent, executable = processes[pid]
+            return SimpleNamespace(returncode=0, stdout=f"{parent} Sun Sep 20 00:00:00 2026 {executable}")
+
+        def status():
+            output = API["command_status"](
+                SimpleNamespace(actor_id=self.actor["id"], token=self.token, worker_id=node["id"]),
+                ROOT, SimpleNamespace(surface_exists=lambda *_: True),
+            )
+            self.assertEqual(output["workers"][0]["phase"], "turn-running")
+            self.assertEqual(output["workers"][0]["availability"], "busy")
+
+        def delayed_provider(*_args, **_kwargs):
+            self.assertEqual(os.environ["LC_ALL"], "fr_FR.UTF-8")
+            self.assertEqual(os.environ["TZ"], "Europe/Paris")
+            with patch.dict(os.environ, bridge_environment, clear=True):
+                self.assertEqual(self.bridge("register"), {"status": "starting"})
+                status()
+                bound = self.state["nodes"][node["id"]]
+                self.assertEqual(bound["supervisor"], supervisor)
+                self.assertIsNone(bound["providerProcess"])
+                self.assertIsNone(bound["nativeMessaging"]["registration"])
+                self.assertNotIn(node["id"], self.state["launches"])
+                for fields in ({"credential": "c" * 64},
+                               {"identity": {**self.native.identity(node), "sessionId": identifier()}}):
+                    with self.assertRaises(API["OrchestrationError"]):
+                        self.bridge("register", **fields)
+                projection = API["Store"](ROOT)._projection(self.state).decode()
+                self.assertNotIn("startFormat", projection)
+                self.assertNotIn(start, projection)
+            events.append("starting")
+            return SimpleNamespace(pid=42, poll=attached, wait=lambda: 0)
+
+        def attached():
+            bound = self.state["nodes"][node["id"]]
+            self.assertEqual(bound["supervisor"], supervisor)
+            self.assertEqual(bound["providerProcess"], provider)
+            with patch.dict(os.environ, bridge_environment, clear=True):
+                for parent in (42, 44):
+                    processes[45] = (parent, "/usr/bin/node")
+                    self.assertEqual(self.bridge("register"), {"identity": self.native.identity(node)})
+                self.assertEqual(self.bridge("ready"), {"ready": True})
+                status()
+            events.append("attached")
+            return 0
+
+        replacements = {
+            "read_state": lambda *_args, **_kwargs: copy.deepcopy(self.state),
+            "mutate": lambda root, operation, **_kwargs: self.mutate(root, operation),
+            "remove_launch_credential": lambda *_: None,
+            "trusted_executable": lambda *_: "/offline/copilot",
+            "worker_environment": lambda *_: {},
+            "collect_git_evidence": lambda *_: {},
+        }
+        environment = {"LC_ALL": "fr_FR.UTF-8", "LC_TIME": "fr_FR.UTF-8", "TZ": "Europe/Paris",
+                       "CMUX_WORKSPACE_ID": node["workspaceId"], "CMUX_SURFACE_ID": node["surfaceId"]}
+        with patch.dict(runtime.__globals__, replacements), patch.dict(os.environ, environment):
+            with patch.object(os, "getpid", return_value=41), patch.object(os, "getppid", return_value=45):
+                with patch.object(os, "isatty", return_value=True), patch.object(signal, "signal"):
+                    with patch.object(subprocess, "Popen", side_effect=delayed_provider):
+                        with patch.object(subprocess, "run", side_effect=ps):
+                            result = runtime(SimpleNamespace(worker_id=node["id"], token=self.token), ROOT)
+        self.assertEqual(result["exitCode"], 0)
+        self.assertEqual(events, ["starting", "attached"])
+        self.assertEqual(self.state["nodes"][node["id"]]["supervisor"], supervisor)
+
+    def test_runtime_refuses_unavailable_native_supervisor_before_publication(self):
+        runtime = API["command_runtime"]
+        node = self.runtime_launch()
+        before = copy.deepcopy(self.state)
+        replacements = {
+            "read_state": lambda *_args, **_kwargs: copy.deepcopy(self.state),
+            "require_current_surface": lambda *_: None,
+        }
+        with patch.dict(runtime.__globals__, replacements):
+            with patch.dict(runtime.__globals__, native_process_identity=lambda _pid, *, canonical: None):
+                with patch.dict(runtime.__globals__, process_start=lambda _pid: self.fail("No legacy fallback")):
+                    with self.assertRaisesRegex(API["OrchestrationError"], "supervisor process identity"):
+                        runtime(SimpleNamespace(worker_id=node["id"], token=self.token), ROOT)
+        self.assertEqual(self.state, before)
+
+    def test_runtime_cleanup_requires_the_full_versioned_supervisor_anchor(self):
+        runtime = API["command_runtime"]
+        for change in ("none", "format", "pid", "start"):
+            with self.subTest(change=change):
+                node = self.runtime_launch()
+                def interrupted(*_args):
+                    def replace(state):
+                        anchor = state["nodes"][node["id"]]["supervisor"]
+                        self.assertEqual(anchor["startFormat"], "ps-c-utc-v1")
+                        if change == "format":
+                            del anchor["startFormat"]
+                        elif change == "pid":
+                            anchor["pid"] += 1
+                        elif change == "start":
+                            anchor["start"] = "2026-09-20T00:00:01Z"
+                    self.mutate(ROOT, replace)
+                    raise API["OrchestrationError"]("offline interrupted runtime")
+                replacements = {
+                    "native_process_identity": lambda _pid, *, canonical: {"start": "2026-09-20T00:00:00Z"},
+                    "read_state": lambda *_args, **_kwargs: copy.deepcopy(self.state),
+                    "mutate": lambda root, operation, **_kwargs: self.mutate(root, operation),
+                    "require_current_surface": lambda *_: None,
+                    "remove_launch_credential": lambda *_: None,
+                    "run_interactive_session": interrupted,
+                }
+                with patch.dict(runtime.__globals__, replacements), patch.object(signal, "signal"):
+                    with self.assertRaisesRegex(API["OrchestrationError"], "offline interrupted"):
+                        runtime(SimpleNamespace(worker_id=node["id"], token=self.token), ROOT)
+                self.assertEqual(self.state["nodes"][node["id"]]["phase"],
+                                 "turn-failed" if change == "none" else "turn-running")
+
     def test_native_binding_capture_and_every_resample_use_c_locale_and_utc(self):
         run = API["run_interactive_session"]
         check = API["native_bridge_caller_matches"]
@@ -430,16 +577,50 @@ class NativeTests(unittest.TestCase):
             for field in ("supervisor", "providerProcess"):
                 self.assertTrue(matches({field: {"pid": 42, "start": legacy}}))
                 self.assertFalse(matches({field: {"pid": 42, "start": "Sun Sep 20 00:00:00 2026"}}))
-            self.assertTrue(matches({"providerProcess": canonical}))
-            for changed in ({"start": legacy}, {"start": "2026-09-20T00:00:01Z"},
+                self.assertTrue(matches({field: canonical}))
+                for changed in ({"start": legacy}, {"start": "2026-09-20T00:00:01Z"},
+                                {"startFormat": "unknown"}):
+                    self.assertFalse(matches({field: {**canonical, **changed}}))
+        for field in ("supervisor", "providerProcess"):
+            for changed in ({"start": legacy}, {"start": "2026-09-31T00:00:00Z"},
                             {"startFormat": "unknown"}):
-                self.assertFalse(matches({"providerProcess": {**canonical, **changed}}))
-        for changed in ({"start": legacy}, {"start": "2026-09-31T00:00:00Z"},
-                        {"startFormat": "unknown"}):
-            state = copy.deepcopy(self.state)
-            state["nodes"][self.child["id"]]["providerProcess"] = {**canonical, **changed}
-            with self.assertRaises(API["OrchestrationError"]):
-                API["validate_state"](state)
+                state = copy.deepcopy(self.state)
+                state["nodes"][self.child["id"]][field] = {**canonical, **changed}
+                with self.assertRaises(API["OrchestrationError"]):
+                    API["validate_state"](state)
+
+    def test_typed_supervisor_validation_is_native_only_and_preserves_unversioned_state(self):
+        anchor = {"pid": 41, "start": "2026-09-20T00:00:00Z", "startFormat": "ps-c-utc-v1"}
+        for invalid in (
+            {**anchor, "pid": True}, {**anchor, "pid": 0}, {**anchor, "pid": "41"},
+            {**anchor, "start": None}, {**anchor, "extra": "field"},
+            {"start": anchor["start"], "startFormat": anchor["startFormat"]},
+            {"pid": anchor["pid"], "startFormat": anchor["startFormat"]},
+        ):
+            with self.subTest(invalid=invalid):
+                state = copy.deepcopy(self.state)
+                state["nodes"][self.child["id"]]["supervisor"] = invalid
+                with self.assertRaises(API["OrchestrationError"]):
+                    API["validate_state"](state)
+        for mode in ("interactive", "bounded"):
+            for native in (False, True):
+                if native and mode == "bounded":
+                    continue
+                with self.subTest(mode=mode, native=native):
+                    state = copy.deepcopy(self.state)
+                    node = state["nodes"][self.child["id"]]
+                    node.update(executionMode=mode, supervisor=anchor)
+                    if mode == "bounded":
+                        node["providerProcess"] = None
+                    if not native:
+                        del node["nativeMessaging"]
+                    if native:
+                        API["validate_state"](state)
+                    else:
+                        with self.assertRaises(API["OrchestrationError"]):
+                            API["validate_state"](state)
+                    node["supervisor"] = {"pid": 41, "start": "dim. 20 sept. 2026 02:00:00"}
+                    API["validate_state"](state)
 
     def test_canonical_native_chain_keeps_bounded_topology_and_second_sample_checks(self):
         check = API["native_bridge_caller_matches"]

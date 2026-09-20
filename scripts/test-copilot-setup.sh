@@ -22,6 +22,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feat
     "$ROOT/CMUXMaestroPreview/Integration/NativeSigningReadiness.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/NativeMessagingSetup.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/WorkerLaunchSettings.swift" \
+    "$ROOT/CMUXMaestroPreview/ContentView.swift" \
     -emit-module-path "$OUTPUT/CMUXMaestroPreview.swiftmodule" \
     -Xlinker -install_name -Xlinker "$OUTPUT/libCMUXMaestroPreview.dylib" \
     -o "$OUTPUT/libCMUXMaestroPreview.dylib"

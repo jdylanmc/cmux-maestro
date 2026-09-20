@@ -695,11 +695,21 @@ def validate_state(state):
             or mode != "interactive" or role != "worker"
         ):
             raise OrchestrationError("Stored interactive process identity is invalid.")
-        if provider is not None and "startFormat" in provider:
-            if provider["startFormat"] != "ps-c-utc-v1":
+        supervisor = node.get("supervisor")
+        if isinstance(supervisor, dict) and "startFormat" in supervisor and (
+            set(supervisor) != {"pid", "start", "startFormat"}
+            or type(supervisor["pid"]) is not int or supervisor["pid"] <= 0
+            or not isinstance(supervisor["start"], str) or not 1 <= len(supervisor["start"]) <= 100
+            or mode != "interactive" or role != "worker" or not node.get("nativeMessaging")
+        ):
+            raise OrchestrationError("Stored native supervisor identity is invalid.")
+        for process in (provider, supervisor):
+            if not isinstance(process, dict) or "startFormat" not in process:
+                continue
+            if process["startFormat"] != "ps-c-utc-v1":
                 raise OrchestrationError("Stored native process start format is invalid.")
             try:
-                native_start_date(provider["start"])
+                native_start_date(process["start"])
             except ValueError as error:
                 raise OrchestrationError("Stored native process start stamp is invalid.") from error
         if node.get("iconId") is not None:
@@ -2168,9 +2178,6 @@ def run_copilot_turn(root, worker_id, token, node):
 def command_runtime(args, root):
     worker_id = canonical_uuid(args.worker_id, "worker ID")
     pid = os.getpid()
-    start = process_start(pid)
-    if not start:
-        raise OrchestrationError("Cannot establish supervisor process identity.")
     deadline = time.monotonic() + timeout("CMUX_MAESTRO_STARTUP_SECONDS", STARTUP_SECONDS)
     while True:
         state = read_state(root, wait=2)
@@ -2184,6 +2191,14 @@ def command_runtime(args, root):
         if time.monotonic() >= deadline:
             raise OrchestrationError("Worker attachment did not finish within the startup bound.")
         time.sleep(0.05)
+    if node.get("executionMode") == "interactive" and node.get("nativeMessaging"):
+        snapshot = native_process_identity(pid, canonical=True)
+        supervisor = {"pid": pid, "start": snapshot["start"], "startFormat": "ps-c-utc-v1"} if snapshot else None
+    else:
+        start = process_start(pid)
+        supervisor = {"pid": pid, "start": start} if start else None
+    if supervisor is None:
+        raise OrchestrationError("Cannot establish supervisor process identity.")
     if args.token is None:
         args.token = with_store(root, lambda store: store.launch_token(worker_id), wait=2)
 
@@ -2197,7 +2212,7 @@ def command_runtime(args, root):
             or launch["surfaceId"] != node["surfaceId"]
         ):
             raise OrchestrationError("Worker runtime is not in the launch phase.")
-        node["supervisor"] = {"pid": pid, "start": start}
+        node["supervisor"] = supervisor
         if node.get("executionMode") == "interactive":
             node["phase"], node["availability"] = "turn-running", "busy"
         else:
@@ -2230,7 +2245,7 @@ def command_runtime(args, root):
                     if (
                         not current or current["generation"] != generation
                         or current["phase"] != "turn-queued"
-                        or current.get("supervisor") != {"pid": pid, "start": start}
+                        or current.get("supervisor") != supervisor
                     ):
                         raise OrchestrationError("Queued worker turn is no longer current.")
                     current["phase"], current["availability"] = "turn-running", "busy"
@@ -2288,7 +2303,7 @@ def command_runtime(args, root):
 
                 def heartbeat(state):
                     current = state["nodes"].get(worker_id)
-                    if current and current.get("supervisor") == {"pid": pid, "start": start}:
+                    if current and current.get("supervisor") == supervisor:
                         current["updatedAt"] = now()
                         apply_git_evidence(state, git_evidence)
                 mutate(root, heartbeat, wait=2)
@@ -2299,7 +2314,7 @@ def command_runtime(args, root):
             node = state["nodes"].get(worker_id)
             if (
                 node and not node.get("archiving")
-                and node.get("supervisor") == {"pid": pid, "start": start}
+                and node.get("supervisor") == supervisor
             ):
                 if node.get("executionMode") == "interactive":
                     if node["phase"] in {"process-disappeared", "turn-failed"}:

@@ -116,10 +116,14 @@ deeper chains fail closed. This process check supplements, and never invents,
 the logical session/worker/run/generation identity. A filesystem path or SDK
 `source` string alone is not authentication. No provider credentials are requested
 from the SDK, and no permission/user-input callbacks are registered.
-New native provider anchors carry the explicit `ps-c-utc-v1` start format:
+New native supervisor and provider anchors carry the explicit `ps-c-utc-v1` start format:
 capture, liveness and every ancestry resample run `ps` in the C locale and UTC,
 then strictly parse its creation stamp into UTC. Caller locale/time zone and the
-bridge's reduced environment cannot change that representation. Existing
+bridge's reduced environment cannot change that representation. The supervisor
+anchor is captured before publishing the running phase, so authenticated adapter
+registration returns `starting` while provider attachment is pending, and status
+does not mistake that launch window for a disappeared process. Runtime ownership
+and exit cleanup compare the full anchor, including its format. Existing
 unversioned provider/supervisor anchors retain their original local-string
 handling; no timezone is guessed and no global process-stamp migration occurs.
 
@@ -131,6 +135,49 @@ review the exact request including account/model, task, parent identity, child
 worker/session IDs, directory, inherited denies and requested tools. Only
 opted-in native workers pass Copilot's per-launch `--experimental` flag.
 Ordinary workers and global `~/.copilot/settings.json` remain unchanged.
+
+The review list puts valid pending run-policy requests first. Rows show the
+initial worker/task label and status, with a short request ID secondary; labels
+are bounded, control/direction-filtered metadata, never proof of authority.
+Expired, not-yet-valid, legacy, unsupported, reuse-ticket and receipt-present
+rows cannot be signed. Status uses the same schema/scope/time validation as
+signing; recognizing a reuse ticket for display does **not** admit it to the
+signing validator. A receipt-present label means safe read and exact request
+binding, **not** cryptographic verification or confirmation of an unused ticket.
+Reuse-ready labels likewise describe the ticket, not current grant validity or
+admission. The controller still checks all launch conditions. Nothing is pruned
+automatically.
+
+The sheet summarizes directory, account/model pins, explicit requested and known
+parent allows/denies, and exact actor/coordinator/run/workspace identities.
+Full source JSON remains available in a disclosure; display-only escaping never
+changes signed bytes. The disclosure continues to explain that matching future
+tasks and labels may vary. These CLI flags are neither an OS sandbox nor a full
+effective-native-permission export.
+
+Failures stay **inside the active sheet** with actionable stage/status codes:
+readiness, validation/expiry, safe request read, key access, signing (including
+source-reported authentication cancellation), receipt write or exact read-back.
+Only allowlisted error-domain labels and numeric system codes are shown, not raw
+backend errors, authentication details or key material. **Run policy approved —
+ready for launch** appears only after the written receipt is safely read back
+byte-for-byte; it never claims a worker launched. Failed read-back explicitly
+warns that a receipt may exist without confirmed success. Going back without
+approving is not success; destructive **Remove request and receipt** has its own
+outcome and does not revoke already-active run-policy grants. Authentication,
+Secure Enclave operations, protections and controller authority are unchanged.
+
+Routine setup and approval controls have explicit accessibility labels and
+stable identifiers, avoiding positional button selection. Setup uses
+`copilot-setup-*` / `native-setup-*` (including distinct install/uninstall and
+enable/disable confirmation targets); launch settings uses `agent-launch-settings`.
+Approval uses `native-authorization-refresh`, `native-authorization-review-<requestId>`,
+`native-authorization-approve`, `native-authorization-remove` and
+`native-authorization-back`. Status, result, error and details are also identified.
+Review accessibility values include status and the exact request ID, independent
+of row order or possibly duplicate worker labels. These are UI metadata, not
+permission or automation grants; macOS authentication still requires user presence.
+Offline tests check compilation and identifier contracts, not live AX exposure.
 
 Full authoritative parent-policy export is unavailable. The displayed request
 explicitly asks the human to authorize a child policy instead; it does not claim
@@ -189,7 +236,7 @@ legacy setup records without a setup identity are unsupported. Messaging itself
 remains protocol v1. The signing pipeline and Secure Enclave key are unchanged.
 
 At most 16 request files are retained, including reusable launch tickets.
-Dismiss reviewed/consumed requests explicitly in the UI. Run-policy grants are
+Remove reviewed/consumed requests explicitly in the UI. Run-policy grants are
 bounded to 128 private records and never enter the observer projection.
 Disable Native Messaging to make future loader executions inert and prevent
 new authorized launches; this does not terminate existing opted-in sessions.
