@@ -954,12 +954,16 @@ artifacts; no other development copies are discovered or deregistered.
 Source files are **never removed**.
 
 The helper target explicitly supplies its resolved production/validation
-identifier to `codesign`; otherwise a command-line tool can retain its
-linker-generated identifier despite `PRODUCT_BUNDLE_IDENTIFIER`. Publication
-and installation verify the effective helper identity. Rebuild older products
+identifier to `codesign` using `CMUX_HELPER_SIGNING_IDENTIFIER`; otherwise a
+command-line tool can retain its linker-generated identifier. Its
+`PRODUCT_BUNDLE_IDENTIFIER` is empty to prevent Xcode from synthesizing an
+application-identifier entitlement, and base entitlement injection is disabled.
+Publication and installation verify the effective helper identity. Rebuild older products
 with linker-generated helper IDs; they are not accepted as install sources.
-The helper's optional `com.apple.application-identifier` entitlement must match
-that exact identity. It does not permit additional access entitlements.
+For older ad-hoc install/rollback products, the helper's optional
+`com.apple.application-identifier` entitlement must match that exact identity.
+It does not permit additional access entitlements. Development packaging does
+not allow the helper any application-identifier or keychain entitlement.
 
 The command confirms the exact production bundle ID and canonical path in
 both LaunchServices and the extension registry—not merely exit status zero.

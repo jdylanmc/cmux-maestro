@@ -3,6 +3,7 @@ import importlib.util
 import copy
 import datetime
 import json
+import os
 from pathlib import Path
 import plistlib
 import shutil
@@ -145,11 +146,34 @@ class BuildMetadataTests(unittest.TestCase):
                     if target == "CMUXMaestroCopilotHook" else "",
                     "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG" if mode in ("production", "development") else "DEBUG CMUX_VALIDATION",
                 }})
+            helper = rows[2]["buildSettings"]
+            helper.update({
+                "PRODUCT_BUNDLE_IDENTIFIER": "",
+                "CMUX_HELPER_SIGNING_IDENTIFIER": metadata.BASE_ID + suffix + ".CopilotHook",
+                "CODE_SIGN_INJECT_BASE_ENTITLEMENTS": "NO",
+                "CODE_SIGN_ENTITLEMENTS": "",
+                "PROVISIONING_PROFILE_SPECIFIER": "",
+            })
             metadata.verify_settings(rows, mode)
             flags = rows[2]["buildSettings"].pop("OTHER_CODE_SIGN_FLAGS")
             with self.assertRaises(ValueError):
                 metadata.verify_settings(rows, mode)
             rows[2]["buildSettings"]["OTHER_CODE_SIGN_FLAGS"] = flags
+            for key, value in (
+                ("PRODUCT_BUNDLE_IDENTIFIER", metadata.BASE_ID + suffix + ".CopilotHook"),
+                ("CMUX_HELPER_SIGNING_IDENTIFIER", metadata.BASE_ID + ".WrongHelper"),
+                ("CMUX_HELPER_SIGNING_IDENTIFIER", ""),
+                ("OTHER_CODE_SIGN_FLAGS", "--identifier " + metadata.BASE_ID + ".WrongHelper"),
+                ("CODE_SIGN_INJECT_BASE_ENTITLEMENTS", "YES"),
+                ("CODE_SIGN_ENTITLEMENTS", "unexpected.entitlements"),
+                ("PROVISIONING_PROFILE_SPECIFIER", "unexpected-profile"),
+                ("PROVISIONING_PROFILE", "unexpected-profile"),
+            ):
+                with self.subTest(mode=mode, key=key, value=value):
+                    bad = copy.deepcopy(rows)
+                    bad[2]["buildSettings"][key] = value
+                    with self.assertRaises(ValueError):
+                        metadata.verify_settings(bad, mode)
             valid_conditions = rows[0]["buildSettings"]["SWIFT_ACTIVE_COMPILATION_CONDITIONS"]
             rows[0]["buildSettings"]["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = (
                 "DEBUG CMUX_VALIDATION" if mode in ("production", "development") else "DEBUG"
@@ -198,7 +222,9 @@ class BuildMetadataTests(unittest.TestCase):
         self.assertNotIn("pluginkit -a", script)
         self.assertNotIn("security find", script)
         self.assertIn("--mode development", script)
-        self.assertLess(script.index('--source-entitlements'), script.index('"${SETTINGS[@]}" build'))
+        self.assertLess(script.index('--source-entitlements'), script.index('"${SETTINGS[@]}" clean build'))
+        self.assertIn('DERIVED_DATA="$ROOT/.build/development"', script)
+        self.assertIn('-derivedDataPath "$DERIVED_DATA" "${SETTINGS[@]}" clean build', script)
         self.assertIn("CODE_SIGN_IDENTITY=-", (ROOT / "scripts/build-register.sh").read_text())
         entitlements = plistlib.loads((ROOT / "scripts/native-development.entitlements").read_bytes())
         self.assertEqual(set(entitlements), {"com.apple.application-identifier",
@@ -226,8 +252,14 @@ class BuildMetadataTests(unittest.TestCase):
         team = "SYNTHETIC1"
         now = datetime.datetime.now(datetime.timezone.utc)
         fault = None
+        verified_targets = []
+        identifiers = {
+            self.app: metadata.BASE_ID,
+            self.extension: metadata.BASE_ID + ".Extension",
+            helper: metadata.BASE_ID + ".CopilotHook",
+        }
 
-        def signed(command, **_):
+        def signed(command, **kwargs):
             target = Path(command[-1])
             extension = str(self.extension) in str(target)
             identifier = metadata.BASE_ID + (".Extension" if extension else "")
@@ -236,7 +268,12 @@ class BuildMetadataTests(unittest.TestCase):
             e.update({metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS}
                      if extension else {"keychain-access-groups": [team + "." + metadata.BASE_ID]})
             if "--verify" in command:
-                self.assertIn("anchor apple generic", command[command.index("-R") + 1])
+                self.assertEqual(command, [
+                    "/usr/bin/codesign", "--verify", "--strict", "--deep", "-R",
+                    f'=anchor apple generic and identifier "{identifiers[target]}"', str(target),
+                ])
+                self.assertEqual(kwargs, {"check": True, "capture_output": True})
+                verified_targets.append(target)
                 if fault == "unsigned":
                     raise subprocess.CalledProcessError(1, command)
                 return subprocess.CompletedProcess(command, 0, stdout=b"")
@@ -247,6 +284,12 @@ class BuildMetadataTests(unittest.TestCase):
                     details += "Signature=adhoc\n"
                 return subprocess.CompletedProcess(command, 0, stderr=details.encode())
             if "--entitlements" in command:
+                if target == helper and fault in ("helper-app-id", "helper-keychain", "helper-team"):
+                    grant = {"com.apple.application-identifier": team + "." + identifiers[helper]} \
+                        if fault == "helper-app-id" else {"keychain-access-groups": [team + "." + metadata.BASE_ID]}
+                    if fault == "helper-team":
+                        grant = {"com.apple.developer.team-identifier": team}
+                    return subprocess.CompletedProcess(command, 0, stdout=plistlib.dumps(grant))
                 return subprocess.CompletedProcess(command, 0, stdout=plistlib.dumps(
                     {} if target == helper or fault == "unentitled" else e))
             self.assertEqual(command[:3], ["/usr/bin/security", "cms", "-D"])
@@ -263,9 +306,64 @@ class BuildMetadataTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, stdout=plistlib.dumps(profile))
 
         metadata.verify_development(self.app, runner=signed)
+        self.assertEqual(verified_targets, [self.app, self.extension, helper])
         for fault in ("unsigned", "adhoc", "team", "unentitled", "unprovisioned", "wrong-profile"):
             with self.subTest(fault=fault), self.assertRaises((ValueError, subprocess.CalledProcessError)):
                 metadata.verify_development(self.app, runner=signed)
+        for fault in ("helper-app-id", "helper-keychain", "helper-team"):
+            with self.subTest(fault=fault), self.assertRaisesRegex(
+                ValueError, "Helper must not gain keychain or application privileges"
+            ):
+                metadata.verify_development(self.app, runner=signed)
+
+    def test_resolved_development_helper_does_not_inject_base_entitlements(self):
+        for configuration in ("Debug", "Release"):
+            with self.subTest(configuration=configuration):
+                result = subprocess.run([
+                    "/usr/bin/xcodebuild", "-project", str(ROOT / "CMUXMaestroPreview.xcodeproj"),
+                    "-alltargets", "-configuration", configuration, "-showBuildSettings", "-json",
+                    "CODE_SIGN_STYLE=Manual", "CODE_SIGN_IDENTITY=Apple Development: Synthetic",
+                    "DEVELOPMENT_TEAM=SYNTHETIC1", "CODE_SIGNING_ALLOWED=YES", "CODE_SIGNING_REQUIRED=YES",
+                    f"CMUX_NATIVE_APP_ENTITLEMENTS={ROOT / 'scripts/native-development.entitlements'}",
+                    "CMUX_NATIVE_APP_PROFILE=synthetic-app", "CMUX_NATIVE_EXTENSION_PROFILE=synthetic-extension",
+                ], check=True, capture_output=True, env={
+                    **os.environ, "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer",
+                    "TMPDIR": str(self.directory),
+                })
+                rows = json.loads(result.stdout)
+                metadata.verify_settings(rows, "development")
+                targets = {row["target"]: row["buildSettings"] for row in rows}
+                helper = targets["CMUXMaestroCopilotHook"]
+                self.assertFalse(helper.get("PRODUCT_BUNDLE_IDENTIFIER"))
+                self.assertEqual(helper["CMUX_HELPER_SIGNING_IDENTIFIER"],
+                                 metadata.BASE_ID + ".CopilotHook")
+                self.assertEqual(helper["CODE_SIGN_INJECT_BASE_ENTITLEMENTS"], "NO")
+                self.assertFalse(helper.get("CODE_SIGN_ENTITLEMENTS"))
+                self.assertFalse(helper.get("PROVISIONING_PROFILE_SPECIFIER"))
+                self.assertFalse(helper.get("PROVISIONING_PROFILE"))
+                self.assertEqual(helper["OTHER_CODE_SIGN_FLAGS"],
+                                 "--identifier " + metadata.BASE_ID + ".CopilotHook")
+                for target in ("CMUXMaestroPreview", "CMUXMaestroSidebar"):
+                    self.assertEqual(targets[target]["CODE_SIGN_INJECT_BASE_ENTITLEMENTS"], "YES")
+
+    def test_resolved_helper_signing_namespace_in_non_development_modes(self):
+        for mode in ("production", "unsigned", "tests"):
+            suffix, point = metadata.PROFILES[mode]
+            for configuration in ("Debug", "Release"):
+                with self.subTest(mode=mode, configuration=configuration):
+                    result = subprocess.run([
+                        "/usr/bin/xcodebuild", "-project", str(ROOT / "CMUXMaestroPreview.xcodeproj"),
+                        "-alltargets", "-configuration", configuration, "-showBuildSettings", "-json",
+                        "CODE_SIGN_IDENTITY=-",
+                        "CODE_SIGNING_ALLOWED=" + ("YES" if mode == "production" else "NO"),
+                        "CMUX_BUNDLE_ID_SUFFIX=" + suffix,
+                        "CMUX_SIDEBAR_EXTENSION_POINT_ID=" + point,
+                        "SWIFT_ACTIVE_COMPILATION_CONDITIONS=" + ("" if mode == "production" else "CMUX_VALIDATION"),
+                    ], check=True, capture_output=True, env={
+                        **os.environ, "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer",
+                        "TMPDIR": str(self.directory),
+                    })
+                    metadata.verify_settings(json.loads(result.stdout), mode)
 
     def test_scripts_pin_validation_namespaces_and_gate_explicit_publication(self):
         for name, mode in (("build-unsigned.sh", "unsigned"), ("test.sh", "tests")):
@@ -362,7 +460,13 @@ class BuildMetadataTests(unittest.TestCase):
                 if target["name"] != "CMUXMaestroPreviewTests":
                     self.assertEqual(settings["CURRENT_PROJECT_VERSION"], metadata.APP_BUILD_VERSION)
                 if target["name"] == "CMUXMaestroCopilotHook":
-                    self.assertEqual(settings["OTHER_CODE_SIGN_FLAGS"], "--identifier $(PRODUCT_BUNDLE_IDENTIFIER)")
+                    self.assertEqual(settings["PRODUCT_BUNDLE_IDENTIFIER"], "")
+                    self.assertEqual(settings["CMUX_HELPER_SIGNING_IDENTIFIER"],
+                                     metadata.BASE_ID + "$(CMUX_BUNDLE_ID_SUFFIX).CopilotHook")
+                    self.assertEqual(settings["OTHER_CODE_SIGN_FLAGS"], "--identifier $(CMUX_HELPER_SIGNING_IDENTIFIER)")
+                    self.assertEqual(settings["CODE_SIGN_INJECT_BASE_ENTITLEMENTS"], "NO")
+                else:
+                    self.assertNotIn("CODE_SIGN_INJECT_BASE_ENTITLEMENTS", settings)
                 if target["name"] in ("CMUXMaestroPreview", "CMUXMaestroSidebar"):
                     self.assertEqual(settings["CMUX_SIDEBAR_EXTENSION_POINT_ID"], metadata.PRODUCTION_POINT)
         metadata.verify_profile(metadata.plist(ROOT / "CMUXMaestroSidebar/CMUXMaestroSidebar.entitlements"))
