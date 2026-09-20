@@ -9,6 +9,13 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify native messaging contracts
+        run: |
+          python3 scripts/test-maestro-native.py
+          node --test scripts/test-native-adapter.mjs
       - name: Verify terminal orchestration contracts
         run: python3 scripts/test-cmux-maestro-orchestrator.py
       - name: Verify build and registration metadata contracts

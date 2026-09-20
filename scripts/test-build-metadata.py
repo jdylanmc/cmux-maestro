@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import importlib.util
+import copy
+import datetime
 import json
 from pathlib import Path
 import plistlib
@@ -48,13 +50,13 @@ class BuildMetadataTests(unittest.TestCase):
         (self.app / "Contents/Info.plist").write_bytes(plistlib.dumps(self.parent))
         (self.extension / "Contents/Info.plist").write_bytes(plistlib.dumps(self.child))
 
-    def test_each_metadata_namespace_is_distinct(self):
+    def test_validation_namespaces_remain_distinct_from_publication(self):
         for mode in metadata.PROFILES:
             with self.subTest(mode=mode):
                 self.fixture(mode)
                 metadata.verify_metadata(self.app, mode)
                 for other in metadata.PROFILES:
-                    if other != mode:
+                    if metadata.PROFILES[other] != metadata.PROFILES[mode]:
                         with self.assertRaises(ValueError):
                             metadata.verify_metadata(self.app, other)
 
@@ -131,12 +133,17 @@ class BuildMetadataTests(unittest.TestCase):
                     "PRODUCT_BUNDLE_IDENTIFIER": metadata.BASE_ID + suffix + ending,
                     "CMUX_SIDEBAR_EXTENSION_POINT_ID": point,
                     "ENABLE_APP_SANDBOX": "YES" if target == "CMUXMaestroSidebar" else "NO",
-                    "CODE_SIGNING_ALLOWED": "YES" if mode == "production" else "NO",
-                    "CODE_SIGN_IDENTITY": "-",
+                    "CODE_SIGNING_ALLOWED": "YES" if mode in ("production", "development") else "NO",
+                    "CODE_SIGNING_REQUIRED": "YES",
+                    "CODE_SIGN_IDENTITY": "Apple Development: Synthetic" if mode == "development" else "-",
+                    "CODE_SIGN_STYLE": "Manual", "DEVELOPMENT_TEAM": "SYNTHETIC1",
+                    "PROVISIONING_PROFILE_SPECIFIER": "synthetic-" + target,
+                    "CODE_SIGN_ENTITLEMENTS": str(ROOT / "scripts/native-development.entitlements")
+                    if target == "CMUXMaestroPreview" else "CMUXMaestroSidebar/CMUXMaestroSidebar.entitlements",
                     "CURRENT_PROJECT_VERSION": metadata.APP_BUILD_VERSION,
                     "OTHER_CODE_SIGN_FLAGS": "--identifier " + metadata.BASE_ID + suffix + ending
                     if target == "CMUXMaestroCopilotHook" else "",
-                    "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG" if mode == "production" else "DEBUG CMUX_VALIDATION",
+                    "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG" if mode in ("production", "development") else "DEBUG CMUX_VALIDATION",
                 }})
             metadata.verify_settings(rows, mode)
             flags = rows[2]["buildSettings"].pop("OTHER_CODE_SIGN_FLAGS")
@@ -145,7 +152,7 @@ class BuildMetadataTests(unittest.TestCase):
             rows[2]["buildSettings"]["OTHER_CODE_SIGN_FLAGS"] = flags
             valid_conditions = rows[0]["buildSettings"]["SWIFT_ACTIVE_COMPILATION_CONDITIONS"]
             rows[0]["buildSettings"]["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = (
-                "DEBUG CMUX_VALIDATION" if mode == "production" else "DEBUG"
+                "DEBUG CMUX_VALIDATION" if mode in ("production", "development") else "DEBUG"
             )
             with self.assertRaises(ValueError):
                 metadata.verify_settings(rows, mode)
@@ -153,6 +160,112 @@ class BuildMetadataTests(unittest.TestCase):
             rows[1]["buildSettings"]["CMUX_SIDEBAR_EXTENSION_POINT_ID"] = "unexpected.point"
             with self.assertRaises(ValueError):
                 metadata.verify_settings(rows, mode)
+
+    def test_development_profile_metadata_is_not_a_boolean_opt_in(self):
+        team = "SYNTHETIC1"
+        now = datetime.datetime.now(datetime.timezone.utc)
+        entitlements = {
+            "com.apple.application-identifier": team + "." + metadata.BASE_ID,
+            "com.apple.developer.team-identifier": team,
+            "keychain-access-groups": [team + "." + metadata.BASE_ID],
+        }
+        profile = {
+            "TeamIdentifier": [team], "ApplicationIdentifierPrefix": [team],
+            "CreationDate": now - datetime.timedelta(days=1),
+            "ExpirationDate": now + datetime.timedelta(days=1),
+            "ProvisionedDevices": ["synthetic-device"], "DeveloperCertificates": [b"synthetic"],
+            "Entitlements": {**entitlements, "get-task-allow": True},
+        }
+        def verify(e=entitlements, p=profile):
+            metadata.verify_development_profile(e, p, team, metadata.BASE_ID, keychain=True, now=now)
+        verify()
+        for e, p in (({}, profile), (entitlements, {}), ({**entitlements, "keychain-access-groups": []}, profile),
+                     ({**entitlements, "com.apple.security.network.client": True}, profile)):
+            with self.assertRaises(ValueError):
+                verify(e, p)
+        for key, value in (("TeamIdentifier", ["OTHERTEAM1"]), ("ExpirationDate", now),
+                           ("ProvisionedDevices", []), ("DeveloperCertificates", [])):
+            with self.assertRaises(ValueError):
+                verify(p={**profile, key: value})
+        wrong = copy.deepcopy(profile)
+        wrong["Entitlements"]["com.apple.application-identifier"] += ".Extension"
+        with self.assertRaises(ValueError):
+            verify(p=wrong)
+
+    def test_development_is_optional_and_never_auto_provisions_or_registers(self):
+        script = (ROOT / "scripts/build-development.sh").read_text()
+        self.assertNotIn("-allowProvisioningUpdates", script)
+        self.assertNotIn("pluginkit -a", script)
+        self.assertNotIn("security find", script)
+        self.assertIn("--mode development", script)
+        self.assertLess(script.index('--source-entitlements'), script.index('"${SETTINGS[@]}" build'))
+        self.assertIn("CODE_SIGN_IDENTITY=-", (ROOT / "scripts/build-register.sh").read_text())
+        entitlements = plistlib.loads((ROOT / "scripts/native-development.entitlements").read_bytes())
+        self.assertEqual(set(entitlements), {"com.apple.application-identifier",
+                         "com.apple.developer.team-identifier", "keychain-access-groups"})
+        self.assertEqual(entitlements["keychain-access-groups"],
+                         ["$(AppIdentifierPrefix)com.jdylanmc.CMUXMaestroPreview"])
+
+    def test_keychain_selection_and_verifier_are_noninteractive(self):
+        source = (ROOT / "CMUXMaestroPreview/Integration/NativeChildAuthorization.swift").read_text()
+        self.assertEqual(source.count("kSecUseDataProtectionKeychain as String: true"), 2)
+        self.assertIn("authentication.interactionNotAllowed = !create", source)
+        self.assertIn("guard create, status == errSecItemNotFound", source)
+        verify = source.split("static func verify", 1)[1].split("static func dismiss", 1)[0]
+        self.assertIn("key(create: false)", verify)
+        self.assertIn("SecKeyCopyPublicKey", verify)
+        self.assertNotIn("SecKeyCreateSignature", verify)
+        self.assertIn("[.privateKeyUsage, .userPresence]", source)
+
+    def test_development_packaging_rejects_bad_signatures_teams_and_profiles(self):
+        self.fixture("development")
+        helper = self.app / "Contents/Helpers/CMUXMaestroCopilotHook"
+        helper.parent.mkdir()
+        helper.write_bytes(b"synthetic")
+        helper.chmod(0o700)
+        team = "SYNTHETIC1"
+        now = datetime.datetime.now(datetime.timezone.utc)
+        fault = None
+
+        def signed(command, **_):
+            target = Path(command[-1])
+            extension = str(self.extension) in str(target)
+            identifier = metadata.BASE_ID + (".Extension" if extension else "")
+            e = {"com.apple.application-identifier": team + "." + identifier,
+                 "com.apple.developer.team-identifier": team}
+            e.update({metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS}
+                     if extension else {"keychain-access-groups": [team + "." + metadata.BASE_ID]})
+            if "--verify" in command:
+                self.assertIn("anchor apple generic", command[command.index("-R") + 1])
+                if fault == "unsigned":
+                    raise subprocess.CalledProcessError(1, command)
+                return subprocess.CompletedProcess(command, 0, stdout=b"")
+            if "--verbose=4" in command:
+                actual_team = "OTHERTEAM1" if fault == "team" and extension else team
+                details = "TeamIdentifier=" + actual_team + "\n"
+                if fault == "adhoc":
+                    details += "Signature=adhoc\n"
+                return subprocess.CompletedProcess(command, 0, stderr=details.encode())
+            if "--entitlements" in command:
+                return subprocess.CompletedProcess(command, 0, stdout=plistlib.dumps(
+                    {} if target == helper or fault == "unentitled" else e))
+            self.assertEqual(command[:3], ["/usr/bin/security", "cms", "-D"])
+            if fault == "unprovisioned":
+                raise subprocess.CalledProcessError(1, command)
+            profile = {
+                "TeamIdentifier": [team], "ApplicationIdentifierPrefix": [team],
+                "CreationDate": now - datetime.timedelta(days=1), "ExpirationDate": now + datetime.timedelta(days=1),
+                "ProvisionedDevices": ["synthetic-device"], "DeveloperCertificates": [b"synthetic"],
+                "Entitlements": {**e, "get-task-allow": True},
+            }
+            if fault == "wrong-profile":
+                profile["Entitlements"]["com.apple.application-identifier"] = team + ".unrelated"
+            return subprocess.CompletedProcess(command, 0, stdout=plistlib.dumps(profile))
+
+        metadata.verify_development(self.app, runner=signed)
+        for fault in ("unsigned", "adhoc", "team", "unentitled", "unprovisioned", "wrong-profile"):
+            with self.subTest(fault=fault), self.assertRaises((ValueError, subprocess.CalledProcessError)):
+                metadata.verify_development(self.app, runner=signed)
 
     def test_scripts_pin_validation_namespaces_and_gate_explicit_publication(self):
         for name, mode in (("build-unsigned.sh", "unsigned"), ("test.sh", "tests")):

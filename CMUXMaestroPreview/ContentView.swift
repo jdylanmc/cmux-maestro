@@ -68,8 +68,12 @@ struct ContentView: View {
             Divider()
             HStack {
                 Button("Enable Native Messaging…") { nativeSetup = true }
+                    .disabled(!NativeSigningReadiness.current)
                 Button("Disable Native Messaging…") { nativeSetup = false }
             }.disabled(busy)
+            if !NativeSigningReadiness.current {
+                Text(NativeSigningReadiness.unsupported).font(.caption).foregroundStyle(.secondary)
+            }
             Text("Optional: installs an inert user extension for newly authorized Maestro workers only. Does not restart, adopt, or configure existing sessions. No permission callbacks or alternate Copilot home.")
                 .font(.caption).foregroundStyle(.secondary)
             if let nativeNotice { Text(nativeNotice).font(.caption) }

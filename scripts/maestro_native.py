@@ -38,7 +38,24 @@ class NativeMessaging:
         return {"nodeId": node["id"], "sessionId": node.get("copilotSessionId"),
                 "generation": node["generation"], "runId": node["runId"]}
 
+    def require_signing_readiness(self, root):
+        def read(store):
+            return store._read_regular("native-setup.json", 4096, private=True, directory=store.root_fd)
+        raw = self.api["with_store"](root, read, read_only=True)
+        try:
+            setup = json.loads(raw) if raw is not None else {}
+            if set(setup) != {"verifier", "version"} or setup["version"] != VERSION:
+                self.fail("Native messaging unsupported: enable setup in a signed, provisioned Maestro app first.")
+            verifier = self.api["trusted_executable"](None, setup["verifier"])
+            checked = subprocess.run([verifier, "--maestro-native-readiness"],
+                                     capture_output=True, timeout=10)
+            if checked.returncode != 0 or checked.stdout.strip() != b'{"supported":true}':
+                self.fail("Native messaging unsupported: app signing/provisioning or Secure Enclave readiness failed.")
+        except (ValueError, TypeError, KeyError, OSError, subprocess.TimeoutExpired) as error:
+            raise self.error("Native messaging unsupported: trusted app readiness is unavailable.") from error
+
     def launch_request(self, args, root, actor, settings, policy, cwd):
+        self.require_signing_readiness(root)
         if os.environ.get("COPILOT_HOME") is not None or os.environ.get("XDG_CONFIG_HOME") is not None:
             self.fail("Native messaging supports only the standard Copilot configuration home.")
         if not settings.get("copilotAccount") or not settings.get("model"):
@@ -76,6 +93,7 @@ class NativeMessaging:
                 "instruction": "Review this exact request in Maestro Agent launch settings."}
 
     def authorized_launch(self, args, root, actor, settings, policy, cwd):
+        self.require_signing_readiness(root)
         if os.environ.get("COPILOT_HOME") is not None or os.environ.get("XDG_CONFIG_HOME") is not None:
             self.fail("Native messaging supports only the standard Copilot configuration home.")
         identifier = self.api["canonical_uuid"](args.native_request, "native request ID")

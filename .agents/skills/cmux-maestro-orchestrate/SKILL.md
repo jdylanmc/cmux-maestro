@@ -144,12 +144,16 @@ around this boundary; a human may be using the same input.
 
 Do not install or enable this automatically. A human must enable **Native
 Messaging** in the installed Maestro app after the base integration is enabled.
+Ad-hoc builds are unsupported for this mode. A properly signed/provisioned app
+must pass OS-backed readiness qualification; paid membership or a bundle ID is
+not sufficient. Never provision, rebuild, install or change signing automatically.
 Only the standard Copilot home is supported; never clear account/model
 environment or substitute a separate `COPILOT_HOME`.
 
 Use `prepare-native` with the same `--actor-id`, `--token`, `--name`, `--task`,
 `--cwd`, `--allow-tool` and `--deny-tool` arguments intended for `spawn`.
-Preparation requires both pinned launch settings and creates no worker. Show the
+Preparation requires enabled setup, successful app readiness and both pinned
+launch settings, and creates no worker. Show the
 returned request ID to the human. They must review the exact target/policy in
 **Agent launch settings → Native messaging child authorization** and authorize
 once using the native macOS user-presence prompt. Full parent-policy export is

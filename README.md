@@ -145,7 +145,11 @@ anchors retain the existing resource bounds.
 The legacy `follow-up` command remains refused for interactive workers.
 An optional, separately human-authorized [native messaging v1](docs/native-messaging-v1.md)
 slice adds bounded SDK enqueue delivery and explicit acknowledgement/reply tools
-for new opted-in workers. It does not complete #38. Enable its loader explicitly
+for new opted-in workers. It requires a properly signed/provisioned app;
+ordinary ad-hoc builds explicitly do not support it. The optional
+[`build-development.sh` path](docs/native-messaging-v1.md#optional-locally-provisioned-development-build)
+uses locally supplied Apple Development signing and profiles, without automatic
+provisioning or installation. It does not complete #38. Enable its loader explicitly
 through Maestro; each launch additionally requires a displayed, one-time,
 OS-user-presence-signed child policy. Full parent-policy export, arbitrary peers,
 transcript sharing, allow-all and automatic session adoption remain unsupported.

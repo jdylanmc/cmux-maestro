@@ -14,6 +14,75 @@ project configuration and native managed policy. Alternate `COPILOT_HOME` and
 `XDG_CONFIG_HOME` are unsupported. No project `.github` directory is changed.
 Validation builds cannot install, approve or verify production authorizations.
 
+**Ad-hoc builds cannot use native messaging.** The ordinary `build-register.sh`
+and `local-preview.py` ad-hoc workflow remains supported for other features.
+Its bundle ID alone does not qualify it for persistent Secure Enclave keys.
+Enable, request preparation, signing and native spawn fail closed unless the
+app passes runtime signing/provisioning qualification. Disabling remains possible.
+Preparation requires enabled setup, not merely pinned launch settings.
+
+### Optional, locally provisioned development build
+
+This is an explicit production-namespace build, **not an offline validation
+command**. First, the human developer must use their Apple Developer account to
+set up an **Apple Development** identity and matching installed macOS development
+profiles for these two explicit identifiers:
+
+- `com.jdylanmc.CMUXMaestroPreview`
+- `com.jdylanmc.CMUXMaestroPreview.Extension`
+
+Both profiles must authorize the same signing certificate and Team ID, include
+this Mac, and be current. The app profile must authorize its one private
+`<AppIdentifierPrefix>.com.jdylanmc.CMUXMaestroPreview` keychain access group.
+The extension retains its existing sandbox/read-only grants and receives no
+keychain group. The helper is signed by the same identity without new grants.
+There is no special `com.apple.developer.secure-enclave` entitlement.
+
+After explicit local build consent, supply these **local environment variables**:
+`CMUX_DEVELOPMENT_TEAM`, `CMUX_DEVELOPMENT_IDENTITY` (full `Apple Development: …`
+identity), `CMUX_NATIVE_APP_PROFILE` and `CMUX_NATIVE_EXTENSION_PROFILE` (installed
+profile names or UUIDs). Then run `./scripts/build-development.sh`. No personal
+team, identity or profile values belong in repository defaults. The script uses
+manual signing, checks resolved namespaces before building, and checks signed
+components, effective entitlements and embedded profile metadata afterward.
+It never creates/imports certificates, downloads profiles or uses
+`-allowProvisioningUpdates`. Output is in `.build/development`.
+
+It neither copies an app into Applications nor explicitly invokes `pluginkit`,
+but **Xcode may register the source app with LaunchServices during build**.
+Installation/registration and enabling the global loader require separate human
+consent. The existing receipt-based `local-preview.py` installer intentionally
+accepts only ad-hoc builds; do not send this development build through it or
+weaken that policy. A signed local installation procedure is still a separate
+manual step. This is not a distribution/notarization workflow. Developer ID
+Application is not categorically incapable of keychain use; this optional
+script specifically targets Apple Development provisioning.
+
+Runtime qualification uses macOS code-signature validation and an Apple-issued
+signing requirement, the exact app/extension identities and common team,
+authenticated embedded profile contents, profile dates and signing-certificate
+membership, and matching effective identity/keychain entitlements. No
+user-configurable “ready” flag can replace these checks. It also checks Secure
+Enclave availability and whether macOS user authentication can be evaluated,
+without creating a key or presenting an authentication prompt. The
+`--maestro-native-readiness` entry point only returns supported/unsupported;
+it is not an approval command. Packaging checks alone are **not** live readiness.
+
+Key creation **and existing-key lookup** explicitly select the data-protection
+keychain (`kSecUseDataProtectionKeychain`), not macOS's default file keychain.
+Verification-only processes prohibit authentication interaction, look up the
+existing private-key reference without creation, and verify with its public key;
+they never sign. Actual key lookup/signing can still fail when locked or denied:
+there is no software-key fallback, automatic prompt approval or retry that
+weakens user presence.
+
+Apple references: [macOS keychains (TN3137)](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains)
+and [certificate types](https://developer.apple.com/help/account/certificates/certificates-overview).
+The supplementary profile-metadata checks are deliberately narrow and may need
+updating as Apple changes profile formats; the operating system, not a parsed
+property list, remains the authority for restricted entitlements
+([TN3125](https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles)).
+
 Setup does not restart or adopt sessions. The global loader exits before SDK
 join/tool registration unless the provider-supplied `SESSION_ID` equals the
 explicit launch binding. A private, generation-scoped bridge capability is
@@ -146,6 +215,8 @@ Offline commands:
 ```sh
 python3 scripts/test-maestro-native.py
 node --test scripts/test-native-adapter.mjs
+python3 scripts/test-build-metadata.py
+./scripts/test.sh -only-testing:CMUXMaestroPreviewTests/NativeMessagingTests
 ./scripts/test-copilot-setup.sh
 python3 scripts/test-cmux-maestro-orchestrator.py
 ```
@@ -153,9 +224,19 @@ python3 scripts/test-cmux-maestro-orchestrator.py
 Live validation requires separate human approval of installation/setup and a new
 request. The implementation task does **not** authorize installation or paid
 inference. After that approval, the operator should verify pinned account/model,
-OS-mediated policy signing, one freshly launched worker, bounded send,
+runtime qualification, first-key creation and OS-mediated policy signing, then
+existing-key reuse and noninteractive verification in a separate process,
+one freshly launched worker, bounded send,
 idempotent retry, explicit acknowledgement/reply, human-typed input, expired
 message refusal and disconnect uncertainty. Capture only explicit message IDs,
 receipts and intentionally supplied test bodies, not general session transcripts.
 Keep provider acceptance and task-result evidence separate. Do not call #38
 complete based on offline tests or SDK acceptance alone.
+
+The remediation has only offline synthetic profile/signature tests and unsigned
+validation builds. A paid membership alone is insufficient: the required local
+Apple Development identity and two installed profiles must exist before a
+signed proof. No signed build, installation, keychain mutation or live inference
+is claimed by these tests. CI runs the Python native-controller and dependency-free
+Node adapter tests alongside the existing checks; Swift qualification tests use
+synthetic metadata and cannot authorize production operations.

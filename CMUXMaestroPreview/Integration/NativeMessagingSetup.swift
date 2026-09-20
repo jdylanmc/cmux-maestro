@@ -8,6 +8,7 @@ nonisolated enum NativeMessagingSetup {
         guard CopilotSetupAccess.currentAppAllowsChanges,
               let executable = Bundle.main.executableURL,
               let resources = Bundle.main.resourceURL else { throw Failure.unavailable }
+        guard !enabled || NativeSigningReadiness.current else { throw Failure.unavailable }
         // This supported loader location preserves Copilot's configured home and session identities.
         // No repository-local .github directory or alternative COPILOT_HOME is created.
         guard ProcessInfo.processInfo.environment["COPILOT_HOME"] == nil,

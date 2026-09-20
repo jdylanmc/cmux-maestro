@@ -58,12 +58,15 @@ nonisolated enum NativeChildAuthorization {
     }
 
     private static func key(create: Bool) throws -> SecKey {
+        guard NativeSigningReadiness.current else { throw Failure.unavailable }
         let authentication = LAContext()
         authentication.interactionNotAllowed = !create
         let query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrApplicationTag as String: keyTag,
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
+            kSecUseDataProtectionKeychain as String: true,
             kSecReturnRef as String: true,
             kSecUseAuthenticationContext as String: authentication,
         ]
@@ -84,6 +87,7 @@ nonisolated enum NativeChildAuthorization {
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
             kSecAttrKeySizeInBits as String: 256,
             kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
+            kSecUseDataProtectionKeychain as String: true,
             kSecPrivateKeyAttrs as String: [
                 kSecAttrIsPermanent as String: true,
                 kSecAttrApplicationTag as String: keyTag,
@@ -94,7 +98,7 @@ nonisolated enum NativeChildAuthorization {
     }
 
     static func approve(_ displayed: Request, root: URL) throws {
-        guard CopilotSetupAccess.currentAppAllowsChanges else { throw Failure.unavailable }
+        guard NativeSigningReadiness.current else { throw Failure.unavailable }
         let request = try validate(displayed.data, id: displayed.id)
         let directory = try HookFiles.privateDirectory(root.appendingPathComponent("control"))
         defer { close(directory) }
@@ -118,7 +122,7 @@ nonisolated enum NativeChildAuthorization {
     }
 
     static func verify(_ receipt: Data) -> Bool {
-        guard CopilotSetupAccess.currentAppAllowsChanges, receipt.count <= 70_000,
+        guard NativeSigningReadiness.current, receipt.count <= 70_000,
               let value = try? JSONSerialization.jsonObject(with: receipt) as? [String: String],
               Set(value.keys) == ["request", "signature"],
               let data = Data(base64Encoded: value["request"] ?? ""),
@@ -172,7 +176,7 @@ struct NativeChildAuthorizationView: View {
                 HStack {
                     Button("Authorize once…") {
                         perform { try NativeChildAuthorization.approve(request, root: $0) }
-                    }
+                    }.disabled(!NativeSigningReadiness.current)
                     Button("Dismiss request", role: .destructive) {
                         perform { try NativeChildAuthorization.dismiss(request, root: $0) }
                     }
@@ -194,6 +198,11 @@ struct NativeChildAuthorizationView: View {
     }
 
     private func refresh() {
+        guard NativeSigningReadiness.current else {
+            requests = []
+            notice = NativeSigningReadiness.unsupported
+            return
+        }
         do {
             requests = try NativeChildAuthorization.requests(root: CopilotPaths.orchestrationRoot())
             notice = requests.isEmpty ? "No pending requests." : nil

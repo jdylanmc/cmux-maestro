@@ -35,9 +35,72 @@ import Testing
     }
 
     @Test func validationCopyCannotApproveOrVerify() throws {
+        #expect(!NativeSigningReadiness.current)
         #expect(!NativeChildAuthorization.verify(Data(#"{"request":"","signature":""}"#.utf8)))
         #expect(throws: (any Error).self) {
             try NativeMessagingSetup.setEnabled(true)
         }
+    }
+
+    @Test func signingQualificationRequiresAuthenticatedMatchingMetadata() {
+        let team = "SYNTHETIC1"
+        let id = NativeSigningReadiness.appID
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let certificate = Data("synthetic certificate, not credentials".utf8)
+        let entitlements: [String: Any] = [
+            "com.apple.application-identifier": "\(team).\(id)",
+            "com.apple.developer.team-identifier": team,
+            "keychain-access-groups": ["\(team).\(id)"],
+        ]
+        let profile: [String: Any] = [
+            "TeamIdentifier": [team], "ApplicationIdentifierPrefix": [team],
+            "CreationDate": now.addingTimeInterval(-60), "ExpirationDate": now.addingTimeInterval(60),
+            "DeveloperCertificates": [certificate], "Entitlements": entitlements,
+        ]
+        func qualifies(signed: Bool = true, adHoc: Bool = false, signedID: String? = nil,
+                       signedTeam: String = team, e: [String: Any]? = nil, p: [String: Any]? = nil,
+                       cert: Data = certificate) -> Bool {
+            NativeSigningReadiness.eligible(.init(
+                identifier: signedID ?? id, team: signedTeam, signed: signed, adHoc: adHoc,
+                entitlements: e ?? entitlements, profile: p ?? profile, certificate: cert
+            ), identifier: id, keychain: true, at: now)
+        }
+        #expect(qualifies())
+        #expect(!qualifies(signed: false))
+        #expect(!qualifies(adHoc: true))
+        #expect(!qualifies(e: [:]))
+        #expect(!qualifies(p: [:]))
+        #expect(!qualifies(signedID: id + ".Validation.Tests"))
+        #expect(!qualifies(signedTeam: "OTHERTEAM1"))
+        #expect(!qualifies(cert: Data("wrong certificate".utf8)))
+        var changed = profile
+        changed["ExpirationDate"] = now
+        #expect(!qualifies(p: changed))
+        changed = profile
+        changed["TeamIdentifier"] = ["OTHERTEAM1"]
+        #expect(!qualifies(p: changed))
+        changed = profile
+        changed["Entitlements"] = [
+            "com.apple.application-identifier": "\(team).\(id).Extension",
+            "com.apple.developer.team-identifier": team,
+            "keychain-access-groups": ["\(team).*"],
+        ]
+        #expect(!qualifies(p: changed))
+        var wrongGroup = entitlements
+        wrongGroup["keychain-access-groups"] = ["\(team).*"]
+        #expect(!qualifies(e: wrongGroup))
+        wrongGroup["keychain-access-groups"] = ["\(team).unrelated"]
+        #expect(!qualifies(e: wrongGroup))
+
+        var sidebar = entitlements
+        sidebar["com.apple.application-identifier"] = "\(team).\(id).Extension"
+        sidebar.removeValue(forKey: "keychain-access-groups")
+        sidebar["com.apple.security.app-sandbox"] = true
+        changed = profile
+        changed["Entitlements"] = sidebar
+        #expect(NativeSigningReadiness.eligible(.init(
+            identifier: id + ".Extension", team: team, signed: true, adHoc: false,
+            entitlements: sidebar, profile: changed, certificate: certificate
+        ), identifier: id + ".Extension", keychain: false, at: now))
     }
 }

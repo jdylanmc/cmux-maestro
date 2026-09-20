@@ -3,6 +3,11 @@ import SwiftUI
 @main
 struct CMUXMaestroPreviewApp: App {
     init() {
+        if CommandLine.arguments.dropFirst() == ["--maestro-native-readiness"] {
+            let supported = NativeSigningReadiness.current
+            print(supported ? #"{"supported":true}"# : #"{"supported":false}"#)
+            exit(supported ? 0 : 2)
+        }
         if CommandLine.arguments.dropFirst() == ["--maestro-verify-native-authorization"] {
             let input = FileHandle.standardInput.readData(ofLength: 70_001)
             let valid = NativeChildAuthorization.verify(input)

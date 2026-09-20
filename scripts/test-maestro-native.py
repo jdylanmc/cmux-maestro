@@ -256,7 +256,10 @@ class NativeTests(unittest.TestCase):
         store = SimpleNamespace(root_fd=0, _read_regular=lambda name, *_args, **_kwargs: files.get(name))
         self.api["with_store"] = lambda _root, operation, **_kwargs: operation(store)
         self.api["trusted_executable"] = lambda variable, fallback: fallback if variable is None else self.fail("override")
-        with patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=b'{"valid":true}')) as run:
+        def verify(command, **kwargs):
+            return SimpleNamespace(returncode=0, stdout=b'{"supported":true}' if
+                                   command[-1] == "--maestro-native-readiness" else b'{"valid":true}')
+        with patch.object(subprocess, "run", side_effect=verify) as run:
             accepted = self.native.authorized_launch(args, ROOT, self.actor, settings, request["toolPolicy"], ROOT)
             self.assertEqual(accepted["workerId"], request["workerId"])
             self.assertEqual(run.call_args.kwargs["input"], receipt)
@@ -265,9 +268,32 @@ class NativeTests(unittest.TestCase):
             with self.assertRaises(API["OrchestrationError"]):
                 self.native.authorized_launch(args, ROOT, self.actor, settings, request["toolPolicy"], ROOT)
         args.task = request["task"]
-        with patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=2, stdout=b'{"valid":false}')):
+        def reject(command, **kwargs):
+            return verify(command) if command[-1] == "--maestro-native-readiness" else SimpleNamespace(
+                returncode=2, stdout=b'{"valid":false}')
+        with patch.object(subprocess, "run", side_effect=reject):
             with self.assertRaisesRegex(API["OrchestrationError"], "signature"):
                 self.native.authorized_launch(args, ROOT, self.actor, settings, request["toolPolicy"], ROOT)
+
+    def test_unqualified_app_blocks_preparation_and_launch_without_writes(self):
+        store = SimpleNamespace(root_fd=0, _read_regular=lambda *_args, **_kwargs:
+                                b'{"version":1,"verifier":"/offline/verifier"}')
+        self.api["with_store"] = lambda _root, operation, **_kwargs: operation(store)
+        self.api["trusted_executable"] = lambda _variable, fallback: fallback
+        for response in (b'{"supported":false}', b'{"supported":true,"override":true}', b''):
+            with patch.object(subprocess, "run", return_value=SimpleNamespace(
+                returncode=0, stdout=response
+            )) as run:
+                for operation in (self.native.launch_request, self.native.authorized_launch):
+                    with self.assertRaisesRegex(API["OrchestrationError"], "unsupported"):
+                        operation(None, ROOT, self.actor, {}, {}, ROOT)
+                self.assertEqual(run.call_args.args[0], ["/offline/verifier", "--maestro-native-readiness"])
+                self.assertNotIn("input", run.call_args.kwargs)
+        store._read_regular = lambda *_args, **_kwargs: None
+        with patch.object(subprocess, "run") as run:
+            with self.assertRaisesRegex(API["OrchestrationError"], "unsupported"):
+                self.native.launch_request(None, ROOT, self.actor, {}, {}, ROOT)
+            run.assert_not_called()
 
     def test_provider_parent_check_is_additional_not_inferred_identity(self):
         check = API["native_bridge_caller_matches"]

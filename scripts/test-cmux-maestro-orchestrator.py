@@ -643,6 +643,18 @@ class OrchestratorTests(unittest.TestCase):
             "--cwd", str(REPO), "--name", "Native worker", "--task", "Exact bounded objective",
             "--deny-tool", "web",
         )
+        unsupported = self.h.run("prepare-native", *arguments, check=False)
+        self.assertNotEqual(unsupported["returncode"], 0)
+        self.assertIn("unsupported", unsupported["stderr"])
+        self.assertFalse(list((self.h.root / "control").glob("native-request-*.json")))
+        # An offline readiness double, never the production app or keychain.
+        verifier = self.h.path / "native-readiness"
+        verifier.write_text("#!/bin/sh\n[ \"$1\" = '--maestro-native-readiness' ] || exit 2\n"
+                            "printf '%s\\n' '{\"supported\":true}'\n")
+        verifier.chmod(0o700)
+        setup = self.h.root / "native-setup.json"
+        setup.write_text(json.dumps({"version": 1, "verifier": str(verifier)}))
+        setup.chmod(0o600)
         prepared = self.h.run("prepare-native", *arguments)
         self.assertEqual(prepared["status"], "human-authorization-required")
         request = self.h.root / "control" / ("native-request-" + prepared["requestId"] + ".json")

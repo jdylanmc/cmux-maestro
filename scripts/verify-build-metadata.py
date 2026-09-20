@@ -2,6 +2,7 @@
 """Check validation namespaces and the explicit native publication boundary."""
 
 import argparse
+import datetime
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ APP_BUILD_VERSION = "2"
 PRODUCTION_POINT = "com.cmuxterm.app.cmux.sidebar"
 PROFILES = {
     "production": ("", PRODUCTION_POINT),
+    "development": ("", PRODUCTION_POINT),
     "unsigned": (".Validation.Unsigned", BASE_ID + ".validation.unsigned.sidebar"),
     "tests": (".Validation.Tests", BASE_ID + ".validation.tests.sidebar"),
 }
@@ -68,7 +70,7 @@ def verify_settings(rows, mode):
             conditions = settings.get("SWIFT_ACTIVE_COMPILATION_CONDITIONS", "")
             require(isinstance(conditions, (str, list)), "Invalid compilation conditions.")
             conditions = conditions.split() if isinstance(conditions, str) else conditions
-            require(("CMUX_VALIDATION" in conditions) == (mode != "production"),
+            require(("CMUX_VALIDATION" in conditions) == (mode not in ("production", "development")),
                     "Validation must use the no-window app scene; production must retain its setup scene.")
         expected_sandbox = "YES" if name == "CMUXMaestroSidebar" else "NO"
         if name != "CMUXMaestroPreviewTests":
@@ -76,7 +78,33 @@ def verify_settings(rows, mode):
                     "Resolved App Sandbox setting changed.")
             require(settings.get("CURRENT_PROJECT_VERSION") == APP_BUILD_VERSION,
                     "Resolved native feature build version is stale.")
-        if mode == "production":
+        if mode == "development":
+            require(settings.get("CODE_SIGN_IDENTITY", "").startswith("Apple Development:"),
+                    "Development requires an explicitly selected local Apple Development identity.")
+            require(re.fullmatch(r"[A-Z0-9]{10}", settings.get("DEVELOPMENT_TEAM", "")),
+                    "Development requires an explicit local team.")
+            require(settings.get("CODE_SIGN_STYLE") == "Manual"
+                    and settings.get("CODE_SIGNING_ALLOWED") == "YES"
+                    and settings.get("CODE_SIGNING_REQUIRED") == "YES",
+                    "Development signing must be explicit and manual.")
+            require(settings["DEVELOPMENT_TEAM"] == targets["CMUXMaestroPreview"].get("DEVELOPMENT_TEAM"),
+                    "Development components must use the same team.")
+            if name in ("CMUXMaestroPreview", "CMUXMaestroSidebar"):
+                require(bool(settings.get("PROVISIONING_PROFILE_SPECIFIER")),
+                        "Development app and sidebar need separate installed profiles.")
+            if name == "CMUXMaestroPreview":
+                require(Path(settings.get("CODE_SIGN_ENTITLEMENTS", "")).resolve()
+                        == Path(__file__).with_name("native-development.entitlements").resolve(),
+                        "Development requires the minimal approved app keychain entitlements.")
+                require(plist(Path(__file__).with_name("native-development.entitlements")) == {
+                    "com.apple.application-identifier": "$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)",
+                    "com.apple.developer.team-identifier": "$(DEVELOPMENT_TEAM)",
+                    "keychain-access-groups": ["$(AppIdentifierPrefix)" + BASE_ID],
+                }, "Development source entitlements exceed the minimal app identity/keychain grants.")
+            elif name == "CMUXMaestroSidebar":
+                require(settings.get("CODE_SIGN_ENTITLEMENTS") == "CMUXMaestroSidebar/CMUXMaestroSidebar.entitlements",
+                        "Development must preserve sidebar entitlements.")
+        elif mode == "production":
             require(settings.get("CODE_SIGN_IDENTITY") == "-", "Publication requires the explicit ad-hoc identity.")
             require(settings.get("CODE_SIGNING_ALLOWED") == "YES", "Publication signing is disabled.")
         else:
@@ -204,6 +232,69 @@ def verify_signed(app):
             "The installer unexpectedly has App Sandbox enabled.")
 
 
+def verify_development_profile(entitlements, profile, team, identifier, *, keychain, now=None):
+    """Packaging check, not runtime/keychain readiness or a substitute for OS validation."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    require(profile.get("TeamIdentifier") == [team], "Profile team mismatch.")
+    prefixes = profile.get("ApplicationIdentifierPrefix")
+    require(isinstance(prefixes, list) and len(prefixes) == 1
+            and re.fullmatch(r"[A-Z0-9]{10}", prefixes[0]), "Invalid profile app prefix.")
+    app_identifier = prefixes[0] + "." + identifier
+    grants = profile.get("Entitlements", {})
+    for value in (entitlements, grants):
+        require(value.get("com.apple.application-identifier") == app_identifier
+                and value.get("com.apple.developer.team-identifier") == team,
+                "App/profile identity mismatch.")
+    for field in ("CreationDate", "ExpirationDate"):
+        require(isinstance(profile.get(field), datetime.datetime), "Missing profile validity dates.")
+    require(profile["CreationDate"].replace(tzinfo=datetime.timezone.utc) <= now
+            < profile["ExpirationDate"].replace(tzinfo=datetime.timezone.utc), "Profile is not current.")
+    require(bool(profile.get("ProvisionedDevices")) and bool(profile.get("DeveloperCertificates")),
+            "Missing development devices or signing certificates.")
+    identity_keys = {"com.apple.application-identifier", "com.apple.developer.team-identifier",
+                     "com.apple.security.get-task-allow"}
+    if keychain:
+        group = prefixes[0] + "." + BASE_ID
+        require(entitlements.get("keychain-access-groups") == [group]
+                and any(item in grants.get("keychain-access-groups", [])
+                        for item in (group, prefixes[0] + ".*")), "Missing authorized private keychain group.")
+        require(set(entitlements) <= identity_keys | {"keychain-access-groups"},
+                "Unexpected app entitlement.")
+    else:
+        verify_profile({k: v for k, v in entitlements.items() if k not in identity_keys})
+
+
+def verify_development(app, runner=subprocess.run):
+    extension, _ = verify_metadata(app, "development")
+    team = None
+    helper = Path(app) / "Contents/Helpers/CMUXMaestroCopilotHook"
+    require(helper.is_file() and os.access(helper, os.X_OK), "Missing executable identity helper.")
+    for target, identifier in ((Path(app), BASE_ID), (extension, BASE_ID + ".Extension"),
+                               (helper, BASE_ID + ".CopilotHook")):
+        runner(["/usr/bin/codesign", "--verify", "--strict", "--deep", "-R",
+                f'anchor apple generic and identifier "{identifier}"', str(target)],
+               check=True, capture_output=True)
+        result = runner(["/usr/bin/codesign", "-d", "--verbose=4", str(target)],
+                        check=True, capture_output=True)
+        details = result.stderr.decode("utf-8", errors="strict")
+        teams = re.findall(r"^TeamIdentifier=([A-Z0-9]{10})$", details, re.MULTILINE)
+        require(len(teams) == 1 and "Signature=adhoc" not in details, "Invalid development signature.")
+        team = team or teams[0]
+        require(teams == [team], "Components use different signing teams.")
+        result = runner(["/usr/bin/codesign", "-d", "--entitlements", ":-", str(target)],
+                        check=True, capture_output=True)
+        entitlements = plistlib.loads(result.stdout) if result.stdout.strip() else {}
+        if target == helper:
+            require(set(entitlements) <= {"com.apple.security.get-task-allow"},
+                    "Helper must not gain keychain or application privileges.")
+            continue
+        result = runner(["/usr/bin/security", "cms", "-D", "-i",
+                         str(target / "Contents/embedded.provisionprofile")],
+                        check=True, capture_output=True)
+        verify_development_profile(entitlements, plistlib.loads(result.stdout), team, identifier,
+                                   keychain=target == Path(app))
+
+
 def registration_records(output, *, allow_empty=False):
     """Parse only the supported pluginkit listing; diagnostics are not success."""
     if allow_empty and output.strip() in ("(no matches)", "(0 plug-ins)"):
@@ -272,6 +363,8 @@ def main():
             verify_settings(json.loads(args.settings.read_text()), args.mode)
         elif args.mode == "production":
             verify_signed(args.app)
+        elif args.mode == "development":
+            verify_development(args.app)
         else:
             verify_metadata(args.app, args.mode)
         if args.source_entitlements:
