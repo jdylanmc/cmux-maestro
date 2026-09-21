@@ -1,5 +1,12 @@
 # Native delivery proof (#54, child of #38)
 
+**Product scope update:** the user confirmed conversion of this proof into the
+installed feature, in one final pull request with its findings. The prototype-only
+restriction is superseded for the installed adapter, existing controller/setup/
+resources, tests, `/maestro` skill and associated documentation. The historical
+proof below remains reproducible; old `deliveryProof` records and `a`/`b` routes
+remain compatible. No live proof sessions are adopted, restarted or modified.
+
 **Status: native A → B → A delivery observed after human permission approvals;
 unsent draft preservation and editability explicitly confirmed by the human.
 Fresh explicit YOLO-launch exchange also demonstrated without approval clicks.
@@ -192,6 +199,14 @@ take precedence, including over `--allow-all-tools`. Existing `--deny-tool`
 arguments remain unchanged. Recheck provider semantics before using another
 version; do not drop denies if they cannot be preserved.
 
+**Review correction R1:** the original source opt-in checked descendant explicit
+allow lists but did not account for the later `--allow-all` flag. A worker actor
+with only `read` could request proof YOLO and bypass its grant bound. Both the
+preserved `--delivery-proof-yolo` and installed `--yolo` now require a coordinator
+actor before credential resolution or reservation. Negative worker-actor tests
+cover both forms; denies and the coordinator's explicit opt-in remain intact.
+This is deliberately not full parent-permission inheritance.
+
 Both calls use the existing pinned interactive launcher, native terminal I/O,
 exact session ID, and existing explicit tool-policy rules. The opt-in is stored
 as `deliveryProof.yolo`; old `{fixture, experimental}` nodes remain valid and
@@ -232,7 +247,7 @@ node --test scripts/test-delivery-proof.mjs
 python3 scripts/test-cmux-maestro-orchestrator.py
 ```
 
-The first two suites use disposable files and local sockets under `.build/dp`,
+The first two suites use disposable files and local sockets under `.build/`,
 with mocked native sessions/launcher processes, and remove their own fixtures.
 No dependencies are added. Repository CI's other declared checks remain
 unchanged and belong to the parent’s complete validation pass.
@@ -256,3 +271,109 @@ before recommending anything for #38. Current recommendation: **core mechanism
 demonstrated**, including fresh explicit YOLO launches and the bounded
 app-background observation above; complete sidebar-hidden verification before
 claiming that condition.
+
+## Installed implementation and remaining acceptance
+
+**Implementation checkpoint:** runtime/setup/resource wiring and their targeted
+contracts are implemented. The user-confirmed intent is stored unchanged at
+`skills/maestro/intent.md`; the simple repo-native `SKILL.md` beside it teaches
+discovery/send/reply and cross-references the existing lifecycle skill, without
+an atomic-skill framework or tool-permission frontmatter grants. The source folder
+is an explicit Xcode resource mapping to `Contents/Resources/maestro/`; setup copies
+its `SKILL.md` into the installed plugin's `skills/maestro/`.
+The parent still owns final complete CI, independent review and installed live
+validation. Targeted build and test evidence is recorded below.
+
+Targeted implementation validation:
+
+- `./scripts/build-unsigned.sh`: **BUILD SUCCEEDED**; both namespace checks passed.
+  The built app identifier is
+  `com.jdylanmc.CMUXMaestroPreview.Validation.Unsigned`, not production.
+- Exact byte comparisons passed for packaged `adapter.mjs`, `extension.mjs`,
+  `maestro/SKILL.md`, `maestro/intent.md`, and lifecycle `SKILL.md`.
+  Confirmed intent SHA-256 remains
+  `8dd1495be16e27a92b43a038ab7b728b4d6fedcbae1e53f41aac11452fe54d42`,
+  matching the parent's storage-gate receipt.
+- `./scripts/test-copilot-setup.sh`: **30 tests passed**. Installation uses
+  synthetic private paths and the real new skill/adapter resources; no provider
+  process, production setup, or live endpoint is involved.
+- Existing CI-registered suites passed: **45 orchestration, 20 Python
+  launcher/proof/skill, 10 Node adapter, 15 metadata, 60 local-preview tests**.
+  `git diff --check` passed. These are targeted results, not a claim that the
+  parent's final full CI/review or live installed-product checks are complete.
+
+The existing explicit production **Enable Copilot Integration** action now
+packages and writes the shared adapter and minimal native loader under
+`~/.copilot/extensions/maestro/`, the `/maestro` plugin skill, and a private
+`Orchestration/bin/messaging.json` configuration. Validation app identifiers are
+still denied installation; app construction has no writes. Setup changes no
+Copilot settings, shell files, host selection or other plugins. The global
+extension discovery path and SDK import mechanism are documented by the inspected
+Copilot SDK's `docs/extensions.md`; SDK resolution is CLI-owned, with no npm
+dependency, separate Copilot client, credential read or permission callback.
+
+Each new installed-controller spawn automatically creates an exclusive
+launcher-owned binding for its exact node/session/generation/workspace, in an
+ordinary working directory. The existing account/model pinning is required;
+native-extension launch uses `--experimental`. The loader does not join or add
+tools unless those environment identities match a private binding and the
+CLI-supplied `SESSION_ID`. Existing coordinators have no launcher-bound session
+and cannot receive; no adoption or hidden coordinator adapter is implied.
+
+The same transport now supports `maestro_peers` and `maestro_send` for any
+participating same-workspace peers, across sibling branches/runs, without
+changing ancestor-only lifecycle authorization. Installed addresses add
+`generation`. Sender/return addresses are bound, not caller-supplied; capabilities
+never appear in tool output or native prompts. Tools expose participation, not
+liveness. Before every tool use or native enqueue, the adapter rechecks its own
+binding; stale/removed identities fail closed. The unchanged fixture interface
+continues to use `maestro_proof_*` and its historical two-peer address shape.
+
+Native children own their sockets; normal provider exit retires the exact
+binding/socket, with offline status/archive cleanup for interrupted supervisors.
+No route is unlinked to make a duplicate launch work. Uninstall removes the
+entry point and new-launch configuration, not live bindings/adapters. Conversation
+replacement, restart or missing/unsupported CLI extension APIs do not trigger
+adoption, restart, keystroke fallback or retries.
+
+### Parent-owned installed-product verification
+
+No installed replacement or provider launch was performed by the implementation
+worker. After full CI/review and explicit setup approval:
+
+1. Build/package the normal app; use only its existing explicit production setup
+   action. The validation copy must still refuse installation. Confirm the app
+   bundle contains `adapter.mjs`, `extension.mjs`, and `maestro/SKILL.md`; inspect
+   only sanitized `launch-settings` (`ready` and `messagingInstalled`), not secrets.
+2. In a fresh disposable workspace, use existing lifecycle registration/spawn
+   guidance and an ordinary working directory. Do **not** run fixture preparation
+   or set test-mode overrides to claim installed behavior. Launch three fresh
+   participants; permit default native trust/tool prompts normally, or use
+   coordinator `--yolo` only when explicitly approved.
+3. Verify `/maestro` is discoverable and `maestro_peers` returns the other two
+   participants, not an unmanaged terminal, old proof session, or other workspace.
+   Ask one participant for one ordinary send/reply through `maestro_send`.
+   Verify exact-generation return addresses and no implicit lifecycle authority.
+4. Reuse the bounded live checks above, keeping draft preservation, app-background
+   and sidebar-hidden observations separate. Historical live proof demonstrates
+   the mechanism, **not** installation or new multi-peer acceptance. Sidebar-hidden
+   remains unverified until explicitly observed.
+5. Close only these new sessions normally. Verify their routes disappear and
+   unavailable recipients do not cause retries or focus/input changes. Never
+   touch the four preserved proof sessions or the existing human draft.
+
+For safe **offline isolated acceptance now**, rerun the setup contract test and
+adapter suites in this worktree. They exercise private disposable `.build/` paths,
+the installer file writer, exact tool registration and native enqueue contracts
+with mocked sessions, and clean only their own fixtures. The unsigned bundle can
+be inspected without opening or installing it. Do not bypass its production
+mutation guard to claim a live installed test. Live acceptance is a separate
+parent-authorized action using fresh sessions, not an excuse to reuse or reload
+the preserved proof routes.
+
+Contract tests cover the generalized adapter, inert/mismatched loader, three-peer
+send/reply, foreign workspaces, stale generations, revoked participation, strict
+invocations, bound payloads, installer resources and preserved live routes,
+coordinator-only YOLO, inherited route scrubbing, pinned launches and legacy
+proof/state compatibility. These tests are registered in the existing CI command
+steps; they do not assert native UI behavior or guaranteed delivery.

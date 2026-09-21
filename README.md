@@ -24,7 +24,10 @@ evidence, live acceptance scope, intentional differences and remaining limits.
    newly installed plugin. Maestro never restarts them automatically. Launch
    future sessions normally inside CMUX; their hooks record validated identity
    and the sidebar renders the tree directly from durable events. Setup also
-   installs the bundled `cmux-maestro-orchestrate` skill and local controller.
+   installs the bundled `cmux-maestro-orchestrate`, `maestro`, and `maestro-icon`
+   skills and local controller. This identity-hook restart guidance does **not**
+   adopt existing sessions into messaging. Only newly Maestro-spawned managed
+   sessions get native messaging bindings automatically.
 
 The containing app is an installer, not an observer. It may be closed after
 setup. A successful setup message means the selected CLI exited successfully;
@@ -38,8 +41,10 @@ signalled. CLI output remains suppressed.
 Setup passes `--no-auto-update` so a plugin change does not opt into upgrading
 the selected CLI.
 
-Only the distinct **`cmux-maestro-native`** plugin, its bundled orchestration
-skill, and its private local controller are installed. Existing
+Only the distinct **`cmux-maestro-native`** plugin, its bundled skills, private
+local controller, and native loader at `~/.copilot/extensions/maestro/extension.mjs`
+are installed. The loader is inert without matching launcher/session/workspace/
+generation bindings. Existing
 `maestro-cmux`, other plugins, provider settings, and sidebar selection are
 never replaced automatically. Moving/replacing the native app requires enabling
 the integration again: Copilot caches local plugin contents, and generated hooks
@@ -48,7 +53,10 @@ contain the **absolute current bundled helper path**.
 ### Disable or uninstall
 
 Use **Uninstall Native Plugin…**, then explicitly confirm. This runs only
-`copilot --no-auto-update plugin uninstall cmux-maestro-native`. Restart/resume existing CLI
+`copilot --no-auto-update plugin uninstall cmux-maestro-native`, then removes
+Maestro's native loader entry point and launch configuration. Live route bindings,
+sockets and in-memory adapters are not touched; close those sessions normally.
+Restart/resume existing CLI
 sessions to unload their cached hooks. Disable this sidebar in CMUX separately
 if desired; uninstall does not select or remove any other provider.
 
@@ -142,10 +150,59 @@ directory and is consumed only after exact workspace/surface attachment.
 The terminal command contains no token. Both supervisor and provider process
 anchors retain the existing resource bounds.
 
-Programmatic follow-ups are refused for interactive workers pending #38.
-No prompt is injected into a live terminal. Close interactive Copilot normally
+The lifecycle `follow-up` command remains refused for interactive workers.
+Participating peers instead use native fire-and-forget messaging below; no prompt
+is injected into terminal input. Close interactive Copilot normally
 before archiving; archive does not interrupt it. Existing legacy workers are
 preserved and visibly labeled **Legacy worker** rather than silently converted.
+
+### Native peer messaging
+
+After explicit integration setup, pin both account and model in **Agent launch
+settings**. `launch-settings` reports `messagingInstalled` separately from account/
+model `ready`; neither field proves a recipient has loaded its native adapter.
+New installed-controller spawns automatically bind their exact Copilot session,
+generation and CMUX workspace before launch and enable CLI native extensions
+with `--experimental`. No per-project fixture preparation is needed. Ordinary
+unmanaged sessions, existing workers, and registered coordinators without a
+launcher-owned Copilot session remain **unsupported recipients**. Never adopt or
+restart them automatically.
+
+Use installed `/maestro` for `maestro_peers` discovery, `maestro_send`, and replies
+to the supplied sender address. Any participating same-workspace peer can send,
+including siblings and peers from another run; messaging grants no lifecycle or
+process-control rights. The native adapter joins only its CLI-owned session and
+uses `session.send({ prompt, mode: "enqueue" })`. Copilot owns scheduling.
+No sidebar, selected workspace, foreground application, terminal keystroke,
+composer inspection, acknowledgement, receipt, retry or completion tracker is
+involved. A local-write attempt is **not** a delivery or completion guarantee.
+The source package and unchanged confirmed purpose live in `skills/maestro/`.
+It has no tool-permission grants in frontmatter and reuses the installed
+`cmux-maestro-orchestrate` skill for lifecycle operations.
+
+Defaults grant nothing. A coordinator may pass `spawn --yolo` **only with explicit
+user approval**; Copilot receives `--allow-all` alongside all explicit denies.
+Workers cannot request YOLO, even if the coordinator was allowed it; requests are
+rejected before credential lookup/reservation. Descendants keep bounded explicit
+allows and inherited denies. There is no speculative full permission inheritance,
+permission callback or persistent provider setting change.
+
+Each native child has one private Unix socket and a launcher-created binding
+under `~/.copilot/extensions/maestro/r/`; account credentials never enter these
+files or messaging tools. Addresses contain workspace/session UUIDs and generation,
+not secrets. Payloads are limited to 4 KiB UTF-8, frames to 8 KiB, registered
+participants to 128, and connections/pending native sends to eight per receiver.
+The existing eight-live-worker workspace limit still applies. Routes use exclusive
+creation, are retired after exact provider exit (or closed-run archive), and cannot
+be rebound by clearing/resuming a conversation. Restart/clear/replaced-session,
+offline, unsupported, invalid or stale routes fail closed; request fresh managed
+sessions only with user authorization. Same-user processes are trusted: private
+capabilities are not a defense against a malicious process running as your user.
+
+See [native delivery findings](docs/delivery-proof.md) for the observed agent
+exchange, human-confirmed draft preservation, separate harness-origin background
+check, and outstanding installed-product live acceptance. Mocked contract tests
+are not native UI proof.
 
 ### Local agent launch settings
 

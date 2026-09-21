@@ -95,6 +95,14 @@ def verify_orchestration_resources(app, *, required=True):
             "Bundled orchestration skill is missing or oversized.")
 
 
+def verify_messaging_resources(app):
+    resources = Path(app) / "Contents/Resources"
+    for name, maximum in (("adapter.mjs", 65_536), ("extension.mjs", 8192), ("maestro/SKILL.md", 65_536)):
+        resource = resources / name
+        require(resource.is_file() and not resource.is_symlink() and 0 < resource.stat().st_size <= maximum,
+                f"Bundled messaging resource {name} is missing or oversized.")
+
+
 def verify_metadata(app, mode, *, expected_build=APP_BUILD_VERSION, require_orchestration=True):
     suffix, point = PROFILES[mode]
     app = Path(app)
@@ -116,6 +124,8 @@ def verify_metadata(app, mode, *, expected_build=APP_BUILD_VERSION, require_orch
     if expected_build is not None:
         require(version == expected_build, "App or sidebar native feature build version is stale.")
     verify_orchestration_resources(app, required=require_orchestration)
+    if require_orchestration:
+        verify_messaging_resources(app)
     return extension, child
 
 

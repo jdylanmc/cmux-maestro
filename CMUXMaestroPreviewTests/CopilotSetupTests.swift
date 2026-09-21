@@ -22,6 +22,7 @@ private struct SetupFileStub: CopilotSetupFileSystem {
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
         root.appendingPathComponent("plugin")
     }
+    func removeMessaging(root: URL) throws {}
 }
 
 private final class SetupAccessSpy: CopilotSetupFileSystem, @unchecked Sendable {
@@ -43,6 +44,7 @@ private final class SetupAccessSpy: CopilotSetupFileSystem, @unchecked Sendable 
         record()
         return root.appendingPathComponent("plugin")
     }
+    func removeMessaging(root: URL) throws { record() }
 
     private func record() {
         lock.lock()
@@ -402,7 +404,7 @@ struct CopilotSetupTests {
         directory: URL, reader: FileHandle, writer: FileHandle, completion: FileHandle
     ) {
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        let directory = repository.appendingPathComponent(".build/setup-fixtures/\(UUID().uuidString)")
+        let directory = repository.appendingPathComponent(".build/s/\(UUID().uuidString.prefix(6))")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var reader: Int32 = -1
         var writer: Int32 = -1
@@ -569,7 +571,9 @@ struct CopilotSetupTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
         let configuration = directory.appendingPathComponent("unrelated-settings.json")
         try Data("preserved".utf8).write(to: configuration)
-        let local = LocalCopilotSetupFiles()
+        let routes = repository.appendingPathComponent(".build/\(UUID().uuidString.prefix(5))")
+        defer { try? FileManager.default.removeItem(at: routes) }
+        let local = LocalCopilotSetupFiles(nativeExtensions: directory.appendingPathComponent("e"), messagingRoutes: routes)
         let controller = directory.appendingPathComponent("controller.py")
         let skill = directory.appendingPathComponent("SKILL.md")
         try Data("#!/usr/bin/env python3\n".utf8).write(to: controller)
@@ -578,6 +582,18 @@ struct CopilotSetupTests {
         try FileManager.default.createDirectory(at: iconSkillDirectory, withIntermediateDirectories: true)
         let iconSkill = iconSkillDirectory.appendingPathComponent("SKILL.md")
         try Data("---\nname: maestro-icon\n---\n".utf8).write(to: iconSkill)
+        let messagingSkillDirectory = directory.appendingPathComponent("maestro", isDirectory: true)
+        try FileManager.default.createDirectory(at: messagingSkillDirectory, withIntermediateDirectories: true)
+        let messagingSkill = messagingSkillDirectory.appendingPathComponent("SKILL.md")
+        try FileManager.default.copyItem(
+            at: repository.appendingPathComponent("skills/maestro/SKILL.md"), to: messagingSkill
+        )
+        for name in ["adapter.mjs", "extension.mjs"] {
+            try FileManager.default.copyItem(
+                at: repository.appendingPathComponent("scripts/delivery-proof/\(name)"),
+                to: directory.appendingPathComponent(name)
+            )
+        }
         try FileManager.default.copyItem(
             at: repository.appendingPathComponent("Resources/NerdFonts"),
             to: directory.appendingPathComponent("NerdFonts")
@@ -592,6 +608,14 @@ struct CopilotSetupTests {
             == Data(contentsOf: skill))
         #expect(try Data(contentsOf: plugin.appendingPathComponent("skills/maestro-icon/SKILL.md"))
             == Data(contentsOf: iconSkill))
+        #expect(try Data(contentsOf: plugin.appendingPathComponent("skills/maestro/SKILL.md"))
+            == Data(contentsOf: messagingSkill))
+        let native = local.nativeExtensions.appendingPathComponent("maestro")
+        #expect(try Data(contentsOf: native.appendingPathComponent("extension.mjs"))
+            == Data(contentsOf: directory.appendingPathComponent("extension.mjs")))
+        #expect(try Data(contentsOf: native.appendingPathComponent("adapter.mjs"))
+            == Data(contentsOf: directory.appendingPathComponent("adapter.mjs")))
+        #expect(try routes.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true)
         let installed = directory.appendingPathComponent(
             "Orchestration/bin/cmux-maestro-orchestrator"
         )
@@ -602,5 +626,11 @@ struct CopilotSetupTests {
         #expect(try String(contentsOf: configuration, encoding: .utf8) == "preserved")
         #expect(try local.executable(selected: executable, path: "") == executable)
         #expect(throws: (any Error).self) { try local.executable(selected: nil, path: ".:relative") }
+        let retained = routes.appendingPathComponent("retained.json")
+        try Data("live route must survive uninstall".utf8).write(to: retained)
+        try local.removeMessaging(root: integration)
+        #expect(!FileManager.default.fileExists(atPath: native.appendingPathComponent("extension.mjs").path))
+        #expect(!FileManager.default.fileExists(atPath: installed.deletingLastPathComponent().appendingPathComponent("messaging.json").path))
+        #expect(FileManager.default.fileExists(atPath: retained.path))
     }
 }

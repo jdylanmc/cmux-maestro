@@ -41,7 +41,7 @@ struct ContentView: View {
                     .disabled(busy)
             }
 
-            Text("Enable installs the cmux-maestro-native plugin, its orchestration skill, and the local controller command. Existing plugins and settings are preserved. Choose only a Copilot executable you trust.")
+            Text("Enable installs the cmux-maestro-native plugin, /maestro and lifecycle skills, the local controller, and a native messaging loader under ~/.copilot/extensions/maestro. The loader is inert outside newly Maestro-launched participating sessions. Existing plugins and settings are preserved. Choose only a Copilot executable you trust.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -67,7 +67,7 @@ struct ContentView: View {
             SettingsLink {
                 Label("Agent launch settings…", systemImage: "gearshape")
             }
-            Text("Next: enable CMUX Maestro Preview in CMUX’s Sidebar Extensions browser and select it. Restart or resume existing Copilot CLI sessions once to load the plugin and orchestration skill; future sessions work normally. Never restart sessions automatically.")
+            Text("Next: configure a pinned account and model in Agent launch settings. New Maestro-launched sessions get fire-and-forget messaging; existing or unmanaged sessions are not adopted. Messaging never changes focus or human input and does not guarantee delivery. The sidebar is optional for messaging.")
                 .font(.callout)
             Text("Keep this app at its installed location. If you move or replace it, enable the integration again to refresh the bundled helper path. Uses the standard ~/.copilot/session-state location only.")
                 .font(.caption)
@@ -88,7 +88,7 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) { pendingAction = nil }
         } message: {
-            Text("This explicitly runs the selected Copilot CLI to change only cmux-maestro-native. No CLI sessions will be restarted and no legacy integration will be removed.")
+            Text("This explicitly runs the selected Copilot CLI for cmux-maestro-native and installs or removes its native messaging entry point. No CLI sessions will be restarted and no legacy integration will be removed.")
         }
     }
 

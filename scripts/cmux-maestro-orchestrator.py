@@ -75,6 +75,112 @@ def delivery_proof_api():
     return runpy.run_path(str(path))
 
 
+def private_message_directory(path):
+    if not path.is_absolute() or path.resolve() != path:
+        raise OrchestrationError("Messaging requires a canonical private directory.")
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise OrchestrationError("Messaging directory is not private.")
+
+
+def message_json(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or not 0 < info.st_size <= 8192):
+            raise OrchestrationError("Messaging configuration is not a private bounded file.")
+        data = stream.read(8193)
+        if len(data) > 8192:
+            raise OrchestrationError("Messaging configuration exceeds its size bound.")
+        return json.loads(data)
+
+
+def messaging_configuration(root):
+    config = root / "bin/messaging.json"
+    try:
+        value = message_json(config)
+        if (not isinstance(value, dict) or set(value) != {"version", "routes", "extension"}
+                or type(value["version"]) is not int or value["version"] != 1
+                or not isinstance(value["routes"], str) or not isinstance(value["extension"], str)):
+            raise OrchestrationError("Messaging configuration is invalid.")
+        routes = Path(value["routes"])
+        private_message_directory(routes)
+        extension = Path(value["extension"])
+        private_message_directory(extension)
+        if len(os.fsencode(routes / ("0" * 16 + ".sock"))) > 100:
+            raise OrchestrationError("Messaging socket path is too long.")
+        for name in ("extension.mjs", "adapter.mjs"):
+            descriptor = os.open(extension / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                info = os.fstat(descriptor)
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                        or info.st_mode & 0o077 or not 0 < info.st_size <= 65_536):
+                    raise OrchestrationError("Installed messaging adapter is unavailable.")
+            finally:
+                os.close(descriptor)
+        return value
+    except FileNotFoundError:
+        # Source/proof and pre-feature controller installs remain usable; an
+        # installed current controller must not silently create unwired workers.
+        if not config.exists() and Path(__file__).name.endswith(".py"):
+            return None
+        raise OrchestrationError("Messaging is not installed; enable Maestro integration.")
+    except (OSError, ValueError) as error:
+        raise OrchestrationError("Messaging is unavailable; enable Maestro integration.") from error
+
+
+def message_peer(node):
+    return hashlib.sha256(
+        f'{node["copilotSessionId"]}:{node["generation"]}'.encode()
+    ).hexdigest()[:16]
+
+
+def bind_messaging(node):
+    routes = Path(node["messaging"]["routes"])
+    private_message_directory(routes)
+    peer = message_peer(node)
+    if len(os.fsencode(routes / f"{peer}.sock")) > 100:
+        raise OrchestrationError("Messaging socket path is too long.")
+    binding = {
+        "peer": peer, "nodeId": node["id"], "name": node["label"],
+        "workspaceId": node["workspaceId"], "sessionId": node["copilotSessionId"],
+        "generation": node["generation"], "capability": secrets.token_hex(32),
+    }
+    descriptor = os.open(routes / f"{peer}.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "w") as stream:
+        json.dump(binding, stream)
+
+
+def retire_messaging(node):
+    if not node.get("messaging"):
+        return
+    routes = Path(node["messaging"]["routes"])
+    try:
+        private_message_directory(routes)
+    except FileNotFoundError:
+        return
+    peer = message_peer(node)
+    try:
+        binding = message_json(routes / f"{peer}.json")
+    except FileNotFoundError:
+        return
+    expected = (node["id"], node["workspaceId"], node["copilotSessionId"], node["generation"])
+    if (not isinstance(binding, dict) or binding.get("peer") != peer
+            or tuple(binding.get(key) for key in ("nodeId", "workspaceId", "sessionId", "generation")) != expected):
+        raise OrchestrationError("Messaging identity changed; refusing cleanup.")
+    (routes / f"{peer}.json").unlink()
+    # Only after the exact owned provider has exited. Never unlink a live route
+    # to recover a launch; unique session/generation endpoints are single-use.
+    endpoint = routes / f"{peer}.sock"
+    try:
+        info = endpoint.lstat()
+        if stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid():
+            endpoint.unlink()
+    except FileNotFoundError:
+        pass
+
+
 @functools.lru_cache(maxsize=1)
 def glyph_catalog():
     directory = Path(__file__).resolve().parent / "NerdFonts"
@@ -162,11 +268,16 @@ def command_launch_settings(root):
             account_available = True
         except OrchestrationError:
             account_available = False
+    try:
+        messaging_installed = messaging_configuration(root) is not None
+    except OrchestrationError:
+        messaging_installed = False
     return {
         "accountPinned": account_pinned,
         "modelPinned": model_pinned,
         "accountAvailable": account_available,
         "ready": account_pinned and model_pinned and account_available,
+        "messagingInstalled": messaging_installed,
     }
 
 
@@ -664,6 +775,22 @@ def validate_state(state):
             raise OrchestrationError("Stored execution mode is invalid.")
         if node.get("launchSettings") is not None:
             validate_launch_settings(node["launchSettings"])
+        if (not isinstance(node.get("permissionMode", "default"), str)
+                or node.get("permissionMode", "default") not in {"default", "yolo"}):
+            raise OrchestrationError("Stored launch permission mode is invalid.")
+        if node.get("permissionMode") == "yolo" and (role != "worker" or mode != "interactive"):
+            raise OrchestrationError("YOLO requires an explicitly launched interactive worker.")
+        messaging = node.get("messaging")
+        if messaging is not None and (
+            not isinstance(messaging, dict) or set(messaging) != {"version", "routes", "extension"}
+            or type(messaging["version"]) is not int or messaging["version"] != 1
+            or not isinstance(messaging["routes"], str) or len(messaging["routes"]) > 1024
+            or not Path(messaging["routes"]).is_absolute()
+            or not isinstance(messaging["extension"], str) or len(messaging["extension"]) > 1024
+            or not Path(messaging["extension"]).is_absolute()
+            or role != "worker" or mode != "interactive"
+        ):
+            raise OrchestrationError("Stored messaging configuration is invalid.")
         proof = node.get("deliveryProof")
         if proof is not None and (
             not isinstance(proof, dict)
@@ -1419,8 +1546,12 @@ def command_spawn(args, root, cmux):
     metadata = git_display_metadata(cwd)
     snapshot = read_state(root)
     actor = authorize(snapshot, args.actor_id, args.token)
+    yolo = getattr(args, "yolo", False) or bool(proof and proof.get("yolo"))
+    if yolo and actor["role"] != "coordinator":
+        raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
+    messaging = None if proof is not None else messaging_configuration(root)
     launch_settings = worker_launch_settings(root)
-    if (args.require_pinned_launch_settings or proof is not None) and (
+    if (args.require_pinned_launch_settings or proof is not None or messaging is not None or yolo) and (
         launch_settings.get("copilotAccount") is None
         or launch_settings.get("model") is None
     ):
@@ -1441,6 +1572,8 @@ def command_spawn(args, root, cmux):
 
     def reserve(state):
         current = authorize(state, args.actor_id, args.token)
+        if yolo and current["role"] != "coordinator":
+            raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
         if (
             current["runId"], current["workspaceId"], current.get("surfaceId")
         ) != (actor["runId"], actor["workspaceId"], actor["surfaceId"]):
@@ -1499,6 +1632,9 @@ def command_spawn(args, root, cmux):
         }
         if proof is not None:
             state["nodes"][identifier]["deliveryProof"] = proof
+        if messaging is not None:
+            state["nodes"][identifier]["messaging"] = messaging
+        state["nodes"][identifier]["permissionMode"] = "yolo" if yolo else "default"
         state["launches"][identifier] = {
             "workerId": identifier, "runId": current["runId"],
             "workspaceId": current["workspaceId"], "surfaceId": None,
@@ -1702,6 +1838,8 @@ def terminal_bookkeeping(event):
 
 def worker_environment(worker_id, token, node):
     environment = os.environ.copy()
+    for key in ("CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER"):
+        environment.pop(key, None)
     environment.update({
         "CMUX_MAESTRO_WORKER_ID": worker_id,
         "CMUX_MAESTRO_CONTROL_TOKEN": token,
@@ -1710,6 +1848,12 @@ def worker_environment(worker_id, token, node):
         "CMUX_MAESTRO_ORCHESTRATOR": str(Path(__file__).resolve()),
         "CMUX_MAESTRO_EXECUTION_MODE": node.get("executionMode", "bounded"),
     })
+    if node.get("messaging"):
+        environment.update({
+            "CMUX_MAESTRO_MESSAGE_ROOT": node["messaging"]["routes"],
+            "CMUX_MAESTRO_MESSAGE_PEER": message_peer(node),
+            "CMUX_WORKSPACE_ID": node["workspaceId"],
+        })
     account = (node.get("launchSettings") or {}).get("copilotAccount")
     subscription = resolve_copilot_token(account)
     if subscription is not None:
@@ -1740,8 +1884,14 @@ def run_interactive_session(root, worker_id, token, node):
             raise OrchestrationError("Delivery proof binding failed; use fresh fixtures.") from error
         if node["deliveryProof"]["experimental"]:
             arguments.append("--experimental")
-        if node["deliveryProof"].get("yolo", False):
-            arguments.append("--allow-all")
+    if node.get("permissionMode") == "yolo" or (node.get("deliveryProof") or {}).get("yolo", False):
+        arguments.append("--allow-all")
+    if node.get("messaging"):
+        if messaging_configuration(root) != node["messaging"]:
+            raise OrchestrationError("Messaging installation changed before launch.")
+        bind_messaging(node)
+        arguments.append("--experimental")
+    process = None
     previous_interrupt = signal.signal(signal.SIGINT, lambda _signum, _frame: None)
     try:
         try:
@@ -1792,6 +1942,8 @@ def run_interactive_session(root, worker_id, token, node):
         return {"workerId": worker_id, "interactive": True, "exitCode": code}
     finally:
         signal.signal(signal.SIGINT, previous_interrupt)
+        if node.get("messaging") and (process is None or process.poll() is not None):
+            retire_messaging(node)
 
 
 def run_copilot_turn(root, worker_id, token, node):
@@ -2358,6 +2510,8 @@ def command_status(args, root, cmux):
                 node["phase"], node["availability"], node["updatedAt"] = (
                     "process-disappeared", "unavailable", now()
                 )
+            if node["role"] == "worker" and not process and node["id"] not in state["launches"]:
+                retire_messaging(node)
         apply_git_evidence(state, git_evidence)
         return {"runId": current_actor["runId"], "workers": [{
             "workerId": node["id"], "parentId": node["parentId"], "name": node["label"],
@@ -2366,6 +2520,11 @@ def command_status(args, root, cmux):
             "iconColor": node.get("iconColor"),
             "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
             "sessionId": node["copilotSessionId"], "generation": node["generation"],
+            "messaging": "participating" if node.get("messaging") and process_matches(node)
+                else "offline" if node.get("messaging") else "unsupported",
+            "permissionMode": node.get(
+                "permissionMode", "yolo" if (node.get("deliveryProof") or {}).get("yolo") else "default"
+            ),
             "phase": node["phase"], "availability": node["availability"],
             "result": node["result"],
         } for node in current_targets]}
@@ -2448,6 +2607,7 @@ def command_archive(args, root, cmux):
         state["archives"].append(archive_summary(state, run_id))
         state["archives"] = state["archives"][-MAX_ARCHIVES:]
         for node in nodes:
+            retire_messaging(node)
             if node["role"] == "worker" and node.get("surfaceId"):
                 state["retainedResources"].append({
                     "runId": run_id, "workspaceId": node["workspaceId"],
@@ -2552,6 +2712,8 @@ def parser():
     spawn.add_argument("--allow-tool", action="append", default=[])
     spawn.add_argument("--deny-tool", action="append", default=[])
     spawn.add_argument("--require-pinned-launch-settings", action="store_true")
+    spawn.add_argument("--yolo", action="store_true",
+                       help="Explicit user-approved coordinator launch with --allow-all; preserves denies")
     spawn.add_argument("--delivery-proof-fixture", help="Opt in to one prepared disposable native-extension fixture")
     spawn.add_argument("--delivery-proof-experimental", action="store_true",
                        help="Opt in to Copilot --experimental for this proof worker only")

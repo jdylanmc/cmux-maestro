@@ -27,6 +27,23 @@ class ProofTests(unittest.TestCase):
             "phase": "turn-running", "generation": 1,
         }
 
+    def test_installed_skill_exposes_messaging_without_implicit_permission_grants(self):
+        skill = (REPO / "skills/maestro/SKILL.md").read_text()
+        frontmatter = skill.split("---", 2)[1]
+        self.assertEqual({line.split(":", 1)[0] for line in frontmatter.splitlines() if line}, {"name", "description"})
+        self.assertIn("name: maestro", frontmatter)
+        for tool in ("maestro_peers", "maestro_send"):
+            self.assertIn(f"`{tool}`", skill)
+        for constraint in (
+            "workspaceId", "sessionId", "generation", "4096 UTF-8 bytes",
+            "/cmux-maestro-orchestrate", "messagingInstalled: true",
+            "Worker actors cannot request YOLO", "delivery and completion are",
+        ):
+            self.assertIn(constraint, skill)
+        self.assertTrue((REPO / "skills/maestro/intent.md").is_file())
+        self.assertFalse((REPO / "skills/maestro/_atoms").exists())
+        self.assertFalse((REPO / "skills/maestro/_molecules").exists())
+
     def test_preparation_is_disposable_private_and_outside_source_discovery(self):
         self.assertEqual(self.root.stat().st_mode & 0o777, 0o700)
         for peer in ("a", "b"):
@@ -217,6 +234,171 @@ class ProofTests(unittest.TestCase):
             with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "--delivery-proof-fixture"):
                 spawn(args, self.root, cmux)
         self.assertEqual(cmux.mock_calls, [])
+
+    def test_worker_cannot_request_any_yolo_before_credentials_or_reservation(self):
+        spawn = CONTROLLER["command_spawn"]
+        for flags in (
+            ["--delivery-proof-fixture", self.paths["a"], "--delivery-proof-yolo"],
+            ["--yolo"],
+        ):
+            args = CONTROLLER["parser"]().parse_args([
+                "spawn", "--actor-id", str(uuid.uuid4()), "--token", "synthetic",
+                "--name", "No escalation", "--task", "test", "--cwd", self.paths["a"], *flags,
+            ])
+            cmux = mock.Mock()
+            forbidden = mock.Mock(side_effect=AssertionError("must refuse before external effects"))
+            with mock.patch.dict(spawn.__globals__, {
+                "read_state": lambda _: {},
+                "authorize": lambda *a: {"role": "worker", "toolPolicy": {"allow": ["read"], "deny": ["web"]}},
+                "worker_launch_settings": forbidden, "resolve_copilot_token": forbidden,
+                "messaging_configuration": forbidden, "mutate": forbidden,
+            }):
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "coordinator"):
+                    spawn(args, self.root, cmux)
+            self.assertEqual(cmux.mock_calls, [])
+
+    def install_synthetic_messaging(self):
+        routes = REPO / ".build" / uuid.uuid4().hex[:5]
+        routes.mkdir(mode=0o700)
+        self.addCleanup(shutil.rmtree, routes)
+        extension = self.root / "extension"
+        extension.mkdir(mode=0o700)
+        for name in ("extension.mjs", "adapter.mjs"):
+            shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
+            (extension / name).chmod(0o600)
+        config = {"version": 1, "routes": str(routes), "extension": str(extension)}
+        (self.root / "bin").mkdir(mode=0o700)
+        PROOF["write_new"](self.root / "bin/messaging.json", config)
+        self.node.update({
+            "id": str(uuid.uuid4()), "runId": str(uuid.uuid4()),
+            "messaging": config, "executionMode": "interactive",
+        })
+        return routes, config
+
+    def test_installed_binding_generation_exclusivity_cleanup_and_readiness(self):
+        routes, config = self.install_synthetic_messaging()
+        self.assertEqual(CONTROLLER["messaging_configuration"](self.root), config)
+        CONTROLLER["bind_messaging"](self.node)
+        peer = CONTROLLER["message_peer"](self.node)
+        binding = PROOF["read_private"](routes / f"{peer}.json")
+        self.assertEqual(binding["nodeId"], self.node["id"])
+        self.assertEqual(binding["generation"], 1)
+        self.assertEqual(binding["sessionId"], self.node["copilotSessionId"])
+        with self.assertRaises(FileExistsError):
+            CONTROLLER["bind_messaging"](self.node)
+        # A retired generation cannot delete a later generation's route.
+        CONTROLLER["retire_messaging"]({**self.node, "generation": 2})
+        self.assertTrue((routes / f"{peer}.json").exists())
+        CONTROLLER["retire_messaging"](self.node)
+        self.assertEqual(list(routes.iterdir()), [])
+        (Path(config["extension"]) / "extension.mjs").unlink()
+        with self.assertRaises(CONTROLLER["OrchestrationError"]):
+            CONTROLLER["messaging_configuration"](self.root)
+
+    def test_installed_spawn_automatically_participates_and_requires_pins(self):
+        _, config = self.install_synthetic_messaging()
+        actor = {
+            "id": str(uuid.uuid4()), "runId": str(uuid.uuid4()),
+            "workspaceId": self.node["workspaceId"], "surfaceId": str(uuid.uuid4()),
+            "role": "coordinator", "parentId": None,
+        }
+        args = CONTROLLER["parser"]().parse_args([
+            "spawn", "--actor-id", actor["id"], "--token", "synthetic",
+            "--name", "Installed participant", "--task", "bounded task", "--cwd", str(REPO),
+            "--deny-tool", "web",
+        ])
+        spawn = CONTROLLER["command_spawn"]
+        state = {**CONTROLLER["empty_state"](), "nodes": {actor["id"]: actor}}
+        credentials = mock.Mock()
+        class Reserved(Exception):
+            pass
+
+        def reserve_only(_root, callback):
+            callback(state)
+            raise Reserved()
+
+        with mock.patch.dict(spawn.__globals__, {
+            "read_state": lambda _: state, "authorize": lambda *a: actor,
+            "worker_launch_settings": lambda _: {},
+            "resolve_copilot_token": credentials,
+            "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+            "resolve_icon": lambda _: "synthetic-icon",
+            "resource_observations": lambda *a: ({}, set()),
+            "mutate": reserve_only,
+        }):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "Pinned"):
+                spawn(args, self.root, mock.Mock())
+            credentials.assert_not_called()
+            with mock.patch.dict(spawn.__globals__, {
+                "worker_launch_settings": lambda _: {
+                    "version": 1, "copilotAccount": "synthetic", "model": "synthetic",
+                },
+            }):
+                with self.assertRaises(Reserved):
+                    spawn(args, self.root, mock.Mock())
+        worker = next(node for node in state["nodes"].values() if node["role"] == "worker")
+        self.assertEqual(worker["messaging"], config)
+        self.assertEqual(worker["workingDirectory"], str(REPO))
+        self.assertEqual(worker["permissionMode"], "default")
+        self.assertEqual(worker["toolPolicy"], {"allow": [], "deny": ["web"]})
+        self.assertNotIn("deliveryProof", worker)
+
+    def test_installed_launcher_wires_ordinary_cwd_and_cleans_only_after_provider_exit(self):
+        routes, _ = self.install_synthetic_messaging()
+        # No fixture validation/binding should run in installed mode.
+        args = self.run_mocked_launcher()
+        self.assertIn("--experimental", args)
+        self.assertNotIn("--allow-all", args)
+        self.assertEqual(list(routes.iterdir()), [])
+        self.node["permissionMode"] = "yolo"
+        self.node["phase"] = "turn-running"
+        args = self.run_mocked_launcher()
+        self.assertEqual(args.count("--allow-all"), 1)
+        self.assertEqual(list(routes.iterdir()), [])
+
+    def test_managed_environment_is_exact_and_legacy_does_not_inherit_route(self):
+        routes, _ = self.install_synthetic_messaging()
+        environment = CONTROLLER["worker_environment"]
+        with mock.patch.dict(environment.__globals__, {"resolve_copilot_token": lambda _: None}), \
+                mock.patch.dict(os.environ, {
+                    "CMUX_MAESTRO_MESSAGE_ROOT": "stale-parent", "CMUX_MAESTRO_MESSAGE_PEER": "stale-peer",
+                    "CMUX_WORKSPACE_ID": str(uuid.uuid4()),
+                }):
+            result = environment(self.node["id"], "synthetic", self.node)
+            self.assertEqual(result["CMUX_MAESTRO_MESSAGE_ROOT"], str(routes))
+            self.assertEqual(result["CMUX_MAESTRO_MESSAGE_PEER"], CONTROLLER["message_peer"](self.node))
+            self.assertEqual(result["CMUX_WORKSPACE_ID"], self.node["workspaceId"])
+            legacy = dict(self.node)
+            legacy.pop("messaging")
+            result = environment(legacy["id"], "synthetic", legacy)
+            self.assertNotIn("CMUX_MAESTRO_MESSAGE_ROOT", result)
+            self.assertNotIn("CMUX_MAESTRO_MESSAGE_PEER", result)
+
+    def test_failed_provider_start_retires_binding_without_retry(self):
+        routes, _ = self.install_synthetic_messaging()
+        run = CONTROLLER["run_interactive_session"]
+        popen = mock.Mock(side_effect=OSError("synthetic start failure"))
+        with mock.patch.dict(run.__globals__, {
+            "trusted_executable": lambda *a: "/synthetic/copilot",
+            "worker_environment": lambda *a: {},
+        }), mock.patch("os.isatty", return_value=True), mock.patch("signal.signal"), \
+                mock.patch("subprocess.Popen", popen):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "launch failed"):
+                run(self.root, self.node["id"], "synthetic", self.node)
+        self.assertEqual(list(routes.iterdir()), [])
+        popen.assert_called_once()
+
+    def test_unsafe_messaging_config_and_binding_permissions_fail_closed(self):
+        routes, _ = self.install_synthetic_messaging()
+        config = self.root / "bin/messaging.json"
+        config.chmod(0o644)
+        with self.assertRaises(CONTROLLER["OrchestrationError"]):
+            CONTROLLER["messaging_configuration"](self.root)
+        config.chmod(0o600)
+        routes.chmod(0o755)
+        with self.assertRaises(CONTROLLER["OrchestrationError"]):
+            CONTROLLER["bind_messaging"](self.node)
+        routes.chmod(0o700)
 
     def test_state_accepts_old_proof_and_boolean_yolo_only(self):
         timestamp = CONTROLLER["now"]()

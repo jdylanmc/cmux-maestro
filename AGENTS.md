@@ -18,6 +18,11 @@ do not copy its source or history, modify it, or make this project depend on it.
 - `scripts/`: pinned SDK fetch, build, test, and local registration commands.
 - `.agents/skills/cmux-maestro-orchestrate/`: repository-owned installed
   terminal orchestration skill.
+- `skills/maestro/`: confirmed intent and installed peer discovery/send/reply
+  skill; reuse the lifecycle skill instead of duplicating it. The Xcode folder
+  resource maps this source package to `Contents/Resources/maestro/`.
+- `scripts/delivery-proof/adapter.mjs`: shared installed native-session
+  adapter and backwards-compatible disposable proof transport.
 - `vendor/CmuxExtensionKit/`: ignored local SDK checkout created by the fetch
   script. Never commit it.
 
@@ -38,14 +43,18 @@ do not copy its source or history, modify it, or make this project depend on it.
   inference, automatic tool approval, or automatic terminal/process cleanup.
 - New workers are interactive Copilot sessions with inherited terminal I/O and
   direct human follow-ups. Do not create new headless-worker tabs or infer task
-  completion from an interactive session's exit. Issue #54 permits the opt-in
-  disposable native-extension delivery proof in `scripts/delivery-proof/`,
-  using the existing pinned launcher. Its same-workspace peer messaging is
+  completion from an interactive session's exit. Issue #54's confirmed product
+  expansion permits the installed native-session adapter, same-workspace peer
+  discovery/send/reply, explicit installer/build resources and `/maestro` skill,
+  reusing `scripts/delivery-proof/` and the existing pinned launcher.
+  Newly launched managed participants receive wiring automatically; never adopt
+  or restart an existing/unmanaged session. Its same-workspace peer messaging is
   fire-and-forget, independent of visual focus, and grants no process control.
   Preserve human typing/drafts; do not use terminal keystrokes as a fallback.
   Copilot owns prompt scheduling; add no custom busy scheduler, acknowledgements,
-  receipts, retries, completion tracker, or beat timer. No installed-integration
-  replacement or host change is authorized by this exception.
+  receipts, retries, completion tracker, or beat timer. Only the existing explicit
+  production setup action may install the inert native loader; no constructor
+  side effects, host changes, generic plugin framework or standalone broker.
   Preserve existing legacy bounded workers.
   Legacy reported outcomes require a strict whole-final-message generation
   report plus verified process/result boundary. Report-missing or permission-
@@ -60,10 +69,11 @@ do not copy its source or history, modify it, or make this project depend on it.
 - Keep Copilot tool policy explicit, bounded and private. Add no grants by
   default; preserve denies and descendant non-escalation. Provider policy flags
   are not an operating-system sandbox or a lifecycle reporting channel.
-  Issue #54 additionally permits explicit per-spawn `--delivery-proof-yolo` for
-  disposable proof workers only, using Copilot `--allow-all` while preserving
-  explicit denies. Do not infer parent permissions, auto-answer prompts, or
-  change persistent Copilot settings; ordinary workers remain unchanged.
+  Explicit user-approved coordinator `spawn --yolo` (and the preserved proof
+  alias `--delivery-proof-yolo`) may use Copilot `--allow-all`, preserving denies.
+  Reject either YOLO request from a worker actor before credential resolution or
+  reservation. Do not infer full parent permissions, auto-answer prompts, or
+  change persistent Copilot settings; normal defaults add no grants.
 - Preserve exact workspace/surface/session/generation ownership and the
   controller's depth, node, size and concurrent-operation bounds.
 

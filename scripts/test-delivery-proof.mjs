@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { EventEmitter, once } from "node:events";
-import { start, validateSend } from "./delivery-proof/adapter.mjs";
+import { start, startManaged, validateSend } from "./delivery-proof/adapter.mjs";
 
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const base = path.join(repo, ".build", "dp");
@@ -218,4 +218,118 @@ test("malformed and fragmented wire input never uses terminal or readiness APIs"
   await incoming;
   assert.equal(f.sends.b.length, 1);
   assert.equal(f.sends.b[0].mode, "enqueue");
+});
+
+async function managedFixture(t) {
+  const root = path.join(repo, ".build", randomUUID().slice(0, 5));
+  await fs.mkdir(root, { mode: 0o700 });
+  const workspaceId = randomUUID();
+  const bindings = [0, 1, 2, 3].map((index) => ({
+    peer: String(index).repeat(16), nodeId: randomUUID(), name: `Participant ${index}`,
+    workspaceId: index === 3 ? randomUUID() : workspaceId,
+    sessionId: randomUUID(), generation: 1, capability: String(index).repeat(64),
+  }));
+  for (const binding of bindings) {
+    await fs.writeFile(path.join(root, `${binding.peer}.json`), JSON.stringify(binding), { mode: 0o600 });
+  }
+  const tools = [], sends = [], adapters = [];
+  const events = new EventEmitter();
+  t.after(async () => {
+    for (const adapter of adapters) await adapter.close();
+    await fs.rm(root, { recursive: true });
+  });
+  function environment(index) {
+    const own = bindings[index];
+    return {
+      CMUX_MAESTRO_MESSAGE_ROOT: root, CMUX_MAESTRO_MESSAGE_PEER: own.peer,
+      CMUX_MAESTRO_WORKER_ID: own.nodeId, CMUX_MAESTRO_EXECUTION_MODE: "interactive",
+      CMUX_WORKSPACE_ID: own.workspaceId, SESSION_ID: own.sessionId, CMUX_MAESTRO_GENERATION: "1",
+    };
+  }
+  async function launch(index, overrides = {}) {
+    const adapter = await startManaged({
+      environment: { ...environment(index), ...overrides },
+      diagnostic: () => events.emit("drop"),
+      joinSession: async (options) => {
+        assert.deepEqual(Object.keys(options), ["tools"]);
+        tools[index] = Object.fromEntries(options.tools.map((tool) =>
+          [tool.name, (args, invocation = { sessionId: bindings[index].sessionId }) => tool.handler(args, invocation)]));
+        return {
+          sessionId: bindings[index].sessionId,
+          send: async (value) => { sends.push({ index, ...value }); events.emit("send"); },
+        };
+      },
+    });
+    adapters.push(adapter);
+  }
+  return { root, bindings, tools, sends, events, launch, environment };
+}
+
+const managedAddress = (binding) => ({ ...addr(binding), generation: binding.generation });
+
+test("installed mode discovers arbitrary same-workspace participants and peer replies", async (t) => {
+  const f = await managedFixture(t);
+  for (const index of [0, 1, 2, 3]) await f.launch(index);
+  const peers = JSON.parse(await f.tools[0].maestro_peers({}));
+  assert.deepEqual(peers.map((p) => p.sessionId).sort(), [f.bindings[1].sessionId, f.bindings[2].sessionId].sort());
+  assert.equal(JSON.stringify(peers).includes("capability"), false);
+  assert.equal(JSON.stringify(peers).includes(f.root), false);
+  for (const index of [1, 2]) {
+    const incoming = event(f.events, "send");
+    assert.match(await f.tools[0].maestro_send({
+      destination: managedAddress(f.bindings[index]), body: `hello ${index}`,
+    }), /unconfirmed/);
+    await incoming;
+    const envelope = JSON.parse(f.sends.at(-1).prompt.split("\n").slice(1).join("\n"));
+    assert.deepEqual(envelope.sender, managedAddress(f.bindings[0]));
+    assert.equal(f.sends.at(-1).mode, "enqueue");
+    const reply = event(f.events, "send");
+    await f.tools[index].maestro_send({ destination: envelope.sender, body: "reply" });
+    await reply;
+    assert.equal(f.sends.at(-1).index, 0);
+  }
+  assert.equal((await f.tools[0].maestro_send({
+    destination: managedAddress(f.bindings[3]), body: "different workspace",
+  })).resultType, "failure");
+  assert.deepEqual(Object.keys(f.tools[0]), ["maestro_peers", "maestro_send"]);
+});
+
+test("installed loader is inert outside managed sessions and refuses mismatched bindings before join", async (t) => {
+  let joined = false;
+  assert.equal(await startManaged({ environment: {}, joinSession: () => { joined = true; } }), null);
+  assert.equal(joined, false);
+  const f = await managedFixture(t);
+  for (const overrides of [
+    { SESSION_ID: randomUUID() }, { CMUX_WORKSPACE_ID: randomUUID() },
+    { CMUX_MAESTRO_GENERATION: "2" }, { CMUX_MAESTRO_WORKER_ID: randomUUID() },
+  ]) {
+    await assert.rejects(startManaged({
+      environment: { ...f.environment(0), ...overrides },
+      joinSession: () => { joined = true; },
+    }));
+    assert.equal(joined, false);
+  }
+});
+
+test("installed routes refuse stale generations, lost participation and wrong invocation", async (t) => {
+  const f = await managedFixture(t);
+  await f.launch(0);
+  await f.launch(1);
+  for (const destination of [
+    { ...managedAddress(f.bindings[1]), generation: 2 }, addr(f.bindings[1]),
+    managedAddress(f.bindings[0]),
+  ]) assert.equal((await f.tools[0].maestro_send({ destination, body: "stale" })).resultType, "failure");
+  assert.equal((await f.tools[0].maestro_peers({}, { sessionId: f.bindings[1].sessionId })).resultType, "failure");
+  const dropped = event(f.events, "drop");
+  await rawSend(f.root, f.bindings[1].peer, {
+    sender: managedAddress(f.bindings[0]), destination: { ...managedAddress(f.bindings[1]), generation: 2 },
+    capability: f.bindings[0].capability, body: "stale",
+  });
+  await dropped;
+  await fs.unlink(path.join(f.root, `${f.bindings[0].peer}.json`));
+  assert.equal((await f.tools[0].maestro_peers({})).resultType, "failure");
+  assert.equal((await f.tools[0].maestro_send({
+    destination: managedAddress(f.bindings[1]), body: "removed",
+  })).resultType, "failure");
+  assert.equal(f.sends.length, 0);
 });

@@ -583,6 +583,7 @@ class OrchestratorTests(unittest.TestCase):
                 "modelPinned": True,
                 "ok": True,
                 "ready": False,
+                "messagingInstalled": False,
                 "returncode": 0,
                 "stderr": "",
             })
@@ -598,6 +599,7 @@ class OrchestratorTests(unittest.TestCase):
                 "modelPinned": True,
                 "ok": True,
                 "ready": True,
+                "messagingInstalled": False,
                 "returncode": 0,
                 "stderr": "",
             })

@@ -44,7 +44,9 @@ private Agent launch settings:
 ```
 
 Proceed only when the response has `ok: true`, `accountPinned: true`,
-`modelPinned: true`, `accountAvailable: true`, and `ready: true`. The response
+`modelPinned: true`, `accountAvailable: true`, `ready: true`, and
+`messagingInstalled: true`. The last field verifies the installed native adapter,
+not recipient liveness or delivery. The response
 intentionally reveals neither the account name nor the model. If the command is
 unavailable, any field is false, or the settings are unreadable, stop before
 creating a worker and direct the human to the installed CMUX Maestro app's
@@ -86,7 +88,12 @@ tools for this task, pass each exact supported Copilot rule separately:
 
 These are Copilot policy arguments, not an operating-system sandbox. Never add
 `--allow-all`, a wildcard, all paths or URLs, or rights not explicitly approved
-for the task. A general shell grant must also be caller-explicit and task-
+for the task. The sole explicit broad-mode option is a **user-approved
+coordinator** `spawn --yolo`; it supplies Copilot `--allow-all` while preserving
+explicit denies. Never add it by default or to solve a stalled permission prompt.
+Worker actors cannot request YOLO, including for descendants of a YOLO worker.
+There is no inferred full parent-permission inheritance. A general shell grant
+must also be caller-explicit and task-
 justified; it is never a default. Denies win. A descendant receives no additional
 grants by default and may request only a subset of its parent's explicit allows;
 inherited denies cannot be removed. Policies remain private.
@@ -135,18 +142,21 @@ For an explicitly delegated descendant, use only the injected worker identity:
 ```
 
 Humans send follow-ups directly in the worker's Copilot interface. The controller's
-`follow-up` command remains refused for interactive workers. Issue #54 separately
-provides an explicitly opt-in, disposable native-extension messaging proof;
-see `docs/delivery-proof.md` in the source checkout. It reuses this pinned
-launcher without installing over the active integration. Participating peers
-may message each other in the same workspace regardless of visual focus; this
-does not grant ancestor-only process-control permissions. Copilot schedules
-incoming prompts, and a reply is another fire-and-forget message. Preserve drafts
-and typing; add no acknowledgements, retries, receipts, or custom busy scheduler.
-For this disposable proof only, an explicitly authorized
-`--delivery-proof-yolo` spawn adds Copilot `--allow-all` while retaining explicit
-denies. Without it, permissions are unchanged. It neither inherits parent
-permissions nor changes persistent settings; it is refused outside proof mode.
+`follow-up` command remains refused for interactive workers. Newly installed
+Maestro-managed spawns automatically participate in native peer messaging,
+using the pinned launcher and an ordinary working directory; no fixture
+preparation is needed. Use **`/maestro`** for discovery, one fire-and-forget send,
+or a reply to the supplied return address. That skill owns the messaging
+workflow; this skill owns lifecycle operations.
+
+Existing/unmanaged sessions and legacy bounded workers are not adopted.
+Registering the current coordinator does not make it a native recipient.
+Participating same-workspace peers may message one another independently of
+visual focus; this does not extend ancestor-only process-control permissions.
+Copilot schedules native incoming prompts. Preserve drafts and typing; add no
+acknowledgements, retries, receipts, completion tracking or custom busy scheduler.
+Source-only disposable proof compatibility remains documented in
+`docs/delivery-proof.md`; it is not the installed setup path.
 Never use `send`, `send-key`, pasted prompts, or terminal keystrokes to work
 around this boundary; a human may be using the same input.
 
