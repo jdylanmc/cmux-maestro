@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import runpy
 from pathlib import Path
 import secrets
 import selectors
@@ -65,6 +66,13 @@ REPORT_KEYS = {
 
 class OrchestrationError(Exception):
     pass
+
+
+def delivery_proof_api():
+    path = Path(__file__).resolve().parent / "delivery-proof" / "fixture.py"
+    if not path.is_file():
+        raise OrchestrationError("Delivery proof is available only from its isolated source checkout.")
+    return runpy.run_path(str(path))
 
 
 @functools.lru_cache(maxsize=1)
@@ -656,6 +664,16 @@ def validate_state(state):
             raise OrchestrationError("Stored execution mode is invalid.")
         if node.get("launchSettings") is not None:
             validate_launch_settings(node["launchSettings"])
+        proof = node.get("deliveryProof")
+        if proof is not None and (
+            not isinstance(proof, dict)
+            or set(proof) not in ({"fixture", "experimental"}, {"fixture", "experimental", "yolo"})
+            or not isinstance(proof["fixture"], str) or len(proof["fixture"]) > 1024
+            or type(proof["experimental"]) is not bool
+            or type(proof.get("yolo", False)) is not bool
+            or role != "worker" or mode != "interactive"
+        ):
+            raise OrchestrationError("Stored delivery proof configuration is invalid.")
         provider = node.get("providerProcess")
         if provider is not None and (
             not isinstance(provider, dict) or set(provider) != {"pid", "start"}
@@ -1386,11 +1404,23 @@ def command_spawn(args, root, cmux):
     task = bounded_text(args.task, "task", MAX_TASK)
     label = sanitize_label(bounded_text(args.name, "name", MAX_LABEL))
     cwd = assigned_directory(args.cwd)
+    proof = None
+    if getattr(args, "delivery_proof_fixture", None):
+        try:
+            proof = delivery_proof_api()["validate_fixture"](args.delivery_proof_fixture, cwd, fresh=True)
+        except (ValueError, OSError) as error:
+            raise OrchestrationError("Delivery proof requires a fresh prepared fixture.") from error
+        proof["experimental"] = args.delivery_proof_experimental
+        proof["yolo"] = getattr(args, "delivery_proof_yolo", False)
+    elif getattr(args, "delivery_proof_experimental", False):
+        raise OrchestrationError("--delivery-proof-experimental requires --delivery-proof-fixture.")
+    elif getattr(args, "delivery_proof_yolo", False):
+        raise OrchestrationError("--delivery-proof-yolo requires --delivery-proof-fixture.")
     metadata = git_display_metadata(cwd)
     snapshot = read_state(root)
     actor = authorize(snapshot, args.actor_id, args.token)
     launch_settings = worker_launch_settings(root)
-    if args.require_pinned_launch_settings and (
+    if (args.require_pinned_launch_settings or proof is not None) and (
         launch_settings.get("copilotAccount") is None
         or launch_settings.get("model") is None
     ):
@@ -1467,6 +1497,8 @@ def command_spawn(args, root, cmux):
             "archiving": False,
             "verifiedBoundaryGeneration": None, "toolPolicy": tool_policy,
         }
+        if proof is not None:
+            state["nodes"][identifier]["deliveryProof"] = proof
         state["launches"][identifier] = {
             "workerId": identifier, "runId": current["runId"],
             "workspaceId": current["workspaceId"], "surfaceId": None,
@@ -1701,6 +1733,15 @@ def run_interactive_session(root, worker_id, token, node):
         arguments.extend(["--deny-tool", rule])
     if not all(os.isatty(fd) for fd in (0, 1, 2)):
         raise OrchestrationError("Interactive workers require a real terminal; no headless fallback is allowed.")
+    if node.get("deliveryProof") is not None:
+        try:
+            delivery_proof_api()["bind"](node["deliveryProof"], node)
+        except (ValueError, OSError) as error:
+            raise OrchestrationError("Delivery proof binding failed; use fresh fixtures.") from error
+        if node["deliveryProof"]["experimental"]:
+            arguments.append("--experimental")
+        if node["deliveryProof"].get("yolo", False):
+            arguments.append("--allow-all")
     previous_interrupt = signal.signal(signal.SIGINT, lambda _signum, _frame: None)
     try:
         try:
@@ -2511,6 +2552,11 @@ def parser():
     spawn.add_argument("--allow-tool", action="append", default=[])
     spawn.add_argument("--deny-tool", action="append", default=[])
     spawn.add_argument("--require-pinned-launch-settings", action="store_true")
+    spawn.add_argument("--delivery-proof-fixture", help="Opt in to one prepared disposable native-extension fixture")
+    spawn.add_argument("--delivery-proof-experimental", action="store_true",
+                       help="Opt in to Copilot --experimental for this proof worker only")
+    spawn.add_argument("--delivery-proof-yolo", action="store_true",
+                       help="Opt in to Copilot --allow-all for this disposable proof worker only; explicit denies remain")
     spawn.add_argument("--icon")
     spawn.add_argument("--color", choices=ICON_COLORS)
     icon = commands.add_parser("icon", help="Choose an icon for the authenticated caller's own session")

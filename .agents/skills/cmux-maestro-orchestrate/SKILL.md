@@ -134,8 +134,19 @@ For an explicitly delegated descendant, use only the injected worker identity:
   --worker-id "$WORKER_ID"
 ```
 
-Humans send follow-ups directly in the worker's Copilot interface. Programmatic
-follow-up is refused for interactive workers pending workspace messaging (#38).
+Humans send follow-ups directly in the worker's Copilot interface. The controller's
+`follow-up` command remains refused for interactive workers. Issue #54 separately
+provides an explicitly opt-in, disposable native-extension messaging proof;
+see `docs/delivery-proof.md` in the source checkout. It reuses this pinned
+launcher without installing over the active integration. Participating peers
+may message each other in the same workspace regardless of visual focus; this
+does not grant ancestor-only process-control permissions. Copilot schedules
+incoming prompts, and a reply is another fire-and-forget message. Preserve drafts
+and typing; add no acknowledgements, retries, receipts, or custom busy scheduler.
+For this disposable proof only, an explicitly authorized
+`--delivery-proof-yolo` spawn adds Copilot `--allow-all` while retaining explicit
+denies. Without it, permissions are unchanged. It neither inherits parent
+permissions nor changes persistent settings; it is refused outside proof mode.
 Never use `send`, `send-key`, pasted prompts, or terminal keystrokes to work
 around this boundary; a human may be using the same input.
 

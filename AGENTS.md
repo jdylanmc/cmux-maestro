@@ -37,9 +37,16 @@ do not copy its source or history, modify it, or make this project depend on it.
   raw prompts/results/tokens, a daemon, loopback server, socket client, focus
   inference, automatic tool approval, or automatic terminal/process cleanup.
 - New workers are interactive Copilot sessions with inherited terminal I/O and
-  direct human follow-ups. Do not create new headless-worker tabs, inject
-  follow-ups into an interactive terminal, or infer task completion from an
-  interactive session's exit. Preserve existing legacy bounded workers.
+  direct human follow-ups. Do not create new headless-worker tabs or infer task
+  completion from an interactive session's exit. Issue #54 permits the opt-in
+  disposable native-extension delivery proof in `scripts/delivery-proof/`,
+  using the existing pinned launcher. Its same-workspace peer messaging is
+  fire-and-forget, independent of visual focus, and grants no process control.
+  Preserve human typing/drafts; do not use terminal keystrokes as a fallback.
+  Copilot owns prompt scheduling; add no custom busy scheduler, acknowledgements,
+  receipts, retries, completion tracker, or beat timer. No installed-integration
+  replacement or host change is authorized by this exception.
+  Preserve existing legacy bounded workers.
   Legacy reported outcomes require a strict whole-final-message generation
   report plus verified process/result boundary. Report-missing or permission-
   denied recovery requires that exact current-generation boundary and exact
@@ -53,6 +60,10 @@ do not copy its source or history, modify it, or make this project depend on it.
 - Keep Copilot tool policy explicit, bounded and private. Add no grants by
   default; preserve denies and descendant non-escalation. Provider policy flags
   are not an operating-system sandbox or a lifecycle reporting channel.
+  Issue #54 additionally permits explicit per-spawn `--delivery-proof-yolo` for
+  disposable proof workers only, using Copilot `--allow-all` while preserving
+  explicit denies. Do not infer parent permissions, auto-answer prompts, or
+  change persistent Copilot settings; ordinary workers remain unchanged.
 - Preserve exact workspace/surface/session/generation ownership and the
   controller's depth, node, size and concurrent-operation bounds.
 

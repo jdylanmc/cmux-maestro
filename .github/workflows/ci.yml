@@ -11,6 +11,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify terminal orchestration contracts
         run: python3 scripts/test-cmux-maestro-orchestrator.py
+      - name: Verify delivery proof fixture and launcher contracts
+        run: python3 scripts/test-delivery-proof.py
+      - name: Verify native delivery adapter contracts
+        run: node --test scripts/test-delivery-proof.mjs
       - name: Verify build and registration metadata contracts
         run: python3 scripts/test-build-metadata.py
       - name: Verify local preview transactions and recovery
