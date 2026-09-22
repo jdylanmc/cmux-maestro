@@ -5,10 +5,13 @@ description: Discover participating Copilot peers in the current CMUX workspace,
 
 # Maestro peer messaging
 
-Installed slash invocation: `/cmux-maestro-native:maestro`. For the skill tool,
-pass `{"skill":"maestro"}`. The plugin-qualified slash-command name and the bare
-skill-tool identifier are distinct; do not pass the slash-command namespace to
-the skill tool.
+Global slash invocation: `/maestro`. For the skill tool, pass
+`{"skill":"maestro"}`.
+
+The human installs this guide separately using the copyable command in Maestro
+**Settings > CLI Integration**. Global distribution uses `npx skills`; this guide
+does not install the runtime, execute setup, or grant permissions. Native messaging
+remains usable without the guide. Do not install or refresh skills automatically.
 
 Use this skill when asked to discover participating sessions, send a message, or
 reply to a received Maestro message. Send only within the user's authorized task;

@@ -41,7 +41,7 @@ struct ContentView: View {
                     .disabled(busy)
             }
 
-            Text("Enable installs the cmux-maestro-native plugin, /cmux-maestro-native:maestro and lifecycle skills, the local controller, and a native messaging loader under ~/.copilot/extensions/maestro. The loader is inert outside newly Maestro-launched participating sessions. Existing plugins and settings are preserved. Choose only a Copilot executable you trust.")
+            Text("Enable installs the cmux-maestro-native lifecycle and icon plugin, the local controller, and a native messaging loader under ~/.copilot/extensions/maestro. The loader is inert outside newly Maestro-launched participating sessions. Install the optional global /maestro guide separately from Settings > CLI Integration. Existing unrelated plugins and settings are preserved. Choose only a Copilot executable you trust.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -65,7 +65,7 @@ struct ContentView: View {
 
             Divider()
             SettingsLink {
-                Label("Agent launch settings…", systemImage: "gearshape")
+                Label("Settings…", systemImage: "gearshape")
             }
             Text("Next: configure a pinned account and model in Agent launch settings. New Maestro-launched sessions get fire-and-forget messaging; existing or unmanaged sessions are not adopted. Messaging never changes focus or human input and does not guarantee delivery. The sidebar is optional for messaging.")
                 .font(.callout)

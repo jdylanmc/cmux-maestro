@@ -2,6 +2,7 @@
 """Fixture/launcher contracts only: never authenticates or launches a real provider."""
 
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -31,11 +32,15 @@ class ProofTests(unittest.TestCase):
             "phase": "turn-running", "generation": 1,
         }
 
-    def test_installed_skill_exposes_messaging_without_implicit_permission_grants(self):
+    def test_global_skill_exposes_messaging_without_implicit_permission_grants(self):
         skill = (REPO / "skills/maestro/SKILL.md").read_text()
         frontmatter = skill.split("---", 2)[1]
         self.assertEqual({line.split(":", 1)[0] for line in frontmatter.splitlines() if line}, {"name", "description"})
         self.assertIn("name: maestro", frontmatter)
+        self.assertIn("`/maestro`", skill)
+        self.assertIn('{"skill":"maestro"}', skill)
+        self.assertNotIn("cmux-maestro-native:maestro", skill)
+        self.assertIn("does not install the runtime", skill)
         for tool in ("maestro_peers", "maestro_send"):
             self.assertIn(f"`{tool}`", skill)
         for constraint in (
@@ -45,8 +50,20 @@ class ProofTests(unittest.TestCase):
         ):
             self.assertIn(constraint, skill)
         self.assertTrue((REPO / "skills/maestro/intent.md").is_file())
+        self.assertEqual(hashlib.sha256((REPO / "skills/maestro/intent.md").read_bytes()).hexdigest(),
+                         "8dd1495be16e27a92b43a038ab7b728b4d6fedcbae1e53f41aac11452fe54d42")
         self.assertFalse((REPO / "skills/maestro/_atoms").exists())
         self.assertFalse((REPO / "skills/maestro/_molecules").exists())
+
+    def test_global_guide_is_not_bundled_or_required_by_runtime_setup(self):
+        project = (REPO / "CMUXMaestroPreview.xcodeproj/project.pbxproj").read_text()
+        self.assertNotIn('path = "skills/maestro"', project)
+        setup = (REPO / "CMUXMaestroPreview/Integration/CopilotSetup.swift").read_text()
+        self.assertNotIn('resources.appendingPathComponent("maestro/SKILL.md")', setup)
+        self.assertNotIn("npx", setup)
+        launcher = (REPO / "scripts/cmux-maestro-orchestrator.py").read_text()
+        self.assertNotIn("managed_plugin_directory", launcher)
+        self.assertNotIn("--plugin-dir", launcher)
 
     def test_preparation_is_disposable_private_and_outside_source_discovery(self):
         self.assertEqual(self.root.stat().st_mode & 0o777, 0o700)
@@ -137,8 +154,7 @@ class ProofTests(unittest.TestCase):
         self.assertEqual(args[args.index("--model") + 1], "synthetic-pinned-model")
         self.assertEqual(args[args.index("--session-id") + 1], self.node["copilotSessionId"])
         self.assertNotIn("--allow-tool", args)
-        if not self.node.get("messaging"):
-            self.assertNotIn("--plugin-dir", args)
+        self.assertNotIn("--plugin-dir", args)
         self.assertEqual(args[args.index("--deny-tool") + 1], "web")
         self.assertEqual(popen.call_args.kwargs, {
             "cwd": self.paths["a"], "env": {"SYNTHETIC_PINNED_ENV": "preserved"},
@@ -268,7 +284,7 @@ class ProofTests(unittest.TestCase):
                     spawn(args, self.root, cmux)
             self.assertEqual(cmux.mock_calls, [])
 
-    def install_synthetic_messaging(self, *, with_plugin=True):
+    def install_synthetic_messaging(self):
         self.root = self.root / "Orchestration"
         self.root.mkdir(mode=0o700)
         routes = REPO / ".build" / uuid.uuid4().hex[:5]
@@ -280,103 +296,39 @@ class ProofTests(unittest.TestCase):
             shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         config = {"version": 1, "routes": str(routes), "extension": str(extension)}
-        installed_config = dict(config)
-        if with_plugin:
-            plugin = self.root.parent / "Copilot/plugin"
-            for directory in (plugin.parent, plugin, plugin / "skills", plugin / "skills/maestro"):
-                directory.mkdir(mode=0o700)
-            PROOF["write_new"](plugin / "plugin.json", {
-                "name": "cmux-maestro-native", "version": "1.1.0", "hooks": "hooks.json",
-            })
-            skill = plugin / "skills/maestro/SKILL.md"
-            shutil.copyfile(REPO / "skills/maestro/SKILL.md", skill)
-            skill.chmod(0o600)
-            installed_config["pluginDirectory"] = str(plugin)
         (self.root / "bin").mkdir(mode=0o700)
-        PROOF["write_new"](self.root / "bin/messaging.json", installed_config)
+        PROOF["write_new"](self.root / "bin/messaging.json", config)
         self.node.update({
             "id": str(uuid.uuid4()), "runId": str(uuid.uuid4()),
             "messaging": config, "executionMode": "interactive",
         })
         return routes, config
 
-    def test_old_config_remains_readable_but_new_managed_launch_requires_setup_upgrade(self):
-        routes, config = self.install_synthetic_messaging(with_plugin=False)
+    def test_three_field_config_launches_without_plugin_or_global_guide(self):
+        routes, config = self.install_synthetic_messaging()
         self.assertEqual(CONTROLLER["messaging_configuration"](self.root), config)
-        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "updated setup"):
-            self.run_mocked_launcher()
+        args = self.run_mocked_launcher()
+        self.assertIn("--experimental", args)
+        self.assertNotIn("--plugin-dir", args)
         self.assertEqual(list(routes.iterdir()), [])
         self.assertEqual(self.node["messaging"], config)
 
-    def test_managed_plugin_configuration_rejects_malformed_and_foreign_paths(self):
-        routes, _ = self.install_synthetic_messaging()
+    def test_obsolete_plugin_directory_is_ignored_without_path_access(self):
+        routes, config = self.install_synthetic_messaging()
         path = self.root / "bin/messaging.json"
         original = PROOF["read_private"](path)
         for candidate in (None, 1, [], {}, "", "relative", "/foreign/plugin", "/bad\0path",
-                          "/" + "x" * 1024, original["pluginDirectory"] + "/../plugin"):
+                          "/" + "x" * 1024, "/missing/../plugin"):
             with self.subTest(candidate=candidate):
                 path.write_text(json.dumps({**original, "pluginDirectory": candidate}))
-                with self.assertRaises(CONTROLLER["OrchestrationError"]):
-                    self.run_mocked_launcher()
+                self.assertEqual(CONTROLLER["messaging_configuration"](self.root), config)
+                self.node["phase"] = "turn-running"
+                self.assertNotIn("--plugin-dir", self.run_mocked_launcher())
                 self.assertEqual(list(routes.iterdir()), [])
+                self.assertEqual(set(self.node["messaging"]), {"version", "routes", "extension"})
         path.write_text(json.dumps({**original, "unexpected": True}))
         with self.assertRaises(CONTROLLER["OrchestrationError"]):
             CONTROLLER["messaging_configuration"](self.root)
-
-    def test_managed_plugin_rejects_wrong_manifest_and_unreadable_skill(self):
-        routes, _ = self.install_synthetic_messaging()
-        plugin = self.root.parent / "Copilot/plugin"
-        manifest = plugin / "plugin.json"
-        original = manifest.read_bytes()
-        for value in ({}, [], {"name": "foreign", "version": "1.1.0", "hooks": "hooks.json"},
-                      {"name": "cmux-maestro-native", "version": "0.0.0", "hooks": "hooks.json"},
-                      {"name": "cmux-maestro-native", "version": "1.1.0", "hooks": "../hooks.json"}):
-            with self.subTest(manifest=value):
-                manifest.write_text(json.dumps(value))
-                with self.assertRaises(CONTROLLER["OrchestrationError"]):
-                    self.run_mocked_launcher()
-        manifest.write_bytes(original)
-        skill = plugin / "skills/maestro/SKILL.md"
-        for content in (b"", b"---\nname: foreign\n---\n", b"\xff", b"x" * 65_537):
-            with self.subTest(skill=content[:20]):
-                skill.write_bytes(content)
-                with self.assertRaises(CONTROLLER["OrchestrationError"]):
-                    self.run_mocked_launcher()
-        skill.unlink()
-        with self.assertRaises(CONTROLLER["OrchestrationError"]):
-            self.run_mocked_launcher()
-        self.assertEqual(list(routes.iterdir()), [])
-
-    def test_managed_plugin_refuses_symlinks_and_unsafe_permissions(self):
-        routes, _ = self.install_synthetic_messaging()
-        plugin = self.root.parent / "Copilot/plugin"
-        for path in (plugin.parent, plugin, plugin / "skills", plugin / "skills/maestro",
-                     plugin / "plugin.json", plugin / "skills/maestro/SKILL.md"):
-            with self.subTest(path=path):
-                permissions = path.stat().st_mode & 0o777
-                path.chmod(0o777)
-                with self.assertRaises(CONTROLLER["OrchestrationError"]):
-                    self.run_mocked_launcher()
-                path.chmod(permissions)
-                saved = path.with_name(path.name + "-saved")
-                path.rename(saved)
-                path.symlink_to(saved, target_is_directory=saved.is_dir())
-                try:
-                    with self.assertRaises(CONTROLLER["OrchestrationError"]):
-                        self.run_mocked_launcher()
-                finally:
-                    path.unlink()
-                    saved.rename(path)
-        self.assertEqual(list(routes.iterdir()), [])
-
-    def test_managed_plugin_refuses_foreign_owner(self):
-        self.install_synthetic_messaging()
-        validate = CONTROLLER["managed_plugin_directory"]
-        # Accept the configuration owner, then reject the plugin's parent owner.
-        uid = os.getuid()
-        with mock.patch("os.getuid", side_effect=[uid, uid + 1]):
-            with self.assertRaises(CONTROLLER["OrchestrationError"]):
-                validate(self.root)
 
     def test_old_stored_nodes_survive_config_upgrade_and_retire_without_plugin_source(self):
         state, _ = self.lifecycle_state()
@@ -395,7 +347,6 @@ class ProofTests(unittest.TestCase):
         # Exit/cleanup of existing nodes must not read the new configuration or
         # source, including after uninstall; only the exact old route is needed.
         (self.root / "bin/messaging.json").unlink()
-        shutil.rmtree(self.root.parent / "Copilot")
         CONTROLLER["validate_state"](state)
         self.assertEqual(CONTROLLER["read_state"](self.root), before)
         CONTROLLER["retire_messaging"](self.node)
@@ -409,10 +360,9 @@ class ProofTests(unittest.TestCase):
         self.assertEqual(self.node["availability"], "unavailable")
         self.assertEqual(list(routes.iterdir()), [])
 
-    def test_missing_managed_plugin_fails_spawn_before_credentials_or_reservation(self):
-        self.install_synthetic_messaging()
-        plugin = self.root.parent / "Copilot/plugin"
-        (plugin / "skills/maestro/SKILL.md").unlink()
+    def test_missing_runtime_fails_spawn_before_credentials_or_reservation(self):
+        _, config = self.install_synthetic_messaging()
+        (Path(config["extension"]) / "extension.mjs").unlink()
         spawn = CONTROLLER["command_spawn"]
         args = CONTROLLER["parser"]().parse_args([
             "spawn", "--actor-id", str(uuid.uuid4()), "--token", "synthetic",
@@ -425,7 +375,7 @@ class ProofTests(unittest.TestCase):
             "git_display_metadata": lambda _: {},
             "worker_launch_settings": forbidden, "resolve_copilot_token": forbidden, "mutate": forbidden,
         }):
-            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "Managed skills"):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "Messaging is not installed"):
                 spawn(args, self.root, cmux)
         forbidden.assert_not_called()
         self.assertEqual(cmux.mock_calls, [])
@@ -807,8 +757,7 @@ class ProofTests(unittest.TestCase):
         # No fixture validation/binding should run in installed mode.
         args = self.run_mocked_launcher()
         self.assertIn("--experimental", args)
-        self.assertEqual(args.count("--plugin-dir"), 1)
-        self.assertEqual(args[args.index("--plugin-dir") + 1], str(self.root.parent / "Copilot/plugin"))
+        self.assertNotIn("--plugin-dir", args)
         self.assertNotIn("--allow-all", args)
         self.assertEqual(list(routes.iterdir()), [])
         self.node["permissionMode"] = "yolo"

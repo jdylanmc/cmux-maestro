@@ -18,9 +18,10 @@ do not copy its source or history, modify it, or make this project depend on it.
 - `scripts/`: pinned SDK fetch, build, test, and local registration commands.
 - `.agents/skills/cmux-maestro-orchestrate/`: repository-owned installed
   terminal orchestration skill.
-- `skills/maestro/`: confirmed intent and installed peer discovery/send/reply
-  skill; reuse the lifecycle skill instead of duplicating it. The Xcode folder
-  resource maps this source package to `Contents/Resources/maestro/`.
+- `skills/maestro/`: confirmed intent and globally distributed peer discovery/
+  send/reply guide; reuse the lifecycle skill instead of duplicating it.
+  Distribute only through the human-run `npx skills` command in Settings >
+  CLI Integration, not app resources or the runtime plugin.
 - `scripts/delivery-proof/adapter.mjs`: shared installed native-session
   adapter and backwards-compatible disposable proof transport.
 - `vendor/CmuxExtensionKit/`: ignored local SDK checkout created by the fetch
@@ -46,7 +47,7 @@ do not copy its source or history, modify it, or make this project depend on it.
   completion from an interactive session's exit. Issue #54's confirmed product
   expansion permits the installed native-session adapter, same-workspace peer
   discovery/send/reply, explicit installer/build resources and
-  `/cmux-maestro-native:maestro` skill,
+  global `/maestro` guide,
   reusing `scripts/delivery-proof/` and the existing pinned launcher.
   Newly launched managed participants receive wiring automatically; never adopt
   or restart an existing/unmanaged session. Its same-workspace peer messaging is

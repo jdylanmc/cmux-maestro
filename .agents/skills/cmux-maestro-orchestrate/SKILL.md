@@ -147,7 +147,7 @@ Humans send follow-ups directly in the worker's Copilot interface. The controlle
 `follow-up` command remains refused for interactive workers. Newly installed
 Maestro-managed spawns automatically participate in native peer messaging,
 using the pinned launcher and an ordinary working directory; no fixture
-preparation is needed. Use **`/cmux-maestro-native:maestro`** for discovery, one fire-and-forget send,
+preparation is needed. Use the separately installed global **`/maestro`** guide for discovery, one fire-and-forget send,
 or a reply to the supplied return address. That skill owns the messaging
 workflow; this skill owns lifecycle operations.
 

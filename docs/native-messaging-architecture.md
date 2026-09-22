@@ -97,7 +97,10 @@ OS sandbox or a cryptographic identity claim against that user.
 ## Installed lifecycle and permissions
 
 Explicit production setup installs the native loader, shared adapter, local
-controller and plugin skills. The loader is inert without matching launcher
+controller and lifecycle/icon plugin skills. The global `/maestro` guide is
+distributed separately through human-run `npx skills`; native Settings >
+CLI Integration only presents and copies the command. Neither guide installation
+nor availability is a runtime prerequisite. The loader is inert without matching launcher
 bindings. Newly Maestro-launched visible interactive sessions participate
 automatically; existing/unmanaged sessions are neither adopted nor restarted.
 A coordinator without a launcher-bound session cannot receive; the sidebar sees no bodies or secrets.
@@ -126,15 +129,26 @@ CMUX's **Default sidebar** was selected. This disproves a dependency on the Maes
 sidebar being selected, not all visibility conditions or reliable delivery.
 Mocked transport/setup tests and packaging checks do not prove native UI behavior.
 
-Installed skill invocation is **still an unresolved acceptance gap**: bare-name
-lookup failed in real interactive sessions despite later read-only discovery
-listing the skill. Qualified skill-tool lookup also failed. CLI source distinguishes
-the qualified slash command from bare skill-tool ID; naming alone did not solve
-the missing interactive registry entry. No exact upstream cause is claimed.
-Passing the existing owned plugin through supported `--plugin-dir` before creating
-new managed sessions is a **pending mitigation**, not a verified fix. It must
-preserve pins and permissions, add no duplicate global skill, and await parent
-validation. The original missing-inventory observations remain part of the findings.
+Plugin-based guide discovery failed live: bare-name lookup failed in interactive
+sessions despite later read-only discovery listing the skill; qualified lookup
+also failed. Explicit `--plugin-dir` did not fix the live failure. No exact
+upstream cause is claimed, and neither workaround remains in the launcher.
+
+At `2026-09-22T12:03:56.533Z`, the user reported successful global local-source
+installation with `npx skills` **1.5.26** to `~/.agents/skills/maestro`, followed
+by successful Copilot global discovery. Global `npx skills` is now the sole guide
+distribution: `/maestro` or `{"skill":"maestro"}`. This is observed discovery,
+not a guarantee across CLI versions or proof of every live messaging condition.
+The GitHub-source command in Settings requires the skill to merge to `main`;
+[local-source acceptance instructions](../README.md#cli-integration-install-the-global-guide)
+cover development without movable refs or automatic installation.
+
+Setup writes only `{version, routes, extension}` for messaging; the old
+`pluginDirectory` field is ignored if encountered. On explicit setup only,
+the obsolete messaging guide in the installer's own plugin is removed, preserving
+unrelated and global skills. No live files were changed for this correction.
+Installed Settings UI acceptance and any consentful refresh remain separate from
+the already observed global discovery success.
 
 [orca-stage]: https://github.com/stablyai/orca/blob/33ba1ff3df247652c546985201d9a6f4edaec80b/src/main/runtime/orchestration/mailbox-pointer-stage.ts#L97-L109
 [orca-submit]: https://github.com/stablyai/orca/blob/33ba1ff3df247652c546985201d9a6f4edaec80b/src/main/runtime/orchestration/mailbox-pointer-submit.ts#L102-L128

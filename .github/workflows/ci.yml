@@ -34,7 +34,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
-      - name: Verify setup process isolation
+      - name: Verify Settings guide and setup process isolation
         run: ./scripts/test-copilot-setup.sh
       - name: Verify compiled hooks fail open
         run: ./scripts/test-copilot-hook.sh

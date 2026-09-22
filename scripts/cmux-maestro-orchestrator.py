@@ -104,13 +104,7 @@ def messaging_configuration(root):
                 or set(value) not in ({"version", "routes", "extension"},
                                      {"version", "routes", "extension", "pluginDirectory"})
                 or type(value["version"]) is not int or value["version"] != 1
-                or not isinstance(value["routes"], str) or not isinstance(value["extension"], str)
-                or ("pluginDirectory" in value and (
-                    not isinstance(value["pluginDirectory"], str)
-                    or not 0 < len(value["pluginDirectory"]) <= 1024
-                    or "\0" in value["pluginDirectory"]
-                    or not Path(value["pluginDirectory"]).is_absolute()
-                ))):
+                or not isinstance(value["routes"], str) or not isinstance(value["extension"], str)):
             raise OrchestrationError("Messaging configuration is invalid.")
         routes = Path(value["routes"])
         private_message_directory(routes)
@@ -127,8 +121,8 @@ def messaging_configuration(root):
                     raise OrchestrationError("Installed messaging adapter is unavailable.")
             finally:
                 os.close(descriptor)
-        # Keep the persisted node contract unchanged: already-running installed
-        # controllers still read/write these nodes after setup replaces the files.
+        # Ignore the obsolete pluginDirectory field; guide discovery is independent.
+        # Keep the three-field node contract compatible with already-running controllers.
         return {key: value[key] for key in ("version", "routes", "extension")}
     except FileNotFoundError:
         # Source/proof and pre-feature controller installs remain usable; an
@@ -138,37 +132,6 @@ def messaging_configuration(root):
         raise OrchestrationError("Messaging is not installed; enable Maestro integration.")
     except (OSError, ValueError) as error:
         raise OrchestrationError("Messaging is unavailable; enable Maestro integration.") from error
-
-
-def managed_plugin_directory(root):
-    """Validate only installer-owned sources; never infer a plugin from the environment."""
-    try:
-        value = message_json(root / "bin/messaging.json")
-        if not isinstance(value, dict) or "pluginDirectory" not in value:
-            raise OrchestrationError("Managed skills require updated setup; enable Maestro integration again.")
-        expected = root.parent / "Copilot/plugin"
-        if value["pluginDirectory"] != str(expected):
-            raise OrchestrationError("Managed plugin source is not the installer-owned Maestro directory.")
-        for directory in (expected.parent, expected, expected / "skills", expected / "skills/maestro"):
-            private_message_directory(directory)
-        manifest = message_json(expected / "plugin.json")
-        if (not isinstance(manifest, dict) or manifest.get("name") != "cmux-maestro-native"
-                or manifest.get("version") != "1.1.0" or manifest.get("hooks") != "hooks.json"):
-            raise OrchestrationError("Managed Maestro plugin manifest is invalid; enable integration again.")
-        descriptor = os.open(
-            expected / "skills/maestro/SKILL.md", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-        )
-        with os.fdopen(descriptor, "rb") as stream:
-            info = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                    or info.st_mode & 0o077 or not 0 < info.st_size <= 65_536):
-                raise OrchestrationError("Managed Maestro skill is not a private bounded file.")
-            data = stream.read(65_537)
-            if len(data) > 65_536 or not data.decode("utf-8").startswith("---\nname: maestro\n"):
-                raise OrchestrationError("Managed Maestro skill is invalid; enable integration again.")
-        return str(expected)
-    except (OSError, ValueError) as error:
-        raise OrchestrationError("Managed skills are unavailable; enable Maestro integration again.") from error
 
 
 def message_peer(node):
@@ -1629,8 +1592,6 @@ def command_spawn(args, root, cmux):
     if yolo and actor["role"] != "coordinator":
         raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
     messaging = None if proof is not None else messaging_configuration(root)
-    if messaging is not None:
-        managed_plugin_directory(root)
     launch_settings = worker_launch_settings(root)
     if (args.require_pinned_launch_settings or proof is not None or messaging is not None or yolo) and (
         launch_settings.get("copilotAccount") is None
@@ -1967,9 +1928,8 @@ def run_interactive_session(root, worker_id, token, node):
     if node.get("messaging"):
         if messaging_configuration(root) != node["messaging"]:
             raise OrchestrationError("Messaging installation changed before launch.")
-        plugin_directory = managed_plugin_directory(root)
         bind_messaging(node)
-        arguments.extend(["--experimental", "--plugin-dir", plugin_directory])
+        arguments.append("--experimental")
     process = None
     previous_interrupt = signal.signal(signal.SIGINT, lambda _signum, _frame: None)
     try:

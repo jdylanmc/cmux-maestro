@@ -64,7 +64,7 @@ nonisolated enum CopilotPluginManifest {
         return [
             "plugin.json": try JSONSerialization.data(withJSONObject: [
                 "name": name, "version": "1.1.0",
-                "description": "CMUX Maestro session identity, lifecycle and peer messaging skills",
+                "description": "CMUX Maestro session identity, lifecycle and icon skills",
                 "hooks": "hooks.json",
             ], options: [.prettyPrinted, .sortedKeys]),
             "hooks.json": try JSONSerialization.data(withJSONObject: [
@@ -111,9 +111,6 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
         let iconSkill = skill.deletingLastPathComponent().appendingPathComponent("maestro-icon/SKILL.md")
         let resources = skill.deletingLastPathComponent()
-        let messagingSkillData = try boundedResource(
-            resources.appendingPathComponent("maestro/SKILL.md"), maximum: 65_536
-        )
         let adapterData = try boundedResource(resources.appendingPathComponent("adapter.mjs"), maximum: 65_536)
         let loaderData = try boundedResource(resources.appendingPathComponent("extension.mjs"), maximum: 8192)
         guard FileManager.default.isExecutableFile(atPath: helper.path),
@@ -153,11 +150,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         )
         defer { close(iconSkillDirectory) }
         try HookFiles.atomicWrite(iconSkillData, name: "SKILL.md", directory: iconSkillDirectory)
-        let messagingSkill = try HookFiles.privateDirectory(
-            plugin.appendingPathComponent("skills/maestro", isDirectory: true)
-        )
-        defer { close(messagingSkill) }
-        try HookFiles.atomicWrite(messagingSkillData, name: "SKILL.md", directory: messagingSkill)
+        try removeBundledMessagingSkill(at: skills)
 
         let orchestration = root.deletingLastPathComponent()
             .appendingPathComponent("Orchestration", isDirectory: true)
@@ -197,11 +190,27 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         try HookFiles.atomicWrite(
             JSONSerialization.data(withJSONObject: [
                 "version": 1, "routes": routes.path, "extension": nativeRoot.path,
-                "pluginDirectory": plugin.path,
             ], options: [.sortedKeys]),
             name: "messaging.json", directory: bin
         )
         return plugin
+    }
+
+    private func removeBundledMessagingSkill(at skills: Int32) throws {
+        // Only the obsolete copy in this installer's plugin, never global skills.
+        let directory: Int32
+        do {
+            directory = try CopilotFileAccess.openDirectory(at: skills, name: "maestro", owner: getuid())
+        } catch CopilotFileError.missing { return }
+        defer { close(directory) }
+        let info = try HookFiles.metadata(directory, directory: true)
+        guard info.st_mode & 0o777 == 0o700 else { throw HookFiles.Failure.unavailable }
+        do {
+            _ = try CopilotFileAccess.readStableRegular(
+                at: directory, filename: "SKILL.md", owner: getuid(), maximum: 65_536, permissions: 0o600
+            )
+        } catch CopilotFileError.missing { return }
+        guard unlinkat(directory, "SKILL.md", 0) == 0 else { throw HookFiles.Failure.unavailable }
     }
 
     func removeMessaging(root: URL) throws {

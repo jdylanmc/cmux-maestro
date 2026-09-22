@@ -42,14 +42,12 @@ class BuildMetadataTests(unittest.TestCase):
         resources.mkdir(parents=True, exist_ok=True)
         (resources / "cmux-maestro-orchestrator.py").write_text("#!/usr/bin/env python3\n")
         (resources / "SKILL.md").write_text("---\nname: cmux-maestro-orchestrate\n---\n")
-        (resources / "maestro").mkdir(exist_ok=True)
-        (resources / "maestro/SKILL.md").write_text("---\nname: maestro\n---\n")
         (resources / "adapter.mjs").write_text("// synthetic adapter\n")
         (resources / "extension.mjs").write_text("// synthetic loader\n")
         self.save()
 
     def test_messaging_resources_are_required_for_every_build_profile(self):
-        for name in ("adapter.mjs", "extension.mjs", "maestro/SKILL.md"):
+        for name in ("adapter.mjs", "extension.mjs"):
             with self.subTest(name=name):
                 self.fixture("tests")
                 (self.app / "Contents/Resources" / name).unlink()

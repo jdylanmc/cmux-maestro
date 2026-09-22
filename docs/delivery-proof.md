@@ -3,7 +3,7 @@
 **Product scope update:** the user confirmed conversion of this proof into the
 installed feature, in one final pull request with its findings. The prototype-only
 restriction is superseded for the installed adapter, existing controller/setup/
-resources, tests, `/cmux-maestro-native:maestro` skill and associated documentation. The historical
+resources, tests, global `/maestro` guide and associated documentation. The historical
 proof below remains reproducible; old `deliveryProof` records and `a`/`b` routes
 remain compatible. No live proof sessions are adopted, restarted or modified.
 
@@ -132,7 +132,7 @@ The [discovery foundation](agent/discovery/issue-38-shared-agent-interaction.md)
 preserves the Orca, Paseo, Herdr, and CMUX revision-pinned comparisons and their
 source-versus-runtime distinctions. This proof does not redo that research.
 
-### Managed skill-source mitigation (pending installed verification)
+### Guide distribution decision after live proof
 
 Parent research against the exact `1.0.87-0` executable found the installed
 `cmux-maestro-native` `1.1.0` plugin enabled in CLI discovery, while a fresh
@@ -140,32 +140,59 @@ interactive session's skill registry omitted `maestro`. Native messaging worked;
 bare skill-tool invocation failed. The upstream cause is not established.
 `joinSession` with unspecified discovery/plugin options does not justify resetting
 configuration. The tool identifier is `maestro`, not
-`cmux-maestro-native:maestro`; the latter is the slash UI namespace.
+`cmux-maestro-native:maestro`; the latter was the plugin slash UI namespace.
 
-The bounded mitigation uses the existing supported `--plugin-dir`, whose source
-loading and `sessionManager.setAdditionalPlugins` occur before interactive session
-creation. Setup adds `pluginDirectory` to its private `messaging.json`, pointing
-only at the existing `Copilot/plugin` beside `Orchestration`. The launcher verifies
-the exact private, canonical source, `cmux-maestro-native` `1.1.0` manifest and
-readable Maestro skill before reservation and again before launch. It appends
-`--experimental --plugin-dir <absolute-installed-plugin-path>` only for managed
-messaging participants. Pins, denies, coordinator-only explicit `--allow-all`,
-and inherited terminal I/O remain unchanged.
+The parent subsequently reported **live failures with both bare plugin loading
+and the explicit `--plugin-dir` mitigation**. Source loading order and mocked
+launcher tests did not establish live interactive skill availability. There is
+no demonstrated upstream root cause; the workaround is removed, not advertised
+as a fix.
 
-The new field stays in setup configuration, **not stored node metadata**. Both
-old and new workers keep `{version, routes, extension}` so already-running old
-controllers remain compatible with newly written state. Old three-field setup
-configuration is readable; a new managed spawn requires a setup upgrade.
-Existing exit/route cleanup does not depend on the plugin directory. Normal,
-source-only and historical proof launches do not receive `--plugin-dir`.
+**User-observed success at `2026-09-22T12:03:56.533Z`:** `npx skills` **1.5.26**
+installed the local-source guide globally at `~/.agents/skills/maestro`, and
+Copilot global discovery succeeded. The user chose this as the **single canonical
+guide distribution**. The location is evidence for that run, not a hardcoded
+`.copilot` global-path assumption. Global invocation is **`/maestro`** or
+**`{"skill":"maestro"}`**, without additional required activation grants.
 
-Contract tests do not establish live registry availability. **Parent next step:**
-reinstall the updated app through the approved normal flow, explicitly enable
-integration, then create a fresh managed session using pinned launch settings.
-Verify its exact installed `--plugin-dir`, invoke `{"skill":"maestro"}`, and
-confirm `/cmux-maestro-native:maestro` in the interactive slash UI. Preserve the
-existing worker sessions; do not reload, adopt, or restart them. This patch makes
-no new installed-runtime success claim.
+Native Maestro **Settings > CLI Integration** now presents the purpose,
+selectable command and one copy button in a minimal native section. Richer card,
+status detection, update and coverage flows are deferred for separate backlog
+tracking by the parent; they do not block messaging. There is no local scan,
+re-check action, remote freshness claim or embedded terminal. The command is:
+
+```sh
+npx skills add jdylanmc/cmux-maestro --skill maestro --agent github-copilot --global --copy
+```
+
+The human must run it and review interactive confirmation. Settings executes
+nothing, opens no terminal/browser, and touches no global skill. This GitHub-source
+command needs the skill merged to `main`. For development/PR acceptance, from the
+checkout root the human may instead run:
+
+```sh
+npx skills add . --skill maestro --agent github-copilot --global --copy
+```
+
+No movable branch ref or release machinery is embedded. The user's working
+global local-source copy is not refreshed by this author; any content refresh
+remains parent/user-consented.
+
+Runtime installation stays in **Enable Copilot Integration**. The guide never
+installs runtime and messaging remains usable without it. The canonical source
+is `skills/maestro/{SKILL.md,intent.md}`; it is no longer bundled into app resources
+or copied into the runtime plugin. Lifecycle/icon plugin skills remain.
+Explicit setup removes only its obsolete `Copilot/plugin/skills/maestro/SKILL.md`
+using existing owned-directory patterns, refusing symlinks and preserving
+unrelated/global skills and other files. This correction does not mutate installed
+live files or cached sessions.
+
+Setup writes `{version, routes, extension}`. The launcher cheaply ignores an old
+`pluginDirectory` field and never validates or passes it to Copilot. Both old
+and new stored nodes retain the three-field contract; no guide-driven setup
+upgrade is required. Pins, denies, coordinator-only explicit `--allow-all`,
+native `--experimental`, terminal I/O and all R1-R5 lifecycle fixes are retained.
+There are no receipts, retries, custom scheduling, new timers or host changes.
 
 ## Parent-only preparation and live launch
 
@@ -343,32 +370,60 @@ Bounded read-only discovery using the exact worker executable and CLI **1.0.87-0
 subsequently listed the installed messaging skill as `name: maestro`,
 `source: plugin`, `enabled: true`. The native loader identifies its plugin as
 `cmux-maestro-native`, while `skillsInvocationName` returns the bare skill name.
-Thus the correct split is **slash command `/cmux-maestro-native:maestro`** and
-**skill-tool argument `{"skill":"maestro"}`**. Lifecycle/icon slash references
-remain qualified. Frontmatter, installed folders, manifest identity and permissions
-are unchanged; no global alias or duplicate skill was added.
+At that stage, the plugin used slash command `/cmux-maestro-native:maestro`
+and skill-tool argument `{"skill":"maestro"}`. That distinction did not fix live
+discovery. The [final distribution decision](#guide-distribution-decision-after-live-proof)
+supersedes plugin messaging-guide installation and invocation with global
+`/maestro`; lifecycle/icon slash references remain qualified.
 
-**Initial missing-inventory observation remains unresolved.** The failing
+**The cause of the initial missing-inventory observation remains unresolved.** The failing
 session's startup model-visible inventory did not contain the messaging skill,
 whereas later read-only discovery did. The permitted comparison found no
 installer/runtime root or registered-plugin discrepancy; it did not establish
 the cause of that startup/current-inventory difference. Neither the namespace
-correction nor current discovery proves live skill execution. The parent is
-performing one fresh authorized **bare-name** validation; its result remains
-pending here. No private registry contents, account/model data, credentials or
-full debug transcripts are included in these findings.
+correction nor plugin discovery proved live skill execution. Subsequent bare
+plugin and explicit-plugin-directory live failures led to the observed successful
+global installation above. No private registry contents, account/model data,
+credentials or full debug transcripts are included in these findings.
 
 **Implementation checkpoint:** runtime/setup/resource wiring and their targeted
 contracts are implemented. The user-confirmed intent is stored unchanged at
 `skills/maestro/intent.md`; the simple repo-native `SKILL.md` beside it teaches
 discovery/send/reply and cross-references the existing lifecycle skill, without
 an atomic-skill framework or tool-permission frontmatter grants. The source folder
-is an explicit Xcode resource mapping to `Contents/Resources/maestro/`; setup copies
-its `SKILL.md` into the installed plugin's `skills/maestro/`.
+is discoverable by `npx skills`, not an app resource or a runtime prerequisite.
 The parent still owns final complete CI, independent review and installed live
 validation. Targeted build and test evidence is recorded below.
 
-Targeted implementation validation:
+Final distribution-correction validation:
+
+- **M2 launcher:** three-field setup/node compatibility, ignored obsolete
+  `pluginDirectory`, no `--plugin-dir`, and launches without any guide/plugin
+  source; lifecycle R1-R5 code is unchanged by this correction.
+- **M3 Settings/setup/resources:** default production and validation Settings
+  scenes share the native tabs; the actual copy handler emits the exact
+  interactive global command. Isolated setup covers absent guide resources,
+  precise obsolete-copy removal, repeated setup, preserved unrelated files,
+  symlink refusal and unchanged runtime installation/uninstallation.
+- **M4 tests/CI:** isolated Settings/setup/hook suite **35 passed**, integrated
+  Settings/setup suites **20 passed**, launcher/proof/skill suite **55 passed**,
+  orchestration **45 passed**, adapter **10 passed**, metadata **15 passed**,
+  local-preview **60 passed**.
+  The existing CI setup step now also compiles and runs Settings tests.
+  Unsigned build and namespace validation passed; the built app contains no
+  messaging guide. These are targeted checks, not a final full-CI claim.
+- **M5 guide/findings:** global `/maestro`, separate runtime consent, prior live
+  failures and user-reported global success, and the pre-merge local-source
+  command are documented. `intent.md` remains byte-identical with SHA-256
+  `8dd1495be16e27a92b43a038ab7b728b4d6fedcbae1e53f41aac11452fe54d42`.
+
+This author performed no production setup, global install/refresh, provider
+launch, live binding read or live endpoint mutation. Installed Settings UI
+acceptance and independent review remain parent-owned; the GitHub-source command
+cannot install this unpublished guide until merge.
+
+Historical targeted validation before the final distribution correction (the
+old packaged guide below is no longer shipped):
 
 - `./scripts/build-unsigned.sh`: **BUILD SUCCEEDED**; both namespace checks passed.
   The built app identifier is
@@ -388,7 +443,7 @@ Targeted implementation validation:
 
 The existing explicit production **Enable Copilot Integration** action now
 packages and writes the shared adapter and minimal native loader under
-`~/.copilot/extensions/maestro/`, the `/cmux-maestro-native:maestro` plugin skill, and a private
+`~/.copilot/extensions/maestro/`, lifecycle/icon plugin skills, and a private
 `Orchestration/bin/messaging.json` configuration. Validation app identifiers are
 still denied installation; app construction has no writes. Setup changes no
 Copilot settings, shell files, host selection or other plugins. The global
@@ -427,14 +482,20 @@ worker. After full CI/review and explicit setup approval:
 
 1. Build/package the normal app; use only its existing explicit production setup
    action. The validation copy must still refuse installation. Confirm the app
-   bundle contains `adapter.mjs`, `extension.mjs`, and `maestro/SKILL.md`; inspect
+   bundle contains `adapter.mjs`, `extension.mjs`, and the lifecycle/icon skills,
+   but no bundled messaging guide; inspect
    only sanitized `launch-settings` (`ready` and `messagingInstalled`), not secrets.
+   Open **Settings > CLI Integration** and verify the displayed command and copy
+   affordance. Before merge, use the local-source command above only with explicit
+   consent to refresh the user's already-working global copy; do not use an
+   unpublished GitHub source as an acceptance proxy.
 2. In a fresh disposable workspace, use existing lifecycle registration/spawn
    guidance and an ordinary working directory. Do **not** run fixture preparation
    or set test-mode overrides to claim installed behavior. Launch three fresh
    participants; permit default native trust/tool prompts normally, or use
    coordinator `--yolo` only when explicitly approved.
-3. Verify `/cmux-maestro-native:maestro` is discoverable and `maestro_peers` returns the other two
+3. Verify global `/maestro` / `{"skill":"maestro"}` discovery after any consentful
+   refresh, and that `maestro_peers` returns the other two
    participants, not an unmanaged terminal, old proof session, or other workspace.
    Ask one participant for one ordinary send/reply through `maestro_send`.
    Verify exact-generation return addresses and no implicit lifecycle authority.

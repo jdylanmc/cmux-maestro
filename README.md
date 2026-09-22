@@ -24,11 +24,14 @@ evidence, live acceptance scope, intentional differences and remaining limits.
    newly installed plugin. Maestro never restarts them automatically. Launch
    future sessions normally inside CMUX; their hooks record validated identity
    and the sidebar renders the tree directly from durable events. Setup also
-   installs the bundled `/cmux-maestro-native:cmux-maestro-orchestrate`,
-   `/cmux-maestro-native:maestro`, and `/cmux-maestro-native:maestro-icon`
+   installs the bundled `/cmux-maestro-native:cmux-maestro-orchestrate`
+   and `/cmux-maestro-native:maestro-icon`
    skills and local controller. This identity-hook restart guidance does **not**
    adopt existing sessions into messaging. Only newly Maestro-spawned managed
    sessions get native messaging bindings automatically.
+5. For the optional messaging guide, open Maestro **Settings > CLI Integration**.
+   Copy the global install command and run it yourself as described below.
+   Runtime setup never installs the global guide.
 
 The containing app is an installer, not an observer. It may be closed after
 setup. A successful setup message means the selected CLI exited successfully;
@@ -51,28 +54,54 @@ never replaced automatically. Moving/replacing the native app requires enabling
 the integration again: Copilot caches local plugin contents, and generated hooks
 contain the **absolute current bundled helper path**.
 
-New managed messaging launches also pass Copilot's supported
-`--plugin-dir "$HOME/Library/Application Support/CMUXMaestroPreview/Copilot/plugin"`.
-The explicit setup action records that absolute source in
-`Orchestration/bin/messaging.json` as `pluginDirectory`, alongside the unchanged
-`version: 1`, `routes`, and `extension` fields. Before credentials/reservation,
-and again before provider launch, the controller checks the exact installer-owned
-path, private ownership/permissions, manifest identity/version, and readable
-`skills/maestro/SKILL.md`. Foreign paths, symlinks, and malformed resources fail
-closed. This binds the existing plugin, not another global skill installation;
-no home, account, model, permission, or persistent Copilot settings are changed.
-`--experimental`, explicit coordinator-only YOLO, denies and terminal I/O are
-unchanged. Source-only/unmanaged and disposable proof launches add no plugin path.
+Messaging launch configuration and stored nodes retain the three-field
+`{version, routes, extension}` contract. The obsolete `pluginDirectory` setup
+field is ignored for compatibility, never validated or passed to Copilot.
+Managed launches retain `--experimental`, pins, denies, coordinator-only explicit
+YOLO and terminal I/O; they do not require a guide or pass `--plugin-dir`.
 
-Old three-field setup configurations remain readable, but **new managed launches
-require enabling integration again** rather than guessing a plugin source.
-Stored nodes retain exactly the old three-field messaging metadata, so old live
-controllers can still read new nodes, and existing sessions can exit/retire
-normally without reading the new plugin source. Setup never restarts or adopts
-them. The skill tool identifier remains **`maestro`**; the slash UI spelling is
-**`/cmux-maestro-native:maestro`**. Explicit loading is a mitigation for an observed
-installed-discovery/interactive-registry divergence, not a verified upstream fix;
-fresh installed-session validation is still required.
+### CLI Integration: install the global guide
+
+Maestro's native **Settings > CLI Integration** tab explains the guide and
+provides selectable command text and **Copy install command**. It does not inspect
+global files, check versions or manage updates. Richer Settings management is
+deferred; it is not required for messaging or guide distribution. After the skill
+is merged to `main`, run this command in your own terminal:
+
+```sh
+npx skills add jdylanmc/cmux-maestro --skill maestro --agent github-copilot --global --copy
+```
+
+Review the installer's interactive confirmation; the command deliberately omits
+`--yes`. Settings only copies text: it does not execute `npx`, open a terminal,
+install a skill, or change global configuration. This is the **single canonical
+guide distribution**, from `skills/maestro/{SKILL.md,intent.md}`. Invoke global
+**`/maestro`**, or use the skill tool with `{"skill":"maestro"}`. No extra
+skill-activation grants are required. The guide never secretly installs runtime;
+native messaging works without it. Runtime remains the separate **Enable Copilot
+Integration** action, including the existing lifecycle and icon plugin skills.
+
+**Development / PR acceptance before merge:** the repository command above cannot
+install the unpublished skill from `main`. From this checkout's root, the human
+may instead run the same installer against the local source:
+
+```sh
+npx skills add . --skill maestro --agent github-copilot --global --copy
+```
+
+No branch refs, automatic refresh, or release machinery are embedded in Settings.
+The user already proved this global local-source path with `skills` **1.5.26** at
+`2026-09-22T12:03:56.533Z`: it installed to `~/.agents/skills/maestro`, and Copilot
+global discovery succeeded. That is an observed location, not an assumption that
+all global skills live under `.copilot`. Bare plugin loading and explicit
+`--plugin-dir` both failed live; no upstream root cause is claimed. See the
+[public findings](docs/delivery-proof.md#guide-distribution-decision-after-live-proof).
+Any refresh of the user's existing global copy remains a separate consentful action.
+
+On the next explicit **Enable Copilot Integration**, setup removes only its old
+`Copilot/plugin/skills/maestro/SKILL.md` copy, if present, using owner-checked,
+non-symlink traversal. It preserves other skills and files, including lifecycle,
+icon and global guides; it never sweeps global paths or cached/live sessions.
 
 ### Disable or uninstall
 
@@ -83,6 +112,7 @@ sockets and in-memory adapters are not touched; close those sessions normally.
 Restart/resume existing CLI
 sessions to unload their cached hooks. Disable this sidebar in CMUX separately
 if desired; uninstall does not select or remove any other provider.
+It also leaves the separately installed global guide untouched.
 
 For individual future CLI launches, either `CMUX_COPILOT_HOOKS_DISABLED=1` or
 `MAESTRO_NATIVE_DISABLED=1` suppresses identity hooks. The legacy
@@ -192,7 +222,7 @@ unmanaged sessions, existing workers, and registered coordinators without a
 launcher-owned Copilot session remain **unsupported recipients**. Never adopt or
 restart them automatically.
 
-Use installed `/cmux-maestro-native:maestro` for `maestro_peers` discovery, `maestro_send`, and replies
+Use global `/maestro` for `maestro_peers` discovery, `maestro_send`, and replies
 to the supplied sender address. Any participating same-workspace peer can send,
 including siblings and peers from another run; messaging grants no lifecycle or
 process-control rights. The native adapter joins only its CLI-owned session and
@@ -203,9 +233,8 @@ involved. A local-write attempt is **not** a delivery or completion guarantee.
 The source package and unchanged confirmed purpose live in `skills/maestro/`.
 It has no tool-permission grants in frontmatter and reuses the installed
 `/cmux-maestro-native:cmux-maestro-orchestrate` skill for lifecycle operations.
-For the skill tool, pass `{"skill":"maestro"}`. The plugin-qualified slash
-command and the bare skill-tool identifier are distinct; do not qualify the
-skill-tool argument.
+For the skill tool, pass `{"skill":"maestro"}`. Only the existing lifecycle/icon
+plugin slash commands remain namespaced; the global messaging guide is not.
 
 Defaults grant nothing. A coordinator may pass `spawn --yolo` **only with explicit
 user approval**; Copilot receives `--allow-all` alongside all explicit denies.
@@ -233,7 +262,7 @@ are not native UI proof.
 
 ### Local agent launch settings
 
-The containing app's **Settings** window provides **Launch agents with
+The containing app's **Settings > Agent launches** tab provides **Launch agents with
 subscription:** and an optional worker-model setting. The dropdown lists
 configured GitHub.com accounts from GitHub CLI without displaying credentials;
 it does not infer subscription plan names. **Use Copilot default** leaves

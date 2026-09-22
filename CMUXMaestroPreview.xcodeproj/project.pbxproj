@@ -9,7 +9,6 @@
 /* Begin PBXBuildFile section */
 		C05400000000000000000001 /* adapter.mjs in Resources */ = {isa = PBXBuildFile; fileRef = C05400000000000000000004; };
 		C05400000000000000000002 /* extension.mjs in Resources */ = {isa = PBXBuildFile; fileRef = C05400000000000000000005; };
-		C05400000000000000000003 /* maestro in Resources */ = {isa = PBXBuildFile; fileRef = C05400000000000000000006; };
 		C09300000000000000000001 /* CopilotAssetEnvelope.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C09300000000000000000003; };
 		C09300000000000000000002 /* CopilotAssetEnvelope.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09300000000000000000003; };
 		C09200000000000000000003 /* maestro-icon in Resources */ = {isa = PBXBuildFile; fileRef = C09200000000000000000004; };
@@ -110,7 +109,6 @@
 /* Begin PBXFileReference section */
 		C05400000000000000000004 /* adapter.mjs */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = scripts/delivery-proof/adapter.mjs; sourceTree = SOURCE_ROOT; };
 		C05400000000000000000005 /* extension.mjs */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = scripts/delivery-proof/extension.mjs; sourceTree = SOURCE_ROOT; };
-		C05400000000000000000006 /* maestro */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "skills/maestro"; sourceTree = SOURCE_ROOT; };
 		C09300000000000000000003 /* CopilotAssetEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/CopilotAssetEnvelope.swift; sourceTree = SOURCE_ROOT; };
 		C09200000000000000000004 /* maestro-icon */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ".agents/skills/maestro-icon"; sourceTree = SOURCE_ROOT; };
 		C09200000000000000000002 /* NerdFonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/NerdFonts; sourceTree = SOURCE_ROOT; };
@@ -220,7 +218,6 @@
 			children = (
 				C05400000000000000000004 /* adapter.mjs */,
 				C05400000000000000000005 /* extension.mjs */,
-				C05400000000000000000006 /* maestro */,
 				C09300000000000000000003 /* CopilotAssetEnvelope.swift */,
 				C09200000000000000000002 /* NerdFonts */,
 				C09200000000000000000008 /* SidebarGlyphs.swift */,
@@ -429,7 +426,6 @@
 				C09200000000000000000003 /* maestro-icon in Resources */,
 				C05400000000000000000001 /* adapter.mjs in Resources */,
 				C05400000000000000000002 /* extension.mjs in Resources */,
-				C05400000000000000000003 /* maestro in Resources */,
 				C09200000000000000000005 /* NerdFonts in App Resources */,
 				C03600000000000000000002 /* SKILL.md in Resources */,
 			);
