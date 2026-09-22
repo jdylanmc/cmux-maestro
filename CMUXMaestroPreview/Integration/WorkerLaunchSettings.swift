@@ -1,6 +1,63 @@
 import Darwin
 import Foundation
 import SwiftUI
+import AppKit
+
+struct MaestroSettingsView: View {
+    var body: some View {
+        TabView {
+            WorkerLaunchSettingsView()
+                .tabItem { Label("Agent launches", systemImage: "person.crop.circle") }
+            CLIIntegrationSettingsView()
+                .tabItem { Label("CLI Integration", systemImage: "terminal") }
+        }
+        .padding(20)
+        .frame(width: 640, height: 450)
+    }
+}
+
+enum CLIIntegrationGuide {
+    static let installCommand = "npx skills add jdylanmc/cmux-maestro --skill maestro --agent github-copilot --global --copy"
+
+    static func copyInstallCommand(to pasteboard: NSPasteboard = .general) -> Bool {
+        pasteboard.clearContents()
+        return pasteboard.setString(installCommand, forType: .string)
+    }
+}
+
+struct CLIIntegrationSettingsView: View {
+    @State private var notice: String?
+
+    var body: some View {
+        Form {
+            Section("Install the Maestro CLI guide") {
+                Text("Add the global /maestro skill to GitHub Copilot for peer discovery, sending messages, and replies.")
+                Text("Copy this command, paste it into your own terminal, and run it. Review the installer's interactive confirmation.")
+                    .foregroundStyle(.secondary)
+                Text(CLIIntegrationGuide.installCommand)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("cli-integration-install-command")
+                Button("Copy install command") {
+                    notice = CLIIntegrationGuide.copyInstallCommand()
+                        ? "Copied. Run the command in your terminal when ready."
+                        : "Could not copy the command. Select and copy the text above."
+                }
+                .accessibilityIdentifier("cli-integration-copy-command")
+                if let notice { Text(notice).font(.caption) }
+            }
+            Section("Runtime integration is separate") {
+                Text("Use Enable Copilot Integration in the main Maestro window to install the runtime. The guide does not install or enable it, and messaging remains usable without the guide.")
+                Text("Settings never runs this command or opens a terminal. No extra skill-activation grants are required. The repository command is available after the skill is merged to main; see the README for local-source development installation.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 600, height: 350)
+    }
+}
 
 nonisolated struct WorkerLaunchSettings: Codable, Equatable, Sendable {
     var version = 1

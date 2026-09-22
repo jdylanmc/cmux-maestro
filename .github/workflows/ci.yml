@@ -11,6 +11,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify terminal orchestration contracts
         run: python3 scripts/test-cmux-maestro-orchestrator.py
+      - name: Verify managed messaging and legacy proof launcher contracts
+        run: python3 scripts/test-delivery-proof.py
+      - name: Verify native delivery adapter contracts
+        run: node --test scripts/test-delivery-proof.mjs
       - name: Verify build and registration metadata contracts
         run: python3 scripts/test-build-metadata.py
       - name: Verify local preview transactions and recovery
@@ -30,7 +34,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
-      - name: Verify setup process isolation
+      - name: Verify Settings guide and setup process isolation
         run: ./scripts/test-copilot-setup.sh
       - name: Verify compiled hooks fail open
         run: ./scripts/test-copilot-hook.sh

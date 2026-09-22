@@ -583,6 +583,7 @@ class OrchestratorTests(unittest.TestCase):
                 "modelPinned": True,
                 "ok": True,
                 "ready": False,
+                "messagingInstalled": False,
                 "returncode": 0,
                 "stderr": "",
             })
@@ -598,6 +599,7 @@ class OrchestratorTests(unittest.TestCase):
                 "modelPinned": True,
                 "ok": True,
                 "ready": True,
+                "messagingInstalled": False,
                 "returncode": 0,
                 "stderr": "",
             })
@@ -706,6 +708,13 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(ended["availability"], "unavailable")
             self.assertIsNone(ended["verifiedBoundaryGeneration"])
             self.assertIn("no task outcome", ended["result"])
+            h.wait_node(identifier, CONTROLLER_API["worker_processes_exited"])
+            archived = h.run("archive", "--actor-id", h.node, "--token", h.token)
+            self.assertTrue(archived["archived"])
+            self.assertEqual(h.state()["nodes"], {})
+            self.assertEqual(
+                h.state()["retainedResources"][0]["surfaceId"], worker["surfaceId"],
+            )
         finally:
             h.close()
 

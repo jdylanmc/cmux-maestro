@@ -24,9 +24,9 @@ nonisolated enum CopilotSetupResult: Equatable, Sendable {
     var message: String {
         switch self {
         case .installed:
-            "Copilot reported installation success. Restart or resume existing CLI sessions once to load the plugin."
+            "Copilot reported installation success. New Maestro-launched sessions get messaging automatically. Existing sessions are not adopted or restarted; restart or resume manually only to load skills and identity hooks."
         case .uninstalled:
-            "Copilot reported uninstallation success. Restart or resume existing CLI sessions to unload cached hooks."
+            "Copilot reported uninstallation success. New messaging launches are disabled. Existing sessions and their in-memory adapters remain untouched; close them normally."
         case .unavailable:
             "Setup could not access the selected executable, bundled helper, or integration directory. Choose a trusted Copilot CLI executable and retry."
         case .failed(let status):
@@ -63,8 +63,8 @@ nonisolated enum CopilotPluginManifest {
         let hooks = Dictionary(uniqueKeysWithValues: events.map { ($0, [hook]) })
         return [
             "plugin.json": try JSONSerialization.data(withJSONObject: [
-                "name": name, "version": "1.0.0",
-                "description": "Local read-only CMUX Maestro session identity",
+                "name": name, "version": "1.1.0",
+                "description": "CMUX Maestro session identity, lifecycle and icon skills",
                 "hooks": "hooks.json",
             ], options: [.prettyPrinted, .sortedKeys]),
             "hooks.json": try JSONSerialization.data(withJSONObject: [
@@ -77,9 +77,14 @@ nonisolated enum CopilotPluginManifest {
 nonisolated protocol CopilotSetupFileSystem: Sendable {
     func executable(selected: URL?, path: String) throws -> URL
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL
+    func removeMessaging(root: URL) throws
 }
 
 nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
+    var nativeExtensions = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".copilot/extensions", isDirectory: true)
+    var messagingRoutes: URL?
+
     func executable(selected: URL?, path: String) throws -> URL {
         let candidates: [URL]
         if let selected {
@@ -105,6 +110,9 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
 
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
         let iconSkill = skill.deletingLastPathComponent().appendingPathComponent("maestro-icon/SKILL.md")
+        let resources = skill.deletingLastPathComponent()
+        let adapterData = try boundedResource(resources.appendingPathComponent("adapter.mjs"), maximum: 65_536)
+        let loaderData = try boundedResource(resources.appendingPathComponent("extension.mjs"), maximum: 8192)
         guard FileManager.default.isExecutableFile(atPath: helper.path),
               FileManager.default.isReadableFile(atPath: controller.path),
               FileManager.default.isReadableFile(atPath: skill.path),
@@ -142,6 +150,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         )
         defer { close(iconSkillDirectory) }
         try HookFiles.atomicWrite(iconSkillData, name: "SKILL.md", directory: iconSkillDirectory)
+        try removeBundledMessagingSkill(at: skills)
 
         let orchestration = root.deletingLastPathComponent()
             .appendingPathComponent("Orchestration", isDirectory: true)
@@ -164,7 +173,63 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
             boundedResource(controller, maximum: 1_048_576),
             name: "cmux-maestro-orchestrator", directory: bin
         )
+        let extensions = try HookFiles.directory(nativeExtensions, create: true)
+        defer { close(extensions) }
+        _ = try HookFiles.metadata(extensions, directory: true)
+        let nativeRoot = nativeExtensions.appendingPathComponent("maestro", isDirectory: true)
+        let nativeDirectory = try HookFiles.privateDirectory(nativeRoot)
+        defer { close(nativeDirectory) }
+        let routes = messagingRoutes ?? nativeRoot.appendingPathComponent("r", isDirectory: true)
+        guard routes.appendingPathComponent(String(repeating: "0", count: 16) + ".sock").path.utf8.count <= 100 else {
+            throw HookFiles.Failure.unavailable
+        }
+        let routeDirectory = try HookFiles.privateDirectory(routes)
+        defer { close(routeDirectory) }
+        try HookFiles.atomicWrite(adapterData, name: "adapter.mjs", directory: nativeDirectory)
+        try HookFiles.atomicWrite(loaderData, name: "extension.mjs", directory: nativeDirectory)
+        try HookFiles.atomicWrite(
+            JSONSerialization.data(withJSONObject: [
+                "version": 1, "routes": routes.path, "extension": nativeRoot.path,
+            ], options: [.sortedKeys]),
+            name: "messaging.json", directory: bin
+        )
         return plugin
+    }
+
+    private func removeBundledMessagingSkill(at skills: Int32) throws {
+        // Only the obsolete copy in this installer's plugin, never global skills.
+        let directory: Int32
+        do {
+            directory = try CopilotFileAccess.openDirectory(at: skills, name: "maestro", owner: getuid())
+        } catch CopilotFileError.missing { return }
+        defer { close(directory) }
+        let info = try HookFiles.metadata(directory, directory: true)
+        guard info.st_mode & 0o777 == 0o700 else { throw HookFiles.Failure.unavailable }
+        do {
+            _ = try CopilotFileAccess.readStableRegular(
+                at: directory, filename: "SKILL.md", owner: getuid(), maximum: 65_536, permissions: 0o600
+            )
+        } catch CopilotFileError.missing { return }
+        guard unlinkat(directory, "SKILL.md", 0) == 0 else { throw HookFiles.Failure.unavailable }
+    }
+
+    func removeMessaging(root: URL) throws {
+        // Remove only the installed entry point/configuration. Do not touch live
+        // route bindings, sockets, cached children, or other extensions.
+        let targets = [
+            nativeExtensions.appendingPathComponent("maestro/extension.mjs"),
+            root.deletingLastPathComponent().appendingPathComponent("Orchestration/bin/messaging.json"),
+        ]
+        for target in targets {
+            let directory: Int32
+            do {
+                directory = try CopilotFileAccess.openDirectory(target.deletingLastPathComponent(), owner: getuid())
+            } catch CopilotFileError.missing { continue }
+            defer { close(directory) }
+            if unlinkat(directory, target.lastPathComponent, 0) != 0, errno != ENOENT {
+                throw HookFiles.Failure.unavailable
+            }
+        }
     }
 
     private func boundedResource(_ url: URL, maximum: Int) throws -> Data {
@@ -444,7 +509,9 @@ nonisolated struct CopilotSetup {
                 arguments = ["--no-auto-update", "plugin", "uninstall", CopilotPluginManifest.name]
             }
             switch await runner.run(executable: executable, arguments: arguments, path: path) {
-            case .exited(0): return action == .install ? .installed : .uninstalled
+            case .exited(0):
+                if action == .uninstall { try files.removeMessaging(root: root) }
+                return action == .install ? .installed : .uninstalled
             case .exited(let status): return .failed(status)
             case .unavailable: return .unavailable
             case .timedOut: return .timedOut

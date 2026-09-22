@@ -22,6 +22,7 @@ private struct SetupFileStub: CopilotSetupFileSystem {
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
         root.appendingPathComponent("plugin")
     }
+    func removeMessaging(root: URL) throws {}
 }
 
 private final class SetupAccessSpy: CopilotSetupFileSystem, @unchecked Sendable {
@@ -43,6 +44,7 @@ private final class SetupAccessSpy: CopilotSetupFileSystem, @unchecked Sendable 
         record()
         return root.appendingPathComponent("plugin")
     }
+    func removeMessaging(root: URL) throws { record() }
 
     private func record() {
         lock.lock()
@@ -402,7 +404,7 @@ struct CopilotSetupTests {
         directory: URL, reader: FileHandle, writer: FileHandle, completion: FileHandle
     ) {
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        let directory = repository.appendingPathComponent(".build/setup-fixtures/\(UUID().uuidString)")
+        let directory = repository.appendingPathComponent(".build/s/\(UUID().uuidString.prefix(6))")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var reader: Int32 = -1
         var writer: Int32 = -1
@@ -559,6 +561,27 @@ struct CopilotSetupTests {
         #expect(try String(contentsOf: proof, encoding: .utf8) == "ran")
     }
 
+    @Test func globalGuideIsSeparateFromManifestQualifiedLifecycleAndIconSkills() throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let sources = [
+            ("cmux-maestro-orchestrate", ".agents/skills/cmux-maestro-orchestrate/SKILL.md"),
+            ("maestro-icon", ".agents/skills/maestro-icon/SKILL.md"),
+        ]
+        for (name, path) in sources {
+            let text = try String(contentsOf: repository.appendingPathComponent(path), encoding: .utf8)
+            #expect(text.hasPrefix("---\nname: \(name)\n"))
+            #expect(text.contains("/\(CopilotPluginManifest.name):\(name)"))
+            #expect(!text.contains("`/cmux-maestro-orchestrate`"))
+            #expect(!text.contains("`/maestro-icon`"))
+        }
+        let messaging = try String(contentsOf: repository.appendingPathComponent("skills/maestro/SKILL.md"), encoding: .utf8)
+        #expect(messaging.hasPrefix("---\nname: maestro\n"))
+        #expect(messaging.contains("`/maestro`"))
+        #expect(messaging.contains(#"{"skill":"maestro"}"#))
+        #expect(!messaging.contains("cmux-maestro-native:maestro"))
+        #expect(messaging.contains("/cmux-maestro-native:cmux-maestro-orchestrate"))
+    }
+
     @Test func writesCurrentBundleManifestWithoutTouchingOtherConfiguration() throws {
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let directory = repository.appendingPathComponent(".build/setup-fixtures/\(UUID().uuidString)")
@@ -569,7 +592,9 @@ struct CopilotSetupTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
         let configuration = directory.appendingPathComponent("unrelated-settings.json")
         try Data("preserved".utf8).write(to: configuration)
-        let local = LocalCopilotSetupFiles()
+        let routes = repository.appendingPathComponent(".build/\(UUID().uuidString.prefix(5))")
+        defer { try? FileManager.default.removeItem(at: routes) }
+        let local = LocalCopilotSetupFiles(nativeExtensions: directory.appendingPathComponent("e"), messagingRoutes: routes)
         let controller = directory.appendingPathComponent("controller.py")
         let skill = directory.appendingPathComponent("SKILL.md")
         try Data("#!/usr/bin/env python3\n".utf8).write(to: controller)
@@ -578,11 +603,17 @@ struct CopilotSetupTests {
         try FileManager.default.createDirectory(at: iconSkillDirectory, withIntermediateDirectories: true)
         let iconSkill = iconSkillDirectory.appendingPathComponent("SKILL.md")
         try Data("---\nname: maestro-icon\n---\n".utf8).write(to: iconSkill)
+        for name in ["adapter.mjs", "extension.mjs"] {
+            try FileManager.default.copyItem(
+                at: repository.appendingPathComponent("scripts/delivery-proof/\(name)"),
+                to: directory.appendingPathComponent(name)
+            )
+        }
         try FileManager.default.copyItem(
             at: repository.appendingPathComponent("Resources/NerdFonts"),
             to: directory.appendingPathComponent("NerdFonts")
         )
-        let integration = directory.appendingPathComponent("integration")
+        let integration = directory.appendingPathComponent("Copilot")
         let plugin = try local.preparePlugin(
             root: integration, helper: executable, controller: controller, skill: skill
         )
@@ -592,15 +623,73 @@ struct CopilotSetupTests {
             == Data(contentsOf: skill))
         #expect(try Data(contentsOf: plugin.appendingPathComponent("skills/maestro-icon/SKILL.md"))
             == Data(contentsOf: iconSkill))
+        #expect(!FileManager.default.fileExists(atPath: plugin.appendingPathComponent("skills/maestro").path))
+        let native = local.nativeExtensions.appendingPathComponent("maestro")
+        #expect(try Data(contentsOf: native.appendingPathComponent("extension.mjs"))
+            == Data(contentsOf: directory.appendingPathComponent("extension.mjs")))
+        #expect(try Data(contentsOf: native.appendingPathComponent("adapter.mjs"))
+            == Data(contentsOf: directory.appendingPathComponent("adapter.mjs")))
+        #expect(try routes.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true)
         let installed = directory.appendingPathComponent(
             "Orchestration/bin/cmux-maestro-orchestrator"
         )
         #expect(FileManager.default.isExecutableFile(atPath: installed.path))
         #expect(try Data(contentsOf: installed) == Data(contentsOf: controller))
+        let messagingConfiguration = installed.deletingLastPathComponent().appendingPathComponent("messaging.json")
+        let messagingConfig = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: messagingConfiguration)) as? [String: Any]
+        )
+        #expect(Set(messagingConfig.keys) == Set(["version", "routes", "extension"]))
+        #expect(messagingConfig["version"] as? Int == 1)
+        #expect(messagingConfig["routes"] as? String == routes.path)
+        #expect(messagingConfig["extension"] as? String == native.path)
+        #expect(try messagingConfiguration.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true)
+        #expect((try FileManager.default.attributesOfItem(atPath: messagingConfiguration.path)[.posixPermissions] as? Int) == 0o600)
         #expect(try Data(contentsOf: installed.deletingLastPathComponent().appendingPathComponent("NerdFonts/glyphnames.json"))
             == Data(contentsOf: repository.appendingPathComponent("Resources/NerdFonts/glyphnames.json")))
         #expect(try String(contentsOf: configuration, encoding: .utf8) == "preserved")
         #expect(try local.executable(selected: executable, path: "") == executable)
         #expect(throws: (any Error).self) { try local.executable(selected: nil, path: ".:relative") }
+        // Simulate only the obsolete installer-owned copy, not a global installation.
+        let obsolete = plugin.appendingPathComponent("skills/maestro")
+        let obsoleteFD = try HookFiles.privateDirectory(obsolete)
+        defer { close(obsoleteFD) }
+        try HookFiles.atomicWrite(Data("---\nname: maestro\n---\n".utf8), name: "SKILL.md", directory: obsoleteFD)
+        let unrelatedSkill = plugin.appendingPathComponent("skills/unrelated")
+        try FileManager.default.createDirectory(at: unrelatedSkill, withIntermediateDirectories: true)
+        let unrelatedGuide = unrelatedSkill.appendingPathComponent("SKILL.md")
+        try Data("unrelated guide".utf8).write(to: unrelatedGuide)
+        let retainedExtra = obsolete.appendingPathComponent("user-notes.txt")
+        try Data("preserve".utf8).write(to: retainedExtra)
+        for _ in 0..<2 {
+            _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+            #expect(!FileManager.default.fileExists(atPath: obsolete.appendingPathComponent("SKILL.md").path))
+            #expect(try Data(contentsOf: unrelatedGuide) == Data("unrelated guide".utf8))
+            #expect(try Data(contentsOf: retainedExtra) == Data("preserve".utf8))
+            #expect(try Data(contentsOf: plugin.appendingPathComponent("skills/cmux-maestro-orchestrate/SKILL.md"))
+                == Data(contentsOf: skill))
+            #expect(try Data(contentsOf: plugin.appendingPathComponent("skills/maestro-icon/SKILL.md"))
+                == Data(contentsOf: iconSkill))
+        }
+        let obsoleteGuide = obsolete.appendingPathComponent("SKILL.md")
+        try FileManager.default.createSymbolicLink(at: obsoleteGuide, withDestinationURL: unrelatedGuide)
+        #expect(throws: (any Error).self) {
+            try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        }
+        #expect(try Data(contentsOf: unrelatedGuide) == Data("unrelated guide".utf8))
+        try FileManager.default.removeItem(at: obsoleteGuide)
+        let savedObsolete = plugin.appendingPathComponent("skills/maestro-saved")
+        try FileManager.default.moveItem(at: obsolete, to: savedObsolete)
+        try FileManager.default.createSymbolicLink(at: obsolete, withDestinationURL: unrelatedSkill)
+        #expect(throws: (any Error).self) {
+            try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        }
+        #expect(try Data(contentsOf: unrelatedGuide) == Data("unrelated guide".utf8))
+        let retained = routes.appendingPathComponent("retained.json")
+        try Data("live route must survive uninstall".utf8).write(to: retained)
+        try local.removeMessaging(root: integration)
+        #expect(!FileManager.default.fileExists(atPath: native.appendingPathComponent("extension.mjs").path))
+        #expect(!FileManager.default.fileExists(atPath: installed.deletingLastPathComponent().appendingPathComponent("messaging.json").path))
+        #expect(FileManager.default.fileExists(atPath: retained.path))
     }
 }

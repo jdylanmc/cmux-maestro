@@ -24,7 +24,14 @@ evidence, live acceptance scope, intentional differences and remaining limits.
    newly installed plugin. Maestro never restarts them automatically. Launch
    future sessions normally inside CMUX; their hooks record validated identity
    and the sidebar renders the tree directly from durable events. Setup also
-   installs the bundled `cmux-maestro-orchestrate` skill and local controller.
+   installs the bundled `/cmux-maestro-native:cmux-maestro-orchestrate`
+   and `/cmux-maestro-native:maestro-icon`
+   skills and local controller. This identity-hook restart guidance does **not**
+   adopt existing sessions into messaging. Only newly Maestro-spawned managed
+   sessions get native messaging bindings automatically.
+5. For the optional messaging guide, open Maestro **Settings > CLI Integration**.
+   Copy the global install command and run it yourself as described below.
+   Runtime setup never installs the global guide.
 
 The containing app is an installer, not an observer. It may be closed after
 setup. A successful setup message means the selected CLI exited successfully;
@@ -38,19 +45,74 @@ signalled. CLI output remains suppressed.
 Setup passes `--no-auto-update` so a plugin change does not opt into upgrading
 the selected CLI.
 
-Only the distinct **`cmux-maestro-native`** plugin, its bundled orchestration
-skill, and its private local controller are installed. Existing
+Only the distinct **`cmux-maestro-native`** plugin, its bundled skills, private
+local controller, and native loader at `~/.copilot/extensions/maestro/extension.mjs`
+are installed. The loader is inert without matching launcher/session/workspace/
+generation bindings. Existing
 `maestro-cmux`, other plugins, provider settings, and sidebar selection are
 never replaced automatically. Moving/replacing the native app requires enabling
 the integration again: Copilot caches local plugin contents, and generated hooks
 contain the **absolute current bundled helper path**.
 
+Messaging launch configuration and stored nodes retain the three-field
+`{version, routes, extension}` contract. The obsolete `pluginDirectory` setup
+field is ignored for compatibility, never validated or passed to Copilot.
+Managed launches retain `--experimental`, pins, denies, coordinator-only explicit
+YOLO and terminal I/O; they do not require a guide or pass `--plugin-dir`.
+
+### CLI Integration: install the global guide
+
+Maestro's native **Settings > CLI Integration** tab explains the guide and
+provides selectable command text and **Copy install command**. It does not inspect
+global files, check versions or manage updates. Richer Settings management is
+deferred; it is not required for messaging or guide distribution. After the skill
+is merged to `main`, run this command in your own terminal:
+
+```sh
+npx skills add jdylanmc/cmux-maestro --skill maestro --agent github-copilot --global --copy
+```
+
+Review the installer's interactive confirmation; the command deliberately omits
+`--yes`. Settings only copies text: it does not execute `npx`, open a terminal,
+install a skill, or change global configuration. This is the **single canonical
+guide distribution**, from `skills/maestro/{SKILL.md,intent.md}`. Invoke global
+**`/maestro`**, or use the skill tool with `{"skill":"maestro"}`. No extra
+skill-activation grants are required. The guide never secretly installs runtime;
+native messaging works without it. Runtime remains the separate **Enable Copilot
+Integration** action, including the existing lifecycle and icon plugin skills.
+
+**Development / PR acceptance before merge:** the repository command above cannot
+install the unpublished skill from `main`. From this checkout's root, the human
+may instead run the same installer against the local source:
+
+```sh
+npx skills add . --skill maestro --agent github-copilot --global --copy
+```
+
+No branch refs, automatic refresh, or release machinery are embedded in Settings.
+The user already proved this global local-source path with `skills` **1.5.26** at
+`2026-09-22T12:03:56.533Z`: it installed to `~/.agents/skills/maestro`, and Copilot
+global discovery succeeded. That is an observed location, not an assumption that
+all global skills live under `.copilot`. Bare plugin loading and explicit
+`--plugin-dir` both failed live; no upstream root cause is claimed. See the
+[public findings](docs/delivery-proof.md#guide-distribution-decision-after-live-proof).
+Any refresh of the user's existing global copy remains a separate consentful action.
+
+On the next explicit **Enable Copilot Integration**, setup removes only its old
+`Copilot/plugin/skills/maestro/SKILL.md` copy, if present, using owner-checked,
+non-symlink traversal. It preserves other skills and files, including lifecycle,
+icon and global guides; it never sweeps global paths or cached/live sessions.
+
 ### Disable or uninstall
 
 Use **Uninstall Native Plugin…**, then explicitly confirm. This runs only
-`copilot --no-auto-update plugin uninstall cmux-maestro-native`. Restart/resume existing CLI
+`copilot --no-auto-update plugin uninstall cmux-maestro-native`, then removes
+Maestro's native loader entry point and launch configuration. Live route bindings,
+sockets and in-memory adapters are not touched; close those sessions normally.
+Restart/resume existing CLI
 sessions to unload their cached hooks. Disable this sidebar in CMUX separately
 if desired; uninstall does not select or remove any other provider.
+It also leaves the separately installed global guide untouched.
 
 For individual future CLI launches, either `CMUX_COPILOT_HOOKS_DISABLED=1` or
 `MAESTRO_NATIVE_DISABLED=1` suppresses identity hooks. The legacy
@@ -142,14 +204,65 @@ directory and is consumed only after exact workspace/surface attachment.
 The terminal command contains no token. Both supervisor and provider process
 anchors retain the existing resource bounds.
 
-Programmatic follow-ups are refused for interactive workers pending #38.
-No prompt is injected into a live terminal. Close interactive Copilot normally
+The lifecycle `follow-up` command remains refused for interactive workers.
+Participating peers instead use native fire-and-forget messaging below; no prompt
+is injected into terminal input. Close interactive Copilot normally
 before archiving; archive does not interrupt it. Existing legacy workers are
 preserved and visibly labeled **Legacy worker** rather than silently converted.
 
+### Native peer messaging
+
+After explicit integration setup, pin both account and model in **Agent launch
+settings**. `launch-settings` reports `messagingInstalled` separately from account/
+model `ready`; neither field proves a recipient has loaded its native adapter.
+New installed-controller spawns automatically bind their exact Copilot session,
+generation and CMUX workspace before launch and enable CLI native extensions
+with `--experimental`. No per-project fixture preparation is needed. Ordinary
+unmanaged sessions, existing workers, and registered coordinators without a
+launcher-owned Copilot session remain **unsupported recipients**. Never adopt or
+restart them automatically.
+
+Use global `/maestro` for `maestro_peers` discovery, `maestro_send`, and replies
+to the supplied sender address. Any participating same-workspace peer can send,
+including siblings and peers from another run; messaging grants no lifecycle or
+process-control rights. The native adapter joins only its CLI-owned session and
+uses `session.send({ prompt, mode: "enqueue" })`. Copilot owns scheduling.
+No sidebar, selected workspace, foreground application, terminal keystroke,
+composer inspection, acknowledgement, receipt, retry or completion tracker is
+involved. A local-write attempt is **not** a delivery or completion guarantee.
+The source package and unchanged confirmed purpose live in `skills/maestro/`.
+It has no tool-permission grants in frontmatter and reuses the installed
+`/cmux-maestro-native:cmux-maestro-orchestrate` skill for lifecycle operations.
+For the skill tool, pass `{"skill":"maestro"}`. Only the existing lifecycle/icon
+plugin slash commands remain namespaced; the global messaging guide is not.
+
+Defaults grant nothing. A coordinator may pass `spawn --yolo` **only with explicit
+user approval**; Copilot receives `--allow-all` alongside all explicit denies.
+Workers cannot request YOLO, even if the coordinator was allowed it; requests are
+rejected before credential lookup/reservation. Descendants keep bounded explicit
+allows and inherited denies. There is no speculative full permission inheritance,
+permission callback or persistent provider setting change.
+
+Each native child has one private Unix socket and a launcher-created binding
+under `~/.copilot/extensions/maestro/r/`; account credentials never enter these
+files or messaging tools. Addresses contain workspace/session UUIDs and generation,
+not secrets. Payloads are limited to 4 KiB UTF-8, frames to 8 KiB, registered
+participants to 128, and connections/pending native sends to eight per receiver.
+The existing eight-live-worker workspace limit still applies. Routes use exclusive
+creation, are retired after exact provider exit (or closed-run archive), and cannot
+be rebound by clearing/resuming a conversation. Restart/clear/replaced-session,
+offline, unsupported, invalid or stale routes fail closed; request fresh managed
+sessions only with user authorization. Same-user processes are trusted: private
+capabilities are not a defense against a malicious process running as your user.
+
+See [native delivery findings](docs/delivery-proof.md) for the observed agent
+exchange, human-confirmed draft preservation, separate harness-origin background
+check, and outstanding installed-product live acceptance. Mocked contract tests
+are not native UI proof.
+
 ### Local agent launch settings
 
-The containing app's **Settings** window provides **Launch agents with
+The containing app's **Settings > Agent launches** tab provides **Launch agents with
 subscription:** and an optional worker-model setting. The dropdown lists
 configured GitHub.com accounts from GitHub CLI without displaying credentials;
 it does not infer subscription plan names. **Use Copilot default** leaves
@@ -194,6 +307,16 @@ still-live managed worker resources are allowed per workspace;
 reported completion does not free a slot. Archive retains bounded history and
 never kills processes or deletes tabs, so still-present archived worker tabs
 continue to consume the resource bound. Tool permissions are not auto-approved.
+Interactive archive checks exact process exit under the lock both before
+admission and before deletion; failed process probes remain uncertain, not
+proof of exit. Interactive-only runs need no cooperative stop marker, so a
+refused archive leaves their records, messaging routes and archive flags intact.
+Cancelling an unclaimed launch lease records explicit pre-runtime failure
+evidence. Stale recovery can retire that never-started worker after its exact
+surface is closed (or when creation produced no surface), even without process
+anchors. Missing anchors alone, idle time and startup timeouts are not exit
+proof; the no-start evidence requires the lease cancellation before runtime
+claimed ownership. Legacy supervisors retain their cooperative archive stop.
 Read-only controller snapshots use shared locks; state mutations remain
 exclusive. Idle supervisors therefore do not serialize their status reads
 behind the mutation lock as a workspace approaches its worker limit.
@@ -399,9 +522,9 @@ test. Its AppKit windows are never shown; this is not a desktop capture, live
 CMUX-host visual proof, system VoiceOver verification or a pixel-baseline
 comparison. No transcripts, real workspace paths or desktop images are uploaded.
 
-## Choose your session icon: `maestro-icon`
+## Choose your session icon: `/cmux-maestro-native:maestro-icon`
 
-The bundled `maestro-icon` skill searches the local Nerd Fonts catalog and saves
+The bundled `/cmux-maestro-native:maestro-icon` skill searches the local Nerd Fonts catalog and saves
 a glyph and/or identity color for **the invoking session only**.
 Workers use their injected identity/token; coordinators use their own retained
 registration credentials. The command checks the caller's exact workspace and

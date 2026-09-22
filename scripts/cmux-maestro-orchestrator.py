@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import runpy
 from pathlib import Path
 import secrets
 import selectors
@@ -65,6 +66,123 @@ REPORT_KEYS = {
 
 class OrchestrationError(Exception):
     pass
+
+
+def delivery_proof_api():
+    path = Path(__file__).resolve().parent / "delivery-proof" / "fixture.py"
+    if not path.is_file():
+        raise OrchestrationError("Delivery proof is available only from its isolated source checkout.")
+    return runpy.run_path(str(path))
+
+
+def private_message_directory(path):
+    if not path.is_absolute() or path.resolve() != path:
+        raise OrchestrationError("Messaging requires a canonical private directory.")
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise OrchestrationError("Messaging directory is not private.")
+
+
+def message_json(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or not 0 < info.st_size <= 8192):
+            raise OrchestrationError("Messaging configuration is not a private bounded file.")
+        data = stream.read(8193)
+        if len(data) > 8192:
+            raise OrchestrationError("Messaging configuration exceeds its size bound.")
+        return json.loads(data)
+
+
+def messaging_configuration(root):
+    config = root / "bin/messaging.json"
+    try:
+        value = message_json(config)
+        if (not isinstance(value, dict)
+                or set(value) not in ({"version", "routes", "extension"},
+                                     {"version", "routes", "extension", "pluginDirectory"})
+                or type(value["version"]) is not int or value["version"] != 1
+                or not isinstance(value["routes"], str) or not isinstance(value["extension"], str)):
+            raise OrchestrationError("Messaging configuration is invalid.")
+        routes = Path(value["routes"])
+        private_message_directory(routes)
+        extension = Path(value["extension"])
+        private_message_directory(extension)
+        if len(os.fsencode(routes / ("0" * 16 + ".sock"))) > 100:
+            raise OrchestrationError("Messaging socket path is too long.")
+        for name in ("extension.mjs", "adapter.mjs"):
+            descriptor = os.open(extension / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                info = os.fstat(descriptor)
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                        or info.st_mode & 0o077 or not 0 < info.st_size <= 65_536):
+                    raise OrchestrationError("Installed messaging adapter is unavailable.")
+            finally:
+                os.close(descriptor)
+        # Ignore the obsolete pluginDirectory field; guide discovery is independent.
+        # Keep the three-field node contract compatible with already-running controllers.
+        return {key: value[key] for key in ("version", "routes", "extension")}
+    except FileNotFoundError:
+        # Source/proof and pre-feature controller installs remain usable; an
+        # installed current controller must not silently create unwired workers.
+        if not config.exists() and Path(__file__).name.endswith(".py"):
+            return None
+        raise OrchestrationError("Messaging is not installed; enable Maestro integration.")
+    except (OSError, ValueError) as error:
+        raise OrchestrationError("Messaging is unavailable; enable Maestro integration.") from error
+
+
+def message_peer(node):
+    return hashlib.sha256(
+        f'{node["copilotSessionId"]}:{node["generation"]}'.encode()
+    ).hexdigest()[:16]
+
+
+def bind_messaging(node):
+    routes = Path(node["messaging"]["routes"])
+    private_message_directory(routes)
+    peer = message_peer(node)
+    if len(os.fsencode(routes / f"{peer}.sock")) > 100:
+        raise OrchestrationError("Messaging socket path is too long.")
+    binding = {
+        "peer": peer, "nodeId": node["id"], "name": node["label"],
+        "workspaceId": node["workspaceId"], "sessionId": node["copilotSessionId"],
+        "generation": node["generation"], "capability": secrets.token_hex(32),
+    }
+    descriptor = os.open(routes / f"{peer}.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "w") as stream:
+        json.dump(binding, stream)
+
+
+def retire_messaging(node):
+    if not node.get("messaging"):
+        return
+    routes = Path(node["messaging"]["routes"])
+    try:
+        private_message_directory(routes)
+    except FileNotFoundError:
+        return
+    peer = message_peer(node)
+    try:
+        binding = message_json(routes / f"{peer}.json")
+    except FileNotFoundError:
+        return
+    expected = (node["id"], node["workspaceId"], node["copilotSessionId"], node["generation"])
+    if (not isinstance(binding, dict) or binding.get("peer") != peer
+            or tuple(binding.get(key) for key in ("nodeId", "workspaceId", "sessionId", "generation")) != expected):
+        raise OrchestrationError("Messaging identity changed; refusing cleanup.")
+    (routes / f"{peer}.json").unlink()
+    # Only after the exact owned provider has exited. Never unlink a live route
+    # to recover a launch; unique session/generation endpoints are single-use.
+    endpoint = routes / f"{peer}.sock"
+    try:
+        info = endpoint.lstat()
+        if stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid():
+            endpoint.unlink()
+    except FileNotFoundError:
+        pass
 
 
 @functools.lru_cache(maxsize=1)
@@ -154,11 +272,16 @@ def command_launch_settings(root):
             account_available = True
         except OrchestrationError:
             account_available = False
+    try:
+        messaging_installed = messaging_configuration(root) is not None
+    except OrchestrationError:
+        messaging_installed = False
     return {
         "accountPinned": account_pinned,
         "modelPinned": model_pinned,
         "accountAvailable": account_available,
         "ready": account_pinned and model_pinned and account_available,
+        "messagingInstalled": messaging_installed,
     }
 
 
@@ -656,6 +779,32 @@ def validate_state(state):
             raise OrchestrationError("Stored execution mode is invalid.")
         if node.get("launchSettings") is not None:
             validate_launch_settings(node["launchSettings"])
+        if (not isinstance(node.get("permissionMode", "default"), str)
+                or node.get("permissionMode", "default") not in {"default", "yolo"}):
+            raise OrchestrationError("Stored launch permission mode is invalid.")
+        if node.get("permissionMode") == "yolo" and (role != "worker" or mode != "interactive"):
+            raise OrchestrationError("YOLO requires an explicitly launched interactive worker.")
+        messaging = node.get("messaging")
+        if messaging is not None and (
+            not isinstance(messaging, dict) or set(messaging) != {"version", "routes", "extension"}
+            or type(messaging["version"]) is not int or messaging["version"] != 1
+            or not isinstance(messaging["routes"], str) or len(messaging["routes"]) > 1024
+            or not Path(messaging["routes"]).is_absolute()
+            or not isinstance(messaging["extension"], str) or len(messaging["extension"]) > 1024
+            or not Path(messaging["extension"]).is_absolute()
+            or role != "worker" or mode != "interactive"
+        ):
+            raise OrchestrationError("Stored messaging configuration is invalid.")
+        proof = node.get("deliveryProof")
+        if proof is not None and (
+            not isinstance(proof, dict)
+            or set(proof) not in ({"fixture", "experimental"}, {"fixture", "experimental", "yolo"})
+            or not isinstance(proof["fixture"], str) or len(proof["fixture"]) > 1024
+            or type(proof["experimental"]) is not bool
+            or type(proof.get("yolo", False)) is not bool
+            or role != "worker" or mode != "interactive"
+        ):
+            raise OrchestrationError("Stored delivery proof configuration is invalid.")
         provider = node.get("providerProcess")
         if provider is not None and (
             not isinstance(provider, dict) or set(provider) != {"pid", "start"}
@@ -728,6 +877,15 @@ def validate_state(state):
         validate_tool_policy(node.get("toolPolicy"))
         if not isinstance(node.get("archiving", False), bool):
             raise OrchestrationError("Stored archive state is invalid.")
+        if "runtimeNotStarted" in node and (
+            node["runtimeNotStarted"] is not True or role != "worker"
+            or node.get("supervisor") or provider or identifier in state["launches"]
+            or node["phase"] not in {
+                "launch-failed", "startup-failed", "resource-retired",
+                "process-disappeared", "terminal-disappeared",
+            }
+        ):
+            raise OrchestrationError("Stored pre-runtime failure evidence is invalid.")
         created = parse_date(node.get("createdAt"), "stored creation time")
         updated = parse_date(node.get("updatedAt"), "stored update time")
         if created > updated or updated > now_date() + datetime.timedelta(minutes=5):
@@ -1276,7 +1434,7 @@ def process_start(pid):
             ["/bin/ps", "-o", "lstart=", "-p", str(pid)],
             capture_output=True, text=True, timeout=3,
         )
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, OSError):
         return None
     value = result.stdout.strip()
     return value if result.returncode == 0 and value else None
@@ -1285,6 +1443,31 @@ def process_start(pid):
 def process_matches(node):
     return any(process and process_start(process["pid"]) == process["start"]
                for process in (node.get("supervisor"), node.get("providerProcess")))
+
+
+def worker_processes_exited(node):
+    processes = (node.get("supervisor"), node.get("providerProcess"))
+    if node.get("runtimeNotStarted") is True and not any(processes):
+        return True
+    if not processes[0] or (node.get("executionMode") == "interactive" and not processes[1]):
+        return False
+    for process in processes:
+        if not process:
+            continue
+        start = process_start(process["pid"])
+        if start == process["start"]:
+            return False
+        if start is None:
+            # A failed/timed-out ps probe is not proof of exit. Signal zero only
+            # checks existence; it neither delivers a signal nor controls a process.
+            try:
+                os.kill(process["pid"], 0)
+            except ProcessLookupError:
+                continue
+            except PermissionError:
+                return False
+            return False
+    return True
 
 
 def new_root(workspace, surface, pane, label, cwd=None, metadata=None, icon_id=None, icon_color=None):
@@ -1353,7 +1536,7 @@ def resource_observations(state, cmux, workspace):
     return active, retained_gone
 
 
-def record_launch_failure(state, worker_id, surface=None):
+def record_launch_failure(state, worker_id, surface=None, *, phase="launch-failed"):
     launch = state["launches"].pop(worker_id, None)
     node = state["nodes"].get(worker_id)
     if surface is not None:
@@ -1377,8 +1560,12 @@ def record_launch_failure(state, worker_id, surface=None):
                 "archivedAt": now(),
             })
     if node is not None and node["phase"] == "launching":
+        # Runtime claims the lease and records its supervisor atomically before
+        # starting a provider. Cancelling an unclaimed lease fences that startup.
+        if launch is not None and not node.get("supervisor") and not node.get("providerProcess"):
+            node["runtimeNotStarted"] = True
         node["phase"], node["availability"], node["updatedAt"] = (
-            "launch-failed", "unavailable", now()
+            phase, "unavailable", now()
         )
 
 
@@ -1386,11 +1573,27 @@ def command_spawn(args, root, cmux):
     task = bounded_text(args.task, "task", MAX_TASK)
     label = sanitize_label(bounded_text(args.name, "name", MAX_LABEL))
     cwd = assigned_directory(args.cwd)
+    proof = None
+    if getattr(args, "delivery_proof_fixture", None):
+        try:
+            proof = delivery_proof_api()["validate_fixture"](args.delivery_proof_fixture, cwd, fresh=True)
+        except (ValueError, OSError) as error:
+            raise OrchestrationError("Delivery proof requires a fresh prepared fixture.") from error
+        proof["experimental"] = args.delivery_proof_experimental
+        proof["yolo"] = getattr(args, "delivery_proof_yolo", False)
+    elif getattr(args, "delivery_proof_experimental", False):
+        raise OrchestrationError("--delivery-proof-experimental requires --delivery-proof-fixture.")
+    elif getattr(args, "delivery_proof_yolo", False):
+        raise OrchestrationError("--delivery-proof-yolo requires --delivery-proof-fixture.")
     metadata = git_display_metadata(cwd)
     snapshot = read_state(root)
     actor = authorize(snapshot, args.actor_id, args.token)
+    yolo = getattr(args, "yolo", False) or bool(proof and proof.get("yolo"))
+    if yolo and actor["role"] != "coordinator":
+        raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
+    messaging = None if proof is not None else messaging_configuration(root)
     launch_settings = worker_launch_settings(root)
-    if args.require_pinned_launch_settings and (
+    if (args.require_pinned_launch_settings or proof is not None or messaging is not None or yolo) and (
         launch_settings.get("copilotAccount") is None
         or launch_settings.get("model") is None
     ):
@@ -1411,6 +1614,8 @@ def command_spawn(args, root, cmux):
 
     def reserve(state):
         current = authorize(state, args.actor_id, args.token)
+        if yolo and current["role"] != "coordinator":
+            raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
         if (
             current["runId"], current["workspaceId"], current.get("surfaceId")
         ) != (actor["runId"], actor["workspaceId"], actor["surfaceId"]):
@@ -1467,6 +1672,11 @@ def command_spawn(args, root, cmux):
             "archiving": False,
             "verifiedBoundaryGeneration": None, "toolPolicy": tool_policy,
         }
+        if proof is not None:
+            state["nodes"][identifier]["deliveryProof"] = proof
+        if messaging is not None:
+            state["nodes"][identifier]["messaging"] = messaging
+        state["nodes"][identifier]["permissionMode"] = "yolo" if yolo else "default"
         state["launches"][identifier] = {
             "workerId": identifier, "runId": current["runId"],
             "workspaceId": current["workspaceId"], "surfaceId": None,
@@ -1541,10 +1751,7 @@ def command_spawn(args, root, cmux):
     def startup_failed(state):
         node = state["nodes"].get(identifier)
         if node and node["phase"] == "launching":
-            state["launches"].pop(identifier, None)
-            node["phase"], node["availability"], node["updatedAt"] = (
-                "startup-failed", "unavailable", now()
-            )
+            record_launch_failure(state, identifier, surface, phase="startup-failed")
     mutate(root, startup_failed, wait=1)
     remove_launch_credential(root, identifier)
     raise OrchestrationError("Worker supervisor did not acknowledge startup within the bound.")
@@ -1670,6 +1877,8 @@ def terminal_bookkeeping(event):
 
 def worker_environment(worker_id, token, node):
     environment = os.environ.copy()
+    for key in ("CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER"):
+        environment.pop(key, None)
     environment.update({
         "CMUX_MAESTRO_WORKER_ID": worker_id,
         "CMUX_MAESTRO_CONTROL_TOKEN": token,
@@ -1678,6 +1887,12 @@ def worker_environment(worker_id, token, node):
         "CMUX_MAESTRO_ORCHESTRATOR": str(Path(__file__).resolve()),
         "CMUX_MAESTRO_EXECUTION_MODE": node.get("executionMode", "bounded"),
     })
+    if node.get("messaging"):
+        environment.update({
+            "CMUX_MAESTRO_MESSAGE_ROOT": node["messaging"]["routes"],
+            "CMUX_MAESTRO_MESSAGE_PEER": message_peer(node),
+            "CMUX_WORKSPACE_ID": node["workspaceId"],
+        })
     account = (node.get("launchSettings") or {}).get("copilotAccount")
     subscription = resolve_copilot_token(account)
     if subscription is not None:
@@ -1701,6 +1916,21 @@ def run_interactive_session(root, worker_id, token, node):
         arguments.extend(["--deny-tool", rule])
     if not all(os.isatty(fd) for fd in (0, 1, 2)):
         raise OrchestrationError("Interactive workers require a real terminal; no headless fallback is allowed.")
+    if node.get("deliveryProof") is not None:
+        try:
+            delivery_proof_api()["bind"](node["deliveryProof"], node)
+        except (ValueError, OSError) as error:
+            raise OrchestrationError("Delivery proof binding failed; use fresh fixtures.") from error
+        if node["deliveryProof"]["experimental"]:
+            arguments.append("--experimental")
+    if node.get("permissionMode") == "yolo" or (node.get("deliveryProof") or {}).get("yolo", False):
+        arguments.append("--allow-all")
+    if node.get("messaging"):
+        if messaging_configuration(root) != node["messaging"]:
+            raise OrchestrationError("Messaging installation changed before launch.")
+        bind_messaging(node)
+        arguments.append("--experimental")
+    process = None
     previous_interrupt = signal.signal(signal.SIGINT, lambda _signum, _frame: None)
     try:
         try:
@@ -1751,6 +1981,8 @@ def run_interactive_session(root, worker_id, token, node):
         return {"workerId": worker_id, "interactive": True, "exitCode": code}
     finally:
         signal.signal(signal.SIGINT, previous_interrupt)
+        if node.get("messaging") and (process is None or process.poll() is not None):
+            retire_messaging(node)
 
 
 def run_copilot_turn(root, worker_id, token, node):
@@ -2308,15 +2540,33 @@ def command_status(args, root, cmux):
         if args.worker_id:
             current_targets = [ensure_owned(state, current_actor, args.worker_id)]
         for node in current_targets:
-            surface, process = observations.get(node["id"], (False, False))
-            if node.get("surfaceId") and not surface:
+            previous = snapshot["nodes"].get(node["id"])
+            if (
+                node["id"] not in observations or previous is None
+                or any(node.get(key) != previous.get(key) for key in (
+                    "runId", "parentId", "role", "workspaceId", "surfaceId",
+                    "copilotSessionId", "generation", "executionMode", "phase",
+                    "supervisor", "providerProcess", "messaging",
+                ))
+                or node["id"] in snapshot["launches"] or node["id"] in state["launches"]
+                or node["phase"] == "launching"
+            ):
+                continue
+            surface, process = observations[node["id"]]
+            exited = node["role"] == "worker" and not process and worker_processes_exited(node)
+            if node["role"] == "worker" and not process and not exited:
+                continue
+            if (node.get("surfaceId") and not surface
+                    and not cmux.surface_exists(node["workspaceId"], node["surfaceId"])):
                 node["phase"], node["availability"], node["updatedAt"] = (
                     "terminal-disappeared", "unavailable", now()
                 )
-            elif node["role"] == "worker" and not process:
+            elif exited:
                 node["phase"], node["availability"], node["updatedAt"] = (
                     "process-disappeared", "unavailable", now()
                 )
+            if exited:
+                retire_messaging(node)
         apply_git_evidence(state, git_evidence)
         return {"runId": current_actor["runId"], "workers": [{
             "workerId": node["id"], "parentId": node["parentId"], "name": node["label"],
@@ -2325,6 +2575,11 @@ def command_status(args, root, cmux):
             "iconColor": node.get("iconColor"),
             "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
             "sessionId": node["copilotSessionId"], "generation": node["generation"],
+            "messaging": "participating" if node.get("messaging") and process_matches(node)
+                else "offline" if node.get("messaging") else "unsupported",
+            "permissionMode": node.get(
+                "permissionMode", "yolo" if (node.get("deliveryProof") or {}).get("yolo") else "default"
+            ),
             "phase": node["phase"], "availability": node["availability"],
             "result": node["result"],
         } for node in current_targets]}
@@ -2363,12 +2618,12 @@ def command_archive(args, root, cmux):
         raise OrchestrationError("Only a coordinator can archive its run.")
     cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
     run_id = actor["runId"]
+    identity = (actor["role"], run_id, actor["workspaceId"], actor["surfaceId"])
 
     def begin(state):
         current = authorize(state, args.actor_id, args.token, allow_archiving=True)
-        if any(node["runId"] == current["runId"] and node.get("executionMode") == "interactive"
-               and process_matches(node) for node in state["nodes"].values()):
-            raise OrchestrationError("Close interactive sessions normally before archiving; no input or process will be interrupted.")
+        if (current["role"], current["runId"], current["workspaceId"], current["surfaceId"]) != identity:
+            raise OrchestrationError("Coordinator ownership changed during archive.")
         if any(
             launch["runId"] == current["runId"]
             for launch in state["launches"].values()
@@ -2376,6 +2631,14 @@ def command_archive(args, root, cmux):
             raise OrchestrationError(
                 "Run archive is pending because a worker launch is in progress; retry."
             )
+        if any(node["runId"] == run_id and node.get("executionMode") == "interactive"
+               and not worker_processes_exited(node) for node in state["nodes"].values()):
+            raise OrchestrationError("Close interactive sessions normally before archiving; live or uncertain processes will not be interrupted.")
+        # Only legacy supervisors need the cooperative stop marker. Interactive
+        # archive is read-only until final locked validation and deletion.
+        if not any(node["runId"] == run_id and node["role"] == "worker"
+                   and node.get("executionMode") != "interactive" for node in state["nodes"].values()):
+            return
         for node in state["nodes"].values():
             if node["runId"] == current["runId"]:
                 node["archiving"] = True
@@ -2388,7 +2651,10 @@ def command_archive(args, root, cmux):
             node for node in state["nodes"].values()
             if node["runId"] == run_id and node["role"] == "worker"
         ]
-        if not any(process_matches(node) for node in workers):
+        if all(
+            worker_processes_exited(node) if node.get("executionMode") == "interactive"
+            else not process_matches(node) for node in workers
+        ):
             break
         time.sleep(0.05)
     else:
@@ -2397,16 +2663,23 @@ def command_archive(args, root, cmux):
         )
 
     def finish(state):
+        current = authorize(state, args.actor_id, args.token, allow_archiving=True)
+        if (current["role"], current["runId"], current["workspaceId"], current["surfaceId"]) != identity:
+            raise OrchestrationError("Coordinator ownership changed during archive.")
         nodes = [node for node in state["nodes"].values() if node["runId"] == run_id]
         if (
             not nodes
             or any(launch["runId"] == run_id for launch in state["launches"].values())
-            or any(node["role"] == "worker" and process_matches(node) for node in nodes)
+            or any(node["role"] == "worker" and (
+                not worker_processes_exited(node) if node.get("executionMode") == "interactive"
+                else process_matches(node)
+            ) for node in nodes)
         ):
-            raise OrchestrationError("Run archive cannot finish while a supervisor is live.")
+            raise OrchestrationError("Run archive cannot finish while worker processes are live or uncertain.")
         state["archives"].append(archive_summary(state, run_id))
         state["archives"] = state["archives"][-MAX_ARCHIVES:]
         for node in nodes:
+            retire_messaging(node)
             if node["role"] == "worker" and node.get("surfaceId"):
                 state["retainedResources"].append({
                     "runId": run_id, "workspaceId": node["workspaceId"],
@@ -2467,11 +2740,26 @@ def command_recover(args, root, cmux):
         ).total_seconds()
         if current_age <= STALE_SECONDS:
             raise OrchestrationError("The existing coordinator ownership became current.")
+        if any(launch["runId"] == current["runId"] for launch in state["launches"].values()):
+            raise OrchestrationError("Stale recovery refuses an in-flight worker launch.")
+        current_nodes = {
+            node["id"]: node for node in state["nodes"].values()
+            if node["runId"] == current["runId"]
+        }
+        if current_nodes != {node["id"]: node for node in run_nodes}:
+            raise OrchestrationError("Run ownership changed during recovery.")
+        for node in current_nodes.values():
+            if node["role"] == "worker" and (
+                node["phase"] == "launching" or not worker_processes_exited(node)
+                or (node.get("surfaceId") and cmux.surface_exists(node["workspaceId"], node["surfaceId"]))
+            ):
+                raise OrchestrationError("Stale recovery refuses live or uncertain worker ownership.")
+        for node in current_nodes.values():
+            retire_messaging(node)
         state["archives"].append(archive_summary(state, current["runId"]))
         state["archives"] = state["archives"][-MAX_ARCHIVES:]
-        for node in list(state["nodes"].values()):
-            if node["runId"] == current["runId"]:
-                del state["nodes"][node["id"]]
+        for node_id in current_nodes:
+            del state["nodes"][node_id]
         node, token = new_root(workspace, surface, pane, label, cwd, metadata, args.icon, args.color)
         state["nodes"][node["id"]] = node
         return {
@@ -2511,6 +2799,13 @@ def parser():
     spawn.add_argument("--allow-tool", action="append", default=[])
     spawn.add_argument("--deny-tool", action="append", default=[])
     spawn.add_argument("--require-pinned-launch-settings", action="store_true")
+    spawn.add_argument("--yolo", action="store_true",
+                       help="Explicit user-approved coordinator launch with --allow-all; preserves denies")
+    spawn.add_argument("--delivery-proof-fixture", help="Opt in to one prepared disposable native-extension fixture")
+    spawn.add_argument("--delivery-proof-experimental", action="store_true",
+                       help="Opt in to Copilot --experimental for this proof worker only")
+    spawn.add_argument("--delivery-proof-yolo", action="store_true",
+                       help="Opt in to Copilot --allow-all for this disposable proof worker only; explicit denies remain")
     spawn.add_argument("--icon")
     spawn.add_argument("--color", choices=ICON_COLORS)
     icon = commands.add_parser("icon", help="Choose an icon for the authenticated caller's own session")

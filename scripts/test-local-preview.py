@@ -189,6 +189,8 @@ class LocalPreviewTests(unittest.TestCase):
         if orchestration:
             (resources / "cmux-maestro-orchestrator.py").write_text("#!/usr/bin/env python3\n")
             (resources / "SKILL.md").write_text("---\nname: cmux-maestro-orchestrate\n---\n")
+            (resources / "adapter.mjs").write_text("// synthetic adapter\n")
+            (resources / "extension.mjs").write_text("// synthetic loader\n")
         parent = {"CFBundleIdentifier": metadata.BASE_ID, "CFBundlePackageType": "APPL",
                   "CFBundleVersion": version, "CFBundleExecutable": "Preview"}
         child = {"CFBundleIdentifier": metadata.BASE_ID + ".Extension", "CFBundlePackageType": "XPC!",
