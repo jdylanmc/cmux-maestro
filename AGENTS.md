@@ -45,7 +45,8 @@ do not copy its source or history, modify it, or make this project depend on it.
   direct human follow-ups. Do not create new headless-worker tabs or infer task
   completion from an interactive session's exit. Issue #54's confirmed product
   expansion permits the installed native-session adapter, same-workspace peer
-  discovery/send/reply, explicit installer/build resources and `/maestro` skill,
+  discovery/send/reply, explicit installer/build resources and
+  `/cmux-maestro-native:maestro` skill,
   reusing `scripts/delivery-proof/` and the existing pinned launcher.
   Newly launched managed participants receive wiring automatically; never adopt
   or restart an existing/unmanaged session. Its same-workspace peer messaging is

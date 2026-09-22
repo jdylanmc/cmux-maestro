@@ -40,7 +40,7 @@ class ProofTests(unittest.TestCase):
             self.assertIn(f"`{tool}`", skill)
         for constraint in (
             "workspaceId", "sessionId", "generation", "4096 UTF-8 bytes",
-            "/cmux-maestro-orchestrate", "messagingInstalled: true",
+            "/cmux-maestro-native:cmux-maestro-orchestrate", "messagingInstalled: true",
             "Worker actors cannot request YOLO", "delivery and completion are",
         ):
             self.assertIn(constraint, skill)
@@ -112,12 +112,17 @@ class ProofTests(unittest.TestCase):
                 spawn(args, self.root, cmux)
         self.assertEqual(cmux.mock_calls, [])
 
-    def run_mocked_launcher(self):
+    def run_mocked_launcher(self, *, on_started=None):
         run = CONTROLLER["run_interactive_session"]
         process = mock.Mock(pid=12345)
         process.poll.return_value = 0
         process.wait.return_value = 0
         popen = mock.Mock(return_value=process)
+        if on_started is not None:
+            def started(*args, **kwargs):
+                on_started()
+                return process
+            popen.side_effect = started
         with mock.patch.dict(run.__globals__, {
             "trusted_executable": lambda *a: "/mock/copilot",
             "worker_environment": lambda *a: {"SYNTHETIC_PINNED_ENV": "preserved"},
@@ -132,6 +137,8 @@ class ProofTests(unittest.TestCase):
         self.assertEqual(args[args.index("--model") + 1], "synthetic-pinned-model")
         self.assertEqual(args[args.index("--session-id") + 1], self.node["copilotSessionId"])
         self.assertNotIn("--allow-tool", args)
+        if not self.node.get("messaging"):
+            self.assertNotIn("--plugin-dir", args)
         self.assertEqual(args[args.index("--deny-tool") + 1], "web")
         self.assertEqual(popen.call_args.kwargs, {
             "cwd": self.paths["a"], "env": {"SYNTHETIC_PINNED_ENV": "preserved"},
@@ -261,7 +268,9 @@ class ProofTests(unittest.TestCase):
                     spawn(args, self.root, cmux)
             self.assertEqual(cmux.mock_calls, [])
 
-    def install_synthetic_messaging(self):
+    def install_synthetic_messaging(self, *, with_plugin=True):
+        self.root = self.root / "Orchestration"
+        self.root.mkdir(mode=0o700)
         routes = REPO / ".build" / uuid.uuid4().hex[:5]
         routes.mkdir(mode=0o700)
         self.addCleanup(shutil.rmtree, routes)
@@ -271,13 +280,167 @@ class ProofTests(unittest.TestCase):
             shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         config = {"version": 1, "routes": str(routes), "extension": str(extension)}
+        installed_config = dict(config)
+        if with_plugin:
+            plugin = self.root.parent / "Copilot/plugin"
+            for directory in (plugin.parent, plugin, plugin / "skills", plugin / "skills/maestro"):
+                directory.mkdir(mode=0o700)
+            PROOF["write_new"](plugin / "plugin.json", {
+                "name": "cmux-maestro-native", "version": "1.1.0", "hooks": "hooks.json",
+            })
+            skill = plugin / "skills/maestro/SKILL.md"
+            shutil.copyfile(REPO / "skills/maestro/SKILL.md", skill)
+            skill.chmod(0o600)
+            installed_config["pluginDirectory"] = str(plugin)
         (self.root / "bin").mkdir(mode=0o700)
-        PROOF["write_new"](self.root / "bin/messaging.json", config)
+        PROOF["write_new"](self.root / "bin/messaging.json", installed_config)
         self.node.update({
             "id": str(uuid.uuid4()), "runId": str(uuid.uuid4()),
             "messaging": config, "executionMode": "interactive",
         })
         return routes, config
+
+    def test_old_config_remains_readable_but_new_managed_launch_requires_setup_upgrade(self):
+        routes, config = self.install_synthetic_messaging(with_plugin=False)
+        self.assertEqual(CONTROLLER["messaging_configuration"](self.root), config)
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "updated setup"):
+            self.run_mocked_launcher()
+        self.assertEqual(list(routes.iterdir()), [])
+        self.assertEqual(self.node["messaging"], config)
+
+    def test_managed_plugin_configuration_rejects_malformed_and_foreign_paths(self):
+        routes, _ = self.install_synthetic_messaging()
+        path = self.root / "bin/messaging.json"
+        original = PROOF["read_private"](path)
+        for candidate in (None, 1, [], {}, "", "relative", "/foreign/plugin", "/bad\0path",
+                          "/" + "x" * 1024, original["pluginDirectory"] + "/../plugin"):
+            with self.subTest(candidate=candidate):
+                path.write_text(json.dumps({**original, "pluginDirectory": candidate}))
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.run_mocked_launcher()
+                self.assertEqual(list(routes.iterdir()), [])
+        path.write_text(json.dumps({**original, "unexpected": True}))
+        with self.assertRaises(CONTROLLER["OrchestrationError"]):
+            CONTROLLER["messaging_configuration"](self.root)
+
+    def test_managed_plugin_rejects_wrong_manifest_and_unreadable_skill(self):
+        routes, _ = self.install_synthetic_messaging()
+        plugin = self.root.parent / "Copilot/plugin"
+        manifest = plugin / "plugin.json"
+        original = manifest.read_bytes()
+        for value in ({}, [], {"name": "foreign", "version": "1.1.0", "hooks": "hooks.json"},
+                      {"name": "cmux-maestro-native", "version": "0.0.0", "hooks": "hooks.json"},
+                      {"name": "cmux-maestro-native", "version": "1.1.0", "hooks": "../hooks.json"}):
+            with self.subTest(manifest=value):
+                manifest.write_text(json.dumps(value))
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.run_mocked_launcher()
+        manifest.write_bytes(original)
+        skill = plugin / "skills/maestro/SKILL.md"
+        for content in (b"", b"---\nname: foreign\n---\n", b"\xff", b"x" * 65_537):
+            with self.subTest(skill=content[:20]):
+                skill.write_bytes(content)
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.run_mocked_launcher()
+        skill.unlink()
+        with self.assertRaises(CONTROLLER["OrchestrationError"]):
+            self.run_mocked_launcher()
+        self.assertEqual(list(routes.iterdir()), [])
+
+    def test_managed_plugin_refuses_symlinks_and_unsafe_permissions(self):
+        routes, _ = self.install_synthetic_messaging()
+        plugin = self.root.parent / "Copilot/plugin"
+        for path in (plugin.parent, plugin, plugin / "skills", plugin / "skills/maestro",
+                     plugin / "plugin.json", plugin / "skills/maestro/SKILL.md"):
+            with self.subTest(path=path):
+                permissions = path.stat().st_mode & 0o777
+                path.chmod(0o777)
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.run_mocked_launcher()
+                path.chmod(permissions)
+                saved = path.with_name(path.name + "-saved")
+                path.rename(saved)
+                path.symlink_to(saved, target_is_directory=saved.is_dir())
+                try:
+                    with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                        self.run_mocked_launcher()
+                finally:
+                    path.unlink()
+                    saved.rename(path)
+        self.assertEqual(list(routes.iterdir()), [])
+
+    def test_managed_plugin_refuses_foreign_owner(self):
+        self.install_synthetic_messaging()
+        validate = CONTROLLER["managed_plugin_directory"]
+        # Accept the configuration owner, then reject the plugin's parent owner.
+        uid = os.getuid()
+        with mock.patch("os.getuid", side_effect=[uid, uid + 1]):
+            with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                validate(self.root)
+
+    def test_old_stored_nodes_survive_config_upgrade_and_retire_without_plugin_source(self):
+        state, _ = self.lifecycle_state()
+        for node in state["nodes"].values():
+            node["createdAt"] = node["updatedAt"] = CONTROLLER["now"]()
+            node.setdefault("toolPolicy", {"allow": [], "deny": []})
+            node["archiving"] = False
+        CONTROLLER["Store"]._normalize_candidate_state(state)
+        before = copy.deepcopy(state)
+        CONTROLLER["validate_state"](state)
+        self.assertEqual(state, before)
+        CONTROLLER["with_store"](self.root, lambda store: store.write(state))
+        self.assertEqual(CONTROLLER["read_state"](self.root), before)
+        self.assertEqual(set(self.node["messaging"]), {"version", "routes", "extension"})
+        self.assertEqual(CONTROLLER["messaging_configuration"](self.root), self.node["messaging"])
+        # Exit/cleanup of existing nodes must not read the new configuration or
+        # source, including after uninstall; only the exact old route is needed.
+        (self.root / "bin/messaging.json").unlink()
+        shutil.rmtree(self.root.parent / "Copilot")
+        CONTROLLER["validate_state"](state)
+        self.assertEqual(CONTROLLER["read_state"](self.root), before)
+        CONTROLLER["retire_messaging"](self.node)
+        self.assertFalse(self.route_path().exists())
+        self.assertEqual(state, before)
+
+    def test_running_node_exits_normally_after_setup_configuration_is_removed(self):
+        routes, _ = self.install_synthetic_messaging()
+        self.run_mocked_launcher(on_started=lambda: (self.root / "bin/messaging.json").unlink())
+        self.assertEqual(self.node["phase"], "process-disappeared")
+        self.assertEqual(self.node["availability"], "unavailable")
+        self.assertEqual(list(routes.iterdir()), [])
+
+    def test_missing_managed_plugin_fails_spawn_before_credentials_or_reservation(self):
+        self.install_synthetic_messaging()
+        plugin = self.root.parent / "Copilot/plugin"
+        (plugin / "skills/maestro/SKILL.md").unlink()
+        spawn = CONTROLLER["command_spawn"]
+        args = CONTROLLER["parser"]().parse_args([
+            "spawn", "--actor-id", str(uuid.uuid4()), "--token", "synthetic",
+            "--name", "Managed", "--task", "test", "--cwd", self.paths["a"],
+        ])
+        forbidden = mock.Mock(side_effect=AssertionError("must refuse before launch side effects"))
+        cmux = mock.Mock()
+        with mock.patch.dict(spawn.__globals__, {
+            "read_state": lambda _: {}, "authorize": lambda *a: {"role": "coordinator"},
+            "git_display_metadata": lambda _: {},
+            "worker_launch_settings": forbidden, "resolve_copilot_token": forbidden, "mutate": forbidden,
+        }):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "Managed skills"):
+                spawn(args, self.root, cmux)
+        forbidden.assert_not_called()
+        self.assertEqual(cmux.mock_calls, [])
+
+    def test_proof_launcher_ignores_installed_plugin_configuration(self):
+        self.install_synthetic_messaging()
+        self.node.pop("messaging")
+        self.node["deliveryProof"] = PROOF["validate_fixture"](self.paths["a"], self.paths["a"])
+        (self.root / "bin/messaging.json").write_text("invalid")
+        args = self.run_mocked_launcher()
+        self.assertNotIn("--plugin-dir", args)
+
+    def test_unmanaged_launcher_does_not_take_plugin_directory_from_environment(self):
+        with mock.patch.dict(os.environ, {"CMUX_MAESTRO_PLUGIN_DIR": "/foreign/plugin"}):
+            self.assertNotIn("--plugin-dir", self.run_mocked_launcher())
 
     def test_installed_binding_generation_exclusivity_cleanup_and_readiness(self):
         routes, config = self.install_synthetic_messaging()
@@ -633,6 +796,7 @@ class ProofTests(unittest.TestCase):
                     spawn(args, self.root, mock.Mock())
         worker = next(node for node in state["nodes"].values() if node["role"] == "worker")
         self.assertEqual(worker["messaging"], config)
+        self.assertEqual(set(worker["messaging"]), {"version", "routes", "extension"})
         self.assertEqual(worker["workingDirectory"], str(REPO))
         self.assertEqual(worker["permissionMode"], "default")
         self.assertEqual(worker["toolPolicy"], {"allow": [], "deny": ["web"]})
@@ -643,6 +807,8 @@ class ProofTests(unittest.TestCase):
         # No fixture validation/binding should run in installed mode.
         args = self.run_mocked_launcher()
         self.assertIn("--experimental", args)
+        self.assertEqual(args.count("--plugin-dir"), 1)
+        self.assertEqual(args[args.index("--plugin-dir") + 1], str(self.root.parent / "Copilot/plugin"))
         self.assertNotIn("--allow-all", args)
         self.assertEqual(list(routes.iterdir()), [])
         self.node["permissionMode"] = "yolo"
@@ -721,6 +887,267 @@ class ProofTests(unittest.TestCase):
                 worker["deliveryProof"]["yolo"] = value
                 with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "delivery proof"):
                     CONTROLLER["validate_state"](state)
+
+
+class LifecycleFailureTests(unittest.TestCase):
+    """No provider, filesystem routes, credentials, or installed state."""
+
+    def setUp(self):
+        self.root = REPO / "unused-mocked-control-root"
+        self.actor, self.token = CONTROLLER["new_root"](
+            str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()), "Coordinator",
+        )
+        self.actor["lastControlAt"] = "2000-01-01T00:00:00+00:00"
+        self.worker = {
+            **copy.deepcopy(self.actor), "id": str(uuid.uuid4()),
+            "parentId": self.actor["id"], "role": "worker", "executionMode": "interactive",
+            "copilotSessionId": str(uuid.uuid4()), "surfaceId": str(uuid.uuid4()),
+            "generation": 1, "phase": "turn-running", "availability": "busy",
+            "supervisor": {"pid": 12345, "start": "supervisor-start"},
+            "providerProcess": {"pid": 12346, "start": "provider-start"},
+        }
+        self.state = {**CONTROLLER["empty_state"](), "nodes": {
+            self.actor["id"]: self.actor, self.worker["id"]: self.worker,
+        }}
+        CONTROLLER["validate_state"](self.state)
+        self.routes = {self.worker["id"]: "synthetic exact-generation route"}
+        self.retire = mock.Mock(side_effect=lambda node: self.routes.pop(node["id"], None))
+        self.cmux = mock.Mock()
+        self.cmux.surface_exists.return_value = False
+        self.cmux.validate_surface.return_value = self.actor["paneId"]
+        self.mutations = 0
+        self.before_mutate = lambda _: None
+
+    def mutate(self, _root, callback, **_kwargs):
+        self.mutations += 1
+        self.before_mutate(self.mutations)
+        pending = copy.deepcopy(self.state)
+        result = callback(pending)
+        CONTROLLER["validate_state"](pending)
+        self.state.clear()
+        self.state.update(pending)
+        return result
+
+    def archive(self, starts=lambda _: None, kill_error=ProcessLookupError):
+        archive = CONTROLLER["command_archive"]
+        args = CONTROLLER["parser"]().parse_args([
+            "archive", "--actor-id", self.actor["id"], "--token", self.token,
+        ])
+        with mock.patch.dict(archive.__globals__, {
+            "read_state": lambda *a, **k: copy.deepcopy(self.state),
+            "mutate": self.mutate, "process_start": starts, "retire_messaging": self.retire,
+        }), mock.patch("os.kill", side_effect=kill_error):
+            return archive(args, self.root, self.cmux)
+
+    def recover(self):
+        recover = CONTROLLER["command_recover"]
+        args = CONTROLLER["parser"]().parse_args([
+            "recover", "--workspace", self.actor["workspaceId"],
+            "--surface", self.actor["surfaceId"], "--name", "Recovered",
+        ])
+        with mock.patch.dict(recover.__globals__, {
+            "read_state": lambda *a, **k: copy.deepcopy(self.state),
+            "mutate": self.mutate, "require_current_surface": lambda *a: None,
+            "process_start": lambda _: None, "retire_messaging": self.retire,
+        }), mock.patch("os.kill", side_effect=ProcessLookupError):
+            return recover(args, self.root, self.cmux)
+
+    def test_archive_unknown_pid_preserves_records_routes_and_archive_flags(self):
+        for kill_error in (None, PermissionError):
+            with self.subTest(kill_error=kill_error):
+                before, routes = copy.deepcopy(self.state), dict(self.routes)
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "uncertain"):
+                    self.archive(kill_error=kill_error)
+                self.assertEqual(self.state, before)
+                self.assertEqual(self.routes, routes)
+                self.retire.assert_not_called()
+
+    def test_unavailable_ps_is_unknown_not_absence(self):
+        probe = CONTROLLER["process_start"]
+        for error in (FileNotFoundError(), subprocess.TimeoutExpired("/bin/ps", 3)):
+            with self.subTest(error=error), mock.patch("subprocess.run", side_effect=error):
+                self.assertIsNone(probe(12345))
+                before = copy.deepcopy(self.state)
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "uncertain"):
+                    self.archive(starts=probe, kill_error=None)
+                self.assertEqual(self.state, before)
+                self.retire.assert_not_called()
+
+    def test_archive_rechecks_uncertainty_before_final_deletion_without_marking_run(self):
+        before, routes = copy.deepcopy(self.state), dict(self.routes)
+        # Admission and waiting establish exit; ps becomes unavailable at the
+        # final locked check, where existence is now unknown.
+        starts = lambda _: "different-start" if self.mutations == 1 else None
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "uncertain"):
+            self.archive(starts=starts, kill_error=None)
+        self.assertEqual(self.mutations, 2)
+        self.assertEqual(self.state, before)
+        self.assertEqual(self.routes, routes)
+        self.retire.assert_not_called()
+
+    def test_archive_waits_conservatively_when_probe_becomes_unknown(self):
+        starts = mock.Mock(side_effect=["different-start", "different-start", None])
+        before = copy.deepcopy(self.state)
+        with mock.patch("time.monotonic", side_effect=[0, 0, 100]), mock.patch("time.sleep"):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "pending"):
+                self.archive(starts=starts, kill_error=None)
+        self.assertEqual(self.mutations, 1)
+        self.assertEqual(self.state, before)
+        self.retire.assert_not_called()
+
+    def test_archive_uses_current_locked_process_identity(self):
+        def replace_identity(count):
+            if count == 1:
+                self.state["nodes"][self.worker["id"]]["providerProcess"]["start"] = "current-start"
+        self.before_mutate = replace_identity
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "uncertain"):
+            self.archive(starts=lambda pid: "current-start" if pid == 12346 else "different-start")
+        self.assertFalse(self.state["nodes"][self.worker["id"]]["archiving"])
+        self.retire.assert_not_called()
+
+    def test_archive_revalidates_coordinator_identity_under_lock(self):
+        def replace_identity(count):
+            if count == 1:
+                self.state["nodes"][self.actor["id"]]["surfaceId"] = str(uuid.uuid4())
+        self.before_mutate = replace_identity
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "ownership changed"):
+            self.archive()
+        self.retire.assert_not_called()
+        self.assertFalse(self.state["nodes"][self.actor["id"]]["archiving"])
+
+    def test_archive_confirmed_actual_exit_retires_and_retains_surface(self):
+        result = self.archive()
+        self.assertTrue(result["archived"])
+        self.assertEqual(self.state["nodes"], {})
+        self.assertEqual(self.routes, {})
+        self.assertEqual(self.state["retainedResources"][0]["surfaceId"], self.worker["surfaceId"])
+
+    def test_legacy_archive_keeps_cooperative_stop(self):
+        self.worker.pop("executionMode")
+        self.worker.pop("providerProcess")
+        def starts(_pid):
+            stopped = self.state["nodes"][self.worker["id"]]["archiving"]
+            return None if stopped else "supervisor-start"
+        self.assertTrue(self.archive(starts=starts)["archived"])
+        self.assertEqual(self.state["nodes"], {})
+
+    def failed_spawn(self, failure):
+        spawn = CONTROLLER["command_spawn"]
+        self.state["nodes"].pop(self.worker["id"])
+        args = CONTROLLER["parser"]().parse_args([
+            "spawn", "--actor-id", self.actor["id"], "--token", self.token,
+            "--name", "Never started", "--task", "Synthetic", "--cwd", str(REPO),
+        ])
+        surface = str(uuid.uuid4())
+        self.cmux.create_surface.return_value = surface
+        if failure == "creation":
+            self.cmux.create_surface.side_effect = RuntimeError("surface creation failed")
+        elif failure == "attachment":
+            self.cmux.validate_surface.side_effect = [
+                self.actor["paneId"], RuntimeError("attachment failed"),
+            ]
+        with mock.patch.dict(spawn.__globals__, {
+            "read_state": lambda *a, **k: copy.deepcopy(self.state),
+            "mutate": self.mutate, "messaging_configuration": lambda _: None,
+            "worker_launch_settings": lambda _: {"version": 1},
+            "resolve_copilot_token": lambda _: None,
+            "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+            "resource_observations": lambda *a: ({}, set()),
+            "with_store": lambda *a, **k: None,
+            "remove_launch_credential": lambda *a: None,
+            "timeout": lambda *a: 1,
+        }), mock.patch("time.monotonic", side_effect=[0, 2]):
+            with self.assertRaises((RuntimeError, CONTROLLER["OrchestrationError"])):
+                spawn(args, self.root, self.cmux)
+        self.worker = next(node for node in self.state["nodes"].values() if node["role"] == "worker")
+        self.state["nodes"][self.actor["id"]]["lastControlAt"] = "2000-01-01T00:00:00+00:00"
+        self.cmux.validate_surface.side_effect = None
+        self.assertTrue(self.worker["runtimeNotStarted"])
+        self.assertFalse(self.worker["supervisor"])
+        self.assertFalse(self.worker.get("providerProcess"))
+        self.assertEqual(self.state["launches"], {})
+        CONTROLLER["validate_state"](self.state)
+
+    def test_surface_creation_failure_can_recover_without_anchors(self):
+        self.failed_spawn("creation")
+        self.assertIsNone(self.worker["surfaceId"])
+        self.assertEqual(self.worker["phase"], "launch-failed")
+        self.assertEqual(self.recover()["recoveredRunId"], self.actor["runId"])
+
+    def test_attachment_failure_requires_exact_surface_closure_then_recovers(self):
+        self.failed_spawn("attachment")
+        self.cmux.surface_exists.return_value = True
+        before = copy.deepcopy(self.state)
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "live worker ownership"):
+            self.recover()
+        self.assertEqual(self.state, before)
+        self.cmux.surface_exists.assert_called_with(self.worker["workspaceId"], self.worker["surfaceId"])
+        self.cmux.surface_exists.return_value = False
+        self.assertEqual(self.recover()["recoveredRunId"], self.actor["runId"])
+
+    def test_startup_failure_cancels_unclaimed_lease_and_requires_surface_closure(self):
+        self.failed_spawn("startup")
+        self.assertEqual(self.worker["phase"], "startup-failed")
+        self.cmux.surface_exists.return_value = True
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "live worker ownership"):
+            self.recover()
+        self.cmux.surface_exists.return_value = False
+        self.assertEqual(self.recover()["recoveredRunId"], self.actor["runId"])
+
+    def test_no_start_evidence_survives_resource_retirement_and_legacy_mode(self):
+        self.failed_spawn("creation")
+        self.worker["phase"] = "resource-retired"
+        self.worker.pop("executionMode")
+        CONTROLLER["validate_state"](self.state)
+        self.assertEqual(self.recover()["recoveredRunId"], self.actor["runId"])
+
+    def test_missing_anchors_or_failure_phase_alone_never_prove_no_start(self):
+        for phase in ("turn-running", "launch-failed", "startup-failed", "resource-retired"):
+            self.worker.update(
+                phase=phase, availability="busy" if phase == "turn-running" else "unavailable",
+                supervisor=None, providerProcess=None,
+            )
+            before = copy.deepcopy(self.state)
+            with self.subTest(phase=phase), self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "uncertain"):
+                self.recover()
+            self.assertEqual(self.state, before)
+            self.retire.assert_not_called()
+
+    def test_failure_without_unclaimed_lease_cannot_record_no_start(self):
+        self.worker.update(phase="launching", supervisor=None, providerProcess=None)
+        CONTROLLER["record_launch_failure"](self.state, self.worker["id"])
+        self.assertNotIn("runtimeNotStarted", self.worker)
+        self.assertFalse(CONTROLLER["worker_processes_exited"](self.worker))
+
+    def test_failure_after_runtime_claim_does_not_record_no_start(self):
+        before = copy.deepcopy(self.worker)
+        CONTROLLER["record_launch_failure"](self.state, self.worker["id"], self.worker["surfaceId"])
+        self.assertEqual(self.worker, before)
+        self.assertNotIn("runtimeNotStarted", self.worker)
+
+    def test_proven_surface_creation_failure_can_archive(self):
+        self.failed_spawn("creation")
+        self.assertTrue(self.archive()["archived"])
+        self.assertEqual(self.state["nodes"], {})
+        self.assertEqual(self.state["retainedResources"], [])
+
+    def test_no_start_evidence_rejects_conflicting_process_or_live_lease(self):
+        self.failed_spawn("creation")
+        for change in ("supervisor", "providerProcess", "launch", "phase", "false"):
+            state = copy.deepcopy(self.state)
+            node = state["nodes"][self.worker["id"]]
+            if change in ("supervisor", "providerProcess"):
+                node[change] = {"pid": 12345, "start": "possibly-live"}
+            elif change == "launch":
+                state["launches"][node["id"]] = {}
+            elif change == "phase":
+                node.update(phase="turn-running", availability="busy")
+            else:
+                node["runtimeNotStarted"] = False
+            with self.subTest(change=change), self.assertRaisesRegex(
+                CONTROLLER["OrchestrationError"], "pre-runtime failure",
+            ):
+                CONTROLLER["validate_state"](state)
 
 
 if __name__ == "__main__":

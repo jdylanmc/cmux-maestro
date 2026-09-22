@@ -561,6 +561,27 @@ struct CopilotSetupTests {
         #expect(try String(contentsOf: proof, encoding: .utf8) == "ran")
     }
 
+    @Test func installedSkillGuidanceUsesManifestQualifiedNamesWithoutRenamingPackages() throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let sources = [
+            ("maestro", "skills/maestro/SKILL.md"),
+            ("cmux-maestro-orchestrate", ".agents/skills/cmux-maestro-orchestrate/SKILL.md"),
+            ("maestro-icon", ".agents/skills/maestro-icon/SKILL.md"),
+        ]
+        for (name, path) in sources {
+            let text = try String(contentsOf: repository.appendingPathComponent(path), encoding: .utf8)
+            #expect(text.hasPrefix("---\nname: \(name)\n"))
+            #expect(text.contains("/\(CopilotPluginManifest.name):\(name)"))
+            #expect(!text.contains("`/maestro`"))
+            #expect(!text.contains("`/cmux-maestro-orchestrate`"))
+            #expect(!text.contains("`/maestro-icon`"))
+        }
+        let messaging = try String(contentsOf: repository.appendingPathComponent("skills/maestro/SKILL.md"), encoding: .utf8)
+        #expect(messaging.contains(#"{"skill":"maestro"}"#))
+        #expect(!messaging.contains(#"{"skill":"cmux-maestro-native:maestro"}"#))
+        #expect(messaging.contains("/cmux-maestro-native:cmux-maestro-orchestrate"))
+    }
+
     @Test func writesCurrentBundleManifestWithoutTouchingOtherConfiguration() throws {
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let directory = repository.appendingPathComponent(".build/setup-fixtures/\(UUID().uuidString)")
@@ -598,7 +619,7 @@ struct CopilotSetupTests {
             at: repository.appendingPathComponent("Resources/NerdFonts"),
             to: directory.appendingPathComponent("NerdFonts")
         )
-        let integration = directory.appendingPathComponent("integration")
+        let integration = directory.appendingPathComponent("Copilot")
         let plugin = try local.preparePlugin(
             root: integration, helper: executable, controller: controller, skill: skill
         )
@@ -621,6 +642,17 @@ struct CopilotSetupTests {
         )
         #expect(FileManager.default.isExecutableFile(atPath: installed.path))
         #expect(try Data(contentsOf: installed) == Data(contentsOf: controller))
+        let messagingConfiguration = installed.deletingLastPathComponent().appendingPathComponent("messaging.json")
+        let messagingConfig = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: messagingConfiguration)) as? [String: Any]
+        )
+        #expect(Set(messagingConfig.keys) == Set(["version", "routes", "extension", "pluginDirectory"]))
+        #expect(messagingConfig["version"] as? Int == 1)
+        #expect(messagingConfig["routes"] as? String == routes.path)
+        #expect(messagingConfig["extension"] as? String == native.path)
+        #expect(messagingConfig["pluginDirectory"] as? String == plugin.path)
+        #expect(try messagingConfiguration.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true)
+        #expect((try FileManager.default.attributesOfItem(atPath: messagingConfiguration.path)[.posixPermissions] as? Int) == 0o600)
         #expect(try Data(contentsOf: installed.deletingLastPathComponent().appendingPathComponent("NerdFonts/glyphnames.json"))
             == Data(contentsOf: repository.appendingPathComponent("Resources/NerdFonts/glyphnames.json")))
         #expect(try String(contentsOf: configuration, encoding: .utf8) == "preserved")

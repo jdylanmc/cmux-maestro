@@ -3,7 +3,7 @@
 **Product scope update:** the user confirmed conversion of this proof into the
 installed feature, in one final pull request with its findings. The prototype-only
 restriction is superseded for the installed adapter, existing controller/setup/
-resources, tests, `/maestro` skill and associated documentation. The historical
+resources, tests, `/cmux-maestro-native:maestro` skill and associated documentation. The historical
 proof below remains reproducible; old `deliveryProof` records and `a`/`b` routes
 remain compatible. No live proof sessions are adopted, restarted or modified.
 
@@ -131,6 +131,41 @@ evidence; sidebar-hidden remains unconfirmed.
 The [discovery foundation](agent/discovery/issue-38-shared-agent-interaction.md)
 preserves the Orca, Paseo, Herdr, and CMUX revision-pinned comparisons and their
 source-versus-runtime distinctions. This proof does not redo that research.
+
+### Managed skill-source mitigation (pending installed verification)
+
+Parent research against the exact `1.0.87-0` executable found the installed
+`cmux-maestro-native` `1.1.0` plugin enabled in CLI discovery, while a fresh
+interactive session's skill registry omitted `maestro`. Native messaging worked;
+bare skill-tool invocation failed. The upstream cause is not established.
+`joinSession` with unspecified discovery/plugin options does not justify resetting
+configuration. The tool identifier is `maestro`, not
+`cmux-maestro-native:maestro`; the latter is the slash UI namespace.
+
+The bounded mitigation uses the existing supported `--plugin-dir`, whose source
+loading and `sessionManager.setAdditionalPlugins` occur before interactive session
+creation. Setup adds `pluginDirectory` to its private `messaging.json`, pointing
+only at the existing `Copilot/plugin` beside `Orchestration`. The launcher verifies
+the exact private, canonical source, `cmux-maestro-native` `1.1.0` manifest and
+readable Maestro skill before reservation and again before launch. It appends
+`--experimental --plugin-dir <absolute-installed-plugin-path>` only for managed
+messaging participants. Pins, denies, coordinator-only explicit `--allow-all`,
+and inherited terminal I/O remain unchanged.
+
+The new field stays in setup configuration, **not stored node metadata**. Both
+old and new workers keep `{version, routes, extension}` so already-running old
+controllers remain compatible with newly written state. Old three-field setup
+configuration is readable; a new managed spawn requires a setup upgrade.
+Existing exit/route cleanup does not depend on the plugin directory. Normal,
+source-only and historical proof launches do not receive `--plugin-dir`.
+
+Contract tests do not establish live registry availability. **Parent next step:**
+reinstall the updated app through the approved normal flow, explicitly enable
+integration, then create a fresh managed session using pinned launch settings.
+Verify its exact installed `--plugin-dir`, invoke `{"skill":"maestro"}`, and
+confirm `/cmux-maestro-native:maestro` in the interactive slash UI. Preserve the
+existing worker sessions; do not reload, adopt, or restart them. This patch makes
+no new installed-runtime success claim.
 
 ## Parent-only preparation and live launch
 
@@ -274,6 +309,55 @@ claiming that condition.
 
 ## Installed implementation and remaining acceptance
 
+### Parent-reported installed exchange and skill-name correction
+
+The parent installed revision `93d6968` through the normal updater and the human
+successfully used **Enable Copilot Integration**. Three fresh managed participants
+launched with explicitly approved `--yolo` in ordinary working directories, not
+proof fixtures. A called `maestro_peers` and found B and C with generation-bearing
+addresses. The installed A -> B -> A exchange produced `installed-violet-54-1` at
+`2026-09-22T00:13:46.727Z`. CMUX's **Default sidebar** was selected, demonstrating
+that this exchange did not require the Maestro sidebar to be selected. This does
+not establish the separate sidebar-hidden condition or repeat draft/background
+acceptance on the installed build.
+
+The same run exposed a skill-discovery failure: the skill tool call
+`{"skill":"maestro"}` failed with **`Skill not found: maestro`**, although the parent
+reported plugin `cmux-maestro-native` v1.1.0 and its installed `skills/maestro`
+directory. The plugin layout follows the documented legacy `skills/` default;
+this is not evidence that the package needs an explicit `skills` field.
+
+Copilot **1.0.87-0** shipped `app.js` constructs plugin skill commands as
+`pluginName:skillName` (functions `DUe` at line 1514 and `n0n` at line 1800);
+skill listing/recognition uses `skillsInvocationName` at line 3122.
+The [public plugin reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-plugin-reference#component-path-fields)
+confirms the default directory convention. The initial interpretation incorrectly
+conflated qualified slash-command names with skill-tool identifiers. A received
+the parent's qualified-name diagnostic but correctly ignored it as outside its
+authorized peer task. A separate fresh participant explicitly authorized to test
+`{"skill":"cmux-maestro-native:maestro"}` then failed with
+**`Skill not found: cmux-maestro-native:maestro`** at
+`2026-09-22T00:19:41.795Z`.
+
+Bounded read-only discovery using the exact worker executable and CLI **1.0.87-0**
+subsequently listed the installed messaging skill as `name: maestro`,
+`source: plugin`, `enabled: true`. The native loader identifies its plugin as
+`cmux-maestro-native`, while `skillsInvocationName` returns the bare skill name.
+Thus the correct split is **slash command `/cmux-maestro-native:maestro`** and
+**skill-tool argument `{"skill":"maestro"}`**. Lifecycle/icon slash references
+remain qualified. Frontmatter, installed folders, manifest identity and permissions
+are unchanged; no global alias or duplicate skill was added.
+
+**Initial missing-inventory observation remains unresolved.** The failing
+session's startup model-visible inventory did not contain the messaging skill,
+whereas later read-only discovery did. The permitted comparison found no
+installer/runtime root or registered-plugin discrepancy; it did not establish
+the cause of that startup/current-inventory difference. Neither the namespace
+correction nor current discovery proves live skill execution. The parent is
+performing one fresh authorized **bare-name** validation; its result remains
+pending here. No private registry contents, account/model data, credentials or
+full debug transcripts are included in these findings.
+
 **Implementation checkpoint:** runtime/setup/resource wiring and their targeted
 contracts are implemented. The user-confirmed intent is stored unchanged at
 `skills/maestro/intent.md`; the simple repo-native `SKILL.md` beside it teaches
@@ -304,7 +388,7 @@ Targeted implementation validation:
 
 The existing explicit production **Enable Copilot Integration** action now
 packages and writes the shared adapter and minimal native loader under
-`~/.copilot/extensions/maestro/`, the `/maestro` plugin skill, and a private
+`~/.copilot/extensions/maestro/`, the `/cmux-maestro-native:maestro` plugin skill, and a private
 `Orchestration/bin/messaging.json` configuration. Validation app identifiers are
 still denied installation; app construction has no writes. Setup changes no
 Copilot settings, shell files, host selection or other plugins. The global
@@ -350,7 +434,7 @@ worker. After full CI/review and explicit setup approval:
    or set test-mode overrides to claim installed behavior. Launch three fresh
    participants; permit default native trust/tool prompts normally, or use
    coordinator `--yolo` only when explicitly approved.
-3. Verify `/maestro` is discoverable and `maestro_peers` returns the other two
+3. Verify `/cmux-maestro-native:maestro` is discoverable and `maestro_peers` returns the other two
    participants, not an unmanaged terminal, old proof session, or other workspace.
    Ask one participant for one ordinary send/reply through `maestro_send`.
    Verify exact-generation return addresses and no implicit lifecycle authority.

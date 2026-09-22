@@ -24,7 +24,8 @@ evidence, live acceptance scope, intentional differences and remaining limits.
    newly installed plugin. Maestro never restarts them automatically. Launch
    future sessions normally inside CMUX; their hooks record validated identity
    and the sidebar renders the tree directly from durable events. Setup also
-   installs the bundled `cmux-maestro-orchestrate`, `maestro`, and `maestro-icon`
+   installs the bundled `/cmux-maestro-native:cmux-maestro-orchestrate`,
+   `/cmux-maestro-native:maestro`, and `/cmux-maestro-native:maestro-icon`
    skills and local controller. This identity-hook restart guidance does **not**
    adopt existing sessions into messaging. Only newly Maestro-spawned managed
    sessions get native messaging bindings automatically.
@@ -49,6 +50,29 @@ generation bindings. Existing
 never replaced automatically. Moving/replacing the native app requires enabling
 the integration again: Copilot caches local plugin contents, and generated hooks
 contain the **absolute current bundled helper path**.
+
+New managed messaging launches also pass Copilot's supported
+`--plugin-dir "$HOME/Library/Application Support/CMUXMaestroPreview/Copilot/plugin"`.
+The explicit setup action records that absolute source in
+`Orchestration/bin/messaging.json` as `pluginDirectory`, alongside the unchanged
+`version: 1`, `routes`, and `extension` fields. Before credentials/reservation,
+and again before provider launch, the controller checks the exact installer-owned
+path, private ownership/permissions, manifest identity/version, and readable
+`skills/maestro/SKILL.md`. Foreign paths, symlinks, and malformed resources fail
+closed. This binds the existing plugin, not another global skill installation;
+no home, account, model, permission, or persistent Copilot settings are changed.
+`--experimental`, explicit coordinator-only YOLO, denies and terminal I/O are
+unchanged. Source-only/unmanaged and disposable proof launches add no plugin path.
+
+Old three-field setup configurations remain readable, but **new managed launches
+require enabling integration again** rather than guessing a plugin source.
+Stored nodes retain exactly the old three-field messaging metadata, so old live
+controllers can still read new nodes, and existing sessions can exit/retire
+normally without reading the new plugin source. Setup never restarts or adopts
+them. The skill tool identifier remains **`maestro`**; the slash UI spelling is
+**`/cmux-maestro-native:maestro`**. Explicit loading is a mitigation for an observed
+installed-discovery/interactive-registry divergence, not a verified upstream fix;
+fresh installed-session validation is still required.
 
 ### Disable or uninstall
 
@@ -168,7 +192,7 @@ unmanaged sessions, existing workers, and registered coordinators without a
 launcher-owned Copilot session remain **unsupported recipients**. Never adopt or
 restart them automatically.
 
-Use installed `/maestro` for `maestro_peers` discovery, `maestro_send`, and replies
+Use installed `/cmux-maestro-native:maestro` for `maestro_peers` discovery, `maestro_send`, and replies
 to the supplied sender address. Any participating same-workspace peer can send,
 including siblings and peers from another run; messaging grants no lifecycle or
 process-control rights. The native adapter joins only its CLI-owned session and
@@ -178,7 +202,10 @@ composer inspection, acknowledgement, receipt, retry or completion tracker is
 involved. A local-write attempt is **not** a delivery or completion guarantee.
 The source package and unchanged confirmed purpose live in `skills/maestro/`.
 It has no tool-permission grants in frontmatter and reuses the installed
-`cmux-maestro-orchestrate` skill for lifecycle operations.
+`/cmux-maestro-native:cmux-maestro-orchestrate` skill for lifecycle operations.
+For the skill tool, pass `{"skill":"maestro"}`. The plugin-qualified slash
+command and the bare skill-tool identifier are distinct; do not qualify the
+skill-tool argument.
 
 Defaults grant nothing. A coordinator may pass `spawn --yolo` **only with explicit
 user approval**; Copilot receives `--allow-all` alongside all explicit denies.
@@ -251,6 +278,16 @@ still-live managed worker resources are allowed per workspace;
 reported completion does not free a slot. Archive retains bounded history and
 never kills processes or deletes tabs, so still-present archived worker tabs
 continue to consume the resource bound. Tool permissions are not auto-approved.
+Interactive archive checks exact process exit under the lock both before
+admission and before deletion; failed process probes remain uncertain, not
+proof of exit. Interactive-only runs need no cooperative stop marker, so a
+refused archive leaves their records, messaging routes and archive flags intact.
+Cancelling an unclaimed launch lease records explicit pre-runtime failure
+evidence. Stale recovery can retire that never-started worker after its exact
+surface is closed (or when creation produced no surface), even without process
+anchors. Missing anchors alone, idle time and startup timeouts are not exit
+proof; the no-start evidence requires the lease cancellation before runtime
+claimed ownership. Legacy supervisors retain their cooperative archive stop.
 Read-only controller snapshots use shared locks; state mutations remain
 exclusive. Idle supervisors therefore do not serialize their status reads
 behind the mutation lock as a workspace approaches its worker limit.
@@ -456,9 +493,9 @@ test. Its AppKit windows are never shown; this is not a desktop capture, live
 CMUX-host visual proof, system VoiceOver verification or a pixel-baseline
 comparison. No transcripts, real workspace paths or desktop images are uploaded.
 
-## Choose your session icon: `maestro-icon`
+## Choose your session icon: `/cmux-maestro-native:maestro-icon`
 
-The bundled `maestro-icon` skill searches the local Nerd Fonts catalog and saves
+The bundled `/cmux-maestro-native:maestro-icon` skill searches the local Nerd Fonts catalog and saves
 a glyph and/or identity color for **the invoking session only**.
 Workers use their injected identity/token; coordinators use their own retained
 registration credentials. The command checks the caller's exact workspace and

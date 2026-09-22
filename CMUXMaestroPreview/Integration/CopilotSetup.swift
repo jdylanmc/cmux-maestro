@@ -197,6 +197,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         try HookFiles.atomicWrite(
             JSONSerialization.data(withJSONObject: [
                 "version": 1, "routes": routes.path, "extension": nativeRoot.path,
+                "pluginDirectory": plugin.path,
             ], options: [.sortedKeys]),
             name: "messaging.json", directory: bin
         )

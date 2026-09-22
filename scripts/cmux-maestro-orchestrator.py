@@ -100,9 +100,17 @@ def messaging_configuration(root):
     config = root / "bin/messaging.json"
     try:
         value = message_json(config)
-        if (not isinstance(value, dict) or set(value) != {"version", "routes", "extension"}
+        if (not isinstance(value, dict)
+                or set(value) not in ({"version", "routes", "extension"},
+                                     {"version", "routes", "extension", "pluginDirectory"})
                 or type(value["version"]) is not int or value["version"] != 1
-                or not isinstance(value["routes"], str) or not isinstance(value["extension"], str)):
+                or not isinstance(value["routes"], str) or not isinstance(value["extension"], str)
+                or ("pluginDirectory" in value and (
+                    not isinstance(value["pluginDirectory"], str)
+                    or not 0 < len(value["pluginDirectory"]) <= 1024
+                    or "\0" in value["pluginDirectory"]
+                    or not Path(value["pluginDirectory"]).is_absolute()
+                ))):
             raise OrchestrationError("Messaging configuration is invalid.")
         routes = Path(value["routes"])
         private_message_directory(routes)
@@ -119,7 +127,9 @@ def messaging_configuration(root):
                     raise OrchestrationError("Installed messaging adapter is unavailable.")
             finally:
                 os.close(descriptor)
-        return value
+        # Keep the persisted node contract unchanged: already-running installed
+        # controllers still read/write these nodes after setup replaces the files.
+        return {key: value[key] for key in ("version", "routes", "extension")}
     except FileNotFoundError:
         # Source/proof and pre-feature controller installs remain usable; an
         # installed current controller must not silently create unwired workers.
@@ -128,6 +138,37 @@ def messaging_configuration(root):
         raise OrchestrationError("Messaging is not installed; enable Maestro integration.")
     except (OSError, ValueError) as error:
         raise OrchestrationError("Messaging is unavailable; enable Maestro integration.") from error
+
+
+def managed_plugin_directory(root):
+    """Validate only installer-owned sources; never infer a plugin from the environment."""
+    try:
+        value = message_json(root / "bin/messaging.json")
+        if not isinstance(value, dict) or "pluginDirectory" not in value:
+            raise OrchestrationError("Managed skills require updated setup; enable Maestro integration again.")
+        expected = root.parent / "Copilot/plugin"
+        if value["pluginDirectory"] != str(expected):
+            raise OrchestrationError("Managed plugin source is not the installer-owned Maestro directory.")
+        for directory in (expected.parent, expected, expected / "skills", expected / "skills/maestro"):
+            private_message_directory(directory)
+        manifest = message_json(expected / "plugin.json")
+        if (not isinstance(manifest, dict) or manifest.get("name") != "cmux-maestro-native"
+                or manifest.get("version") != "1.1.0" or manifest.get("hooks") != "hooks.json"):
+            raise OrchestrationError("Managed Maestro plugin manifest is invalid; enable integration again.")
+        descriptor = os.open(
+            expected / "skills/maestro/SKILL.md", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        )
+        with os.fdopen(descriptor, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o077 or not 0 < info.st_size <= 65_536):
+                raise OrchestrationError("Managed Maestro skill is not a private bounded file.")
+            data = stream.read(65_537)
+            if len(data) > 65_536 or not data.decode("utf-8").startswith("---\nname: maestro\n"):
+                raise OrchestrationError("Managed Maestro skill is invalid; enable integration again.")
+        return str(expected)
+    except (OSError, ValueError) as error:
+        raise OrchestrationError("Managed skills are unavailable; enable Maestro integration again.") from error
 
 
 def message_peer(node):
@@ -873,6 +914,15 @@ def validate_state(state):
         validate_tool_policy(node.get("toolPolicy"))
         if not isinstance(node.get("archiving", False), bool):
             raise OrchestrationError("Stored archive state is invalid.")
+        if "runtimeNotStarted" in node and (
+            node["runtimeNotStarted"] is not True or role != "worker"
+            or node.get("supervisor") or provider or identifier in state["launches"]
+            or node["phase"] not in {
+                "launch-failed", "startup-failed", "resource-retired",
+                "process-disappeared", "terminal-disappeared",
+            }
+        ):
+            raise OrchestrationError("Stored pre-runtime failure evidence is invalid.")
         created = parse_date(node.get("createdAt"), "stored creation time")
         updated = parse_date(node.get("updatedAt"), "stored update time")
         if created > updated or updated > now_date() + datetime.timedelta(minutes=5):
@@ -1421,7 +1471,7 @@ def process_start(pid):
             ["/bin/ps", "-o", "lstart=", "-p", str(pid)],
             capture_output=True, text=True, timeout=3,
         )
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, OSError):
         return None
     value = result.stdout.strip()
     return value if result.returncode == 0 and value else None
@@ -1434,6 +1484,8 @@ def process_matches(node):
 
 def worker_processes_exited(node):
     processes = (node.get("supervisor"), node.get("providerProcess"))
+    if node.get("runtimeNotStarted") is True and not any(processes):
+        return True
     if not processes[0] or (node.get("executionMode") == "interactive" and not processes[1]):
         return False
     for process in processes:
@@ -1521,7 +1573,7 @@ def resource_observations(state, cmux, workspace):
     return active, retained_gone
 
 
-def record_launch_failure(state, worker_id, surface=None):
+def record_launch_failure(state, worker_id, surface=None, *, phase="launch-failed"):
     launch = state["launches"].pop(worker_id, None)
     node = state["nodes"].get(worker_id)
     if surface is not None:
@@ -1545,8 +1597,12 @@ def record_launch_failure(state, worker_id, surface=None):
                 "archivedAt": now(),
             })
     if node is not None and node["phase"] == "launching":
+        # Runtime claims the lease and records its supervisor atomically before
+        # starting a provider. Cancelling an unclaimed lease fences that startup.
+        if launch is not None and not node.get("supervisor") and not node.get("providerProcess"):
+            node["runtimeNotStarted"] = True
         node["phase"], node["availability"], node["updatedAt"] = (
-            "launch-failed", "unavailable", now()
+            phase, "unavailable", now()
         )
 
 
@@ -1573,6 +1629,8 @@ def command_spawn(args, root, cmux):
     if yolo and actor["role"] != "coordinator":
         raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
     messaging = None if proof is not None else messaging_configuration(root)
+    if messaging is not None:
+        managed_plugin_directory(root)
     launch_settings = worker_launch_settings(root)
     if (args.require_pinned_launch_settings or proof is not None or messaging is not None or yolo) and (
         launch_settings.get("copilotAccount") is None
@@ -1732,10 +1790,7 @@ def command_spawn(args, root, cmux):
     def startup_failed(state):
         node = state["nodes"].get(identifier)
         if node and node["phase"] == "launching":
-            state["launches"].pop(identifier, None)
-            node["phase"], node["availability"], node["updatedAt"] = (
-                "startup-failed", "unavailable", now()
-            )
+            record_launch_failure(state, identifier, surface, phase="startup-failed")
     mutate(root, startup_failed, wait=1)
     remove_launch_credential(root, identifier)
     raise OrchestrationError("Worker supervisor did not acknowledge startup within the bound.")
@@ -1912,8 +1967,9 @@ def run_interactive_session(root, worker_id, token, node):
     if node.get("messaging"):
         if messaging_configuration(root) != node["messaging"]:
             raise OrchestrationError("Messaging installation changed before launch.")
+        plugin_directory = managed_plugin_directory(root)
         bind_messaging(node)
-        arguments.append("--experimental")
+        arguments.extend(["--experimental", "--plugin-dir", plugin_directory])
     process = None
     previous_interrupt = signal.signal(signal.SIGINT, lambda _signum, _frame: None)
     try:
@@ -2602,12 +2658,12 @@ def command_archive(args, root, cmux):
         raise OrchestrationError("Only a coordinator can archive its run.")
     cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
     run_id = actor["runId"]
+    identity = (actor["role"], run_id, actor["workspaceId"], actor["surfaceId"])
 
     def begin(state):
         current = authorize(state, args.actor_id, args.token, allow_archiving=True)
-        if any(node["runId"] == current["runId"] and node.get("executionMode") == "interactive"
-               and process_matches(node) for node in state["nodes"].values()):
-            raise OrchestrationError("Close interactive sessions normally before archiving; no input or process will be interrupted.")
+        if (current["role"], current["runId"], current["workspaceId"], current["surfaceId"]) != identity:
+            raise OrchestrationError("Coordinator ownership changed during archive.")
         if any(
             launch["runId"] == current["runId"]
             for launch in state["launches"].values()
@@ -2615,6 +2671,14 @@ def command_archive(args, root, cmux):
             raise OrchestrationError(
                 "Run archive is pending because a worker launch is in progress; retry."
             )
+        if any(node["runId"] == run_id and node.get("executionMode") == "interactive"
+               and not worker_processes_exited(node) for node in state["nodes"].values()):
+            raise OrchestrationError("Close interactive sessions normally before archiving; live or uncertain processes will not be interrupted.")
+        # Only legacy supervisors need the cooperative stop marker. Interactive
+        # archive is read-only until final locked validation and deletion.
+        if not any(node["runId"] == run_id and node["role"] == "worker"
+                   and node.get("executionMode") != "interactive" for node in state["nodes"].values()):
+            return
         for node in state["nodes"].values():
             if node["runId"] == current["runId"]:
                 node["archiving"] = True
@@ -2627,7 +2691,10 @@ def command_archive(args, root, cmux):
             node for node in state["nodes"].values()
             if node["runId"] == run_id and node["role"] == "worker"
         ]
-        if not any(process_matches(node) for node in workers):
+        if all(
+            worker_processes_exited(node) if node.get("executionMode") == "interactive"
+            else not process_matches(node) for node in workers
+        ):
             break
         time.sleep(0.05)
     else:
@@ -2636,13 +2703,19 @@ def command_archive(args, root, cmux):
         )
 
     def finish(state):
+        current = authorize(state, args.actor_id, args.token, allow_archiving=True)
+        if (current["role"], current["runId"], current["workspaceId"], current["surfaceId"]) != identity:
+            raise OrchestrationError("Coordinator ownership changed during archive.")
         nodes = [node for node in state["nodes"].values() if node["runId"] == run_id]
         if (
             not nodes
             or any(launch["runId"] == run_id for launch in state["launches"].values())
-            or any(node["role"] == "worker" and process_matches(node) for node in nodes)
+            or any(node["role"] == "worker" and (
+                not worker_processes_exited(node) if node.get("executionMode") == "interactive"
+                else process_matches(node)
+            ) for node in nodes)
         ):
-            raise OrchestrationError("Run archive cannot finish while a supervisor is live.")
+            raise OrchestrationError("Run archive cannot finish while worker processes are live or uncertain.")
         state["archives"].append(archive_summary(state, run_id))
         state["archives"] = state["archives"][-MAX_ARCHIVES:]
         for node in nodes:

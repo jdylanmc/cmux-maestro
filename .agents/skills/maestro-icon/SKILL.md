@@ -5,6 +5,8 @@ description: Choose a Nerd Font glyph and optional identity color for your own C
 
 # Maestro Icon
 
+Installed invocation: `/cmux-maestro-native:maestro-icon`.
+
 Choose one icon for the invoking agent's own session. This changes
 only its sidebar appearance. Never assign another session's icon, change
 execution state, or create, recover, archive, rename, focus, or stop an agent.

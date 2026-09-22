@@ -41,7 +41,7 @@ struct ContentView: View {
                     .disabled(busy)
             }
 
-            Text("Enable installs the cmux-maestro-native plugin, /maestro and lifecycle skills, the local controller, and a native messaging loader under ~/.copilot/extensions/maestro. The loader is inert outside newly Maestro-launched participating sessions. Existing plugins and settings are preserved. Choose only a Copilot executable you trust.")
+            Text("Enable installs the cmux-maestro-native plugin, /cmux-maestro-native:maestro and lifecycle skills, the local controller, and a native messaging loader under ~/.copilot/extensions/maestro. The loader is inert outside newly Maestro-launched participating sessions. Existing plugins and settings are preserved. Choose only a Copilot executable you trust.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 

@@ -5,6 +5,8 @@ description: Launch chat-ready interactive Copilot workers in CMUX terminal tabs
 
 # CMUX Maestro Orchestration
 
+Installed invocation: `/cmux-maestro-native:cmux-maestro-orchestrate`.
+
 Use this skill only when the user explicitly delegates work to another Copilot
 session. Each worker receives a real terminal tab in the coordinator's current
 CMUX pane and workspace. Never create a window or split.
@@ -145,7 +147,7 @@ Humans send follow-ups directly in the worker's Copilot interface. The controlle
 `follow-up` command remains refused for interactive workers. Newly installed
 Maestro-managed spawns automatically participate in native peer messaging,
 using the pinned launcher and an ordinary working directory; no fixture
-preparation is needed. Use **`/maestro`** for discovery, one fire-and-forget send,
+preparation is needed. Use **`/cmux-maestro-native:maestro`** for discovery, one fire-and-forget send,
 or a reply to the supplied return address. That skill owns the messaging
 workflow; this skill owns lifecycle operations.
 
