@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Fixture/launcher contracts only: never authenticates or launches a real provider."""
 
+import copy
+import json
 import os
 from pathlib import Path
 import runpy
 import shutil
+import socket
+import subprocess
 import unittest
 from unittest import mock
 import uuid
@@ -294,6 +298,297 @@ class ProofTests(unittest.TestCase):
         (Path(config["extension"]) / "extension.mjs").unlink()
         with self.assertRaises(CONTROLLER["OrchestrationError"]):
             CONTROLLER["messaging_configuration"](self.root)
+
+    def lifecycle_state(self):
+        self.install_synthetic_messaging()
+        actor = {
+            "id": str(uuid.uuid4()), "runId": self.node["runId"],
+            "workspaceId": self.node["workspaceId"], "surfaceId": str(uuid.uuid4()),
+            "role": "coordinator", "parentId": None, "label": "Coordinator",
+            "lastControlAt": "2000-01-01T00:00:00+00:00",
+            "copilotSessionId": None, "generation": 0, "phase": "registered",
+            "availability": "active", "result": None,
+        }
+        self.node.update({
+            "role": "worker", "parentId": actor["id"], "surfaceId": str(uuid.uuid4()),
+            "availability": "busy", "result": None,
+            "supervisor": {"pid": 12345, "start": "supervisor-start"},
+            "providerProcess": {"pid": 12346, "start": "provider-start"},
+        })
+        CONTROLLER["bind_messaging"](self.node)
+        state = {**CONTROLLER["empty_state"](), "nodes": {
+            actor["id"]: actor, self.node["id"]: self.node,
+        }}
+        return state, actor
+
+    def route_path(self, node=None):
+        node = node or self.node
+        return Path(node["messaging"]["routes"]) / f'{CONTROLLER["message_peer"](node)}.json'
+
+    def assert_tools_available(self):
+        # Real adapter/tool handlers, but only synthetic sessions and local routes.
+        peer = {**self.node, "id": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4())}
+        CONTROLLER["bind_messaging"](peer)
+        script = """
+            import assert from 'node:assert/strict';
+            const { start } = await import(process.argv[1]);
+            const nodes = JSON.parse(process.argv[2]);
+            const adapters = [], tools = [];
+            try {
+                for (const node of nodes) {
+                    adapters.push(await start({
+                        root: node.root, peer: node.peer, managed: true, expected: node,
+                        joinSession: async options => {
+                            tools.push(options.tools);
+                            return { sessionId: node.sessionId, send: async () => {} };
+                        },
+                    }));
+                }
+                const invocation = { sessionId: nodes[0].sessionId };
+                const peers = JSON.parse(await tools[0][0].handler({}, invocation));
+                assert.equal(peers.length, 1);
+                assert.equal(peers[0].sessionId, nodes[1].sessionId);
+                const { workspaceId, sessionId, generation } = peers[0];
+                const sent = await tools[0][1].handler({
+                    destination: { workspaceId, sessionId, generation }, body: 'Synthetic message',
+                }, invocation);
+                assert.equal(typeof sent, 'string');
+                assert.match(sent, /Local write attempted/);
+            } finally {
+                for (const adapter of adapters) await adapter.close();
+            }
+        """
+        nodes = [{
+            "root": node["messaging"]["routes"], "peer": CONTROLLER["message_peer"](node),
+            "nodeId": node["id"], "workspaceId": node["workspaceId"],
+            "sessionId": node["copilotSessionId"], "generation": node["generation"],
+        } for node in (self.node, peer)]
+        result = subprocess.run([
+            "node", "--input-type=module", "-e", script,
+            (REPO / "scripts/delivery-proof/adapter.mjs").as_uri(), json.dumps(nodes),
+        ], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def status_interleaving(self, state, actor, snapshot, *, process_start, kill_error=ProcessLookupError):
+        status = CONTROLLER["command_status"]
+        args = CONTROLLER["parser"]().parse_args([
+            "status", "--actor-id", actor["id"], "--token", "synthetic",
+        ])
+        cmux = mock.Mock()
+        cmux.surface_exists.return_value = True
+        with mock.patch.dict(status.__globals__, {
+            "read_state": lambda _: snapshot,
+            "authorize": lambda state, *a: state["nodes"][actor["id"]],
+            "mutate": lambda root, callback: callback(state),
+            "collect_git_evidence": lambda *a: {},
+            "apply_git_evidence": lambda *a: None,
+            "process_start": process_start,
+        }), mock.patch("os.kill", side_effect=kill_error), \
+                mock.patch.dict(status.__globals__, {
+                    "retire_messaging": mock.Mock(wraps=CONTROLLER["retire_messaging"]),
+                }):
+            retire = status.__globals__["retire_messaging"]
+            result = status(args, self.root, cmux)
+        return result, retire
+
+    def check_status_spawn_interleaving(self, interleaving):
+        state, actor = self.lifecycle_state()
+        snapshot = copy.deepcopy(state)
+        if interleaving == "new-worker":
+            del snapshot["nodes"][self.node["id"]]
+        else:
+            old = snapshot["nodes"][self.node["id"]]
+            old.update(phase="launching", supervisor=None, providerProcess=None)
+            snapshot["launches"][self.node["id"]] = {"runId": actor["runId"]}
+        before = copy.deepcopy(self.node)
+        binding = self.route_path().read_bytes()
+        result, retire = self.status_interleaving(
+            state, actor, snapshot,
+            process_start=lambda pid: {12345: "supervisor-start", 12346: "provider-start"}[pid],
+        )
+        retire.assert_not_called()
+        self.assertEqual(self.node, before)
+        self.assertEqual(self.route_path().read_bytes(), binding)
+        worker = next(item for item in result["workers"] if item["workerId"] == self.node["id"])
+        self.assertEqual(worker["messaging"], "participating")
+        self.assert_tools_available()
+
+    def test_status_new_worker_preserves_live_routes_and_tools(self):
+        self.check_status_spawn_interleaving("new-worker")
+
+    def test_status_startup_completed_preserves_live_routes_and_tools(self):
+        self.check_status_spawn_interleaving("startup-completed")
+
+    def test_status_changed_identity_and_startup_preserve_routes(self):
+        state, actor = self.lifecycle_state()
+        for field, old in (
+            ("generation", 0), ("copilotSessionId", str(uuid.uuid4())),
+            ("supervisor", {"pid": 12344, "start": "old-start"}),
+            ("providerProcess", {"pid": 12347, "start": "old-start"}),
+            ("surfaceId", str(uuid.uuid4())), ("phase", "launching"),
+        ):
+            with self.subTest(field=field):
+                snapshot = copy.deepcopy(state)
+                snapshot["nodes"][self.node["id"]][field] = old
+                _, retire = self.status_interleaving(state, actor, snapshot, process_start=lambda _: None)
+                retire.assert_not_called()
+                self.assertEqual(self.node["phase"], "turn-running")
+                self.assertTrue(self.route_path().exists())
+        state["launches"][self.node["id"]] = {"runId": actor["runId"]}
+        _, retire = self.status_interleaving(
+            state, actor, copy.deepcopy(state), process_start=lambda _: None,
+        )
+        retire.assert_not_called()
+        self.assertEqual(self.node["phase"], "turn-running")
+
+    def test_status_rechecks_exit_at_cleanup_boundary(self):
+        state, actor = self.lifecycle_state()
+        # The first observation misses both processes; the boundary sees the provider live.
+        starts = mock.Mock(side_effect=[None, None, None, "provider-start", None, "provider-start"])
+        _, retire = self.status_interleaving(state, actor, copy.deepcopy(state), process_start=starts)
+        retire.assert_not_called()
+        self.assertEqual(self.node["phase"], "turn-running")
+        self.assertTrue(self.route_path().exists())
+
+    def test_status_unknown_exit_preserves_route_and_phase(self):
+        state, actor = self.lifecycle_state()
+        for uncertainty in ("probe-failed", "probe-denied", "no-provider", "no-supervisor"):
+            with self.subTest(uncertainty=uncertainty):
+                current = copy.deepcopy(state)
+                if uncertainty == "no-provider":
+                    current["nodes"][self.node["id"]]["providerProcess"] = None
+                elif uncertainty == "no-supervisor":
+                    current["nodes"][self.node["id"]]["supervisor"] = None
+                before = copy.deepcopy(current["nodes"][self.node["id"]])
+                _, retire = self.status_interleaving(
+                    current, actor, copy.deepcopy(current), process_start=lambda _: None,
+                    kill_error=PermissionError if uncertainty == "probe-denied" else None,
+                )
+                retire.assert_not_called()
+                self.assertEqual(current["nodes"][self.node["id"]], before)
+                self.assertTrue(self.route_path().exists())
+
+    def test_status_confirmed_exit_retires_exact_route_and_socket(self):
+        state, actor = self.lifecycle_state()
+        endpoint = self.route_path().with_suffix(".sock")
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(str(endpoint))
+        _, retire = self.status_interleaving(
+            state, actor, copy.deepcopy(state), process_start=lambda _: None,
+        )
+        retire.assert_called_once_with(self.node)
+        self.assertFalse(self.route_path().exists())
+        self.assertFalse(endpoint.exists())
+        self.assertEqual(self.node["phase"], "process-disappeared")
+
+    def recover_interleaving(self, state, actor, snapshot, *, process_start,
+                             kill_error=ProcessLookupError, surfaces=None):
+        recover = CONTROLLER["command_recover"]
+        args = CONTROLLER["parser"]().parse_args([
+            "recover", "--workspace", actor["workspaceId"], "--surface", actor["surfaceId"],
+            "--name", "Recovered",
+        ])
+        cmux = mock.Mock()
+        cmux.surface_exists.return_value = False
+        cmux.surface_exists.side_effect = surfaces
+        replacement = {**actor, "id": str(uuid.uuid4()), "runId": str(uuid.uuid4())}
+        with mock.patch.dict(recover.__globals__, {
+            "read_state": lambda _: snapshot,
+            "require_current_surface": lambda *a: None,
+            "mutate": lambda root, callback: callback(state),
+            "new_root": lambda *a: (replacement, "synthetic"),
+            "process_start": process_start,
+        }), mock.patch("os.kill", side_effect=kill_error):
+            return recover(args, self.root, cmux)
+
+    def test_recovery_retires_only_exact_stopped_run_routes(self):
+        state, actor = self.lifecycle_state()
+        other = {**self.node, "id": str(uuid.uuid4()), "runId": str(uuid.uuid4()),
+                 "copilotSessionId": str(uuid.uuid4())}
+        state["nodes"][other["id"]] = other
+        CONTROLLER["bind_messaging"](other)
+        other_binding = self.route_path(other).read_bytes()
+        endpoint = self.route_path().with_suffix(".sock")
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(str(endpoint))
+        # Supervisor is gone, but its provider must keep the route until a later recovery.
+        before = copy.deepcopy(state)
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "live worker ownership"):
+            self.recover_interleaving(
+                state, actor, copy.deepcopy(state),
+                process_start=lambda pid: "provider-start" if pid == 12346 else None,
+            )
+        self.assertEqual(state, before)
+        self.assertTrue(self.route_path().exists())
+        self.assertTrue(endpoint.exists())
+        result = self.recover_interleaving(
+            state, actor, copy.deepcopy(state), process_start=lambda _: None,
+        )
+        self.assertEqual(result["recoveredRunId"], actor["runId"])
+        self.assertNotIn(self.node["id"], state["nodes"])
+        self.assertNotIn(actor["id"], state["nodes"])
+        self.assertIn(result["coordinatorId"], state["nodes"])
+        self.assertEqual(state["archives"][0]["runId"], actor["runId"])
+        self.assertFalse(self.route_path().exists())
+        self.assertFalse(endpoint.exists())
+        self.assertEqual(state["nodes"][other["id"]], other)
+        self.assertEqual(self.route_path(other).read_bytes(), other_binding)
+
+    def test_recovery_revalidates_launch_nodes_and_processes_before_cleanup(self):
+        state, actor = self.lifecycle_state()
+        for change in ("launch", "new-worker", "generation", "provider-live"):
+            with self.subTest(change=change):
+                current = copy.deepcopy(state)
+                snapshot = copy.deepcopy(state)
+                if change == "launch":
+                    current["launches"][self.node["id"]] = {"runId": actor["runId"]}
+                elif change == "new-worker":
+                    new = {**self.node, "id": str(uuid.uuid4())}
+                    current["nodes"][new["id"]] = new
+                elif change == "generation":
+                    current["nodes"][self.node["id"]]["generation"] += 1
+                starts = mock.Mock(side_effect=[None, None, None, "provider-start"]) \
+                    if change == "provider-live" else lambda _: None
+                before = copy.deepcopy(current)
+                binding = self.route_path().read_bytes()
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.recover_interleaving(current, actor, snapshot, process_start=starts)
+                self.assertEqual(current, before)
+                self.assertEqual(self.route_path().read_bytes(), binding)
+
+    def test_recovery_uncertain_process_or_live_surface_keeps_records_and_routes(self):
+        state, actor = self.lifecycle_state()
+        for uncertainty in ("probe-failed", "probe-denied", "no-provider", "no-supervisor", "surface"):
+            with self.subTest(uncertainty=uncertainty):
+                current = copy.deepcopy(state)
+                if uncertainty == "no-provider":
+                    current["nodes"][self.node["id"]]["providerProcess"] = None
+                elif uncertainty == "no-supervisor":
+                    current["nodes"][self.node["id"]]["supervisor"] = None
+                before = copy.deepcopy(current)
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "uncertain"):
+                    self.recover_interleaving(
+                        current, actor, copy.deepcopy(current), process_start=lambda _: None,
+                        kill_error=PermissionError if uncertainty == "probe-denied" else
+                            ProcessLookupError if uncertainty == "surface" else None,
+                        surfaces=[False, True] if uncertainty == "surface" else None,
+                    )
+                self.assertEqual(current, before)
+                self.assertTrue(self.route_path().exists())
+
+    def test_recovery_mismatched_binding_refuses_record_deletion(self):
+        state, actor = self.lifecycle_state()
+        route = self.route_path()
+        binding = PROOF["read_private"](route)
+        binding["nodeId"] = str(uuid.uuid4())
+        route.write_text(json.dumps(binding))
+        before = copy.deepcopy(state)
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "identity changed"):
+            self.recover_interleaving(
+                state, actor, copy.deepcopy(state), process_start=lambda _: None,
+            )
+        self.assertEqual(state, before)
+        self.assertEqual(PROOF["read_private"](route), binding)
 
     def test_installed_spawn_automatically_participates_and_requires_pins(self):
         _, config = self.install_synthetic_messaging()

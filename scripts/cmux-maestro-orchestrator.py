@@ -1432,6 +1432,29 @@ def process_matches(node):
                for process in (node.get("supervisor"), node.get("providerProcess")))
 
 
+def worker_processes_exited(node):
+    processes = (node.get("supervisor"), node.get("providerProcess"))
+    if not processes[0] or (node.get("executionMode") == "interactive" and not processes[1]):
+        return False
+    for process in processes:
+        if not process:
+            continue
+        start = process_start(process["pid"])
+        if start == process["start"]:
+            return False
+        if start is None:
+            # A failed/timed-out ps probe is not proof of exit. Signal zero only
+            # checks existence; it neither delivers a signal nor controls a process.
+            try:
+                os.kill(process["pid"], 0)
+            except ProcessLookupError:
+                continue
+            except PermissionError:
+                return False
+            return False
+    return True
+
+
 def new_root(workspace, surface, pane, label, cwd=None, metadata=None, icon_id=None, icon_color=None):
     identifier, run_id, token = str(uuid.uuid4()), str(uuid.uuid4()), secrets.token_hex(32)
     timestamp = now()
@@ -2501,16 +2524,32 @@ def command_status(args, root, cmux):
         if args.worker_id:
             current_targets = [ensure_owned(state, current_actor, args.worker_id)]
         for node in current_targets:
-            surface, process = observations.get(node["id"], (False, False))
-            if node.get("surfaceId") and not surface:
+            previous = snapshot["nodes"].get(node["id"])
+            if (
+                node["id"] not in observations or previous is None
+                or any(node.get(key) != previous.get(key) for key in (
+                    "runId", "parentId", "role", "workspaceId", "surfaceId",
+                    "copilotSessionId", "generation", "executionMode", "phase",
+                    "supervisor", "providerProcess", "messaging",
+                ))
+                or node["id"] in snapshot["launches"] or node["id"] in state["launches"]
+                or node["phase"] == "launching"
+            ):
+                continue
+            surface, process = observations[node["id"]]
+            exited = node["role"] == "worker" and not process and worker_processes_exited(node)
+            if node["role"] == "worker" and not process and not exited:
+                continue
+            if (node.get("surfaceId") and not surface
+                    and not cmux.surface_exists(node["workspaceId"], node["surfaceId"])):
                 node["phase"], node["availability"], node["updatedAt"] = (
                     "terminal-disappeared", "unavailable", now()
                 )
-            elif node["role"] == "worker" and not process:
+            elif exited:
                 node["phase"], node["availability"], node["updatedAt"] = (
                     "process-disappeared", "unavailable", now()
                 )
-            if node["role"] == "worker" and not process and node["id"] not in state["launches"]:
+            if exited:
                 retire_messaging(node)
         apply_git_evidence(state, git_evidence)
         return {"runId": current_actor["runId"], "workers": [{
@@ -2668,11 +2707,26 @@ def command_recover(args, root, cmux):
         ).total_seconds()
         if current_age <= STALE_SECONDS:
             raise OrchestrationError("The existing coordinator ownership became current.")
+        if any(launch["runId"] == current["runId"] for launch in state["launches"].values()):
+            raise OrchestrationError("Stale recovery refuses an in-flight worker launch.")
+        current_nodes = {
+            node["id"]: node for node in state["nodes"].values()
+            if node["runId"] == current["runId"]
+        }
+        if current_nodes != {node["id"]: node for node in run_nodes}:
+            raise OrchestrationError("Run ownership changed during recovery.")
+        for node in current_nodes.values():
+            if node["role"] == "worker" and (
+                node["phase"] == "launching" or not worker_processes_exited(node)
+                or (node.get("surfaceId") and cmux.surface_exists(node["workspaceId"], node["surfaceId"]))
+            ):
+                raise OrchestrationError("Stale recovery refuses live or uncertain worker ownership.")
+        for node in current_nodes.values():
+            retire_messaging(node)
         state["archives"].append(archive_summary(state, current["runId"]))
         state["archives"] = state["archives"][-MAX_ARCHIVES:]
-        for node in list(state["nodes"].values()):
-            if node["runId"] == current["runId"]:
-                del state["nodes"][node["id"]]
+        for node_id in current_nodes:
+            del state["nodes"][node_id]
         node, token = new_root(workspace, surface, pane, label, cwd, metadata, args.icon, args.color)
         state["nodes"][node["id"]] = node
         return {
