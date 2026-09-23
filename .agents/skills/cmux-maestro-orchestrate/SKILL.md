@@ -42,6 +42,10 @@ account settings. Update controller, adapter and sidebar together. A live or
 uncertain old supervisor blocks the new coordinator schema; the launcher
 refuses to interrupt it. Provider sessions whose supervisors have already
 exited are preserved, not terminated or migrated.
+Capture the root command's JSON privately even on a nonzero exit. Once a root
+was reserved, a failed startup still returns its custody receipt and control
+token so the owner can inspect and reconcile it. Never print that token or
+treat `ok: false` as a running coordinator.
 
 Inside that managed coordinator, use the injected actor identity for lifecycle
 status and native `maestro_spawn` for children. Require current-session

@@ -2,6 +2,7 @@
 """Fixture/launcher contracts only: never authenticates or launches a real provider."""
 
 import copy
+import io
 import hashlib
 import json
 import os
@@ -626,6 +627,45 @@ class ProofTests(unittest.TestCase):
         self.assertEqual(node["toolPolicy"]["deny"], ["web"])
         self.assertFalse(any(item.get("surfaceId") == surface for item in state["nodes"].values()))
         launcher.assert_called_once()
+
+    def test_failed_root_preserves_private_owner_receipt_without_claiming_success(self):
+        self.install_synthetic_messaging()
+        command = CONTROLLER["command_launch_coordinator"]
+        state = CONTROLLER["empty_state"]()
+        workspace, surface = str(uuid.uuid4()), str(uuid.uuid4())
+        argv = [
+            "launch-coordinator", "--workspace", workspace, "--surface", surface,
+            "--cwd", self.paths["a"], "--task", "Synthetic", "--account", "root-account",
+        ]
+        args = CONTROLLER["parser"]().parse_args(argv)
+        cmux = mock.Mock()
+        cmux.validate_surface.return_value = str(uuid.uuid4())
+        with mock.patch.dict(command.__globals__, {
+            "require_current_surface": mock.Mock(),
+            "read_state": lambda _: state,
+            "worker_launch_settings": lambda _: {"version": 1, "model": "pinned-model"},
+            "resolve_copilot_token": mock.Mock(return_value=None),
+            "mutate": lambda _root, operation: operation(state),
+            "launch_reserved_session": mock.Mock(side_effect=CONTROLLER["OrchestrationError"]("Synthetic startup failure")),
+        }):
+            with self.assertRaises(CONTROLLER["CoordinatorLaunchError"]) as caught:
+                command(args, self.root, cmux)
+        failure = caught.exception
+        receipt = failure.receipt
+        node = state["nodes"][receipt["coordinatorId"]]
+        self.assertEqual(CONTROLLER["token_hash"](receipt["controlToken"]), node["tokenHash"])
+        self.assertNotIn(receipt["controlToken"], str(failure))
+        output, error = io.StringIO(), io.StringIO()
+        main = CONTROLLER["main"]
+        with mock.patch.dict(main.__globals__, {
+            "default_root": lambda: self.root, "Cmux": mock.Mock,
+            "command_launch_coordinator": mock.Mock(side_effect=failure),
+        }), mock.patch("sys.stdout", output), mock.patch("sys.stderr", error):
+            self.assertEqual(main(argv), 2)
+        payload = json.loads(output.getvalue())
+        self.assertIs(payload["ok"], False)
+        self.assertEqual(payload["controlToken"], receipt["controlToken"])
+        self.assertEqual(error.getvalue(), "")
 
     def assert_tools_available(self):
         # Real adapter/tool handlers, but only synthetic sessions and local routes.

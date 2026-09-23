@@ -202,6 +202,9 @@ without credentials. Native `maestro_spawn` reads that session's current account
 for each child, retaining explicit model selection and permission bounds.
 Saved account defaults and unrelated Git authentication never select a child's
 subscription. Missing identity/API/credentials fail before terminal creation.
+The current credential resolver uses GitHub CLI's keychain-backed account
+store. Authenticate the required account there once; a Copilot-only login is
+not silently imported or replaced with another GitHub CLI account.
 Ordinary shell `spawn` cannot establish that evidence and refuses; source-only
 disposable proof compatibility is not a production fallback. **New workers are
 interactive Copilot sessions**, launched with `--interactive` and the initial
@@ -226,6 +229,10 @@ Supervisor acknowledgement is not provider readiness or completed work.
 `providerStarted` means a provider identity was recorded; lifecycle
 `messaging: configured` does not prove adapter attachment or delivery.
 Verify exact surfaces, native tools, and returned evidence separately.
+Root callers must retain the private custody receipt even when startup returns
+`ok: false`; its control token remains private. The controller preserves bounded
+startup errors in owned lifecycle diagnostics rather than replacing them with a
+generic exit message or publishing them to the sidebar.
 Managed coordinators have their own controlled sessions and runs; existing
 conversations are not converted. A live or uncertain legacy supervisor blocks
 the new coordinator schema; the launcher fails rather than interrupting it.

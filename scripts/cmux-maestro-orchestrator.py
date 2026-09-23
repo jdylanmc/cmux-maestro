@@ -68,6 +68,12 @@ class OrchestrationError(Exception):
     pass
 
 
+class CoordinatorLaunchError(OrchestrationError):
+    def __init__(self, message, receipt):
+        super().__init__(message)
+        self.receipt = receipt
+
+
 def delivery_proof_api():
     path = Path(__file__).resolve().parent / "delivery-proof" / "fixture.py"
     if not path.is_file():
@@ -316,7 +322,7 @@ def resolve_copilot_token(account):
         raise OrchestrationError("The selected Copilot subscription could not be accessed; no fallback account was used.") from error
     token = response.stdout.strip()
     if response.returncode or not token or len(token) > 4096 or any(character.isspace() for character in token):
-        raise OrchestrationError("The selected Copilot subscription is unavailable; sign in to that account before launching.")
+        raise OrchestrationError("The selected account credential is unavailable through GitHub CLI; authenticate that exact account with gh auth login. No fallback account was used.")
     return token
 
 
@@ -1631,10 +1637,17 @@ def command_launch_coordinator(args, root, cmux):
             "createdAt": node["createdAt"], "updatedAt": node["updatedAt"],
         }
     mutate(root, reserve)
-    result = launch_reserved_session(
-        root, cmux, node["id"], node["copilotSessionId"], token, workspace, pane, cwd, label
-    )
-    return {**result, "coordinatorId": node["id"], "runId": node["runId"], "controlToken": token}
+    receipt = {
+        "coordinatorId": node["id"], "runId": node["runId"], "controlToken": token,
+        "workspaceId": workspace, "sessionId": node["copilotSessionId"],
+    }
+    try:
+        result = launch_reserved_session(
+            root, cmux, node["id"], node["copilotSessionId"], token, workspace, pane, cwd, label
+        )
+    except OrchestrationError as error:
+        raise CoordinatorLaunchError(str(error), receipt) from error
+    return {**result, **receipt}
 
 
 def resource_observations(state, cmux, workspace):
@@ -1983,7 +1996,9 @@ def launch_reserved_session(root, cmux, identifier, session_id, worker_token, wo
             record_launch_failure(state, identifier, surface, phase="startup-failed")
     mutate(root, startup_failed, wait=1)
     remove_launch_credential(root, identifier)
-    raise OrchestrationError("Worker supervisor did not acknowledge startup within the bound.")
+    raise OrchestrationError(
+        f"Worker supervisor did not acknowledge startup within the bound. Reconcile worker {identifier}, surface {surface}."
+    )
 
 
 def assistant_text(event):
@@ -2491,6 +2506,7 @@ def command_runtime(args, root):
     signal.signal(signal.SIGTERM, stop_supervisor)
     signal.signal(signal.SIGHUP, stop_supervisor)
     last_heartbeat = 0.0
+    runtime_error = None
     try:
         if started_node.get("executionMode") == "interactive":
             return run_interactive_session(root, worker_id, args.token, started_node)
@@ -2573,6 +2589,9 @@ def command_runtime(args, root):
                 mutate(root, heartbeat, wait=2)
                 last_heartbeat = time.monotonic()
             time.sleep(0.1)
+    except (OrchestrationError, OSError) as error:
+        runtime_error = f"Interactive runtime failed ({type(error).__name__}): {error}"[:MAX_RESULT]
+        raise
     finally:
         def disappeared(state):
             node = state["nodes"].get(worker_id)
@@ -2590,7 +2609,7 @@ def command_runtime(args, root):
                     node["phase"], node["availability"], node["updatedAt"] = (
                         "turn-failed", "idle", now()
                     )
-                    node["result"] = "Interactive runtime ended before a clean session exit; no task outcome is inferred."
+                    node["result"] = runtime_error or "Interactive runtime ended before a clean session exit; no task outcome is inferred."
                     return
                 node["phase"], node["availability"], node["updatedAt"] = (
                     "process-disappeared", "unavailable", now()
@@ -3130,6 +3149,11 @@ def main(argv=None):
             return 0 if output["exitCode"] == 0 else 1
         print(json.dumps({"ok": True, **output}, sort_keys=True))
         return 0
+    except CoordinatorLaunchError as error:
+        # Like successful registration, this is a private custody receipt, not
+        # a public log: failed startup must not discard the owner's capability.
+        print(json.dumps({"ok": False, "error": str(error), **error.receipt}, sort_keys=True))
+        return 2
     except OrchestrationError as error:
         print(json.dumps({"ok": False, "error": str(error)}, sort_keys=True), file=sys.stderr)
         return 2

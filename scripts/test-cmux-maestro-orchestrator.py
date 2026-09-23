@@ -681,6 +681,27 @@ class OrchestratorTests(unittest.TestCase):
             h.close()
             shutil.rmtree(routes)
 
+    def test_interactive_prelaunch_error_survives_supervisor_exit_privately(self):
+        h = Harness(interactive=True)
+        try:
+            missing = h.path / "missing-provider"
+            h.env["CMUX_MAESTRO_COPILOT"] = str(missing)
+            h.run(
+                "spawn", "--actor-id", h.node, "--token", h.token,
+                "--cwd", str(REPO), "--name", "Startup diagnostic",
+                "--task", "Synthetic failure before provider creation", check=False,
+            )
+            identifier = next(
+                node["id"] for node in h.state()["nodes"].values() if node["role"] == "worker"
+            )
+            node = h.wait_node(identifier, lambda item: item["phase"] == "turn-failed")
+            self.assertIn("Required executable is unavailable", node["result"])
+            self.assertIn("missing-provider", node["result"])
+            self.assertIsNone(node.get("providerProcess"))
+            self.assertNotIn("missing-provider", (h.root / "observer/current.json").read_text())
+        finally:
+            h.close()
+
     def test_standalone_icon_uses_identity_helper_without_mutating_orchestration(self):
         package = self.h.path / "standalone-bin"
         package.mkdir()
