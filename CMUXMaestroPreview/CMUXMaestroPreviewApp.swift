@@ -1,16 +1,17 @@
 import SwiftUI
 import Darwin
+import Dispatch
 
 @main
-struct CMUXMaestroPreviewApp: App {
-    private let setupRequested: Bool
-
-    init() {
+enum CMUXMaestroEntryPoint {
+    @MainActor
+    static func main() {
         let arguments = Array(ProcessInfo.processInfo.arguments.dropFirst())
-        setupRequested = arguments.contains(CopilotSetupCommandLine.installFlag)
-        guard setupRequested else { return }
-        NSApplication.shared.setActivationPolicy(.prohibited)
-        Task {
+        guard arguments.contains(CopilotSetupCommandLine.installFlag) else {
+            CMUXMaestroPreviewApp.main()
+            return
+        }
+        Task { @MainActor in
             do {
                 guard let selected = try CopilotSetupCommandLine.executable(arguments: arguments) else {
                     throw CopilotSetupCommandLine.Failure.usage
@@ -24,14 +25,15 @@ struct CMUXMaestroPreviewApp: App {
                 exit(2)
             }
         }
+        dispatchMain()
     }
+}
 
+struct CMUXMaestroPreviewApp: App {
     var body: some Scene {
         #if !CMUX_VALIDATION
-        if !setupRequested {
-            WindowGroup {
-                ContentView()
-            }
+        WindowGroup {
+            ContentView()
         }
         #endif
         // Validation keeps the same Settings entry point without opening setup windows.
