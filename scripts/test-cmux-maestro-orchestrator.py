@@ -89,6 +89,11 @@ try:
             env = os.environ.copy()
             env["CMUX_WORKSPACE_ID"] = workspace
             env["CMUX_SURFACE_ID"] = surface
+            if env.get("FAKE_DROP_RUNTIME_PATH"):
+                env["PATH"] = "/usr/bin:/bin"
+                env.pop("CMUX_MAESTRO_COPILOT", None)
+            if env.get("FAKE_RUNTIME_COPILOT_MISSING"):
+                env["CMUX_MAESTRO_COPILOT"] = env["FAKE_RUNTIME_COPILOT_MISSING"]
             output = open(state_path.parent / ("runtime-" + surface + ".log"), "ab", buffering=0)
             terminal = os.open(env["FAKE_PTY_SLAVE"], os.O_RDWR) if env.get("FAKE_PTY_SLAVE") else None
             process = subprocess.Popen(
@@ -685,7 +690,7 @@ class OrchestratorTests(unittest.TestCase):
         h = Harness(interactive=True)
         try:
             missing = h.path / "missing-provider"
-            h.env["CMUX_MAESTRO_COPILOT"] = str(missing)
+            h.env["FAKE_RUNTIME_COPILOT_MISSING"] = str(missing)
             h.run(
                 "spawn", "--actor-id", h.node, "--token", h.token,
                 "--cwd", str(REPO), "--name", "Startup diagnostic",
@@ -699,6 +704,32 @@ class OrchestratorTests(unittest.TestCase):
             self.assertIn("missing-provider", node["result"])
             self.assertIsNone(node.get("providerProcess"))
             self.assertNotIn("missing-provider", (h.root / "observer/current.json").read_text())
+        finally:
+            h.close()
+
+    def test_provider_is_pinned_before_host_drops_interactive_shell_path(self):
+        h = Harness(interactive=True)
+        try:
+            directory = h.path / "provider-bin"
+            directory.mkdir()
+            interpreter = directory / "maestro-test-python"
+            interpreter.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} \"$@\"\n")
+            interpreter.chmod(0o700)
+            h.copilot.write_text(FAKE_COPILOT.replace(
+                "#!/usr/bin/env python3", "#!/usr/bin/env maestro-test-python", 1
+            ))
+            h.copilot.chmod(0o700)
+            h.env["PATH"] = str(directory) + os.pathsep + h.env["PATH"]
+            h.env["FAKE_DROP_RUNTIME_PATH"] = "1"
+            worker = h.spawn("Synthetic direct startup without shell configuration.")
+            node = h.wait_node(
+                worker["workerId"], lambda item: item.get("providerProcess") is not None
+                and (h.path / "interactive-ready").exists()
+            )
+            self.assertEqual(node["copilotExecutable"], str(h.copilot))
+            self.assertEqual(node["launchPath"], h.env["PATH"])
+            os.write(h.terminal_master, b"exit\n")
+            h.wait_node(worker["workerId"], lambda item: item["phase"] == "process-disappeared")
         finally:
             h.close()
 

@@ -220,6 +220,10 @@ Interactive startup uses `surface.create` with `initial_command`, rather than
 CLI `new-surface --command`, which queues input behind interactive shell
 initialization. Only the caller's executable search path is added to the startup
 environment; credentials are not passed through the host creation request.
+Because the host may rewrite that environment, the launch record also captures
+the validated absolute Copilot executable and caller search path privately.
+The supervisor uses those values for provider startup and invokes its own
+Python interpreter explicitly; it does not depend on interactive shell setup.
 The eight-second supervisor lease remains unchanged. A bounded one-time credential stays in the private control
 directory and is consumed only after exact workspace/surface attachment.
 The terminal command contains no token. Both supervisor and provider process

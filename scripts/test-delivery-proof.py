@@ -229,6 +229,7 @@ class ProofTests(unittest.TestCase):
 
                 with mock.patch.dict(spawn.__globals__, {
                     "read_state": lambda _: state,
+                    "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
                     "authorize": lambda *a: state["nodes"][actor["id"]],
                     "worker_launch_settings": lambda _: {
                         "version": 1, "copilotAccount": "synthetic-account", "model": "synthetic-pinned-model",
@@ -481,6 +482,7 @@ class ProofTests(unittest.TestCase):
         with mock.patch.dict(spawn.__globals__, {
             "read_state": lambda _: state,
             "worker_launch_settings": lambda _: dict(saved),
+            "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
             "resolve_copilot_token": credentials,
             "process_matches": lambda _: True,
             "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
@@ -544,6 +546,7 @@ class ProofTests(unittest.TestCase):
             with mock.patch.dict(command.__globals__, {
                 "require_current_surface": mock.Mock(),
                 "read_state": lambda _: state,
+                "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
                 "worker_processes_exited": lambda _: False,
                 "worker_launch_settings": forbidden, "resolve_copilot_token": forbidden,
                 "mutate": forbidden,
@@ -609,6 +612,7 @@ class ProofTests(unittest.TestCase):
         with mock.patch.dict(command.__globals__, {
             "require_current_surface": mock.Mock(),
             "read_state": lambda _: state,
+            "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
             "worker_launch_settings": lambda _: {"version": 1, "copilotAccount": "saved-other", "model": "pinned-model"},
             "resolve_copilot_token": mock.Mock(return_value=None),
             "mutate": lambda _root, operation: operation(state),
@@ -957,6 +961,7 @@ class ProofTests(unittest.TestCase):
         with mock.patch.dict(spawn.__globals__, {
             "read_state": lambda _: state, "authorize": lambda *a: actor,
             "authorize_native_spawn": lambda *a: actor,
+            "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
             "worker_launch_settings": lambda _: {},
             "resolve_copilot_token": credentials,
             "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
@@ -1227,6 +1232,7 @@ class LifecycleFailureTests(unittest.TestCase):
             ]
         with mock.patch.dict(spawn.__globals__, {
             "read_state": lambda *a, **k: copy.deepcopy(self.state),
+            "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
             "authorize_native_spawn": lambda state, *_: state["nodes"][self.actor["id"]],
             "mutate": self.mutate, "messaging_configuration": lambda _: None,
             "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},

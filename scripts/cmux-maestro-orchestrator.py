@@ -35,6 +35,7 @@ MAX_POLICY_RULE = 512
 MAX_POLICY_RULES = 16
 MAX_REPORT_MESSAGE = 8_192
 MAX_DISPLAY_METADATA = 120
+MAX_LAUNCH_PATH = 16_384
 GIT_EVIDENCE_STATUSES = {"verified", "unavailable"}
 MAX_GIT_COUNT = 1_000_000_000
 GIT_CHANGE_FIELDS = {"files", "insertions", "deletions", "untrackedFiles", "binaryFiles"}
@@ -737,6 +738,16 @@ def trusted_executable(variable, fallback):
     return str(resolved)
 
 
+def provider_launch_context(actor=None):
+    actor = actor or {}
+    executable = trusted_executable(
+        "CMUX_MAESTRO_COPILOT", actor.get("copilotExecutable") or "copilot"
+    )
+    launch_path = actor.get("launchPath") or os.environ.get("PATH", "/usr/bin:/bin")
+    bounded_text(launch_path, "provider launch PATH", MAX_LAUNCH_PATH)
+    return executable, launch_path
+
+
 def empty_state():
     return {
         "version": VERSION,
@@ -792,6 +803,13 @@ def validate_state(state):
             raise OrchestrationError("Stored runtime protocol is unsupported.")
         if node.get("launchSettings") is not None:
             validate_launch_settings(node["launchSettings"])
+        if ("copilotExecutable" in node) != ("launchPath" in node):
+            raise OrchestrationError("Stored provider executable context is incomplete.")
+        if "copilotExecutable" in node:
+            executable = bounded_text(node["copilotExecutable"], "stored provider executable", 4096)
+            if not Path(executable).is_absolute():
+                raise OrchestrationError("Stored provider executable must be absolute.")
+            bounded_text(node["launchPath"], "stored provider PATH", MAX_LAUNCH_PATH)
         if (not isinstance(node.get("permissionMode", "default"), str)
                 or node.get("permissionMode", "default") not in {"default", "yolo"}):
             raise OrchestrationError("Stored launch permission mode is invalid.")
@@ -1600,6 +1618,7 @@ def command_launch_coordinator(args, root, cmux):
     messaging = messaging_configuration(root)
     if messaging is None:
         raise OrchestrationError("A managed coordinator requires installed native messaging.")
+    copilot, launch_path = provider_launch_context()
     resolve_copilot_token(settings["copilotAccount"])
     policy = normalize_tool_policy(args.allow_tool, args.deny_tool)
     node, token = new_root(
@@ -1607,6 +1626,7 @@ def command_launch_coordinator(args, root, cmux):
     )
     node.update({
         "runtimeProtocolVersion": 2,
+        "copilotExecutable": copilot, "launchPath": launch_path,
         "executionMode": "interactive", "generation": 1,
         "copilotSessionId": str(uuid.uuid4()), "launchSettings": settings,
         "messaging": messaging, "permissionMode": "yolo" if args.yolo else "default",
@@ -1834,6 +1854,7 @@ def command_spawn(args, root, cmux, *, native_identity=None):
             "Pinned Maestro account and model settings are required; configure Agent launch settings before spawning."
         )
     # Check availability before creating a terminal; never persist the credential.
+    copilot, launch_path = provider_launch_context(actor)
     resolve_copilot_token(launch_settings.get("copilotAccount"))
     parent_policy = actor["toolPolicy"] if has_managed_runtime(actor) else None
     tool_policy = normalize_tool_policy(args.allow_tool, args.deny_tool, parent_policy)
@@ -1882,6 +1903,7 @@ def command_spawn(args, root, cmux, *, native_identity=None):
             "role": "worker", "label": label, "workspaceId": current["workspaceId"],
             "executionMode": "interactive",
             "runtimeProtocolVersion": 2,
+            "copilotExecutable": copilot, "launchPath": launch_path,
             "launchSettings": launch_settings,
             "iconId": resolve_icon(args.icon or "maestro"),
             "iconColor": args.color,
@@ -1925,7 +1947,7 @@ def launch_reserved_session(root, cmux, identifier, session_id, worker_token, wo
             ).encode())
         with_store(root, credential)
         bootstrap = shlex.join([
-            str(Path(__file__).resolve()), "runtime", "--worker-id", identifier
+            sys.executable, str(Path(__file__).resolve()), "runtime", "--worker-id", identifier
         ])
         surface = cmux.create_surface(workspace, pane, str(cwd), command=bootstrap)
 
@@ -2121,6 +2143,8 @@ def terminal_bookkeeping(event):
 
 def worker_environment(worker_id, token, node):
     environment = os.environ.copy()
+    if "launchPath" in node:
+        environment["PATH"] = node["launchPath"]
     for key in ("CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER"):
         environment.pop(key, None)
     environment.update({
@@ -2145,7 +2169,9 @@ def worker_environment(worker_id, token, node):
 
 
 def run_interactive_session(root, worker_id, token, node):
-    copilot = trusted_executable("CMUX_MAESTRO_COPILOT", "copilot")
+    copilot = trusted_executable(
+        "CMUX_MAESTRO_COPILOT", node.get("copilotExecutable") or "copilot"
+    )
     arguments = [
         copilot, "--no-auto-update", "--interactive", node["task"],
         "--session-id", node["copilotSessionId"], "--name", node["label"],
@@ -2230,7 +2256,9 @@ def run_interactive_session(root, worker_id, token, node):
 
 
 def run_copilot_turn(root, worker_id, token, node):
-    copilot = trusted_executable("CMUX_MAESTRO_COPILOT", "copilot")
+    copilot = trusted_executable(
+        "CMUX_MAESTRO_COPILOT", node.get("copilotExecutable") or "copilot"
+    )
     prompt = node["task"] + report_instruction(node)
     arguments = [copilot, "--no-auto-update", "-p", prompt, "--output-format", "json"]
     if node["generation"] > 1:

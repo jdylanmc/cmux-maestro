@@ -156,6 +156,10 @@ uses a private one-time credential, never a token typed into shell history.
 The runtime starts through CMUX's `surface.create` direct `initial_command`,
 not shell startup input. Unsupported direct creation fails without a shell-input
 fallback; the existing bounded launch lease is unchanged.
+The caller resolves the provider executable before creating the terminal and
+captures its executable search path privately. The runtime revalidates that
+absolute executable and restores the path for its child, without depending on
+the host's noninteractive PATH or shell startup files.
 
 Do not create headless-worker tabs or substitute tabless SDK helpers for
 Maestro roles. A failed launch is a blocker, not permission to change runtimes.
