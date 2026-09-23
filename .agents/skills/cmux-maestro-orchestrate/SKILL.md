@@ -46,6 +46,11 @@ Capture the root command's JSON privately even on a nonzero exit. Once a root
 was reserved, a failed startup still returns its custody receipt and control
 token so the owner can inspect and reconcile it. Never print that token or
 treat `ok: false` as a running coordinator.
+Failed receipts include `reservationState: committed` when private ownership
+was established, or `uncertain` when storage could not confirm it. Preserve an
+uncertain receipt and the original failure; do not relaunch or guess ownership.
+A confirmed uncommitted refusal returns no custody token. OS failures and
+partial observer publication remain nonzero failures, not startup success.
 
 Inside that managed coordinator, use the injected actor identity for lifecycle
 status and native `maestro_spawn` for children. Require current-session
@@ -170,6 +175,9 @@ and eight-live-session workspace limit, including managed coordinators;
 finishing an initial task does not release
 an open interactive session or terminal slot. Reuse an idle worker instead of retrying fanout
 failures in a loop.
+Capacity reconciliation requires CMUX's atomic `surface.list` workspace
+snapshot, not separate pane inventories that can miss a moving terminal.
+Unavailable or malformed inventory blocks launch without freeing resource slots.
 
 A launch acknowledgement establishes supervisor startup only. Its
 `providerStarted` field reports whether a provider identity has been recorded.
@@ -263,6 +271,13 @@ Archive an owned run before reusing its coordinator surface:
 Close interactive sessions normally before archiving; archive refuses while an
 interactive session or its supervisor is live. Existing sessions are never
 automatically converted, restarted or closed by an update.
+For a managed coordinator, its exact private receipt also permits archive after
+a proven never-started failure or after all owned processes have exited, even
+when its root tab never existed or has already closed. An active launch lease,
+missing process anchors, or uncertain/live descendants still blocks archive.
+Surviving terminals remain retained and counted; archive neither closes them
+nor adopts another session. Legacy registered coordinators still require their
+exact live root surface.
 
 For legacy bounded workers, archive asks idle supervisors to exit but never kills a process or deletes a
 terminal. Still-present worker terminals remain counted as retained resources.

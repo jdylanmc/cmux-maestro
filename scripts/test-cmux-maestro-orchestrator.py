@@ -65,6 +65,10 @@ try:
         result = {"workspace_id": workspace, "surface_id": surface, "pane_id": state["pane"]}
     elif command == "list-panes":
         result = {"panes": [{"pane_id": state["pane"]}]}
+    elif command == "rpc" and args[args.index("rpc") + 1] == "surface.list":
+        result = {"workspace_id": workspace, "surfaces": [
+            {"id": item} for item in state["surfaces"]
+        ]}
     elif command == "rpc":
         if args[args.index("rpc") + 1] != "surface.create":
             raise SystemExit("unsupported RPC")

@@ -75,6 +75,13 @@ class CoordinatorLaunchError(OrchestrationError):
         self.receipt = receipt
 
 
+def launch_failure_message(error):
+    if isinstance(error, OSError):
+        # OS messages can contain private paths or subprocess inputs.
+        return f"{type(error).__name__} during launch storage or execution (errno {error.errno})."
+    return str(error)[:512]
+
+
 def delivery_proof_api():
     path = Path(__file__).resolve().parent / "delivery-proof" / "fixture.py"
     if not path.is_file():
@@ -1374,22 +1381,20 @@ class Cmux:
         raise OrchestrationError("The exact surface is not in a current pane of that workspace.")
 
     def workspace_surfaces(self, workspace):
-        listing = self.run("list-panes", "--workspace", workspace)
-        if not isinstance(listing, dict) or not isinstance(listing.get("panes"), list):
-            raise OrchestrationError("CMUX pane inventory is unavailable.")
-        panes = set(self.ids(listing["panes"], {"id", "paneid", "uuid"})) - {workspace}
-        if not panes or len(panes) > MAX_NODES:
-            raise OrchestrationError("CMUX pane inventory is incomplete or exceeds its bound.")
+        # surface.list takes one host main-actor snapshot. Separate pane reads
+        # can miss a live surface moved into an already-read pane.
+        listing = self.run("rpc", "surface.list", json.dumps({"workspace_id": workspace}))
+        if (not isinstance(listing, dict) or not isinstance(listing.get("surfaces"), list)
+                or canonical_uuid(listing.get("workspace_id"), "inventory workspace") != workspace):
+            raise OrchestrationError("CMUX workspace surface inventory is unavailable.")
         surfaces = set()
-        for pane in panes:
-            result = self.run("list-pane-surfaces", "--workspace", workspace, "--pane", pane)
-            if not isinstance(result, dict) or not isinstance(result.get("surfaces"), list):
-                raise OrchestrationError("CMUX surface inventory is unavailable.")
-            for item in result["surfaces"]:
-                identities = set(self.ids(item, {"id", "surfaceid", "uuid"}))
-                if len(identities) != 1:
-                    raise OrchestrationError("CMUX surface inventory has ambiguous identity.")
-                surfaces.update(identities)
+        for item in listing["surfaces"]:
+            if not isinstance(item, dict):
+                raise OrchestrationError("CMUX surface inventory has invalid identity.")
+            surface = canonical_uuid(item.get("id"), "inventory surface")
+            if surface in surfaces:
+                raise OrchestrationError("CMUX surface inventory has duplicate identity.")
+            surfaces.add(surface)
         return surfaces
 
     def create_surface(self, workspace, pane, cwd, command=None):
@@ -1633,8 +1638,15 @@ def command_launch_coordinator(args, root, cmux):
         "phase": "launching", "availability": "busy", "task": task,
         "toolPolicy": policy,
     })
+    receipt = {
+        "coordinatorId": node["id"], "runId": node["runId"], "controlToken": token,
+        "workspaceId": workspace, "sessionId": node["copilotSessionId"],
+    }
+    reservation_prepared = False
+    reservation_committed = False
 
     def reserve(state):
+        nonlocal reservation_prepared
         if any(current.get("surfaceId") == source_surface and has_managed_runtime(current)
                for current in state["nodes"].values()):
             raise OrchestrationError("Caller ownership changed before coordinator launch.")
@@ -1656,17 +1668,44 @@ def command_launch_coordinator(args, root, cmux):
             "surfaceId": None, "state": "creating",
             "createdAt": node["createdAt"], "updatedAt": node["updatedAt"],
         }
-    mutate(root, reserve)
-    receipt = {
-        "coordinatorId": node["id"], "runId": node["runId"], "controlToken": token,
-        "workspaceId": workspace, "sessionId": node["copilotSessionId"],
-    }
+        reservation_prepared = True
     try:
+        mutate(root, reserve)
+        reservation_committed = True
         result = launch_reserved_session(
             root, cmux, node["id"], node["copilotSessionId"], token, workspace, pane, cwd, label
         )
-    except OrchestrationError as error:
-        raise CoordinatorLaunchError(str(error), receipt) from error
+    except (OrchestrationError, OSError) as error:
+        if not reservation_prepared:
+            raise
+        message = launch_failure_message(error)
+        reservation_state = "committed" if reservation_committed else "uncertain"
+        if not reservation_committed:
+            # state.json may have committed before observer publication failed.
+            # Reconcile under the same lock; no ticket or host launch was attempted.
+            def failed_reservation(store):
+                nonlocal reservation_state
+                state = store.read()
+                if node["id"] not in state["nodes"]:
+                    reservation_state = "uncommitted"
+                    return
+                current = authorize(state, node["id"], token)
+                if any(current.get(key) != node.get(key) for key in (
+                    "runId", "workspaceId", "copilotSessionId", "generation",
+                )):
+                    raise OrchestrationError("Reserved coordinator ownership changed.")
+                reservation_state = "committed"
+                record_launch_failure(state, node["id"])
+                store.write(state)
+            try:
+                with_store(root, failed_reservation)
+            except (OrchestrationError, OSError) as recovery_error:
+                message += f" Failure recording also failed: {launch_failure_message(recovery_error)}"
+        if reservation_state == "uncommitted":
+            raise OrchestrationError(message) from error
+        raise CoordinatorLaunchError(
+            message, {**receipt, "reservationState": reservation_state},
+        ) from error
     return {**result, **receipt}
 
 
@@ -1709,6 +1748,7 @@ def reconcile_resources(state, snapshot, observations, retained_gone):
     state["retainedResources"] = [
         resource for resource in state["retainedResources"]
         if resource["surfaceId"] not in retained_gone
+        or resource not in snapshot["retainedResources"]
     ]
 
 
@@ -1985,11 +2025,17 @@ def launch_reserved_session(root, cmux, identifier, session_id, worker_token, wo
             launch["state"], launch["updatedAt"] = "starting", now()
         mutate(root, attach)
         cmux.rename(workspace, surface, label)
-    except Exception:
+    except Exception as error:
         def failed(state):
             record_launch_failure(state, identifier, surface)
-        mutate(root, failed, wait=1)
-        remove_launch_credential(root, identifier)
+        try:
+            mutate(root, failed, wait=1)
+            remove_launch_credential(root, identifier)
+        except (OrchestrationError, OSError) as recovery_error:
+            raise OrchestrationError(
+                f"{launch_failure_message(error)} Failure recording or ticket cleanup also failed: "
+                f"{launch_failure_message(recovery_error)}"
+            ) from error
         raise
     deadline = time.monotonic() + timeout("CMUX_MAESTRO_STARTUP_SECONDS", STARTUP_SECONDS)
     while time.monotonic() < deadline:
@@ -2893,13 +2939,18 @@ def command_archive(args, root, cmux):
     actor = authorize(snapshot, args.actor_id, args.token, allow_archiving=True)
     if actor["role"] != "coordinator":
         raise OrchestrationError("Only a coordinator can archive its run.")
-    cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
+    if actor.get("executionMode") != "interactive":
+        cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
     run_id = actor["runId"]
-    identity = (actor["role"], run_id, actor["workspaceId"], actor["surfaceId"])
+    identity_keys = (
+        "role", "runId", "workspaceId", "surfaceId",
+        "copilotSessionId", "generation", "executionMode",
+    )
+    identity = tuple(actor.get(key) for key in identity_keys)
 
     def begin(state):
         current = authorize(state, args.actor_id, args.token, allow_archiving=True)
-        if (current["role"], current["runId"], current["workspaceId"], current["surfaceId"]) != identity:
+        if tuple(current.get(key) for key in identity_keys) != identity:
             raise OrchestrationError("Coordinator ownership changed during archive.")
         if any(
             launch["runId"] == current["runId"]
@@ -2941,7 +2992,7 @@ def command_archive(args, root, cmux):
 
     def finish(state):
         current = authorize(state, args.actor_id, args.token, allow_archiving=True)
-        if (current["role"], current["runId"], current["workspaceId"], current["surfaceId"]) != identity:
+        if tuple(current.get(key) for key in identity_keys) != identity:
             raise OrchestrationError("Coordinator ownership changed during archive.")
         nodes = [node for node in state["nodes"].values() if node["runId"] == run_id]
         if (
@@ -3184,6 +3235,9 @@ def main(argv=None):
         return 2
     except OrchestrationError as error:
         print(json.dumps({"ok": False, "error": str(error)}, sort_keys=True), file=sys.stderr)
+        return 2
+    except OSError as error:
+        print(json.dumps({"ok": False, "error": launch_failure_message(error)}, sort_keys=True), file=sys.stderr)
         return 2
 
 

@@ -11,6 +11,7 @@ import runpy
 import shutil
 import socket
 import subprocess
+import tempfile
 import unittest
 from unittest import mock
 import uuid
@@ -1335,6 +1336,421 @@ class LifecycleFailureTests(unittest.TestCase):
                 CONTROLLER["OrchestrationError"], "pre-runtime failure",
             ):
                 CONTROLLER["validate_state"](state)
+
+    def census_host(self, surfaces):
+        host = object.__new__(CONTROLLER["Cmux"])
+        panes = [str(uuid.uuid4()), str(uuid.uuid4())]
+        read_panes = []
+
+        def run(command, *arguments):
+            if command == "rpc":
+                self.assertEqual(arguments, (
+                    "surface.list", json.dumps({"workspace_id": self.actor["workspaceId"]}),
+                ))
+                return {"workspace_id": self.actor["workspaceId"],
+                        "surfaces": [{"id": surface} for surface in surfaces]}
+            if command == "list-panes":
+                return {"panes": [{"pane_id": pane} for pane in panes]}
+            if command == "list-pane-surfaces":
+                # B's tracked surface moves into already-read A between calls.
+                read_panes.append(arguments[-1])
+                return {"surfaces": [{"surface_id": surface} for surface in sorted(surfaces)[:-1]]
+                        if len(read_panes) == 1 else []}
+            raise AssertionError(command)
+
+        host.run = mock.Mock(side_effect=run)
+        return host, read_panes
+
+    def test_atomic_census_preserves_cross_pane_moved_terminal_at_root_and_child_limit(self):
+        self.state["nodes"].pop(self.worker["id"])
+        self.state["retainedResources"] = [{
+            "runId": str(uuid.uuid4()), "workspaceId": self.actor["workspaceId"],
+            "surfaceId": str(uuid.uuid4()), "archivedAt": CONTROLLER["now"](),
+        } for _ in range(8)]
+        host, _ = self.census_host({item["surfaceId"] for item in self.state["retainedResources"]})
+        self.cmux.workspace_surfaces.side_effect = host.workspace_surfaces
+        before = copy.deepcopy(self.state)
+        for command in ("launch-coordinator", "spawn"):
+            argv = ([
+                command, "--workspace", self.actor["workspaceId"],
+                "--surface", self.actor["surfaceId"], "--account", "synthetic",
+            ] if command == "launch-coordinator" else [
+                command, "--actor-id", self.actor["id"], "--token", self.token,
+            ]) + ["--name", "Refused ninth", "--task", "Synthetic", "--cwd", str(REPO)]
+            function = CONTROLLER["command_" + command.replace("-", "_")]
+            forbidden = mock.Mock(side_effect=AssertionError("ninth resource launched"))
+            with self.subTest(command=command), mock.patch.dict(function.__globals__, {
+                "read_state": lambda *a, **k: copy.deepcopy(self.state),
+                "mutate": self.mutate, "require_current_surface": lambda *a: None,
+                "authorize_native_spawn": lambda state, *_: state["nodes"][self.actor["id"]],
+                "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+                "resolve_copilot_token": lambda _: None,
+                "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+                "messaging_configuration": lambda _: {
+                    "version": 1, "routes": "/synthetic/routes", "extension": "/synthetic/extension",
+                },
+                "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+                "launch_reserved_session": forbidden,
+            }):
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "resource limit"):
+                    if command == "spawn":
+                        function(CONTROLLER["parser"]().parse_args(argv), self.root, self.cmux,
+                                 native_identity={"login": "synthetic"})
+                    else:
+                        function(CONTROLLER["parser"]().parse_args(argv), self.root, self.cmux)
+            self.assertEqual(self.state, before)
+            forbidden.assert_not_called()
+
+    def test_atomic_census_distinguishes_removed_and_surviving_exited_surface(self):
+        observe = CONTROLLER["resource_observations"]
+        for present in (True, False):
+            host, read_panes = self.census_host({self.worker["surfaceId"]} if present else set())
+            state = copy.deepcopy(self.state)
+            state["retainedResources"] = [{
+                "runId": str(uuid.uuid4()), "workspaceId": self.actor["workspaceId"],
+                "surfaceId": str(uuid.uuid4()), "archivedAt": CONTROLLER["now"](),
+            }]
+            with self.subTest(present=present), mock.patch.dict(observe.__globals__, {
+                "process_matches": lambda _: False, "worker_processes_exited": lambda _: True,
+            }):
+                observations, gone = observe(state, host, self.actor["workspaceId"])
+                CONTROLLER["reconcile_resources"](state, copy.deepcopy(state), observations, gone)
+            self.assertEqual(state["nodes"][self.worker["id"]]["phase"],
+                             "turn-running" if present else "resource-retired")
+            self.assertEqual(state["retainedResources"], [])
+            self.assertEqual(read_panes, [])
+
+    def test_atomic_census_rejects_unavailable_malformed_or_wrong_workspace_inventory(self):
+        host, _ = self.census_host(set())
+        before = copy.deepcopy(self.state)
+        for response in (
+            None, {}, {"workspace_id": self.actor["workspaceId"], "surfaces": None},
+            {"workspace_id": str(uuid.uuid4()), "surfaces": []},
+            {"workspace_id": self.actor["workspaceId"], "surfaces": [{}]},
+            {"workspace_id": self.actor["workspaceId"], "surfaces": [{"id": "not-a-uuid"}]},
+            {"workspace_id": self.actor["workspaceId"], "surfaces": [
+                {"id": self.worker["surfaceId"]}, {"id": self.worker["surfaceId"]},
+            ]},
+        ):
+            host.run = mock.Mock(return_value=response)
+            with self.subTest(response=response), self.assertRaises(CONTROLLER["OrchestrationError"]):
+                CONTROLLER["resource_observations"](self.state, host, self.actor["workspaceId"])
+            self.assertEqual(self.state, before)
+        for failure in (CONTROLLER["OrchestrationError"]("unavailable"), FileNotFoundError()):
+            host.run = mock.Mock(side_effect=failure)
+            with self.assertRaises((CONTROLLER["OrchestrationError"], OSError)):
+                CONTROLLER["resource_observations"](self.state, host, self.actor["workspaceId"])
+            self.assertEqual(self.state, before)
+
+    def test_census_never_releases_active_lease_or_new_retained_ownership(self):
+        root = self.managed_root()
+        root.update(phase="launching", availability="busy", surfaceId=None)
+        self.state["launches"][root["id"]] = {
+            "workerId": root["id"], "runId": root["runId"],
+            "workspaceId": root["workspaceId"], "surfaceId": None,
+            "state": "creating", "createdAt": root["createdAt"], "updatedAt": root["updatedAt"],
+        }
+        snapshot = copy.deepcopy(self.state)
+        resource = {
+            "runId": root["runId"], "workspaceId": root["workspaceId"],
+            "surfaceId": str(uuid.uuid4()), "archivedAt": CONTROLLER["now"](),
+        }
+        self.state["retainedResources"].append(resource)
+        CONTROLLER["reconcile_resources"](
+            self.state, snapshot, {root["id"]: {"surface": False, "exited": True}},
+            {resource["surfaceId"]},
+        )
+        self.assertEqual(root["phase"], "launching")
+        self.assertEqual(self.state["launches"], snapshot["launches"])
+        self.assertEqual(self.state["retainedResources"], [resource])
+
+    def managed_root(self, *, never_started=False):
+        root = self.state["nodes"][self.actor["id"]]
+        root.update(
+            executionMode="interactive", runtimeProtocolVersion=2, generation=1,
+            copilotSessionId=str(uuid.uuid4()),
+            launchSettings={"version": 1, "model": "synthetic-model"},
+            phase="launch-failed" if never_started else "process-disappeared",
+            availability="unavailable",
+            supervisor=None if never_started else copy.deepcopy(self.worker["supervisor"]),
+            providerProcess=None if never_started else copy.deepcopy(self.worker["providerProcess"]),
+        )
+        if never_started:
+            root["runtimeNotStarted"] = True
+        return root
+
+    def test_managed_root_archive_does_not_require_surviving_surface(self):
+        for failure in ("creation", "attachment", "closed-after-exit"):
+            self.setUp()
+            root = self.managed_root(never_started=failure != "closed-after-exit")
+            if failure == "creation":
+                root["surfaceId"] = None
+            self.cmux.validate_surface.side_effect = CONTROLLER["OrchestrationError"]("surface absent")
+            self.assertTrue(self.archive()["archived"])
+            self.assertEqual(self.state["nodes"], {})
+            self.assertEqual({item["surfaceId"] for item in self.state["retainedResources"]},
+                             {self.worker["surfaceId"]} | (
+                                 {root["surfaceId"]} if root["surfaceId"] else set()
+                             ))
+            self.cmux.validate_surface.assert_not_called()
+
+    def test_managed_root_archive_preserves_missing_or_uncertain_process_anchors(self):
+        root = self.managed_root()
+        root["surfaceId"] = None
+        for missing in (None, "supervisor", "providerProcess"):
+            original = copy.deepcopy(root)
+            if missing:
+                root[missing] = None
+            before = copy.deepcopy(self.state)
+            with self.subTest(missing=missing), self.assertRaisesRegex(
+                CONTROLLER["OrchestrationError"], "uncertain",
+            ):
+                self.archive(kill_error=PermissionError)
+            self.assertEqual(self.state, before)
+            self.retire.assert_not_called()
+            root.update(original)
+
+    def test_managed_root_archive_refuses_active_lease_and_live_descendant(self):
+        root = self.managed_root()
+        root.update(phase="launching", availability="busy")
+        self.state["launches"][root["id"]] = {
+            "workerId": root["id"], "runId": root["runId"],
+            "workspaceId": root["workspaceId"], "surfaceId": root["surfaceId"],
+            "state": "starting", "createdAt": root["createdAt"], "updatedAt": root["updatedAt"],
+        }
+        before = copy.deepcopy(self.state)
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "launch is in progress"):
+            self.archive()
+        self.assertEqual(self.state, before)
+        self.state["launches"].clear()
+        root.update(phase="launch-failed", availability="unavailable",
+                    runtimeNotStarted=True, supervisor=None, providerProcess=None)
+        before = copy.deepcopy(self.state)
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "uncertain"):
+            self.archive(starts=lambda pid: self.worker["providerProcess"]["start"]
+                         if pid == 12346 else None)
+        self.assertEqual(self.state, before)
+        self.retire.assert_not_called()
+
+    def test_managed_root_archive_requires_exact_token_and_locked_session_identity(self):
+        self.managed_root(never_started=True)
+        before = copy.deepcopy(self.state)
+        self.token = "wrong-token"
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "control token"):
+            self.archive()
+        self.assertEqual(self.state, before)
+        self.setUp()
+        self.managed_root(never_started=True)
+        def replace_session(count):
+            if count == 1:
+                self.state["nodes"][self.actor["id"]]["copilotSessionId"] = str(uuid.uuid4())
+        self.before_mutate = replace_session
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "ownership changed"):
+            self.archive()
+        self.assertEqual(len(self.state["nodes"]), 2)
+        self.retire.assert_not_called()
+
+    def test_legacy_archive_still_requires_exact_root_surface(self):
+        before = copy.deepcopy(self.state)
+        self.cmux.validate_surface.side_effect = CONTROLLER["OrchestrationError"]("absent")
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "absent"):
+            self.archive()
+        self.assertEqual(self.state, before)
+        self.assertEqual(self.mutations, 0)
+
+
+class RootCustodyTests(unittest.TestCase):
+    """Real private Store and command entrypoint; synthetic host/provider only."""
+
+    def setUp(self):
+        (REPO / ".build").mkdir(exist_ok=True)
+        directory = tempfile.TemporaryDirectory(prefix="root-custody-", dir=REPO / ".build")
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.original, _ = CONTROLLER["new_root"](
+            str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()), "Original session",
+        )
+        CONTROLLER["mutate"](self.root, lambda state: state["nodes"].update({
+            self.original["id"]: copy.deepcopy(self.original),
+        }))
+        self.cmux = mock.Mock()
+        self.cmux.validate_surface.return_value = self.original["paneId"]
+        self.cmux.workspace_surfaces.return_value = {self.original["surfaceId"]}
+        self.cmux.create_surface.side_effect = FileNotFoundError(2, "synthetic private diagnostic")
+        self.argv = [
+            "launch-coordinator", "--workspace", self.original["workspaceId"],
+            "--surface", self.original["surfaceId"], "--account", "synthetic",
+            "--cwd", str(REPO), "--task", "Synthetic root", "--deny-tool", "web",
+        ]
+        self.patches = mock.patch.dict(CONTROLLER["main"].__globals__, {
+            "default_root": lambda: self.root, "Cmux": lambda: self.cmux,
+            "require_current_surface": lambda *a: None,
+            "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+            "resolve_copilot_token": lambda _: None,
+            "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+            "messaging_configuration": lambda _: {
+                "version": 1, "routes": str(self.root / "routes"),
+                "extension": str(self.root / "extension"),
+            },
+            "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+        })
+        self.patches.start()
+        self.addCleanup(self.patches.stop)
+
+    def failure(self, *, custody=True, fenced=True):
+        output, error = io.StringIO(), io.StringIO()
+        with mock.patch("sys.stdout", output), mock.patch("sys.stderr", error):
+            self.assertEqual(CONTROLLER["main"](self.argv), 2)
+        payload = json.loads(output.getvalue() if custody else error.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertLess(len(payload["error"]), 1200)
+        self.assertNotIn("synthetic private diagnostic", payload["error"])
+        state = CONTROLLER["read_state"](self.root)
+        self.assertEqual(state["nodes"][self.original["id"]], self.original)
+        if custody:
+            self.assertEqual(error.getvalue(), "")
+            node = CONTROLLER["authorize"](state, payload["coordinatorId"], payload["controlToken"])
+            self.assertEqual(node["runId"], payload["runId"])
+            self.assertEqual(node["copilotSessionId"], payload["sessionId"])
+            self.assertEqual(node["toolPolicy"]["deny"], ["web"])
+            self.assertNotIn(payload["controlToken"], payload["error"])
+            for name in ("current.json", "icons.json"):
+                self.assertNotIn(payload["controlToken"], (self.root / "observer" / name).read_text())
+            if fenced:
+                self.assertEqual(node["phase"], "launch-failed")
+                self.assertTrue(node["runtimeNotStarted"])
+                self.assertEqual(state["launches"], {})
+        else:
+            self.assertEqual(output.getvalue(), "")
+            self.assertNotIn("controlToken", payload)
+            self.assertEqual(list(state["nodes"]), [self.original["id"]])
+        return payload, state
+
+    def test_missing_host_executable_returns_exact_private_custody(self):
+        payload, _ = self.failure()
+        self.assertEqual(payload["reservationState"], "committed")
+        self.cmux.create_surface.assert_called_once()
+        self.cmux.rename.assert_not_called()
+        self.assertEqual(list((self.root / "control").glob("launch-*.json")), [])
+
+    def test_cmux_subprocess_os_failure_returns_custody(self):
+        host = object.__new__(CONTROLLER["Cmux"])
+        host.executable = "/synthetic/missing-cmux"
+        self.cmux.create_surface.side_effect = host.create_surface
+        with mock.patch("subprocess.run", side_effect=FileNotFoundError(2, "synthetic private diagnostic")):
+            self.failure()
+
+    def test_ticket_write_and_cleanup_os_errors_preserve_private_custody(self):
+        atomic = CONTROLLER["Store"]._atomic
+        def fail_ticket(directory, name, data):
+            if name.startswith("launch-"):
+                raise PermissionError(13, "synthetic private diagnostic")
+            return atomic(directory, name, data)
+        with mock.patch.object(CONTROLLER["Store"], "_atomic", side_effect=fail_ticket):
+            self.failure()
+        self.cmux.create_surface.assert_not_called()
+
+    def test_ticket_removal_error_does_not_hide_original_launch_failure(self):
+        with mock.patch.dict(CONTROLLER["main"].__globals__, {
+            "remove_launch_credential": mock.Mock(
+                side_effect=PermissionError(13, "synthetic private diagnostic"),
+            ),
+        }):
+            payload, _ = self.failure()
+        self.assertIn("FileNotFoundError", payload["error"])
+        self.assertIn("PermissionError", payload["error"])
+        self.assertEqual(len(list((self.root / "control").glob("launch-*.json"))), 1)
+
+    def test_observer_failure_after_reservation_publication_returns_custody_and_fences_start(self):
+        atomic = CONTROLLER["Store"]._atomic
+        def fail_observer(directory, name, data):
+            if name == "current.json":
+                raise OSError(28, "synthetic private diagnostic")
+            return atomic(directory, name, data)
+        with mock.patch.object(CONTROLLER["Store"], "_atomic", side_effect=fail_observer):
+            payload, _ = self.failure()
+        self.assertEqual(payload["reservationState"], "committed")
+        self.cmux.create_surface.assert_not_called()
+        args = CONTROLLER["parser"]().parse_args([
+            "archive", "--actor-id", payload["coordinatorId"], "--token", payload["controlToken"],
+        ])
+        self.cmux.validate_surface.side_effect = CONTROLLER["OrchestrationError"]("absent")
+        self.assertTrue(CONTROLLER["command_archive"](args, self.root, self.cmux)["archived"])
+        self.assertEqual(list(CONTROLLER["read_state"](self.root)["nodes"]), [self.original["id"]])
+
+    def test_state_replace_then_fsync_error_preserves_committed_custody(self):
+        atomic = CONTROLLER["Store"]._atomic
+        def fail_after_commit(directory, name, data):
+            atomic(directory, name, data)
+            if name == "state.json":
+                raise OSError(5, "synthetic private diagnostic")
+        with mock.patch.object(CONTROLLER["Store"], "_atomic", side_effect=fail_after_commit):
+            payload, _ = self.failure()
+        self.assertEqual(payload["reservationState"], "committed")
+        self.cmux.create_surface.assert_not_called()
+
+    def test_unreadable_reservation_returns_uncertain_receipt_without_discarding_lease(self):
+        atomic = CONTROLLER["Store"]._atomic
+        read = CONTROLLER["Store"].read
+        publication_failed = False
+        def fail_observer(directory, name, data):
+            nonlocal publication_failed
+            if name == "current.json":
+                publication_failed = True
+                raise OSError(28, "synthetic private diagnostic")
+            return atomic(directory, name, data)
+        def unreadable_once(store):
+            nonlocal publication_failed
+            if publication_failed:
+                publication_failed = False
+                raise PermissionError(13, "synthetic private diagnostic")
+            return read(store)
+        with mock.patch.object(CONTROLLER["Store"], "_atomic", side_effect=fail_observer), \
+                mock.patch.object(CONTROLLER["Store"], "read", unreadable_once):
+            payload, state = self.failure(fenced=False)
+        self.assertEqual(payload["reservationState"], "uncertain")
+        node = state["nodes"][payload["coordinatorId"]]
+        self.assertEqual(node["phase"], "launching")
+        self.assertNotIn("runtimeNotStarted", node)
+        self.assertEqual(state["launches"][node["id"]]["state"], "creating")
+        self.assertIsNone(state["launches"][node["id"]]["surfaceId"])
+        self.cmux.create_surface.assert_not_called()
+
+    def test_attachment_os_error_retains_exact_created_surface_and_private_custody(self):
+        surface = str(uuid.uuid4())
+        self.cmux.create_surface.side_effect = None
+        self.cmux.create_surface.return_value = surface
+        self.cmux.validate_surface.side_effect = [
+            self.original["paneId"], OSError(5, "synthetic private diagnostic"),
+        ]
+        payload, state = self.failure()
+        self.assertEqual(state["nodes"][payload["coordinatorId"]]["surfaceId"], surface)
+        self.assertEqual(state["retainedResources"], [])
+        self.cmux.rename.assert_not_called()
+
+    def test_launch_failure_with_unwritable_failure_state_keeps_lease_and_custody(self):
+        atomic = CONTROLLER["Store"]._atomic
+        def fail_failure_state(directory, name, data):
+            if name == "state.json" and b'"launch-failed"' in data:
+                raise OSError(28, "synthetic private diagnostic")
+            return atomic(directory, name, data)
+        with mock.patch.object(CONTROLLER["Store"], "_atomic", side_effect=fail_failure_state):
+            payload, state = self.failure(fenced=False)
+        self.assertEqual(payload["reservationState"], "committed")
+        self.assertIn("FileNotFoundError", payload["error"])
+        self.assertIn("OSError", payload["error"])
+        self.assertEqual(state["launches"][payload["coordinatorId"]]["state"], "creating")
+        self.assertEqual(len(list((self.root / "control").glob("launch-*.json"))), 1)
+
+    def test_uncommitted_state_write_failure_does_not_claim_custody(self):
+        atomic = CONTROLLER["Store"]._atomic
+        def fail_state(directory, name, data):
+            if name == "state.json":
+                raise OSError(28, "synthetic private diagnostic")
+            return atomic(directory, name, data)
+        with mock.patch.object(CONTROLLER["Store"], "_atomic", side_effect=fail_state):
+            self.failure(custody=False)
+        self.cmux.create_surface.assert_not_called()
 
 
 if __name__ == "__main__":
