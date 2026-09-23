@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 import uuid
 from pathlib import Path
 
@@ -642,7 +643,7 @@ class OrchestratorTests(unittest.TestCase):
     def test_managed_coordinator_launch_owns_native_session_and_preserves_caller(self):
         h = Harness(interactive=True)
         routes = REPO / ".build" / uuid.uuid4().hex[:5]
-        routes.mkdir(mode=0o700)
+        routes.mkdir(mode=0o700, parents=True)
         try:
             extension = h.root / "extension"
             extension.mkdir(mode=0o700)
@@ -1294,7 +1295,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("visible permission diagnostic", log.read_text())
 
     def test_direct_surface_creation_does_not_fallback_to_shell_input(self):
-        cmux = CONTROLLER_API["Cmux"]()
+        with patch.dict(os.environ, self.h.env):
+            cmux = CONTROLLER_API["Cmux"]()
         calls = []
 
         def unsupported(*arguments):

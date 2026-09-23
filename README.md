@@ -29,6 +29,8 @@ evidence, live acceptance scope, intentional differences and remaining limits.
    This uses the same installer and production-identity checks. It does not
    open setup windows, change accounts, or restart existing conversations.
    Normal app startup still performs no installation.
+   Production preview builds disable coverage instrumentation so setup does not
+   leave `default.profraw` in the caller's worktree; test coverage remains enabled.
 3. In CMUX's **Sidebar Extensions** browser, enable **CMUX Maestro Preview** and
    select it as the active sidebar.
 4. Restart or resume already-running Copilot CLI sessions **once** to load the
