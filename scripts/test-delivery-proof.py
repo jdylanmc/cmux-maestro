@@ -1742,6 +1742,24 @@ class RootCustodyTests(unittest.TestCase):
         self.assertEqual(state["launches"][payload["coordinatorId"]]["state"], "creating")
         self.assertEqual(len(list((self.root / "control").glob("launch-*.json"))), 1)
 
+    def test_created_surface_is_in_private_receipt_when_attachment_and_failure_writes_fail(self):
+        surface = str(uuid.uuid4())
+        self.cmux.create_surface.side_effect = None
+        self.cmux.create_surface.return_value = surface
+        atomic = CONTROLLER["Store"]._atomic
+        def fail_after_creation(directory, name, data):
+            if name == "state.json" and self.cmux.create_surface.called:
+                raise OSError(28, "synthetic private diagnostic")
+            return atomic(directory, name, data)
+        with mock.patch.object(CONTROLLER["Store"], "_atomic", side_effect=fail_after_creation):
+            payload, state = self.failure(fenced=False)
+        self.assertEqual(payload["surfaceId"], surface)
+        node = state["nodes"][payload["coordinatorId"]]
+        self.assertIsNone(node["surfaceId"])
+        self.assertEqual(state["launches"][node["id"]]["state"], "creating")
+        self.assertEqual(len(list((self.root / "control").glob("launch-*.json"))), 1)
+        self.cmux.rename.assert_not_called()
+
     def test_uncommitted_state_write_failure_does_not_claim_custody(self):
         atomic = CONTROLLER["Store"]._atomic
         def fail_state(directory, name, data):

@@ -75,6 +75,12 @@ class CoordinatorLaunchError(OrchestrationError):
         self.receipt = receipt
 
 
+class SessionLaunchError(OrchestrationError):
+    def __init__(self, message, surface):
+        super().__init__(message)
+        self.surface = surface
+
+
 def launch_failure_message(error):
     if isinstance(error, OSError):
         # OS messages can contain private paths or subprocess inputs.
@@ -1703,6 +1709,8 @@ def command_launch_coordinator(args, root, cmux):
                 message += f" Failure recording also failed: {launch_failure_message(recovery_error)}"
         if reservation_state == "uncommitted":
             raise OrchestrationError(message) from error
+        if isinstance(error, SessionLaunchError) and error.surface is not None:
+            receipt["surfaceId"] = error.surface
         raise CoordinatorLaunchError(
             message, {**receipt, "reservationState": reservation_state},
         ) from error
@@ -2032,9 +2040,10 @@ def launch_reserved_session(root, cmux, identifier, session_id, worker_token, wo
             mutate(root, failed, wait=1)
             remove_launch_credential(root, identifier)
         except (OrchestrationError, OSError) as recovery_error:
-            raise OrchestrationError(
+            raise SessionLaunchError(
                 f"{launch_failure_message(error)} Failure recording or ticket cleanup also failed: "
-                f"{launch_failure_message(recovery_error)}"
+                f"{launch_failure_message(recovery_error)}",
+                surface,
             ) from error
         raise
     deadline = time.monotonic() + timeout("CMUX_MAESTRO_STARTUP_SECONDS", STARTUP_SECONDS)

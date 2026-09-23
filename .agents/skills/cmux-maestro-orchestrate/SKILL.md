@@ -51,6 +51,9 @@ was established, or `uncertain` when storage could not confirm it. Preserve an
 uncertain receipt and the original failure; do not relaunch or guess ownership.
 A confirmed uncommitted refusal returns no custody token. OS failures and
 partial observer publication remain nonzero failures, not startup success.
+If a tab was created but storage could not record its attachment/failure, the
+private receipt also retains its exact `surfaceId`; keep it with the token.
+Uncertain leases and resources remain reserved, not automatically reclaimed.
 
 Inside that managed coordinator, use the injected actor identity for lifecycle
 status and native `maestro_spawn` for children. Require current-session
