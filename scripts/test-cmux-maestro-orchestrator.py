@@ -46,12 +46,13 @@ try:
     args = sys.argv[1:]
     state["calls"].append(args)
     command = next((item for item in args if item in {
-        "identify", "list-panes", "new-surface", "list-pane-surfaces",
+        "identify", "list-panes", "rpc", "list-pane-surfaces",
         "send", "send-key", "rename-tab", "reorder-surface"
     }), None)
     def value(flag):
         return args[args.index(flag) + 1] if flag in args else None
-    workspace = value("--workspace")
+    creation = json.loads(args[args.index("rpc") + 2]) if command == "rpc" else None
+    workspace = creation["workspace_id"] if creation is not None else value("--workspace")
     if workspace != state["workspace"]:
         raise SystemExit("wrong workspace")
     result = {}
@@ -63,14 +64,17 @@ try:
         result = {"workspace_id": workspace, "surface_id": surface, "pane_id": state["pane"]}
     elif command == "list-panes":
         result = {"panes": [{"pane_id": state["pane"]}]}
-    elif command == "new-surface":
-        if value("--pane") != state["pane"] or value("--type") != "terminal" or value("--focus") != "false":
-            raise SystemExit("invalid new-surface grammar")
+    elif command == "rpc":
+        if args[args.index("rpc") + 1] != "surface.create":
+            raise SystemExit("unsupported RPC")
+        if (creation["pane_id"] != state["pane"] or creation["type"] != "terminal"
+                or creation["focus"] is not False or "initial_input" in creation):
+            raise SystemExit("invalid direct surface.create parameters")
         surface = str(uuid.uuid4())
         state["surfaces"].append(surface)
         state["buffers"][surface] = ""
         result = {"surface_id": surface, "pane_id": state["pane"], "workspace_id": workspace}
-        bootstrap = value("--command")
+        bootstrap = creation.get("initial_command")
         if bootstrap:
             command_args = shlex.split(bootstrap)
             worker_id = command_args[command_args.index("--worker-id") + 1]
@@ -591,7 +595,7 @@ class OrchestratorTests(unittest.TestCase):
                              "--name", "Must not launch", "--task", "No fallback",
                              "--require-pinned-launch-settings", check=False)
             self.assertNotEqual(rejected["returncode"], 0)
-            self.assertFalse(any("new-surface" in call for call in h.cmux_data()["calls"]))
+            self.assertFalse(any("surface.create" in call for call in h.cmux_data()["calls"]))
             del h.env["FAKE_SUBSCRIPTION_MISSING"]
             self.assertEqual(h.run("launch-settings"), {
                 "accountAvailable": True,
@@ -628,7 +632,54 @@ class OrchestratorTests(unittest.TestCase):
         )
         self.assertNotEqual(rejected["returncode"], 0)
         self.assertIn("Pinned Maestro account and model settings are required", rejected["stderr"])
-        self.assertFalse(any("new-surface" in call for call in self.h.cmux_data()["calls"]))
+        self.assertFalse(any("surface.create" in call for call in self.h.cmux_data()["calls"]))
+
+    def test_managed_coordinator_launch_owns_native_session_and_preserves_caller(self):
+        h = Harness(interactive=True)
+        routes = REPO / ".build" / uuid.uuid4().hex[:5]
+        routes.mkdir(mode=0o700)
+        try:
+            extension = h.root / "extension"
+            extension.mkdir(mode=0o700)
+            for name in ("adapter.mjs", "extension.mjs"):
+                shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, extension / name)
+                (extension / name).chmod(0o600)
+            (h.root / "bin").mkdir(mode=0o700)
+            config = h.root / "bin/messaging.json"
+            config.write_text(json.dumps({"version": 1, "routes": str(routes), "extension": str(extension)}))
+            config.chmod(0o600)
+            settings = h.root / "worker-settings.json"
+            settings.write_text(json.dumps({"version": 1, "copilotAccount": "saved-other", "model": "pinned-model"}))
+            settings.chmod(0o600)
+            gh = h.path / "gh"
+            gh.write_text(
+                "#!/usr/bin/env python3\nimport sys\n"
+                "assert sys.argv[sys.argv.index('--user')+1]=='root-account'\n"
+                "print('synthetic-work-token')\n"
+            )
+            gh.chmod(0o700)
+            h.env["CMUX_MAESTRO_GH"] = str(gh)
+            result = h.run(
+                "launch-coordinator", "--workspace", h.workspace, "--surface", h.surface,
+                "--cwd", str(REPO), "--name", "Managed coordinator", "--task", "Synthetic root",
+                "--account", "root-account", "--deny-tool", "web",
+            )
+            node = h.wait_node(result["coordinatorId"], lambda item: item.get("providerProcess") is not None)
+            self.assertEqual(node["role"], "coordinator")
+            self.assertIsNone(node["parentId"])
+            self.assertNotEqual(node["runId"], h.registration["runId"])
+            self.assertEqual(node["launchSettings"]["copilotAccount"], "root-account")
+            self.assertEqual(node["toolPolicy"]["deny"], ["web"])
+            self.assertEqual(h.state()["nodes"][h.node]["surfaceId"], h.surface)
+            self.assertEqual(h.cmux_data()["selected"], h.surface)
+            refused = h.run("archive", "--actor-id", node["id"], "--token", result["controlToken"], check=False)
+            self.assertNotEqual(refused["returncode"], 0)
+            self.assertIn("Close interactive sessions normally", refused["stderr"])
+            os.write(h.terminal_master, b"exit\n")
+            h.wait_node(node["id"], lambda item: item["phase"] == "process-disappeared")
+        finally:
+            h.close()
+            shutil.rmtree(routes)
 
     def test_standalone_icon_uses_identity_helper_without_mutating_orchestration(self):
         package = self.h.path / "standalone-bin"
@@ -1179,11 +1230,31 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("--allow-all", first)
         sends = [call for call in self.h.cmux_data()["calls"] if "send" in call]
         self.assertEqual(len(sends), 0)
-        created = next(call for call in self.h.cmux_data()["calls"] if "new-surface" in call)
-        self.assertIn("--command", created)
-        self.assertNotIn("--token", created[created.index("--command") + 1])
+        created = next(call for call in self.h.cmux_data()["calls"] if "surface.create" in call)
+        parameters = json.loads(created[created.index("surface.create") + 1])
+        self.assertNotIn("initial_input", parameters)
+        self.assertNotIn("--token", parameters["initial_command"])
+        self.assertEqual(parameters["workspace_id"], self.h.workspace)
+        self.assertEqual(parameters["pane_id"], self.h.pane)
+        self.assertIs(parameters["focus"], False)
+        self.assertEqual(set(parameters["startup_environment"]), {"PATH"})
         log = self.h.path / f"runtime-{worker['surfaceId']}.log"
         self.assertIn("visible permission diagnostic", log.read_text())
+
+    def test_direct_surface_creation_does_not_fallback_to_shell_input(self):
+        cmux = CONTROLLER_API["Cmux"]()
+        calls = []
+
+        def unsupported(*arguments):
+            calls.append(arguments)
+            raise CONTROLLER_API["OrchestrationError"]("surface.create is unavailable")
+
+        cmux.run = unsupported
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "unavailable"):
+            cmux.create_surface(self.h.workspace, self.h.pane, str(REPO), "/exact/runtime runtime")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][:2], ("rpc", "surface.create"))
+        self.assertEqual(CONTROLLER_API["STARTUP_SECONDS"], 8)
 
     def test_archive_refuses_external_create_attach_gap_and_tracks_surface(self):
         barrier = self.h.path / "attach-barrier"

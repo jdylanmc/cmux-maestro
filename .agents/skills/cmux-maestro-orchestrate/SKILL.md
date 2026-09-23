@@ -17,7 +17,40 @@ Set the command path once:
 CMUX_MAESTRO_ORCHESTRATOR="${CMUX_MAESTRO_ORCHESTRATOR:-$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/cmux-maestro-orchestrator}"
 ```
 
-## Register the current coordinator
+## Start a managed coordinator
+
+For agent-to-agent coordination, start a new Maestro-managed coordinator.
+Registration alone does not enable an existing conversation. Never replace,
+restart, or adopt that conversation to obtain messaging.
+
+From the human's CMUX terminal, with an explicitly selected initial account:
+
+```sh
+"$CMUX_MAESTRO_ORCHESTRATOR" launch-coordinator \
+  --workspace "$CMUX_WORKSPACE_ID" --surface "$CMUX_SURFACE_ID" \
+  --cwd "/absolute/repository/main" --account "<human-selected-account>" \
+  --name "Maestro coordinator" --task "Bounded authorized coordination objective"
+```
+
+The placeholder is not an account default. This chooses the account for a new
+root session, which has no parent to inherit from. Omitting `--account` requires
+an explicit initial coordinator selection in Agent launch settings; it never
+selects an ambient CLI account. The model must be configured
+or explicitly supplied with `--model`. The command validates credentials and
+native messaging before creating an unfocused tab; it never changes saved
+account settings. Update controller, adapter and sidebar together. A live or
+uncertain old supervisor blocks the new coordinator schema; the launcher
+refuses to interrupt it. Provider sessions whose supervisors have already
+exited are preserved, not terminated or migrated.
+
+Inside that managed coordinator, use the injected actor identity for lifecycle
+status and native `maestro_spawn` for children. Require current-session
+`maestro_peers`, `maestro_send`, and `maestro_spawn`; missing tools block
+coordination. There is no invisible SDK-agent fallback.
+Call `maestro_identity({})` to verify the actual current session/account before
+dispatch. A failed identity query is a blocker, not an invitation to guess.
+
+## Register an existing caller for legacy lifecycle control
 
 Use only the exact CMUX environment identities. Never infer a surface from a
 title, directory, screen contents, or current focus:
@@ -36,7 +69,19 @@ verified Git worktree and branch. Non-Git directories produce no Git labels;
 omit it rather than guessing when the current directory is not the assigned task
 root. The controller refreshes this bounded evidence during lifecycle checks.
 
-## Require the dedicated Maestro launch settings
+## Installation and legacy launch settings
+
+Only with explicit human installation approval, the actual production Maestro
+app offers the same setup operation without UI:
+
+```sh
+"/absolute/installed/CMUX Maestro Preview.app/Contents/MacOS/CMUX Maestro Preview" \
+  --install-copilot-integration --copilot-executable "/absolute/trusted/copilot"
+```
+
+Normal app startup remains inert. Validation/test apps cannot use this path.
+It reuses the installer and never restarts CLI sessions. Do not use it as an
+automatic repair or bypass an OS permission prompt.
 
 Before the first spawn, verify the installed controller supports and reports the
 private Agent launch settings:
@@ -45,53 +90,49 @@ private Agent launch settings:
 "$CMUX_MAESTRO_ORCHESTRATOR" launch-settings
 ```
 
-Proceed only when the response has `ok: true`, `accountPinned: true`,
-`modelPinned: true`, `accountAvailable: true`, `ready: true`, and
-`messagingInstalled: true`. The last field verifies the installed native adapter,
-not recipient liveness or delivery. The response
-intentionally reveals neither the account name nor the model. If the command is
-unavailable, any field is false, or the settings are unreadable, stop before
-creating a worker and direct the human to the installed CMUX Maestro app's
-**Agent launch settings**. Never substitute the coordinator's account, active
-GitHub CLI account, ambient token, Copilot default, or a hardcoded model.
+Require `ok: true`, `modelPinned: true`, and `messagingInstalled: true`.
+The last field verifies installation, not recipient liveness or delivery.
+The response intentionally reveals neither the account name nor the model.
+Saved-account `accountPinned`, `accountAvailable`, and `ready` are legacy
+metadata, not evidence of the current invoking account. Registration-only
+callers cannot launch new managed workers.
 
-The controller resolves the selected account credential only at launch, passes
-it privately through `COPILOT_GITHUB_TOKEN`, and supplies the configured model.
-An unavailable account fails closed before a terminal is created. Do not add
-account or model arguments to the skill command.
+The native launch path resolves the account verified by the invoking session,
+passes its credential privately through `COPILOT_GITHUB_TOKEN`, and supplies the
+configured model. An unavailable account fails before terminal creation. Never
+replace missing evidence with active GitHub CLI authentication, repository
+identity, ambient credentials, Copilot defaults, or a hardcoded model.
 
-## Spawn
+## Spawn from a managed session
 
-```sh
-"$CMUX_MAESTRO_ORCHESTRATOR" spawn \
-  --actor-id "$COORDINATOR_ID" \
-  --token "$CONTROL_TOKEN" \
-  --name "Focused worker name" \
-  --cwd "/absolute/working/directory" \
-  --require-pinned-launch-settings \
-  --task "Bounded objective, constraints, validation, and stop condition"
+Call native `maestro_spawn` with a complete first assignment:
+
+```json
+{"name":"Focused worker","cwd":"/absolute/owned/worktree","task":"Bounded objective, constraints, validation, and stop condition"}
 ```
 
-The safe default adds no Copilot tool grants. When the user explicitly approves
-tools for this task, pass each exact supported Copilot rule separately:
+The adapter reads the invoking session's current account through
+`session.rpc.gitHubAuth.getStatus()` for each launch. Neither task text, repository
+authentication, saved account defaults, nor another session selects that account.
+Missing identity/API support refuses before terminal creation. Explicit model
+selection remains separate. Optional `allowTools` and `denyTools` arrays carry
+exact authorized rules; `yolo: true` requires explicit human approval and a
+coordinator actor. A worker cannot escalate by launching another root.
 
-```sh
-"$CMUX_MAESTRO_ORCHESTRATOR" spawn \
-  --actor-id "$COORDINATOR_ID" \
-  --token "$CONTROL_TOKEN" \
-  --name "Authorized implementation worker" \
-  --cwd "/absolute/working/directory" \
-  --require-pinned-launch-settings \
-  --task "Bounded implementation and validation" \
-  --allow-tool "read" \
-  --allow-tool "edit" \
-  --deny-tool "web"
-```
+Shell `spawn` refuses managed actors because it cannot establish their live
+session account. Do not synthesize native launch identity, inspect bindings, or
+call the private ingress yourself.
+
+## Permissions and runtime ownership
+
+The safe default adds no Copilot tool grants. Pass each exact authorized rule
+in `allowTools` or `denyTools`; a new root's CLI uses `--allow-tool` and
+`--deny-tool`. Do not synthesize full parent-permission inheritance.
 
 These are Copilot policy arguments, not an operating-system sandbox. Never add
 `--allow-all`, a wildcard, all paths or URLs, or rights not explicitly approved
 for the task. The sole explicit broad-mode option is a **user-approved
-coordinator** `spawn --yolo`; it supplies Copilot `--allow-all` while preserving
+coordinator** `yolo: true` (or root `--yolo`); it supplies Copilot `--allow-all` while preserving
 explicit denies. Never add it by default or to solve a stalled permission prompt.
 Worker actors cannot request YOLO, including for descendants of a YOLO worker.
 There is no inferred full parent-permission inheritance. A general shell grant
@@ -100,37 +141,34 @@ justified; it is never a default. Denies win. A descendant receives no additiona
 grants by default and may request only a subset of its parent's explicit allows;
 inherited denies cannot be removed. Policies remain private.
 
-The command creates exactly one unfocused terminal tab beside the actor and
-launches normal interactive Copilot with the supplied initial task. The account
-and model come only from the verified local **Agent launch settings**. This
-skill always requires both settings and never falls back to normal Copilot
-defaults. No personal account or model is shipped as a project default. Input and
+Root startup and native child launch create exactly one unfocused terminal tab
+beside the caller and launch normal interactive Copilot with the supplied task.
+Managed children inherit the verified invoking account; no account or model
+fallback is allowed. No personal account or model is shipped as a project default. Input and
 output belong directly to that terminal: the human can type follow-ups, answer
 questions, and continue after the first task finishes. A foreground supervisor
 maintains ownership and metadata without intercepting terminal input. Launch
 uses a private one-time credential, never a token typed into shell history.
+The runtime starts through CMUX's `surface.create` direct `initial_command`,
+not shell startup input. Unsupported direct creation fails without a shell-input
+fallback; the existing bounded launch lease is unchanged.
 
-Do not create headless-worker tabs. For explicitly requested background work,
-prefer the provider's normal tabless subagent facilities; this skill does not
-offer a new headless launch mode.
+Do not create headless-worker tabs or substitute tabless SDK helpers for
+Maestro roles. A failed launch is a blocker, not permission to change runtimes.
 
-Workers may spawn descendants through the same command using their injected
-`CMUX_MAESTRO_WORKER_ID` and `CMUX_MAESTRO_CONTROL_TOKEN`. Respect the depth
-and eight-live-worker workspace limit; finishing an initial task does not release
+Managed workers spawn descendants through the same native `maestro_spawn` tool.
+The adapter binds the actual sender; it is not supplied by the model. Respect the depth
+and eight-live-session workspace limit, including managed coordinators;
+finishing an initial task does not release
 an open interactive session or terminal slot. Reuse an idle worker instead of retrying fanout
 failures in a loop.
 
-For an explicitly delegated descendant, use only the injected worker identity:
-
-```sh
-"$CMUX_MAESTRO_ORCHESTRATOR" spawn \
-  --actor-id "$CMUX_MAESTRO_WORKER_ID" \
-  --token "$CMUX_MAESTRO_CONTROL_TOKEN" \
-  --name "Bounded descendant" \
-  --cwd "/absolute/working/directory" \
-  --require-pinned-launch-settings \
-  --task "Bounded objective, constraints, validation, and stop condition"
-```
+A launch acknowledgement establishes supervisor startup only. Its
+`providerStarted` field reports whether a provider identity has been recorded.
+`messaging: configured` is not proof of adapter attachment, peer availability,
+or delivery. Do not count a prepared worktree, a failed tab, or an SDK task as a
+running Maestro agent. Verify the exact returned surface/session and subsequent
+native participation before claiming the team is usable.
 
 ## Inspect and focus
 

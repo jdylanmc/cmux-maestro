@@ -219,6 +219,31 @@ struct SidebarOrchestrationTests {
         }
     }
 
+    @Test func managedCoordinatorRequiresExactInteractiveSessionIdentity() throws {
+        let now = Date()
+        let root = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator",
+            label: "Managed coordinator", workspaceId: UUID(), surfaceId: UUID(),
+            generation: 1, phase: "turn-running", availability: "busy",
+            copilotSessionId: UUID(), executionMode: .interactive,
+            createdAt: now, updatedAt: now
+        )
+        try SidebarOrchestrationReader.validate(.init(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [root]
+        ))
+        let missingIdentity = SidebarOrchestrationNode(
+            id: root.id, runId: root.runId, parentId: nil, role: root.role,
+            label: root.label, workspaceId: root.workspaceId, surfaceId: root.surfaceId,
+            generation: 1, phase: root.phase, availability: root.availability,
+            executionMode: .interactive, createdAt: now, updatedAt: now
+        )
+        #expect(throws: CopilotFileError.self) {
+            try SidebarOrchestrationReader.validate(.init(
+                version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [missingIdentity]
+            ))
+        }
+    }
+
     @Test func displayMetadataIsOptionalBoundedAndControlCharacterFree() throws {
         let workspace = UUID()
         let run = UUID()

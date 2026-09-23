@@ -157,8 +157,8 @@ struct WorkerLaunchSettingsView: View {
             if CopilotSetupAccess.currentAppAllowsChanges {
                 Form {
                     Section("Agent launches") {
-                        Picker("Launch agents with subscription:", selection: $account) {
-                            Text("Use Copilot default").tag("")
+                        Picker("New coordinator subscription:", selection: $account) {
+                            Text("Choose an initial account").tag("")
                             ForEach(accounts) { item in
                                 Text(item.available ? item.login : "\(item.login) — unavailable")
                                     .tag(item.login)
@@ -175,11 +175,11 @@ struct WorkerLaunchSettingsView: View {
                             if busy { ProgressView().controlSize(.small) }
                         }
                         .disabled(busy)
-                        Text("Uses the selected GitHub account’s Copilot subscription. Git identity and the active gh account are unchanged. Account names are shown; plan tiers are not inferred.")
+                        Text("Selects the initial account for a new managed coordinator. Its children inherit the invoking session’s verified account, not this setting. Git identity and the active gh account are unchanged; plan tiers are not inferred.")
                             .font(.caption).foregroundStyle(.secondary)
-                        TextField("Worker model:", text: $model, prompt: Text("Use Copilot default"))
+                        TextField("Model for new sessions:", text: $model, prompt: Text("Choose an explicit model"))
                             .accessibilityIdentifier("worker-model-setting")
-                        Text("Only new workers are affected. Credentials stay in the keychain and are resolved at launch. A missing pinned account blocks launch rather than using another account.")
+                        Text("Existing sessions are unchanged. Credentials stay in the keychain and are resolved at launch. Missing account or model evidence blocks launch instead of selecting a fallback.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     HStack {

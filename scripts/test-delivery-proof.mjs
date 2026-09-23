@@ -291,7 +291,7 @@ test("installed mode discovers arbitrary same-workspace participants and peer re
   assert.equal((await f.tools[0].maestro_send({
     destination: managedAddress(f.bindings[3]), body: "different workspace",
   })).resultType, "failure");
-  assert.deepEqual(Object.keys(f.tools[0]), ["maestro_peers", "maestro_send"]);
+  assert.deepEqual(Object.keys(f.tools[0]), ["maestro_peers", "maestro_send", "maestro_identity", "maestro_spawn"]);
 });
 
 test("installed loader is inert outside managed sessions and refuses mismatched bindings before join", async (t) => {
@@ -309,6 +309,71 @@ test("installed loader is inert outside managed sessions and refuses mismatched 
     }));
     assert.equal(joined, false);
   }
+});
+
+test("native launch reads the invoking session account on each request, not task-supplied identity", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  let tools;
+  let login = "parent-a";
+  const requests = [];
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async options => {
+      tools = options.tools;
+      return {
+        sessionId: own.sessionId,
+        rpc: { gitHubAuth: { getStatus: async () => ({
+          isAuthenticated: true, host: "https://github.com", login,
+        }) } },
+      };
+    },
+    launch: async request => {
+      requests.push(request);
+      return { ok: true, workerId: "synthetic-worker", supervisorStarted: true };
+    },
+  });
+  t.after(() => adapter.close());
+  const spawn = tools.find(tool => tool.name === "maestro_spawn").handler;
+  const identity = tools.find(tool => tool.name === "maestro_identity").handler;
+  const assignment = { name: "Child", cwd: "/synthetic", task: "Bounded task" };
+  const invocation = { sessionId: own.sessionId };
+  for (const next of ["parent-a", "parent-b"]) {
+    login = next;
+    const observed = JSON.parse(await identity({}, invocation));
+    assert.equal(observed.account.login, next);
+    assert.equal(observed.sessionId, own.sessionId);
+    assert.equal(JSON.stringify(observed).includes(own.capability), false);
+    const result = await spawn(assignment, invocation);
+    assert.equal(JSON.parse(result).ok, true);
+    assert.equal(requests.at(-1).identity.login, next);
+    assert.equal(result.includes(own.capability), false);
+    assert.equal(result.includes(next), false);
+  }
+  assert.equal((await spawn({ ...assignment, login: "injected" }, invocation)).resultType, "failure");
+  assert.equal((await spawn(assignment, { sessionId: f.bindings[1].sessionId })).resultType, "failure");
+  login = undefined;
+  assert.equal((await identity({}, invocation)).resultType, "failure");
+  assert.equal((await spawn(assignment, invocation)).resultType, "failure");
+  assert.equal(requests.length, 2);
+});
+
+test("native launch refuses unsupported account APIs without creating a terminal", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  let tools;
+  let launches = 0;
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async options => { tools = options.tools; return { sessionId: own.sessionId }; },
+    launch: async () => { launches++; },
+  });
+  t.after(() => adapter.close());
+  const result = await tools.find(tool => tool.name === "maestro_spawn").handler(
+    { name: "Child", cwd: "/synthetic", task: "No fallback" }, { sessionId: own.sessionId },
+  );
+  assert.equal(result.resultType, "failure");
+  assert.equal(launches, 0);
 });
 
 test("installed routes refuse stale generations, lost participation and wrong invocation", async (t) => {

@@ -67,7 +67,7 @@ struct ContentView: View {
             SettingsLink {
                 Label("Settings…", systemImage: "gearshape")
             }
-            Text("Next: configure a pinned account and model in Agent launch settings. New Maestro-launched sessions get fire-and-forget messaging; existing or unmanaged sessions are not adopted. Messaging never changes focus or human input and does not guarantee delivery. The sidebar is optional for messaging.")
+            Text("Next: choose an initial coordinator account and explicit model in Agent launch settings, then use Maestro’s launch-coordinator entry. Managed children inherit their invoking session’s account. Existing conversations are not adopted. Messaging preserves focus and human input and does not guarantee delivery; the sidebar is optional.")
                 .font(.callout)
             Text("Keep this app at its installed location. If you move or replace it, enable the integration again to refresh the bundled helper path. Uses the standard ~/.copilot/session-state location only.")
                 .font(.caption)

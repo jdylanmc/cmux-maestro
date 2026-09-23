@@ -372,11 +372,12 @@ class ProofTests(unittest.TestCase):
         cmux = mock.Mock()
         with mock.patch.dict(spawn.__globals__, {
             "read_state": lambda _: {}, "authorize": lambda *a: {"role": "coordinator"},
+            "authorize_native_spawn": lambda *a: {"role": "coordinator"},
             "git_display_metadata": lambda _: {},
             "worker_launch_settings": forbidden, "resolve_copilot_token": forbidden, "mutate": forbidden,
         }):
             with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "Messaging is not installed"):
-                spawn(args, self.root, cmux)
+                spawn(args, self.root, cmux, native_identity={"login": "synthetic"})
         forbidden.assert_not_called()
         self.assertEqual(cmux.mock_calls, [])
 
@@ -437,6 +438,194 @@ class ProofTests(unittest.TestCase):
     def route_path(self, node=None):
         node = node or self.node
         return Path(node["messaging"]["routes"]) / f'{CONTROLLER["message_peer"](node)}.json'
+
+    def native_identity(self):
+        binding = json.loads(self.route_path().read_text())
+        return {
+            key: binding[key]
+            for key in ("nodeId", "workspaceId", "sessionId", "generation", "capability")
+        } | {"login": "parent-account", "host": "https://github.com"}
+
+    def test_native_launch_identity_is_exact_and_capability_bound(self):
+        state, _ = self.lifecycle_state()
+        identity = self.native_identity()
+        authorize = CONTROLLER["authorize_native_spawn"]
+        self.assertEqual(authorize(state, identity)["id"], self.node["id"])
+        for key, value in (
+            ("sessionId", str(uuid.uuid4())), ("generation", 2),
+            ("workspaceId", str(uuid.uuid4())), ("capability", "f" * 64),
+            ("host", "unrelated.example"), ("login", None),
+        ):
+            with self.subTest(key=key):
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    authorize(state, {**identity, key: value})
+
+    def test_native_spawn_inherits_live_account_not_saved_account(self):
+        state, _ = self.lifecycle_state()
+        spawn = CONTROLLER["command_spawn"]
+        identity = self.native_identity()
+        args = CONTROLLER["parser"]().parse_args([
+            "spawn", "--actor-id", self.node["id"], "--token", "unused",
+            "--name", "Child", "--task", "Synthetic", "--cwd", self.paths["a"],
+        ])
+        saved = {"version": 1, "copilotAccount": "wrong-saved-account", "model": "pinned-model"}
+        class Reserved(Exception):
+            pass
+        def reserve_only(_root, callback):
+            callback(state)
+            raise Reserved()
+        cmux = mock.Mock()
+        cmux.validate_surface.return_value = str(uuid.uuid4())
+        credentials = mock.Mock(return_value=None)
+        with mock.patch.dict(spawn.__globals__, {
+            "read_state": lambda _: state,
+            "worker_launch_settings": lambda _: dict(saved),
+            "resolve_copilot_token": credentials,
+            "process_matches": lambda _: True,
+            "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+            "resolve_icon": lambda _: "synthetic-icon",
+            "resource_observations": lambda *a: ({}, set()),
+            "mutate": reserve_only,
+        }):
+            with self.assertRaises(Reserved):
+                spawn(args, self.root, cmux, native_identity=identity)
+        child = next(node for node in state["nodes"].values() if node["parentId"] == self.node["id"])
+        self.assertEqual(child["launchSettings"], {**saved, "copilotAccount": "parent-account"})
+        self.assertEqual(child["toolPolicy"]["deny"], ["web"])
+        self.assertEqual(saved["copilotAccount"], "wrong-saved-account")
+        credentials.assert_called_once_with("parent-account")
+        cmux.create_surface.assert_not_called()
+
+    def test_managed_shell_spawn_cannot_bypass_current_account_verification(self):
+        state, _ = self.lifecycle_state()
+        spawn = CONTROLLER["command_spawn"]
+        args = CONTROLLER["parser"]().parse_args([
+            "spawn", "--actor-id", self.node["id"], "--token", "synthetic",
+            "--name", "Child", "--task", "No fallback", "--cwd", self.paths["a"],
+        ])
+        forbidden = mock.Mock(side_effect=AssertionError("must refuse before launch effects"))
+        with mock.patch.dict(spawn.__globals__, {
+            "read_state": lambda _: state,
+            "authorize": lambda *a: self.node,
+            "worker_launch_settings": forbidden, "resolve_copilot_token": forbidden,
+            "mutate": forbidden,
+        }):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "maestro_spawn"):
+                spawn(args, self.root, mock.Mock())
+
+    def test_registered_caller_cannot_launch_using_only_saved_account_in_production(self):
+        state, actor = self.lifecycle_state()
+        spawn = CONTROLLER["command_spawn"]
+        args = CONTROLLER["parser"]().parse_args([
+            "spawn", "--actor-id", actor["id"], "--token", "synthetic",
+            "--name", "Child", "--task", "No fallback", "--cwd", self.paths["a"],
+        ])
+        forbidden = mock.Mock(side_effect=AssertionError("must refuse before launch effects"))
+        with mock.patch.dict(os.environ, {"CMUX_MAESTRO_TESTING": ""}), \
+                mock.patch.dict(spawn.__globals__, {
+                    "read_state": lambda _: state,
+                    "authorize": lambda *a: actor,
+                    "worker_launch_settings": forbidden, "resolve_copilot_token": forbidden,
+                    "mutate": forbidden,
+                }):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "parent-account evidence"):
+                spawn(args, self.root, mock.Mock())
+
+    def test_root_launch_refuses_managed_caller_and_live_legacy_runtime_before_credentials(self):
+        state, actor = self.lifecycle_state()
+        command = CONTROLLER["command_launch_coordinator"]
+        forbidden = mock.Mock(side_effect=AssertionError("must refuse before launch effects"))
+        for surface in (self.node["surfaceId"], actor["surfaceId"]):
+            args = CONTROLLER["parser"]().parse_args([
+                "launch-coordinator", "--workspace", actor["workspaceId"], "--surface", surface,
+                "--cwd", self.paths["a"], "--task", "No takeover", "--account", "synthetic",
+            ])
+            with mock.patch.dict(command.__globals__, {
+                "require_current_surface": mock.Mock(),
+                "read_state": lambda _: state,
+                "worker_processes_exited": lambda _: False,
+                "worker_launch_settings": forbidden, "resolve_copilot_token": forbidden,
+                "mutate": forbidden,
+            }):
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    command(args, self.root, mock.Mock())
+        forbidden.assert_not_called()
+
+    def test_legacy_compatibility_protects_supervisor_writers_without_ending_providers(self):
+        state, _ = self.lifecycle_state()
+        before = copy.deepcopy(state)
+        check = CONTROLLER["legacy_supervisor_blocks"]
+        with mock.patch.dict(check.__globals__, {
+            "process_start": lambda pid: "provider-start" if pid == 12346 else None,
+        }), mock.patch("os.kill", side_effect=ProcessLookupError):
+            self.assertFalse(check(state, self.node))
+        self.assertEqual(state, before)
+        with mock.patch.dict(check.__globals__, {
+            "process_start": lambda pid: "supervisor-start" if pid == 12345 else None,
+        }):
+            self.assertTrue(check(state, self.node))
+        with mock.patch.dict(check.__globals__, {"process_start": lambda _: None}), \
+                mock.patch("os.kill", side_effect=PermissionError):
+            self.assertTrue(check(state, self.node))
+        state["launches"][self.node["id"]] = {}
+        self.assertTrue(check(state, self.node))
+
+    def test_resource_reconciliation_preserves_active_leases_and_changed_owners(self):
+        state, _ = self.lifecycle_state()
+        snapshot = copy.deepcopy(state)
+        identifier = self.node["id"]
+        observations = {identifier: {"surface": False, "process": False, "exited": True}}
+        reconcile = CONTROLLER["reconcile_resources"]
+        state["launches"][identifier] = {}
+        reconcile(state, snapshot, observations, set())
+        self.assertEqual(state["nodes"][identifier]["phase"], "turn-running")
+        state["launches"].clear()
+        state["nodes"][identifier]["surfaceId"] = str(uuid.uuid4())
+        reconcile(state, snapshot, observations, set())
+        self.assertEqual(state["nodes"][identifier]["phase"], "turn-running")
+        state["nodes"][identifier] = copy.deepcopy(snapshot["nodes"][identifier])
+        observations[identifier]["exited"] = False
+        reconcile(state, snapshot, observations, set())
+        self.assertEqual(state["nodes"][identifier]["phase"], "turn-running")
+        observations[identifier]["exited"] = True
+        reconcile(state, snapshot, observations, set())
+        self.assertEqual(state["nodes"][identifier]["phase"], "resource-retired")
+        self.assertEqual(state["nodes"][identifier]["providerProcess"], self.node["providerProcess"])
+
+    def test_managed_coordinator_has_its_own_run_and_does_not_adopt_caller(self):
+        self.install_synthetic_messaging()
+        command = CONTROLLER["command_launch_coordinator"]
+        workspace, surface, pane = (str(uuid.uuid4()) for _ in range(3))
+        state = CONTROLLER["empty_state"]()
+        args = CONTROLLER["parser"]().parse_args([
+            "launch-coordinator", "--workspace", workspace, "--surface", surface,
+            "--name", "Managed root", "--cwd", self.paths["a"], "--task", "Synthetic",
+            "--account", "chosen-root-account", "--deny-tool", "web",
+        ])
+        cmux = mock.Mock()
+        cmux.validate_surface.return_value = pane
+        launcher = mock.Mock(return_value={"supervisorStarted": True})
+        with mock.patch.dict(command.__globals__, {
+            "require_current_surface": mock.Mock(),
+            "read_state": lambda _: state,
+            "worker_launch_settings": lambda _: {"version": 1, "copilotAccount": "saved-other", "model": "pinned-model"},
+            "resolve_copilot_token": mock.Mock(return_value=None),
+            "mutate": lambda _root, operation: operation(state),
+            "launch_reserved_session": launcher,
+        }):
+            result = command(args, self.root, cmux)
+        node = state["nodes"][result["coordinatorId"]]
+        CONTROLLER["validate_state"](state)
+        self.assertEqual(node["role"], "coordinator")
+        self.assertEqual(node["executionMode"], "interactive")
+        self.assertIsNone(node["parentId"])
+        self.assertIsNone(node["surfaceId"])
+        self.assertEqual(node["generation"], 1)
+        self.assertIsNotNone(node["copilotSessionId"])
+        self.assertEqual(node["launchSettings"]["copilotAccount"], "chosen-root-account")
+        self.assertEqual(node["toolPolicy"]["deny"], ["web"])
+        self.assertFalse(any(item.get("surfaceId") == surface for item in state["nodes"].values()))
+        launcher.assert_called_once()
 
     def assert_tools_available(self):
         # Real adapter/tool handlers, but only synthetic sessions and local routes.
@@ -523,7 +712,7 @@ class ProofTests(unittest.TestCase):
         self.assertEqual(self.node, before)
         self.assertEqual(self.route_path().read_bytes(), binding)
         worker = next(item for item in result["workers"] if item["workerId"] == self.node["id"])
-        self.assertEqual(worker["messaging"], "participating")
+        self.assertEqual(worker["messaging"], "configured")
         self.assert_tools_available()
 
     def test_status_new_worker_preserves_live_routes_and_tools(self):
@@ -727,6 +916,7 @@ class ProofTests(unittest.TestCase):
 
         with mock.patch.dict(spawn.__globals__, {
             "read_state": lambda _: state, "authorize": lambda *a: actor,
+            "authorize_native_spawn": lambda *a: actor,
             "worker_launch_settings": lambda _: {},
             "resolve_copilot_token": credentials,
             "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
@@ -735,7 +925,7 @@ class ProofTests(unittest.TestCase):
             "mutate": reserve_only,
         }):
             with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "Pinned"):
-                spawn(args, self.root, mock.Mock())
+                spawn(args, self.root, mock.Mock(), native_identity={"login": "synthetic"})
             credentials.assert_not_called()
             with mock.patch.dict(spawn.__globals__, {
                 "worker_launch_settings": lambda _: {
@@ -743,7 +933,7 @@ class ProofTests(unittest.TestCase):
                 },
             }):
                 with self.assertRaises(Reserved):
-                    spawn(args, self.root, mock.Mock())
+                    spawn(args, self.root, mock.Mock(), native_identity={"login": "synthetic"})
         worker = next(node for node in state["nodes"].values() if node["role"] == "worker")
         self.assertEqual(worker["messaging"], config)
         self.assertEqual(set(worker["messaging"]), {"version", "routes", "extension"})
@@ -997,8 +1187,9 @@ class LifecycleFailureTests(unittest.TestCase):
             ]
         with mock.patch.dict(spawn.__globals__, {
             "read_state": lambda *a, **k: copy.deepcopy(self.state),
+            "authorize_native_spawn": lambda state, *_: state["nodes"][self.actor["id"]],
             "mutate": self.mutate, "messaging_configuration": lambda _: None,
-            "worker_launch_settings": lambda _: {"version": 1},
+            "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
             "resolve_copilot_token": lambda _: None,
             "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
             "resource_observations": lambda *a: ({}, set()),
@@ -1007,7 +1198,7 @@ class LifecycleFailureTests(unittest.TestCase):
             "timeout": lambda *a: 1,
         }), mock.patch("time.monotonic", side_effect=[0, 2]):
             with self.assertRaises((RuntimeError, CONTROLLER["OrchestrationError"])):
-                spawn(args, self.root, self.cmux)
+                spawn(args, self.root, self.cmux, native_identity={"login": "synthetic"})
         self.worker = next(node for node in self.state["nodes"].values() if node["role"] == "worker")
         self.state["nodes"][self.actor["id"]]["lastControlAt"] = "2000-01-01T00:00:00+00:00"
         self.cmux.validate_surface.side_effect = None
