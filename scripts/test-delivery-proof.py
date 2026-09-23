@@ -650,6 +650,7 @@ class ProofTests(unittest.TestCase):
             "worker_launch_settings": lambda _: {"version": 1, "model": "pinned-model"},
             "resolve_copilot_token": mock.Mock(return_value=None),
             "mutate": lambda _root, operation: operation(state),
+            "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
             "launch_reserved_session": mock.Mock(side_effect=CONTROLLER["OrchestrationError"]("Synthetic startup failure")),
         }):
             with self.assertRaises(CONTROLLER["CoordinatorLaunchError"]) as caught:
