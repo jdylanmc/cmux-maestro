@@ -31,5 +31,6 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feat
     "$ROOT/CMUXMaestroPreviewTests/CopilotHookTests.swift" \
     "$ROOT/CMUXMaestroPreviewTests/CopilotSetupTests.swift" \
     "$ROOT/CMUXMaestroPreviewTests/WorkerLaunchSettingsTests.swift" \
+    "$ROOT/CMUXMaestroPreviewTests/CLIIntegrationGuideTests.swift" \
     "$ROOT/scripts/CopilotSetupTestMain.swift" -o "$OUTPUT/setup-tests"
 "$OUTPUT/setup-tests"

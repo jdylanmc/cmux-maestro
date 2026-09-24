@@ -101,6 +101,12 @@ accessibility label containing its location and result; color is supplemental.
 Synthetic offscreen tests cover all four results in light/dark mode at narrow and
 standard widths. They do not prove live VoiceOver navigation or installed-host
 behavior.
+Fixture tests exercise missing/partial installs, exact byte mismatches,
+unreadable files/directories, unsafe symlinks and file types, size limits,
+invalid baselines, and repeated checks that clear stale success. Updating the
+synthetic current copy leaves a different legacy copy different. App-bundle
+tests verify canonical digests and exclusion of guide bodies; build-metadata
+tests verify regeneration when either canonical input changes.
 
 To install or update the current Copilot copy, run this command in your own terminal:
 

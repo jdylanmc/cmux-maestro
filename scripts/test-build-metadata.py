@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import plistlib
@@ -18,6 +19,74 @@ spec.loader.exec_module(metadata)
 
 
 class BuildMetadataTests(unittest.TestCase):
+    def test_guide_baseline_tracks_both_sources_without_bundling_bodies(self):
+        source = self.directory / "guide"
+        source.mkdir()
+        output = self.directory / "resources/maestro-guide-baseline.json"
+        values = {"SKILL.md": b"synthetic guide\n", "intent.md": b"synthetic intent\n"}
+        for name, data in values.items():
+            (source / name).write_bytes(data)
+        command = [sys.executable, str(ROOT / "scripts/generate-guide-baseline.py"),
+                   "--source", str(source), "--output", str(output)]
+        subprocess.run(command, check=True, capture_output=True)
+        self.assertEqual(json.loads(output.read_text()), {
+            "version": 1, "files": {name: hashlib.sha256(data).hexdigest() for name, data in values.items()}
+        })
+        for changed in values:
+            before = json.loads(output.read_text())["files"]
+            values[changed] += b"updated\n"
+            (source / changed).write_bytes(values[changed])
+            subprocess.run(command, check=True, capture_output=True)
+            after = json.loads(output.read_text())["files"]
+            self.assertNotEqual(after[changed], before[changed])
+            self.assertEqual(after[changed], hashlib.sha256(values[changed]).hexdigest())
+            other = next(name for name in values if name != changed)
+            self.assertEqual(after[other], before[other])
+        self.assertEqual(list(output.parent.iterdir()), [output])
+        self.assertLess(output.stat().st_size, 1024)
+
+    def test_guide_baseline_generation_fails_for_missing_unsafe_or_oversized_source(self):
+        source = self.directory / "guide"
+        source.mkdir()
+        output = self.directory / "baseline.json"
+        (source / "intent.md").write_text("intent")
+        command = [sys.executable, str(ROOT / "scripts/generate-guide-baseline.py"),
+                   "--source", str(source), "--output", str(output)]
+        for kind in ("missing", "empty", "oversized", "symlink"):
+            with self.subTest(kind=kind):
+                skill = source / "SKILL.md"
+                if skill.exists() or skill.is_symlink():
+                    skill.unlink()
+                if kind == "empty":
+                    skill.write_bytes(b"")
+                elif kind == "oversized":
+                    skill.write_bytes(b"x" * 262_145)
+                elif kind == "symlink":
+                    skill.symlink_to(source / "intent.md")
+                result = subprocess.run(command, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b"Guide source", result.stderr)
+                self.assertFalse(output.exists())
+
+    def test_guide_baseline_build_phase_declares_source_inputs_and_bundle_output(self):
+        project = json.loads(subprocess.run(
+            ["plutil", "-convert", "json", "-o", "-", str(ROOT / "CMUXMaestroPreview.xcodeproj/project.pbxproj")],
+            check=True, capture_output=True, text=True).stdout)["objects"]
+        phases = [(key, value) for key, value in project.items()
+                  if value.get("isa") == "PBXShellScriptBuildPhase" and value.get("name") == "Generate guide baseline"]
+        self.assertEqual(len(phases), 1)
+        key, phase = phases[0]
+        self.assertEqual(set(phase["inputPaths"]), {
+            "$(SRCROOT)/scripts/generate-guide-baseline.py",
+            "$(SRCROOT)/skills/maestro/SKILL.md", "$(SRCROOT)/skills/maestro/intent.md"
+        })
+        self.assertEqual(phase["outputPaths"], [
+            "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/maestro-guide-baseline.json"
+        ])
+        app = next(value for value in project.values()
+                   if value.get("isa") == "PBXNativeTarget" and value.get("name") == "CMUXMaestroPreview")
+        self.assertIn(key, app["buildPhases"])
+
     def test_production_preview_disables_profile_output_without_disabling_test_coverage(self):
         production = (ROOT / "scripts/build-register.sh").read_text()
         validation = (ROOT / "scripts/test.sh").read_text()
