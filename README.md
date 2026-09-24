@@ -1150,12 +1150,14 @@ app or backup. It reports the specific process ID when possible; it never signal
 process. Keep these apps closed until the operation finishes.
 
 An unrelated application's updater can leave a live process whose old executable
-path has been deleted. When Darwin reports that specific missing-path condition,
-the installer checks kernel-backed program-text vnode paths using `/usr/sbin/lsof`,
-bracketed by exact PID/owner/start-time checks. Every reported text path must be
-outside the affected preview apps and backups. Missing, partial, changed, or
-permission-denied evidence still blocks the update; unrelated apps are neither
-terminated nor exempted by name.
+path has been deleted. For that specific missing-path condition, the installer
+compares the kernel-cached executable code-directory hash with every Mach-O
+architecture in the receipt-verified preview apps and backups. It requires
+unchanged bundle contents, process ownership/start time and executable identity.
+A matching hash, missing signature, unsupported/partial inventory, changed
+evidence or permission denial still blocks the update. No process is exempted
+by name or terminated. Mapped-library listings are not used as proof of the
+running executable's identity.
 
 macOS can retain an idle extension process even after Default is selected.
 Use **`prepare-update`** to retire only the receipt-owned preview registration

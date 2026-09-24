@@ -10,6 +10,7 @@ import plistlib
 import shutil
 import signal
 import subprocess
+import struct
 import sys
 import time
 from types import SimpleNamespace
@@ -123,72 +124,69 @@ class SyntheticMac(preview.MacOperations):
 
 
 class LocalPreviewTests(unittest.TestCase):
-    def text_vnode_output(self, pid, uid, *paths):
-        owner = f"p{pid}\0u{uid}\0\n".encode()
-        return owner + b"".join(b"ftxt\0D0x100000e\0i123\0n" + os.fsencode(path) + b"\0\n" for path in paths)
-
-    def test_deleted_executable_fallback_requires_complete_unrelated_kernel_vnodes(self):
+    def test_deleted_executable_requires_positive_stable_code_identity_and_inventory(self):
         pid, uid = 43210, os.getuid()
         generation = (pid, uid, 100, 123)
-        outside = self.root / "Unrelated app.app/old\nbinary"
-        good = self.text_vnode_output(pid, uid, outside, Path("/usr/lib/dyld"))
         cases = [
-            (good, 0, b"", True),
-            (self.text_vnode_output(pid, uid, self.app / "Contents/MacOS/Preview"), 0, b"", False),
-            (self.text_vnode_output(pid, uid, self.app / "Contents/MacOS/Preview (deleted)"), 0, b"", False),
-            (self.text_vnode_output(pid, uid, outside, self.app / "Contents/Helpers/Helper"), 0, b"", False),
-            (self.text_vnode_output(pid + 1, uid, outside), 0, b"", False),
-            (self.text_vnode_output(pid, uid + 1, outside), 0, b"", False),
-            (self.text_vnode_output(pid, uid), 0, b"", False),
-            (self.text_vnode_output(pid, uid, Path("relative/path")), 0, b"", False),
-            (self.text_vnode_output(pid, uid, self.root / "../unknown"), 0, b"", False),
-            (good.replace(b"ftxt", b"fmem"), 0, b"", False),
-            (good.replace(b"D0x100000e\0", b""), 0, b"", False),
-            (good.replace(b"i123", b"i0"), 0, b"", False),
-            (good.replace(b"i123", b"i123\0i123"), 0, b"", False),
-            (good + good, 0, b"", False),
-            (good[:-1], 0, b"", False),
-            (b"x" * 1_048_577 + b"\0\n", 0, b"", False),
-            (good, 1, b"", False),
-            (good, 0, b"partial scan", False),
+            (["aa" * 20] * 2, {"bb" * 20}, [generation] * 2, ["tree"] * 2, True),
+            (["aa" * 20] * 2, {"aa" * 20, "bb" * 20}, [generation] * 2, ["tree"] * 2, False),
+            ([None], {"bb" * 20}, [generation] * 2, ["tree"] * 2, False),
+            (["aa" * 20, None], {"bb" * 20}, [generation] * 2, ["tree"] * 2, False),
+            (["aa" * 20, "cc" * 20], {"bb" * 20}, [generation] * 2, ["tree"] * 2, False),
+            (["aa" * 20] * 2, set(), [generation] * 2, ["tree"] * 2, False),
+            (["aa" * 20] * 2, {"bb" * 20}, [None], ["tree"] * 2, False),
+            (["aa" * 20] * 2, {"bb" * 20}, [generation, None], ["tree"] * 2, False),
+            (["aa" * 20] * 2, {"bb" * 20}, [generation, (pid, uid, 100, 124)], ["tree"] * 2, False),
+            (["aa" * 20] * 2, {"bb" * 20}, [generation] * 2, ["tree", "changed"], False),
         ]
-        for data, code, diagnostic, accepted in cases:
-            with self.subTest(data=data[:100], code=code, diagnostic=diagnostic):
+        for hashes, protected, generations, trees, accepted in cases:
+            with self.subTest(hashes=hashes, protected=protected, generations=generations, trees=trees):
                 operations = preview.MacOperations()
-                with patch.object(operations, "process_generation", return_value=generation), patch.object(
-                    operations, "run", return_value=subprocess.CompletedProcess([], code, data, diagnostic)
-                ) as run:
-                    self.assertEqual(operations.confirmed_unrelated_text(pid, uid, (self.app,)), accepted)
-                    run.assert_called_once_with(
-                        ["/usr/sbin/lsof", "-a", "-p", str(pid), "-d", "txt", "-F0pfDinu"], check=False,
+                with patch.object(operations, "process_generation", side_effect=generations), \
+                        patch.object(operations, "executable_code_hash", side_effect=hashes), \
+                        patch.object(operations, "protected_code_hashes", return_value=protected), \
+                        patch.object(preview, "digest", side_effect=trees), \
+                        patch.object(operations, "run") as run:
+                    self.assertEqual(
+                        operations.confirmed_unrelated_executable(pid, uid, (self.app,)), accepted,
                     )
+                    run.assert_not_called()
 
-    def test_deleted_executable_fallback_rejects_symlink_aliases_and_changed_generation(self):
-        pid, uid = 43210, os.getuid()
-        alias = self.root / "alias"
-        alias.symlink_to(self.app, target_is_directory=True)
+    def test_mach_o_inventory_covers_every_architecture_and_alternate_hash(self):
+        binary = self.old / "universal"
+        arm = struct.pack("<III", 0xfeedfacf, 0x100000c, 0)
+        intel = struct.pack("<III", 0xfeedfacf, 0x1000007, 3)
+        binary.write_bytes(
+            struct.pack(">II", 0xcafebabe, 2)
+            + struct.pack(">IIIII", 0x100000c, 0, 48, len(arm), 0)
+            + struct.pack(">IIIII", 0x1000007, 3, 60, len(intel), 0) + arm + intel
+        )
+        self.assertEqual(preview.mach_o_architectures(binary), [(0x100000c, 0), (0x1000007, 3)])
         operations = preview.MacOperations()
-        generation = (pid, uid, 100, 123)
-        for path, generations in [
-            (alias / "Contents/MacOS/Preview", [generation]),
-            (self.root / "outside", [generation, (pid, uid, 100, 124)]),
-            (self.root / "outside", [generation, None]),
-        ]:
-            with self.subTest(path=path, generations=generations), patch.object(
-                operations, "process_generation", side_effect=generations
-            ), patch.object(operations, "run", return_value=subprocess.CompletedProcess(
-                [], 0, self.text_vnode_output(pid, uid, path), b""
-            )):
-                self.assertFalse(operations.confirmed_unrelated_text(pid, uid, (self.app,)))
-        with patch.object(operations, "process_generation", return_value=None), patch.object(operations, "run") as run:
-            self.assertFalse(operations.confirmed_unrelated_text(pid, uid, (self.app,)))
+        with patch.object(operations, "run", side_effect=[
+            subprocess.CompletedProcess([], 0, b"", f"CDHash={'aa' * 20}\nCandidateCDHash sha1={'bb' * 20}\n".encode()),
+            subprocess.CompletedProcess([], 0, b"", f"CDHash={'cc' * 20}\n".encode()),
+        ]) as run:
+            self.assertEqual(operations.protected_code_hashes((self.old,)), {"aa" * 20, "bb" * 20, "cc" * 20})
+            self.assertEqual([call.args[0][-2] for call in run.call_args_list], ["16777228,0", "16777223,3"])
+        binary.write_bytes(arm)
+        for details in [b"", b"CDHash=short\n", f"CDHash={'aa' * 20}\nCandidateCDHash sha1=short\n".encode()]:
+            with self.subTest(details=details), patch.object(
+                operations, "run", return_value=subprocess.CompletedProcess([], 0, b"", details)
+            ), self.assertRaises(ValueError):
+                operations.protected_code_hashes((self.old,))
+        for data in [arm[:8], struct.pack(">II", 0xcafebabe, 33) + b"0000",
+                     struct.pack(">II", 0xcafebabe, 1) + b"0000",
+                     struct.pack(">II", 0xcafebabe, 1) + struct.pack(">IIIII", 0x100000c, 0, 0, 12, 0)]:
+            binary.write_bytes(data)
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                preview.mach_o_architectures(binary)
+        with patch.object(preview, "safe_tree"), patch.object(Path, "rglob", return_value=[binary] * 16_385), \
+                patch.object(operations, "run") as run, self.assertRaisesRegex(ValueError, "bound"):
+            operations.protected_code_hashes((self.old,))
             run.assert_not_called()
-        with patch.object(operations, "process_generation", return_value=generation), patch.object(
-            operations, "run", side_effect=subprocess.TimeoutExpired("lsof", 120)
-        ):
-            self.assertFalse(operations.confirmed_unrelated_text(pid, uid, (self.app,)))
 
-    def test_only_enoent_can_use_positive_unrelated_text_evidence(self):
+    def test_only_enoent_can_use_positive_unrelated_executable_evidence(self):
         pid, uid = os.getpid() + 100_000, os.getuid()
         for error in [errno.ENOENT, errno.EPERM, errno.EACCES, 0]:
             for unrelated in [True, False]:
@@ -200,7 +198,7 @@ class LocalPreviewTests(unittest.TestCase):
                     with patch.object(preview.ctypes, "CDLL", return_value=SimpleNamespace(proc_pidpath=lookup)), \
                             patch.object(operations, "run", return_value=SimpleNamespace(stdout=f"{pid} {uid}\n")), \
                             patch.object(operations, "confirmed_zombie", return_value=False), \
-                            patch.object(operations, "confirmed_unrelated_text", return_value=unrelated) as evidence, \
+                            patch.object(operations, "confirmed_unrelated_executable", return_value=unrelated) as evidence, \
                             patch.object(preview.os, "kill") as probe:
                         if error == errno.ENOENT and unrelated:
                             operations.assert_idle(self.app)
@@ -211,27 +209,31 @@ class LocalPreviewTests(unittest.TestCase):
                         probe.assert_called_once_with(pid, 0)
 
     @unittest.skipUnless(sys.platform == "darwin", "Darwin kernel process evidence")
-    def test_live_deleted_program_text_remains_guarded_without_signalling_other_apps(self):
+    def test_live_deleted_executable_identity_remains_guarded_without_signalling_other_apps(self):
         operations = preview.MacOperations()
         protected = self.root / "Protected.app"
-        probe = self.root / "text-probe"
-        subprocess.run(
-            ["/usr/bin/xcrun", "clang", "-x", "c", "-", "-o", str(probe)],
-            input=b'#include <unistd.h>\nint main(void) { write(1, "ready", 5); sleep(30); return 0; }\n',
-            check=True, capture_output=True,
-        )
-        for location, unrelated in [(self.root / "unrelated-sleep", True), (protected / "Contents/MacOS/sleep", False)]:
+        protected_binary = protected / "Contents/MacOS/probe"
+        unrelated_binary = self.root / "unrelated-probe"
+        for location, label in [(protected_binary, "owned"), (unrelated_binary, "other")]:
+            location.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["/usr/bin/xcrun", "clang", "-x", "c", "-", "-o", str(location)],
+                input=f'#include <unistd.h>\nint main(void) {{ write(1, "{label}", 5); sleep(30); return 0; }}\n'.encode(),
+                check=True, capture_output=True,
+            )
+        for location, unrelated, label in [(unrelated_binary, True, b"other"), (protected_binary, False, b"owned")]:
             with self.subTest(location=location):
-                location.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy(probe, location)
                 child = subprocess.Popen([str(location)], stdin=subprocess.DEVNULL,
                                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
                 try:
-                    self.assertEqual(child.stdout.read(5), b"ready")
-                    location.unlink()
+                    self.assertEqual(child.stdout.read(5), label)
+                    if unrelated:
+                        location.unlink()
+                    else:
+                        location.rename(location.with_suffix(".retained"))
                     self.assertIsNone(child.poll())
                     self.assertEqual(
-                        operations.confirmed_unrelated_text(child.pid, os.getuid(), (protected,)), unrelated,
+                        operations.confirmed_unrelated_executable(child.pid, os.getuid(), (protected,)), unrelated,
                     )
                     self.assertIsNone(child.poll())
                 finally:

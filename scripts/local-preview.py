@@ -16,6 +16,7 @@ import plistlib
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import uuid
@@ -49,6 +50,49 @@ class ProcBSDInfo(ctypes.Structure):
         ("tpgid", ctypes.c_uint32), ("nice", ctypes.c_int32),
         ("start_seconds", ctypes.c_uint64), ("start_microseconds", ctypes.c_uint64),
     ]
+
+
+def mach_o_architectures(path):
+    """Read bounded Mach-O architecture headers; codesign validates the actual code."""
+    thin = {b"\xce\xfa\xed\xfe": "<", b"\xcf\xfa\xed\xfe": "<",
+            b"\xfe\xed\xfa\xce": ">", b"\xfe\xed\xfa\xcf": ">"}
+    fat = {b"\xca\xfe\xba\xbe": (">", False), b"\xbe\xba\xfe\xca": ("<", False),
+           b"\xca\xfe\xba\xbf": (">", True), b"\xbf\xba\xfe\xca": ("<", True)}
+    with path.open("rb") as stream:
+        header = stream.read(12)
+        magic = header[:4]
+        if magic in thin:
+            require(len(header) == 12, "Truncated native code header.")
+            cpu, subtype = struct.unpack(thin[magic] + "II", header[4:])
+            return [(cpu, subtype & 0x00ffffff)]
+        if magic not in fat:
+            return []
+        require(len(header) == 12, "Truncated universal code header.")
+        endian, wide = fat[magic]
+        count = struct.unpack(endian + "I", header[4:8])[0]
+        require(0 < count <= 32, "Unsupported universal architecture count.")
+        entry_size = 32 if wide else 20
+        stream.seek(8)
+        table = stream.read(count * entry_size)
+        require(len(table) == count * entry_size, "Truncated universal architecture table.")
+        total = os.fstat(stream.fileno()).st_size
+        architectures, ranges = [], []
+        for index in range(count):
+            entry = table[index * entry_size:(index + 1) * entry_size]
+            cpu, subtype, offset, size = struct.unpack(endian + ("IIQQII" if wide else "IIIII"), entry)[:4]
+            require(offset >= 8 + len(table) and size >= 12 and offset + size <= total,
+                    "Invalid universal code range.")
+            require(all(offset + size <= start or offset >= end for start, end in ranges),
+                    "Overlapping universal code ranges.")
+            ranges.append((offset, offset + size))
+            stream.seek(offset)
+            image = stream.read(12)
+            require(image[:4] in thin and struct.unpack(thin[image[:4]] + "II", image[4:]) == (cpu, subtype),
+                    "Universal architecture does not match its code header.")
+            architecture = (cpu, subtype & 0x00ffffff)
+            require(architecture not in architectures, "Ambiguous universal architecture.")
+            architectures.append(architecture)
+        return architectures
 
 
 def require(condition, message):
@@ -210,43 +254,58 @@ class MacOperations:
             return None
         return (info.pid, info.uid, info.start_seconds, info.start_microseconds)
 
-    def confirmed_unrelated_text(self, pid, uid, apps):
-        """Deleted executable paths can fail proc_pidpath while kernel text vnodes remain readable."""
+    def executable_code_hash(self, pid):
+        library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        library.csops.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_void_p, ctypes.c_size_t]
+        library.csops.restype = ctypes.c_int
+        code_hash = ctypes.create_string_buffer(20)
+        # CS_OPS_CDHASH reads the running executable's kernel-cached code identity, not argv or mapped libraries.
+        if library.csops(pid, 5, code_hash, len(code_hash)) or not any(code_hash.raw):
+            return None
+        return code_hash.raw.hex()
+
+    def protected_code_hashes(self, apps):
+        hashes = set()
+        for app in apps:
+            safe_tree(app)
+            files = [path for path in app.rglob("*") if path.is_file() and not path.is_symlink()]
+            require(len(files) <= 16_384, "Protected code inventory exceeds its bound.")
+            app_hashes = set()
+            for path in files:
+                for cpu, subtype in mach_o_architectures(path):
+                    result = self.run([
+                        "/usr/bin/codesign", "-d", "--verbose=4", "--architecture",
+                        f"{cpu},{subtype}", str(path),
+                    ])
+                    require(not result.stdout and len(result.stderr) <= 65_536, "Unexpected code identity output.")
+                    details = result.stderr.decode("utf-8", errors="strict")
+                    primary = re.findall(r"^CDHash=([0-9a-f]{40})$", details, re.MULTILINE)
+                    require(len(primary) == 1, "Missing or ambiguous protected code identity.")
+                    app_hashes.update(primary)
+                    for line in details.splitlines():
+                        if line.startswith("CandidateCDHash "):
+                            match = re.fullmatch(r"CandidateCDHash [a-z0-9]+=(?:[0-9a-f]{40})", line)
+                            require(match is not None, "Unrecognized protected code identity.")
+                            app_hashes.add(line.split("=", 1)[1])
+            require(app_hashes, "No verifiable native code in protected app.")
+            hashes.update(app_hashes)
+        require(hashes, "No protected native code inventory.")
+        return hashes
+
+    def confirmed_unrelated_executable(self, pid, uid, apps):
+        """Compare positive executable identities against unchanged, receipt-verified protected trees."""
         try:
             before = self.process_generation(pid, uid)
-            if before is None:
+            code_hash = self.executable_code_hash(pid)
+            if before is None or code_hash is None:
                 return False
-            result = self.run(
-                ["/usr/sbin/lsof", "-a", "-p", str(pid), "-d", "txt", "-F0pfDinu"],
-                check=False,
-            )
-            data = result.stdout
-            if (result.returncode or result.stderr or not data.endswith(b"\0\n")
-                    or len(data) > 1_048_576):
+            fingerprints = [digest(app) for app in apps]
+            protected = self.protected_code_hashes(apps)
+            if not protected or code_hash in protected:
                 return False
-            records = data[:-2].split(b"\0\n")
-
-            def fields(record, expected):
-                parts = record.split(b"\0")
-                values = {part[:1]: part[1:] for part in parts}
-                require(len(parts) == len(values) and values.keys() == expected,
-                        "Incomplete kernel text-vnode evidence.")
-                return values
-
-            owner = fields(records[0], {b"p", b"u"})
-            if owner != {b"p": str(pid).encode(), b"u": str(uid).encode()} or len(records) < 2:
-                return False
-            for record in records[1:]:
-                item = fields(record, {b"f", b"D", b"i", b"n"})
-                if (item[b"f"] != b"txt" or not re.fullmatch(rb"0x[0-9a-fA-F]+", item[b"D"])
-                        or not item[b"i"].isdigit() or int(item[b"i"]) <= 0):
-                    return False
-                path = Path(os.fsdecode(item[b"n"]))
-                if not path.is_absolute() or ".." in path.parts:
-                    return False
-                if any(path.is_relative_to(app) or path.resolve().is_relative_to(app) for app in apps):
-                    return False
-            return self.process_generation(pid, uid) == before
+            return (fingerprints == [digest(app) for app in apps]
+                    and self.process_generation(pid, uid) == before
+                    and self.executable_code_hash(pid) == code_hash)
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
             # The caller reports an unverifiable live process; never interpret missing evidence as idle.
             return False
@@ -272,7 +331,7 @@ class MacOperations:
                     continue
                 if self.confirmed_zombie(pid, uid):
                     continue
-                if path_error == errno.ENOENT and self.confirmed_unrelated_text(pid, uid, apps):
+                if path_error == errno.ENOENT and self.confirmed_unrelated_executable(pid, uid, apps):
                     continue
                 raise ValueError(f"Cannot verify executable for live process {pid}; retry when it exits.")
             executable = Path(os.fsdecode(buffer.value)).resolve()
