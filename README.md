@@ -453,6 +453,21 @@ example, switching between Nord and Tokyo Night) is tracked in
 sidebar SDK does not expose the host's resolved theme colors. Native light/dark
 adaptation is not a claim of custom terminal-palette matching.
 
+Workspace titles have a passive hover preview and a separate **Preview** info
+button for mouse/keyboard access. The shared native card prefers the right edge,
+fits the available screen, and scrolls long metadata. Hover waits 350 ms; leaving
+the title/card allows 300 ms to cross between them. Explicit previews stay open
+until dismissed with Escape, Close, or an outside interaction. Workspace previews
+show only current granted workspace metadata and shared-surface counts; denied
+or ambiguous evidence is labeled unavailable.
+
+`SidebarHoverRegion` and `SidebarHoverCard` accept presentation data, independent
+of sessions, navigation, preferences, and the bottom details. Passive panels
+cannot become key/main windows. Only an explicit Preview action enables keyboard
+interaction; closing that preview restores its original responder when appropriate.
+The current bottom details remain unchanged by previewing. This does not implement
+the separate active-window pinned-details overhaul, pets, tags, or lifecycle controls.
+
 Working agent rows have a pale pastel-green shimmer moving left to right; blocked rows have a
 steady subtle red background. Idle/unknown rows do not pulse or glow. Reduce
 Motion replaces the working shimmer with a steady subtle tint. The glow stays on
