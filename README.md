@@ -75,24 +75,51 @@ YOLO and terminal I/O; they do not require a guide or pass `--plugin-dir`.
 
 ### CLI Integration: install the global guide
 
-Maestro's native **Settings > CLI Integration** tab explains the guide and
-provides selectable command text and **Copy install command**. It does not inspect
-global files, check versions or manage updates. Richer Settings management is
-deferred; it is not required for messaging or guide distribution. After the skill
-is merged to `main`, run this command in your own terminal:
+Maestro's native **Settings > CLI Integration** tab explains the GitHub Copilot
+guide, provides selectable command text and **Copy install command**, and offers
+a read-only **Re-check**. Results start as **Not checked**. Re-check compares
+`SKILL.md` and `intent.md` independently at two recognized locations:
+`~/.copilot/skills/maestro` (the current Copilot copy destination) and
+`~/.agents/skills/maestro` (the evidenced legacy location).
+
+Each location reports **Not installed here**, **Cannot read content**,
+**Different from this build**, or **Matches this build**. Matching requires both
+files' exact bytes to match SHA-256 digests generated from this build's canonical
+guide sources; the app bundles only digest metadata, not the guide bodies.
+Changes to either canonical file regenerate that metadata during the Xcode build.
+A partial install is different/incomplete, not missing. Unreadable, unsafe,
+changing or oversized files, and unavailable/invalid build metadata, never
+produce a match. Reads are limited to 256 KiB per guide file; symlinks are not
+followed. Empty files differ from the canonical nonempty guide.
+
+The two locations never collapse into one green result. Results carry a check
+time and remain snapshots until **Re-check**; they do not establish upstream
+freshness, whether different content is newer, or what a running Copilot session
+loaded. No recursive discovery, watcher or automatic re-check is used.
+Re-check is also available with **Command-R**. Each status has an explicit
+accessibility label containing its location and result; color is supplemental.
+Synthetic offscreen tests cover all four results in light/dark mode at narrow and
+standard widths. They do not prove live VoiceOver navigation or installed-host
+behavior.
+
+To install or update the current Copilot copy, run this command in your own terminal:
 
 ```sh
 npx skills add jdylanmc/cmux-maestro --skill maestro --agent github-copilot --global --copy
 ```
 
 Review the installer's interactive confirmation; the command deliberately omits
-`--yes`. Settings only copies text: it does not execute `npx`, open a terminal,
+`--yes`. The update affordance only copies text: it does not execute `npx`, open a terminal,
 install a skill, or change global configuration. This is the **single canonical
 guide distribution**, from `skills/maestro/{SKILL.md,intent.md}`. Invoke global
 **`/maestro`**, or use the skill tool with `{"skill":"maestro"}`. No extra
 skill-activation grants are required. The guide never secretly installs runtime;
 native messaging works without it. Runtime remains the separate **Enable Copilot
 Integration** action, including the existing lifecycle and icon plugin skills.
+The command targets the current Copilot copy location; the installer's output
+remains authoritative for the actual destination. It does not update, migrate or
+delete the separately reported legacy copy. Re-check both locations after running
+it; one matching copy never implies both were updated.
 
 **Development / PR acceptance before merge:** the repository command above cannot
 install the unpublished skill from `main`. From this checkout's root, the human

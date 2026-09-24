@@ -14,8 +14,8 @@ struct WorkerLaunchSettingsTests {
         #expect(pasteboard.string(forType: .string) == expected)
         #expect(!expected.contains("--yes"))
         let view = NSHostingView(rootView: CLIIntegrationSettingsView())
-        #expect(view.fittingSize.width == 600)
-        #expect(view.fittingSize.height == 350)
+        #expect(view.fittingSize.width >= 320)
+        #expect(view.fittingSize.height >= 350)
         let settings = NSHostingView(rootView: MaestroSettingsView())
         #expect(settings.fittingSize.width == 640)
         #expect(settings.fittingSize.height == 450)
@@ -38,11 +38,15 @@ struct WorkerLaunchSettingsTests {
         #expect(guide.contains("CLIIntegrationGuide.copyInstallCommand()"))
         for forbidden in [
             "Process(", "NSWorkspace", "CopilotSetup()", ".task", ".onAppear", "--yes",
-            ".copilot/skills", "FileManager", "Data(contentsOf:", "URLSession",
-            "Up to date", "Matches this build", ".orange"
+            "FileManager", "Data(contentsOf:", "URLSession", "Up to date", ".orange"
         ] {
             #expect(!guide.contains(forbidden))
         }
+        #expect(guide.contains("check.recheck()"))
+        #expect(guide.contains("CLIIntegrationGuideCheck"))
+        #expect(guide.contains(#".keyboardShortcut("r", modifiers: .command)"#))
+        #expect(guide.contains(#".accessibilityIdentifier("cli-integration-recheck")"#))
+        #expect(guide.contains(#".accessibilityLabel("\(inspection.location.title), \(inspection.location.displayPath). \(inspection.status.title). \(inspection.detail)")"#))
     }
 
     @Test func defaultsAreUnpinnedAndStoredPreferencesContainNoCredential() throws {

@@ -304,6 +304,7 @@
 				A3685BE52FCA3AEE00009F1B /* Sources */,
 				A3685BE62FCA3AEE00009F1B /* Frameworks */,
 				A3685BE72FCA3AEE00009F1B /* Resources */,
+				C05500000000000000000001 /* Generate guide baseline */,
 				A3685C312FCA3B3700009F1B /* Embed ExtensionKit Extensions */,
 				C06100000000000000000005 /* Embed Helpers */,
 			);
@@ -448,6 +449,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		C05500000000000000000001 /* Generate guide baseline */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = (
+				"$(SRCROOT)/scripts/generate-guide-baseline.py",
+				"$(SRCROOT)/skills/maestro/SKILL.md",
+				"$(SRCROOT)/skills/maestro/intent.md",
+			);
+			name = "Generate guide baseline";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/maestro-guide-baseline.json",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\n/usr/bin/python3 \"$SRCROOT/scripts/generate-guide-baseline.py\" --source \"$SRCROOT/skills/maestro\" --output \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/maestro-guide-baseline.json\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		C06100000000000000000009 /* Hook Sources */ = {

@@ -18,6 +18,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feat
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotIdentityVerifier.swift" \
     "$ROOT/CMUXMaestroCopilotHook/CopilotHookRecorder.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/CopilotSetup.swift" \
+    "$ROOT/CMUXMaestroPreview/Integration/CLIIntegrationGuideStatus.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/WorkerLaunchSettings.swift" \
     -emit-module-path "$OUTPUT/CMUXMaestroPreview.swiftmodule" \
     -Xlinker -install_name -Xlinker "$OUTPUT/libCMUXMaestroPreview.dylib" \

@@ -27,12 +27,50 @@ enum CLIIntegrationGuide {
 
 struct CLIIntegrationSettingsView: View {
     @State private var notice: String?
+    @State private var check: CLIIntegrationGuideCheck
+
+    init(check: CLIIntegrationGuideCheck? = nil) {
+        _check = State(initialValue: check ?? CLIIntegrationGuideCheck())
+    }
 
     var body: some View {
         Form {
-            Section("Install the Maestro CLI guide") {
-                Text("Add the global /maestro skill to GitHub Copilot for peer discovery, sending messages, and replies.")
-                Text("Copy this command, paste it into your own terminal, and run it. Review the installer's interactive confirmation.")
+            Section("Maestro guide") {
+                Text("The global /maestro skill for GitHub Copilot: peer discovery, messages, and replies.")
+                ForEach(check.inspections) { inspection in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(inspection.location.title).font(.body.weight(.medium))
+                        Text(inspection.location.displayPath)
+                            .font(.caption)
+                            .textSelection(.enabled)
+                            .foregroundStyle(.secondary)
+                        Label(inspection.status.title, systemImage: inspection.status.symbol)
+                            .foregroundStyle(statusColor(inspection.status))
+                        Text(inspection.detail).font(.caption).foregroundStyle(.secondary)
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(inspection.location.title), \(inspection.location.displayPath). \(inspection.status.title). \(inspection.detail)")
+                    .accessibilityIdentifier("cli-guide-status-\(inspection.location.rawValue)")
+                }
+                HStack {
+                    Button("Re-check") { Task { await check.recheck() } }
+                        .disabled(check.isChecking)
+                        .keyboardShortcut("r", modifiers: .command)
+                        .help("Read only the two named guide locations. Nothing is installed or changed.")
+                        .accessibilityIdentifier("cli-integration-recheck")
+                    if check.isChecking {
+                        ProgressView().controlSize(.small).accessibilityLabel("Checking guide content")
+                    } else if let checkedAt = check.checkedAt {
+                        Text("Checked \(checkedAt.formatted(date: .abbreviated, time: .standard))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Text("Results describe the last check, not upstream freshness or which guide a running Copilot session loaded.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Install or update") {
+                Text("Copy and run this command in your own terminal. Review the installer's interactive confirmation.")
                     .foregroundStyle(.secondary)
                 Text(CLIIntegrationGuide.installCommand)
                     .font(.system(.body, design: .monospaced))
@@ -45,17 +83,30 @@ struct CLIIntegrationSettingsView: View {
                         : "Could not copy the command. Select and copy the text above."
                 }
                 .accessibilityIdentifier("cli-integration-copy-command")
-                if let notice { Text(notice).font(.caption) }
+                if let notice {
+                    Text(notice).font(.caption)
+                        .accessibilityIdentifier("cli-integration-copy-notice")
+                }
+                Text("The command targets the Copilot copy at ~/.copilot/skills/maestro. Check the installer's output for the actual destination. It does not update, migrate, or delete the legacy ~/.agents copy.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Runtime integration is separate") {
                 Text("Use Enable Copilot Integration in the main Maestro window to install the runtime. The guide does not install or enable it, and messaging remains usable without the guide.")
-                Text("Settings never runs this command or opens a terminal. No extra skill-activation grants are required. The repository command is available after the skill is merged to main; see the README for local-source development installation.")
+                Text("Settings never runs this command, opens a terminal, or changes global configuration. No extra skill-activation grants are required.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 600, height: 350)
+        .frame(minWidth: 320, idealWidth: 600, minHeight: 350)
+    }
+
+    private func statusColor(_ status: CLIIntegrationGuideStatus) -> Color {
+        switch status {
+        case .matching: .green
+        case .unreadable: .red
+        default: .secondary
+        }
     }
 }
 
