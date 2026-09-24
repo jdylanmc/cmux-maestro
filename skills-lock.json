@@ -5,13 +5,13 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/automate-this/SKILL.md",
-      "computedHash": "6e6fa3f7e61d7071317c981e4d3a478c406ef37200cff21bea824bf228dc7442"
+      "computedHash": "4baecc6c060b88e96e7151e9d0247642ab6f4ecd9253f4966648bf1018c40a21"
     },
     "breakdown-tickets": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/breakdown-tickets/SKILL.md",
-      "computedHash": "6e1c5f87b955b723085e505c4425c637e207509d6e9ab6c611718465fda180f8"
+      "computedHash": "1b9985aa835d4e3de431cfca16de42703602b67e3a73a467877dad466ff328c3"
     },
     "caveman": {
       "source": "jdylanmc/agent-skills",
@@ -23,67 +23,85 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/changelog/SKILL.md",
-      "computedHash": "bae7ec69e8d9705d7532a2f12955f807bba9d8d647b1aec1fb4c3137e5e718b9"
+      "computedHash": "8e61da16279c462b236f20c72a950de1407507784215d533dce5e5ddc7018dec"
     },
     "chart-a-course": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/chart-a-course/SKILL.md",
-      "computedHash": "7ce88fbee03c3b78c21c146bd1d7083aebfd16b0bd830f99055105521a6f40db"
+      "computedHash": "88690534a28717bc49ea5ee1f00d05d36bb6de092f7703099411a8da9e05927c"
     },
     "conflicts": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/conflicts/SKILL.md",
-      "computedHash": "a1d28fef2c6368b64f78f7e6d9a11622905d102020c643dc714d2263f79a2f0b"
+      "computedHash": "d2a1a7a4321e511e8b185e8cc52172f275385d8be1dfdbd1ea6f4418d859df78"
     },
     "discovery": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/discovery/SKILL.md",
-      "computedHash": "9804b451d4cc0bef71c87cf1a8e7a2866f499bf716f770cc952c0325a750f33a"
+      "computedHash": "6d2ff4c04908f87cc8f45fb614637989d78082bd38d49d343db32d2cccdcf2fd"
     },
     "doctrine": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/doctrine/SKILL.md",
-      "computedHash": "a0562094296cb86214af65c6154fe31aaf87b48c3e757752fcd6f94296b7df74"
+      "computedHash": "254a511cafc0f35b2a18bd28a3d5c5f37e1e60f4fde459c40d813f5d23e32c11"
     },
     "domain-modeling": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/domain-modeling/SKILL.md",
-      "computedHash": "a850c06dfbde97a6cae52e25ed5e311ba7c6ae15df213c5e5382254ccb2094fd"
+      "computedHash": "8a9cda5a78f7c63a5c7511f5462377d0b1d39cea9c23b781332d4d6d0c103ed6"
     },
     "eli5": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/eli5/SKILL.md",
-      "computedHash": "f784a2e57e493d98186edc5d422cc540e661a3de85cfa349151903d41d00f757"
+      "computedHash": "e28c0af7cdcb8a6f97b89887961f229b68d3a752e1fc114a4ae10ad0b5113689"
     },
     "evolve-architecture": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/evolve-architecture/SKILL.md",
-      "computedHash": "3cdd898a8c1a74073a63f80de8b41e4e90e5ad4a88f23dd1c216b4d61a2290e9"
+      "computedHash": "0acfd15f698008bbc9e5b351b227dec5ab01771ba04c70f3755d54591ccc5a3e"
     },
     "handoff": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/handoff/SKILL.md",
-      "computedHash": "414cf655ad3bba0d59e825cf92270e8d0ebf00aee90dbac1caa87d1eae414dae"
+      "computedHash": "1192985e5f4a187471baa90a09c12423b55713a781dd0640907826294f86f86c"
     },
     "interrogate": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/interrogate/SKILL.md",
-      "computedHash": "5c0ee6cc639d4f3a7e0ce2ad97fe1c7e381a67e376b1468d78a37f37293fb9fd"
+      "computedHash": "9f3fbf1589f44f977c7c39521c469ecaa74c409150096128b511c849f7f3b28a"
     },
     "joe-mode": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/joe-mode/SKILL.md",
-      "computedHash": "c0d958517fc6cd108634f063020485fa2648917ce560dc027de7af8f89843fa5"
+      "computedHash": "47872135aa95f0290ce79c854a5c13345755cb2b08bd9229a6376d196964e9c0"
+    },
+    "joe-mode-cmux": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/joe-mode-cmux/SKILL.md",
+      "computedHash": "0fa89620ef09c014615cfd178da2f24189fd5eee75cc91c40f99bffdcc2e7791"
+    },
+    "joe-mode-orca": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/joe-mode-orca/SKILL.md",
+      "computedHash": "a123d4a9d02428b4db874a3393253449cf72939c5e18f77cfeac0f879348935a"
+    },
+    "joe-mode-paseo": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/joe-mode-paseo/SKILL.md",
+      "computedHash": "e492de8acaef65d98d3c337685c4c5d40df85dd37f3582c2516859469ceed37c"
     },
     "macos-auto-update": {
       "source": "fayazara/macos-app-skills",
@@ -113,85 +131,85 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/migration/SKILL.md",
-      "computedHash": "5278fa96fbbdac21805bc5c571ef94d8e4d5bdcb3a39fe993a4a559fe393a6b4"
+      "computedHash": "081f7b93b9d62168030f8aac576c280ce98e6fad702e03e012789e05c67f901e"
     },
     "patch": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/patch/SKILL.md",
-      "computedHash": "f9f0d2409f31b0a0f7cdbbee13cc9039093fed36c739695d2cc768e6014f77e5"
+      "computedHash": "17980c8a3d4dcae5137d026f8d4212941ddc0ff22fdf746c213b4746cd1cd7ec"
     },
     "poc": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/poc/SKILL.md",
-      "computedHash": "f8f1827ac89a0497ad5897755c923bb1ce8682b2e53ca115e83b590041e81002"
+      "computedHash": "f3a6856f86fdb0e1572bc373bf3c5a9961e1711fa0b6c349b6e24e4c50018722"
     },
     "refactor": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/refactor/SKILL.md",
-      "computedHash": "27893ba9af36e9ef5d0fefc306de40b6c496bc5acd1ab89533c6ecbe89682e0b"
+      "computedHash": "9ae634d284b9dd821cda576e26386d7a762caf3504d80e18e2d0cf1228395553"
     },
     "research": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/research/SKILL.md",
-      "computedHash": "d9f299feb425d219b240efaf682b7598ab60aa263ad147ee961f6b008e2ecb4b"
+      "computedHash": "892924b0aa1ef6c4c0f7e6e0d86bafa17663528a220bbaffe7895155e91ee7dc"
     },
     "retro": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/retro/SKILL.md",
-      "computedHash": "5fc1d79633076ed4eb890cd3d0744e5d10ce6970d3ad6746a3bc6c78880f9038"
+      "computedHash": "6f5cacdc368419e9c4d8dd698ef6bec078d12866e7aed523d3734309bf773800"
     },
     "roast": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/roast/SKILL.md",
-      "computedHash": "90144c1830d63efde8324517ab3de7490ef6617b11380ba36ddae7d8bbc81827"
+      "computedHash": "423e248eb063136d896119f92f769d0fd3cd69e2cd98889c9e12608658bfd710"
     },
     "scout": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/scout/SKILL.md",
-      "computedHash": "8925084da5511653042971ce3d920ab903cb0b617a25a42cdb7ee57c842f2003"
+      "computedHash": "8a6c419ea281056174df87654688e7483d75c7fcbc76acdf2e0c6344fe6ae35d"
     },
     "setup": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/setup/SKILL.md",
-      "computedHash": "a03657854eabe3080c57b15bb2212b7809bfe00b9ebc10d50988da98e9c2f63e"
+      "computedHash": "d275ceaaa712364b6331817ad82936b1c246109c2e89e4e955eca1850e0298fe"
     },
     "shepherd": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/shepherd/SKILL.md",
-      "computedHash": "f0bcf218e58266f7b4c63e19cdfdd0530a0055acda73d154896eee115c9800d2"
+      "computedHash": "78a901ccd537bc39a777eb901cf341436e5d088ef2118a43f2a38f736a4833a4"
     },
     "ship": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/ship/SKILL.md",
-      "computedHash": "b545776c551916df6cecd66fa25ebe977ae98af11d03122217a9af446b821447"
+      "computedHash": "2893b4b4a3f34c950010b1b316bc85e293aa9e01dd7a418f4107c600f825eb6f"
     },
     "specify": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/specify/SKILL.md",
-      "computedHash": "c4e32fce06ae5bed76f62886e0f09e47629c2c85981121c6609a92f21e2903ae"
+      "computedHash": "4a3e149bcd27faca74e08dc5d7b66f4992d11cb9e82ca3e88f6464aab0b74ca5"
     },
     "squadron": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/squadron/SKILL.md",
-      "computedHash": "0338e4362ca2bb8fc3c7c00d9de9de6e178648864d6c9f6b0afd0b3002c5f5d1"
+      "computedHash": "4e23779141996bd00e9095fb44c09c4e6aa327da33d69f6c2add4a98dc1017e2"
     },
     "status-report": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/status-report/SKILL.md",
-      "computedHash": "951dbd99f7661232d464d35a2a29e3603c9353bfdb9703a1d64fcfad1a6e8b1e"
+      "computedHash": "8714b5d50e7a0f0ca1cc0b0255eb8c1c9b588f7a09ad04df11bfecfecfa26b60"
     },
     "swiftui-design-principles": {
       "source": "arjitj2/swiftui-design-principles",

@@ -115,7 +115,7 @@ GitHub Copilot. To add or refresh that package's discoverable skills, run:
 npx --yes skills add jdylanmc/agent-skills --skill '*' --agent github-copilot --copy -y
 ```
 
-Keep the wildcard quoted. This installs the existing upstream skills (33 at
+Keep the wildcard quoted. This installs the existing upstream skills (36 at
 this update), not newly authored skills. Their copies also live under the
 ignored `.agents/skills/` directory; commit the lockfile, not generated copies.
 Neither command installs globally. The lock records sources and content hashes,
@@ -147,3 +147,49 @@ inside this repository so it can discover project-local skills. Task packets
 may mention relevant skills as available context without requiring their use.
 Confirm skill discovery with `/skills` or `/env` after restoring dependencies
 or starting a fresh Copilot session.
+
+## Agent skills
+
+### Issue tracker
+
+Use GitHub Issues in `jdylanmc/cmux-maestro`. Joe's selected backlog is the
+explicit #57 delivery scope, not assigned-to-me. See
+[`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
+
+### Triage labels
+
+Use the five canonical GitHub labels mapped in
+[`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
+Configuration does not authorize issue mutations or mark work ready.
+
+### Domain docs
+
+Use single-context documentation, created lazily. See
+[`docs/agents/domain.md`](docs/agents/domain.md); do not scaffold speculative
+context or decisions.
+
+### Commit messages
+
+Use the terse Conventional Commits policy in
+[`docs/agents/commit-style.md`](docs/agents/commit-style.md), preserving the
+repository's author identity and no-co-author rule. Formatting grants no
+staging, commit, or history-rewrite authority.
+
+### Doctrine
+
+The installed package is `.agents/skills/doctrine/`. Use its `SKILL.md` and
+`APPLY.md`; `/doctrine` without arguments lists metadata, and named IDs load
+verified full text. Keep the manifest, sources, and helper together.
+Repository-wide required IDs: none beyond workflow requirements.
+PR-producing workflows require `worktrees`; code Roast requires `solid`.
+Orchestrators provide scoped selections and workers load the assigned sources.
+Preserve operator choices for that delivery, not unrelated work. Missing local
+packages are capability blockers, not permission to alter global settings.
+
+### Joe delivery and merge policy
+
+See [`docs/agents/merge-policy.md`](docs/agents/merge-policy.md) for the
+four-developer pool, standalone worktrees, installed Maestro lifecycle and
+native `/maestro` messaging, independent review, and human-authorized PR Sniper
+merge gate. Authors stop at candidates; this guide does not authorize merging,
+timers, services, or live-session changes.
