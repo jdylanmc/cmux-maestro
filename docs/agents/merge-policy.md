@@ -84,7 +84,8 @@ do not run it as an incidental configuration check.
 The Project Manager advances its clean `main` checkout by guarded fast-forward
 only, verifying expected local/remote commits and ownership. Never reset,
 force-push, overwrite local changes, or move another worker's branch.
-After **each merge**, the Project Manager dispatches install-verification
-support. Normal plugin updates are permitted only without interrupting live
-sessions or administrative bypass. A blocked installation retains the last
-working install and reports the blocker; independent work may continue.
+Installation verification or updates require a separate, current human grant;
+they are never an automatic merge side effect. Installation is currently
+explicitly deferred. Do not retry an unresolved installer guard or disturb
+live sessions, and never use administrative bypass. Retain the last working
+install and report blockers; independent work may continue.
