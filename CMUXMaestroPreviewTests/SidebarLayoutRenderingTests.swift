@@ -201,7 +201,7 @@ struct SidebarLayoutRenderingTests {
                 polling: model.orchestration, hierarchy: model.hierarchy,
                 navigation: model.navigation, layout: preferences.layout,
                 setExpanded: { _, _ in }, selectedID: .constant(nil)
-            ).frame(width: 300, alignment: .leading))
+            ).environment(preferences).frame(width: 300, alignment: .leading))
             view.layoutSubtreeIfNeeded()
             return view.fittingSize.height
         }

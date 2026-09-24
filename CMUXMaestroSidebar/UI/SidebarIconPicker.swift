@@ -1,4 +1,5 @@
 import SwiftUI
+import Carbon.HIToolbox
 
 extension SidebarAvatarColor {
     var nativeColor: NSColor {
@@ -35,7 +36,7 @@ struct SidebarIconPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                glyph(selection.glyph)
+                glyph(selection.glyph, tint: Color(nsColor: selection.color.nativeColor))
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Choose icon").font(.headline)
                     Text(source).font(.caption).foregroundStyle(.secondary)
@@ -72,11 +73,11 @@ struct SidebarIconPicker: View {
                                 Button { selectGlyph(entry.name) } label: {
                                     glyph(entry.name)
                                         .frame(width: 32, height: 32)
-                                        .background(selection.glyph == entry.name ? Color.accentColor.opacity(0.12) : .clear,
+                                        .background(selection.glyph == entry.name ? Color.primary.opacity(0.08) : .clear,
                                                     in: RoundedRectangle(cornerRadius: 5))
                                         .overlay {
                                             RoundedRectangle(cornerRadius: 5)
-                                                .strokeBorder(selection.glyph == entry.name ? Color.accentColor : .clear, lineWidth: 2)
+                                                .strokeBorder(selection.glyph == entry.name ? Color.primary.opacity(0.6) : .clear, lineWidth: 2)
                                         }
                                 }
                                 .buttonStyle(.plain)
@@ -149,8 +150,8 @@ struct SidebarIconPicker: View {
         choose(.init(glyph: selection.glyph, color: color))
     }
 
-    private func glyph(_ name: String) -> some View {
-        SidebarGlyphIcon(name: name, tint: Color(nsColor: selection.color.nativeColor), catalog: .success(catalog))
+    private func glyph(_ name: String, tint: Color = .primary) -> some View {
+        SidebarGlyphIcon(name: name, tint: tint, catalog: .success(catalog))
     }
 
     private func moveFocus(_ direction: MoveCommandDirection) {
@@ -204,7 +205,7 @@ final class SidebarIconNativeButton: NSButton {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 121 && event.modifierFlags.contains(.shift) {
+        if event.keyCode == UInt16(kVK_F10) && event.modifierFlags.contains(.shift) {
             if isEnabled { activate() }
         } else { super.keyDown(with: event) }
     }

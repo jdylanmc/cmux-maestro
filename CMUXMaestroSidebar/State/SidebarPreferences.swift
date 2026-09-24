@@ -87,7 +87,7 @@ final class SidebarPreferences {
         self.layoutStore = layoutStore
         iconStore = SidebarPreferenceStore(
             file: .init(url: iconFile ?? historyFile.deletingLastPathComponent().appendingPathComponent("sidebar-icons.json")),
-            initializeMissingFile: false
+            initializeMissingFile: false, preserveSettingsOnSaveFailure: true
         )
         showEnded = defaults.bool(forKey: Self.showEndedKey)
         agentIconStyle = defaults.string(forKey: Self.agentIconStyleKey)

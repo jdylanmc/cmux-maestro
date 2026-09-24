@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Testing
+import Carbon.HIToolbox
 
 @MainActor
 @Suite(.serialized)
@@ -63,9 +64,16 @@ struct SidebarIconPickerTests {
         let keyboard = try #require(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: .shift, timestamp: 0,
             windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "",
-            isARepeat: false, keyCode: 121
+            isARepeat: false, keyCode: UInt16(kVK_F10)
         ))
         button.keyDown(with: keyboard)
+        #expect(opened == 4)
+        let pageDown = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .shift, timestamp: 0,
+            windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "",
+            isARepeat: false, keyCode: UInt16(kVK_PageDown)
+        ))
+        button.keyDown(with: pageDown)
         #expect(opened == 4)
         #expect(button.accessibilityPerformPress())
         #expect(opened == 5)
@@ -73,6 +81,8 @@ struct SidebarIconPickerTests {
         button.rightMouseDown(with: right)
         button.mouseDown(with: controlClick)
         button.keyDown(with: keyboard)
+        button.keyDown(with: pageDown)
+        #expect(!button.accessibilityPerformPress())
         #expect(opened == 5)
     }
 
@@ -105,6 +115,18 @@ struct SidebarIconPickerTests {
         #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
         let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
         hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        let scale = Double(bitmap.pixelsHigh) / Double(hosting.bounds.height)
+        var coloredGridPixels = 0
+        for y in Int(140 * scale)..<Int(345 * scale) {
+            for x in 0..<bitmap.pixelsWide {
+                let color = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                if max(color.redComponent, color.greenComponent, color.blueComponent)
+                    - min(color.redComponent, color.greenComponent, color.blueComponent) > 0.08 {
+                    coloredGridPixels += 1
+                }
+            }
+        }
+        #expect(coloredGridPixels == 0, "Catalog grid must remain neutral even with an opt-in teal selection")
         let png = try #require(bitmap.representation(using: .png, properties: [:]))
         #expect(png.count > 1_024)
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()

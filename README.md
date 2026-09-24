@@ -445,6 +445,13 @@ selection, resets and dismissal. `SidebarIconPickerButton` provides the native
 primary/secondary-click and keyboard anchor. Neither component reads preferences,
 knows session identity, or calls the host. `SidebarItemIcon` is the thin sidebar
 adapter that owns the popover and connects those components to persistence.
+The picker uses inherited native appearance and semantic colors, with a neutral
+catalog grid; only an explicitly selected icon color and the swatches add color.
+It does not hardcode themes. Automatic CMUX/Ghostty palette inheritance (for
+example, switching between Nord and Tokyo Night) is tracked in
+[#67](https://github.com/jdylanmc/cmux-maestro/issues/67): the pinned
+sidebar SDK does not expose the host's resolved theme colors. Native light/dark
+adaptation is not a claim of custom terminal-palette matching.
 
 Working agent rows have a pale pastel-green shimmer moving left to right; blocked rows have a
 steady subtle red background. Idle/unknown rows do not pulse or glow. Reduce

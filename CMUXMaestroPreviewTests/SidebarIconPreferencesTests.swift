@@ -121,6 +121,7 @@ struct SidebarIconPreferencesTests {
         for _ in 0..<SidebarIconSettings.maximumEntries {
             settings.overrides[SidebarIconTarget.session(UUID()).key] = .custom(human)
         }
+
         #expect(settings.isValid)
         #expect(try JSONEncoder().encode(settings).count < SidebarIconSettings.maximumStoredBytes)
         settings.overrides[SidebarIconTarget.session(UUID()).key] = .standard
@@ -130,6 +131,32 @@ struct SidebarIconPreferencesTests {
             settings.overrides = [key: .standard]
             #expect(!settings.isValid)
         }
+    }
+
+    @Test func failedSavePreservesExistingHumanChoicesInEveryWindowAndOnDisk() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let first = fixture.preferences(), second = fixture.preferences()
+        let custom = SidebarIconTarget.session(UUID()), standardTarget = SidebarIconTarget.session(UUID())
+        let another = SidebarIconTarget.surface(UUID())
+        first.setIcon(human, for: custom)
+        first.resetIconToDefault(for: standardTarget)
+        let previous = first.icons
+        let file = fixture.root.appendingPathComponent("sidebar-icons.json")
+        let previousData = try Data(contentsOf: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: fixture.root.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.root.path) }
+        second.setIcon(agent, for: another)
+        #expect(second.iconNotice == SidebarIconSettings.saveNotice)
+        #expect(first.iconNotice == SidebarIconSettings.saveNotice)
+        #expect(first.icons == previous && second.icons == previous)
+        #expect(first.icons.resolve(target: custom, standard: standard, agent: agent).choice == human)
+        #expect(first.icons.resolve(target: standardTarget, standard: standard, agent: agent).choice == standard)
+        #expect(try Data(contentsOf: file) == previousData)
+        first.resetIcons()
+        #expect(first.icons == previous && second.icons == previous)
+        #expect(first.iconNotice == SidebarIconSettings.saveNotice)
+        #expect(try Data(contentsOf: file) == previousData)
     }
 
     @Test func managedIdentityUsesExactSessionAndNeverNodeOrPaneFallback() {

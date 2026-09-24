@@ -49,15 +49,16 @@ nonisolated struct SidebarPreferenceFile<Value: SidebarPreferenceValue>: Sendabl
         reset: Bool = false,
         initializeOnly: Bool = false,
         presenter: NSFilePresenter? = nil,
+        lastKnownSettings: Value? = nil,
         legacy: () throws -> Value? = { nil },
         mutation: (inout Value) throws -> Void
     ) -> SidebarPreferenceRead<Value> {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         } catch {
-            return .init(settings: .failOpen, notice: Value.saveNotice)
+            return .init(settings: lastKnownSettings ?? .failOpen, notice: Value.saveNotice)
         }
-        var result = SidebarPreferenceRead<Value>(settings: .failOpen, notice: Value.saveNotice)
+        var result = SidebarPreferenceRead<Value>(settings: lastKnownSettings ?? .failOpen, notice: Value.saveNotice)
         var error: NSError?
         NSFileCoordinator(filePresenter: presenter).coordinate(writingItemAt: url, options: .forMerging, error: &error) { coordinated in
             let exists = FileManager.default.fileExists(atPath: coordinated.path)
@@ -91,10 +92,11 @@ nonisolated struct SidebarPreferenceFile<Value: SidebarPreferenceValue>: Sendabl
             } catch let rejection as SidebarPreferenceRejection {
                 result = .init(settings: current.settings, notice: rejection.notice)
             } catch {
-                result = .init(settings: .failOpen, notice: Value.saveNotice)
+                let preserved = lastKnownSettings.map { reset ? $0 : current.settings }
+                result = .init(settings: preserved ?? .failOpen, notice: Value.saveNotice)
             }
         }
-        return error == nil ? result : .init(settings: .failOpen, notice: Value.saveNotice)
+        return error == nil ? result : .init(settings: lastKnownSettings ?? .failOpen, notice: Value.saveNotice)
     }
 
     private var unreadable: SidebarPreferenceRead<Value> {
@@ -126,6 +128,7 @@ private enum SidebarPreferenceStores {
 final class SidebarPreferenceStore<Value: SidebarPreferenceValue> {
     private let file: SidebarPreferenceFile<Value>
     private let defaultsWhenMissing: Bool
+    private let preserveSettingsOnSaveFailure: Bool
     @ObservationIgnored private let legacy: () throws -> Value?
     @ObservationIgnored private let migrated: () -> Void
     @ObservationIgnored private var presenter: SidebarPreferencePresenter?
@@ -134,10 +137,12 @@ final class SidebarPreferenceStore<Value: SidebarPreferenceValue> {
     init(
         file: SidebarPreferenceFile<Value>,
         initializeMissingFile: Bool = true,
+        preserveSettingsOnSaveFailure: Bool = false,
         legacy: @escaping () throws -> Value? = { nil },
         migrated: @escaping () -> Void = {}
     ) {
         self.file = file
+        self.preserveSettingsOnSaveFailure = preserveSettingsOnSaveFailure
         defaultsWhenMissing = !initializeMissingFile
         self.legacy = legacy
         self.migrated = migrated
@@ -163,7 +168,11 @@ final class SidebarPreferenceStore<Value: SidebarPreferenceValue> {
     }
 
     func apply(reset: Bool = false, _ mutation: (inout Value) throws -> Void) {
-        value = file.update(reset: reset, presenter: presenter, legacy: legacy, mutation: mutation)
+        value = file.update(
+            reset: reset, presenter: presenter,
+            lastKnownSettings: preserveSettingsOnSaveFailure ? value.settings : nil,
+            legacy: legacy, mutation: mutation
+        )
         if value.notice == nil { migrated() }
         // Same-process windows converge immediately; presenters cover sibling processes.
         for case let store as SidebarPreferenceStore<Value> in SidebarPreferenceStores.all.allObjects
