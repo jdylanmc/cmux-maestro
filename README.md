@@ -418,6 +418,34 @@ Ordinary terminal tabs use `md-ghost`; browsers use `fa-edge` (U+F282).
 **Sidebar settings → Agent icon** chooses the fallback robot or Copilot glyph for
 sessions without an explicit selection.
 
+Click or right-click an **agent, terminal, or browser icon** to open its anchored
+picker. Search all bundled glyph names (including role aliases), choose a color,
+and use **Done** or Escape to close. Keyboard users can activate the icon button,
+use Down from search and arrow keys in the grid, or Tab through the controls.
+**Show details** remains a separate action inside the popover. Opening the picker
+and changing appearance do not focus a terminal, mark attention as read, or send input.
+Provider-child observations and native agent surfaces without an exact session
+identity are not customizable; other surface kinds retain their standard icons.
+
+**Your choice** wins over later agent metadata. **Reset to default** explicitly
+chooses the standard appearance, while **Reset to agent selection** follows the
+agent's current choice (or the default when absent). Human preferences persist
+by exact session UUID, or stable native surface UUID for non-agents, across restarts,
+view changes and pane moves. They never transfer to a replacement session in the
+same pane. Agent metadata remains separate and untouched. The sandbox stores these
+bounded, coordinated preferences in its own Application Support
+`CMUXMaestroPreview/sidebar-icons.json`; no additional filesystem or network grant
+is required. Read/write failures are visible; **Sidebar settings > Reset all icon
+preferences** is the explicit recovery action. Pets and favicon fetching are not
+part of this picker.
+
+`SidebarIconPicker` is a controlled, reusable SwiftUI view: inject a
+`SidebarGlyphCatalog`, `SidebarIconChoice`, source/notice text, and callbacks for
+selection, resets and dismissal. `SidebarIconPickerButton` provides the native
+primary/secondary-click and keyboard anchor. Neither component reads preferences,
+knows session identity, or calls the host. `SidebarItemIcon` is the thin sidebar
+adapter that owns the popover and connects those components to persistence.
+
 Working agent rows have a pale pastel-green shimmer moving left to right; blocked rows have a
 steady subtle red background. Idle/unknown rows do not pulse or glow. Reduce
 Motion replaces the working shimmer with a steady subtle tint. The glow stays on

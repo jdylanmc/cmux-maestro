@@ -987,12 +987,12 @@ struct SidebarClarityTests {
         let source = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarView.swift"), encoding: .utf8)
         #expect(!source.contains(".orange"))
         #expect(!source.contains("Text(\"Copilot agent\")"))
-        #expect(source.contains("avatar: node.iconId, color: node.iconColor"))
+        #expect(source.contains("agentGlyph: node.iconId, agentColor: node.iconColor"))
         #expect(!source.contains("isOrchestrating:"))
         #expect(source.contains("dismiss-managed-"))
         #expect(source.contains("Image(systemName: surface.kind.symbolName)"))
         #expect(source.contains("else if surface.kind == .terminal"))
-        #expect(source.contains("SidebarTerminalIcon()"))
+        #expect(source.contains("kind: .terminal, target: .surface(surface.id)"))
         #expect(NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: "Worktree") != nil)
         let expression = try NSRegularExpression(pattern: #"FocusButton\([\s\S]*?\)\s*\{"#)
         let text = source as NSString
@@ -1013,6 +1013,7 @@ struct SidebarClarityTests {
             #expect(!label.contains("AcknowledgeOutcomeButton"))
             #expect(!label.contains("DismissOutcomeButton"))
             #expect(!label.contains(".popover"))
+            #expect(!label.contains("SidebarItemIcon"))
         }
     }
 

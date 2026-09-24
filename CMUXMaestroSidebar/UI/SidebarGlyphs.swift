@@ -2,12 +2,17 @@ import CoreText
 import CryptoKit
 import SwiftUI
 
+final class SidebarIconResources: NSObject {
+    static let bundle = Bundle(for: SidebarIconResources.self)
+}
+
 @MainActor
 final class SidebarGlyphCatalog {
-    struct Glyph {
+    struct Glyph: Identifiable {
         let name: String
         let character: String
         let code: String
+        var id: String { name }
     }
 
     struct Preset: Decodable, Identifiable {
@@ -36,6 +41,8 @@ final class SidebarGlyphCatalog {
 
     let glyphs: [String: Glyph]
     let presets: [Preset]
+    private let orderedGlyphs: [Glyph]
+    private let searchTerms: [String: String]
     private let font: CTFont
     private let paths = NSCache<NSString, CGPath>()
 
@@ -64,6 +71,15 @@ final class SidebarGlyphCatalog {
               presets.allSatisfy({ SidebarGlyphName.isValid($0.id) && glyphs[$0.glyph] != nil }) else {
             throw ResourceError.invalid
         }
+        var preferred = Set<String>()
+        let favorites = presets.compactMap { preset in
+            preferred.insert(preset.glyph).inserted ? glyphs[preset.glyph] : nil
+        }
+        orderedGlyphs = favorites + glyphs.values.filter { !preferred.contains($0.name) }.sorted { $0.name < $1.name }
+        let aliases = Dictionary(grouping: presets, by: \.glyph)
+        searchTerms = glyphs.mapValues { glyph in
+            Self.normalized(([glyph.name] + (aliases[glyph.name] ?? []).flatMap { [$0.id, $0.name] }).joined(separator: " "))
+        }
         guard let provider = CGDataProvider(data: fontData as CFData),
               let graphicsFont = CGFont(provider) else { throw ResourceError.invalid }
         font = CTFontCreateWithGraphicsFont(graphicsFont, 1_000, nil, nil)
@@ -75,6 +91,21 @@ final class SidebarGlyphCatalog {
         if name.hasPrefix("nf-") { name = String(name.dropFirst(3)) }
         name = presets.first(where: { $0.id == name })?.glyph ?? name
         return glyphs[name]
+    }
+
+    func search(_ query: String) -> [Glyph] {
+        let terms = Self.normalized(query).split(separator: " ")
+        guard !terms.isEmpty else { return orderedGlyphs }
+        return orderedGlyphs.filter { glyph in
+            let text = searchTerms[glyph.name] ?? ""
+            return terms.allSatisfy { text.contains($0) }
+        }
+    }
+
+    private static func normalized(_ value: String) -> String {
+        var value = value.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.hasPrefix("nf-") { value = String(value.dropFirst(3)) }
+        return value.replacingOccurrences(of: "-", with: " ").replacingOccurrences(of: "_", with: " ")
     }
 
     func path(for name: String) -> CGPath? {
@@ -120,10 +151,11 @@ private struct SidebarFontGlyphShape: Shape {
 struct SidebarGlyphIcon: View {
     let name: String
     var tint: Color = .primary
+    var catalog: Result<SidebarGlyphCatalog, Error> = SidebarGlyphCatalog.shared
 
     var body: some View {
         Group {
-            if case .success(let catalog) = SidebarGlyphCatalog.shared,
+            if case .success(let catalog) = catalog,
                let path = catalog.path(for: name) {
                 SidebarFontGlyphShape(outline: path).fill(tint)
                     .accessibilityLabel(name)
