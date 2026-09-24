@@ -41,6 +41,38 @@ nonisolated enum CopilotSetupResult: Equatable, Sendable {
     }
 }
 
+nonisolated enum CopilotSetupCommandLine {
+    static let installFlag = "--install-copilot-integration"
+    static let usage = "Usage: CMUX Maestro Preview --install-copilot-integration --copilot-executable /absolute/path/to/copilot"
+
+    enum Failure: Error { case usage }
+
+    static func executable(arguments: [String]) throws -> URL? {
+        guard arguments.contains(installFlag) else { return nil }
+        guard arguments.count == 3, arguments[0] == installFlag,
+              arguments[1] == "--copilot-executable", arguments[2].hasPrefix("/"),
+              !arguments[2].unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+        else { throw Failure.usage }
+        return URL(fileURLWithPath: arguments[2])
+    }
+
+    static func install(selected: URL) async -> CopilotSetupResult {
+        guard CopilotSetupAccess.currentAppAllowsChanges else { return .validationOnly }
+        guard let root = try? CopilotPaths.integrationRoot(),
+              let controller = Bundle.main.url(forResource: "cmux-maestro-orchestrator", withExtension: "py"),
+              let skill = Bundle.main.url(forResource: "SKILL", withExtension: "md") else {
+            return .unavailable
+        }
+        let helper = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Helpers/CMUXMaestroCopilotHook")
+        return await CopilotSetup().perform(
+            .install, selected: selected,
+            path: ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
+            root: root, helper: helper, controller: controller, skill: skill
+        )
+    }
+}
+
 nonisolated enum CopilotPluginManifest {
     static let name = "cmux-maestro-native"
     static let events = ["sessionStart", "userPromptSubmitted", "postToolUse"]

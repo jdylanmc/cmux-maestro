@@ -18,6 +18,12 @@ spec.loader.exec_module(metadata)
 
 
 class BuildMetadataTests(unittest.TestCase):
+    def test_production_preview_disables_profile_output_without_disabling_test_coverage(self):
+        production = (ROOT / "scripts/build-register.sh").read_text()
+        validation = (ROOT / "scripts/test.sh").read_text()
+        self.assertIn("ENABLE_CODE_COVERAGE=NO", production)
+        self.assertNotIn("ENABLE_CODE_COVERAGE=NO", validation)
+
     def setUp(self):
         self.directory = ROOT / ".build/metadata-tests" / str(uuid.uuid4())
         self.app = self.directory / "Fixture.app"

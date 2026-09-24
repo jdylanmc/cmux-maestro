@@ -18,6 +18,19 @@ evidence, live acceptance scope, intentional differences and remaining limits.
    cannot find Copilot, use **Choose Copilot…** to select the trusted executable
    you normally run. No shell startup files or machine-specific cache paths are
    assumed.
+   For explicitly authorized button-free setup, the actual production app also
+   accepts:
+
+   ```sh
+   "$HOME/Applications/CMUX Maestro Preview.app/Contents/MacOS/CMUX Maestro Preview" \
+     --install-copilot-integration --copilot-executable "$(command -v copilot)"
+   ```
+
+   This uses the same installer and production-identity checks. It does not
+   open setup windows, change accounts, or restart existing conversations.
+   Normal app startup still performs no installation.
+   Production preview builds disable coverage instrumentation so setup does not
+   leave `default.profraw` in the caller's worktree; test coverage remains enabled.
 3. In CMUX's **Sidebar Extensions** browser, enable **CMUX Maestro Preview** and
    select it as the active sidebar.
 4. Restart or resume already-running Copilot CLI sessions **once** to load the
@@ -182,27 +195,56 @@ exact managed workspace/surface pair replaces an unmanaged terminal row; names,
 paths and guessed relationships never establish ownership. The Taskboard view
 keeps the complete inferred activity projection available independently.
 
-The installed skill exposes explicit `launch-settings`, `register`, `spawn`,
-`status`, `focus`, `archive`, and exact stale-surface `recover` operations.
-`launch-settings` reports only whether a pinned account and model are configured
-and whether the selected account is currently available; it never returns the
-account name, model identifier, or credential. The skill requires that readiness
-and passes `spawn --require-pinned-launch-settings`, so a missing/default account
-or model fails before CMUX creates a terminal. **New workers are
+The installed skill exposes `launch-coordinator`, `launch-settings`, `status`,
+`focus`, and `archive`; `register` and exact stale-surface `recover` remain for
+legacy lifecycle ownership. Registration is not messaging adoption.
+Start a new managed coordinator with an explicitly selected initial account and
+model. Its public `maestro_identity` tool reports the actual session/account
+without credentials. Native `maestro_spawn` reads that session's current account
+for each child, retaining explicit model selection and permission bounds.
+Saved account defaults and unrelated Git authentication never select a child's
+subscription. Missing identity/API/credentials fail before terminal creation.
+The current credential resolver uses GitHub CLI's keychain-backed account
+store. Authenticate the required account there once; a Copilot-only login is
+not silently imported or replaced with another GitHub CLI account.
+Ordinary shell `spawn` cannot establish that evidence and refuses; source-only
+disposable proof compatibility is not a production fallback. **New workers are
 interactive Copilot sessions**, launched with `--interactive` and the initial
 task. Their terminal is a normal conversation: humans can type follow-ups and
 answer permission/questions directly, and completing a task does not close it.
 A foreground supervisor inherits terminal I/O rather than capturing a JSON
 stream. Ctrl-C goes to Copilot without terminating the supervisor; normal
 session exit is recorded without claiming task success. New workers cannot be
-launched in headless mode. Tabless background work belongs to the provider's
-normal subagent facilities, not misleading chat-like terminal tabs.
+launched in headless mode. Invisible SDK tasks must not be substituted for
+visible Maestro roles when startup fails.
 
-Interactive startup uses the host's command launch, not input typed into an
-interactive shell. A bounded one-time credential stays in the private control
+Interactive startup uses `surface.create` with `initial_command`, rather than
+CLI `new-surface --command`, which queues input behind interactive shell
+initialization. Only the caller's executable search path is added to the startup
+environment; credentials are not passed through the host creation request.
+Because the host may rewrite that environment, the launch record also captures
+the validated absolute Copilot executable and caller search path privately.
+The supervisor uses those values for provider startup and invokes its own
+Python interpreter explicitly; it does not depend on interactive shell setup.
+The eight-second supervisor lease remains unchanged. A bounded one-time credential stays in the private control
 directory and is consumed only after exact workspace/surface attachment.
 The terminal command contains no token. Both supervisor and provider process
 anchors retain the existing resource bounds.
+
+Supervisor acknowledgement is not provider readiness or completed work.
+`providerStarted` means a provider identity was recorded; lifecycle
+`messaging: configured` does not prove adapter attachment or delivery.
+Verify exact surfaces, native tools, and returned evidence separately.
+Root callers must retain the private custody receipt even when startup returns
+`ok: false`; its control token remains private. The controller preserves bounded
+startup errors in owned lifecycle diagnostics rather than replacing them with a
+generic exit message or publishing them to the sidebar.
+Managed coordinators have their own controlled sessions and runs; existing
+conversations are not converted. A live or uncertain legacy supervisor blocks
+the new coordinator schema; the launcher fails rather than interrupting it.
+Existing provider sessions do not need to be ended when their old supervisors
+have already exited. Resource reconciliation retires only unchanged records
+with absent surfaces and proven process exit, never an active launch lease.
 
 The lifecycle `follow-up` command remains refused for interactive workers.
 Participating peers instead use native fire-and-forget messaging below; no prompt
@@ -212,9 +254,11 @@ preserved and visibly labeled **Legacy worker** rather than silently converted.
 
 ### Native peer messaging
 
-After explicit integration setup, pin both account and model in **Agent launch
-settings**. `launch-settings` reports `messagingInstalled` separately from account/
-model `ready`; neither field proves a recipient has loaded its native adapter.
+After explicit integration setup, select the initial coordinator account and
+model in **Agent launch settings**, then use `launch-coordinator`.
+`launch-settings` reports `messagingInstalled` separately from saved-account/
+model `ready`; neither field proves a recipient has loaded its native adapter
+or identifies the invoking session's account.
 New installed-controller spawns automatically bind their exact Copilot session,
 generation and CMUX workspace before launch and enable CLI native extensions
 with `--experimental`. No per-project fixture preparation is needed. Ordinary
@@ -236,7 +280,7 @@ It has no tool-permission grants in frontmatter and reuses the installed
 For the skill tool, pass `{"skill":"maestro"}`. Only the existing lifecycle/icon
 plugin slash commands remain namespaced; the global messaging guide is not.
 
-Defaults grant nothing. A coordinator may pass `spawn --yolo` **only with explicit
+Defaults grant nothing. A coordinator may request native `yolo: true` **only with explicit
 user approval**; Copilot receives `--allow-all` alongside all explicit denies.
 Workers cannot request YOLO, even if the coordinator was allowed it; requests are
 rejected before credential lookup/reservation. Descendants keep bounded explicit
@@ -248,7 +292,8 @@ under `~/.copilot/extensions/maestro/r/`; account credentials never enter these
 files or messaging tools. Addresses contain workspace/session UUIDs and generation,
 not secrets. Payloads are limited to 4 KiB UTF-8, frames to 8 KiB, registered
 participants to 128, and connections/pending native sends to eight per receiver.
-The existing eight-live-worker workspace limit still applies. Routes use exclusive
+The eight-live-managed-session workspace limit includes managed coordinators
+and retained resources. Routes use exclusive
 creation, are retired after exact provider exit (or closed-run archive), and cannot
 be rebound by clearing/resuming a conversation. Restart/clear/replaced-session,
 offline, unsupported, invalid or stale routes fail closed; request fresh managed
@@ -1090,6 +1135,10 @@ sessions. Restart/resume existing CLI sessions **once, at a time you choose**,
 to load the refreshed plugin. Keep the old development app/worktree until
 sessions with its cached hooks have retired. Future normal CLI launches need
 no manual observer or session-start procedure.
+
+The explicit production-app `--install-copilot-integration` command documented
+above is the button-free equivalent. It is a separate authorized setup action,
+not an automatic side effect of the preview update transaction.
 
 ### Update, rollback and status
 

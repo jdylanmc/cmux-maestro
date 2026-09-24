@@ -98,6 +98,33 @@ struct CopilotSetupTests {
     private let controller = URL(fileURLWithPath: "/Applications/Maestro.app/Contents/Resources/cmux-maestro-orchestrator.py")
     private let skill = URL(fileURLWithPath: "/Applications/Maestro.app/Contents/Resources/SKILL.md")
 
+    @Test func commandLineSetupIsExplicitAndRejectsAmbiguousArguments() throws {
+        #expect(try CopilotSetupCommandLine.executable(arguments: []) == nil)
+        #expect(try CopilotSetupCommandLine.executable(arguments: ["--unrelated"]) == nil)
+        let flag = CopilotSetupCommandLine.installFlag
+        let executable = "/Applications/A Tool's Folder/copilot"
+        #expect(try CopilotSetupCommandLine.executable(
+            arguments: [flag, "--copilot-executable", executable]
+        )?.path == executable)
+        for arguments in [
+            [flag], [flag, "--copilot-executable", "relative"],
+            [flag, "--copilot-executable", "/path", flag],
+            [flag, "--copilot-executable", "/path\ninjected"],
+            ["--copilot-executable", "/path", flag],
+        ] {
+            #expect(throws: CopilotSetupCommandLine.Failure.self) {
+                try CopilotSetupCommandLine.executable(arguments: arguments)
+            }
+        }
+    }
+
+    @Test func commandLineSetupCannotInstallFromValidationHost() async {
+        #expect(!CopilotSetupAccess.currentAppAllowsChanges)
+        #expect(await CopilotSetupCommandLine.install(
+            selected: URL(fileURLWithPath: "/nonexistent/copilot")
+        ) == .validationOnly)
+    }
+
     @Test func buildNamespacesAndPublicationGuardsStaySeparate() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let process = Process()

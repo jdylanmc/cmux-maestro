@@ -288,7 +288,8 @@ nonisolated enum SidebarOrchestrationReader {
                 throw CopilotFileError.unsafePath
             }
             guard validGitEvidence(node, generatedAt: snapshot.generatedAt),
-                  node.role == "worker" || node.copilotSessionId == nil else {
+                  node.role == "worker" || node.executionMode == .interactive
+                    || node.copilotSessionId == nil else {
                 throw CopilotFileError.unsafePath
             }
 
@@ -363,11 +364,15 @@ nonisolated enum SidebarOrchestrationReader {
     }
 
     private static func validState(_ node: SidebarOrchestrationNode) -> Bool {
-        if node.role == "coordinator" {
+        if node.role == "coordinator", node.executionMode != .interactive {
             return node.parentId == nil && node.generation == 0
                 && node.phase == "registered" && node.availability == "active"
         }
-        guard node.role == "worker", node.parentId != nil, node.generation > 0 else {
+        let managedCoordinator = node.role == "coordinator" && node.parentId == nil
+            && node.executionMode == .interactive && node.generation == 1
+            && node.copilotSessionId != nil
+        guard managedCoordinator || (node.role == "worker" && node.parentId != nil
+                                     && node.generation > 0) else {
             return false
         }
         guard let phase = SidebarOrchestrationPhase(rawValue: node.phase) else {

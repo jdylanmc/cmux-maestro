@@ -35,6 +35,7 @@ MAX_POLICY_RULE = 512
 MAX_POLICY_RULES = 16
 MAX_REPORT_MESSAGE = 8_192
 MAX_DISPLAY_METADATA = 120
+MAX_LAUNCH_PATH = 16_384
 GIT_EVIDENCE_STATUSES = {"verified", "unavailable"}
 MAX_GIT_COUNT = 1_000_000_000
 GIT_CHANGE_FIELDS = {"files", "insertions", "deletions", "untrackedFiles", "binaryFiles"}
@@ -66,6 +67,25 @@ REPORT_KEYS = {
 
 class OrchestrationError(Exception):
     pass
+
+
+class CoordinatorLaunchError(OrchestrationError):
+    def __init__(self, message, receipt):
+        super().__init__(message)
+        self.receipt = receipt
+
+
+class SessionLaunchError(OrchestrationError):
+    def __init__(self, message, surface):
+        super().__init__(message)
+        self.surface = surface
+
+
+def launch_failure_message(error):
+    if isinstance(error, OSError):
+        # OS messages can contain private paths or subprocess inputs.
+        return f"{type(error).__name__} during launch storage or execution (errno {error.errno})."
+    return str(error)[:512]
 
 
 def delivery_proof_api():
@@ -316,7 +336,7 @@ def resolve_copilot_token(account):
         raise OrchestrationError("The selected Copilot subscription could not be accessed; no fallback account was used.") from error
     token = response.stdout.strip()
     if response.returncode or not token or len(token) > 4096 or any(character.isspace() for character in token):
-        raise OrchestrationError("The selected Copilot subscription is unavailable; sign in to that account before launching.")
+        raise OrchestrationError("The selected account credential is unavailable through GitHub CLI; authenticate that exact account with gh auth login. No fallback account was used.")
     return token
 
 
@@ -731,6 +751,16 @@ def trusted_executable(variable, fallback):
     return str(resolved)
 
 
+def provider_launch_context(actor=None):
+    actor = actor or {}
+    executable = trusted_executable(
+        "CMUX_MAESTRO_COPILOT", actor.get("copilotExecutable") or "copilot"
+    )
+    launch_path = actor.get("launchPath") or os.environ.get("PATH", "/usr/bin:/bin")
+    bounded_text(launch_path, "provider launch PATH", MAX_LAUNCH_PATH)
+    return executable, launch_path
+
+
 def empty_state():
     return {
         "version": VERSION,
@@ -739,6 +769,10 @@ def empty_state():
         "retainedResources": [],
         "launches": {},
     }
+
+
+def has_managed_runtime(node):
+    return node["role"] == "worker" or node.get("executionMode") == "interactive"
 
 
 def validate_state(state):
@@ -777,13 +811,23 @@ def validate_state(state):
         mode = node.get("executionMode", "bounded")
         if mode not in {"bounded", "interactive"}:
             raise OrchestrationError("Stored execution mode is invalid.")
+        runtime_version = node.get("runtimeProtocolVersion", 1)
+        if type(runtime_version) is not int or runtime_version not in {1, 2}:
+            raise OrchestrationError("Stored runtime protocol is unsupported.")
         if node.get("launchSettings") is not None:
             validate_launch_settings(node["launchSettings"])
+        if ("copilotExecutable" in node) != ("launchPath" in node):
+            raise OrchestrationError("Stored provider executable context is incomplete.")
+        if "copilotExecutable" in node:
+            executable = bounded_text(node["copilotExecutable"], "stored provider executable", 4096)
+            if not Path(executable).is_absolute():
+                raise OrchestrationError("Stored provider executable must be absolute.")
+            bounded_text(node["launchPath"], "stored provider PATH", MAX_LAUNCH_PATH)
         if (not isinstance(node.get("permissionMode", "default"), str)
                 or node.get("permissionMode", "default") not in {"default", "yolo"}):
             raise OrchestrationError("Stored launch permission mode is invalid.")
-        if node.get("permissionMode") == "yolo" and (role != "worker" or mode != "interactive"):
-            raise OrchestrationError("YOLO requires an explicitly launched interactive worker.")
+        if node.get("permissionMode") == "yolo" and mode != "interactive":
+            raise OrchestrationError("YOLO requires an explicitly launched interactive session.")
         messaging = node.get("messaging")
         if messaging is not None and (
             not isinstance(messaging, dict) or set(messaging) != {"version", "routes", "extension"}
@@ -792,7 +836,7 @@ def validate_state(state):
             or not Path(messaging["routes"]).is_absolute()
             or not isinstance(messaging["extension"], str) or len(messaging["extension"]) > 1024
             or not Path(messaging["extension"]).is_absolute()
-            or role != "worker" or mode != "interactive"
+            or mode != "interactive"
         ):
             raise OrchestrationError("Stored messaging configuration is invalid.")
         proof = node.get("deliveryProof")
@@ -810,7 +854,7 @@ def validate_state(state):
             not isinstance(provider, dict) or set(provider) != {"pid", "start"}
             or type(provider["pid"]) is not int or provider["pid"] <= 0
             or not isinstance(provider["start"], str) or not 1 <= len(provider["start"]) <= 100
-            or mode != "interactive" or role != "worker"
+            or mode != "interactive"
         ):
             raise OrchestrationError("Stored interactive process identity is invalid.")
         if node.get("iconId") is not None:
@@ -861,8 +905,13 @@ def validate_state(state):
         session_id = node.get("copilotSessionId")
         if session_id is not None:
             canonical_uuid(session_id, "stored Copilot session ID")
-        if role == "coordinator" and session_id is not None:
-            raise OrchestrationError("Coordinator cannot claim a controlled Copilot session.")
+        if role == "coordinator":
+            if mode == "interactive":
+                if (session_id is None or node["generation"] != 1
+                        or node.get("launchSettings") is None or runtime_version != 2):
+                    raise OrchestrationError("Managed coordinator requires an exact launch identity.")
+            elif session_id is not None or node["generation"] != 0:
+                raise OrchestrationError("Registered coordinator cannot claim a controlled Copilot session.")
         boundary_generation = node.get("verifiedBoundaryGeneration")
         if (
             boundary_generation is not None
@@ -878,7 +927,7 @@ def validate_state(state):
         if not isinstance(node.get("archiving", False), bool):
             raise OrchestrationError("Stored archive state is invalid.")
         if "runtimeNotStarted" in node and (
-            node["runtimeNotStarted"] is not True or role != "worker"
+            node["runtimeNotStarted"] is not True or not has_managed_runtime(node)
             or node.get("supervisor") or provider or identifier in state["launches"]
             or node["phase"] not in {
                 "launch-failed", "startup-failed", "resource-retired",
@@ -892,9 +941,10 @@ def validate_state(state):
             raise OrchestrationError("Stored node timestamps are inconsistent.")
         phase, availability = node.get("phase"), node.get("availability")
         valid_lifecycle = (
-            role == "coordinator" and phase == "registered" and availability == "active"
+            role == "coordinator" and mode != "interactive"
+            and phase == "registered" and availability == "active"
         ) or (
-            role == "worker" and (
+            has_managed_runtime(node) and (
                 (phase == "launching" and availability == "busy")
                 or (phase == "turn-running" and availability == "busy")
                 or (mode == "bounded" and phase == "turn-queued" and availability == "busy")
@@ -942,7 +992,7 @@ def validate_state(state):
             raise OrchestrationError("Launch transaction identity is invalid.")
         node = nodes.get(identifier)
         if (
-            node is None or node["role"] != "worker" or node["phase"] != "launching"
+            node is None or not has_managed_runtime(node) or node["phase"] != "launching"
             or launch.get("runId") != node["runId"]
             or launch.get("workspaceId") != node["workspaceId"]
             or launch.get("state") not in {"creating", "attaching", "starting"}
@@ -1336,13 +1386,33 @@ class Cmux:
                 return pane
         raise OrchestrationError("The exact surface is not in a current pane of that workspace.")
 
+    def workspace_surfaces(self, workspace):
+        # surface.list takes one host main-actor snapshot. Separate pane reads
+        # can miss a live surface moved into an already-read pane.
+        listing = self.run("rpc", "surface.list", json.dumps({"workspace_id": workspace}))
+        if (not isinstance(listing, dict) or not isinstance(listing.get("surfaces"), list)
+                or canonical_uuid(listing.get("workspace_id"), "inventory workspace") != workspace):
+            raise OrchestrationError("CMUX workspace surface inventory is unavailable.")
+        surfaces = set()
+        for item in listing["surfaces"]:
+            if not isinstance(item, dict):
+                raise OrchestrationError("CMUX surface inventory has invalid identity.")
+            surface = canonical_uuid(item.get("id"), "inventory surface")
+            if surface in surfaces:
+                raise OrchestrationError("CMUX surface inventory has duplicate identity.")
+            surfaces.add(surface)
+        return surfaces
+
     def create_surface(self, workspace, pane, cwd, command=None):
-        arguments = ["--command", command] if command is not None else []
-        response = self.run(
-            "new-surface", "--type", "terminal", "--pane", pane,
-            "--workspace", workspace, "--working-directory", cwd, "--focus", "false",
-            *arguments,
-        )
+        parameters = {
+            "type": "terminal", "pane_id": pane, "workspace_id": workspace,
+            "working_directory": cwd, "focus": False,
+            "startup_environment": {"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        }
+        if command is not None:
+            # CLI --command queues shell input; its startup files can outlive the lease.
+            parameters["initial_command"] = command
+        response = self.run("rpc", "surface.create", json.dumps(parameters))
         candidates = [
             value for value in self.ids(response, {"id", "surfaceid", "uuid"})
             if value not in {workspace, pane}
@@ -1470,6 +1540,21 @@ def worker_processes_exited(node):
     return True
 
 
+def legacy_supervisor_blocks(state, node):
+    if not has_managed_runtime(node) or node.get("runtimeProtocolVersion", 1) >= 2:
+        return False
+    if node["id"] in state["launches"]:
+        return True
+    if not node.get("supervisor"):
+        return node["phase"] not in {
+            "launch-failed", "startup-failed", "resource-retired",
+            "process-disappeared", "terminal-disappeared",
+        }
+    # Providers/adapters do not parse controller state. Preserve them; only an
+    # old supervisor writer can be invalidated by the new coordinator schema.
+    return not worker_processes_exited({**node, "executionMode": "bounded", "providerProcess": None})
+
+
 def new_root(workspace, surface, pane, label, cwd=None, metadata=None, icon_id=None, icon_color=None):
     identifier, run_id, token = str(uuid.uuid4()), str(uuid.uuid4()), secrets.token_hex(32)
     timestamp = now()
@@ -1519,21 +1604,160 @@ def command_register(args, root, cmux):
     return mutate(root, register)
 
 
+def command_launch_coordinator(args, root, cmux):
+    workspace = canonical_uuid(args.workspace, "workspace ID")
+    source_surface = canonical_uuid(args.surface, "surface ID")
+    require_current_surface(workspace, source_surface)
+    pane = cmux.validate_surface(workspace, source_surface)
+    snapshot = read_state(root)
+    if any(current.get("surfaceId") == source_surface and has_managed_runtime(current)
+           for current in snapshot["nodes"].values()):
+        raise OrchestrationError("A managed session cannot launch another root; use its authorized child-launch tool.")
+    if any(legacy_supervisor_blocks(snapshot, current) for current in snapshot["nodes"].values()):
+        raise OrchestrationError("A live or uncertain legacy supervisor prevents coordinator startup; existing sessions were not changed.")
+    observations, retained_gone = resource_observations(snapshot, cmux, workspace)
+    cwd = assigned_directory(args.cwd)
+    label = sanitize_label(bounded_text(args.name, "name", MAX_LABEL))
+    task = bounded_text(args.task, "task", MAX_TASK)
+    settings = worker_launch_settings(root)
+    settings = validate_launch_settings({
+        "version": 1, "copilotAccount": args.account or settings.get("copilotAccount"),
+        "model": args.model or settings.get("model"),
+    })
+    if not settings.get("copilotAccount") or not settings.get("model"):
+        raise OrchestrationError("A managed coordinator requires an explicit account and configured model.")
+    messaging = messaging_configuration(root)
+    if messaging is None:
+        raise OrchestrationError("A managed coordinator requires installed native messaging.")
+    copilot, launch_path = provider_launch_context()
+    resolve_copilot_token(settings["copilotAccount"])
+    policy = normalize_tool_policy(args.allow_tool, args.deny_tool)
+    node, token = new_root(
+        workspace, None, pane, label, cwd, git_display_metadata(cwd), args.icon, args.color
+    )
+    node.update({
+        "runtimeProtocolVersion": 2,
+        "copilotExecutable": copilot, "launchPath": launch_path,
+        "executionMode": "interactive", "generation": 1,
+        "copilotSessionId": str(uuid.uuid4()), "launchSettings": settings,
+        "messaging": messaging, "permissionMode": "yolo" if args.yolo else "default",
+        "phase": "launching", "availability": "busy", "task": task,
+        "toolPolicy": policy,
+    })
+    receipt = {
+        "coordinatorId": node["id"], "runId": node["runId"], "controlToken": token,
+        "workspaceId": workspace, "sessionId": node["copilotSessionId"],
+    }
+    reservation_prepared = False
+    reservation_committed = False
+
+    def reserve(state):
+        nonlocal reservation_prepared
+        if any(current.get("surfaceId") == source_surface and has_managed_runtime(current)
+               for current in state["nodes"].values()):
+            raise OrchestrationError("Caller ownership changed before coordinator launch.")
+        if any(legacy_supervisor_blocks(state, current) for current in state["nodes"].values()):
+            raise OrchestrationError("Legacy managed runtime became active before coordinator launch.")
+        reconcile_resources(state, snapshot, observations, retained_gone)
+        if len(state["nodes"]) >= MAX_NODES:
+            raise OrchestrationError("Orchestration node limit reached.")
+        live = sum(
+            1 for current in state["nodes"].values()
+            if has_managed_runtime(current) and current["workspaceId"] == workspace
+            and current["phase"] != "resource-retired"
+        ) + sum(item["workspaceId"] == workspace for item in state["retainedResources"])
+        if live >= MAX_LIVE_WORKERS:
+            raise OrchestrationError("Live session resource limit reached.")
+        state["nodes"][node["id"]] = node
+        state["launches"][node["id"]] = {
+            "workerId": node["id"], "runId": node["runId"], "workspaceId": workspace,
+            "surfaceId": None, "state": "creating",
+            "createdAt": node["createdAt"], "updatedAt": node["updatedAt"],
+        }
+        reservation_prepared = True
+    try:
+        mutate(root, reserve)
+        reservation_committed = True
+        result = launch_reserved_session(
+            root, cmux, node["id"], node["copilotSessionId"], token, workspace, pane, cwd, label
+        )
+    except (OrchestrationError, OSError) as error:
+        if not reservation_prepared:
+            raise
+        message = launch_failure_message(error)
+        reservation_state = "committed" if reservation_committed else "uncertain"
+        if not reservation_committed:
+            # state.json may have committed before observer publication failed.
+            # Reconcile under the same lock; no ticket or host launch was attempted.
+            def failed_reservation(store):
+                nonlocal reservation_state
+                state = store.read()
+                if node["id"] not in state["nodes"]:
+                    reservation_state = "uncommitted"
+                    return
+                current = authorize(state, node["id"], token)
+                if any(current.get(key) != node.get(key) for key in (
+                    "runId", "workspaceId", "copilotSessionId", "generation",
+                )):
+                    raise OrchestrationError("Reserved coordinator ownership changed.")
+                reservation_state = "committed"
+                record_launch_failure(state, node["id"])
+                store.write(state)
+            try:
+                with_store(root, failed_reservation)
+            except (OrchestrationError, OSError) as recovery_error:
+                message += f" Failure recording also failed: {launch_failure_message(recovery_error)}"
+        if reservation_state == "uncommitted":
+            raise OrchestrationError(message) from error
+        if isinstance(error, SessionLaunchError) and error.surface is not None:
+            receipt["surfaceId"] = error.surface
+        raise CoordinatorLaunchError(
+            message, {**receipt, "reservationState": reservation_state},
+        ) from error
+    return {**result, **receipt}
+
+
 def resource_observations(state, cmux, workspace):
     active = {}
+    surfaces = cmux.workspace_surfaces(workspace)
     for node in state["nodes"].values():
-        if node["role"] == "worker" and node["workspaceId"] == workspace:
+        if has_managed_runtime(node) and node["workspaceId"] == workspace:
+            process = process_matches(node)
             active[node["id"]] = {
-                "surface": bool(node.get("surfaceId"))
-                    and cmux.surface_exists(workspace, node["surfaceId"]),
-                "process": process_matches(node),
+                "surface": node.get("surfaceId") in surfaces,
+                "process": process,
+                "exited": not process and worker_processes_exited(node),
             }
     retained_gone = {
         resource["surfaceId"] for resource in state["retainedResources"]
         if resource["workspaceId"] == workspace
-        and not cmux.surface_exists(workspace, resource["surfaceId"])
+        and resource["surfaceId"] not in surfaces
     }
     return active, retained_gone
+
+
+def reconcile_resources(state, snapshot, observations, retained_gone):
+    for identifier, observed in observations.items():
+        node = state["nodes"].get(identifier)
+        previous = snapshot["nodes"].get(identifier)
+        if (
+            node is None or previous is None
+            or identifier in state["launches"] or identifier in snapshot["launches"]
+            or node["phase"] == "launching"
+            or any(node.get(key) != previous.get(key) for key in (
+                "runId", "workspaceId", "surfaceId", "supervisor", "providerProcess", "phase",
+            ))
+        ):
+            continue
+        if not observed["surface"] and observed["exited"]:
+            node["phase"], node["availability"], node["updatedAt"] = (
+                "resource-retired", "unavailable", now()
+            )
+    state["retainedResources"] = [
+        resource for resource in state["retainedResources"]
+        if resource["surfaceId"] not in retained_gone
+        or resource not in snapshot["retainedResources"]
+    ]
 
 
 def record_launch_failure(state, worker_id, surface=None, *, phase="launch-failed"):
@@ -1569,7 +1793,77 @@ def record_launch_failure(state, worker_id, surface=None, *, phase="launch-faile
         )
 
 
-def command_spawn(args, root, cmux):
+def authorize_native_spawn(state, identity):
+    if not isinstance(identity, dict) or set(identity) != {
+        "nodeId", "workspaceId", "sessionId", "generation", "capability", "login", "host"
+    }:
+        raise OrchestrationError("Native launch identity is invalid.")
+    node_id = canonical_uuid(identity["nodeId"], "native actor ID")
+    actor = state["nodes"].get(node_id)
+    if not actor or actor.get("archiving") or not actor.get("messaging"):
+        raise OrchestrationError("Native launch actor is unavailable.")
+    if (
+        (identity["workspaceId"], identity["sessionId"], identity["generation"])
+        != (actor["workspaceId"], actor["copilotSessionId"], actor["generation"])
+        or type(identity["generation"]) is not int
+    ):
+        raise OrchestrationError("Native launch session identity changed.")
+    routes = Path(actor["messaging"]["routes"])
+    private_message_directory(routes)
+    binding = message_json(routes / f"{message_peer(actor)}.json")
+    if (
+        not isinstance(binding, dict)
+        or binding.get("nodeId") != actor["id"]
+        or binding.get("sessionId") != actor["copilotSessionId"]
+        or binding.get("generation") != actor["generation"]
+        or binding.get("workspaceId") != actor["workspaceId"]
+        or not isinstance(identity["capability"], str)
+        or not isinstance(binding.get("capability"), str)
+        or not secrets.compare_digest(binding.get("capability", ""), identity["capability"])
+    ):
+        raise OrchestrationError("Native launch capability is unavailable.")
+    if identity["host"] not in {"github.com", "https://github.com"}:
+        raise OrchestrationError("Parent account host is unsupported; no account fallback was used.")
+    validate_launch_settings({"version": 1, "copilotAccount": identity["login"]})
+    if not identity["login"]:
+        raise OrchestrationError("Parent account is unavailable; no account fallback was used.")
+    return actor
+
+
+def command_native_spawn(root, cmux):
+    try:
+        raw = sys.stdin.buffer.read(65_537)
+        if len(raw) > 65_536:
+            raise OrchestrationError("Native launch request exceeds its size bound.")
+        request = json.loads(raw)
+    except (UnicodeError, ValueError) as error:
+        raise OrchestrationError("Native launch request is invalid.") from error
+    if not isinstance(request, dict) or set(request) != {"identity", "assignment"}:
+        raise OrchestrationError("Native launch request fields are invalid.")
+    assignment = request["assignment"]
+    if not isinstance(assignment, dict) or set(assignment) - {
+        "name", "cwd", "task", "allowTools", "denyTools", "yolo", "icon", "color"
+    } or not {"name", "cwd", "task"}.issubset(assignment):
+        raise OrchestrationError("Native assignment fields are invalid.")
+    if type(assignment.get("yolo", False)) is not bool:
+        raise OrchestrationError("Native launch permission mode is invalid.")
+    if any(not isinstance(assignment.get(key, []), list) for key in ("allowTools", "denyTools")):
+        raise OrchestrationError("Native tool permissions must be explicit rule lists.")
+    if "color" in assignment and (
+        not isinstance(assignment["color"], str) or assignment["color"] not in ICON_COLORS
+    ):
+        raise OrchestrationError("Native launch color is invalid.")
+    args = argparse.Namespace(
+        actor_id=None, token=None, name=assignment["name"], cwd=assignment["cwd"],
+        task=assignment["task"], allow_tool=assignment.get("allowTools", []),
+        deny_tool=assignment.get("denyTools", []), yolo=assignment.get("yolo", False),
+        require_pinned_launch_settings=True, icon=assignment.get("icon"), color=assignment.get("color"),
+        delivery_proof_fixture=None, delivery_proof_experimental=False, delivery_proof_yolo=False,
+    )
+    return command_spawn(args, root, cmux, native_identity=request["identity"])
+
+
+def command_spawn(args, root, cmux, *, native_identity=None):
     task = bounded_text(args.task, "task", MAX_TASK)
     label = sanitize_label(bounded_text(args.name, "name", MAX_LABEL))
     cwd = assigned_directory(args.cwd)
@@ -1587,12 +1881,19 @@ def command_spawn(args, root, cmux):
         raise OrchestrationError("--delivery-proof-yolo requires --delivery-proof-fixture.")
     metadata = git_display_metadata(cwd)
     snapshot = read_state(root)
-    actor = authorize(snapshot, args.actor_id, args.token)
+    actor = (authorize_native_spawn(snapshot, native_identity) if native_identity is not None
+             else authorize(snapshot, args.actor_id, args.token))
     yolo = getattr(args, "yolo", False) or bool(proof and proof.get("yolo"))
     if yolo and actor["role"] != "coordinator":
         raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
+    if actor.get("messaging") and native_identity is None:
+        raise OrchestrationError("Managed sessions must use maestro_spawn to verify their current Copilot account.")
+    if native_identity is None and proof is None and os.environ.get("CMUX_MAESTRO_TESTING") != "1":
+        raise OrchestrationError("New managed workers require maestro_spawn from a managed coordinator; registration and saved accounts are not parent-account evidence.")
     messaging = None if proof is not None else messaging_configuration(root)
     launch_settings = worker_launch_settings(root)
+    if native_identity is not None:
+        launch_settings = {**launch_settings, "copilotAccount": native_identity["login"]}
     if (args.require_pinned_launch_settings or proof is not None or messaging is not None or yolo) and (
         launch_settings.get("copilotAccount") is None
         or launch_settings.get("model") is None
@@ -1601,11 +1902,12 @@ def command_spawn(args, root, cmux):
             "Pinned Maestro account and model settings are required; configure Agent launch settings before spawning."
         )
     # Check availability before creating a terminal; never persist the credential.
+    copilot, launch_path = provider_launch_context(actor)
     resolve_copilot_token(launch_settings.get("copilotAccount"))
-    parent_policy = actor["toolPolicy"] if actor["role"] == "worker" else None
+    parent_policy = actor["toolPolicy"] if has_managed_runtime(actor) else None
     tool_policy = normalize_tool_policy(args.allow_tool, args.deny_tool, parent_policy)
     pane = cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
-    if actor["role"] == "worker" and not process_matches(actor):
+    if has_managed_runtime(actor) and not process_matches(actor):
         raise OrchestrationError("Actor worker supervisor identity is stale.")
     observations, retained_gone = resource_observations(snapshot, cmux, actor["workspaceId"])
     identifier, session_id, worker_token = (
@@ -1613,25 +1915,18 @@ def command_spawn(args, root, cmux):
     )
 
     def reserve(state):
-        current = authorize(state, args.actor_id, args.token)
+        current = (authorize_native_spawn(state, native_identity) if native_identity is not None
+                   else authorize(state, args.actor_id, args.token))
         if yolo and current["role"] != "coordinator":
             raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
         if (
             current["runId"], current["workspaceId"], current.get("surfaceId")
         ) != (actor["runId"], actor["workspaceId"], actor["surfaceId"]):
             raise OrchestrationError("Actor ownership changed during spawn.")
-        for worker_id, observed in observations.items():
-            node = state["nodes"].get(worker_id)
-            if node and not observed["surface"] and not observed["process"]:
-                node["phase"], node["availability"] = "resource-retired", "unavailable"
-                node["updatedAt"] = now()
-        state["retainedResources"] = [
-            resource for resource in state["retainedResources"]
-            if resource["surfaceId"] not in retained_gone
-        ]
+        reconcile_resources(state, snapshot, observations, retained_gone)
         live = sum(
             1 for node in state["nodes"].values()
-            if node["role"] == "worker" and node["workspaceId"] == current["workspaceId"]
+            if has_managed_runtime(node) and node["workspaceId"] == current["workspaceId"]
             and node["phase"] != "resource-retired"
         ) + sum(
             1 for resource in state["retainedResources"]
@@ -1655,6 +1950,8 @@ def command_spawn(args, root, cmux):
             "id": identifier, "runId": current["runId"], "parentId": current["id"],
             "role": "worker", "label": label, "workspaceId": current["workspaceId"],
             "executionMode": "interactive",
+            "runtimeProtocolVersion": 2,
+            "copilotExecutable": copilot, "launchPath": launch_path,
             "launchSettings": launch_settings,
             "iconId": resolve_icon(args.icon or "maestro"),
             "iconColor": args.color,
@@ -1684,6 +1981,12 @@ def command_spawn(args, root, cmux):
         }
         current["lastControlAt"] = timestamp
     mutate(root, reserve)
+    return launch_reserved_session(
+        root, cmux, identifier, session_id, worker_token, actor["workspaceId"], pane, cwd, label
+    )
+
+
+def launch_reserved_session(root, cmux, identifier, session_id, worker_token, workspace, pane, cwd, label):
     surface = None
     try:
         def credential(store):
@@ -1692,9 +1995,9 @@ def command_spawn(args, root, cmux):
             ).encode())
         with_store(root, credential)
         bootstrap = shlex.join([
-            str(Path(__file__).resolve()), "runtime", "--worker-id", identifier
+            sys.executable, str(Path(__file__).resolve()), "runtime", "--worker-id", identifier
         ])
-        surface = cmux.create_surface(actor["workspaceId"], pane, str(cwd), command=bootstrap)
+        surface = cmux.create_surface(workspace, pane, str(cwd), command=bootstrap)
 
         def created(state):
             launch = state["launches"].get(identifier)
@@ -1709,7 +2012,7 @@ def command_spawn(args, root, cmux):
             )
         mutate(root, created, wait=1)
         test_barrier("CMUX_MAESTRO_TEST_ATTACH_BARRIER")
-        confirmed_pane = cmux.validate_surface(actor["workspaceId"], surface)
+        confirmed_pane = cmux.validate_surface(workspace, surface)
         if os.environ.get("CMUX_MAESTRO_TEST_ATTACH_FAILURE") == "1":
             if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
                 raise OrchestrationError("CMUX_MAESTRO_TEST_ATTACH_FAILURE is test-only.")
@@ -1729,22 +2032,38 @@ def command_spawn(args, root, cmux):
             node["surfaceId"], node["paneId"], node["updatedAt"] = surface, confirmed_pane, now()
             launch["state"], launch["updatedAt"] = "starting", now()
         mutate(root, attach)
-        cmux.rename(actor["workspaceId"], surface, label)
-    except Exception:
+        cmux.rename(workspace, surface, label)
+    except Exception as error:
         def failed(state):
             record_launch_failure(state, identifier, surface)
-        mutate(root, failed, wait=1)
-        remove_launch_credential(root, identifier)
+        try:
+            mutate(root, failed, wait=1)
+            remove_launch_credential(root, identifier)
+        except (OrchestrationError, OSError) as recovery_error:
+            raise SessionLaunchError(
+                f"{launch_failure_message(error)} Failure recording or ticket cleanup also failed: "
+                f"{launch_failure_message(recovery_error)}",
+                surface,
+            ) from error
         raise
     deadline = time.monotonic() + timeout("CMUX_MAESTRO_STARTUP_SECONDS", STARTUP_SECONDS)
     while time.monotonic() < deadline:
         state = read_state(root, wait=1)
         node = state["nodes"].get(identifier)
         if node and node.get("supervisor") and node["phase"] != "launching":
+            if node.get("executionMode") == "interactive" and node["phase"] in {
+                "turn-failed", "process-disappeared", "terminal-disappeared",
+            }:
+                raise OrchestrationError(
+                    f"Managed session failed during startup ({node['phase']}); reconcile worker {identifier}."
+                )
             return {
                 "workerId": identifier, "sessionId": session_id, "surfaceId": surface,
-                "workspaceId": actor["workspaceId"], "generation": 1,
+                "workspaceId": workspace, "generation": 1,
                 "phase": node["phase"],
+                "supervisorStarted": True,
+                "providerStarted": bool(node.get("providerProcess")),
+                "messaging": "configured" if node.get("messaging") else "unsupported",
             }
         time.sleep(0.05)
 
@@ -1754,7 +2073,9 @@ def command_spawn(args, root, cmux):
             record_launch_failure(state, identifier, surface, phase="startup-failed")
     mutate(root, startup_failed, wait=1)
     remove_launch_credential(root, identifier)
-    raise OrchestrationError("Worker supervisor did not acknowledge startup within the bound.")
+    raise OrchestrationError(
+        f"Worker supervisor did not acknowledge startup within the bound. Reconcile worker {identifier}, surface {surface}."
+    )
 
 
 def assistant_text(event):
@@ -1877,6 +2198,8 @@ def terminal_bookkeeping(event):
 
 def worker_environment(worker_id, token, node):
     environment = os.environ.copy()
+    if "launchPath" in node:
+        environment["PATH"] = node["launchPath"]
     for key in ("CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER"):
         environment.pop(key, None)
     environment.update({
@@ -1901,7 +2224,9 @@ def worker_environment(worker_id, token, node):
 
 
 def run_interactive_session(root, worker_id, token, node):
-    copilot = trusted_executable("CMUX_MAESTRO_COPILOT", "copilot")
+    copilot = trusted_executable(
+        "CMUX_MAESTRO_COPILOT", node.get("copilotExecutable") or "copilot"
+    )
     arguments = [
         copilot, "--no-auto-update", "--interactive", node["task"],
         "--session-id", node["copilotSessionId"], "--name", node["label"],
@@ -1986,7 +2311,9 @@ def run_interactive_session(root, worker_id, token, node):
 
 
 def run_copilot_turn(root, worker_id, token, node):
-    copilot = trusted_executable("CMUX_MAESTRO_COPILOT", "copilot")
+    copilot = trusted_executable(
+        "CMUX_MAESTRO_COPILOT", node.get("copilotExecutable") or "copilot"
+    )
     prompt = node["task"] + report_instruction(node)
     arguments = [copilot, "--no-auto-update", "-p", prompt, "--output-format", "json"]
     if node["generation"] > 1:
@@ -2241,7 +2568,7 @@ def command_runtime(args, root):
         node = authorize(state, worker_id, args.token)
         launch = state["launches"].get(worker_id)
         if (
-            node["role"] != "worker" or node["phase"] != "launching"
+            not has_managed_runtime(node) or node["phase"] != "launching"
             or not node["surfaceId"] or not launch
             or launch["state"] != "starting"
             or launch["surfaceId"] != node["surfaceId"]
@@ -2262,6 +2589,7 @@ def command_runtime(args, root):
     signal.signal(signal.SIGTERM, stop_supervisor)
     signal.signal(signal.SIGHUP, stop_supervisor)
     last_heartbeat = 0.0
+    runtime_error = None
     try:
         if started_node.get("executionMode") == "interactive":
             return run_interactive_session(root, worker_id, args.token, started_node)
@@ -2344,6 +2672,9 @@ def command_runtime(args, root):
                 mutate(root, heartbeat, wait=2)
                 last_heartbeat = time.monotonic()
             time.sleep(0.1)
+    except (OrchestrationError, OSError) as error:
+        runtime_error = f"Interactive runtime failed ({type(error).__name__}): {error}"[:MAX_RESULT]
+        raise
     finally:
         def disappeared(state):
             node = state["nodes"].get(worker_id)
@@ -2361,7 +2692,7 @@ def command_runtime(args, root):
                     node["phase"], node["availability"], node["updatedAt"] = (
                         "turn-failed", "idle", now()
                     )
-                    node["result"] = "Interactive runtime ended before a clean session exit; no task outcome is inferred."
+                    node["result"] = runtime_error or "Interactive runtime ended before a clean session exit; no task outcome is inferred."
                     return
                 node["phase"], node["availability"], node["updatedAt"] = (
                     "process-disappeared", "unavailable", now()
@@ -2526,7 +2857,7 @@ def command_status(args, root, cmux):
         node["id"]: (
             cmux.surface_exists(node["workspaceId"], node["surfaceId"])
             if node.get("surfaceId") else False,
-            process_matches(node) if node["role"] == "worker" else True,
+            process_matches(node) if has_managed_runtime(node) else True,
         ) for node in targets
     }
     git_evidence = collect_git_evidence(
@@ -2553,8 +2884,8 @@ def command_status(args, root, cmux):
             ):
                 continue
             surface, process = observations[node["id"]]
-            exited = node["role"] == "worker" and not process and worker_processes_exited(node)
-            if node["role"] == "worker" and not process and not exited:
+            exited = has_managed_runtime(node) and not process and worker_processes_exited(node)
+            if has_managed_runtime(node) and not process and not exited:
                 continue
             if (node.get("surfaceId") and not surface
                     and not cmux.surface_exists(node["workspaceId"], node["surfaceId"])):
@@ -2570,12 +2901,13 @@ def command_status(args, root, cmux):
         apply_git_evidence(state, git_evidence)
         return {"runId": current_actor["runId"], "workers": [{
             "workerId": node["id"], "parentId": node["parentId"], "name": node["label"],
+            "role": node["role"],
             "executionMode": node.get("executionMode"),
             "iconId": node.get("iconId"),
             "iconColor": node.get("iconColor"),
             "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
             "sessionId": node["copilotSessionId"], "generation": node["generation"],
-            "messaging": "participating" if node.get("messaging") and process_matches(node)
+            "messaging": "configured" if node.get("messaging") and process_matches(node)
                 else "offline" if node.get("messaging") else "unsupported",
             "permissionMode": node.get(
                 "permissionMode", "yolo" if (node.get("deliveryProof") or {}).get("yolo") else "default"
@@ -2590,8 +2922,8 @@ def command_focus(args, root, cmux):
     snapshot = read_state(root)
     actor = authorize(snapshot, args.actor_id, args.token)
     target = ensure_owned(snapshot, actor, args.worker_id)
-    if target["role"] != "worker":
-        raise OrchestrationError("Focus requires an owned worker.")
+    if not has_managed_runtime(target):
+        raise OrchestrationError("Focus requires an owned managed session.")
     cmux.focus(target["workspaceId"], target["surfaceId"])
 
     def touched(state):
@@ -2616,13 +2948,18 @@ def command_archive(args, root, cmux):
     actor = authorize(snapshot, args.actor_id, args.token, allow_archiving=True)
     if actor["role"] != "coordinator":
         raise OrchestrationError("Only a coordinator can archive its run.")
-    cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
+    if actor.get("executionMode") != "interactive":
+        cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
     run_id = actor["runId"]
-    identity = (actor["role"], run_id, actor["workspaceId"], actor["surfaceId"])
+    identity_keys = (
+        "role", "runId", "workspaceId", "surfaceId",
+        "copilotSessionId", "generation", "executionMode",
+    )
+    identity = tuple(actor.get(key) for key in identity_keys)
 
     def begin(state):
         current = authorize(state, args.actor_id, args.token, allow_archiving=True)
-        if (current["role"], current["runId"], current["workspaceId"], current["surfaceId"]) != identity:
+        if tuple(current.get(key) for key in identity_keys) != identity:
             raise OrchestrationError("Coordinator ownership changed during archive.")
         if any(
             launch["runId"] == current["runId"]
@@ -2649,7 +2986,7 @@ def command_archive(args, root, cmux):
         state = read_state(root, wait=1)
         workers = [
             node for node in state["nodes"].values()
-            if node["runId"] == run_id and node["role"] == "worker"
+            if node["runId"] == run_id and has_managed_runtime(node)
         ]
         if all(
             worker_processes_exited(node) if node.get("executionMode") == "interactive"
@@ -2664,13 +3001,13 @@ def command_archive(args, root, cmux):
 
     def finish(state):
         current = authorize(state, args.actor_id, args.token, allow_archiving=True)
-        if (current["role"], current["runId"], current["workspaceId"], current["surfaceId"]) != identity:
+        if tuple(current.get(key) for key in identity_keys) != identity:
             raise OrchestrationError("Coordinator ownership changed during archive.")
         nodes = [node for node in state["nodes"].values() if node["runId"] == run_id]
         if (
             not nodes
             or any(launch["runId"] == run_id for launch in state["launches"].values())
-            or any(node["role"] == "worker" and (
+            or any(has_managed_runtime(node) and (
                 not worker_processes_exited(node) if node.get("executionMode") == "interactive"
                 else process_matches(node)
             ) for node in nodes)
@@ -2680,7 +3017,7 @@ def command_archive(args, root, cmux):
         state["archives"] = state["archives"][-MAX_ARCHIVES:]
         for node in nodes:
             retire_messaging(node)
-            if node["role"] == "worker" and node.get("surfaceId"):
+            if has_managed_runtime(node) and node.get("surfaceId"):
                 state["retainedResources"].append({
                     "runId": run_id, "workspaceId": node["workspaceId"],
                     "surfaceId": node["surfaceId"], "archivedAt": now(),
@@ -2711,6 +3048,8 @@ def command_recover(args, root, cmux):
     if len(roots) != 1:
         raise OrchestrationError("Recovery requires one exact existing coordinator registration.")
     previous = roots[0]
+    if previous.get("executionMode") == "interactive":
+        raise OrchestrationError("Managed coordinators cannot be adopted by recovery; end and archive their run normally.")
     age = (now_date() - parse_date(previous["lastControlAt"], "last control time")).total_seconds()
     if age <= STALE_SECONDS:
         raise OrchestrationError("The existing coordinator ownership is still current.")
@@ -2723,7 +3062,7 @@ def command_recover(args, root, cmux):
     ):
         raise OrchestrationError("Stale recovery refuses an in-flight worker launch.")
     for node in run_nodes:
-        if node["role"] == "worker" and (
+        if has_managed_runtime(node) and (
             process_matches(node) or (
                 node.get("surfaceId")
                 and cmux.surface_exists(node["workspaceId"], node["surfaceId"])
@@ -2749,7 +3088,7 @@ def command_recover(args, root, cmux):
         if current_nodes != {node["id"]: node for node in run_nodes}:
             raise OrchestrationError("Run ownership changed during recovery.")
         for node in current_nodes.values():
-            if node["role"] == "worker" and (
+            if has_managed_runtime(node) and (
                 node["phase"] == "launching" or not worker_processes_exited(node)
                 or (node.get("surfaceId") and cmux.surface_exists(node["workspaceId"], node["surfaceId"]))
             ):
@@ -2774,6 +3113,7 @@ def parser():
     result = argparse.ArgumentParser(prog="cmux-maestro-orchestrator")
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("accounts", help="List configured GitHub account names without credentials")
+    commands.add_parser("native-spawn", help="Private session-bound launch ingress; use the native maestro_spawn tool")
     commands.add_parser(
         "launch-settings",
         help="Report whether pinned Maestro account and model settings are ready without revealing them",
@@ -2790,6 +3130,21 @@ def parser():
         command.add_argument("--cwd")
         command.add_argument("--icon")
         command.add_argument("--color", choices=ICON_COLORS)
+    coordinator = commands.add_parser(
+        "launch-coordinator", help="Launch a new managed messaging coordinator; never adopt the invoking session"
+    )
+    coordinator.add_argument("--workspace", required=True)
+    coordinator.add_argument("--surface", required=True)
+    coordinator.add_argument("--name", default="Maestro coordinator")
+    coordinator.add_argument("--cwd", required=True)
+    coordinator.add_argument("--task", required=True)
+    coordinator.add_argument("--account", help="Subscription for this new root; otherwise use the explicit coordinator setting")
+    coordinator.add_argument("--model")
+    coordinator.add_argument("--allow-tool", action="append", default=[])
+    coordinator.add_argument("--deny-tool", action="append", default=[])
+    coordinator.add_argument("--yolo", action="store_true", help="Explicitly user-approved root permission mode")
+    coordinator.add_argument("--icon")
+    coordinator.add_argument("--color", choices=ICON_COLORS)
     spawn = commands.add_parser("spawn")
     spawn.add_argument("--actor-id", required=True)
     spawn.add_argument("--token", required=True)
@@ -2855,10 +3210,14 @@ def main(argv=None):
             output = command_launch_settings(root)
         elif args.command == "register":
             output = command_register(args, root, cmux)
+        elif args.command == "launch-coordinator":
+            output = command_launch_coordinator(args, root, cmux)
         elif args.command == "recover":
             output = command_recover(args, root, cmux)
         elif args.command == "spawn":
             output = command_spawn(args, root, cmux)
+        elif args.command == "native-spawn":
+            output = command_native_spawn(root, cmux)
         elif args.command == "runtime":
             output = command_runtime(args, root)
         elif args.command == "report":
@@ -2878,8 +3237,16 @@ def main(argv=None):
             return 0 if output["exitCode"] == 0 else 1
         print(json.dumps({"ok": True, **output}, sort_keys=True))
         return 0
+    except CoordinatorLaunchError as error:
+        # Like successful registration, this is a private custody receipt, not
+        # a public log: failed startup must not discard the owner's capability.
+        print(json.dumps({"ok": False, "error": str(error), **error.receipt}, sort_keys=True))
+        return 2
     except OrchestrationError as error:
         print(json.dumps({"ok": False, "error": str(error)}, sort_keys=True), file=sys.stderr)
+        return 2
+    except OSError as error:
+        print(json.dumps({"ok": False, "error": launch_failure_message(error)}, sort_keys=True), file=sys.stderr)
         return 2
 
 

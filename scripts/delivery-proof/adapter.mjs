@@ -3,6 +3,7 @@ import net from "node:net";
 import path from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { TextDecoder } from "node:util";
+import { execFile } from "node:child_process";
 
 const PEERS = ["a", "b"];
 const MANAGED_PEER = /^[0-9a-f]{16}$/;
@@ -127,7 +128,38 @@ async function writeOnce(endpoint, frame) {
   });
 }
 
-export async function start({ root, peer, joinSession, managed = false, expected, diagnostic = () => {
+async function launchNative(request, controller) {
+  requireCondition(typeof controller === "string" && path.isAbsolute(controller));
+  const info = await fs.lstat(controller);
+  requireCondition(info.isFile() && [0, process.getuid()].includes(info.uid) &&
+    !(info.mode & 0o022) && await fs.realpath(controller) === controller);
+  return new Promise((resolve, reject) => {
+    const child = execFile(controller, ["native-spawn"], {
+      timeout: 60_000, maxBuffer: 65_536,
+    }, (error, stdout, stderr) => {
+      if (error) {
+        try {
+          const failure = JSON.parse(stderr);
+          reject(new Error(typeof failure.error === "string" ? failure.error : "Native launch failed."));
+        } catch {
+          reject(new Error("Native launch failed or timed out; reconcile owned resources before retrying."));
+        }
+        return;
+      }
+      try {
+        const result = JSON.parse(stdout);
+        requireCondition(result.ok === true);
+        resolve(result);
+      } catch (parseError) {
+        reject(parseError);
+      }
+    });
+    child.stdin.on("error", reject);
+    child.stdin.end(JSON.stringify(request));
+  });
+}
+
+export async function start({ root, peer, joinSession, managed = false, expected, launch = launchNative, diagnostic = () => {
   console.error("Maestro message dropped; no retry.");
 } }) {
   requireCondition(path.isAbsolute(root) && (managed ? MANAGED_PEER.test(peer) : PEERS.includes(peer)));
@@ -144,6 +176,23 @@ export async function start({ root, peer, joinSession, managed = false, expected
       current.capability === own.capability && current.nodeId === own.nodeId);
   }
   let session;
+  async function currentAccount(invocation) {
+    requireCondition(session?.sessionId === own.sessionId && invocation?.sessionId === own.sessionId);
+    await currentBinding();
+    let auth;
+    try {
+      auth = await session.rpc.gitHubAuth.getStatus();
+    } catch {
+      throw new Error("The invoking session account API is unavailable; no terminal was created");
+    }
+    if (!(auth?.isAuthenticated === true && typeof auth.login === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(auth.login) &&
+      ["github.com", "https://github.com"].includes(auth.host))) {
+      throw new Error("The invoking session account cannot be verified; no terminal was created");
+    }
+    await currentBinding();
+    return { login: auth.login, host: auth.host };
+  }
   const tools = [
     {
       name: managed ? "maestro_peers" : "maestro_proof_peers",
@@ -204,6 +253,60 @@ export async function start({ root, peer, joinSession, managed = false, expected
       },
     },
   ];
+  if (managed) tools.push({
+    name: "maestro_identity",
+    description: "Read this managed session's exact public identity and current verified Copilot account. No credentials, plan inference, or launch effects.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    handler: async (args, invocation) => {
+      try {
+        exactKeys(args, []);
+        const account = await currentAccount(invocation);
+        return JSON.stringify({ nodeId: own.nodeId, ...ownAddress, account });
+      } catch {
+        return { resultType: "failure", textResultForLlm: "Maestro session identity or account is unavailable; no fallback was used." };
+      }
+    },
+  });
+  if (managed) tools.push({
+    name: "maestro_spawn",
+    description: "Launch one explicitly authorized visible Maestro child using this session's current Copilot account. No hidden fallback; launch acknowledgement is not readiness or task completion.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string" }, cwd: { type: "string" }, task: { type: "string" },
+        icon: { type: "string" },
+        color: { type: "string", enum: ["theme", "green", "teal", "blue", "purple", "pink", "red", "gray"] },
+        allowTools: { type: "array", items: { type: "string" } },
+        denyTools: { type: "array", items: { type: "string" } },
+        yolo: { type: "boolean", description: "Only with explicit human approval for a coordinator launch." },
+      },
+      required: ["name", "cwd", "task"],
+      additionalProperties: false,
+    },
+    handler: async (assignment, invocation) => {
+      try {
+        requireCondition(session?.sessionId === own.sessionId && invocation?.sessionId === own.sessionId);
+        requireCondition(assignment && typeof assignment === "object" && !Array.isArray(assignment));
+        requireCondition(Object.keys(assignment).every(key =>
+          ["name", "cwd", "task", "allowTools", "denyTools", "yolo", "icon", "color"].includes(key)));
+        const auth = await currentAccount(invocation);
+        const result = await launch({
+          identity: {
+            nodeId: own.nodeId, workspaceId: own.workspaceId, sessionId: own.sessionId,
+            generation: own.generation, capability: own.capability,
+            login: auth.login, host: auth.host,
+          },
+          assignment,
+        }, expected.controller);
+        return JSON.stringify(result);
+      } catch (error) {
+        return {
+          resultType: "failure",
+          textResultForLlm: `Maestro launch refused or uncertain: ${error.message}. No fallback or retry was made.`,
+        };
+      }
+    },
+  });
   // Join only the CLI-owned session; do not supply account, model, or permission handlers.
   session = await joinSession({ tools });
   requireCondition(session.sessionId === own.sessionId);
@@ -283,6 +386,7 @@ export async function startManaged({ joinSession, environment = process.env, dia
     sessionId: environment.SESSION_ID,
     generation,
     nodeId: environment.CMUX_MAESTRO_WORKER_ID,
+    controller: environment.CMUX_MAESTRO_ORCHESTRATOR,
   };
   return start({ root, peer, joinSession, managed: true, expected, diagnostic });
 }
