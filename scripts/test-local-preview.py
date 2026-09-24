@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Synthetic filesystem + injected signatures/registries; no live app or CLI access."""
+"""Synthetic filesystem/registries and owned test processes; no live app or CLI mutation."""
 
 import importlib.util
+import errno
 import json
 import os
 from pathlib import Path
@@ -122,6 +123,148 @@ class SyntheticMac(preview.MacOperations):
 
 
 class LocalPreviewTests(unittest.TestCase):
+    def text_vnode_output(self, pid, uid, *paths):
+        owner = f"p{pid}\0u{uid}\0\n".encode()
+        return owner + b"".join(b"ftxt\0D0x100000e\0i123\0n" + os.fsencode(path) + b"\0\n" for path in paths)
+
+    def test_deleted_executable_fallback_requires_complete_unrelated_kernel_vnodes(self):
+        pid, uid = 43210, os.getuid()
+        generation = (pid, uid, 100, 123)
+        outside = self.root / "Unrelated app.app/old\nbinary"
+        good = self.text_vnode_output(pid, uid, outside, Path("/usr/lib/dyld"))
+        cases = [
+            (good, 0, b"", True),
+            (self.text_vnode_output(pid, uid, self.app / "Contents/MacOS/Preview"), 0, b"", False),
+            (self.text_vnode_output(pid, uid, self.app / "Contents/MacOS/Preview (deleted)"), 0, b"", False),
+            (self.text_vnode_output(pid, uid, outside, self.app / "Contents/Helpers/Helper"), 0, b"", False),
+            (self.text_vnode_output(pid + 1, uid, outside), 0, b"", False),
+            (self.text_vnode_output(pid, uid + 1, outside), 0, b"", False),
+            (self.text_vnode_output(pid, uid), 0, b"", False),
+            (self.text_vnode_output(pid, uid, Path("relative/path")), 0, b"", False),
+            (self.text_vnode_output(pid, uid, self.root / "../unknown"), 0, b"", False),
+            (good.replace(b"ftxt", b"fmem"), 0, b"", False),
+            (good.replace(b"D0x100000e\0", b""), 0, b"", False),
+            (good.replace(b"i123", b"i0"), 0, b"", False),
+            (good.replace(b"i123", b"i123\0i123"), 0, b"", False),
+            (good + good, 0, b"", False),
+            (good[:-1], 0, b"", False),
+            (b"x" * 1_048_577 + b"\0\n", 0, b"", False),
+            (good, 1, b"", False),
+            (good, 0, b"partial scan", False),
+        ]
+        for data, code, diagnostic, accepted in cases:
+            with self.subTest(data=data[:100], code=code, diagnostic=diagnostic):
+                operations = preview.MacOperations()
+                with patch.object(operations, "process_generation", return_value=generation), patch.object(
+                    operations, "run", return_value=subprocess.CompletedProcess([], code, data, diagnostic)
+                ) as run:
+                    self.assertEqual(operations.confirmed_unrelated_text(pid, uid, (self.app,)), accepted)
+                    run.assert_called_once_with(
+                        ["/usr/sbin/lsof", "-a", "-p", str(pid), "-d", "txt", "-F0pfDinu"], check=False,
+                    )
+
+    def test_deleted_executable_fallback_rejects_symlink_aliases_and_changed_generation(self):
+        pid, uid = 43210, os.getuid()
+        alias = self.root / "alias"
+        alias.symlink_to(self.app, target_is_directory=True)
+        operations = preview.MacOperations()
+        generation = (pid, uid, 100, 123)
+        for path, generations in [
+            (alias / "Contents/MacOS/Preview", [generation]),
+            (self.root / "outside", [generation, (pid, uid, 100, 124)]),
+            (self.root / "outside", [generation, None]),
+        ]:
+            with self.subTest(path=path, generations=generations), patch.object(
+                operations, "process_generation", side_effect=generations
+            ), patch.object(operations, "run", return_value=subprocess.CompletedProcess(
+                [], 0, self.text_vnode_output(pid, uid, path), b""
+            )):
+                self.assertFalse(operations.confirmed_unrelated_text(pid, uid, (self.app,)))
+        with patch.object(operations, "process_generation", return_value=None), patch.object(operations, "run") as run:
+            self.assertFalse(operations.confirmed_unrelated_text(pid, uid, (self.app,)))
+            run.assert_not_called()
+        with patch.object(operations, "process_generation", return_value=generation), patch.object(
+            operations, "run", side_effect=subprocess.TimeoutExpired("lsof", 120)
+        ):
+            self.assertFalse(operations.confirmed_unrelated_text(pid, uid, (self.app,)))
+
+    def test_only_enoent_can_use_positive_unrelated_text_evidence(self):
+        pid, uid = os.getpid() + 100_000, os.getuid()
+        for error in [errno.ENOENT, errno.EPERM, errno.EACCES, 0]:
+            for unrelated in [True, False]:
+                with self.subTest(error=error, unrelated=unrelated):
+                    def lookup(*args):
+                        preview.ctypes.set_errno(error)
+                        return 0
+                    operations = preview.MacOperations()
+                    with patch.object(preview.ctypes, "CDLL", return_value=SimpleNamespace(proc_pidpath=lookup)), \
+                            patch.object(operations, "run", return_value=SimpleNamespace(stdout=f"{pid} {uid}\n")), \
+                            patch.object(operations, "confirmed_zombie", return_value=False), \
+                            patch.object(operations, "confirmed_unrelated_text", return_value=unrelated) as evidence, \
+                            patch.object(preview.os, "kill") as probe:
+                        if error == errno.ENOENT and unrelated:
+                            operations.assert_idle(self.app)
+                        else:
+                            with self.assertRaisesRegex(ValueError, "Cannot verify executable"):
+                                operations.assert_idle(self.app)
+                        self.assertEqual(evidence.call_count, int(error == errno.ENOENT))
+                        probe.assert_called_once_with(pid, 0)
+
+    @unittest.skipUnless(sys.platform == "darwin", "Darwin kernel process evidence")
+    def test_live_deleted_program_text_remains_guarded_without_signalling_other_apps(self):
+        operations = preview.MacOperations()
+        protected = self.root / "Protected.app"
+        probe = self.root / "text-probe"
+        subprocess.run(
+            ["/usr/bin/xcrun", "clang", "-x", "c", "-", "-o", str(probe)],
+            input=b'#include <unistd.h>\nint main(void) { write(1, "ready", 5); sleep(30); return 0; }\n',
+            check=True, capture_output=True,
+        )
+        for location, unrelated in [(self.root / "unrelated-sleep", True), (protected / "Contents/MacOS/sleep", False)]:
+            with self.subTest(location=location):
+                location.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(probe, location)
+                child = subprocess.Popen([str(location)], stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                try:
+                    self.assertEqual(child.stdout.read(5), b"ready")
+                    location.unlink()
+                    self.assertIsNone(child.poll())
+                    self.assertEqual(
+                        operations.confirmed_unrelated_text(child.pid, os.getuid(), (protected,)), unrelated,
+                    )
+                    self.assertIsNone(child.poll())
+                finally:
+                    child.terminate()
+                    child.wait(timeout=5)
+                    child.stdout.close()
+
+    def test_kernel_generation_requires_exact_owner_start_and_complete_bsd_info(self):
+        pid, uid = 43210, os.getuid()
+        cases = [
+            ({}, False, (pid, uid, 100, 123)),
+            ({}, True, None),
+            ({"pid": pid + 1}, False, None),
+            ({"uid": uid + 1}, False, None),
+            ({"ruid": uid + 1}, False, None),
+            ({"flags": 4}, False, None),
+            ({"status": 5}, False, None),
+            ({"start_seconds": 0}, False, None),
+            ({"start_microseconds": 1_000_000}, False, None),
+        ]
+        for overrides, truncated, expected in cases:
+            with self.subTest(overrides=overrides, truncated=truncated):
+                info = preview.ProcBSDInfo(pid=pid, uid=uid, ruid=uid, status=2,
+                                           start_seconds=100, start_microseconds=123)
+                for key, value in overrides.items():
+                    setattr(info, key, value)
+                def lookup(actual_pid, flavor, argument, buffer, size):
+                    self.assertEqual((actual_pid, flavor, argument, size), (pid, 3, 0, preview.ctypes.sizeof(info)))
+                    preview.ctypes.memmove(buffer, preview.ctypes.byref(info), size)
+                    return size - int(truncated)
+                with patch.object(preview.ctypes, "CDLL", return_value=SimpleNamespace(proc_pidinfo=lookup)):
+                    self.assertEqual(preview.MacOperations().process_generation(pid, uid), expected)
+
     def test_unverifiable_process_is_skipped_only_for_matching_kernel_zombie_state(self):
         pid = os.getpid() + 100_000
         uid = os.getuid()

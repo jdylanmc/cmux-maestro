@@ -1149,6 +1149,14 @@ replacement while a same-user process is executing from an affected preview
 app or backup. It reports the specific process ID when possible; it never signals a
 process. Keep these apps closed until the operation finishes.
 
+An unrelated application's updater can leave a live process whose old executable
+path has been deleted. When Darwin reports that specific missing-path condition,
+the installer checks kernel-backed program-text vnode paths using `/usr/sbin/lsof`,
+bracketed by exact PID/owner/start-time checks. Every reported text path must be
+outside the affected preview apps and backups. Missing, partial, changed, or
+permission-denied evidence still blocks the update; unrelated apps are neither
+terminated nor exempted by name.
+
 macOS can retain an idle extension process even after Default is selected.
 Use **`prepare-update`** to retire only the receipt-owned preview registration
 before an update or rollback. This does not delete or replace app files, change

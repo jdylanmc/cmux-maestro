@@ -4,6 +4,7 @@
 import argparse
 from contextlib import contextmanager
 import ctypes
+import errno
 import fcntl
 import hashlib
 import importlib.util
@@ -32,6 +33,22 @@ STATE_NAME = ".cmux-maestro-preview-install"
 EXTENSION = Path("Contents/Extensions/CMUX Maestro Preview Extension.appex")
 DEVELOPMENT_APP = ROOT / ".build/adhoc/Build/Products/Debug" / DEFAULT_NAME
 LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+
+class ProcBSDInfo(ctypes.Structure):
+    """Darwin sys/proc_info.h, PROC_PIDTBSDINFO; names are never identity evidence."""
+    _fields_ = [
+        (name, ctypes.c_uint32) for name in (
+            "flags", "status", "xstatus", "pid", "ppid", "uid", "gid", "ruid",
+            "rgid", "svuid", "svgid", "reserved",
+        )
+    ] + [
+        ("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32),
+        ("nfiles", ctypes.c_uint32), ("pgid", ctypes.c_uint32),
+        ("pjobc", ctypes.c_uint32), ("tdev", ctypes.c_uint32),
+        ("tpgid", ctypes.c_uint32), ("nice", ctypes.c_int32),
+        ("start_seconds", ctypes.c_uint64), ("start_microseconds", ctypes.c_uint64),
+    ]
 
 
 def require(condition, message):
@@ -179,6 +196,61 @@ class MacOperations:
             and re.fullmatch(r"Z[+<>AELNSsVWX]*", fields[2]) is not None
         )
 
+    def process_generation(self, pid, uid):
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        library.proc_pidinfo.argtypes = [
+            ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int,
+        ]
+        library.proc_pidinfo.restype = ctypes.c_int
+        info = ProcBSDInfo()
+        length = library.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
+        if (length != ctypes.sizeof(info) or info.pid != pid or info.uid != uid
+                or info.ruid != uid or info.flags & 4 or info.status == 5
+                or not info.start_seconds or info.start_microseconds >= 1_000_000):
+            return None
+        return (info.pid, info.uid, info.start_seconds, info.start_microseconds)
+
+    def confirmed_unrelated_text(self, pid, uid, apps):
+        """Deleted executable paths can fail proc_pidpath while kernel text vnodes remain readable."""
+        try:
+            before = self.process_generation(pid, uid)
+            if before is None:
+                return False
+            result = self.run(
+                ["/usr/sbin/lsof", "-a", "-p", str(pid), "-d", "txt", "-F0pfDinu"],
+                check=False,
+            )
+            data = result.stdout
+            if (result.returncode or result.stderr or not data.endswith(b"\0\n")
+                    or len(data) > 1_048_576):
+                return False
+            records = data[:-2].split(b"\0\n")
+
+            def fields(record, expected):
+                parts = record.split(b"\0")
+                values = {part[:1]: part[1:] for part in parts}
+                require(len(parts) == len(values) and values.keys() == expected,
+                        "Incomplete kernel text-vnode evidence.")
+                return values
+
+            owner = fields(records[0], {b"p", b"u"})
+            if owner != {b"p": str(pid).encode(), b"u": str(uid).encode()} or len(records) < 2:
+                return False
+            for record in records[1:]:
+                item = fields(record, {b"f", b"D", b"i", b"n"})
+                if (item[b"f"] != b"txt" or not re.fullmatch(rb"0x[0-9a-fA-F]+", item[b"D"])
+                        or not item[b"i"].isdigit() or int(item[b"i"]) <= 0):
+                    return False
+                path = Path(os.fsdecode(item[b"n"]))
+                if not path.is_absolute() or ".." in path.parts:
+                    return False
+                if any(path.is_relative_to(app) or path.resolve().is_relative_to(app) for app in apps):
+                    return False
+            return self.process_generation(pid, uid) == before
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+            # The caller reports an unverifiable live process; never interpret missing evidence as idle.
+            return False
+
     def assert_idle(self, *apps):
         """Check executable paths and kernel exit state, never names or command text."""
         library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
@@ -190,13 +262,17 @@ class MacOperations:
             if uid != os.getuid() or pid == os.getpid():
                 continue
             buffer = ctypes.create_string_buffer(4096)
+            ctypes.set_errno(0)
             length = library.proc_pidpath(pid, buffer, len(buffer))
+            path_error = ctypes.get_errno()
             if length <= 0:
                 try:
                     os.kill(pid, 0)
                 except ProcessLookupError:
                     continue
                 if self.confirmed_zombie(pid, uid):
+                    continue
+                if path_error == errno.ENOENT and self.confirmed_unrelated_text(pid, uid, apps):
                     continue
                 raise ValueError(f"Cannot verify executable for live process {pid}; retry when it exits.")
             executable = Path(os.fsdecode(buffer.value)).resolve()
