@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Synthetic filesystem + injected signatures/registries; no live app or CLI access."""
+"""Synthetic filesystem/registries and owned test processes; no live app or CLI mutation."""
 
 import importlib.util
+import errno
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import plistlib
 import shutil
 import signal
 import subprocess
+import struct
 import sys
 import time
 from types import SimpleNamespace
@@ -122,6 +124,149 @@ class SyntheticMac(preview.MacOperations):
 
 
 class LocalPreviewTests(unittest.TestCase):
+    def test_deleted_executable_requires_positive_stable_code_identity_and_inventory(self):
+        pid, uid = 43210, os.getuid()
+        generation = (pid, uid, 100, 123)
+        cases = [
+            (["aa" * 20] * 2, {"bb" * 20}, [generation] * 2, ["tree"] * 2, True),
+            (["aa" * 20] * 2, {"aa" * 20, "bb" * 20}, [generation] * 2, ["tree"] * 2, False),
+            ([None], {"bb" * 20}, [generation] * 2, ["tree"] * 2, False),
+            (["aa" * 20, None], {"bb" * 20}, [generation] * 2, ["tree"] * 2, False),
+            (["aa" * 20, "cc" * 20], {"bb" * 20}, [generation] * 2, ["tree"] * 2, False),
+            (["aa" * 20] * 2, set(), [generation] * 2, ["tree"] * 2, False),
+            (["aa" * 20] * 2, {"bb" * 20}, [None], ["tree"] * 2, False),
+            (["aa" * 20] * 2, {"bb" * 20}, [generation, None], ["tree"] * 2, False),
+            (["aa" * 20] * 2, {"bb" * 20}, [generation, (pid, uid, 100, 124)], ["tree"] * 2, False),
+            (["aa" * 20] * 2, {"bb" * 20}, [generation] * 2, ["tree", "changed"], False),
+        ]
+        for hashes, protected, generations, trees, accepted in cases:
+            with self.subTest(hashes=hashes, protected=protected, generations=generations, trees=trees):
+                operations = preview.MacOperations()
+                with patch.object(operations, "process_generation", side_effect=generations), \
+                        patch.object(operations, "executable_code_hash", side_effect=hashes), \
+                        patch.object(operations, "protected_code_hashes", return_value=protected), \
+                        patch.object(preview, "digest", side_effect=trees), \
+                        patch.object(operations, "run") as run:
+                    self.assertEqual(
+                        operations.confirmed_unrelated_executable(pid, uid, (self.app,)), accepted,
+                    )
+                    run.assert_not_called()
+
+    def test_mach_o_inventory_covers_every_architecture_and_alternate_hash(self):
+        binary = self.old / "universal"
+        arm = struct.pack("<III", 0xfeedfacf, 0x100000c, 0)
+        intel = struct.pack("<III", 0xfeedfacf, 0x1000007, 3)
+        binary.write_bytes(
+            struct.pack(">II", 0xcafebabe, 2)
+            + struct.pack(">IIIII", 0x100000c, 0, 48, len(arm), 0)
+            + struct.pack(">IIIII", 0x1000007, 3, 60, len(intel), 0) + arm + intel
+        )
+        self.assertEqual(preview.mach_o_architectures(binary), [(0x100000c, 0), (0x1000007, 3)])
+        operations = preview.MacOperations()
+        with patch.object(operations, "run", side_effect=[
+            subprocess.CompletedProcess([], 0, b"", f"CDHash={'aa' * 20}\nCandidateCDHash sha1={'bb' * 20}\n".encode()),
+            subprocess.CompletedProcess([], 0, b"", f"CDHash={'cc' * 20}\n".encode()),
+        ]) as run:
+            self.assertEqual(operations.protected_code_hashes((self.old,)), {"aa" * 20, "bb" * 20, "cc" * 20})
+            self.assertEqual([call.args[0][-2] for call in run.call_args_list], ["16777228,0", "16777223,3"])
+        binary.write_bytes(arm)
+        for details in [b"", b"CDHash=short\n", f"CDHash={'aa' * 20}\nCandidateCDHash sha1=short\n".encode()]:
+            with self.subTest(details=details), patch.object(
+                operations, "run", return_value=subprocess.CompletedProcess([], 0, b"", details)
+            ), self.assertRaises(ValueError):
+                operations.protected_code_hashes((self.old,))
+        for data in [arm[:8], struct.pack(">II", 0xcafebabe, 33) + b"0000",
+                     struct.pack(">II", 0xcafebabe, 1) + b"0000",
+                     struct.pack(">II", 0xcafebabe, 1) + struct.pack(">IIIII", 0x100000c, 0, 0, 12, 0)]:
+            binary.write_bytes(data)
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                preview.mach_o_architectures(binary)
+        with patch.object(preview, "safe_tree"), patch.object(Path, "rglob", return_value=[binary] * 16_385), \
+                patch.object(operations, "run") as run, self.assertRaisesRegex(ValueError, "bound"):
+            operations.protected_code_hashes((self.old,))
+            run.assert_not_called()
+
+    def test_only_enoent_can_use_positive_unrelated_executable_evidence(self):
+        pid, uid = os.getpid() + 100_000, os.getuid()
+        for error in [errno.ENOENT, errno.EPERM, errno.EACCES, 0]:
+            for unrelated in [True, False]:
+                with self.subTest(error=error, unrelated=unrelated):
+                    def lookup(*args):
+                        preview.ctypes.set_errno(error)
+                        return 0
+                    operations = preview.MacOperations()
+                    with patch.object(preview.ctypes, "CDLL", return_value=SimpleNamespace(proc_pidpath=lookup)), \
+                            patch.object(operations, "run", return_value=SimpleNamespace(stdout=f"{pid} {uid}\n")), \
+                            patch.object(operations, "confirmed_zombie", return_value=False), \
+                            patch.object(operations, "confirmed_unrelated_executable", return_value=unrelated) as evidence, \
+                            patch.object(preview.os, "kill") as probe:
+                        if error == errno.ENOENT and unrelated:
+                            operations.assert_idle(self.app)
+                        else:
+                            with self.assertRaisesRegex(ValueError, "Cannot verify executable"):
+                                operations.assert_idle(self.app)
+                        self.assertEqual(evidence.call_count, int(error == errno.ENOENT))
+                        probe.assert_called_once_with(pid, 0)
+
+    @unittest.skipUnless(sys.platform == "darwin", "Darwin kernel process evidence")
+    def test_live_deleted_executable_identity_remains_guarded_without_signalling_other_apps(self):
+        operations = preview.MacOperations()
+        protected = self.root / "Protected.app"
+        protected_binary = protected / "Contents/MacOS/probe"
+        unrelated_binary = self.root / "unrelated-probe"
+        for location, label in [(protected_binary, "owned"), (unrelated_binary, "other")]:
+            location.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["/usr/bin/xcrun", "clang", "-x", "c", "-", "-o", str(location)],
+                input=f'#include <unistd.h>\nint main(void) {{ write(1, "{label}", 5); sleep(30); return 0; }}\n'.encode(),
+                check=True, capture_output=True,
+            )
+        for location, unrelated, label in [(unrelated_binary, True, b"other"), (protected_binary, False, b"owned")]:
+            with self.subTest(location=location):
+                child = subprocess.Popen([str(location)], stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                try:
+                    self.assertEqual(child.stdout.read(5), label)
+                    if unrelated:
+                        location.unlink()
+                    else:
+                        location.rename(location.with_suffix(".retained"))
+                    self.assertIsNone(child.poll())
+                    self.assertEqual(
+                        operations.confirmed_unrelated_executable(child.pid, os.getuid(), (protected,)), unrelated,
+                    )
+                    self.assertIsNone(child.poll())
+                finally:
+                    child.terminate()
+                    child.wait(timeout=5)
+                    child.stdout.close()
+
+    def test_kernel_generation_requires_exact_owner_start_and_complete_bsd_info(self):
+        pid, uid = 43210, os.getuid()
+        cases = [
+            ({}, False, (pid, uid, 100, 123)),
+            ({}, True, None),
+            ({"pid": pid + 1}, False, None),
+            ({"uid": uid + 1}, False, None),
+            ({"ruid": uid + 1}, False, None),
+            ({"flags": 4}, False, None),
+            ({"status": 5}, False, None),
+            ({"start_seconds": 0}, False, None),
+            ({"start_microseconds": 1_000_000}, False, None),
+        ]
+        for overrides, truncated, expected in cases:
+            with self.subTest(overrides=overrides, truncated=truncated):
+                info = preview.ProcBSDInfo(pid=pid, uid=uid, ruid=uid, status=2,
+                                           start_seconds=100, start_microseconds=123)
+                for key, value in overrides.items():
+                    setattr(info, key, value)
+                def lookup(actual_pid, flavor, argument, buffer, size):
+                    self.assertEqual((actual_pid, flavor, argument, size), (pid, 3, 0, preview.ctypes.sizeof(info)))
+                    preview.ctypes.memmove(buffer, preview.ctypes.byref(info), size)
+                    return size - int(truncated)
+                with patch.object(preview.ctypes, "CDLL", return_value=SimpleNamespace(proc_pidinfo=lookup)):
+                    self.assertEqual(preview.MacOperations().process_generation(pid, uid), expected)
+
     def test_unverifiable_process_is_skipped_only_for_matching_kernel_zombie_state(self):
         pid = os.getpid() + 100_000
         uid = os.getuid()

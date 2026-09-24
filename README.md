@@ -1184,6 +1184,16 @@ replacement while a same-user process is executing from an affected preview
 app or backup. It reports the specific process ID when possible; it never signals a
 process. Keep these apps closed until the operation finishes.
 
+An unrelated application's updater can leave a live process whose old executable
+path has been deleted. For that specific missing-path condition, the installer
+compares the kernel-cached executable code-directory hash with every Mach-O
+architecture in the receipt-verified preview apps and backups. It requires
+unchanged bundle contents, process ownership/start time and executable identity.
+A matching hash, missing signature, unsupported/partial inventory, changed
+evidence or permission denial still blocks the update. No process is exempted
+by name or terminated. Mapped-library listings are not used as proof of the
+running executable's identity.
+
 macOS can retain an idle extension process even after Default is selected.
 Use **`prepare-update`** to retire only the receipt-owned preview registration
 before an update or rollback. This does not delete or replace app files, change

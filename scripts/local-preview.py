@@ -4,6 +4,7 @@
 import argparse
 from contextlib import contextmanager
 import ctypes
+import errno
 import fcntl
 import hashlib
 import importlib.util
@@ -15,6 +16,7 @@ import plistlib
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import uuid
@@ -32,6 +34,65 @@ STATE_NAME = ".cmux-maestro-preview-install"
 EXTENSION = Path("Contents/Extensions/CMUX Maestro Preview Extension.appex")
 DEVELOPMENT_APP = ROOT / ".build/adhoc/Build/Products/Debug" / DEFAULT_NAME
 LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+
+class ProcBSDInfo(ctypes.Structure):
+    """Darwin sys/proc_info.h, PROC_PIDTBSDINFO; names are never identity evidence."""
+    _fields_ = [
+        (name, ctypes.c_uint32) for name in (
+            "flags", "status", "xstatus", "pid", "ppid", "uid", "gid", "ruid",
+            "rgid", "svuid", "svgid", "reserved",
+        )
+    ] + [
+        ("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32),
+        ("nfiles", ctypes.c_uint32), ("pgid", ctypes.c_uint32),
+        ("pjobc", ctypes.c_uint32), ("tdev", ctypes.c_uint32),
+        ("tpgid", ctypes.c_uint32), ("nice", ctypes.c_int32),
+        ("start_seconds", ctypes.c_uint64), ("start_microseconds", ctypes.c_uint64),
+    ]
+
+
+def mach_o_architectures(path):
+    """Read bounded Mach-O architecture headers; codesign validates the actual code."""
+    thin = {b"\xce\xfa\xed\xfe": "<", b"\xcf\xfa\xed\xfe": "<",
+            b"\xfe\xed\xfa\xce": ">", b"\xfe\xed\xfa\xcf": ">"}
+    fat = {b"\xca\xfe\xba\xbe": (">", False), b"\xbe\xba\xfe\xca": ("<", False),
+           b"\xca\xfe\xba\xbf": (">", True), b"\xbf\xba\xfe\xca": ("<", True)}
+    with path.open("rb") as stream:
+        header = stream.read(12)
+        magic = header[:4]
+        if magic in thin:
+            require(len(header) == 12, "Truncated native code header.")
+            cpu, subtype = struct.unpack(thin[magic] + "II", header[4:])
+            return [(cpu, subtype & 0x00ffffff)]
+        if magic not in fat:
+            return []
+        require(len(header) == 12, "Truncated universal code header.")
+        endian, wide = fat[magic]
+        count = struct.unpack(endian + "I", header[4:8])[0]
+        require(0 < count <= 32, "Unsupported universal architecture count.")
+        entry_size = 32 if wide else 20
+        stream.seek(8)
+        table = stream.read(count * entry_size)
+        require(len(table) == count * entry_size, "Truncated universal architecture table.")
+        total = os.fstat(stream.fileno()).st_size
+        architectures, ranges = [], []
+        for index in range(count):
+            entry = table[index * entry_size:(index + 1) * entry_size]
+            cpu, subtype, offset, size = struct.unpack(endian + ("IIQQII" if wide else "IIIII"), entry)[:4]
+            require(offset >= 8 + len(table) and size >= 12 and offset + size <= total,
+                    "Invalid universal code range.")
+            require(all(offset + size <= start or offset >= end for start, end in ranges),
+                    "Overlapping universal code ranges.")
+            ranges.append((offset, offset + size))
+            stream.seek(offset)
+            image = stream.read(12)
+            require(image[:4] in thin and struct.unpack(thin[image[:4]] + "II", image[4:]) == (cpu, subtype),
+                    "Universal architecture does not match its code header.")
+            architecture = (cpu, subtype & 0x00ffffff)
+            require(architecture not in architectures, "Ambiguous universal architecture.")
+            architectures.append(architecture)
+        return architectures
 
 
 def require(condition, message):
@@ -179,6 +240,76 @@ class MacOperations:
             and re.fullmatch(r"Z[+<>AELNSsVWX]*", fields[2]) is not None
         )
 
+    def process_generation(self, pid, uid):
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        library.proc_pidinfo.argtypes = [
+            ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int,
+        ]
+        library.proc_pidinfo.restype = ctypes.c_int
+        info = ProcBSDInfo()
+        length = library.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
+        if (length != ctypes.sizeof(info) or info.pid != pid or info.uid != uid
+                or info.ruid != uid or info.flags & 4 or info.status == 5
+                or not info.start_seconds or info.start_microseconds >= 1_000_000):
+            return None
+        return (info.pid, info.uid, info.start_seconds, info.start_microseconds)
+
+    def executable_code_hash(self, pid):
+        library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        library.csops.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_void_p, ctypes.c_size_t]
+        library.csops.restype = ctypes.c_int
+        code_hash = ctypes.create_string_buffer(20)
+        # CS_OPS_CDHASH reads the running executable's kernel-cached code identity, not argv or mapped libraries.
+        if library.csops(pid, 5, code_hash, len(code_hash)) or not any(code_hash.raw):
+            return None
+        return code_hash.raw.hex()
+
+    def protected_code_hashes(self, apps):
+        hashes = set()
+        for app in apps:
+            safe_tree(app)
+            files = [path for path in app.rglob("*") if path.is_file() and not path.is_symlink()]
+            require(len(files) <= 16_384, "Protected code inventory exceeds its bound.")
+            app_hashes = set()
+            for path in files:
+                for cpu, subtype in mach_o_architectures(path):
+                    result = self.run([
+                        "/usr/bin/codesign", "-d", "--verbose=4", "--architecture",
+                        f"{cpu},{subtype}", str(path),
+                    ])
+                    require(not result.stdout and len(result.stderr) <= 65_536, "Unexpected code identity output.")
+                    details = result.stderr.decode("utf-8", errors="strict")
+                    primary = re.findall(r"^CDHash=([0-9a-f]{40})$", details, re.MULTILINE)
+                    require(len(primary) == 1, "Missing or ambiguous protected code identity.")
+                    app_hashes.update(primary)
+                    for line in details.splitlines():
+                        if line.startswith("CandidateCDHash "):
+                            match = re.fullmatch(r"CandidateCDHash [a-z0-9]+=(?:[0-9a-f]{40})", line)
+                            require(match is not None, "Unrecognized protected code identity.")
+                            app_hashes.add(line.split("=", 1)[1])
+            require(app_hashes, "No verifiable native code in protected app.")
+            hashes.update(app_hashes)
+        require(hashes, "No protected native code inventory.")
+        return hashes
+
+    def confirmed_unrelated_executable(self, pid, uid, apps):
+        """Compare positive executable identities against unchanged, receipt-verified protected trees."""
+        try:
+            before = self.process_generation(pid, uid)
+            code_hash = self.executable_code_hash(pid)
+            if before is None or code_hash is None:
+                return False
+            fingerprints = [digest(app) for app in apps]
+            protected = self.protected_code_hashes(apps)
+            if not protected or code_hash in protected:
+                return False
+            return (fingerprints == [digest(app) for app in apps]
+                    and self.process_generation(pid, uid) == before
+                    and self.executable_code_hash(pid) == code_hash)
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+            # The caller reports an unverifiable live process; never interpret missing evidence as idle.
+            return False
+
     def assert_idle(self, *apps):
         """Check executable paths and kernel exit state, never names or command text."""
         library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
@@ -190,13 +321,17 @@ class MacOperations:
             if uid != os.getuid() or pid == os.getpid():
                 continue
             buffer = ctypes.create_string_buffer(4096)
+            ctypes.set_errno(0)
             length = library.proc_pidpath(pid, buffer, len(buffer))
+            path_error = ctypes.get_errno()
             if length <= 0:
                 try:
                     os.kill(pid, 0)
                 except ProcessLookupError:
                     continue
                 if self.confirmed_zombie(pid, uid):
+                    continue
+                if path_error == errno.ENOENT and self.confirmed_unrelated_executable(pid, uid, apps):
                     continue
                 raise ValueError(f"Cannot verify executable for live process {pid}; retry when it exits.")
             executable = Path(os.fsdecode(buffer.value)).resolve()
