@@ -45,6 +45,9 @@ final class SidebarPreferences {
     var layoutNotice: String? { layoutStore.value.notice }
     private let historyStore: SidebarPreferenceStore<SidebarHistorySettings>
     private let attentionStore: SidebarPreferenceStore<SidebarAttentionSettings>
+    private let iconStore: SidebarPreferenceStore<SidebarIconSettings>
+    var icons: SidebarIconSettings { iconStore.value.settings }
+    var iconNotice: String? { iconStore.value.notice }
     var history: SidebarHistorySettings { historyStore.value.settings }
     var historyNotice: String? { historyStore.value.notice }
     var attention: SidebarAttentionSettings { attentionStore.value.settings }
@@ -76,9 +79,16 @@ final class SidebarPreferences {
         )
     }
 
-    init(defaults: UserDefaults, historyFile: URL, attentionFile: URL, layoutStore: SidebarLayoutStore) {
+    init(
+        defaults: UserDefaults, historyFile: URL, attentionFile: URL, layoutStore: SidebarLayoutStore,
+        iconFile: URL? = nil
+    ) {
         self.defaults = defaults
         self.layoutStore = layoutStore
+        iconStore = SidebarPreferenceStore(
+            file: .init(url: iconFile ?? historyFile.deletingLastPathComponent().appendingPathComponent("sidebar-icons.json")),
+            initializeMissingFile: false, preserveSettingsOnSaveFailure: true
+        )
         showEnded = defaults.bool(forKey: Self.showEndedKey)
         agentIconStyle = defaults.string(forKey: Self.agentIconStyleKey)
             .flatMap(SidebarAgentIconStyle.init(rawValue:)) ?? .maestro
@@ -113,6 +123,37 @@ final class SidebarPreferences {
     func expandAll() { layoutStore.apply(.expandAll) }
     func resetLayout() { layoutStore.apply(.reset) }
     func refreshLayout() { layoutStore.refresh() }
+
+    func setIcon(_ choice: SidebarIconChoice, for target: SidebarIconTarget) {
+        iconStore.apply {
+            guard SidebarGlyphName.isValid(choice.glyph) else {
+                throw SidebarPreferenceRejection(notice: "That icon name is invalid. Choose an icon from the bundled font.")
+            }
+            $0.overrides[target.key] = .custom(choice)
+            guard $0.isValid else {
+                throw SidebarPreferenceRejection(notice: "Icon storage is full (2,048 items). Reset unused choices to free space.")
+            }
+        }
+    }
+
+    func resetIconToDefault(for target: SidebarIconTarget) {
+        iconStore.apply {
+            if case .session = target { $0.overrides[target.key] = .standard }
+            else { $0.overrides.removeValue(forKey: target.key) }
+        }
+    }
+
+    func resetIconToAgentSelection(for target: SidebarIconTarget) {
+        iconStore.apply {
+            guard case .session = target else {
+                throw SidebarPreferenceRejection(notice: "This item has no agent selection. Use Reset to default instead.")
+            }
+            $0.overrides.removeValue(forKey: target.key)
+        }
+    }
+
+    func resetIcons() { iconStore.apply(reset: true) { _ in } }
+    func refreshIcons() { iconStore.refresh() }
 
     func setRetention(_ retention: SidebarHistoryRetention) {
         historyStore.apply { $0.retention = retention }

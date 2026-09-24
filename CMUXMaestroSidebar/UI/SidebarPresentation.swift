@@ -628,6 +628,13 @@ enum SidebarPresentation {
         managedSession(for: node, in: tree, now: now)?.model
     }
 
+    static func managedIconTarget(
+        _ node: SidebarOrchestrationNode, tree: SidebarCopilotTree, now: Date
+    ) -> SidebarIconTarget? {
+        if let id = node.copilotSessionId { return .session(id) }
+        return managedSession(for: node, in: tree, now: now).map { .session($0.id) }
+    }
+
     private static func coordinatorSession(
         _ node: SidebarOrchestrationNode, availability: SidebarOrchestrationAvailability,
         tree: SidebarCopilotTree?, now: Date

@@ -28,11 +28,7 @@ private struct SidebarFocusedSurfaceKey: EnvironmentKey {
     static let defaultValue: SidebarSeenTarget? = nil
 }
 
-final class SidebarIconResources: NSObject {
-    static let bundle = Bundle(for: SidebarIconResources.self)
-}
-
-private extension EnvironmentValues {
+extension EnvironmentValues {
     var sidebarFocusedSurface: SidebarSeenTarget? {
         get { self[SidebarFocusedSurfaceKey.self] }
         set { self[SidebarFocusedSurfaceKey.self] = newValue }
@@ -396,6 +392,11 @@ struct SidebarView: View {
                 Text(notice).font(.caption2).foregroundStyle(SidebarTone.attention.color)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let notice = preferences.iconNotice {
+                Text(notice).font(.caption2).foregroundStyle(SidebarTone.attention.color)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("sidebar-icon-notice")
+            }
             if let notice = preferences.attentionNotice {
                 Text(notice).font(.caption2).foregroundStyle(SidebarTone.attention.color)
                     .fixedSize(horizontal: false, vertical: true)
@@ -435,6 +436,7 @@ struct SidebarView: View {
         }
         .padding(preferences.layout.density.spacing(10))
         .padding(.bottom, Self.hostFooterClearance)
+        .environment(preferences)
         .environment(\.sidebarDensity, preferences.layout.density)
         .environment(\.sidebarAgentIconStyle, preferences.agentIconStyle)
         .environment(\.sidebarTerminalIconStyle, preferences.terminalIconStyle)
@@ -444,6 +446,7 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             preferences.refreshLayout()
+            preferences.refreshIcons()
             model.copilot.updateHistory(preferences.history)
             model.copilot.updateAttention(preferences.attention)
             model.setVisible(true)
@@ -458,7 +461,10 @@ struct SidebarView: View {
         }
         .onChange(of: model.copilot.tree) { _, _ in preferences.refreshLayout() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { preferences.refreshLayout() }
+            if phase == .active {
+                preferences.refreshLayout()
+                preferences.refreshIcons()
+            }
         }
         .onDisappear { model.setVisible(false) }
     }
@@ -649,6 +655,13 @@ struct SidebarView: View {
             }
             .pickerStyle(.segmented)
             .accessibilityIdentifier("sidebar-terminal-icon-style")
+            Text("Click or right-click an item icon to choose from the bundled font. Your choices override agent selections until reset.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Reset all icon preferences") { preferences.resetIcons() }
+                .disabled(preferences.icons.overrides.isEmpty && preferences.iconNotice == nil)
+                .help("Remove human icon choices in every window and follow agent selections again. Other preferences are unchanged.")
+                .accessibilityIdentifier("sidebar-reset-icons")
             Picker("View", selection: $preferences.selectedMode) {
                 ForEach(SidebarMode.allCases) { mode in Text(mode.title).tag(mode) }
             }
@@ -944,16 +957,11 @@ private struct ManagedNodeRow: View {
             } else {
                 Color.clear.frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
             }
-            Button(action: select) {
-                SidebarAgentIcon(
-                    visual: stateVisual,
-                    avatar: node.iconId, color: node.iconColor
-                )
-            }
-            .buttonStyle(.plain)
-            .help(stateVisual.title)
-            .accessibilityLabel("\(node.label), \(stateVisual.title). Show details")
-            .accessibilityIdentifier("select-managed-\(node.id)")
+            SidebarItemIcon(
+                kind: .agent, target: SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate),
+                title: node.label, agentGlyph: node.iconId, agentColor: node.iconColor,
+                inspect: select
+            )
             FocusButton(
                 target: .surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
                 navigation: navigation, label: "Focus \(node.label)"
@@ -1389,33 +1397,29 @@ private struct SurfaceRow: View {
                 } else {
                     Color.clear.frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
                 }
-                Button {
-                    if let singleSession {
-                        selection = .session(singleSession.id)
-                    } else {
-                        selection = .surface(workspaceID: workspaceID, surfaceID: surface.id)
-                    }
-                } label: {
-                    if let singleSession {
-                        SidebarAgentIcon(
-                            visual: SidebarPresentation.sessionState(singleSession),
-                            avatar: singleSession.iconId, color: singleSession.iconColor.flatMap(SidebarAvatarColor.init(rawValue:))
-                        )
-                    } else if surface.kind == .agentSession {
-                        SidebarAgentIcon(visual: SidebarPresentation.state(.unknown))
-                    } else if surface.kind == .terminal {
-                        SidebarTerminalIcon()
-                    } else if surface.kind == .browser {
-                        SidebarGlyphIcon(name: "fa-edge").frame(width: 24, height: 24)
-                    } else {
+                if let singleSession {
+                    SidebarItemIcon(
+                        kind: .agent, target: .session(singleSession.id), title: title,
+                        agentGlyph: singleSession.iconId,
+                        agentColor: singleSession.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
+                        inspect: inspect
+                    )
+                } else if surface.kind == .agentSession {
+                    SidebarItemIcon(kind: .agent, target: nil, title: title, inspect: inspect)
+                } else if surface.kind == .terminal {
+                    SidebarItemIcon(kind: .terminal, target: .surface(surface.id), title: title, inspect: inspect)
+                } else if surface.kind == .browser {
+                    SidebarItemIcon(kind: .browser, target: .surface(surface.id), title: title, inspect: inspect)
+                } else {
+                    Button(action: inspect) {
                         Image(systemName: surface.kind.symbolName)
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                             .frame(width: 18, height: 24)
                     }
+                    .buttonStyle(.plain)
+                    .help(inspectionLabel)
+                    .accessibilityLabel(inspectionLabel)
                 }
-                .buttonStyle(.plain)
-                .help(inspectionLabel)
-                .accessibilityLabel(inspectionLabel)
                 FocusButton(
                     target: .surface(workspaceID: workspaceID, surfaceID: surface.id),
                     navigation: navigation, label: "Focus \(surface.kind.title) \(title)"
@@ -1476,6 +1480,11 @@ private struct SurfaceRow: View {
         return URL(fileURLWithPath: path).lastPathComponent
     }
 
+    private func inspect() {
+        if let singleSession { selection = .session(singleSession.id) }
+        else { selection = .surface(workspaceID: workspaceID, surfaceID: surface.id) }
+    }
+
     private var rowMetadata: String {
         var parts = [
             singleSession == nil ? surface.kind.title : "Agent",
@@ -1512,17 +1521,11 @@ private struct CopilotSessionRow: View {
                 } else {
                     Color.clear.frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
                 }
-                Button {
-                    selection = .session(session.id)
-                } label: {
-                    SidebarAgentIcon(
-                        visual: SidebarPresentation.sessionState(session),
-                        avatar: session.iconId, color: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:))
-                    )
-                }
-                .buttonStyle(.plain)
-                .help("\(SidebarPresentation.sessionState(session).title). Show details")
-                .accessibilityLabel("Copilot \(session.shortID), \(SidebarPresentation.sessionState(session).title). Show details")
+                SidebarItemIcon(
+                    kind: .agent, target: .session(session.id), title: "Copilot \(session.shortID)",
+                    agentGlyph: session.iconId, agentColor: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
+                    inspect: { selection = .session(session.id) }
+                )
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation, label: "Focus Copilot session \(session.shortID)"
@@ -1885,17 +1888,16 @@ private struct TaskboardSessionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
+                SidebarItemIcon(
+                    kind: .agent, target: .session(session.id), title: title,
+                    agentGlyph: session.iconId, agentColor: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
+                    inspect: { selection = .session(session.id) }
+                )
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation, label: "Focus Copilot session \(session.shortID)"
                 ) {
-                    HStack(spacing: 4) {
-                        SidebarAgentIcon(
-                            visual: SidebarPresentation.sessionState(session),
-                            avatar: session.iconId, color: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:))
-                        )
-                        Text(title).sidebarFont(.caption, weight: .semibold).lineLimit(1)
-                    }
+                    Text(title).sidebarFont(.caption, weight: .semibold).lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 Button { selection = .session(session.id) } label: {
