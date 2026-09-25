@@ -12,6 +12,7 @@ struct SidebarHoverCardData: Equatable {
 struct SidebarHoverCard: View {
     let data: SidebarHoverCardData
     let close: () -> Void
+    let copySessionID: (UUID) -> Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -35,13 +36,24 @@ struct SidebarHoverCard: View {
                         Text(subtitle).font(.callout).fixedSize(horizontal: false, vertical: true)
                     }
                     ForEach(data.lines) { line in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(line.title).foregroundStyle(.secondary)
-                            Text(line.value).textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
+                        if let sessionID = line.copyableSessionID {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(line.title).font(.caption).foregroundStyle(.secondary)
+                                SidebarCopyableValue(value: line.value, label: line.title) {
+                                    copySessionID(sessionID)
+                                }
+                                .id(sessionID)
+                            }
+                            .accessibilityElement(children: .contain)
+                        } else {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(line.title).foregroundStyle(.secondary)
+                                Text(line.value).textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .font(.caption)
+                            .accessibilityElement(children: .combine)
                         }
-                        .font(.caption)
-                        .accessibilityElement(children: .combine)
                     }
                     if let notice = data.notice {
                         Text(notice).font(.caption).foregroundStyle(.secondary)
@@ -136,6 +148,13 @@ final class SidebarHoverPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+enum SidebarSessionCopy {
+    static func copy(_ id: UUID, to pasteboard: NSPasteboard = .general) -> Bool {
+        pasteboard.clearContents()
+        return pasteboard.setString(id.uuidString, forType: .string)
+    }
+}
+
 @MainActor
 final class SidebarHoverPresenter {
     private(set) var state = SidebarHoverState()
@@ -150,14 +169,17 @@ final class SidebarHoverPresenter {
     private var eventMonitor: Any?
     private var windowObservers: [NSObjectProtocol] = []
     private var hosting: NSHostingView<AnyView>?
+    private let copySessionID: (UUID) -> Bool
     private let showPanel: (NSWindow, SidebarHoverPanel, Bool) -> Void
     var isMonitoring: Bool { eventMonitor != nil || !windowObservers.isEmpty }
 
-    init(showPanel: @escaping (NSWindow, SidebarHoverPanel, Bool) -> Void = { window, panel, explicit in
+    init(copySessionID: @escaping (UUID) -> Bool = { SidebarSessionCopy.copy($0) },
+         showPanel: @escaping (NSWindow, SidebarHoverPanel, Bool) -> Void = { window, panel, explicit in
         window.addChildWindow(panel, ordered: .above)
         panel.orderFront(nil)
         if explicit { panel.makeKey() }
     }) {
+        self.copySessionID = copySessionID
         self.showPanel = showPanel
     }
 
@@ -235,7 +257,10 @@ final class SidebarHoverPresenter {
 
     private func updateContent() {
         guard let panel, let data else { return }
-        let content = SidebarHoverCard(data: data, close: { [weak self] in self?.dismiss(restoreFocus: true) })
+        let content = SidebarHoverCard(
+            data: data, close: { [weak self] in self?.dismiss(restoreFocus: true) },
+            copySessionID: copySessionID
+        )
             .onHover { [weak self] in self?.hoverCard($0) }
         if let hosting {
             hosting.rootView = AnyView(content)

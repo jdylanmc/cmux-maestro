@@ -3,7 +3,13 @@ import Foundation
 struct SidebarDetailLine: Equatable, Identifiable {
     let title: String
     let value: String
+    var copyableSessionID: UUID? = nil
     var id: String { title }
+
+    static func sessionID(_ id: UUID, isParent: Bool = false, canCopy: Bool = true) -> Self {
+        .init(title: isParent ? "Parent session ID" : "Session ID", value: id.uuidString,
+              copyableSessionID: canCopy ? id : nil)
+    }
 }
 
 enum SidebarTone: CaseIterable, Hashable {
@@ -609,7 +615,7 @@ enum SidebarPresentation {
             result.append(.init(title: "Observation warnings", value: warnings.joined(separator: "\n")))
         }
         if let sessionID = node.copilotSessionId {
-            result.append(.init(title: "Copilot session", value: sessionID.uuidString))
+            result.append(.sessionID(sessionID))
         }
         result += [
             .init(title: "Worker ID", value: node.id.uuidString),
@@ -679,7 +685,7 @@ enum SidebarPresentation {
             .init(title: "Name", value: node.name),
             .init(title: "Kind", value: kind(node.kind)),
             .init(title: "State", value: node.state.rawValue),
-            .init(title: "Session", value: session.id.uuidString),
+            .sessionID(session.id, isParent: true, canCopy: [.alive, .dead].contains(session.liveness)),
             .init(title: "Session glyph", value: session.iconId ?? "Sidebar default"),
             .init(title: "Icon color", value: session.iconColor ?? "theme"),
             .init(title: "Child ID", value: node.id)
@@ -695,7 +701,7 @@ enum SidebarPresentation {
 
     static func sessionDetails(_ session: SidebarCopilotSession) -> [SidebarDetailLine] {
         var result: [SidebarDetailLine] = [
-            .init(title: "Session", value: session.id.uuidString),
+            .sessionID(session.id, canCopy: [.alive, .dead].contains(session.liveness)),
             .init(title: "State", value: session.state.rawValue),
             .init(title: "Process", value: session.liveness.rawValue),
             .init(title: "Observed", value: date(session.observedAt)),

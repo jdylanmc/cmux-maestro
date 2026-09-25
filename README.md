@@ -476,6 +476,16 @@ Git metrics. Windowless children retain parent-session placement context.
 Opening a card never invokes the existing inspection/mark-seen action; the icon
 picker, title-to-focus action, bottom details, and history controls are unchanged.
 
+Agent previews put a **Copy session ID** button beside the exact session GUID.
+Observed children label their inherited identity **Parent session ID** and copy
+that parent GUID, never the child/worker/run/surface ID. Missing, ambiguous, or
+unavailable session identity has no copy action. Open **Preview** for keyboard
+access; hovering, opening, and refreshing never write to the clipboard.
+Copying shows **Copied** only after the native pasteboard accepts the value;
+failure shows **Could not copy. Try again.** Changing the GUID clears feedback.
+The small `SidebarCopyableValue` control receives an injected action and knows
+nothing about session lookup, persistence, host navigation, or the pasteboard.
+
 Working agent rows have a pale pastel-green shimmer moving left to right; blocked rows have a
 steady subtle red background. Idle/unknown rows do not pulse or glow. Reduce
 Motion replaces the working shimmer with a steady subtle tint. The glow stays on
