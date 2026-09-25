@@ -57,6 +57,36 @@ struct SidebarHoverTests {
         #expect(!panel.isVisible)
     }
 
+    @Test func losingPanelFocusOrApplicationActivationReleasesPreviewOwnership() throws {
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 400, height: 400),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let anchor = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 30))
+        window.contentView = anchor
+        defer { window.contentView = nil; window.close() }
+        let group = SidebarHoverGroup()
+        for notification in [NSWindow.didResignKeyNotification, NSApplication.didResignActiveNotification] {
+            let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in })
+            presenter.update(anchor: anchor, data: .init(id: "one", category: "Preview", title: "One"), group: group)
+            let original = window.firstResponder
+            presenter.open(explicit: true)
+            #expect(presenter.state.mode == .explicit)
+            #expect(presenter.isMonitoring)
+            let panel = try #require(presenter.panel)
+            #expect(!panel.isVisible && !window.isVisible)
+            let other = SidebarHoverPresenter(showPanel: { _, _, _ in })
+            #expect(!group.claim(other, explicit: false))
+            NotificationCenter.default.post(
+                name: notification,
+                object: notification == NSWindow.didResignKeyNotification ? panel : NSApp
+            )
+            #expect(presenter.state.mode == .hidden)
+            #expect(!presenter.isMonitoring && panel.contentView == nil)
+            #expect(window.firstResponder === original)
+            #expect(group.claim(other, explicit: false))
+        }
+    }
+
     @Test func placementFitsScreenEdgesAndShortAvailableSpace() {
         for visible in [
             CGRect(x: 0, y: 0, width: 1440, height: 900),
