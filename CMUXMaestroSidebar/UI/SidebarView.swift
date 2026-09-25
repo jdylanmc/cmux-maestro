@@ -439,6 +439,15 @@ struct SidebarView: View {
         .padding(.bottom, Self.hostFooterClearance)
         .environment(preferences)
         .environment(\.sidebarHoverGroup, hoverGroup)
+        .environment(\.sidebarAgentHoverProvider, { target in
+            let connected: Bool
+            if case .connected = model.state { connected = true } else { connected = false }
+            return SidebarAgentHoverContent.card(
+                for: target, hierarchy: model.hierarchy, connected: connected,
+                tree: model.copilot.tree, managed: model.orchestration.snapshot,
+                availability: model.orchestration.availability, now: Date()
+            )
+        })
         .environment(\.sidebarHoverConnected, {
             if case .connected = model.state { return true }
             return false
@@ -1005,6 +1014,7 @@ private struct ManagedNodeRow: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .agentHoverPreview(.managed(node.id, generation: node.generation))
             if !hasChildren, let dismissManaged,
                let outcome = SidebarPresentation.dismissibleManagedFailure(node, tree: copilotTree) {
                 Button { dismissManaged(outcome) } label: {
@@ -1452,6 +1462,7 @@ private struct SurfaceRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .accessibilityValue(accessibilityStatus)
+                .agentHoverPreview(singleSession.map { .session($0.id) })
                 if let singleSession {
                     SessionEvidenceBadge(session: singleSession)
                 }
@@ -1553,6 +1564,7 @@ private struct CopilotSessionRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .accessibilityValue(session.state.rawValue)
+                .agentHoverPreview(.session(session.id))
                 SessionEvidenceBadge(session: session)
                 if !expanded && !session.outlineNodes.isEmpty {
                     CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: [session]))
@@ -1707,6 +1719,7 @@ private struct CopilotWorkRow: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .agentHoverPreview(node.kind == .subagent ? .child(sessionID: session.id, childID: node.id) : nil)
                 if let summary = expansion?.collapsedSummary { CollapsedBranchSummary(summary: summary) }
                 if node.ancestryUnresolved {
                     Image(systemName: "questionmark.circle")
@@ -1912,6 +1925,7 @@ private struct TaskboardSessionRow: View {
                 ) {
                     Text(title).sidebarFont(.caption, weight: .semibold).lineLimit(1)
                 }
+                .agentHoverPreview(.session(session.id))
                 Spacer(minLength: 0)
                 Button { selection = .session(session.id) } label: {
                     Image(systemName: "info.circle")

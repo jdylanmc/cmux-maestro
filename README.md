@@ -468,6 +468,14 @@ interaction; closing that preview restores its original responder when appropria
 The current bottom details remain unchanged by previewing. This does not implement
 the separate active-window pinned-details overhaul, pets, tags, or lifecycle controls.
 
+The same preview is available on managed agent, observed session, and observed
+sub-agent titles in Hierarchy and Taskboard. Each card resolves its own exact
+subject and only current or explicitly last-known metadata. Missing/expired
+observations are labeled, not replaced with invented model, context, timing or
+Git metrics. Windowless children retain parent-session placement context.
+Opening a card never invokes the existing inspection/mark-seen action; the icon
+picker, title-to-focus action, bottom details, and history controls are unchanged.
+
 Working agent rows have a pale pastel-green shimmer moving left to right; blocked rows have a
 steady subtle red background. Idle/unknown rows do not pulse or glow. Reduce
 Motion replaces the working shimmer with a steady subtle tint. The glow stays on
