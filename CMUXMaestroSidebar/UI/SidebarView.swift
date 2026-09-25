@@ -299,6 +299,7 @@ struct SidebarView: View {
     @State private var showingHistory = false
     @State private var selectedManagedID: UUID?
     @State private var selectedUnmanaged: UnmanagedSelection?
+    @State private var hoverGroup = SidebarHoverGroup()
     @Environment(\.scenePhase) private var scenePhase
 
     init(model: SidebarConnectionModel, preferences: SidebarPreferences) {
@@ -437,6 +438,11 @@ struct SidebarView: View {
         .padding(preferences.layout.density.spacing(10))
         .padding(.bottom, Self.hostFooterClearance)
         .environment(preferences)
+        .environment(\.sidebarHoverGroup, hoverGroup)
+        .environment(\.sidebarHoverConnected, {
+            if case .connected = model.state { return true }
+            return false
+        }())
         .environment(\.sidebarDensity, preferences.layout.density)
         .environment(\.sidebarAgentIconStyle, preferences.agentIconStyle)
         .environment(\.sidebarTerminalIconStyle, preferences.terminalIconStyle)
@@ -882,7 +888,7 @@ struct ManagedHierarchyContent: View {
             ForEach(workspaceGroups, id: \.id) { group in
                 VStack(alignment: .leading, spacing: 2) {
                     if showsWorkspaceHeaders {
-                        WorkspaceOutlineHeader(workspace: group.workspace, navigation: navigation)
+                        WorkspaceOutlineHeader(workspace: group.workspace, hierarchy: hierarchy, navigation: navigation)
                     }
                     ForEach(rows(for: group.roots)) { row in
                         ManagedNodeRow(
@@ -1089,20 +1095,24 @@ struct GitChangeBadge: View {
 
 private struct WorkspaceOutlineHeader: View {
         let workspace: HierarchyWorkspace?
+        let hierarchy: HierarchySnapshot
         let navigation: SidebarNavigation
+        @Environment(\.sidebarHoverConnected) private var connected
 
         var body: some View {
             if let workspace {
-                FocusButton(target: .workspace(workspace.id), navigation: navigation, label: "Focus workspace \(title)") {
-                    HStack(spacing: 5) {
-                        Text(title)
-                            .sidebarFont(.caption2, weight: .semibold)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
+                SidebarHoverRegion(data: SidebarHoverContent.workspace(workspace.id, hierarchy: hierarchy, connected: connected)) {
+                    FocusButton(target: .workspace(workspace.id), navigation: navigation, label: "Focus workspace \(title)") {
+                        HStack(spacing: 5) {
+                            Text(title)
+                                .sidebarFont(.caption2, weight: .semibold)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .foregroundStyle(.secondary)
                     }
-                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("managed-workspace-\(workspace.id)")
                 }
-                .accessibilityIdentifier("managed-workspace-\(workspace.id)")
             } else {
                 Text("Workspace")
                     .sidebarFont(.caption2, weight: .semibold)
@@ -1237,6 +1247,7 @@ private struct WorkspaceRow: View {
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
+    @Environment(\.sidebarHoverConnected) private var connected
     private var expanded: Bool { layout.isExpanded(.workspace(workspace.id)) }
     private var managedNodes: [SidebarOrchestrationNode] {
         displayManaged.filter { $0.workspaceId == workspace.id }
@@ -1273,20 +1284,22 @@ private struct WorkspaceRow: View {
                 ExpandButton(expanded: expanded, label: title) {
                     setExpanded(.workspace(workspace.id), !expanded)
                 }
-                FocusButton(target: .workspace(workspace.id), navigation: navigation, label: "Focus workspace \(title)") {
-                    HStack(spacing: 5) {
-                        Text(title).sidebarFont(.caption2, weight: .semibold)
-                            .foregroundStyle(.secondary).lineLimit(1)
-                        Spacer(minLength: 0)
-                        if case .available(true) = workspace.isPinned {
-                            StatusBadge(symbol: "pin.fill", label: "Pinned")
-                        }
-                        if case .available(let count) = workspace.unreadCount, count > 0 {
-                            UnreadBadge(count: count)
+                SidebarHoverRegion(data: SidebarHoverContent.workspace(workspace.id, hierarchy: hierarchy, connected: connected)) {
+                    FocusButton(target: .workspace(workspace.id), navigation: navigation, label: "Focus workspace \(title)") {
+                        HStack(spacing: 5) {
+                            Text(title).sidebarFont(.caption2, weight: .semibold)
+                                .foregroundStyle(.secondary).lineLimit(1)
+                            Spacer(minLength: 0)
+                            if case .available(true) = workspace.isPinned {
+                                StatusBadge(symbol: "pin.fill", label: "Pinned")
+                            }
+                            if case .available(let count) = workspace.unreadCount, count > 0 {
+                                UnreadBadge(count: count)
+                            }
                         }
                     }
+                    .accessibilityValue(accessibilityStatus)
                 }
-                .accessibilityValue(accessibilityStatus)
                 Menu {
                     FocusButton(
                         target: .workspace(workspace.id), navigation: navigation,
