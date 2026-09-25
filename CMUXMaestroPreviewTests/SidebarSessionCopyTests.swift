@@ -218,11 +218,23 @@ struct SidebarSessionCopyTests {
                 #expect(window.frame.contains(buttonFrame))
                 #expect(button.accessibilityPerformPress())
                 try await settle(hosting)
+                #expect(try copyButton(in: hosting).accessibilityValue() as? String
+                    == (success ? "Copied" : "Could not copy. Try again."))
                 let metrics = SidebarRenderingEvidence.metrics(for: hosting)
                 #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
                 #expect(!window.isVisible)
-                let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+                // Fix capture density before rasterization, rather than enlarging a display-dependent 1x PNG.
+                let captureScale = 2
+                let bitmap = try #require(NSBitmapImageRep(
+                    bitmapDataPlanes: nil,
+                    pixelsWide: Int(hosting.bounds.width) * captureScale,
+                    pixelsHigh: Int(hosting.bounds.height) * captureScale,
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                    isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+                ))
+                bitmap.size = hosting.bounds.size
                 hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                #expect(bitmap.pixelsWide == width * 2 && bitmap.pixelsHigh == 520)
                 let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
                     .appendingPathComponent(".build/layout-validation/offscreen")
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
