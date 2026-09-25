@@ -150,6 +150,16 @@ final class SidebarHoverPresenter {
     private var eventMonitor: Any?
     private var windowObservers: [NSObjectProtocol] = []
     private var hosting: NSHostingView<AnyView>?
+    private let showPanel: (NSWindow, SidebarHoverPanel, Bool) -> Void
+    var isMonitoring: Bool { eventMonitor != nil || !windowObservers.isEmpty }
+
+    init(showPanel: @escaping (NSWindow, SidebarHoverPanel, Bool) -> Void = { window, panel, explicit in
+        window.addChildWindow(panel, ordered: .above)
+        panel.orderFront(nil)
+        if explicit { panel.makeKey() }
+    }) {
+        self.showPanel = showPanel
+    }
 
     func update(anchor: NSView, data: SidebarHoverCardData?, group: SidebarHoverGroup?) {
         self.anchor = anchor
@@ -219,9 +229,7 @@ final class SidebarHoverPresenter {
         panel.appearance = anchor.effectiveAppearance
         updateContent()
         position()
-        window.addChildWindow(panel, ordered: .above)
-        panel.orderFront(nil)
-        if explicit { panel.makeKey() }
+        showPanel(window, panel, explicit)
         installObservers(window: window)
     }
 
@@ -294,6 +302,16 @@ final class SidebarHoverPresenter {
                 MainActor.assumeIsolated { self?.dismiss(restoreFocus: false) }
             })
         }
+        windowObservers.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: panel, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.dismiss(restoreFocus: false) }
+        })
+        windowObservers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.dismiss(restoreFocus: false) }
+        })
     }
 
     func dismiss(restoreFocus: Bool) {
