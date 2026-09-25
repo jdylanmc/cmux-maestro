@@ -481,6 +481,8 @@ Observed children label their inherited identity **Parent session ID** and copy
 that parent GUID, never the child/worker/run/surface ID. Missing, ambiguous, or
 unavailable session identity has no copy action. Open **Preview** for keyboard
 access; hovering, opening, and refreshing never write to the clipboard.
+A stale managed observation still offers its exact recorded session ID with
+the existing last-known notice; copying does not imply the session is live.
 Copying shows **Copied** only after the native pasteboard accepts the value;
 failure shows **Could not copy. Try again.** Changing the GUID clears feedback.
 The small `SidebarCopyableValue` control receives an injected action and knows

@@ -23,7 +23,7 @@ enum SidebarAgentHoverContent {
             var lines = SidebarPresentation.managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { allowed.contains($0.title) }
             let current = availability == .ready || availability == .partial
-            if !current {
+            if !current && availability != .stale {
                 lines = lines.map { line in
                     var result = line
                     result.copyableSessionID = nil

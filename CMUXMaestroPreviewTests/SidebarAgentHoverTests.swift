@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -93,9 +94,24 @@ struct SidebarAgentHoverTests {
         #expect(card(.managed(node.id, generation: 3), sessions: [session()], nodes: [node]) == nil)
         #expect(card(.managed(node.id, generation: 2), sessions: [session()], nodes: [node, node]) == nil)
         let stale = try #require(card(
-            .managed(node.id, generation: 2), sessions: [session()], nodes: [node], availability: .stale
+            .managed(node.id, generation: 2), sessions: [], nodes: [node], availability: .stale
         ))
-        #expect(stale.lines.allSatisfy { $0.copyableSessionID == nil })
+        #expect(stale.notice == "Managed observation is stale or unavailable. Last-known metadata is not live state.")
+        let line = try #require(stale.lines.first { $0.copyableSessionID != nil })
+        let sessionID = try #require(line.copyableSessionID)
+        #expect(sessionID == node.copilotSessionId)
+        #expect(line.value == fixtures.sessionID.uuidString)
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        #expect(SidebarSessionCopy.copy(sessionID, to: pasteboard))
+        #expect(pasteboard.string(forType: .string) == line.value)
+        #expect(card(.managed(node.id, generation: 2), sessions: [], nodes: [node, node], availability: .stale) == nil)
+        for availability in [SidebarOrchestrationAvailability.unavailable, .hidden, .disconnected, .waiting, .loading] {
+            let unavailable = try #require(card(
+                .managed(node.id, generation: 2), sessions: [], nodes: [node], availability: availability
+            ))
+            #expect(unavailable.lines.allSatisfy { $0.copyableSessionID == nil })
+        }
     }
 
     @Test func unavailableAndAmbiguousSessionIdentitiesHaveNoCopyAction() throws {
@@ -114,9 +130,13 @@ struct SidebarAgentHoverTests {
             workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 1,
             phase: "launching", availability: "busy", createdAt: now, updatedAt: now
         )
-        let missing = try #require(card(.managed(node.id, generation: 1), sessions: [session()], nodes: [node]))
-        #expect(missing.lines.allSatisfy { $0.copyableSessionID == nil })
-        #expect(!missing.lines.contains { $0.title == "Session ID" })
+        for availability in [SidebarOrchestrationAvailability.ready, .stale] {
+            let missing = try #require(card(
+                .managed(node.id, generation: 1), sessions: [session()], nodes: [node], availability: availability
+            ))
+            #expect(missing.lines.allSatisfy { $0.copyableSessionID == nil })
+            #expect(!missing.lines.contains { $0.title == "Session ID" })
+        }
         #expect(SidebarDetailLine(title: "Session ID", value: fixtures.sessionID.uuidString).copyableSessionID == nil)
     }
 
