@@ -2,11 +2,8 @@ import AppKit
 import Testing
 import Vision
 
-#if compiler(>=6.4)
+// Swift Testing's body stays concurrent with NonisolatedNonsendingByDefault enabled.
 typealias SidebarScopedTestBody = @concurrent @Sendable () async throws -> Void
-#else
-typealias SidebarScopedTestBody = @Sendable () async throws -> Void
-#endif
 
 nonisolated struct SidebarAppKitTestScope: TestTrait, SuiteTrait, TestScoping {
     var isRecursive: Bool { true }
