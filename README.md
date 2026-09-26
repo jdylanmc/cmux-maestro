@@ -471,7 +471,9 @@ Disconnected, redacted, missing or ambiguous focus clears the previous subject.
 Ordinary terminals and browsers show native context without agent fields or a pet.
 An agent on a terminal requires one fresh, live, exact observed session; managed
 labels and Git context additionally require current, uniquely bound managed
-evidence. Reused surfaces, stale membership and matching titles never establish
+evidence. Positively ended observations do not compete with a replacement live
+session; unknown or ambiguous owners still prevent a unique current identity.
+Reused surfaces, stale membership and matching titles never establish
 ownership. Existing observation expiry updates the footer without a new timer.
 
 The flush footer uses native adaptive colors and one small, original
@@ -530,7 +532,9 @@ actions. The header menu exposes the two view modes directly, plus settings.
 Settings and the separate Details inspector popover have explicit Close controls.
 The keyboard-accessible inspector scrolls independently, preserves full metadata
 and Other activity, and revalidates window, placement, session, run and generation
-identity against current permissions. Replaced or revoked subjects show an
+identity against current permissions. Workspace-only details require current
+workspace access, not surface access; paths remain independently permission-gated.
+Surface and session details still require surface metadata. Replaced or revoked subjects show an
 unavailable message instead of silently keeping the old data. Escape or Close
 dismisses only the inspector; the footer has no Close or manual-pin override.
 Rows use concise state labels rather than diagnostic walls; blocked/failed state, incomplete ancestry,

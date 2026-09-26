@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Testing
+@_spi(CmuxHostTransport) import CmuxExtensionKit
 
 @MainActor
 @Suite(.serialized)
@@ -132,9 +133,14 @@ struct SidebarPinnedDetailsTests {
         }
         let terminal = pinned(sessions: [], nodes: [managed()])
         #expect(!terminal.isAgent && terminal.notice == nil)
+        #expect(pinned(sessions: [session(liveness: .dead)], nodes: [managed()]) == terminal)
         for sessions in [[session(), session()], [session(), session(id: UUID())],
                          [session(liveness: .ambiguous)], [session(liveness: .unknown)],
-                         [session(liveness: .dead)], [session(observedAt: now.addingTimeInterval(-9))]] {
+                         [session(), session(id: UUID(), liveness: .ambiguous)],
+                         [session(), session(id: UUID(), liveness: .unknown)],
+                         [session(), session(liveness: .dead)],
+                         [session(), session(id: fixtures.sessionID, other: true, liveness: .dead)],
+                         [session(observedAt: now.addingTimeInterval(-9))]] {
             let result = pinned(sessions: sessions, nodes: [managed()])
             #expect(!result.isAgent && result.notice != nil)
             #expect(!result.lines.contains { $0.copyableSessionID != nil || $0.title == "Model" })
@@ -142,6 +148,75 @@ struct SidebarPinnedDetailsTests {
         #expect(!pinned(generatedAt: now.addingTimeInterval(-9)).isAgent)
         #expect(!pinned(sessions: [session(), session(id: fixtures.sessionID, other: true)]).isAgent)
         #expect(pinned(hierarchy(kind: .agentSession), sessions: []).notice != nil)
+    }
+
+    @Test func readerRepublishedDeadOwnerDoesNotSuppressItsLiveReplacement() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let now = now
+        try fixture.writeRecord(.init(
+            sessionID: fixture.sessionID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,
+            ownerPID: fixture.process.pid, ownerStartSeconds: fixture.process.startSeconds,
+            ownerStartMicroseconds: fixture.process.startMicroseconds, recordedAt: fixture.record.recordedAt
+        ))
+        try fixture.writeEvents([copilotTestEvent("session.model_change", data: ["newModel": "ended-model"])])
+        let initial = try await fixture.reader(clock: { now }).read(surfaceIDs: [fixtures.surfaceA])
+        let initialTree = SidebarCopilotTree.project(initial, onto: SidebarTopology(hierarchy()), now: now)
+        #expect(initialTree.sessions.first?.model == "ended-model")
+        #expect(pinned(sessions: initialTree.sessions).lines.contains(.sessionID(fixture.sessionID)))
+
+        let replacement = try fixture.addSession(surface: fixtures.surfaceA)
+        let replacementID = try #require(UUID(uuidString: replacement.lastPathComponent))
+        let owner = CopilotProcessIdentity(
+            pid: 4343, parentPID: 1, uid: fixture.process.uid, startSeconds: 1, startMicroseconds: 0
+        )
+        try fixture.writeRecord(.init(
+            sessionID: replacementID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,
+            ownerPID: owner.pid, ownerStartSeconds: owner.startSeconds,
+            ownerStartMicroseconds: owner.startMicroseconds, recordedAt: fixture.record.recordedAt
+        ))
+        try Data().write(to: replacement.appendingPathComponent("inuse.\(owner.pid).lock"))
+        try (copilotTestEvent("session.model_change", data: ["newModel": "replacement-model"]) + Data([10]))
+            .write(to: replacement.appendingPathComponent("events.jsonl"))
+        let node = managed(sessionID: replacementID)
+        for date in [now, now.addingTimeInterval(2)] {
+            let observation = try await fixture.reader(
+                lookup: { $0 == owner.pid ? .found(owner) : .dead }, clock: { date }
+            ).read(surfaceIDs: [fixtures.surfaceA])
+            let ended = try #require(observation.sessions.first { $0.sessionID == fixture.sessionID })
+            #expect(ended.liveness == .dead && ended.observedAt == date)
+            let projected = SidebarCopilotTree.project(observation, onto: SidebarTopology(hierarchy()), now: date)
+            #expect(projected.sessions.count == 2)
+            let content = SidebarPresentation.pinnedDetails(
+                hierarchy: hierarchy(), connected: true, tree: projected, managed: snapshot([node]),
+                availability: .ready, now: date
+            )
+            #expect(content.isAgent && content.title == node.label && content.notice == nil)
+            #expect(content.inspection?.sessionID == replacementID)
+            #expect(content.lines.contains(.init(title: "Model", value: "replacement-model")))
+            #expect(content.lines.filter { $0.copyableSessionID != nil } == [.sessionID(replacementID)])
+            #expect(content.lines.contains(.init(title: "Branch", value: "feat/pinned-details")))
+            #expect(content.lines.contains(.init(title: "Worktree", value: "pinned-46")))
+            #expect(content.gitChanges == node.gitChanges)
+            #expect(!content.lines.contains { $0.value.contains("ended-model") || $0.value.contains(fixture.sessionID.uuidString) })
+
+            let pasteboard = NSPasteboard.withUniqueName()
+            defer { pasteboard.releaseGlobally() }
+            var copied: [UUID] = []
+            var inspections = 0
+            let hosting = NSHostingView(rootView: SidebarPinnedFooter(
+                content: content, inspect: { inspections += 1 },
+                copySessionID: { copied.append($0); return SidebarSessionCopy.copy($0, to: pasteboard) }
+            ).frame(width: 300))
+            hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 220)
+            try await settle(hosting)
+            let buttons = views(hosting).compactMap { $0 as? NSButton }
+                .filter { $0.accessibilityIdentifier() == "hover-copy-value" }
+            #expect(buttons.count == 1)
+            #expect(try #require(buttons.first).accessibilityPerformPress())
+            #expect(copied == [replacementID] && inspections == 0)
+            #expect(pasteboard.string(forType: .string) == replacementID.uuidString)
+        }
     }
 
     @Test func managedIdentityRequiresCurrentUniqueBindingAndNeverBorrowsFromReusedSurface() {
@@ -222,6 +297,65 @@ struct SidebarPinnedDetailsTests {
         }
     }
 
+    @Test func workspaceInspectionNeedsNoSurfaceGrantAndRedactsPathsIndependently() throws {
+        let target = SidebarInspection.Target.unmanaged(.workspace(fixtures.workspaceA))
+        let subject = try #require(SidebarPresentation.inspection(
+            for: target, hierarchy: hierarchy(), connected: true, tree: tree([session()]),
+            managed: .empty, availability: .ready, now: now
+        ))
+        let raw = CmuxSidebarSnapshot(
+            sequence: 1, windowID: fixtures.windowID, selectedWorkspaceID: nil,
+            workspaces: [.init(
+                id: fixtures.workspaceA, title: "Workspace without surfaces",
+                rootPath: "/synthetic/worktree", projectRootPath: "/synthetic",
+                surfaces: [.init(id: fixtures.surfaceA, title: "Terminal", kind: .terminal)]
+            )]
+        )
+        func mapped(_ raw: CmuxSidebarSnapshot, scopes: Set<CmuxExtensionScope>) -> HierarchySnapshot {
+            let model = SidebarConnectionModel()
+            model.update(context: .init(snapshot: raw.filtered(for: scopes), host: .init(performAction: { _, _ in })))
+            return model.hierarchy
+        }
+        for paths in [true, false] {
+            let hierarchy = mapped(raw, scopes: paths ? [.workspaceMetadata, .workspacePaths] : [.workspaceMetadata])
+            #expect(!SidebarTopology(hierarchy).canReadSessions)
+            #expect(hierarchy.workspaces.first?.surfaces == .unavailable)
+            let detail = try #require(inspector(subject, hierarchy: hierarchy))
+            #expect(detail.title == "Workspace without surfaces")
+            #expect(detail.lines == [
+                .init(title: "Workspace ID", value: fixtures.workspaceA.uuidString),
+                .init(title: "Workspace path", value: paths ? "/synthetic/worktree" : "Path unavailable"),
+                .init(title: "Project path", value: paths ? "/synthetic" : "Path unavailable")
+            ])
+            for dependent in [
+                SidebarInspection.Target.unmanaged(.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA)),
+                .unmanaged(.session(fixtures.sessionID)), .unmanaged(.child(sessionID: fixtures.sessionID, childID: "child")),
+                .managed(managed())
+            ] {
+                #expect(SidebarPresentation.inspection(
+                    for: dependent, hierarchy: hierarchy, connected: true, tree: tree([session()]),
+                    managed: snapshot([managed()]), availability: .ready, now: now
+                ) == nil)
+            }
+            #expect(inspector(subject, hierarchy: hierarchy, connected: false) == nil)
+        }
+        var windowless = raw
+        windowless.windowID = nil
+        var otherWindow = raw
+        otherWindow.windowID = UUID()
+        var removed = raw
+        removed.workspaces = []
+        var duplicate = raw
+        duplicate.workspaces.append(raw.workspaces[0])
+        for invalid in [
+            HierarchySnapshot.empty, mapped(raw, scopes: []), mapped(raw, scopes: [.workspaceList, .workspacePaths]),
+            mapped(windowless, scopes: [.workspaceMetadata]), mapped(otherWindow, scopes: [.workspaceMetadata]),
+            mapped(removed, scopes: [.workspaceMetadata]), mapped(duplicate, scopes: [.workspaceMetadata])
+        ] {
+            #expect(inspector(subject, hierarchy: invalid) == nil)
+        }
+    }
+
     @Test func passiveProjectionAndHoverHaveNoInteractionOrUnsupportedMetrics() throws {
         let before = pinned(nodes: [managed()])
         _ = SidebarAgentHoverContent.card(
@@ -245,6 +379,7 @@ struct SidebarPinnedDetailsTests {
         #expect(!source.contains("selectionDetails"))
         let footer = try #require(source.components(separatedBy: "struct SidebarPinnedFooter: View").last?
             .components(separatedBy: "private struct PathDetail").first)
+        #expect(footer.contains("if content.isAgent { SidebarPlaceholderPet() }"))
         for forbidden in ["SidebarCloseButton", "prepareSeen(", "FocusButton", ".onHover", "RoundedRectangle"] {
             #expect(!footer.contains(forbidden))
         }

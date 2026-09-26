@@ -374,11 +374,48 @@ struct SidebarNavigationTests {
         )
         #expect(view.contains("selection = .workspace(workspace.id)"))
         #expect(view.contains("selection = .surface(workspaceID: workspaceID, surfaceID: surface.id)"))
-        #expect(view.contains(".init(title: \"Workspace path\", value: workspace.rootPath.pathDisplayText)"))
-        #expect(view.contains(".init(title: \"Project path\", value: workspace.projectRootPath.pathDisplayText)"))
-        #expect(view.contains(".init(title: \"Working directory\", value: surface.workingDirectory.pathDisplayText)"))
-        #expect(view.contains("SidebarPresentation.paths(paths)"))
-        #expect(view.contains("UnmanagedSelectionDetails("))
+        #expect(view.components(separatedBy: "selection: unmanagedSelection").count == 3)
+        #expect(view.contains("SidebarPresentation.inspectorDetails("))
+        #expect(view.contains("SidebarInspector(content: inspectorDetails)"))
+        let now = Date()
+        for granted in [true, false] {
+            let scopes: Set<CmuxExtensionScope> = granted
+                ? [.workspaceMetadata, .surfaceMetadata, .workspacePaths] : [.workspaceMetadata, .surfaceMetadata]
+            let model = SidebarConnectionModel()
+            model.update(context: .init(
+                snapshot: pathSnapshot().filtered(for: scopes), host: .init(performAction: { _, _ in })
+            ))
+            let tree = SidebarCopilotTree.project(
+                fixtures.snapshot(sessions: [fixtures.session(children: [fixtures.child("child")], now: now)], now: now),
+                onto: SidebarTopology(model.hierarchy), now: now
+            )
+            let expectedPaths: [SidebarDetailLine] = [
+                .init(title: "Workspace path", value: granted ? "/repo/.worktrees/feature" : "Path unavailable"),
+                .init(title: "Project path", value: granted ? "/repo" : "Path unavailable"),
+                .init(title: "Working directory", value: granted ? "/repo/.worktrees/feature/src" : "Path unavailable")
+            ]
+            for selection in [
+                UnmanagedSelection.workspace(fixtures.workspaceA),
+                .surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA),
+                .session(fixtures.sessionID), .child(sessionID: fixtures.sessionID, childID: "child")
+            ] {
+                let subject = try #require(SidebarPresentation.inspection(
+                    for: .unmanaged(selection), hierarchy: model.hierarchy, connected: true, tree: tree,
+                    managed: .empty, availability: .ready, now: now
+                ))
+                let detail = try #require(SidebarPresentation.inspectorDetails(
+                    for: subject, hierarchy: model.hierarchy, connected: true, tree: tree,
+                    managed: .empty, availability: .ready, now: now
+                ))
+                let expected: [SidebarDetailLine]
+                switch selection {
+                case .workspace: expected = Array(expectedPaths.prefix(2))
+                case .surface: expected = Array(expectedPaths.suffix(1))
+                case .session, .child: expected = expectedPaths
+                }
+                #expect(detail.lines.filter { ["Workspace path", "Project path", "Working directory"].contains($0.title) } == expected)
+            }
+        }
     }
 
     private func pathSnapshot(sequence: UInt64 = 1, hasPaths: Bool = true) -> CmuxSidebarSnapshot {

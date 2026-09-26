@@ -362,7 +362,9 @@ enum SidebarPresentation {
         )
         // Browser and other native surfaces cannot inherit an old terminal's agent.
         guard [.terminal, .agentSession].contains(surface.kind) else { return result }
-        let sessions = tree.sessions.filter { $0.workspaceID == workspaceID && $0.surfaceID == surfaceID }
+        let sessions = tree.sessions.filter {
+            $0.workspaceID == workspaceID && $0.surfaceID == surfaceID && $0.liveness != .dead
+        }
         guard sessions.count == 1, let session = sessions.first,
               tree.sessions.filter({ $0.id == session.id }).count == 1,
               session.liveness == .alive, [.ready, .partial].contains(tree.availability),
@@ -412,7 +414,8 @@ enum SidebarPresentation {
         availability: SidebarOrchestrationAvailability, now: Date = Date()
     ) -> SidebarInspection? {
         let topology = SidebarTopology(hierarchy)
-        guard connected, topology.canReadSessions, let windowID = topology.windowID else { return nil }
+        guard connected, hierarchy.receivedSnapshot, hierarchy.workspaceListAvailable,
+              hierarchy.workspaceMetadataAvailable, let windowID = topology.windowID else { return nil }
         let workspaceID: UUID
         let surfaceID: UUID?
         var sessionID: UUID?
@@ -457,7 +460,7 @@ enum SidebarPresentation {
         guard topology.workspaceIDs.contains(workspaceID) else { return nil }
         var kind: HierarchySurfaceKind?
         if let surfaceID {
-            guard topology.workspaceBySurface[surfaceID] == workspaceID,
+            guard topology.canReadSessions, topology.workspaceBySurface[surfaceID] == workspaceID,
                   let workspace = hierarchy.workspaces.first(where: { $0.id == workspaceID }),
                   case .available(let surfaces) = workspace.surfaces,
                   let surface = surfaces.first(where: { $0.id == surfaceID }) else { return nil }
