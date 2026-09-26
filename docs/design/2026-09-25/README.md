@@ -78,10 +78,10 @@ direction being frozen:
 1. Workspace-name and collapsed-summary previews lack equivalent keyboard
    activation. Expanded-row focus previews exist, but normal Tab traversal
    cannot reach their interactive actions before dismissal. Acceptance in
-   #43/#46/#58 and the workspace-hover follow-up requires closing these gaps.
+   #43/#46/#58 and workspace-hover follow-up #88 requires closing these gaps.
 2. After pane reordering, the utility Move dialog still labels Pane 1 "left"
    and Pane 2 "right." Its future host implementation must derive positions
-   from the destination workspace or omit spatial descriptions.
+   from the destination workspace or omit spatial descriptions (#86).
 
 The byte-exact prototype is retained as reviewed, rather than silently fixed
 after the human's visual approval. Screenshots of normal initial order do not

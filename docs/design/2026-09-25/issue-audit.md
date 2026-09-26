@@ -41,18 +41,18 @@ completion notes, labels, assignees and delivery ownership remain intact.
 | #81 | Apply shared path formatting to new directory/utility surfaces where relevant. | Typed `~/...` example is not trusted user-home resolution. |
 | #83 | Fermata is the last header icon; preserve actual host state/synchronization and no independent wake process. | Local demo Boolean cannot be ported as the source of truth. |
 
-## New gaps approved for creation
+## New gaps created
 
 The human approved these five new issues after reviewing the deduplication
-plan. Issue numbers and publication results are recorded after creation.
+plan. All five were created and linked as children of #57.
 
-| Gap | Why an existing open issue is not enough |
+| Issue / gap | Why an existing open issue is not enough |
 | --- | --- |
-| Sidebar header: compact icon shortcuts and Settings access | No existing header integration owner; placement/wiring should not duplicate each feature's behavior. |
-| Open a directory as a new workspace | No existing issue covers the folder-plus chooser/create-workspace request. Working-directory display #77 is different. |
-| Host Beats and Taskboard as reusable movable content tabs | Existing #39 covers topology, not utility-view hosting, singleton/reveal lifetime, restoration or independent view closure. |
-| Taskboard follow-up: cross-session overview in a content tab | Closed #4 delivered the old toggle; this preserves functionality through a different presentation, not a duplicate toggle issue. |
-| Workspace hover follow-up: activate only over name text | Closed #52/#71 delivered the container; only the activation hit region and equivalent keyboard access change. |
+| [#84 - Header shortcuts and Settings access](https://github.com/jdylanmc/cmux-maestro/issues/84) | No existing header integration owner; placement/wiring should not duplicate each feature's behavior. |
+| [#85 - Open directory as new workspace](https://github.com/jdylanmc/cmux-maestro/issues/85) | No existing issue covers the folder-plus chooser/create-workspace request. Working-directory display #77 is different. |
+| [#86 - Reusable movable utility tabs](https://github.com/jdylanmc/cmux-maestro/issues/86) | Existing #39 covers topology, not utility-view hosting, singleton/reveal lifetime, restoration or independent view closure. |
+| [#87 - Taskboard content-tab follow-up](https://github.com/jdylanmc/cmux-maestro/issues/87) | Closed #4 delivered the old toggle; this preserves functionality through a different presentation, not a duplicate toggle issue. |
+| [#88 - Workspace-name hover follow-up](https://github.com/jdylanmc/cmux-maestro/issues/88) | Closed #52/#71 delivered the container; only the activation hit region and equivalent keyboard access change. |
 
 No separate duplicate issues are needed for tag colors (#51), sibling
 reordering (#44), compact status/nesting (#58), workspace eyes (#48/#58),
@@ -83,7 +83,11 @@ Replace stale **target** imagery, not historical report evidence or comments.
 Re-read each current issue before writing and refuse to overwrite intervening
 body/title edits. Use hosted images with a dated versioned reference.
 
-Publish 24 existing leaf/related issue updates plus #57; leave #61 unchanged.
-Create five approved gaps and link them under #57. Preserve states, assignments
-and existing labels on existing issues. Do not mark ready, close, dispatch,
-merge or manipulate live sessions.
+Published 24 existing leaf/related issue updates plus #57; #61 was left
+unchanged. Created #84-88 and linked them under #57. Existing states,
+assignments and labels were preserved. New issues carry `enhancement`,
+`cosmetic` and `needs-triage`; none was marked ready or assigned.
+
+The [publication record](evidence/publication.json) binds the written issue
+bodies, source snapshot and hosted image URLs. No issue was closed, no worker
+was dispatched, and no live session or installation was changed.

@@ -36,7 +36,7 @@ dependencies, native installation or actual agent scheduling occurred.
   keyboard; Escape returns to origin; active/pinned identity stays unchanged;
   negative hover checks still exclude eye/backlog/menu/collapse.
 - **Disposition:** retained as a documented prototype exception. Updated
-  acceptance in #43/#46/#58 and the workspace-hover follow-up owns resolution.
+  acceptance in #43/#46/#58 and workspace-hover follow-up #88 owns resolution.
 
 ### Important: stale spatial labels in utility Move
 
@@ -56,7 +56,7 @@ dependencies, native installation or actual agent scheduling occurred.
   destination; repeat across workspaces with different orders; preserve agent
   identity and Beat definitions.
 - **Disposition:** retained as a documented prototype exception. The new
-  utility-tab hosting issue explicitly requires correct destination labels.
+  utility-tab hosting issue #86 explicitly requires correct destination labels.
 
 ## Coverage
 
@@ -76,6 +76,22 @@ The reviewer loaded and verified the documentation doctrine at SHA-256
 applying "One concern, one authority," "Document what code cannot," and "Treat
 disagreement as drift." This was a product-design/interaction review, not a
 SOLID/code-architecture audit.
+
+## Documentation follow-up
+
+The same independent reviewer then checked the completed design README,
+review report, issue audit, issue-tracker paragraph and changelog against the
+frozen source, evidence and relevant publication-plan criteria. The result was
+**no additional supported findings**.
+
+Both important interaction defects remained explicit non-approved acceptance
+exceptions. The reviewer confirmed that the prose retained experiment-only
+boundaries, unsettled production policies, omitted field requirements,
+completed issues and unchanged Joe dispatch scope.
+
+That follow-up did not inspect eventual GitHub issue bodies or final numeric
+references. Those publication results were verified separately against the
+approved write plan; the underlying prototype and capture bytes did not change.
 
 ## Limits
 
