@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C07600000000000000000001 /* SidebarCopyableValue.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C07600000000000000000011; };
 		C04600000000000000000001 /* SidebarAgentHoverContent.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C04600000000000000000011; };
 		C05200000000000000000001 /* SidebarHoverCard.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C05200000000000000000011; };
 		C05200000000000000000002 /* SidebarHoverContent.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C05200000000000000000012; };
@@ -114,6 +115,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C07600000000000000000011 /* SidebarCopyableValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarCopyableValue.swift; sourceTree = SOURCE_ROOT; };
 		C04600000000000000000011 /* SidebarAgentHoverContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarAgentHoverContent.swift; sourceTree = SOURCE_ROOT; };
 		C05200000000000000000011 /* SidebarHoverCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarHoverCard.swift; sourceTree = SOURCE_ROOT; };
 		C05200000000000000000012 /* SidebarHoverContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarHoverContent.swift; sourceTree = SOURCE_ROOT; };
@@ -240,6 +242,7 @@
 				C04900000000000000000013 /* SidebarItemIcon.swift */,
 				C04900000000000000000014 /* SidebarIconModels.swift */,
 				C05200000000000000000011 /* SidebarHoverCard.swift */,
+				C07600000000000000000011 /* SidebarCopyableValue.swift */,
 				C05200000000000000000012 /* SidebarHoverContent.swift */,
 				C04600000000000000000011 /* SidebarAgentHoverContent.swift */,
 				C09200000000000000000004 /* maestro-icon */,
@@ -496,6 +499,7 @@
 				C04900000000000000000003 /* SidebarItemIcon.swift in Test Sources */,
 				C04900000000000000000004 /* SidebarIconModels.swift in Test Sources */,
 				C05200000000000000000001 /* SidebarHoverCard.swift in Test Sources */,
+				C07600000000000000000001 /* SidebarCopyableValue.swift in Test Sources */,
 				C05200000000000000000002 /* SidebarHoverContent.swift in Test Sources */,
 				C04600000000000000000001 /* SidebarAgentHoverContent.swift in Test Sources */,
 				C03600000000000000000005 /* SidebarOrchestration.swift in Test Sources */,

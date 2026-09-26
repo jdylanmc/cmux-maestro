@@ -171,6 +171,9 @@ struct SidebarHoverTests {
             window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             let hosting = NSHostingView(rootView: SidebarHoverCard(data: data, close: {
                 Issue.record("Rendering must not dismiss the card")
+            }, copySessionID: { _ in
+                Issue.record("Rendering must not copy")
+                return false
             }).environment(\.colorScheme, dark ? .dark : .light).background(Color(nsColor: .windowBackgroundColor)))
             window.contentView = hosting
             defer { window.contentView = nil; window.close() }

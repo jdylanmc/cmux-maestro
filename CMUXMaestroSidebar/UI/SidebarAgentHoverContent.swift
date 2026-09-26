@@ -19,10 +19,17 @@ enum SidebarAgentHoverContent {
             let matches = managed.nodes.filter { $0.id == id && $0.generation == generation }
             guard matches.count == 1, let node = matches.first,
                   topology.workspaceBySurface[node.surfaceId] == node.workspaceId else { return nil }
-            let allowed = Set(["Model", "Role", "Branch", "Worktree", "Git evidence", "Git changes", "Working directory", "Copilot session"])
-            let lines = SidebarPresentation.managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
+            let allowed = Set(["Model", "Role", "Branch", "Worktree", "Git evidence", "Git changes", "Working directory", "Session ID"])
+            var lines = SidebarPresentation.managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { allowed.contains($0.title) }
             let current = availability == .ready || availability == .partial
+            if !current && availability != .stale {
+                lines = lines.map { line in
+                    var result = line
+                    result.copyableSessionID = nil
+                    return result
+                }
+            }
             return .init(
                 id: "managed-\(id)-\(generation)", category: "Agent preview", title: node.label,
                 subtitle: SidebarPresentation.managedState(node, availability: availability, now: now, tree: tree).title,
@@ -42,7 +49,7 @@ enum SidebarAgentHoverContent {
                 return .init(id: "child-\(sessionID)-\(childID)", category: "Agent preview", title: child.name,
                              notice: "Child observation is no longer current.")
             }
-            let allowed = Set(["Name", "Kind", "Model", "Ancestry", "Completion", "Child ID", "Session"])
+            let allowed = Set(["Name", "Kind", "Model", "Ancestry", "Completion", "Child ID", "Parent session ID"])
             var lines = SidebarPresentation.nodeDetails(child, session: session).filter { allowed.contains($0.title) }
             lines += [
                 .init(title: "Placement", value: "Observed child; native placement belongs to its parent session"),
@@ -78,7 +85,7 @@ enum SidebarAgentHoverContent {
             return .init(id: "session-\(session.id)", category: "Agent preview", title: title,
                          notice: "Session observation is no longer current.")
         }
-        let allowed = Set(["Model", "Observed", "Child history", "Session"])
+        let allowed = Set(["Model", "Observed", "Child history", "Session ID"])
         var lines = SidebarPresentation.sessionDetails(session).filter { allowed.contains($0.title) }
         if session.liveness != .alive {
             lines = lines.map { $0.title == "Model" ? .init(title: "Last reported model", value: $0.value) : $0 }
