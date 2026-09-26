@@ -1059,16 +1059,16 @@ private struct ManagedNodeRow: View {
         guard node.gitEvidenceStatus == "verified", node.gitEvidenceAt != nil else { return nil }
         switch (node.branchLabel, node.worktreeLabel) {
         case let (branch?, worktree?) where branch != worktree:
-            return "\(branch)  ·  \(worktree)"
+            return "\(branch)  ·  \(SidebarPathDisplay.text(worktree))"
         case let (branch?, _): return branch
-        case let (_, worktree?): return worktree
+        case let (_, worktree?): return SidebarPathDisplay.text(worktree)
         default: return nil
         }
     }
 
     private var verifiedWorktree: String? {
         guard node.gitEvidenceStatus == "verified", node.gitEvidenceAt != nil else { return nil }
-        return node.worktreeLabel
+        return node.worktreeLabel.map(SidebarPathDisplay.text)
     }
 
     private var stateCaption: String {
@@ -1479,7 +1479,7 @@ private struct SurfaceRow: View {
     private var directoryLabel: String? {
         guard case .available(let path) = surface.workingDirectory,
               let path, !path.isEmpty else { return nil }
-        return URL(fileURLWithPath: path).lastPathComponent
+        return SidebarPathDisplay.text(path)
     }
 
     private func inspect() {

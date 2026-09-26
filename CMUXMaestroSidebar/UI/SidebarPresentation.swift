@@ -776,7 +776,7 @@ enum SidebarPresentation {
 
     static func briefPath(root: HierarchyAvailability<String?>, project: HierarchyAvailability<String?>) -> String? {
         for path in [root, project] {
-            if case .available(let value) = path, let value, !value.isEmpty { return value }
+            if case .available(let value) = path, let value, !value.isEmpty { return SidebarPathDisplay.text(value) }
         }
         return nil
     }
@@ -804,7 +804,7 @@ enum SidebarPresentation {
                 result.append(.init(title: "Branch", value: branch))
             }
             if let worktree = node.worktreeLabel {
-                result.append(.init(title: "Worktree", value: worktree))
+                result.append(.init(title: "Worktree", value: SidebarPathDisplay.text(worktree)))
             }
             if let captured = node.gitEvidenceAt {
                 result.append(.init(title: "Git evidence", value: "Verified \(date(captured))"))

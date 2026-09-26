@@ -8,6 +8,13 @@ The separate interpreted Maestro project is untouched and is not a dependency.
 See the [behavioral parity matrix](docs/behavioral-parity.md) for regression
 evidence, live acceptance scope, intentional differences and remaining limits.
 
+Sidebar path labels use the real user's account home (`~` or `~/…`), including
+workspace/project paths, working directories, hover and pinned details.
+Formatting normalizes separators and dot components lexically; it neither
+probes the filesystem nor resolves symlinks. Outside paths stay absolute,
+missing/denied states stay explicit, and ownership/navigation values are
+unchanged. If account-home resolution fails, the absolute label explains it.
+
 ## One-time setup
 
 1. Use the [local preview install](#install-a-stable-local-preview) below, or
