@@ -4,7 +4,7 @@ import Testing
 import Carbon.HIToolbox
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarSessionCopyTests {
     private let ownID = UUID(uuidString: "12345678-1234-5678-ABCD-1234567890AB")!
     private let parentID = UUID(uuidString: "ABCDEF12-3456-7890-ABCD-EF1234567890")!

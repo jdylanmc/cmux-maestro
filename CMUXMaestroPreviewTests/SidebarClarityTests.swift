@@ -3,7 +3,7 @@ import SwiftUI
 import Testing
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarClarityTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)

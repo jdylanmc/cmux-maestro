@@ -4,7 +4,7 @@ import SwiftUI
 import Testing
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarPreferencesTests {
     @Test
     func exposesExactlyTheTwoSidebarChoices() {

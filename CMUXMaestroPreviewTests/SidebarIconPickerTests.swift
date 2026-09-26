@@ -4,7 +4,7 @@ import Testing
 import Carbon.HIToolbox
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarIconPickerTests {
     @Test func staleMenuIconRequestCannotRetargetAReplacementSession() {
         let original = SidebarIconTarget.session(UUID())

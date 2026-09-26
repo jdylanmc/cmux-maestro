@@ -4,7 +4,7 @@ import Testing
 
 struct PreviewConnectionStateTests {
     @MainActor
-    @Test
+    @Test(SidebarAppKitTestScope())
     func validationHostCannotOfferInstallationOrOpenASetupWindow() {
         #expect(!CopilotSetupAccess.currentAppAllowsChanges)
         #expect(NSApplication.shared.windows.filter(\.isVisible).isEmpty)

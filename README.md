@@ -488,9 +488,15 @@ Menu icon requests retain their exact identity; a replacement target shows
 **Icon target changed** rather than applying the old request to a new session.
 Preview Close/Copy controls have an explicit native Tab order, independent of
 system-wide keyboard-navigation preferences.
-The hosted keyboard regression requires an unlocked graphical login so its
+The hosted keyboard regression uses the production sidebar's automatically
+constructed row key loop, including any intervening native controls. It requires
+an unlocked graphical login so its
 test-created windows can actually exchange key focus; it does not substitute
 simulated key ownership when WindowServer denies focus.
+AppKit rendering/interaction cases and the validation-host no-window assertion
+share a test-only asynchronous gate across suites, held through fixture cleanup.
+Other tests remain parallel. Motion captures fix and assert the logical viewport
+before comparing exact native pixels; static controls retain a zero-change requirement.
 Activity-only children offer **Open parent chat**, never an independent surface.
 Unsupported pet, tag, backlog, placement and exit actions show disabled reasons;
 menus add no capability or lifecycle authority.

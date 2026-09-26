@@ -3,6 +3,7 @@ import SwiftUI
 import Testing
 
 @MainActor
+@Suite(SidebarAppKitTestScope())
 struct SidebarHeaderTests {
     @Test func exactHeaderOrderAndUnavailableReasonsDoNotClaimCapabilities() throws {
         #expect(SidebarHeaderAction.allCases == [.directory, .beats, .taskboard, .history, .settings, .fermata])

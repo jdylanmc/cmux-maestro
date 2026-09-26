@@ -1,5 +1,91 @@
 import AppKit
+import Testing
 import Vision
+
+#if compiler(>=6.4)
+typealias SidebarScopedTestBody = @concurrent @Sendable () async throws -> Void
+#else
+typealias SidebarScopedTestBody = @Sendable () async throws -> Void
+#endif
+
+nonisolated struct SidebarAppKitTestScope: TestTrait, SuiteTrait, TestScoping {
+    var isRecursive: Bool { true }
+
+    func provideScope(
+        for test: Test, testCase: Test.Case?, performing function: SidebarScopedTestBody
+    ) async throws {
+        // Scope individual cases, not their containing suite (which would reacquire the same gate).
+        guard testCase != nil else { try await function(); return }
+        try await SidebarAppKitTestGate.shared.run {
+            print("R3 AppKit scope begin: \(test.name)")
+            defer { print("R3 AppKit scope end: \(test.name)") }
+            try await function()
+        }
+    }
+}
+
+@MainActor
+final class SidebarAppKitTestGate {
+    static let shared = SidebarAppKitTestGate()
+    private var occupied = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    var waitingCount: Int { waiters.count }
+
+    func run(_ function: @Sendable () async throws -> Void) async throws {
+        if occupied {
+            await withCheckedContinuation { waiters.append($0) }
+        } else {
+            occupied = true
+        }
+        defer {
+            if waiters.isEmpty { occupied = false }
+            else { waiters.removeFirst().resume() }
+        }
+        try Task.checkCancellation()
+        try await function()
+    }
+}
+
+@MainActor
+@Suite(SidebarAppKitTestScope())
+struct SidebarAppKitIsolationTests {
+    @Test func visibleFixtureCannotOverlapBootstrapEvenAcrossSuspensionAndThrow() async throws {
+        let gate = SidebarAppKitTestGate()
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 80, height: 40),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        enum FixtureFailure: Error { case expected }
+        let fixture = Task {
+            try await gate.run { @MainActor in
+                window.orderFront(nil)
+                defer { window.close() }
+                try #require(window.isVisible)
+                await sidebarEventually { gate.waitingCount == 1 }
+                try #require(gate.waitingCount == 1)
+                #expect(window.isVisible)
+                throw FixtureFailure.expected
+            }
+        }
+        await sidebarEventually { window.isVisible }
+        let assertion = Task {
+            try await gate.run { @MainActor in
+                #expect(!window.isVisible)
+                PreviewConnectionStateTests().validationHostCannotOfferInstallationOrOpenASetupWindow()
+            }
+        }
+        let fixtureResult = await fixture.result
+        try await assertion.value
+        switch fixtureResult {
+        case .success:
+            Issue.record("The fixture's error must propagate through the gate")
+        case .failure(let error):
+            #expect(error is FixtureFailure)
+        }
+        #expect(gate.waitingCount == 0)
+        print("R3 isolation: visible fixture suspended with bootstrap queued; exact window closed before assertion; error propagated")
+    }
+}
 
 @MainActor
 enum SidebarRenderingEvidence {

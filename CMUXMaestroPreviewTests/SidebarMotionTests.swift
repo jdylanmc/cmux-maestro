@@ -3,7 +3,7 @@ import SwiftUI
 import Testing
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarMotionTests {
     @Test func ringMakesOneLinearRevolutionAndReducedMotionHasNoPhaseChange() throws {
         #expect(SidebarPresentation.statusDescription(SidebarPresentation.state(.blocked), needsInput: true) == "Needs input. Blocked")
@@ -32,6 +32,7 @@ struct SidebarMotionTests {
                 .environment(\._accessibilityReduceMotion, reduceMotion)
                 .background(SidebarActivityBackground(visual: SidebarPresentation.state(.working)))
                 .background(Color.white)
+                .frame(width: 280, height: 40)
             )
             let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 280, height: 40),
                                   styleMask: .borderless, backing: .buffered, defer: false)
@@ -59,6 +60,10 @@ struct SidebarMotionTests {
     }
 
     private func capture(_ view: NSView, to file: URL) throws -> NSBitmapImageRep {
+        view.layoutSubtreeIfNeeded()
+        try #require(view.bounds == NSRect(x: 0, y: 0, width: 280, height: 40),
+                     "Both native snapshots must use the same logical viewport, not a transient intrinsic height")
+        let before = view.bounds
         let bitmap = try #require(NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: 560, pixelsHigh: 80,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -66,6 +71,8 @@ struct SidebarMotionTests {
         ))
         bitmap.size = view.bounds.size
         view.cacheDisplay(in: view.bounds, to: bitmap)
+        try #require(view.bounds == before && bitmap.size == before.size)
+        print("P57 capture \(file.lastPathComponent): before=\(before), after=\(view.bounds), bitmapSize=\(bitmap.size)")
         try #require(bitmap.representation(using: .png, properties: [:])).write(to: file)
         return bitmap
     }

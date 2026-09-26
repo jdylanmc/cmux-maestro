@@ -4,6 +4,7 @@ import Testing
 
 /// Offscreen synthetic SwiftUI/AppKit rendering only, not CMUX-host visual or system AX verification.
 @MainActor
+@Suite(SidebarAppKitTestScope())
 struct SidebarLayoutRenderingTests {
     @Test func productionEightLevelOutlineRetainsNameWidthAt280() async throws {
         let fixtures = SidebarTreeFixtures()

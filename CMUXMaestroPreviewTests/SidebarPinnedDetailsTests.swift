@@ -29,7 +29,7 @@ private final class RetainedMenuSource {
 }
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarPinnedDetailsTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -360,7 +360,11 @@ struct SidebarPinnedDetailsTests {
         let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences))
         window.contentView = hosting
         window.orderFront(nil)
-        defer { window.contentView = nil; window.close() }
+        defer {
+            for child in window.childWindows ?? [] { child.close() }
+            window.contentView = nil
+            window.close()
+        }
         await sidebarEventually { orchestration.snapshot.nodes == [original] && polling.tree.attentionOwnerCount == 1 }
         try await settle(hosting)
         var capturedMenu: NSMenu?
@@ -404,7 +408,7 @@ struct SidebarPinnedDetailsTests {
         let bitmap = try #require(panelContent.bitmapImageRepForCachingDisplay(in: panelContent.bounds))
         panelContent.cacheDisplay(in: panelContent.bounds, to: bitmap)
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build/polish/remediation1")
+            .appendingPathComponent(".build/polish/remediation2")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let capture = folder.appendingPathComponent("retained-menu-\(mode.rawValue)-\(change).png")
         try #require(bitmap.representation(using: .png, properties: [:])).write(to: capture)
