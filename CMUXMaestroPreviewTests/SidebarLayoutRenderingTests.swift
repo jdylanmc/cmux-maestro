@@ -142,21 +142,20 @@ struct SidebarLayoutRenderingTests {
         }
         preferences.expandAll()
         let mixedImage = folder.appendingPathComponent("mixed-incomplete-outline-dark-340x940.png")
+        var titleLines: [String] = []
         let mixedMetrics = try await render(
             model: mixedModel, preferences: preferences, width: 340, height: 940,
             appearance: .dark, managed: true, expectedSessions: 6,
             destination: mixedImage
-        )
+        ) { host in
+            titleLines = try captureTitleLanes(in: host, image: mixedImage)
+        }
         #expect(mixedMetrics.documentHeight <= 420)
         // Read the pixels: offscreen hosting does not expose a system accessibility tree.
         let lines = try SidebarRenderingEvidence.recognizedLines(in: mixedImage, dark: true)
-        // Recognize the title lane separately: Vision otherwise joins the robot with "Coordinator".
-        let titleLines = try SidebarRenderingEvidence.recognizedLines(
-            in: mixedImage, dark: true, excludingLeadingFraction: 64.0 / 340.0, naturalLanguage: true
-        )
         try JSONEncoder().encode(lines).write(to: mixedImage.appendingPathExtension("text.json"))
         for title in ["Coordinator", "Implementation", "Hierarchy recovery", "Readiness check"] {
-            #expect(titleLines.filter { $0.contains(title) }.count == 1, "Expected one title-lane \(title): \(titleLines)")
+            #expect(Self.containsExactlyOneTitle(title, in: titleLines), "Expected one title-lane \(title): \(titleLines)")
         }
         for title in ["Managed workspace", "Context review"] {
             #expect(lines.filter { $0.contains(title) }.count == 1, "Expected one rendered \(title): \(lines)")
@@ -211,6 +210,123 @@ struct SidebarLayoutRenderingTests {
         #expect(!commandLines.contains { $0.contains("Executing tool:") || $0.contains("bash invocation") })
         #expect(commandMetrics.documentHeight > unmanagedBaselineMetrics.documentHeight)
         #expect(commandMetrics.documentHeight <= unmanagedBaselineMetrics.documentHeight + 20)
+    }
+
+    @Test func titleCaptureRoundsOutwardAndRejectsClippedOrOffViewportBounds() throws {
+        let host = CGRect(x: 10, y: 20, width: 340, height: 940)
+        let title = CGRect(x: 70.25, y: 100.25, width: 150.5, height: 24.5)
+        for flipped in [false, true] {
+            for scale: CGFloat in [1, 2] {
+                let geometry = TitleCaptureGeometry(
+                    title: title, visible: title, host: host, flipped: flipped,
+                    imageSize: CGSize(width: host.width * scale, height: host.height * scale)
+                )
+                #expect(geometry.titlePixels.minX == 60.25 * scale)
+                #expect(geometry.titlePixels.minY == (flipped ? 80.25 : 835.25) * scale)
+                #expect(geometry.complete(geometry.crop))
+                #expect(geometry.crop.minX == floor(geometry.titlePixels.minX))
+                #expect(geometry.crop.maxX == ceil(geometry.titlePixels.maxX))
+                #expect(geometry.crop.minY == floor(geometry.titlePixels.minY))
+                #expect(geometry.crop.maxY == ceil(geometry.titlePixels.maxY))
+                for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                    #expect(!geometry.complete(geometry.crop.offsetBy(dx: dx, dy: dy)),
+                            "Reject a one-pixel loss at any edge, including first/last glyphs")
+                }
+                let clipped = TitleCaptureGeometry(
+                    title: title, visible: title.insetBy(dx: 1, dy: 0), host: host, flipped: flipped,
+                    imageSize: geometry.imageSize
+                )
+                #expect(!clipped.complete(clipped.crop))
+                let outside = TitleCaptureGeometry(
+                    title: title.offsetBy(dx: host.width, dy: 0), visible: host, host: host,
+                    flipped: flipped, imageSize: geometry.imageSize
+                )
+                #expect(!outside.complete(outside.crop))
+            }
+        }
+    }
+
+    @Test func titleOracleRejectsMissingDuplicateClippedAndIconJoinedText() {
+        let titles = ["Coordinator", "Implementation", "Hierarchy recovery", "Readiness check"]
+        for title in titles {
+            #expect(Self.containsExactlyOneTitle(title, in: titles))
+            for invalid in [
+                titles.filter { $0 != title }, titles + [title],
+                [String(title.dropFirst())], [String(title.dropLast())],
+                [title.lowercased()], ["robot" + title], [title + " suffix"]
+            ] {
+                #expect(!Self.containsExactlyOneTitle(title, in: invalid))
+            }
+        }
+        #expect(!Self.containsExactlyOneTitle("Hierarchy recovery", in: ["lierarchy recovery"]))
+    }
+
+    private static func containsExactlyOneTitle(_ title: String, in lines: [String]) -> Bool {
+        lines.filter { $0 == title }.count == 1
+    }
+
+    private struct TitleCaptureGeometry: Codable {
+        let title: CGRect
+        let visible: CGRect
+        let host: CGRect
+        let flipped: Bool
+        let imageSize: CGSize
+
+        var titlePixels: CGRect {
+            CGRect(
+                x: (title.minX - host.minX) * imageSize.width / host.width,
+                y: (flipped ? title.minY - host.minY : host.maxY - title.maxY) * imageSize.height / host.height,
+                width: title.width * imageSize.width / host.width,
+                height: title.height * imageSize.height / host.height
+            )
+        }
+        var crop: CGRect { titlePixels.integral }
+        func complete(_ candidate: CGRect) -> Bool {
+            !title.isEmpty && visible.contains(title) && host.contains(title)
+                && CGRect(origin: .zero, size: imageSize).contains(candidate)
+                && candidate.contains(titlePixels)
+        }
+    }
+
+    private func captureTitleLanes(in host: NSView, image: URL) throws -> [String] {
+        func descendants(_ view: NSView) -> [NSView] {
+            view.subviews.flatMap { [$0] + descendants($0) }
+        }
+        let source = try #require(NSBitmapImageRep(data: Data(contentsOf: image))?.cgImage)
+        let titles = descendants(host).compactMap { $0 as? SidebarTitleNativeButton }
+        try #require(!titles.isEmpty)
+        var lines: [String] = []
+        var geometries: [TitleCaptureGeometry] = []
+        for (index, button) in titles.enumerated() {
+            // Measure every mounted title, never select rows or expected text from accessibility labels.
+            let content = button.hosting
+            try #require(!content.isHiddenOrHasHiddenAncestor)
+            let geometry = TitleCaptureGeometry(
+                title: host.convert(content.bounds, from: content),
+                visible: host.convert(content.visibleRect, from: content), host: host.bounds,
+                flipped: host.isFlipped, imageSize: CGSize(width: source.width, height: source.height)
+            )
+            let crop = geometry.crop
+            try #require(geometry.complete(crop), "Title \(index) must be fully inside the native viewport: \(geometry)")
+            // Losing even one leading pixel must fail before language correction can repair a clipped H.
+            let missingLeadingPixel = CGRect(x: crop.minX + 1, y: crop.minY, width: crop.width - 1, height: crop.height)
+            #expect(!geometry.complete(missingLeadingPixel))
+            let missingTrailingPixel = CGRect(x: crop.minX, y: crop.minY, width: crop.width - 1, height: crop.height)
+            #expect(!geometry.complete(missingTrailingPixel))
+            let bitmap = NSBitmapImageRep(cgImage: try #require(source.cropping(to: crop)))
+            let destination = image.deletingPathExtension().appendingPathExtension("title-\(index).png")
+            try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
+            // Full title-control bounds exclude the adjacent robot, but retain metadata and all title glyphs.
+            let recognized = try SidebarRenderingEvidence.recognizedLines(
+                in: destination, dark: true, naturalLanguage: true
+            )
+            lines += recognized
+            geometries.append(geometry)
+            print("P57 title capture \(index): points=\(geometry.title), pixels=\(crop), lines=\(recognized)")
+        }
+        try JSONEncoder().encode(geometries).write(to: image.appendingPathExtension("titles.json"))
+        try JSONEncoder().encode(lines).write(to: image.appendingPathExtension("titles.text.json"))
+        return lines
     }
 
     @Test func managedRowsStayWithinCompactHeightBudgetAtThreeHundredWidth() async throws {
