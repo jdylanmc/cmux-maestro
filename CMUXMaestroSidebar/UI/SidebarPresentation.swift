@@ -269,7 +269,8 @@ enum SidebarPresentation {
 
     static func workspaceAttention(
         sessions: [SidebarCopilotSession], managed: [SidebarOrchestrationNode],
-        availability: SidebarOrchestrationAvailability, now: Date
+        availability: SidebarOrchestrationAvailability, now: Date,
+        observations: SidebarCopilotTree? = nil
     ) -> SidebarWorkspaceAttention {
         enum Owner: Hashable {
             case managed(UUID), session(UUID), child(UUID, String)
@@ -283,8 +284,9 @@ enum SidebarPresentation {
             if signals.contains(where: { $0.kind == .permission }) { approvals.insert(owner) }
             if live && state == .blocked { blocked.insert(owner) }
         }
+        let coalescing = coalescingManagedNodes(managed, observations: observations, now: now)
         for session in sessions {
-            let claimed = managed.first {
+            let claimed = coalescing.first {
                 $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
             }
             let owner = claimed.map { Owner.managed($0.id) } ?? .session(session.id)
@@ -702,10 +704,34 @@ enum SidebarPresentation {
         return result
     }
 
+    static func coalescingManagedNodes(
+        _ managed: [SidebarOrchestrationNode], observations: SidebarCopilotTree?, now: Date
+    ) -> [SidebarOrchestrationNode] {
+        guard let observations, [.ready, .partial].contains(observations.availability),
+              !observations.issues.contains(.permissionDenied),
+              let generatedAt = observations.generatedAt,
+              SidebarCopilotTree.isFresh(generatedAt, now: now) else { return managed }
+        return managed.filter { node in
+            guard let managedSessionID = node.copilotSessionId else { return true }
+            let candidates = observations.sessions.filter {
+                $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId && $0.liveness != .dead
+            }
+            guard candidates.count == 1, let session = candidates.first, session.liveness == .alive,
+                  SidebarCopilotTree.isFresh(session.observedAt, now: now),
+                  session.observedAt <= generatedAt.addingTimeInterval(1),
+                  observations.sessions.filter({ $0.id == session.id }).count == 1 else { return true }
+            // Placement is not identity. Retain the managed branch, but do not
+            // coalesce away a different verified live session on its surface.
+            return session.id == managedSessionID
+        }
+    }
+
     static func unmanagedSurfaces(
-        _ surfaces: [HierarchySurface], workspaceID: UUID, managed: [SidebarOrchestrationNode]
+        _ surfaces: [HierarchySurface], workspaceID: UUID, managed: [SidebarOrchestrationNode],
+        observations: SidebarCopilotTree? = nil, now: Date = Date()
     ) -> [HierarchySurface] {
-        let owned = Set(managed.filter { $0.workspaceId == workspaceID }.map(\.surfaceId))
+        let owned = Set(coalescingManagedNodes(managed, observations: observations, now: now)
+            .filter { $0.workspaceId == workspaceID }.map(\.surfaceId))
         return surfaces.filter { !owned.contains($0.id) }
     }
 
@@ -719,7 +745,8 @@ enum SidebarPresentation {
         observations: SidebarCopilotTree? = nil
     ) -> SidebarWorkspaceSummary {
         let managedSurfaces = Set(managed.map(\.surfaceId))
-        let unmanagedSessions = sessions.filter { !managedSurfaces.contains($0.surfaceID) }
+        let coalescingSurfaces = Set(coalescingManagedNodes(managed, observations: observations, now: now).map(\.surfaceId))
+        let unmanagedSessions = sessions.filter { !coalescingSurfaces.contains($0.surfaceID) }
         var counts: [AgentSummaryState: Int] = [:]
         var incomplete = !countsComplete || orchestrationAvailability != .ready
 

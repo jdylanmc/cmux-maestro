@@ -419,7 +419,7 @@ struct SidebarView: View {
         let work = visibleWork
         return SidebarPresentation.workspaceAttention(
             sessions: work.tree.sessions, managed: work.managed,
-            availability: model.orchestration.availability, now: Date()
+            availability: model.orchestration.availability, now: Date(), observations: work.tree
         )
     }
 
@@ -1376,13 +1376,15 @@ private struct WorkspaceRow: View {
         displayManaged.filter { $0.workspaceId == workspace.id }
     }
     private var unmanagedSessions: [SidebarCopilotSession] {
-        let surfaces = Set(managedNodes.map(\.surfaceId))
+        let surfaces = Set(SidebarPresentation.coalescingManagedNodes(
+            managedNodes, observations: copilotTree, now: Date()
+        ).map(\.surfaceId))
         return sessions.filter { !surfaces.contains($0.surfaceID) }
     }
     private var attentionSummary: SidebarWorkspaceAttention {
         SidebarPresentation.workspaceAttention(
             sessions: sessions, managed: managedNodes,
-            availability: orchestration.availability, now: Date()
+            availability: orchestration.availability, now: Date(), observations: copilotTree
         )
     }
 
@@ -1461,7 +1463,7 @@ private struct WorkspaceRow: View {
                 case .available(let surfaces):
                     ForEach(SidebarPresentation.unmanagedSurfaces(
                         surfaces.filter { !hiddenSurfaces.contains($0.id) },
-                        workspaceID: workspace.id, managed: managedNodes
+                        workspaceID: workspace.id, managed: managedNodes, observations: copilotTree
                     )) { surface in
                         SurfaceRow(
                             workspaceID: workspace.id, surface: surface,
