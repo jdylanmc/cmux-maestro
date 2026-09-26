@@ -158,15 +158,19 @@ struct SidebarRowActions<Content: View>: View {
     var body: some View {
         HStack(spacing: 2) {
             content
-            if hovered || focused {
-                Button { presenter.show() } label: {
-                    Image(systemName: "ellipsis").font(.caption2)
-                        .frame(width: 20, height: 24)
+            ZStack {
+                Color.clear
+                if hovered || focused {
+                    Button { presenter.show() } label: {
+                        Image(systemName: "ellipsis").font(.caption2)
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Actions for \(title)")
+                    .help("Actions for \(title); Shift-F10 on the row")
                 }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("Actions for \(title)")
-                .help("Actions for \(title); Shift-F10 on the row")
             }
+            .frame(width: 24, height: 24)
         }
         .environment(\.sidebarRowMenu, configuredPresenter)
         .background(SidebarRowMenuAnchor(presenter: presenter))

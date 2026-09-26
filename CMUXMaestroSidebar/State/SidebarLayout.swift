@@ -8,6 +8,9 @@ nonisolated enum SidebarDensity: String, Codable, CaseIterable, Identifiable, Se
     var title: String { self == .compact ? "Compact" : "Comfortable" }
     func spacing(_ compact: Double) -> Double { compact * (self == .compact ? 1 : 1.35) }
     var controlSize: Double { self == .compact ? 20 : 24 }
+    var rowHeight: Double { self == .compact ? 46 : 52 }
+    var rowTitleSize: Double { self == .compact ? 11 : 12 }
+    var rowMetadataSize: Double { self == .compact ? 9 : 10 }
     func stacksActions(width: Double) -> Bool { width < (self == .compact ? 240 : 280) }
 
     func indentation(depth: Int, unresolved: Bool, width: Double) -> Double {

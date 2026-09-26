@@ -19,7 +19,7 @@ enum SidebarAgentHoverContent {
             let matches = managed.nodes.filter { $0.id == id && $0.generation == generation }
             guard matches.count == 1, let node = matches.first,
                   topology.workspaceBySurface[node.surfaceId] == node.workspaceId else { return nil }
-            let allowed = Set(["Model", "Role", "Branch", "Worktree", "Git evidence", "Git changes", "Working directory", "Session ID"])
+            let allowed = Set(["Model", "Role", "Branch", "Worktree", "Last verified location", "Git evidence", "Git changes", "Working directory", "Session ID"])
             var lines = SidebarPresentation.managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { allowed.contains($0.title) }
             let current = availability == .ready || availability == .partial

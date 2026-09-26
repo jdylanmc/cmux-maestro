@@ -334,6 +334,19 @@ enum SidebarPresentation {
         needsInput ? "Needs input. \(visual.title)" : visual.title
     }
 
+    static func sessionStatus(_ session: SidebarCopilotSession) -> String {
+        let state = statusDescription(sessionState(session), needsInput: needsInput(session.attention))
+        return session.childrenComplete && !session.treeDegraded ? state
+            : "\(state). Child history incomplete; missing work is not assumed finished"
+    }
+
+    static func rowMetadata(kind: String, directory: String? = nil, activity: String? = nil) -> String {
+        if let activity { return "\(kind) · \(activity)" }
+        guard let directory, !directory.isEmpty else { return kind }
+        let context = SidebarPathDisplay.text(directory).split(separator: "/").last.map(String.init) ?? "/"
+        return "\(kind) · \(context)"
+    }
+
     static func managedNeedsInput(_ node: SidebarOrchestrationNode, tree: SidebarCopilotTree, now: Date) -> Bool {
         managedSession(for: node, in: tree, now: now).map { needsInput($0.attention) } ?? false
     }
@@ -837,6 +850,13 @@ enum SidebarPresentation {
         } else if let captured = node.gitEvidenceAt {
             let status = node.gitEvidenceStatus == "unavailable" ? "Unavailable" : "Stale"
             result.append(.init(title: "Git evidence", value: "\(status) · \(date(captured))"))
+            if node.gitEvidenceStatus == "verified" {
+                let location = [node.branchLabel, node.worktreeLabel.map(SidebarPathDisplay.text)].compactMap { $0 }
+                if !location.isEmpty {
+                    result.append(.init(title: "Last verified location",
+                                        value: "Not current Git state: \(location.joined(separator: " · "))"))
+                }
+            }
         }
         if let changes = node.currentGitChanges(at: now) {
             result.append(.init(title: "Git changes", value: changes.description))

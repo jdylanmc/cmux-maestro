@@ -8,6 +8,28 @@ struct SidebarClarityTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test func quietMetadataUsesOnlyConciseObservedContext() {
+        #expect(SidebarPresentation.rowMetadata(kind: "Agent", directory: "/synthetic/worktrees/design") == "Agent · design")
+        #expect(SidebarPresentation.rowMetadata(kind: "Terminal", directory: "/synthetic/worktrees/design/") == "Terminal · design")
+        #expect(SidebarPresentation.rowMetadata(kind: "Browser") == "Browser")
+        #expect(SidebarPresentation.rowMetadata(kind: "Surface", directory: nil) == "Surface")
+        #expect(SidebarPresentation.rowMetadata(kind: "Agent", directory: "/synthetic/design",
+                                              activity: "Running a command") == "Agent · Running a command")
+    }
+
+    @Test func consolidatedCueKeepsUnknownAndIncompleteEvidenceExplicit() {
+        let session = SidebarCopilotSession(
+            id: UUID(), workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .unknown, state: .working, model: "synthetic-model", observedAt: now, nodes: [],
+            childrenComplete: false, treeDegraded: true, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        #expect(SidebarPresentation.sessionStatus(session) ==
+                "State unavailable. Child history incomplete; missing work is not assumed finished")
+        #expect(SidebarPresentation.activityTreatment(SidebarPresentation.sessionState(session), reduceMotion: false) == .none)
+        #expect(SidebarPresentation.sessionDetails(session).contains(.init(title: "Child history",
+            value: "Incomplete; missing work is not assumed finished")))
+    }
+
     @Test func focusedBorderUsesOnlyTheSelectedWorkspacesUniqueFocusedSurface() {
         let a = UUID(), b = UUID(), surfaceA = UUID(), surfaceB = UUID()
         func workspace(_ id: UUID, selected: Bool, surface: UUID) -> HierarchyWorkspace {

@@ -379,10 +379,10 @@ policy controls, not an operating-system sandbox. Shell access is never a
 default and requires an explicit task-level caller decision; wildcard,
 all-resource and `--allow-all` grants are never injected.
 
-The default view is a restrained workspace outline. Quiet workspace headers
+The default view is a restrained workspace outline. Primary semibold workspace headers
 contain explicit coordinator → worker → nested-worker rows, with guide lines and
 durable disclosure by stable node identity. Each row leads with its safe name,
-then a muted Git branch/worktree line when the external controller verified those
+then one quiet kind/location line when the external controller verified those
 facts from the explicitly assigned working directory. The worktree label is the
 verified repository root basename; the branch label comes from `git symbolic-ref`.
 Detached `HEAD` omits the branch while retaining the verified worktree. Non-Git
@@ -391,14 +391,15 @@ failed root queries publish no Git labels rather than calling a directory a
 worktree. The controller refreshes exact assigned-directory evidence at bounded
 worker heartbeats, turn boundaries, follow-up queueing and explicit status checks.
 Each projection carries a separate Git evidence status and capture time. Stale
-verified locations remain useful as **last verified** labels, with a clock glyph,
-explicit help and accessibility qualification; they are not presented as current
+verified locations remain useful context, with a static unverified-state cue and
+explicit **last verified** hover/details and accessibility qualification; they are not presented as current
 Git state. Unavailable evidence is omitted. Probes are batched by assigned directory and run outside the global
 state mutation lock. The sandboxed sidebar never runs Git and never receives the
 private full assigned path through observer metadata.
 
-Managed rows show the worktree name with a branch-tree icon. Fresh Git evidence
-also carries a changed-file count and **+green / -red** tracked-text line counts
+Managed rows show concise worktree context beside the exact state cue. Hover,
+Details and the existing pinned footer retain Git diagnostics. Fresh Git evidence
+carries a changed-file count and **+green / -red** tracked-text line counts
 against `HEAD` (staged and unstaged changes combined). File totals include
 untracked files and binary changes; line totals exclude them and submodule
 contents. Renames count once. Conflicts, unborn `HEAD`, failed or oversized
@@ -480,6 +481,8 @@ interaction; closing that preview restores its original responder when appropria
 Right-click a row, use its transient overflow, or press **Shift-F10** on its title
 for the same native grouped menu. Opening it is passive. **Preview details** is
 also passive; **Open details** retains the existing explicit mark-read behavior.
+The overflow occupies a stable 24-point slot with a 2-point gap; revealing it
+never changes the title's width or truncation, and hidden controls are not keyboard stops.
 Managed inspection requests retain the captured node, run, generation, session,
 workspace and surface. A changed subject shows **Details no longer available**
 without inspecting or marking the replacement read.
@@ -514,7 +517,7 @@ ownership. Existing observation expiry updates the footer without a new timer.
 The flush footer uses native adaptive colors and one small, original
 **placeholder pet** silhouette for verified agents only. It is not a functioning
 pet integration or a provider asset. Metadata is bounded and scrollable; verified
-Git counts reuse the row badge, full paths remain in Details, and the existing
+Git counts use the existing compact badge, full paths remain in Details, and the existing
 session-ID copy control stays near identity. No context percentages, elapsed
 durations, tags, pet preferences or lifecycle controls are added.
 Steady connection success adds no label or row, leaving the footer lower while
@@ -551,9 +554,13 @@ separate from activity and icon color. Other workspaces' remembered focus does
 not light a border, and ambiguous/unavailable focus evidence does not guess.
 Identity colors do not change this treatment. Icons have no wand decoration;
 choosing an icon or role preset does not imply orchestration ownership.
-Compact rows omit routine inline state words; state remains in tooltips,
-accessibility and details. Unknown/stale evidence and protected attention remain
-visible. Coordinator
+Both densities use a single-line name and one quiet metadata line: 11/9-point
+type in 46-point Compact rows, 12/10-point type in 52-point Comfortable rows.
+Routine Unknown, State unavailable and Last verified prose moves to full help,
+accessibility and details, not a third row. Unknown/stale states retain a static
+dashed cue, never an idle or working claim; incomplete child-history context
+shares that row's exact state cue instead of a redundant trailing info icon.
+Protected attention and actual errors remain visible. Coordinator
 activity comes only from a fresh, unique, live Copilot observation on its exact
 workspace/surface; registration or child activity alone cannot start a pulse.
 **Sidebar settings → Terminal icon** offers Ghost and plain `>_` styles.
@@ -607,12 +614,12 @@ the current owner. Passive skill/shell history moves to the selected session's
 **Other activity** disclosure and remains in Taskboard. Agents, structural
 ancestors, active/blocked/failed work and outstanding attention stay in the outline.
 Ordinary running shell invocations are the exception: verified, unambiguous leaf
-commands fold into a quiet activity caption beneath their exact owning session or
+commands fold into the quiet metadata line of their exact owning session or
 agent, such as "Running a command". Concurrent commands are counted; blocked,
 failed, attention-bearing, unresolved and structural shell rows stay visible.
 The complete shell records remain available in details and Taskboard. This is
 presentation-only: raw activity evidence, lifecycle state and counts are unchanged.
-Incomplete-history indicators and collapsed-branch counts sit beside their owning
+Incomplete-history context and collapsed-branch counts stay with their owning
 row, not on standalone diagnostic rows. A chevron needs no "Branch collapsed"
 caption. Registration is neutral, not a claim that an agent is running; stale
 managed evidence and unconfirmed/ended process ownership cannot show a live state.
@@ -625,12 +632,18 @@ summaries, and incidental diagnostics stay behind selection or settings.
 Taskboard remains available from its header button and retains each
 primary session's state even when it has no attention or child rows.
 
-A healthy outline has no diagnostic paragraphs. Source availability is a header
+A healthy outline has no diagnostic paragraphs. **Maestro** leads the header;
+the six existing actions form a right-aligned group of 28-point buttons with
+2-point gaps, rather than stretching across the sidebar. Source availability is a header
 indicator with full help and accessibility text; incomplete evidence is marked on
 its owning row. Blockers, attention and omitted active work remain visible.
-Workspaces use quiet headings; directory labels sit beneath terminal names.
-Complete path metadata remains in Details rather than repeating unavailable
+Workspaces use primary 12-point semibold names, boxed disclosure and a section rule.
+Rows retain the chosen identity glyph in a consistent 24-point column; directory
+context uses the observed basename, never a guessed workspace name or Git branch.
+Complete home-relative paths remain in hover, accessibility and Details rather than repeating unavailable
 workspace/project/path lines on every row.
+New grouping selectors, pane headings, tags and utility rows from the design
+prototype are deliberately separate scope; no decorative substitutes are shown.
 The header gear remains the entry for density and stored preferences. Saved
 expansion, retention, acknowledgement, navigation and source records are preserved;
 the outline's activity filtering is presentation-only.
@@ -646,8 +659,9 @@ full paths remain available to accessibility and tooltips.
 
 The outline uses 5-point side gutters (scaled for Comfortable), 8-point shallow
 nesting and 4-point increments beyond level three, bounded to 32 points or 12%
-of available width. Git counts sit with secondary metadata so titles keep priority, including
-the eight-level, 280-point case. The 50-point host-footer clearance is unchanged.
+of available width. Full Git diagnostics remain in hover/details so titles keep priority.
+At eight levels and 280 points, the stable overflow slot leaves at least 124 points
+for the name without hover-time reflow. The 50-point host-footer clearance is unchanged.
 
 Hierarchy expansion persists by workspace/surface UUID and provider/session/
 child identity—not names, paths or the current window. Moves and reloads keep

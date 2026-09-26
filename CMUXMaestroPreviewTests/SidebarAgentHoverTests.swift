@@ -86,6 +86,8 @@ struct SidebarAgentHoverTests {
         #expect(result.title == node.label)
         #expect(result.lines.contains(.init(title: "Model", value: "model")))
         #expect(!result.lines.contains { $0.value == "old-branch" || $0.value == "not-current" })
+        #expect(result.lines.contains(.init(title: "Last verified location",
+                                           value: "Not current Git state: old-branch · not-current")))
         #expect(result.lines.contains { $0.title == "Git evidence" && $0.value.hasPrefix("Stale") })
         #expect(result.lines.filter { $0.copyableSessionID != nil } == [.sessionID(fixtures.sessionID)])
         #expect(!result.lines.contains { $0.copyableSessionID == node.id || $0.copyableSessionID == node.runId })
