@@ -9,11 +9,13 @@ struct SidebarItemIcon: View {
     var agentGlyph: String? = nil
     var agentColor: SidebarAvatarColor? = nil
     let inspect: () -> Void
+    var picker: Binding<Bool>? = nil
 
     @Environment(SidebarPreferences.self) private var preferences
     @Environment(\.sidebarAgentIconStyle) private var agentStyle
     @Environment(\.sidebarTerminalIconStyle) private var terminalStyle
-    @State private var showingPicker = false
+    @State private var localPicker = false
+    private var showingPicker: Binding<Bool> { picker ?? $localPicker }
 
     private var appearance: (choice: SidebarIconChoice, source: String) {
         let standardGlyph: String
@@ -42,10 +44,10 @@ struct SidebarItemIcon: View {
                         ? "Icon for \(title). Exact session identity unavailable; customization disabled."
                         : "Choose icon for \(title). \(appearance.source): \(appearance.choice.glyph)",
                     enabled: target != nil,
-                    action: { showingPicker = true }
+                    action: { showingPicker.wrappedValue = true }
                 )
                 .frame(width: 24, height: 24)
-                .popover(isPresented: $showingPicker, arrowEdge: .trailing) {
+                .popover(isPresented: showingPicker, arrowEdge: .trailing) {
                     if let target {
                         VStack(spacing: 0) {
                             SidebarIconPicker(
@@ -55,29 +57,22 @@ struct SidebarItemIcon: View {
                                 choose: { preferences.setIcon($0, for: target) },
                                 resetDefault: { preferences.resetIconToDefault(for: target) },
                                 resetAgentSelection: kind == .agent ? { preferences.resetIconToAgentSelection(for: target) } : nil,
-                                close: { showingPicker = false }
+                                close: { showingPicker.wrappedValue = false }
                             )
                             Divider()
                             Button("Show details") {
-                                showingPicker = false
+                                showingPicker.wrappedValue = false
                                 inspect()
                             }
                             .padding(10)
                         }
                     }
                 }
-                .onChange(of: target) { _, _ in showingPicker = false }
+                .onChange(of: target) { _, _ in showingPicker.wrappedValue = false }
             } else {
                 Image(systemName: "questionmark.square")
                     .frame(width: 24, height: 24)
                     .help(SidebarGlyphCatalog.notice ?? "Icon font unavailable")
-            }
-            if target == nil || SidebarGlyphCatalog.notice != nil {
-                Button(action: inspect) {
-                    Image(systemName: "info.circle").frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Details for \(title)")
             }
         }
     }

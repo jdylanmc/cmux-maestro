@@ -460,11 +460,14 @@ example, switching between Nord and Tokyo Night) is tracked in
 sidebar SDK does not expose the host's resolved theme colors. Native light/dark
 adaptation is not a claim of custom terminal-palette matching.
 
-Workspace titles have a passive hover preview and a separate **Preview** info
-button for mouse/keyboard access. The shared native card prefers the right edge,
-fits the available screen, and scrolls long metadata. Hover waits 350 ms; leaving
-the title/card allows 300 ms to cross between them. Explicit previews stay open
-until dismissed with Escape, Close, or an outside interaction. Workspace previews
+Only the workspace **name text** triggers its passive hover preview; disclosure,
+blank title fill, and actions do not. Leaving that text cancels or dismisses the
+workspace hover immediately. Agent previews retain a 300 ms crossing grace.
+The shared native card prefers the right edge, fits the available screen, and
+scrolls long metadata. Hover waits 350 ms. Keyboard focus on a title previews it
+without pressing it; **Tab** enters its preview controls, and **Escape** or
+**Shift-Tab** returns to that title. Explicit previews also close on outside
+interaction. Workspace previews
 show only current granted workspace metadata and shared-surface counts; denied
 or ambiguous evidence is labeled unavailable.
 
@@ -472,6 +475,13 @@ or ambiguous evidence is labeled unavailable.
 of sessions, navigation, preferences, and the bottom details. Passive panels
 cannot become key/main windows. Only an explicit Preview action enables keyboard
 interaction; closing that preview restores its original responder when appropriate.
+Right-click a row, use its transient overflow, or press **Shift-F10** on its title
+for the same native grouped menu. Opening it is passive. **Preview details** is
+also passive; **Open details** retains the existing explicit mark-read behavior.
+Icon-direct right-click still opens the compact icon picker, not the row menu.
+Activity-only children offer **Open parent chat**, never an independent surface.
+Unsupported pet, tag, backlog, placement and exit actions show disabled reasons;
+menus add no capability or lifecycle authority.
 Previewing never changes the **Active window** footer. It follows only the
 current window's selected workspace and uniquely focused native surface.
 Disconnected, redacted, missing or ambiguous focus clears the previous subject.

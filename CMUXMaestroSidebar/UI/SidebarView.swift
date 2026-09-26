@@ -972,6 +972,32 @@ private struct ManagedNodeRow: View {
     let toggleExpanded: () -> Void
     let select: () -> Void
     @Environment(\.sidebarDismissManaged) private var dismissManaged
+    @Environment(\.sidebarPrepareSeen) private var prepareSeen
+    @State private var showingPicker = false
+
+    private var actions: [SidebarRowActionGroup] {
+        var navigationActions = [
+            SidebarRowAction.focus(.surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
+                                   navigation: navigation, prepareSeen: prepareSeen),
+            .init(title: "Open details", perform: { select() })
+        ]
+        if hasChildren {
+            navigationActions.append(.init(title: expanded ? "Collapse branch" : "Expand branch", perform: { toggleExpanded() }))
+        }
+        var groups: [SidebarRowActionGroup] = [
+            .init(title: "Navigation", actions: navigationActions),
+            .appearance(icon: SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate) == nil
+                        ? nil : { showingPicker = true }, agent: true),
+            .placement, .lifecycle()
+        ]
+        if !hasChildren, let dismissManaged,
+           let outcome = SidebarPresentation.dismissibleManagedFailure(node, tree: copilotTree) {
+            groups.append(.init(title: "History", actions: [
+                .init(title: "Dismiss failed result", perform: { dismissManaged(outcome) })
+            ]))
+        }
+        return groups
+    }
 
     var body: some View {
         HStack(spacing: 4) {
@@ -983,7 +1009,7 @@ private struct ManagedNodeRow: View {
             SidebarItemIcon(
                 kind: .agent, target: SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate),
                 title: node.label, agentGlyph: node.iconId, agentColor: node.iconColor,
-                inspect: select
+                inspect: select, picker: $showingPicker
             )
             FocusButton(
                 target: .surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
@@ -1035,6 +1061,7 @@ private struct ManagedNodeRow: View {
                 .accessibilityIdentifier("dismiss-managed-\(node.id)-\(node.generation)")
             }
         }
+        .sidebarRowActions(title: node.label, groups: actions)
         .background { SidebarActivityBackground(visual: stateVisual) }
         .modifier(SidebarFocusBorder(workspaceID: node.workspaceId, surfaceID: node.surfaceId))
         .padding(.leading, CGFloat(depth * 12))
@@ -1116,21 +1143,29 @@ private struct WorkspaceOutlineHeader: View {
         let hierarchy: HierarchySnapshot
         let navigation: SidebarNavigation
         @Environment(\.sidebarHoverConnected) private var connected
+        @Environment(\.sidebarPrepareSeen) private var prepareSeen
 
         var body: some View {
             if let workspace {
-                SidebarHoverRegion(data: SidebarHoverContent.workspace(workspace.id, hierarchy: hierarchy, connected: connected)) {
+                SidebarHoverRegion(data: SidebarHoverContent.workspace(workspace.id, hierarchy: hierarchy, connected: connected), nameOnly: true) {
                     FocusButton(target: .workspace(workspace.id), navigation: navigation, label: "Focus workspace \(title)") {
                         HStack(spacing: 5) {
                             Text(title)
                                 .sidebarFont(.caption2, weight: .semibold)
                                 .lineLimit(1)
+                                .sidebarNameHover()
                             Spacer(minLength: 0)
                         }
                         .foregroundStyle(.secondary)
                     }
                     .accessibilityIdentifier("managed-workspace-\(workspace.id)")
                 }
+                .sidebarRowActions(title: "workspace \(title)", groups: [
+                    .init(title: "Navigation", actions: [
+                        .focus(.workspace(workspace.id), navigation: navigation, prepareSeen: prepareSeen),
+                        .unavailable("Open backlog…", "Workspace backlog is not available.")
+                    ]), .placement, .lifecycle()
+                ])
             } else {
                 Text("Workspace")
                     .sidebarFont(.caption2, weight: .semibold)
@@ -1236,6 +1271,7 @@ private struct WorkspaceRow: View {
     @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarHoverConnected) private var connected
+    @Environment(\.sidebarPrepareSeen) private var prepareSeen
     private var expanded: Bool { layout.isExpanded(.workspace(workspace.id)) }
     private var managedNodes: [SidebarOrchestrationNode] {
         displayManaged.filter { $0.workspaceId == workspace.id }
@@ -1266,17 +1302,31 @@ private struct WorkspaceRow: View {
         return labels.joined(separator: ", ")
     }
 
+    private var actions: [SidebarRowActionGroup] {
+        [
+            .init(title: "Navigation", actions: [
+                .focus(.workspace(workspace.id), navigation: navigation, prepareSeen: prepareSeen),
+                .init(title: expanded ? "Collapse workspace" : "Expand workspace",
+                      perform: { setExpanded(.workspace(workspace.id), !expanded) }),
+                .init(title: "Workspace details", perform: { selection = .workspace(workspace.id) }),
+                .unavailable("Open backlog…", "Workspace backlog is not available.")
+            ]),
+            .placement, .lifecycle()
+        ]
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: density.spacing(4)) {
             HStack(spacing: 5) {
                 ExpandButton(expanded: expanded, label: title) {
                     setExpanded(.workspace(workspace.id), !expanded)
                 }
-                SidebarHoverRegion(data: SidebarHoverContent.workspace(workspace.id, hierarchy: hierarchy, connected: connected)) {
+                SidebarHoverRegion(data: SidebarHoverContent.workspace(workspace.id, hierarchy: hierarchy, connected: connected), nameOnly: true) {
                     FocusButton(target: .workspace(workspace.id), navigation: navigation, label: "Focus workspace \(title)") {
                         HStack(spacing: 5) {
                             Text(title).sidebarFont(.caption2, weight: .semibold)
                                 .foregroundStyle(.secondary).lineLimit(1)
+                                .sidebarNameHover()
                             Spacer(minLength: 0)
                             if case .available(true) = workspace.isPinned {
                                 StatusBadge(symbol: "pin.fill", label: "Pinned")
@@ -1288,30 +1338,8 @@ private struct WorkspaceRow: View {
                     }
                     .accessibilityValue(accessibilityStatus)
                 }
-                Menu {
-                    FocusButton(
-                        target: .workspace(workspace.id), navigation: navigation,
-                        label: "Focus workspace \(title)"
-                    ) { Text("Focus workspace") }
-                    Button(expanded ? "Collapse workspace" : "Expand workspace") {
-                        setExpanded(.workspace(workspace.id), !expanded)
-                    }
-                    .accessibilityIdentifier("workspace-menu-expansion-\(workspace.id)")
-                    Divider()
-                    Button("Workspace details") {
-                        selection = .workspace(workspace.id)
-                    }
-                    .accessibilityIdentifier("workspace-menu-details-\(workspace.id)")
-                } label: {
-                    Image(systemName: "ellipsis").font(.caption2).foregroundStyle(.secondary)
-                        .frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
-                }
-                .buttonStyle(.borderless)
-                .menuIndicator(.hidden)
-                .help("Workspace actions")
-                .accessibilityLabel("Actions for workspace \(title)")
-                .accessibilityIdentifier("workspace-menu-\(workspace.id)")
             }
+            .sidebarRowActions(title: "workspace \(title)", groups: actions)
             WorkspaceAttentionLabel(summary: attentionSummary)
                 .padding(.leading, SidebarPresentation.minimumControlSize + 5)
             if expanded {
@@ -1362,6 +1390,10 @@ private struct SurfaceRow: View {
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
+    @Environment(\.sidebarPrepareSeen) private var prepareSeen
+    @Environment(\.sidebarAgentHoverProvider) private var hoverProvider
+    @Environment(\.sidebarHoverConnected) private var connected
+    @State private var showingPicker = false
     private var singleSession: SidebarCopilotSession? { sessions.count == 1 ? sessions.first : nil }
     private var expanded: Bool {
         layout.isExpanded(.surface(surface.id))
@@ -1387,14 +1419,39 @@ private struct SurfaceRow: View {
         return labels.joined(separator: ", ")
     }
 
+    private func toggleExpanded() {
+        setExpanded(.surface(surface.id), !expanded)
+        if let singleSession { setExpanded(.session(singleSession.id), !expanded) }
+    }
+
+    private var actions: [SidebarRowActionGroup] {
+        var items: [SidebarRowAction] = [
+            .focus(.surface(workspaceID: workspaceID, surfaceID: surface.id),
+                   navigation: navigation, prepareSeen: prepareSeen),
+            .init(title: "Open details", perform: inspect)
+        ]
+        if hasChildren { items.append(.init(title: expanded ? "Collapse branch" : "Expand branch", perform: toggleExpanded)) }
+        let editable = singleSession != nil || surface.kind == .terminal || surface.kind == .browser
+        return [
+            .init(title: "Navigation", actions: items),
+            .appearance(icon: editable ? { showingPicker = true } : nil, agent: singleSession != nil || surface.kind == .agentSession),
+            .placement, .lifecycle()
+        ]
+    }
+
+    private var preview: SidebarHoverCardData? {
+        if let singleSession { return hoverProvider(.session(singleSession.id)) }
+        guard connected else { return nil }
+        return .init(id: "surface-\(surface.id)", category: "\(surface.kind.title) preview", title: title,
+                     lines: [.init(title: "Working directory", value: surface.workingDirectory.pathDisplayText),
+                             .init(title: "Surface ID", value: surface.id.uuidString)])
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: density.spacing(4)) {
             HStack(spacing: 4) {
                 if hasChildren {
-                    ExpandButton(expanded: expanded, label: title) {
-                        setExpanded(.surface(surface.id), !expanded)
-                        if let singleSession { setExpanded(.session(singleSession.id), !expanded) }
-                    }
+                    ExpandButton(expanded: expanded, label: title, toggle: toggleExpanded)
                 } else {
                     Color.clear.frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
                 }
@@ -1403,14 +1460,14 @@ private struct SurfaceRow: View {
                         kind: .agent, target: .session(singleSession.id), title: title,
                         agentGlyph: singleSession.iconId,
                         agentColor: singleSession.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
-                        inspect: inspect
+                        inspect: inspect, picker: $showingPicker
                     )
                 } else if surface.kind == .agentSession {
-                    SidebarItemIcon(kind: .agent, target: nil, title: title, inspect: inspect)
+                    SidebarItemIcon(kind: .agent, target: nil, title: title, inspect: inspect, picker: $showingPicker)
                 } else if surface.kind == .terminal {
-                    SidebarItemIcon(kind: .terminal, target: .surface(surface.id), title: title, inspect: inspect)
+                    SidebarItemIcon(kind: .terminal, target: .surface(surface.id), title: title, inspect: inspect, picker: $showingPicker)
                 } else if surface.kind == .browser {
-                    SidebarItemIcon(kind: .browser, target: .surface(surface.id), title: title, inspect: inspect)
+                    SidebarItemIcon(kind: .browser, target: .surface(surface.id), title: title, inspect: inspect, picker: $showingPicker)
                 } else {
                     Button(action: inspect) {
                         Image(systemName: surface.kind.symbolName)
@@ -1421,7 +1478,8 @@ private struct SurfaceRow: View {
                     .help(inspectionLabel)
                     .accessibilityLabel(inspectionLabel)
                 }
-                FocusButton(
+                SidebarHoverRegion(data: preview) {
+                  FocusButton(
                     target: .surface(workspaceID: workspaceID, surfaceID: surface.id),
                     navigation: navigation, label: "Focus \(surface.kind.title) \(title)"
                 ) {
@@ -1440,7 +1498,7 @@ private struct SurfaceRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .accessibilityValue(accessibilityStatus)
-                .agentHoverPreview(singleSession.map { .session($0.id) })
+                }
                 if let singleSession {
                     SessionEvidenceBadge(session: singleSession)
                 }
@@ -1450,6 +1508,7 @@ private struct SurfaceRow: View {
                 if surface.isPinned { StatusBadge(symbol: "pin.fill", label: "Pinned") }
                 if surface.unreadCount > 0 { UnreadBadge(count: surface.unreadCount) }
             }
+            .sidebarRowActions(title: title, groups: actions)
             .background {
                 if let singleSession {
                     SidebarActivityBackground(visual: SidebarPresentation.sessionState(singleSession))
@@ -1511,7 +1570,22 @@ private struct CopilotSessionRow: View {
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
+    @Environment(\.sidebarPrepareSeen) private var prepareSeen
+    @State private var showingPicker = false
     private var expanded: Bool { layout.isExpanded(.session(session.id)) }
+    private var actions: [SidebarRowActionGroup] {
+        var items: [SidebarRowAction] = [
+            .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
+                   navigation: navigation, prepareSeen: prepareSeen),
+            .init(title: "Open details", perform: { selection = .session(session.id) })
+        ]
+        if !session.outlineNodes.isEmpty {
+            items.append(.init(title: expanded ? "Collapse branch" : "Expand branch",
+                               perform: { setExpanded(.session(session.id), !expanded) }))
+        }
+        return [.init(title: "Navigation", actions: items),
+                .appearance(icon: { showingPicker = true }, agent: true), .placement, .lifecycle()]
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: density.spacing(4)) {
@@ -1526,7 +1600,7 @@ private struct CopilotSessionRow: View {
                 SidebarItemIcon(
                     kind: .agent, target: .session(session.id), title: "Copilot \(session.shortID)",
                     agentGlyph: session.iconId, agentColor: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
-                    inspect: { selection = .session(session.id) }
+                    inspect: { selection = .session(session.id) }, picker: $showingPicker
                 )
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
@@ -1548,6 +1622,7 @@ private struct CopilotSessionRow: View {
                     CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: [session]))
                 }
             }
+            .sidebarRowActions(title: "Copilot \(session.shortID)", groups: actions)
             .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session)) }
             CopilotSessionContents(
                 session: session, expanded: expanded,
@@ -1628,9 +1703,29 @@ private struct CopilotWorkRow: View {
     var taskboard = false
     @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
+    @Environment(\.sidebarPrepareSeen) private var prepareSeen
     private var hasOutcomeActions: Bool {
         node.dismissibleOutcome(sessionID: session.id) != nil
             || node.dismissibleFailure(sessionID: session.id) != nil
+    }
+    private var actions: [SidebarRowActionGroup] {
+        var items: [SidebarRowAction] = [
+            .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
+                   navigation: navigation, prepareSeen: prepareSeen, parentChat: true),
+            .init(title: "Open activity details", perform: { selection = .child(sessionID: session.id, childID: node.id) })
+        ]
+        if let expansion, node.hasChildren, let setExpanded {
+            items.append(.init(title: expansion.expanded ? "Collapse branch" : "Expand branch",
+                               perform: { setExpanded(expansion.expansionID, !expansion.expanded) }))
+        }
+        var groups: [SidebarRowActionGroup] = [
+            .init(title: "Navigation", actions: items), .appearance(icon: nil, agent: node.kind == .subagent, child: true),
+            .placement, .lifecycle(child: true)
+        ]
+        if let outcome = node.dismissibleOutcome(sessionID: session.id) ?? node.dismissibleFailure(sessionID: session.id) {
+            groups.append(.init(title: "History", actions: [.init(title: "Dismiss outcome", perform: { dismiss(outcome) })]))
+        }
+        return groups
     }
 
     init(
@@ -1697,7 +1792,7 @@ private struct CopilotWorkRow: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .agentHoverPreview(node.kind == .subagent ? .child(sessionID: session.id, childID: node.id) : nil)
+                .agentHoverPreview(.child(sessionID: session.id, childID: node.id))
                 if let summary = expansion?.collapsedSummary { CollapsedBranchSummary(summary: summary) }
                 if node.ancestryUnresolved {
                     Image(systemName: "questionmark.circle")
@@ -1709,6 +1804,7 @@ private struct CopilotWorkRow: View {
                     DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)
                 }
             }
+            .sidebarRowActions(title: node.name, groups: actions)
             if !SidebarPresentation.attention(
                 node.attention, state: node.state, degraded: node.attentionDegraded
             ).isEmpty {
@@ -1857,6 +1953,15 @@ private struct TaskboardSessionRow: View {
     let navigation: SidebarNavigation
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
+    @Environment(\.sidebarPrepareSeen) private var prepareSeen
+    @State private var showingPicker = false
+    private var actions: [SidebarRowActionGroup] {
+        [.init(title: "Navigation", actions: [
+            .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
+                   navigation: navigation, prepareSeen: prepareSeen),
+            .init(title: "Open details", perform: { selection = .session(session.id) })
+        ]), .appearance(icon: { showingPicker = true }, agent: true), .placement, .lifecycle()]
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1864,7 +1969,7 @@ private struct TaskboardSessionRow: View {
                 SidebarItemIcon(
                     kind: .agent, target: .session(session.id), title: title,
                     agentGlyph: session.iconId, agentColor: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
-                    inspect: { selection = .session(session.id) }
+                    inspect: { selection = .session(session.id) }, picker: $showingPicker
                 )
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
@@ -1874,15 +1979,8 @@ private struct TaskboardSessionRow: View {
                 }
                 .agentHoverPreview(.session(session.id))
                 Spacer(minLength: 0)
-                Button { selection = .session(session.id) } label: {
-                    Image(systemName: "info.circle")
-                        .frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
-                }
-                .buttonStyle(.borderless)
-                .help("Details for \(title)")
-                .accessibilityLabel("Details for \(title)")
-                .accessibilityIdentifier("details-session-\(session.id)")
             }
+            .sidebarRowActions(title: title, groups: actions)
             SidebarActionLayout {
                 SessionStateSummary(session: session)
             }
@@ -2145,24 +2243,35 @@ struct FocusButton<Content: View>: View {
     @ViewBuilder var content: Content
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
     func focus() {
-        switch target {
-        case .workspace:
-            navigation.select(target)
-        case .surface(let workspaceID, let surfaceID):
-            let onSuccess = prepareSeen(.surface(workspaceID: workspaceID, surfaceID: surfaceID))
-            navigation.select(target, onSuccess: onSuccess)
-        }
+        SidebarRowAction.focus(target, navigation: navigation, prepareSeen: prepareSeen).perform()
     }
 
     var body: some View {
-        Button(action: focus) {
-            content.frame(minHeight: SidebarPresentation.minimumControlSize).contentShape(Rectangle())
+        SidebarTitleButton(label: label, hint: navigation.disabledReason(for: target) ?? label, action: focus) {
+            content
         }
-            .buttonStyle(.plain)
-            .disabled(navigation.disabledReason(for: target) != nil)
-            .help(navigation.disabledReason(for: target) ?? label)
-            .accessibilityLabel(label)
-            .accessibilityHint(navigation.disabledReason(for: target) ?? "Selects this surface or workspace in CMUX")
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+extension SidebarRowAction {
+    static func focus(
+        _ target: SidebarNavigationTarget, navigation: SidebarNavigation,
+        prepareSeen: @escaping (SidebarSeenTarget) -> () -> Void, parentChat: Bool = false
+    ) -> Self {
+        let title: String
+        switch target {
+        case .workspace: title = "Focus workspace"
+        case .surface: title = parentChat ? "Open parent chat" : "Focus surface"
+        }
+        return .init(title: title, unavailable: navigation.disabledReason(for: target)) {
+            switch target {
+            case .workspace: navigation.select(target)
+            case .surface(let workspaceID, let surfaceID):
+                let success = prepareSeen(.surface(workspaceID: workspaceID, surfaceID: surfaceID))
+                navigation.select(target, onSuccess: { success() })
+            }
+        }
     }
 }
 

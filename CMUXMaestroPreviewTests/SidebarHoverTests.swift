@@ -5,6 +5,186 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct SidebarHoverTests {
+    @Test func sharedNativeMenusKeepTargetsAndUnavailableActionsInert() async throws {
+        let fixture = SidebarTreeFixtures()
+        let navigation = SidebarNavigation()
+        var selected: [SidebarNavigationTarget] = []
+        var seen: [SidebarSeenTarget] = []
+        navigation.update(topology: SidebarTopology(fixture.hierarchy()), connected: true,
+                          workspaceAllowed: true, surfaceAllowed: true, perform: { selected.append($0) })
+        let focus = SidebarRowAction.focus(
+            .surface(workspaceID: fixture.workspaceA, surfaceID: fixture.surfaceA),
+            navigation: navigation, prepareSeen: { target in { seen.append(target) } }, parentChat: true
+        )
+        let presenter = SidebarRowMenuPresenter()
+        presenter.groups = [
+            .init(title: "Navigation", actions: [focus]),
+            .appearance(icon: nil, agent: true, child: true), .placement, .lifecycle(child: true)
+        ]
+        let menu = presenter.menu()
+        #expect(menu.items.map(\.title) == ["Navigation", "Appearance", "Organization", "Lifecycle"])
+        #expect(selected.isEmpty && seen.isEmpty && navigation.status == .idle)
+        let command = try #require(menu.items[0].submenu?.items.first)
+        #expect(command.title == "Open parent chat" && command.isEnabled)
+        for group in menu.items.dropFirst() {
+            for item in try #require(group.submenu).items {
+                #expect(!item.isEnabled)
+                presenter.invoke(item)
+            }
+        }
+        #expect(selected.isEmpty && seen.isEmpty)
+        presenter.invoke(command)
+        await sidebarEventually { navigation.status == .selected }
+        #expect(selected == [.surface(workspaceID: fixture.workspaceA, surfaceID: fixture.surfaceA)])
+        #expect(seen == [.surface(workspaceID: fixture.workspaceA, surfaceID: fixture.surfaceA)])
+        navigation.update(topology: SidebarTopology(fixture.hierarchy(moved: true)), connected: true,
+                          workspaceAllowed: true, surfaceAllowed: true, perform: { selected.append($0) })
+        presenter.invoke(command)
+        #expect(navigation.status == .staleTarget)
+        #expect(selected.count == 1 && seen.count == 1)
+        let denied = SidebarRowAction.focus(.workspace(fixture.workspaceA), navigation: SidebarNavigation(),
+                                          prepareSeen: { _ in { Issue.record("Denied menu cannot acknowledge") } })
+        #expect(denied.unavailable != nil)
+    }
+
+    @Test func nativeContextBoundaryDistinguishesIconRowAndOutsideAndKeyboardUsesSameMenu() throws {
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 280, height: 100),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 100))
+        let anchor = SidebarRowMenuAnchorView(frame: NSRect(x: 0, y: 0, width: 240, height: 30))
+        let icon = SidebarIconNativeButton()
+        icon.frame = NSRect(x: 0, y: 0, width: 24, height: 24)
+        let title = SidebarTitleNativeButton(frame: NSRect(x: 28, y: 0, width: 180, height: 24))
+        root.addSubview(anchor)
+        root.addSubview(icon)
+        root.addSubview(title)
+        window.contentView = root
+        defer { anchor.detach(); window.contentView = nil; window.close() }
+        let presenter = SidebarRowMenuPresenter()
+        presenter.anchor = anchor
+        anchor.presenter = presenter
+        var presses = 0, menus = 0, icons = 0
+        presenter.groups = [.init(title: "Navigation", actions: [.init(title: "Exact action", perform: { presses += 1 })])]
+        presenter.present = { menu, _, _ in
+            #expect(menu.items.first?.submenu?.items.first?.title == "Exact action")
+            menus += 1
+        }
+        title.showActions = { presenter.show() }
+        icon.activate = { icons += 1 }
+        func event(_ point: NSPoint, type: NSEvent.EventType = .rightMouseDown,
+                   flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: flags, timestamp: 0,
+                                           windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                           clickCount: 1, pressure: 1))
+        }
+        #expect(!anchor.handles(try event(NSPoint(x: 10, y: 10))))
+        #expect(anchor.handles(try event(NSPoint(x: 80, y: 10))))
+        #expect(anchor.handles(try event(NSPoint(x: 80, y: 10), type: .leftMouseDown, flags: .control)))
+        #expect(!anchor.handles(try event(NSPoint(x: 260, y: 10))))
+        #expect(!anchor.handles(try event(NSPoint(x: 80, y: 10), type: .leftMouseDown)))
+        icon.rightMouseDown(with: try event(NSPoint(x: 10, y: 10)))
+        #expect(icons == 1 && menus == 0 && presses == 0)
+        presenter.show()
+        title.keyDown(with: try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .shift, timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
+            isARepeat: false, keyCode: 109
+        )))
+        #expect(menus == 2 && presses == 0 && icons == 1)
+        #expect(!window.isVisible)
+    }
+
+    @Test func realHostedWorkspaceNameHasNoTrackingOverBlankFillOrControls() async throws {
+        for text in ["Short", String(repeating: "Long workspace ", count: 12)] {
+            let content = HStack(spacing: 5) {
+                Button("Disclosure") {}
+                SidebarHoverRegion(data: .init(id: "workspace", category: "Workspace", title: text), nameOnly: true) {
+                    SidebarTitleButton(label: text, hint: text, action: { Issue.record("Passive render must not press") }) {
+                        HStack {
+                            Text(text).font(.caption).lineLimit(1).sidebarNameHover()
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+                Button("Actions") {}
+            }.frame(width: 280)
+            let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 280, height: 40),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: content)
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+            func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+            let name = try #require(descendants(host).compactMap { $0 as? SidebarHoverAnchorView }.first)
+            let button = try #require(descendants(host).compactMap { $0 as? SidebarTitleNativeButton }.first)
+            let textRect = host.convert(name.bounds, from: name)
+            let buttonRect = host.convert(button.bounds, from: button)
+            #expect(buttonRect.contains(textRect))
+            #expect(textRect.width > 0 && textRect.width <= buttonRect.width)
+            if text == "Short" { #expect(textRect.width < buttonRect.width - 10) }
+            #expect(textRect.minX > 0 && textRect.maxX < 280)
+            #expect(!window.isVisible)
+        }
+    }
+
+    @Test func nativeNameTrackingCancelsPendingAndVisiblePreviewAtItsBoundary() async throws {
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 280, height: 400),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 400))
+        let anchor = SidebarHoverAnchorView(frame: NSRect(x: 24, y: 340, width: 90, height: 14))
+        root.addSubview(anchor)
+        window.contentView = root
+        defer { window.contentView = nil; window.close() }
+        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in })
+        anchor.presenter = presenter
+        anchor.tracksName = true
+        presenter.update(anchor: anchor, data: .init(id: "name", category: "Workspace", title: "Long workspace name"),
+                         group: SidebarHoverGroup())
+        let event = try #require(NSEvent.enterExitEvent(
+            with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil
+        ))
+        for _ in 0..<3 {
+            anchor.mouseEntered(with: event)
+            anchor.mouseExited(with: event)
+        }
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(presenter.state.mode == .hidden && presenter.panel == nil)
+        anchor.mouseEntered(with: event)
+        await sidebarEventually { presenter.state.mode == .hover }
+        #expect(presenter.state.mode == .hover)
+        anchor.mouseExited(with: event)
+        #expect(presenter.state.mode == .hidden)
+        #expect(!presenter.isMonitoring)
+        #expect(anchor.hitTest(NSPoint(x: 25, y: 345)) == nil, "Tracking must not intercept name activation")
+        #expect(anchor.bounds.width == 90, "Blank name fill and adjacent controls are outside the tracking area")
+        presenter.detach()
+    }
+
+    @Test func nativeKeyboardPreviewDoesNotPressTitleAndTabEntersControls() throws {
+        let button = SidebarTitleNativeButton(frame: NSRect(x: 0, y: 0, width: 140, height: 24))
+        var activations = 0, entries = 0, dismissals = 0
+        button.activate = { activations += 1 }
+        button.preview = .init(focus: { _ in }, enter: { entries += 1; return true }, dismiss: { dismissals += 1 })
+        func key(_ code: UInt16, _ flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                                         windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "",
+                                         isARepeat: false, keyCode: code))
+        }
+        button.keyDown(with: try key(48))
+        #expect(entries == 1 && activations == 0)
+        button.keyDown(with: try key(53))
+        #expect(dismissals == 1 && activations == 0)
+        button.keyDown(with: try key(36))
+        #expect(activations == 1 && dismissals == 2)
+        button.keyDown(with: try key(49))
+        #expect(activations == 2)
+    }
+
     @Test func pointerTravelAndExplicitDismissalHaveSeparateState() {
         var state = SidebarHoverState()
         #expect(!state.shouldOpen)
