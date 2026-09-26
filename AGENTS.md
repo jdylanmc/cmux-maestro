@@ -96,17 +96,23 @@ products. Configure repository-local Git author identity as Dylan McCurry
 
 ## Project skills
 
-Project-local agent skill dependencies are recorded in `skills-lock.json`.
-Restore the recorded skill set with:
+Project-local agent skill files, references, and helpers under `.agents/skills/`
+are committed alongside `skills-lock.json`. A normal checkout includes the
+reviewed skill set; do not ignore these files or require installation just to
+make them available. If dependency files are missing, restore them with:
 
 ```sh
 npx skills experimental_install
 ```
 
-The restored third-party copies under `.agents/skills/` are generated and
-ignored. The repository-owned `.agents/skills/macos-build/SKILL.md` is the
-exception: it adapts build guidance to the checked-in validation scripts and is
-reviewed with the rest of the project.
+Review restored files and lockfile changes before committing. Preserve bundled
+upstream notices and the dependency attribution in
+[`.agents/THIRD_PARTY_NOTICES.md`](.agents/THIRD_PARTY_NOTICES.md); these notices
+do not select a license for the Maestro product.
+
+The repository-owned `macos-build`, `cmux-maestro-orchestrate`, and
+`maestro-icon` skills are maintained here. Preserve those local adaptations
+when restoring or refreshing dependencies.
 
 Workflow skills from `jdylanmc/agent-skills` are installed project-locally for
 GitHub Copilot. To add or refresh that package's discoverable skills, run:
@@ -118,8 +124,8 @@ npx --yes skills remove joe-mode-orca --yes
 
 Keep the wildcard quoted. This refreshes the existing upstream workflow skills,
 then removes the intentionally excluded Orca coordinator from the project.
-Their copies live under the ignored `.agents/skills/` directory; commit the
-lockfile, not generated copies. These commands do not install globally.
+Commit the changed `.agents/skills/` files and lockfile together.
+These commands do not install globally.
 The lock records sources and content hashes,
 not immutable upstream revisions, so review lockfile changes after restoring
 or refreshing skills.
@@ -139,8 +145,8 @@ this application's implementation. `cmux-cua` still requires the user's
 explicit request; installing the guide grants no computer-use permission.
 Keep Maestro spawning and peer messaging on the existing lifecycle/native
 adapter path. These skills neither enable that adapter nor adopt existing
-sessions. Restore the recorded set with `npx skills experimental_install`;
-commit the lockfile, not the ignored generated copies.
+sessions. Restore missing dependency files with `npx skills experimental_install`;
+review and commit the skill files and lockfile together.
 
 These skills are available as contextual guidance. Agents should use them when
 they materially improve the work, while retaining judgment for simple or

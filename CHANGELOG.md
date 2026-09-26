@@ -12,6 +12,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Commit project-local skill files, references, helpers, and upstream notices
+  alongside the lockfile so a checkout includes the reviewed skill set.
 - Standardize repository agents on upstream CMUX and refreshed personal skills,
   excluding the Orca coordinator.
 - Use all open GitHub Issues in `jdylanmc/cmux-maestro` as the default backlog,
