@@ -196,7 +196,7 @@ struct SidebarStateBadge: View {
                 if reduceMotion {
                     SidebarWorkingRing(rotation: 0)
                 } else {
-                    TimelineView(.animation) { context in
+                    TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
                         SidebarWorkingRing(rotation: SidebarPresentation.workingRotation(at: context.date, reduceMotion: false))
                     }
                 }
@@ -207,8 +207,8 @@ struct SidebarStateBadge: View {
         .foregroundStyle(needsInput ? SidebarTone.red.color : visual.tone.color)
         .frame(width: 12, height: 14)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(needsInput ? "Needs input. \(visual.title)" : visual.title)
-        .help(needsInput ? "Needs input. \(visual.title)" : visual.title)
+        .accessibilityLabel(SidebarPresentation.statusDescription(visual, needsInput: needsInput))
+        .help(SidebarPresentation.statusDescription(visual, needsInput: needsInput))
     }
 }
 
@@ -462,17 +462,22 @@ struct SidebarView: View {
                     showingHistory = true
                 }
             }
-            .popover(isPresented: $showingHistory) { historySettings }
-            .popover(item: $unavailableHeaderAction) { action in
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(action.title).font(.headline)
-                    Text(action.unavailable ?? "").font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Close") { unavailableHeaderAction = nil }
-                        .keyboardShortcut(.cancelAction)
+            .popover(isPresented: Binding(
+                get: { showingHistory || unavailableHeaderAction != nil },
+                set: { if !$0 { showingHistory = false; unavailableHeaderAction = nil } }
+            )) {
+                if showingHistory {
+                    historySettings
+                } else if let action = unavailableHeaderAction, let reason = action.unavailable {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(action.title).font(.headline)
+                        Text(reason).font(.callout).fixedSize(horizontal: false, vertical: true)
+                        Button("Close") { unavailableHeaderAction = nil }
+                            .keyboardShortcut(.cancelAction)
+                    }
+                    .padding(14)
+                    .frame(width: 260)
                 }
-                .padding(14)
-                .frame(width: 260)
             }
             HStack {
                 ManagedSourceNotice(
@@ -1056,9 +1061,10 @@ private struct ManagedNodeRow: View {
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
-    @State private var showingPicker = false
+    @State private var showingPicker: SidebarIconTarget?
 
     private var actions: [SidebarRowActionGroup] {
+        let iconTarget = SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate)
         var navigationActions = [
             SidebarRowAction.focus(.surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
                                    navigation: navigation, prepareSeen: prepareSeen),
@@ -1069,8 +1075,7 @@ private struct ManagedNodeRow: View {
         }
         var groups: [SidebarRowActionGroup] = [
             .init(title: "Navigation", actions: navigationActions),
-            .appearance(icon: SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate) == nil
-                        ? nil : { showingPicker = true }, agent: true),
+            .appearance(icon: iconTarget.map { target in { showingPicker = target } }, agent: true),
             .placement, .lifecycle()
         ]
         if !hasChildren, let dismissManaged,
@@ -1199,10 +1204,13 @@ private struct ManagedNodeRow: View {
     }
 
     private var metadataHelp: String {
-        guard let metadataLine else { return stateVisual.title }
+        let state = SidebarPresentation.statusDescription(
+            stateVisual, needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate)
+        )
+        guard let metadataLine else { return state }
         let location = node.hasFreshGitEvidence(at: evidenceDate)
             ? metadataLine : "Last verified location, not current Git state: \(metadataLine)"
-        return "\(stateVisual.title). \(location)"
+        return "\(state). \(location)"
     }
 }
 
@@ -1480,7 +1488,7 @@ private struct SurfaceRow: View {
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
     @Environment(\.sidebarAgentHoverProvider) private var hoverProvider
     @Environment(\.sidebarHoverConnected) private var connected
-    @State private var showingPicker = false
+    @State private var showingPicker: SidebarIconTarget?
     private var singleSession: SidebarCopilotSession? { sessions.count == 1 ? sessions.first : nil }
     private var expanded: Bool {
         layout.isExpanded(.surface(surface.id))
@@ -1518,10 +1526,11 @@ private struct SurfaceRow: View {
             .init(title: "Open details", perform: inspect)
         ]
         if hasChildren { items.append(.init(title: expanded ? "Collapse branch" : "Expand branch", perform: toggleExpanded)) }
-        let editable = singleSession != nil || surface.kind == .terminal || surface.kind == .browser
+        let iconTarget: SidebarIconTarget? = singleSession.map { .session($0.id) }
+            ?? ((surface.kind == .terminal || surface.kind == .browser) ? .surface(surface.id) : nil)
         return [
             .init(title: "Navigation", actions: items),
-            .appearance(icon: editable ? { showingPicker = true } : nil, agent: singleSession != nil || surface.kind == .agentSession),
+            .appearance(icon: iconTarget.map { target in { showingPicker = target } }, agent: singleSession != nil || surface.kind == .agentSession),
             .placement, .lifecycle()
         ]
     }
@@ -1657,7 +1666,10 @@ private struct SurfaceRow: View {
     }
 
     private var rowMetadataHelp: String {
-        let state = singleSession.map { SidebarPresentation.sessionState($0).title + ". " } ?? ""
+        let state = singleSession.map {
+            SidebarPresentation.statusDescription(SidebarPresentation.sessionState($0),
+                                                  needsInput: SidebarPresentation.needsInput($0.attention)) + ". "
+        } ?? ""
         guard directoryLabel != nil else { return state + rowMetadata }
         return "\(state)\(rowMetadata). Working directory; Git branch not verified by this source."
     }
@@ -1673,7 +1685,7 @@ private struct CopilotSessionRow: View {
     @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
-    @State private var showingPicker = false
+    @State private var showingPicker: SidebarIconTarget?
     private var expanded: Bool { layout.isExpanded(.session(session.id)) }
     private var actions: [SidebarRowActionGroup] {
         var items: [SidebarRowAction] = [
@@ -1686,7 +1698,7 @@ private struct CopilotSessionRow: View {
                                perform: { setExpanded(.session(session.id), !expanded) }))
         }
         return [.init(title: "Navigation", actions: items),
-                .appearance(icon: { showingPicker = true }, agent: true), .placement, .lifecycle()]
+                .appearance(icon: { showingPicker = .session(session.id) }, agent: true), .placement, .lifecycle()]
     }
 
     var body: some View {
@@ -1707,7 +1719,8 @@ private struct CopilotSessionRow: View {
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation, label: "Focus Copilot session \(session.shortID)",
-                    detail: SidebarPresentation.sessionState(session).title
+                    detail: SidebarPresentation.statusDescription(SidebarPresentation.sessionState(session),
+                                                                 needsInput: SidebarPresentation.needsInput(session.attention))
                 ) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Agent \(session.shortID)")
@@ -1893,7 +1906,7 @@ private struct CopilotWorkRow: View {
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation, label: "Open parent chat for \(node.name), Copilot \(session.shortID)",
-                    detail: stateVisual.title
+                    detail: SidebarPresentation.statusDescription(stateVisual, needsInput: SidebarPresentation.needsInput(node.attention))
                 ) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(node.name).sidebarFont(.caption, weight: .medium).lineLimit(density == .compact ? 1 : 2)
@@ -2073,13 +2086,13 @@ private struct TaskboardSessionRow: View {
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
-    @State private var showingPicker = false
+    @State private var showingPicker: SidebarIconTarget?
     private var actions: [SidebarRowActionGroup] {
         [.init(title: "Navigation", actions: [
             .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                    navigation: navigation, prepareSeen: prepareSeen),
             .init(title: "Open details", perform: { selection = .session(session.id) })
-        ]), .appearance(icon: { showingPicker = true }, agent: true), .placement, .lifecycle()]
+        ]), .appearance(icon: { showingPicker = .session(session.id) }, agent: true), .placement, .lifecycle()]
     }
 
     var body: some View {

@@ -22,13 +22,7 @@ struct SidebarHoverCard: View {
                     Text(data.title).font(.headline).lineLimit(3)
                 }
                 Spacer(minLength: 0)
-                Button(action: close) {
-                    Image(systemName: "xmark").font(.caption)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close preview")
-                .accessibilityIdentifier("hover-close")
+                SidebarPreviewCloseButton(close: close).frame(width: 24, height: 24)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -69,6 +63,31 @@ struct SidebarHoverCard: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("hover-card-\(data.id)")
     }
+}
+
+private struct SidebarPreviewCloseButton: NSViewRepresentable {
+    let close: () -> Void
+    func makeNSView(context: Context) -> SidebarPreviewCloseNativeButton { SidebarPreviewCloseNativeButton() }
+    func updateNSView(_ button: SidebarPreviewCloseNativeButton, context: Context) { button.closePreview = close }
+}
+
+private final class SidebarPreviewCloseNativeButton: NSButton {
+    var closePreview: () -> Void = {}
+    init() {
+        super.init(frame: .zero)
+        title = ""
+        isBordered = false
+        image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)
+        target = self
+        action = #selector(closeCard)
+        toolTip = "Close preview"
+        setAccessibilityLabel("Close preview")
+        setAccessibilityIdentifier("hover-close")
+    }
+    required init?(coder: NSCoder) { nil }
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { !isHiddenOrHasHiddenAncestor && window != nil }
+    @objc private func closeCard() { closePreview() }
 }
 
 enum SidebarHoverPlacement {
@@ -147,6 +166,31 @@ final class SidebarHoverPanel: NSPanel {
     var allowsKeyboard = false
     override var canBecomeKey: Bool { allowsKeyboard }
     override var canBecomeMain: Bool { false }
+
+    @discardableResult
+    func focusControls() -> Bool {
+        contentView?.layoutSubtreeIfNeeded()
+        guard allowsKeyboard, let first = keyboardControls.first else { return false }
+        return makeFirstResponder(first)
+    }
+
+    override func selectNextKeyView(_ sender: Any?) {
+        let controls = keyboardControls
+        guard allowsKeyboard, !controls.isEmpty else { super.selectNextKeyView(sender); return }
+        let index = controls.firstIndex { $0 === firstResponder }.map { ($0 + 1) % controls.count } ?? 0
+        controls[index].scrollToVisible(controls[index].bounds)
+        makeFirstResponder(controls[index])
+    }
+
+    private var keyboardControls: [NSButton] {
+        func visit(_ view: NSView) -> [NSButton] {
+            if let button = view as? NSButton,
+               ["hover-close", "hover-copy-value"].contains(button.accessibilityIdentifier() ?? ""),
+               button.canBecomeKeyView { return [button] }
+            return view.subviews.flatMap(visit)
+        }
+        return contentView.map(visit) ?? []
+    }
 }
 
 enum SidebarSessionCopy {
@@ -235,8 +279,7 @@ final class SidebarHoverPresenter {
         guard data != nil else { return false }
         open(explicit: true)
         guard state.mode == .explicit else { return false }
-        panel?.selectNextKeyView(nil)
-        return true
+        return panel?.focusControls() == true
     }
 
     func hoverCard(_ inside: Bool) {
@@ -535,6 +578,7 @@ final class SidebarTitleNativeButton: NSButton {
     required init?(coder: NSCoder) { nil }
     @objc private func pressTitle() { preview.dismiss(); activate() }
     override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { !isHiddenOrHasHiddenAncestor && window != nil }
     override func hitTest(_ point: NSPoint) -> NSView? {
         bounds.contains(convert(point, from: superview)) ? self : nil
     }

@@ -5,6 +5,65 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct SidebarHoverTests {
+    @Test func nativeTabTraversesIntoExactCopyControlWithoutPressingOrReplacingOrigin() async throws {
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 280, height: 200),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 200))
+        let button = SidebarTitleNativeButton(frame: NSRect(x: 0, y: 150, width: 240, height: 30))
+        root.addSubview(button)
+        window.contentView = root
+        defer { window.contentView = nil; window.close() }
+        let sessionID = UUID()
+        var copied: [UUID] = []
+        var pressed = 0
+        let presenter = SidebarHoverPresenter(copySessionID: { copied.append($0); return true }, showPanel: { _, _, _ in })
+        defer { presenter.detach() }
+        presenter.update(anchor: button, data: .init(
+            id: "keyboard-session", category: "Agent preview", title: "Synthetic keyboard agent",
+            lines: [.sessionID(sessionID)]
+        ), group: SidebarHoverGroup())
+        button.activate = { pressed += 1 }
+        button.preview = .init(
+            available: true, focus: { presenter.keyboardFocus($0) }, enter: { presenter.enterFromKeyboard() },
+            origin: { presenter.rememberKeyboardOrigin($0) }, dismiss: { presenter.dismiss(restoreFocus: false) }
+        )
+        #expect(window.makeFirstResponder(button))
+        #expect(presenter.state.mode == .keyboard && pressed == 0 && copied.isEmpty)
+        func key(_ code: UInt16, in target: NSWindow, characters: String) throws -> NSEvent {
+            try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: target.windowNumber, context: nil, characters: characters,
+                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code
+            ))
+        }
+        button.keyDown(with: try key(48, in: window, characters: "\t"))
+        let panel = try #require(presenter.panel)
+        #expect(presenter.state.mode == .explicit && panel.canBecomeKey)
+        panel.contentView?.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(30))
+        func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+        let panelContent = try #require(panel.contentView)
+        let copy = try #require(descendants(panelContent).compactMap { $0 as? NSButton }
+            .first { $0.accessibilityIdentifier() == "hover-copy-value" })
+        panel.recalculateKeyViewLoop()
+        for _ in 0..<12 where panel.firstResponder !== copy {
+            panel.selectNextKeyView(nil)
+        }
+        print("P57 preview key loop: copyEligible=\(copy.canBecomeKeyView), responder=\(String(describing: panel.firstResponder))")
+        #expect(panel.firstResponder === copy, "Native Tab order must reach the preview's copy control")
+        try #require(panel.firstResponder === copy)
+        panel.sendEvent(try key(49, in: panel, characters: " "))
+        await sidebarEventually { copy.accessibilityValue() as? String == "Copied" }
+        #expect(copied == [sessionID] && pressed == 0)
+        #expect(copy.accessibilityValue() as? String == "Copied")
+        presenter.dismiss(restoreFocus: true)
+        #expect(presenter.state.mode == .hidden)
+        #expect(window.firstResponder === button)
+        #expect(!window.isVisible && !panel.isVisible)
+        print("P57 native keyboard: passive row focus -> Tab -> exact copy -> Copied; origin retained; host activations=0")
+    }
+
     @Test func sharedNativeMenusKeepTargetsAndUnavailableActionsInert() async throws {
         let fixture = SidebarTreeFixtures()
         let navigation = SidebarNavigation()

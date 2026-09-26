@@ -34,7 +34,10 @@ final class SidebarRowMenuPresenter: NSObject {
         if let preview {
             let item = NSMenuItem(title: "Preview details", action: #selector(invoke(_:)), keyEquivalent: "")
             item.target = self
-            item.representedObject = SidebarRowAction(title: "Preview details", perform: { _ = preview() })
+            item.representedObject = SidebarRowAction(title: "Preview details", perform: {
+                // Let native menu tracking finish before granting the preview keyboard focus.
+                Task { @MainActor in _ = preview() }
+            })
             menu.addItem(item)
             menu.addItem(.separator())
         }
@@ -73,6 +76,14 @@ final class SidebarRowMenuPresenter: NSObject {
         dismissPreview()
         present(menu(), point ?? NSPoint(x: anchor.bounds.minX, y: anchor.bounds.maxY), anchor)
     }
+
+    func detach() {
+        anchor = nil
+        groups = []
+        dismissPreview = {}
+        preview = nil
+        focusChanged = { _ in }
+    }
 }
 
 final class SidebarRowMenuAnchorView: NSView {
@@ -104,7 +115,7 @@ final class SidebarRowMenuAnchorView: NSView {
 
     func detach() {
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
-        presenter?.anchor = nil
+        if presenter?.anchor === self { presenter?.detach() }
         presenter = nil
     }
 }
@@ -171,9 +182,11 @@ struct SidebarRowActions<Content: View>: View {
 
 extension SidebarRowActionGroup {
     static func appearance(icon: (() -> Void)?, agent: Bool, child: Bool = false) -> Self {
+        let catalogNotice = SidebarGlyphCatalog.notice
+        let availableIcon = catalogNotice == nil ? icon : nil
         var actions: [SidebarRowAction] = [
-            icon.map { callback in .init(title: "Choose icon…", perform: { callback() }) }
-                ?? .unavailable("Choose icon…", child ? "Activity-only child has no independent icon." : "Exact icon identity unavailable.")
+            availableIcon.map { callback in .init(title: "Choose icon…", perform: { callback() }) }
+                ?? .unavailable("Choose icon…", catalogNotice ?? (child ? "Activity-only child has no independent icon." : "Exact icon identity unavailable."))
         ]
         if agent {
             actions.append(.unavailable("Choose pet…", child ? "Activity-only child has no independent pet." : "Pet selection is not available."))

@@ -330,6 +330,10 @@ enum SidebarPresentation {
         attention.contains { $0.kind == .answer || $0.kind == .permission }
     }
 
+    static func statusDescription(_ visual: SidebarVisual, needsInput: Bool = false) -> String {
+        needsInput ? "Needs input. \(visual.title)" : visual.title
+    }
+
     static func managedNeedsInput(_ node: SidebarOrchestrationNode, tree: SidebarCopilotTree, now: Date) -> Bool {
         managedSession(for: node, in: tree, now: now).map { needsInput($0.attention) } ?? false
     }

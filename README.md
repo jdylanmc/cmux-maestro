@@ -479,6 +479,10 @@ Right-click a row, use its transient overflow, or press **Shift-F10** on its tit
 for the same native grouped menu. Opening it is passive. **Preview details** is
 also passive; **Open details** retains the existing explicit mark-read behavior.
 Icon-direct right-click still opens the compact icon picker, not the row menu.
+Menu icon requests retain their exact identity; a replacement target shows
+**Icon target changed** rather than applying the old request to a new session.
+Preview Close/Copy controls have an explicit native Tab loop, independent of
+system-wide keyboard-navigation preferences.
 Activity-only children offer **Open parent chat**, never an independent surface.
 Unsupported pet, tag, backlog, placement and exit actions show disabled reasons;
 menus add no capability or lifecycle authority.

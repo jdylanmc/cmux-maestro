@@ -9,13 +9,22 @@ struct SidebarItemIcon: View {
     var agentGlyph: String? = nil
     var agentColor: SidebarAvatarColor? = nil
     let inspect: () -> Void
-    var picker: Binding<Bool>? = nil
+    var picker: Binding<SidebarIconTarget?>? = nil
 
     @Environment(SidebarPreferences.self) private var preferences
     @Environment(\.sidebarAgentIconStyle) private var agentStyle
     @Environment(\.sidebarTerminalIconStyle) private var terminalStyle
     @State private var localPicker = false
-    private var showingPicker: Binding<Bool> { picker ?? $localPicker }
+    private var showingPicker: Binding<Bool> {
+        Binding(get: { picker.map { $0.wrappedValue != nil } ?? localPicker }, set: { showing in
+            if let picker { picker.wrappedValue = showing ? target : nil }
+            else { localPicker = showing }
+        })
+    }
+
+    static func requestIsCurrent(_ requested: SidebarIconTarget?, target: SidebarIconTarget?) -> Bool {
+        requested == nil || requested == target
+    }
 
     private var appearance: (choice: SidebarIconChoice, source: String) {
         let standardGlyph: String
@@ -48,7 +57,14 @@ struct SidebarItemIcon: View {
                 )
                 .frame(width: 24, height: 24)
                 .popover(isPresented: showingPicker, arrowEdge: .trailing) {
-                    if let target {
+                    if !Self.requestIsCurrent(picker?.wrappedValue, target: target) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Icon target changed").font(.headline)
+                            Text("Close this preview and choose the current row. No icon has changed.").font(.callout)
+                            Button("Close") { showingPicker.wrappedValue = false }
+                        }
+                        .padding(14).frame(width: 260)
+                    } else if let target {
                         VStack(spacing: 0) {
                             SidebarIconPicker(
                                 catalog: catalog, selection: appearance.choice, source: appearance.source,

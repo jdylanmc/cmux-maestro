@@ -6,6 +6,8 @@ import Testing
 @Suite(.serialized)
 struct SidebarMotionTests {
     @Test func ringMakesOneLinearRevolutionAndReducedMotionHasNoPhaseChange() throws {
+        #expect(SidebarPresentation.statusDescription(SidebarPresentation.state(.blocked), needsInput: true) == "Needs input. Blocked")
+        #expect(SidebarPresentation.statusDescription(SidebarPresentation.state(.unknown)) == "Unknown")
         for (time, angle) in [(0.0, 0.0), (0.25, 90), (0.5, 180), (0.75, 270), (1, 0), (1.25, 90)] {
             let date = Date(timeIntervalSinceReferenceDate: time)
             #expect(SidebarPresentation.workingRotation(at: date, reduceMotion: false) == angle)
