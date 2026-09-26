@@ -113,14 +113,34 @@ GitHub Copilot. To add or refresh that package's discoverable skills, run:
 
 ```sh
 npx --yes skills add jdylanmc/agent-skills --skill '*' --agent github-copilot --copy -y
+npx --yes skills remove joe-mode-orca --yes
 ```
 
-Keep the wildcard quoted. This installs the existing upstream skills (36 at
-this update), not newly authored skills. Their copies also live under the
-ignored `.agents/skills/` directory; commit the lockfile, not generated copies.
-Neither command installs globally. The lock records sources and content hashes,
+Keep the wildcard quoted. This refreshes the existing upstream workflow skills,
+then removes the intentionally excluded Orca coordinator from the project.
+Their copies live under the ignored `.agents/skills/` directory; commit the
+lockfile, not generated copies. These commands do not install globally.
+The lock records sources and content hashes,
 not immutable upstream revisions, so review lockfile changes after restoring
 or refreshing skills.
+
+The upstream CMUX skillset is also installed project-locally for GitHub Copilot:
+
+```sh
+npx --yes skills add https://github.com/manaflow-ai/cmux --skill '*' --agent github-copilot --copy --yes
+```
+
+Use its `cmux-workspace`, `cmux`, `cmux-browser`, and `cmux-diagnostics` guides
+for applicable host operations. Contributor-oriented guides apply when working
+on upstream CMUX; their repository paths and build commands do not replace
+this project's checked-in scripts or native ExtensionKit boundaries.
+`cmux-custom-sidebar` describes the separate interpreted sidebar system, not
+this application's implementation. `cmux-cua` still requires the user's
+explicit request; installing the guide grants no computer-use permission.
+Keep Maestro spawning and peer messaging on the existing lifecycle/native
+adapter path. These skills neither enable that adapter nor adopt existing
+sessions. Restore the recorded set with `npx skills experimental_install`;
+commit the lockfile, not the ignored generated copies.
 
 These skills are available as contextual guidance. Agents should use them when
 they materially improve the work, while retaining judgment for simple or
@@ -152,8 +172,9 @@ or starting a fresh Copilot session.
 
 ### Issue tracker
 
-Use GitHub Issues in `jdylanmc/cmux-maestro`. Joe's selected backlog is the
-explicit #57 delivery scope, not assigned-to-me. See
+Use GitHub Issues in `jdylanmc/cmux-maestro`. The default backlog is all open
+issues in that repository, not assigned-to-me. An explicit issue or epic request
+narrows the selection. See
 [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
 
 ### Triage labels

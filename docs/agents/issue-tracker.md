@@ -9,34 +9,35 @@
 - **PRs as a request surface: no.** Linked PRs remain delivery evidence, not a
   separate triage queue.
 
-## Selected Joe backlog
+## Default backlog
 
-The latest visual reference and full design-suite audit are
-[locked separately](../design/2026-09-25/README.md). The September 25
-design includes Beats and new follow-up work; auditing or publishing that
-reference does not silently expand the active Joe dispatch selection below.
+The default backlog is **all open GitHub Issues in `jdylanmc/cmux-maestro`**.
+Do not apply an assigned-to-me filter implicitly. An explicit issue or epic
+request narrows this selection; do not silently broaden it to other issues,
+repositories, or the organization.
 
-The approved visual delivery is parent [#57](https://github.com/jdylanmc/cmux-maestro/issues/57)
-and these fourteen children:
-**#39, #43, #44, #45, #46, #48, #49, #50, #51, #52, #55, #58, #59, #60**.
-The default view is this **full selected scope**, never assigned-to-me or the
-entire repository. Stage and Beats are deferred. New children or unrelated
-work require scope reconciliation with the owning Project Manager; discovering
-them does not automatically expand this selection.
-
-Read each selected issue explicitly, including comments, labels, dependencies,
-and linked PRs before dispatch:
+Use complete pagination. GitHub's Issues API also returns pull requests, so
+exclude those records rather than treating them as backlog items:
 
 ```sh
-gh issue view 57 --repo jdylanmc/cmux-maestro --comments
-gh api --hostname github.com repos/jdylanmc/cmux-maestro/issues/57/sub_issues --paginate
+gh api --hostname github.com --paginate \
+  'repos/jdylanmc/cmux-maestro/issues?state=open&per_page=100' \
+  --jq '.[] | select(.pull_request == null) | {number, title, state, labels: [.labels[].name], assignees: [.assignees[].login]}'
 ```
 
-Intersect live relations with the explicit selection above. Fetch complete
-pages for list queries; never treat a CLI default limit as the full backlog.
-Use GitHub's open/closed state plus the mapped
-[`ready-for-agent`](triage-labels.md) label for eligible work. Readiness does not
-override ownership, unresolved decisions, or unavailable dependencies.
+The backlog is a request surface, not an instruction to execute every issue.
+For authorized execution, select open issues carrying the mapped
+[`ready-for-agent`](triage-labels.md) label, within the current requested scope,
+then check dependencies, ownership and unresolved human decisions. Read each
+selected issue, comments, labels, dependency relations and linked PRs before
+dispatch. Never treat the CLI's default result limit as a complete backlog.
+
+An active controller retains its explicitly assigned issue or epic scope;
+changing this default does not expand an in-flight assignment or activate
+Joe-mode. Reconcile an existing owner's scope before starting separate work.
+
+The [visual reference and design-suite audit](../design/2026-09-25/README.md)
+remain evidence for that feature area, not a repository-wide backlog filter.
 
 Use native GitHub sub-issue and dependency relations when present. Preserve
 existing task-list/`Part of #57` or `Blocked by: #N` references as evidence

@@ -31,6 +31,150 @@
       "skillPath": ".agents/skills/chart-a-course/SKILL.md",
       "computedHash": "88690534a28717bc49ea5ee1f00d05d36bb6de092f7703099411a8da9e05927c"
     },
+    "cmux": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux/SKILL.md",
+      "computedHash": "a85fef0ffbc87d099ab726f4692f14a48138904f3d59f9b35497685c01f413ba"
+    },
+    "cmux-architecture": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-architecture/SKILL.md",
+      "computedHash": "7cfe1812c505e255090fed5a641201c04d947697155bc1e5c76712a5f338c9da"
+    },
+    "cmux-backend": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-backend/SKILL.md",
+      "computedHash": "94f4dd436d5f66ce41886e45eeeb7fc12694f5aafd17b8d997c9a55690b67ceb"
+    },
+    "cmux-billing": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-billing/SKILL.md",
+      "computedHash": "432de1e9eeec90607fa7e6ab71732b44bb424acbaa5cd959e0369585cee7c628"
+    },
+    "cmux-browser": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-browser/SKILL.md",
+      "computedHash": "053e17a2cec0e5269228e7beeef08ecc815e3ff75fb9518f1601dc3979045764"
+    },
+    "cmux-cloud-vm": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-cloud-vm/SKILL.md",
+      "computedHash": "c858b89f7be4cc3c0d61f1a97fa8358990c850357f2aa3d1cac576503b488536"
+    },
+    "cmux-cua": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-cua/SKILL.md",
+      "computedHash": "b00d7be1951ccf8bfd642f11f6072f198a1b14e16ec4d5ad3824d1d0607db53b"
+    },
+    "cmux-custom-sidebar": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-custom-sidebar/SKILL.md",
+      "computedHash": "18edd8ba167b12addfa4f2f6063f293e376c76015da469b062551002cb7f8366"
+    },
+    "cmux-customization": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-customization/SKILL.md",
+      "computedHash": "5503d418d64dcb3133dd13be6ccab3842dd74774e96842a617891a3802b1adeb"
+    },
+    "cmux-debugging": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-debugging/SKILL.md",
+      "computedHash": "076df9dcce25fc65fa5bddec4ede2cc7be1cc47cc89565b0c87c5de5d9e880d5"
+    },
+    "cmux-dev-workflow": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-dev-workflow/SKILL.md",
+      "computedHash": "db62c3ad2588b6365f8b02f417e64a6d547570fb460c81213e2dbe2cb604ba2d"
+    },
+    "cmux-diagnostics": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-diagnostics/SKILL.md",
+      "computedHash": "321d2b89fb13523dc1945da92cf04f383c9fb665354b601fa6face49a4a1fa6a"
+    },
+    "cmux-ghostty": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-ghostty/SKILL.md",
+      "computedHash": "c4d3dae3b0d71b427b58901c92dca9405cec934625c8dbb3ba78ceb6be50ffe2"
+    },
+    "cmux-keyboard-shortcuts": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-keyboard-shortcuts/SKILL.md",
+      "computedHash": "32c05cc3a88869f5f19013ded2341785b74e49769039efa1d67f325cb837b26a"
+    },
+    "cmux-localization": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-localization/SKILL.md",
+      "computedHash": "1b5a3361cc117f10fc8c506d92ea4529a7d52f0698291337735e9682c6562375"
+    },
+    "cmux-markdown": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-markdown/SKILL.md",
+      "computedHash": "0870025e9cc20f3a7bde8eeebfafc7a2c5e273168b5252df961acac942c26e28"
+    },
+    "cmux-release": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-release/SKILL.md",
+      "computedHash": "3416ef5ed8200d6a514fba27cc73a513e2858ce52b00abe47ec4ef4f4f78ec85"
+    },
+    "cmux-review": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-review/SKILL.md",
+      "computedHash": "ae906392274b5af6ce746217963dff0f90549969f8e4f58d0c7cc5b375953a3f"
+    },
+    "cmux-settings": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-settings/SKILL.md",
+      "computedHash": "609a3103e0ad65e4f5f8ba4c68e64ba85ca7113d9f6e6d431e9775eccad90126"
+    },
+    "cmux-shared-behavior": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-shared-behavior/SKILL.md",
+      "computedHash": "bbe60e3e04b6c8a427ddf194b2449c9d96009cb6a75a8c6c34d784654bddb176"
+    },
+    "cmux-socket-policy": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-socket-policy/SKILL.md",
+      "computedHash": "a454245e2f949f104889b24a6aa1e9ba02b85057191a1af587b7a7df799eef7d"
+    },
+    "cmux-test-bisect": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-test-bisect/SKILL.md",
+      "computedHash": "ed72806c9a5c781362647d9065a209e6b9b045013f6a2760587aa89f7e3ae33e"
+    },
+    "cmux-testing": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-testing/SKILL.md",
+      "computedHash": "1e3c5a2a559276682ac836f3ab3b67acdeeedc8b0c94fd32a35b9f2da247b5f8"
+    },
+    "cmux-workspace": {
+      "source": "manaflow-ai/cmux",
+      "sourceType": "github",
+      "skillPath": "skills/cmux-workspace/SKILL.md",
+      "computedHash": "323ecb6935abb6d39010831d5b610824790c874d79eb63732c8c9a1b8d61af01"
+    },
     "conflicts": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
@@ -83,19 +227,13 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/joe-mode/SKILL.md",
-      "computedHash": "47872135aa95f0290ce79c854a5c13345755cb2b08bd9229a6376d196964e9c0"
+      "computedHash": "681d0db146c4413691a5c41c7e0849c018d088c42fe974d096bfd4494c1bc31d"
     },
     "joe-mode-cmux": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/joe-mode-cmux/SKILL.md",
-      "computedHash": "0fa89620ef09c014615cfd178da2f24189fd5eee75cc91c40f99bffdcc2e7791"
-    },
-    "joe-mode-orca": {
-      "source": "jdylanmc/agent-skills",
-      "sourceType": "github",
-      "skillPath": ".agents/skills/joe-mode-orca/SKILL.md",
-      "computedHash": "a123d4a9d02428b4db874a3393253449cf72939c5e18f77cfeac0f879348935a"
+      "computedHash": "772b70bc3c0e200c068a705f136bbece355064306bb79f3860cd2428031e4d9f"
     },
     "joe-mode-paseo": {
       "source": "jdylanmc/agent-skills",
@@ -179,7 +317,7 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/setup/SKILL.md",
-      "computedHash": "d275ceaaa712364b6331817ad82936b1c246109c2e89e4e955eca1850e0298fe"
+      "computedHash": "9ff257dbd93bb9cb4c844959e1aa5370e32c8a31c6ee5e87b64b69a152f22574"
     },
     "shepherd": {
       "source": "jdylanmc/agent-skills",
@@ -203,7 +341,7 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/squadron/SKILL.md",
-      "computedHash": "4e23779141996bd00e9095fb44c09c4e6aa327da33d69f6c2add4a98dc1017e2"
+      "computedHash": "48531c62e4a31ab7662ad4650934b20867da01ae93af2c44825b49f568e2f6a0"
     },
     "status-report": {
       "source": "jdylanmc/agent-skills",
