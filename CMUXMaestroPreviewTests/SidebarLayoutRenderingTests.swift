@@ -4,7 +4,199 @@ import Testing
 
 /// Offscreen synthetic SwiftUI/AppKit rendering only, not CMUX-host visual or system AX verification.
 @MainActor
+@Suite(SidebarAppKitTestScope())
 struct SidebarLayoutRenderingTests {
+    @Test func targetLedNativeComposition() async throws {
+        let model = makeVisualTargetModel()
+        let fixture = try SidebarPreferenceFixture()
+        defer { model.setVisible(false); fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.setRetention(.never)
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/visual-target/after")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for density in SidebarDensity.allCases {
+            preferences.setDensity(density)
+            for appearance in [RenderAppearance.dark, .light] {
+                for width in [240, 280, 350, 500] {
+                    try await render(
+                        model: model, preferences: preferences, width: width, height: 900,
+                        appearance: appearance, managed: true, expectedSessions: 3,
+                        nativeBackground: true,
+                        destination: folder.appendingPathComponent("\(density.rawValue)-\(appearance.name)-\(width).png")
+                    ) { host in
+                        let titles = nativeTitles(in: host)
+                        try #require(titles.count == 11)
+                        let before = titles.map { host.convert($0.bounds, from: $0) }
+                        for title in titles { title.focusChanged(true) }
+                        try await Task.sleep(for: .milliseconds(20))
+                        host.layoutSubtreeIfNeeded()
+                        let revealed = titles.map { host.convert($0.bounds, from: $0) }
+                        #expect(before == revealed, "Overflow reveal must not change title position or width")
+                        if appearance == .dark, width >= 350 {
+                            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                            host.cacheDisplay(in: host.bounds, to: bitmap)
+                            try #require(bitmap.representation(using: .png, properties: [:])).write(to:
+                                folder.appendingPathComponent("\(density.rawValue)-dark-\(width)-overflow.png"))
+                        }
+                        for title in titles { title.focusChanged(false) }
+                        try await Task.sleep(for: .milliseconds(20))
+                        host.layoutSubtreeIfNeeded()
+                        #expect(before == titles.map { host.convert($0.bounds, from: $0) })
+                        let geometry = zip(titles, before).map { title, frame in
+                            NativeRowGeometry(label: title.accessibilityLabel() ?? "", frame: frame,
+                                              help: title.toolTip ?? "")
+                        }
+                        try JSONEncoder().encode(geometry).write(to:
+                            folder.appendingPathComponent("\(density.rawValue)-\(appearance.name)-\(width)-rows.json"))
+                        let ordinary = geometry.filter { !$0.label.hasPrefix("Focus workspace") }
+                        #expect(ordinary.allSatisfy { $0.frame.height <= 34 }, "Exactly one title and one metadata line")
+                        #expect(abs(ordinary[1].frame.minY - ordinary[0].frame.minY - density.rowHeight) < 0.01)
+                        #expect(abs(ordinary[2].frame.minY - ordinary[1].frame.minY - density.rowHeight) < 0.01)
+                        #expect(ordinary.prefix(3).allSatisfy { $0.frame.minX == ordinary[0].frame.minX })
+                        #expect(geometry.contains { $0.help.contains("State unavailable")
+                            && $0.help.contains("Child history incomplete") && $0.help.contains("~/git/_opensource/example/maestro-design") })
+                        #expect(geometry.contains { $0.help.contains("Last verified location, not current Git state")
+                            && $0.help.contains("Current Git counts unavailable") })
+                    }
+                }
+            }
+        }
+    }
+
+    private struct NativeRowGeometry: Codable {
+        let label: String
+        let frame: CGRect
+        let help: String
+    }
+
+    private func nativeTitles(in view: NSView) -> [SidebarTitleNativeButton] {
+        view.subviews.flatMap { child in
+            (child as? SidebarTitleNativeButton).map { [$0] } ?? nativeTitles(in: child)
+        }
+    }
+
+    private func makeVisualTargetModel() -> SidebarConnectionModel {
+        let now = Date()
+        let first = UUID(), second = UUID()
+        let surfaces = (0..<6).map { _ in UUID() }
+        let sessions = (0..<3).map { _ in UUID() }
+        let directory = NSHomeDirectory() + "/git/_opensource/example/maestro-design"
+        func surface(_ index: Int, _ title: String, _ kind: HierarchySurfaceKind) -> HierarchySurface {
+            .init(id: surfaces[index], title: title, kind: kind, isFocused: false, isPinned: false,
+                  unreadCount: 0, workingDirectory: .available(kind == .browser ? nil : directory))
+        }
+        func workspace(_ id: UUID, _ title: String, _ rows: [HierarchySurface]) -> HierarchyWorkspace {
+            .init(id: id, title: .available(title), detail: .available("Synthetic visual fixture"),
+                  isSelected: .available(id == first), isPinned: .available(false), unreadCount: .available(0),
+                  rootPath: .available(directory), projectRootPath: .available(directory),
+                  surfaces: .available(rows))
+        }
+        let hierarchy = HierarchySnapshot(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: true,
+            workspaces: [
+                workspace(first, "Maestro design (synthetic)", [
+                    surface(0, "Accessibility review", .terminal),
+                    surface(1, "Session Planning - GitHub Copilot", .terminal),
+                    surface(2, "GitHub - design backlog", .browser)
+                ]),
+                workspace(second, "feat(sidebar): refine native workspace and session presentation", [
+                    surface(3, "Sidebar Extensions", .unknown),
+                    surface(4, "Review native spacing and long-name truncation", .terminal),
+                    surface(5, "Build and tests", .terminal)
+                ])
+            ], windowID: UUID()
+        )
+        let node = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Accessibility review",
+            workspaceId: first, surfaceId: surfaces[0], generation: 0, phase: "registered",
+            availability: "active", worktreeLabel: directory, branchLabel: "feat/native-spacing",
+            gitEvidenceStatus: "verified", gitEvidenceAt: now.addingTimeInterval(-600),
+            gitChangesStatus: "unavailable", createdAt: now.addingTimeInterval(-900),
+            updatedAt: now.addingTimeInterval(-600)
+        )
+        let observations: [CopilotSessionObservation] = [
+            .init(sessionID: sessions[0], surfaceID: surfaces[1], launchWorkspaceID: first,
+                  liveness: .unknown, state: .unknown, model: "synthetic-model",
+                  children: [], observedAt: now),
+            .init(sessionID: sessions[1], surfaceID: surfaces[4], launchWorkspaceID: second,
+                  liveness: .alive, state: .working, model: "synthetic-model",
+                  children: [.init(id: "review", parentID: nil, kind: .subagent,
+                                   name: "Verify keyboard navigation", state: .blocked, model: "synthetic-model",
+                                   attention: [.init(kind: .permission, evidence: .init(
+                                    source: "copilot.events", eventID: UUID()), occurredAt: now)])],
+                  observedAt: now),
+            .init(sessionID: sessions[2], surfaceID: surfaces[4], launchWorkspaceID: second,
+                  liveness: .unknown, state: .unknown, model: nil, children: [], observedAt: now)
+        ]
+        let copilot = SidebarCopilotPolling(
+            read: { _ in .init(generatedAt: now, sessions: observations, issues: [], isComplete: false) },
+            pause: { try await Task.sleep(for: .seconds(60)) },
+            expiryPause: Self.suspendFrozenClock, now: { now }
+        )
+        let orchestration = SidebarOrchestrationPolling(
+            read: { .init(version: 1, generatedAt: now.addingTimeInterval(-600),
+                          complete: true, omittedCount: 0, nodes: [node]) },
+            pause: { try await Task.sleep(for: .seconds(60)) }
+        )
+        let model = SidebarConnectionModel(copilot: copilot, orchestration: orchestration)
+        model.replaceHierarchy(with: hierarchy)
+        model.showConnected(workspaceCount: 2, surfaceCount: surfaces.count)
+        let topology = SidebarTopology(hierarchy)
+        model.navigation.update(topology: topology, connected: true, workspaceAllowed: true,
+                                surfaceAllowed: true, perform: { _ in Issue.record("Synthetic render cannot navigate") })
+        copilot.update(topology: topology, connected: true)
+        orchestration.update(topology: topology, connected: true)
+        model.setVisible(true)
+        return model
+    }
+
+    @Test func productionEightLevelOutlineRetainsNameAndStableActionsAt280() async throws {
+        let fixtures = SidebarTreeFixtures()
+        let model = makeModel(fixtures: fixtures, longMetadata: true, deep: true)
+        let fixture = try SidebarPreferenceFixture()
+        defer { model.setVisible(false); fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for density in SidebarDensity.allCases {
+            preferences.setDensity(density)
+            for appearance in [RenderAppearance.light, .dark] {
+                let file = folder.appendingPathComponent("polish-deep8-\(density.rawValue)-\(appearance.name)-280x400.png")
+                try await render(model: model, preferences: preferences, width: 280, height: 400,
+                                 appearance: appearance, destination: file) { host in
+                    func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+                    let title = try #require(descendants(host).compactMap { $0 as? SidebarTitleNativeButton }
+                        .first { $0.accessibilityLabel()?.contains("Synthetic level 8") == true })
+                    // The approved stable 24-point action slot plus 2-point gap replaces hover-time insertion.
+                    #expect(title.bounds.width >= 150 - 26, "Deep title must retain useful width: \(title.bounds.width)")
+                    #expect(title.bounds.height <= 70)
+                    let frame = title.frame
+                    title.focusChanged(true)
+                    try await Task.sleep(for: .milliseconds(20))
+                    host.layoutSubtreeIfNeeded()
+                    #expect(title.frame == frame)
+                    title.focusChanged(false)
+                    #expect(model.copilot.tree.sessions[0].nodes.map(\.depth).max() == 8)
+                    print("P57 deep geometry \(density.rawValue) \(appearance.name): titleWidth=\(title.bounds.width), titleHeight=\(title.bounds.height)")
+                    title.scrollToVisible(title.bounds)
+                    host.layoutSubtreeIfNeeded()
+                    let bitmap = try #require(NSBitmapImageRep(
+                        bitmapDataPlanes: nil, pixelsWide: 560, pixelsHigh: 800,
+                        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+                    ))
+                    bitmap.size = host.bounds.size
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    try #require(bitmap.representation(using: .png, properties: [:])).write(to:
+                        folder.appendingPathComponent("polish-deep8-\(density.rawValue)-\(appearance.name)-deepest-280x400.png"))
+                }
+            }
+        }
+    }
+
     @Test func syntheticSidebarRendersAtNarrowWidthsInBothDensitiesAndModes() async throws {
         let fixtures = SidebarTreeFixtures()
         let model = makeModel(fixtures: fixtures, longMetadata: false)
@@ -103,21 +295,21 @@ struct SidebarLayoutRenderingTests {
         }
         preferences.expandAll()
         let mixedImage = folder.appendingPathComponent("mixed-incomplete-outline-dark-340x940.png")
+        var titleLines: [String] = []
         let mixedMetrics = try await render(
             model: mixedModel, preferences: preferences, width: 340, height: 940,
             appearance: .dark, managed: true, expectedSessions: 6,
             destination: mixedImage
-        )
-        #expect(mixedMetrics.documentHeight <= 420)
+        ) { host in
+            titleLines = try captureTitleLanes(in: host, image: mixedImage)
+            #expect(nativeTitles(in: host).contains { $0.toolTip?.contains("State unavailable") == true })
+        }
+        #expect(mixedMetrics.documentHeight <= 450, "Seven 46-point rows plus workspace headers and retained attention")
         // Read the pixels: offscreen hosting does not expose a system accessibility tree.
         let lines = try SidebarRenderingEvidence.recognizedLines(in: mixedImage, dark: true)
-        // Recognize the title lane separately: Vision otherwise joins the robot with "Coordinator".
-        let titleLines = try SidebarRenderingEvidence.recognizedLines(
-            in: mixedImage, dark: true, excludingLeadingFraction: 64.0 / 340.0, naturalLanguage: true
-        )
         try JSONEncoder().encode(lines).write(to: mixedImage.appendingPathExtension("text.json"))
         for title in ["Coordinator", "Implementation", "Hierarchy recovery", "Readiness check"] {
-            #expect(titleLines.filter { $0.contains(title) }.count == 1, "Expected one title-lane \(title): \(titleLines)")
+            #expect(Self.containsExactlyOneTitle(title, in: titleLines), "Expected one title-lane \(title): \(titleLines)")
         }
         for title in ["Managed workspace", "Context review"] {
             #expect(lines.filter { $0.contains(title) }.count == 1, "Expected one rendered \(title): \(lines)")
@@ -125,7 +317,7 @@ struct SidebarLayoutRenderingTests {
         #expect(!lines.contains { $0.contains("Copilot agent") || $0.lowercased().contains("session ") })
         #expect(!lines.contains { $0.contains("counts incomplete") || $0.contains("0 agents") || $0.contains("Other tabs") })
         #expect(lines.contains { $0.contains("Agent") && $0.contains("review-worktree") })
-        #expect(titleLines.contains { $0.contains("State unavailable") })
+        #expect(!titleLines.contains { $0.contains("State unavailable") })
         #expect(lines.contains { $0.contains("Terminal") })
         #expect(!lines.contains { $0.contains("Earlier skill") || $0.contains("Branch collapsed")
             || $0.contains("Other sessions/activity") })
@@ -161,7 +353,7 @@ struct SidebarLayoutRenderingTests {
         #expect(ordinaryNodes.allSatisfy { $0.attention.isEmpty && $0.state != .blocked })
         #expect(unmanagedBaselineMetrics.documentHeight < ordinaryMetrics.documentHeight)
         #expect((ordinaryMetrics.documentHeight - unmanagedBaselineMetrics.documentHeight)
-                / Double(fullCount - baselineCount) <= 40)
+                / Double(fullCount - baselineCount) == SidebarDensity.compact.rowHeight)
         let commandImage = folder.appendingPathComponent("command-activity-light-340x600.png")
         let commandMetrics = try await render(
             model: commandModel, preferences: preferences, width: 340, height: 600,
@@ -170,8 +362,125 @@ struct SidebarLayoutRenderingTests {
         let commandLines = try SidebarRenderingEvidence.recognizedLines(in: commandImage)
         #expect(commandLines.filter { $0.contains("Running a command") }.count == 1)
         #expect(!commandLines.contains { $0.contains("Executing tool:") || $0.contains("bash invocation") })
-        #expect(commandMetrics.documentHeight > unmanagedBaselineMetrics.documentHeight)
-        #expect(commandMetrics.documentHeight <= unmanagedBaselineMetrics.documentHeight + 20)
+        #expect(commandMetrics.documentHeight == unmanagedBaselineMetrics.documentHeight,
+                "Folded activity replaces context in the existing metadata line")
+    }
+
+    @Test func titleCaptureRoundsOutwardAndRejectsClippedOrOffViewportBounds() throws {
+        let host = CGRect(x: 10, y: 20, width: 340, height: 940)
+        let title = CGRect(x: 70.25, y: 100.25, width: 150.5, height: 24.5)
+        for flipped in [false, true] {
+            for scale: CGFloat in [1, 2] {
+                let geometry = TitleCaptureGeometry(
+                    title: title, visible: title, host: host, flipped: flipped,
+                    imageSize: CGSize(width: host.width * scale, height: host.height * scale)
+                )
+                #expect(geometry.titlePixels.minX == 60.25 * scale)
+                #expect(geometry.titlePixels.minY == (flipped ? 80.25 : 835.25) * scale)
+                #expect(geometry.complete(geometry.crop))
+                #expect(geometry.crop.minX == floor(geometry.titlePixels.minX))
+                #expect(geometry.crop.maxX == ceil(geometry.titlePixels.maxX))
+                #expect(geometry.crop.minY == floor(geometry.titlePixels.minY))
+                #expect(geometry.crop.maxY == ceil(geometry.titlePixels.maxY))
+                for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                    #expect(!geometry.complete(geometry.crop.offsetBy(dx: dx, dy: dy)),
+                            "Reject a one-pixel loss at any edge, including first/last glyphs")
+                }
+                let clipped = TitleCaptureGeometry(
+                    title: title, visible: title.insetBy(dx: 1, dy: 0), host: host, flipped: flipped,
+                    imageSize: geometry.imageSize
+                )
+                #expect(!clipped.complete(clipped.crop))
+                let outside = TitleCaptureGeometry(
+                    title: title.offsetBy(dx: host.width, dy: 0), visible: host, host: host,
+                    flipped: flipped, imageSize: geometry.imageSize
+                )
+                #expect(!outside.complete(outside.crop))
+            }
+        }
+    }
+
+    @Test func titleOracleRejectsMissingDuplicateClippedAndIconJoinedText() {
+        let titles = ["Coordinator", "Implementation", "Hierarchy recovery", "Readiness check"]
+        for title in titles {
+            #expect(Self.containsExactlyOneTitle(title, in: titles))
+            for invalid in [
+                titles.filter { $0 != title }, titles + [title],
+                [String(title.dropFirst())], [String(title.dropLast())],
+                [title.lowercased()], ["robot" + title], [title + " suffix"]
+            ] {
+                #expect(!Self.containsExactlyOneTitle(title, in: invalid))
+            }
+        }
+        #expect(!Self.containsExactlyOneTitle("Hierarchy recovery", in: ["lierarchy recovery"]))
+    }
+
+    private static func containsExactlyOneTitle(_ title: String, in lines: [String]) -> Bool {
+        lines.filter { $0 == title }.count == 1
+    }
+
+    private struct TitleCaptureGeometry: Codable {
+        let title: CGRect
+        let visible: CGRect
+        let host: CGRect
+        let flipped: Bool
+        let imageSize: CGSize
+
+        var titlePixels: CGRect {
+            CGRect(
+                x: (title.minX - host.minX) * imageSize.width / host.width,
+                y: (flipped ? title.minY - host.minY : host.maxY - title.maxY) * imageSize.height / host.height,
+                width: title.width * imageSize.width / host.width,
+                height: title.height * imageSize.height / host.height
+            )
+        }
+        var crop: CGRect { titlePixels.integral }
+        func complete(_ candidate: CGRect) -> Bool {
+            !title.isEmpty && visible.contains(title) && host.contains(title)
+                && CGRect(origin: .zero, size: imageSize).contains(candidate)
+                && candidate.contains(titlePixels)
+        }
+    }
+
+    private func captureTitleLanes(in host: NSView, image: URL) throws -> [String] {
+        func descendants(_ view: NSView) -> [NSView] {
+            view.subviews.flatMap { [$0] + descendants($0) }
+        }
+        let source = try #require(NSBitmapImageRep(data: Data(contentsOf: image))?.cgImage)
+        let titles = descendants(host).compactMap { $0 as? SidebarTitleNativeButton }
+        try #require(!titles.isEmpty)
+        var lines: [String] = []
+        var geometries: [TitleCaptureGeometry] = []
+        for (index, button) in titles.enumerated() {
+            // Measure every mounted title, never select rows or expected text from accessibility labels.
+            let content = button.hosting
+            try #require(!content.isHiddenOrHasHiddenAncestor)
+            let geometry = TitleCaptureGeometry(
+                title: host.convert(content.bounds, from: content),
+                visible: host.convert(content.visibleRect, from: content), host: host.bounds,
+                flipped: host.isFlipped, imageSize: CGSize(width: source.width, height: source.height)
+            )
+            let crop = geometry.crop
+            try #require(geometry.complete(crop), "Title \(index) must be fully inside the native viewport: \(geometry)")
+            // Losing even one leading pixel must fail before language correction can repair a clipped H.
+            let missingLeadingPixel = CGRect(x: crop.minX + 1, y: crop.minY, width: crop.width - 1, height: crop.height)
+            #expect(!geometry.complete(missingLeadingPixel))
+            let missingTrailingPixel = CGRect(x: crop.minX, y: crop.minY, width: crop.width - 1, height: crop.height)
+            #expect(!geometry.complete(missingTrailingPixel))
+            let bitmap = NSBitmapImageRep(cgImage: try #require(source.cropping(to: crop)))
+            let destination = image.deletingPathExtension().appendingPathExtension("title-\(index).png")
+            try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
+            // Full title-control bounds exclude the adjacent robot, but retain metadata and all title glyphs.
+            let recognized = try SidebarRenderingEvidence.recognizedLines(
+                in: destination, dark: true, naturalLanguage: true
+            )
+            lines += recognized
+            geometries.append(geometry)
+            print("P57 title capture \(index): points=\(geometry.title), pixels=\(crop), lines=\(recognized)")
+        }
+        try JSONEncoder().encode(geometries).write(to: image.appendingPathExtension("titles.json"))
+        try JSONEncoder().encode(lines).write(to: image.appendingPathExtension("titles.text.json"))
+        return lines
     }
 
     @Test func managedRowsStayWithinCompactHeightBudgetAtThreeHundredWidth() async throws {
@@ -200,7 +509,7 @@ struct SidebarLayoutRenderingTests {
             let view = NSHostingView(rootView: ManagedHierarchyContent(
                 polling: model.orchestration, hierarchy: model.hierarchy,
                 navigation: model.navigation, layout: preferences.layout,
-                setExpanded: { _, _ in }, selectedID: .constant(nil)
+                setExpanded: { _, _ in }, selectedNode: .constant(nil)
             ).environment(preferences).frame(width: 300, alignment: .leading))
             view.layoutSubtreeIfNeeded()
             return view.fittingSize.height
@@ -208,7 +517,7 @@ struct SidebarLayoutRenderingTests {
         let rootHeight = height(rootModel)
         let treeHeight = height(treeModel)
         #expect(rootHeight <= 120)
-        #expect((treeHeight - rootHeight) / 4 <= 40)
+        #expect((treeHeight - rootHeight) / 4 == SidebarDensity.compact.rowHeight)
     }
 
     @Test func activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes() async throws {
@@ -533,7 +842,7 @@ struct SidebarLayoutRenderingTests {
     }
 
     private func makeModel(
-        fixtures: SidebarTreeFixtures, longMetadata: Bool, childLimit: Int? = nil, shellActivity: Bool = false
+        fixtures: SidebarTreeFixtures, longMetadata: Bool, childLimit: Int? = nil, shellActivity: Bool = false, deep: Bool = false
     ) -> SidebarConnectionModel {
         let now = Date()
         let rootLabel = "Synthetic coordinator reviewing deeply nested layout and accessibility coverage"
@@ -566,6 +875,12 @@ struct SidebarLayoutRenderingTests {
         if shellActivity {
             children = [.init(id: "shell:command", parentID: nil, kind: .shell, name: "bash invocation",
                               state: .working, model: nil)]
+        }
+        if deep {
+            children = (0...8).map { level in
+                .init(id: "level-\(level)", parentID: level == 0 ? nil : "level-\(level - 1)", kind: .subagent,
+                      name: "Synthetic level \(level) with a deliberately long title", state: .working, model: nil)
+            }
         }
         let snapshot = fixtures.snapshot(sessions: [
             .init(sessionID: fixtures.sessionID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,
@@ -616,8 +931,8 @@ struct SidebarLayoutRenderingTests {
     private func render(
         model: SidebarConnectionModel, preferences: SidebarPreferences, width: Int,
         height: Int = 941, appearance: RenderAppearance = .light, managed: Bool = false,
-        expectedSessions: Int = 1,
-        destination: URL, inspect: ((NSView) throws -> Void)? = nil
+        expectedSessions: Int = 1, nativeBackground: Bool = false,
+        destination: URL, inspect: ((NSView) async throws -> Void)? = nil
     ) async throws -> SidebarRenderingEvidence.Metrics {
         // Yield between renders so unrelated asynchronous navigation tests can service their deadlines.
         try await Task.sleep(for: .milliseconds(10))
@@ -632,7 +947,8 @@ struct SidebarLayoutRenderingTests {
         let view = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
             .background(AppearanceProbe(evidence: evidence).frame(width: 0, height: 0))
             .environment(\._colorSchemeContrast, appearance.contrast)
-            .background(appearance.colorScheme == .dark ? Color.black : Color.white))
+            .background(nativeBackground ? Color(nsColor: .windowBackgroundColor)
+                        : appearance.colorScheme == .dark ? Color.black : Color.white))
         window.contentView = view
         defer { window.contentView = nil; window.close() }
         view.frame = frame
@@ -665,7 +981,7 @@ struct SidebarLayoutRenderingTests {
         #expect(metrics.documentHeight > 0)
         #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
         try JSONEncoder().encode(metrics).write(to: destination.deletingPathExtension().appendingPathExtension("json"))
-        try inspect?(view)
+        try await inspect?(view)
         return metrics
     }
 

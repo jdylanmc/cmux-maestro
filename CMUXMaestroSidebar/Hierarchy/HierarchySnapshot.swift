@@ -59,8 +59,47 @@ extension HierarchyAvailability where Value == String? {
     var pathDisplayText: String {
         switch self {
         case .unavailable: "Path unavailable"
-        case .available(let path): path ?? "No path shared"
+        case .available(let path): path.map(SidebarPathDisplay.text) ?? "No path shared"
         }
+    }
+}
+
+enum SidebarPathDisplay {
+    private static let humanHome = Result { try CopilotPaths.realUserHome().path }
+
+    static func text(_ path: String) -> String {
+        guard !path.isEmpty else { return "No path shared" }
+        guard path.hasPrefix("/") else { return path }
+        switch humanHome {
+        case .success(let home): return text(path, home: home)
+        case .failure: return "\(path) (Home directory unavailable)"
+        }
+    }
+
+    static func text(_ path: String, home: String) -> String {
+        guard !path.isEmpty else { return "No path shared" }
+        guard path.hasPrefix("/"), home.hasPrefix("/") else { return path }
+        let components = normalizedComponents(path)
+        let homeComponents = normalizedComponents(home)
+        // Lexical display only: never resolve symlinks or rewrite an operation target.
+        guard !homeComponents.isEmpty, components.starts(with: homeComponents) else {
+            return "/" + components.joined(separator: "/")
+        }
+        let relative = components.dropFirst(homeComponents.count)
+        return relative.isEmpty ? "~" : "~/" + relative.joined(separator: "/")
+    }
+
+    private static func normalizedComponents(_ path: String) -> [Substring] {
+        var result: [Substring] = []
+        for component in path.split(separator: "/") {
+            if component == "." { continue }
+            if component == ".." {
+                if !result.isEmpty { result.removeLast() }
+            } else {
+                result.append(component)
+            }
+        }
+        return result
     }
 }
 

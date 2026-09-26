@@ -4,8 +4,17 @@ import Testing
 import Carbon.HIToolbox
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarIconPickerTests {
+    @Test func staleMenuIconRequestCannotRetargetAReplacementSession() {
+        let original = SidebarIconTarget.session(UUID())
+        let replacement = SidebarIconTarget.session(UUID())
+        #expect(SidebarItemIcon.requestIsCurrent(original, target: original))
+        #expect(!SidebarItemIcon.requestIsCurrent(original, target: replacement))
+        #expect(!SidebarItemIcon.requestIsCurrent(original, target: nil))
+        #expect(SidebarItemIcon.requestIsCurrent(nil, target: replacement))
+    }
+
     @Test func catalogSearchCoversTheWholeFontAndAliasesDeterministically() throws {
         let catalog = try SidebarGlyphCatalog.shared.get()
         let all = catalog.search("")

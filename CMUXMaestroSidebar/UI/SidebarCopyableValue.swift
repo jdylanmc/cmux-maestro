@@ -100,6 +100,7 @@ private final class SidebarCopyNativeButton: NSButton {
     required init?(coder: NSCoder) { nil }
 
     override var acceptsFirstResponder: Bool { isEnabled }
+    override var canBecomeKeyView: Bool { isEnabled && !isHiddenOrHasHiddenAncestor && window != nil }
 
     @objc private func copyValue() { activate() }
 

@@ -19,7 +19,7 @@ enum SidebarAgentHoverContent {
             let matches = managed.nodes.filter { $0.id == id && $0.generation == generation }
             guard matches.count == 1, let node = matches.first,
                   topology.workspaceBySurface[node.surfaceId] == node.workspaceId else { return nil }
-            let allowed = Set(["Model", "Role", "Branch", "Worktree", "Git evidence", "Git changes", "Working directory", "Session ID"])
+            let allowed = Set(["Model", "Role", "Branch", "Worktree", "Last verified location", "Git evidence", "Git changes", "Working directory", "Session ID"])
             var lines = SidebarPresentation.managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { allowed.contains($0.title) }
             let current = availability == .ready || availability == .partial
@@ -43,7 +43,7 @@ enum SidebarAgentHoverContent {
         case .child(let sessionID, let childID):
             guard let session = uniqueSession(sessionID, in: tree),
                   topology.workspaceBySurface[session.surfaceID] == session.workspaceID else { return nil }
-            let matches = session.nodes.filter { $0.id == childID && $0.kind == .subagent }
+            let matches = session.nodes.filter { $0.id == childID }
             guard matches.count == 1, let child = matches.first else { return nil }
             guard isFresh(session, tree: tree, now: now) else {
                 return .init(id: "child-\(sessionID)-\(childID)", category: "Agent preview", title: child.name,
@@ -58,7 +58,7 @@ enum SidebarAgentHoverContent {
                 ).workingDirectory.pathDisplayText)
             ]
             return .init(
-                id: "child-\(sessionID)-\(childID)", category: "Agent preview", title: child.name,
+                id: "child-\(sessionID)-\(childID)", category: child.kind == .subagent ? "Agent preview" : "Activity preview", title: child.name,
                 subtitle: session.liveness == .alive ? SidebarPresentation.state(child.state).title : "Last reported: \(child.state.rawValue)",
                 lines: lines, notice: session.childrenComplete && !session.treeDegraded
                     ? nil : "Child history is incomplete; missing work is not assumed finished."

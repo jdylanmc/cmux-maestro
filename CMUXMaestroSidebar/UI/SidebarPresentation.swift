@@ -59,7 +59,7 @@ struct SidebarVisual: Equatable {
 }
 
 enum SidebarActivityTreatment: Equatable {
-    case shimmer, steadyWorking, steadyAlert, none
+    case rotatingWorking, steadyWorking, steadyAlert, none
 }
 
 struct SidebarWorkspaceStateCount: Equatable, Identifiable {
@@ -315,10 +315,48 @@ enum SidebarPresentation {
 
     static func activityTreatment(_ visual: SidebarVisual, reduceMotion: Bool) -> SidebarActivityTreatment {
         switch visual.tone {
-        case .green: reduceMotion ? .steadyWorking : .shimmer
+        case .green: reduceMotion ? .steadyWorking : .rotatingWorking
         case .red: .steadyAlert
         default: .none
         }
+
+    }
+
+    static func workingRotation(at date: Date, reduceMotion: Bool) -> Double {
+        reduceMotion ? 0 : date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1) * 360
+    }
+
+    static func needsInput(_ attention: [AgentAttention]) -> Bool {
+        attention.contains { $0.kind == .answer || $0.kind == .permission }
+    }
+
+    static func statusDescription(_ visual: SidebarVisual, needsInput: Bool = false) -> String {
+        needsInput ? "Needs input. \(visual.title)" : visual.title
+    }
+
+    static func sessionStatus(_ session: SidebarCopilotSession) -> String {
+        let state = statusDescription(sessionState(session), needsInput: needsInput(session.attention))
+        return session.childrenComplete && !session.treeDegraded ? state
+            : "\(state). Child history incomplete; missing work is not assumed finished"
+    }
+
+    static func rowMetadata(kind: String, directory: String? = nil, activity: String? = nil) -> String {
+        if let activity { return "\(kind) · \(activity)" }
+        guard let directory, !directory.isEmpty else { return kind }
+        let context = SidebarPathDisplay.text(directory).split(separator: "/").last.map(String.init) ?? "/"
+        return "\(kind) · \(context)"
+    }
+
+    static func managedNeedsInput(_ node: SidebarOrchestrationNode, tree: SidebarCopilotTree, now: Date) -> Bool {
+        managedSession(for: node, in: tree, now: now).map { needsInput($0.attention) } ?? false
+    }
+
+    static func childState(_ node: SidebarCopilotNode, session: SidebarCopilotSession) -> SidebarVisual {
+        if node.state == .blocked || node.state == .failed { return state(node.state) }
+        guard session.liveness == .alive else {
+            return process(session.liveness).titled("Last reported: \(state(node.state).title). \(process(session.liveness).title)")
+        }
+        return state(node.state)
     }
 
     static func focusInteraction(from old: HierarchySnapshot, to new: HierarchySnapshot) -> SidebarSeenTarget? {
@@ -776,7 +814,7 @@ enum SidebarPresentation {
 
     static func briefPath(root: HierarchyAvailability<String?>, project: HierarchyAvailability<String?>) -> String? {
         for path in [root, project] {
-            if case .available(let value) = path, let value, !value.isEmpty { return value }
+            if case .available(let value) = path, let value, !value.isEmpty { return SidebarPathDisplay.text(value) }
         }
         return nil
     }
@@ -804,7 +842,7 @@ enum SidebarPresentation {
                 result.append(.init(title: "Branch", value: branch))
             }
             if let worktree = node.worktreeLabel {
-                result.append(.init(title: "Worktree", value: worktree))
+                result.append(.init(title: "Worktree", value: SidebarPathDisplay.text(worktree)))
             }
             if let captured = node.gitEvidenceAt {
                 result.append(.init(title: "Git evidence", value: "Verified \(date(captured))"))
@@ -812,6 +850,13 @@ enum SidebarPresentation {
         } else if let captured = node.gitEvidenceAt {
             let status = node.gitEvidenceStatus == "unavailable" ? "Unavailable" : "Stale"
             result.append(.init(title: "Git evidence", value: "\(status) · \(date(captured))"))
+            if node.gitEvidenceStatus == "verified" {
+                let location = [node.branchLabel, node.worktreeLabel.map(SidebarPathDisplay.text)].compactMap { $0 }
+                if !location.isEmpty {
+                    result.append(.init(title: "Last verified location",
+                                        value: "Not current Git state: \(location.joined(separator: " · "))"))
+                }
+            }
         }
         if let changes = node.currentGitChanges(at: now) {
             result.append(.init(title: "Git changes", value: changes.description))

@@ -509,7 +509,11 @@ struct SidebarLayoutTests {
         #expect(!view.contains("@State private var expanded"))
         #expect(!view.contains("@State private var collapsed"))
         #expect(!view.contains("withAnimation"))
-        #expect(!view.contains(".animation("))
+        let workingRingSchedule = "TimelineView(.animation(minimumInterval: 1.0 / 30))"
+        #expect(view.components(separatedBy: workingRingSchedule).count == 2)
+        #expect(!view.replacingOccurrences(of: workingRingSchedule, with: "").contains(".animation("))
+        #expect(!view.contains(".phaseAnimator"))
+        #expect(view.contains("@Environment(\\.accessibilityReduceMotion)"))
         #expect(SidebarBranchSummary(sessions: [], complete: false).incomplete)
         #expect(view.contains("model.navigation.permissionSummary"))
         #expect(view.contains("model.copilot.updateHistory(preferences.history)"))

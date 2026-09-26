@@ -9,6 +9,7 @@ mkdir -p "$OUTPUT"
 xcrun swiftc -swift-version 5 -strict-concurrency=complete \
     -default-isolation MainActor -parse-as-library \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotModels.swift" \
+    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotPaths.swift" \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotEventReducer.swift" \
     "$ROOT/CMUXMaestroPreview/Domain/AgentSignals.swift" \
     "$ROOT/CMUXMaestroSidebar/Hierarchy/HierarchySnapshot.swift" \

@@ -22,13 +22,7 @@ struct SidebarHoverCard: View {
                     Text(data.title).font(.headline).lineLimit(3)
                 }
                 Spacer(minLength: 0)
-                Button(action: close) {
-                    Image(systemName: "xmark").font(.caption)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close preview")
-                .accessibilityIdentifier("hover-close")
+                SidebarPreviewCloseButton(close: close).frame(width: 24, height: 24)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -71,6 +65,31 @@ struct SidebarHoverCard: View {
     }
 }
 
+private struct SidebarPreviewCloseButton: NSViewRepresentable {
+    let close: () -> Void
+    func makeNSView(context: Context) -> SidebarPreviewCloseNativeButton { SidebarPreviewCloseNativeButton() }
+    func updateNSView(_ button: SidebarPreviewCloseNativeButton, context: Context) { button.closePreview = close }
+}
+
+private final class SidebarPreviewCloseNativeButton: NSButton {
+    var closePreview: () -> Void = {}
+    init() {
+        super.init(frame: .zero)
+        title = ""
+        isBordered = false
+        image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)
+        target = self
+        action = #selector(closeCard)
+        toolTip = "Close preview"
+        setAccessibilityLabel("Close preview")
+        setAccessibilityIdentifier("hover-close")
+    }
+    required init?(coder: NSCoder) { nil }
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { !isHiddenOrHasHiddenAncestor && window != nil }
+    @objc private func closeCard() { closePreview() }
+}
+
 enum SidebarHoverPlacement {
     static func frame(anchor: CGRect, visible: CGRect, preferred: CGSize) -> CGRect {
         let area = visible.insetBy(dx: 8, dy: 8)
@@ -88,7 +107,7 @@ enum SidebarHoverPlacement {
 }
 
 struct SidebarHoverState {
-    enum Mode { case hidden, hover, explicit }
+    enum Mode { case hidden, hover, keyboard, explicit }
     private(set) var mode: Mode = .hidden
     private(set) var overAnchor = false
     private(set) var overCard = false
@@ -102,6 +121,7 @@ struct SidebarHoverState {
     var shouldOpen: Bool { mode == .hidden && overAnchor && !suppressed }
     var shouldClose: Bool { mode == .hover && !overAnchor && !overCard }
     mutating func open(explicit: Bool) { mode = explicit ? .explicit : .hover }
+    mutating func keyboard() { mode = .keyboard }
     mutating func dismiss() {
         mode = .hidden
         overCard = false
@@ -144,8 +164,35 @@ extension EnvironmentValues {
 
 final class SidebarHoverPanel: NSPanel {
     var allowsKeyboard = false
+    var advanceFromPreview: () -> Void = {}
     override var canBecomeKey: Bool { allowsKeyboard }
     override var canBecomeMain: Bool { false }
+
+    @discardableResult
+    func focusControls() -> Bool {
+        contentView?.layoutSubtreeIfNeeded()
+        guard allowsKeyboard, let first = keyboardControls.first else { return false }
+        return makeFirstResponder(first)
+    }
+
+    override func selectNextKeyView(_ sender: Any?) {
+        let controls = keyboardControls
+        guard allowsKeyboard, !controls.isEmpty else { super.selectNextKeyView(sender); return }
+        let index = controls.firstIndex { $0 === firstResponder }.map { $0 + 1 } ?? 0
+        guard index < controls.count else { advanceFromPreview(); return }
+        controls[index].scrollToVisible(controls[index].bounds)
+        makeFirstResponder(controls[index])
+    }
+
+    private var keyboardControls: [NSButton] {
+        func visit(_ view: NSView) -> [NSButton] {
+            if let button = view as? NSButton,
+               ["hover-close", "hover-copy-value"].contains(button.accessibilityIdentifier()),
+               button.canBecomeKeyView { return [button] }
+            return view.subviews.flatMap(visit)
+        }
+        return contentView.map(visit) ?? []
+    }
 }
 
 enum SidebarSessionCopy {
@@ -161,6 +208,7 @@ final class SidebarHoverPresenter {
     private(set) var panel: SidebarHoverPanel?
     private weak var anchor: NSView?
     private weak var originalResponder: NSResponder?
+    private weak var keyboardOrigin: NSResponder?
     private weak var parentWindow: NSWindow?
     private var data: SidebarHoverCardData?
     private var group: SidebarHoverGroup?
@@ -196,10 +244,19 @@ final class SidebarHoverPresenter {
         }
     }
 
-    func hoverAnchor(_ inside: Bool) {
+    func hoverAnchor(_ inside: Bool, nameOnly: Bool = false) {
         state.anchor(inside)
         openTask?.cancel()
+        if !inside && state.mode == .hidden {
+            dismiss(restoreFocus: false)
+            return
+        }
+        if !inside && nameOnly && state.mode == .hover {
+            dismiss(restoreFocus: false)
+            return
+        }
         if state.shouldOpen {
+            if data != nil, let window = anchor?.window { installObservers(window: window) }
             openTask = Task { @MainActor [weak self] in
                 do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
                 guard let self, self.state.shouldOpen else { return }
@@ -207,6 +264,24 @@ final class SidebarHoverPresenter {
             }
         }
         scheduleClose()
+    }
+
+    func rememberKeyboardOrigin(_ responder: NSResponder) { keyboardOrigin = responder }
+
+    func keyboardFocus(_ focused: Bool) {
+        if focused {
+            open(explicit: false)
+            if state.mode == .hover { state.keyboard() }
+        } else if state.mode == .keyboard {
+            dismiss(restoreFocus: false)
+        }
+    }
+
+    func enterFromKeyboard() -> Bool {
+        guard data != nil else { return false }
+        open(explicit: true)
+        guard state.mode == .explicit else { return false }
+        return panel?.focusControls() == true
     }
 
     func hoverCard(_ inside: Bool) {
@@ -234,12 +309,19 @@ final class SidebarHoverPresenter {
             parentWindow = window
             originalResponder = window.firstResponder
         }
+        if explicit { originalResponder = keyboardOrigin ?? window.firstResponder }
         state.open(explicit: explicit)
         let panel = panel ?? SidebarHoverPanel(
             contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false
         )
         self.panel = panel
+        panel.advanceFromPreview = { [weak self] in
+            guard let self, self.state.mode == .explicit, self.panel?.isKeyWindow == true,
+                  let parent = self.parentWindow, let origin = self.originalResponder else { return }
+            self.dismiss(restoreFocus: true)
+            parent.selectNextKeyView(origin)
+        }
         panel.allowsKeyboard = explicit
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
@@ -293,7 +375,7 @@ final class SidebarHoverPresenter {
             if state.mode != .hidden { dismiss(restoreFocus: false) }
             return
         }
-        let rectangle = window.convertToScreen(anchor.convert(anchor.visibleRect, to: nil))
+        let rectangle = window.convertToScreen(anchor.convert(anchor.bounds.intersection(anchor.visibleRect), to: nil))
         panel?.appearance = anchor.effectiveAppearance
         panel?.setFrame(SidebarHoverPlacement.frame(
             anchor: rectangle, visible: screen.visibleFrame,
@@ -306,7 +388,8 @@ final class SidebarHoverPresenter {
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .scrollWheel]) { [weak self] event in
             guard let self else { return event }
             if event.type == .keyDown {
-                if event.keyCode == 53 {
+                if event.keyCode == 53 || (event.keyCode == 48 && event.modifierFlags.contains(.shift)
+                                          && self.state.mode == .explicit && event.window === self.panel) {
                     let owned = self.state.mode == .explicit && event.window === self.panel
                     self.dismiss(restoreFocus: owned)
                     return owned ? nil : event
@@ -354,8 +437,10 @@ final class SidebarHoverPresenter {
         windowObservers.forEach(NotificationCenter.default.removeObserver)
         windowObservers.removeAll()
         if restore, let originalResponder, let parentWindow {
+            parentWindow.makeKey()
             parentWindow.makeFirstResponder(originalResponder)
         }
+        keyboardOrigin = nil
     }
 
     func detach() {
@@ -365,20 +450,34 @@ final class SidebarHoverPresenter {
     }
 }
 
-private final class SidebarHoverAnchorView: NSView {
+final class SidebarHoverAnchorView: NSView {
     weak var presenter: SidebarHoverPresenter?
+    var tracksName = false { didSet { updateTrackingAreas() } }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        if tracksName {
+            addTrackingArea(NSTrackingArea(
+                rect: bounds.intersection(visibleRect), options: [.activeInActiveApp, .mouseEnteredAndExited],
+                owner: self
+            ))
+        }
+    }
+    override func mouseEntered(with event: NSEvent) { presenter?.hoverAnchor(true, nameOnly: true) }
+    override func mouseExited(with event: NSEvent) { presenter?.hoverAnchor(false, nameOnly: true) }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil { presenter?.detach() }
     }
-    override func layout() { super.layout(); presenter?.position() }
+    override func layout() { super.layout(); updateTrackingAreas(); presenter?.position() }
 }
 
 private struct SidebarHoverAnchor: NSViewRepresentable {
     let presenter: SidebarHoverPresenter
     let data: SidebarHoverCardData?
     let group: SidebarHoverGroup?
+    var tracksName = false
 
     func makeNSView(context: Context) -> SidebarHoverAnchorView {
         let view = SidebarHoverAnchorView()
@@ -386,6 +485,7 @@ private struct SidebarHoverAnchor: NSViewRepresentable {
         return view
     }
     func updateNSView(_ view: SidebarHoverAnchorView, context: Context) {
+        view.tracksName = tracksName
         presenter.update(anchor: view, data: data, group: group)
     }
     static func dismantleNSView(_ view: SidebarHoverAnchorView, coordinator: ()) { view.presenter?.detach() }
@@ -393,27 +493,181 @@ private struct SidebarHoverAnchor: NSViewRepresentable {
 
 struct SidebarHoverRegion<Content: View>: View {
     let data: SidebarHoverCardData?
+    var nameOnly = false
     @ViewBuilder let content: () -> Content
     @State private var presenter = SidebarHoverPresenter()
     @Environment(\.sidebarHoverGroup) private var group
 
     var body: some View {
-        HStack(spacing: 2) {
-            content()
-            if let data {
-                Button { presenter.open(explicit: true) } label: {
-                    Image(systemName: "info.circle").font(.caption2).foregroundStyle(.secondary)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("Preview \(data.title)")
-                .accessibilityHint("Opens a temporary card without selecting or marking work seen")
-                .accessibilityIdentifier("hover-preview-\(data.id)")
-                .help("Preview \(data.title)")
+        content()
+            .environment(\.sidebarPreviewInteraction, .init(
+                available: data != nil,
+                focus: { presenter.keyboardFocus($0) },
+                enter: { presenter.enterFromKeyboard() },
+                origin: { presenter.rememberKeyboardOrigin($0) },
+                dismiss: { presenter.dismiss(restoreFocus: false) }
+            ))
+            .environment(\.sidebarNamePreview, nameOnly ? .init(presenter: presenter, data: data, group: group) : nil)
+            .background {
+                if !nameOnly { SidebarHoverAnchor(presenter: presenter, data: data, group: group) }
+            }
+            .onHover { if !nameOnly { presenter.hoverAnchor($0) } }
+            .onDisappear { presenter.detach() }
+    }
+}
+
+struct SidebarPreviewInteraction {
+    var available = false
+    var focus: (Bool) -> Void = { _ in }
+    var enter: () -> Bool = { false }
+    var origin: (NSResponder) -> Void = { _ in }
+    var dismiss: () -> Void = {}
+}
+
+private struct SidebarPreviewInteractionKey: EnvironmentKey {
+    static let defaultValue = SidebarPreviewInteraction()
+}
+
+private struct SidebarNamePreview {
+    let presenter: SidebarHoverPresenter
+    let data: SidebarHoverCardData?
+    let group: SidebarHoverGroup?
+}
+
+private struct SidebarNamePreviewKey: EnvironmentKey {
+    static let defaultValue: SidebarNamePreview? = nil
+}
+
+extension EnvironmentValues {
+    var sidebarPreviewInteraction: SidebarPreviewInteraction {
+        get { self[SidebarPreviewInteractionKey.self] }
+        set { self[SidebarPreviewInteractionKey.self] = newValue }
+    }
+    fileprivate var sidebarNamePreview: SidebarNamePreview? {
+        get { self[SidebarNamePreviewKey.self] }
+        set { self[SidebarNamePreviewKey.self] = newValue }
+    }
+}
+
+private struct SidebarNameHoverModifier: ViewModifier {
+    @Environment(\.sidebarNamePreview) private var preview
+    func body(content: Content) -> some View {
+        content.background {
+            if let preview {
+                SidebarHoverAnchor(presenter: preview.presenter, data: preview.data, group: preview.group, tracksName: true)
             }
         }
-        .background(SidebarHoverAnchor(presenter: presenter, data: data, group: group))
-        .onHover { presenter.hoverAnchor($0) }
-        .onDisappear { presenter.detach() }
+    }
+}
+
+extension View {
+    func sidebarNameHover() -> some View { modifier(SidebarNameHoverModifier()) }
+}
+
+/// The title is one native keyboard target; entering its preview never presses it.
+final class SidebarTitleNativeButton: NSButton {
+    let hosting = NSHostingView(rootView: AnyView(EmptyView()))
+    var labelContent = AnyView(EmptyView())
+    var activate: () -> Void = {}
+    var preview = SidebarPreviewInteraction()
+    var showActions: (() -> Void)?
+    var focusChanged: (Bool) -> Void = { _ in }
+    private var returningFromPreview = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isBordered = false
+        title = ""
+        target = self
+        action = #selector(pressTitle)
+        focusRingType = .exterior
+        addSubview(hosting)
+    }
+    required init?(coder: NSCoder) { nil }
+    @objc private func pressTitle() { preview.dismiss(); activate() }
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { !isHiddenOrHasHiddenAncestor && window != nil }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(convert(point, from: superview)) ? self : nil
+    }
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            focusChanged(true)
+            if !returningFromPreview { preview.focus(true) }
+            needsDisplay = true
+        }
+        return result
+    }
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result {
+            returningFromPreview = false
+            preview.focus(false)
+            focusChanged(false)
+            needsDisplay = true
+        }
+        return result
+    }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 48 && !event.modifierFlags.contains(.shift),
+           !returningFromPreview, enterPreview() { return }
+        if event.keyCode == 53 { preview.dismiss(); return }
+        if event.keyCode == 109 && event.modifierFlags.contains(.shift), let showActions {
+            preview.dismiss()
+            showActions()
+            return
+        }
+        if event.keyCode == 36 || event.keyCode == 49 { performClick(nil); return }
+        super.keyDown(with: event)
+    }
+    override func draw(_ dirtyRect: NSRect) {}
+    func enterPreview() -> Bool {
+        preview.origin(self)
+        returningFromPreview = preview.enter()
+        return returningFromPreview
+    }
+    override func drawFocusRingMask() {
+        NSBezierPath(roundedRect: bounds, xRadius: 3, yRadius: 3).fill()
+    }
+    override var focusRingMaskBounds: NSRect { bounds }
+    override func layout() {
+        super.layout()
+        hosting.frame = bounds
+    }
+    func measure(width proposedWidth: CGFloat?) -> CGSize {
+        let width = proposedWidth.flatMap { $0.isFinite ? max(0, $0) : nil }
+        hosting.rootView = AnyView(labelContent.frame(width: width, alignment: .leading))
+        let size = hosting.fittingSize
+        return CGSize(width: width ?? size.width, height: max(24, size.height))
+    }
+}
+
+struct SidebarTitleButton<Label: View>: NSViewRepresentable {
+    let label: String
+    let hint: String
+    var value = ""
+    let action: () -> Void
+    @ViewBuilder var content: Label
+    @Environment(\.sidebarPreviewInteraction) private var preview
+    @Environment(\.sidebarRowMenu) private var rowMenu
+
+    func makeNSView(context: Context) -> SidebarTitleNativeButton { SidebarTitleNativeButton() }
+    func updateNSView(_ button: SidebarTitleNativeButton, context: Context) {
+        button.labelContent = AnyView(content.environment(\.self, context.environment))
+        button.activate = action
+        button.preview = preview
+        button.showActions = rowMenu.map { menu in { menu.show() } }
+        button.focusChanged = { rowMenu?.focusChanged($0) }
+        rowMenu?.dismissPreview = preview.dismiss
+        rowMenu?.preview = preview.available ? { [weak button] in button?.enterPreview() ?? false } : nil
+        button.setAccessibilityLabel(label)
+        button.setAccessibilityValue(value)
+        button.setAccessibilityHelp(preview.available ? "\(hint). Tab enters preview controls, then continues past this title. Escape or Shift-Tab returns; the next Tab continues onward. Shift-F10 opens actions." : hint)
+        button.toolTip = hint
+        _ = button.measure(width: button.bounds.width > 0 ? button.bounds.width : nil)
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: SidebarTitleNativeButton, context: Context) -> CGSize? {
+        nsView.measure(width: proposal.width)
     }
 }

@@ -29,6 +29,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feat
     -Xlinker -rpath -Xlinker "$FRAMEWORKS" \
     "$ROOT/CMUXMaestroPreviewTests/CopilotHookTests.swift" \
     "$ROOT/CMUXMaestroPreviewTests/CopilotSetupTests.swift" \
+    "$ROOT/CMUXMaestroPreviewTests/SidebarAppKitTestScope.swift" \
     "$ROOT/CMUXMaestroPreviewTests/WorkerLaunchSettingsTests.swift" \
     "$ROOT/scripts/CopilotSetupTestMain.swift" -o "$OUTPUT/setup-tests"
 "$OUTPUT/setup-tests"

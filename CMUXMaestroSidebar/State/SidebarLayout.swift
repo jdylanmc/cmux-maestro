@@ -8,11 +8,15 @@ nonisolated enum SidebarDensity: String, Codable, CaseIterable, Identifiable, Se
     var title: String { self == .compact ? "Compact" : "Comfortable" }
     func spacing(_ compact: Double) -> Double { compact * (self == .compact ? 1 : 1.35) }
     var controlSize: Double { self == .compact ? 20 : 24 }
+    var rowHeight: Double { self == .compact ? 46 : 52 }
+    var rowTitleSize: Double { self == .compact ? 11 : 12 }
+    var rowMetadataSize: Double { self == .compact ? 9 : 10 }
     func stacksActions(width: Double) -> Bool { width < (self == .compact ? 240 : 280) }
 
     func indentation(depth: Int, unresolved: Bool, width: Double) -> Double {
-        // Deep trees must leave room for status and controls at narrow sidebar widths.
-        min(Double(max(0, depth) + (unresolved ? 1 : 0)) * spacing(4), max(0, width * 0.15))
+        let level = max(0, depth) + (unresolved ? 1 : 0)
+        let points = Double(min(level, 3) * 8 + max(0, level - 3) * 4)
+        return min(spacing(points), max(0, min(32, width * 0.12)))
     }
 }
 

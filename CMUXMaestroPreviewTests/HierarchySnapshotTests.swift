@@ -4,6 +4,34 @@ import Testing
 
 @MainActor
 struct HierarchySnapshotTests {
+    @Test func homeRelativeDisplayUsesComponentsWithoutChangingSourcePaths() throws {
+        let home = "/Users/Test Person"
+        let cases = [
+            (home, "~"), (home + "/", "~"), (home + "//a/./b/../c/", "~/a/c"),
+            (home + "/日本語/space name", "~/日本語/space name"),
+            (home + "-other/project", home + "-other/project"),
+            (home + "/../Other", "/Users/Other"), ("/", "/"),
+            ("/../../tmp/", "/tmp"), ("relative/../path", "relative/../path"),
+            ("", "No path shared")
+        ]
+        for (path, expected) in cases {
+            #expect(SidebarPathDisplay.text(path, home: home) == expected)
+        }
+        #expect(SidebarPathDisplay.text("/tmp", home: "/") == "/tmp")
+        let realHome = try CopilotPaths.realUserHome().path
+        let original = realHome + "/project/../workspace"
+        let paths = HierarchyPathContext(
+            rootPath: .available(realHome), projectRootPath: .available(original),
+            workingDirectory: .available(original + "/日本語")
+        )
+        #expect(SidebarPresentation.paths(paths).map(\.value) == ["~", "~/workspace", "~/workspace/日本語"])
+        #expect(paths.projectRootPath == .available(original))
+        #expect(paths.accessibilityDescription.contains("Workspace: ~."))
+        #expect(SidebarPresentation.briefPath(root: paths.rootPath, project: paths.projectRootPath) == "~")
+        #expect(HierarchyAvailability<String?>.unavailable.pathDisplayText == "Path unavailable")
+        #expect(HierarchyAvailability<String?>.available(nil).pathDisplayText == "No path shared")
+    }
+
     @Test
     func mapsEverySurfaceKindWithoutFilteringOrProviderData() throws {
         let workspaceID = id("10000000-0000-0000-0000-000000000001")

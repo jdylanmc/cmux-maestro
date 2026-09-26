@@ -8,6 +8,13 @@ The separate interpreted Maestro project is untouched and is not a dependency.
 See the [behavioral parity matrix](docs/behavioral-parity.md) for regression
 evidence, live acceptance scope, intentional differences and remaining limits.
 
+Sidebar path labels use the real user's account home (`~` or `~/…`), including
+workspace/project paths, working directories, hover and pinned details.
+Formatting normalizes separators and dot components lexically; it neither
+probes the filesystem nor resolves symlinks. Outside paths stay absolute,
+missing/denied states stay explicit, and ownership/navigation values are
+unchanged. If account-home resolution fails, the absolute label explains it.
+
 ## One-time setup
 
 1. Use the [local preview install](#install-a-stable-local-preview) below, or
@@ -372,10 +379,10 @@ policy controls, not an operating-system sandbox. Shell access is never a
 default and requires an explicit task-level caller decision; wildcard,
 all-resource and `--allow-all` grants are never injected.
 
-The default view is a restrained workspace outline. Quiet workspace headers
+The default view is a restrained workspace outline. Primary semibold workspace headers
 contain explicit coordinator → worker → nested-worker rows, with guide lines and
 durable disclosure by stable node identity. Each row leads with its safe name,
-then a muted Git branch/worktree line when the external controller verified those
+then one quiet kind/location line when the external controller verified those
 facts from the explicitly assigned working directory. The worktree label is the
 verified repository root basename; the branch label comes from `git symbolic-ref`.
 Detached `HEAD` omits the branch while retaining the verified worktree. Non-Git
@@ -384,14 +391,15 @@ failed root queries publish no Git labels rather than calling a directory a
 worktree. The controller refreshes exact assigned-directory evidence at bounded
 worker heartbeats, turn boundaries, follow-up queueing and explicit status checks.
 Each projection carries a separate Git evidence status and capture time. Stale
-verified locations remain useful as **last verified** labels, with a clock glyph,
-explicit help and accessibility qualification; they are not presented as current
+verified locations remain useful context, with a static unverified-state cue and
+explicit **last verified** hover/details and accessibility qualification; they are not presented as current
 Git state. Unavailable evidence is omitted. Probes are batched by assigned directory and run outside the global
 state mutation lock. The sandboxed sidebar never runs Git and never receives the
 private full assigned path through observer metadata.
 
-Managed rows show the worktree name with a branch-tree icon. Fresh Git evidence
-also carries a changed-file count and **+green / -red** tracked-text line counts
+Managed rows show concise worktree context beside the exact state cue. Hover,
+Details and the existing pinned footer retain Git diagnostics. Fresh Git evidence
+carries a changed-file count and **+green / -red** tracked-text line counts
 against `HEAD` (staged and unstaged changes combined). File totals include
 untracked files and binary changes; line totals exclude them and submodule
 contents. Renames count once. Conflicts, unborn `HEAD`, failed or oversized
@@ -453,11 +461,16 @@ example, switching between Nord and Tokyo Night) is tracked in
 sidebar SDK does not expose the host's resolved theme colors. Native light/dark
 adaptation is not a claim of custom terminal-palette matching.
 
-Workspace titles have a passive hover preview and a separate **Preview** info
-button for mouse/keyboard access. The shared native card prefers the right edge,
-fits the available screen, and scrolls long metadata. Hover waits 350 ms; leaving
-the title/card allows 300 ms to cross between them. Explicit previews stay open
-until dismissed with Escape, Close, or an outside interaction. Workspace previews
+Only the workspace **name text** triggers its passive hover preview; disclosure,
+blank title fill, and actions do not. Leaving that text cancels or dismisses the
+workspace hover immediately. Agent previews retain a 300 ms crossing grace.
+The shared native card prefers the right edge, fits the available screen, and
+scrolls long metadata. Hover waits 350 ms. Keyboard focus on a title previews it
+without pressing it; **Tab** enters its preview controls and continues past the
+originating title after the last control. **Escape** or **Shift-Tab** returns to
+that title; the next **Tab** continues onward instead of re-entering the preview.
+Explicit previews also close on outside
+interaction. Workspace previews
 show only current granted workspace metadata and shared-surface counts; denied
 or ambiguous evidence is labeled unavailable.
 
@@ -465,6 +478,31 @@ or ambiguous evidence is labeled unavailable.
 of sessions, navigation, preferences, and the bottom details. Passive panels
 cannot become key/main windows. Only an explicit Preview action enables keyboard
 interaction; closing that preview restores its original responder when appropriate.
+Right-click a row, use its transient overflow, or press **Shift-F10** on its title
+for the same native grouped menu. Opening it is passive. **Preview details** is
+also passive; **Open details** retains the existing explicit mark-read behavior.
+The overflow occupies a stable 24-point slot with a 2-point gap; revealing it
+never changes the title's width or truncation, and hidden controls are not keyboard stops.
+Managed inspection requests retain the captured node, run, generation, session,
+workspace and surface. A changed subject shows **Details no longer available**
+without inspecting or marking the replacement read.
+Icon-direct right-click still opens the compact icon picker, not the row menu.
+Menu icon requests retain their exact identity; a replacement target shows
+**Icon target changed** rather than applying the old request to a new session.
+Preview Close/Copy controls have an explicit native Tab order, independent of
+system-wide keyboard-navigation preferences.
+The hosted keyboard regression uses the production sidebar's automatically
+constructed row key loop, including any intervening native controls. It requires
+an unlocked graphical login so its
+test-created windows can actually exchange key focus; it does not substitute
+simulated key ownership when WindowServer denies focus.
+AppKit rendering/interaction cases and the validation-host no-window assertion
+share a test-only asynchronous gate across suites, held through fixture cleanup.
+Other tests remain parallel. Motion captures fix and assert the logical viewport
+before comparing exact native pixels; static controls retain a zero-change requirement.
+Activity-only children offer **Open parent chat**, never an independent surface.
+Unsupported pet, tag, backlog, placement and exit actions show disabled reasons;
+menus add no capability or lifecycle authority.
 Previewing never changes the **Active window** footer. It follows only the
 current window's selected workspace and uniquely focused native surface.
 Disconnected, redacted, missing or ambiguous focus clears the previous subject.
@@ -479,7 +517,7 @@ ownership. Existing observation expiry updates the footer without a new timer.
 The flush footer uses native adaptive colors and one small, original
 **placeholder pet** silhouette for verified agents only. It is not a functioning
 pet integration or a provider asset. Metadata is bounded and scrollable; verified
-Git counts reuse the row badge, full paths remain in Details, and the existing
+Git counts use the existing compact badge, full paths remain in Details, and the existing
 session-ID copy control stays near identity. No context percentages, elapsed
 durations, tags, pet preferences or lifecycle controls are added.
 Steady connection success adds no label or row, leaving the footer lower while
@@ -506,16 +544,23 @@ failure shows **Could not copy. Try again.** Changing the GUID clears feedback.
 The small `SidebarCopyableValue` control receives an injected action and knows
 nothing about session lookup, persistence, host navigation, or the pasteboard.
 
-Working agent rows have a pale pastel-green shimmer moving left to right; blocked rows have a
-steady subtle red background. Idle/unknown rows do not pulse or glow. Reduce
-Motion replaces the working shimmer with a steady subtle tint. The glow stays on
-each agent's own row, not its descendants, and never intercepts input.
+Working agents use one 9-point open ring, rotating linearly once per second.
+Reduce Motion keeps the ring static; questions and approval requests use a
+distinct static exclamation mark. Working rows have no shimmer or moving wash.
+Blocked rows retain a subtle static red background. Idle/unknown rows do not
+pulse or glow. State cues belong to their exact row, never its descendants.
 The selected workspace's uniquely focused surface has a glowing left border,
 separate from activity and icon color. Other workspaces' remembered focus does
 not light a border, and ambiguous/unavailable focus evidence does not guess.
 Identity colors do not change this treatment. Icons have no wand decoration;
 choosing an icon or role preset does not imply orchestration ownership.
-State remains explicit in row text and accessibility labels. Coordinator
+Both densities use a single-line name and one quiet metadata line: 11/9-point
+type in 46-point Compact rows, 12/10-point type in 52-point Comfortable rows.
+Routine Unknown, State unavailable and Last verified prose moves to full help,
+accessibility and details, not a third row. Unknown/stale states retain a static
+dashed cue, never an idle or working claim; incomplete child-history context
+shares that row's exact state cue instead of a redundant trailing info icon.
+Protected attention and actual errors remain visible. Coordinator
 activity comes only from a fresh, unique, live Copilot observation on its exact
 workspace/surface; registration or child activity alone cannot start a pulse.
 **Sidebar settings → Terminal icon** offers Ghost and plain `>_` styles.
@@ -529,9 +574,15 @@ Agent totals, idle counts and repeated completeness warnings are not primary UI;
 source diagnostics remain in details. Glyphs have 2 pt insets in their existing
 24 pt slots.
 Standalone state keys retain pause/check/error symbols for blocked, finished and
-failed states. Workspace headers are text with chevrons;
+failed states. Workspace headers have a boxed disclosure;
 their trailing ellipsis menu offers Focus, Expand/Collapse and Details as separate
-actions. The header menu exposes the two view modes directly, plus settings.
+actions. The six header shortcuts are directory-plus, Beats, Taskboard, History,
+Maestro settings and Fermata, in that order. Settings reuses the existing sidebar
+preferences; History opens the same popover at completed-work controls.
+Taskboard temporarily toggles the existing sidebar view (its underline and
+accessible state indicate selection); activate it again to return to the outline.
+Reusable utility hosting is not implemented. Directory, Beats and Fermata explain
+their unavailability without creating workspaces, schedules or power assertions.
 Settings and the separate Details inspector popover have explicit Close controls.
 The keyboard-accessible inspector scrolls independently, preserves full metadata
 and Other activity, and revalidates window, placement, session, run and generation
@@ -563,42 +614,54 @@ the current owner. Passive skill/shell history moves to the selected session's
 **Other activity** disclosure and remains in Taskboard. Agents, structural
 ancestors, active/blocked/failed work and outstanding attention stay in the outline.
 Ordinary running shell invocations are the exception: verified, unambiguous leaf
-commands fold into a quiet activity caption beneath their exact owning session or
+commands fold into the quiet metadata line of their exact owning session or
 agent, such as "Running a command". Concurrent commands are counted; blocked,
 failed, attention-bearing, unresolved and structural shell rows stay visible.
 The complete shell records remain available in details and Taskboard. This is
 presentation-only: raw activity evidence, lifecycle state and counts are unchanged.
-Incomplete-history indicators and collapsed-branch counts sit beside their owning
+Incomplete-history context and collapsed-branch counts stay with their owning
 row, not on standalone diagnostic rows. A chevron needs no "Branch collapsed"
 caption. Registration is neutral, not a claim that an agent is running; stale
 managed evidence and unconfirmed/ended process ownership cannot show a live state.
 
 With or without a managed graph, the same outline groups real CMUX
 surfaces and valid inferred Copilot sessions beneath workspace headers. Working
-directory basenames are explicitly described as directory labels, never Git
+directory labels are home-relative where applicable, never inferred Git
 branches. Uncertain ownership and incomplete evidence remain honest glyphs or
 summaries, and incidental diagnostics stay behind selection or settings.
-Taskboard remains available from the compact view/settings menu and retains each
+Taskboard remains available from its header button and retains each
 primary session's state even when it has no attention or child rows.
 
-A healthy outline has no diagnostic paragraphs. Source availability is a header
+A healthy outline has no diagnostic paragraphs. **Maestro** leads the header;
+the six existing actions form a right-aligned group of 28-point buttons with
+2-point gaps, rather than stretching across the sidebar. Source availability is a header
 indicator with full help and accessibility text; incomplete evidence is marked on
 its owning row. Blockers, attention and omitted active work remain visible.
-Workspaces use quiet headings; directory labels sit beneath terminal names.
-Complete path metadata remains in Details rather than repeating unavailable
+Workspaces use primary 12-point semibold names, boxed disclosure and a section rule.
+Rows retain the chosen identity glyph in a consistent 24-point column; directory
+context uses the observed basename, never a guessed workspace name or Git branch.
+Complete home-relative paths remain in hover, accessibility and Details rather than repeating unavailable
 workspace/project/path lines on every row.
-The header menu remains the entry for density and stored preferences. Saved
+New grouping selectors, pane headings, tags and utility rows from the design
+prototype are deliberately separate scope; no decorative substitutes are shown.
+The header gear remains the entry for density and stored preferences. Saved
 expansion, retention, acknowledgement, navigation and source records are preserved;
 the outline's activity filtering is presentation-only.
 When several source warnings apply, the overview keeps the primary warning
 and omitted active-work count visible; its Details disclosure lists every reason.
 The current host's overlaid footer has 50 points of reserved clearance.
 
-The sidebar **menu** includes **Compact** (the original spacing) and
+Sidebar **settings** includes **Compact** and
 **Comfortable** (more room and larger native detail text) density. Both
 Hierarchy and Taskboard keep the same data, counts, paths and independent
 focus, dismissal and acknowledgement actions. Narrow rows stack actions;
 full paths remain available to accessibility and tooltips.
+
+The outline uses 5-point side gutters (scaled for Comfortable), 8-point shallow
+nesting and 4-point increments beyond level three, bounded to 32 points or 12%
+of available width. Full Git diagnostics remain in hover/details so titles keep priority.
+At eight levels and 280 points, the stable overflow slot leaves at least 124 points
+for the name without hover-time reflow. The 50-point host-footer clearance is unchanged.
 
 Hierarchy expansion persists by workspace/surface UUID and provider/session/
 child identity—not names, paths or the current window. Moves and reloads keep
@@ -676,6 +739,19 @@ the same oracle. PNG references/captures and per-image pixel differences remain
 with the render artifacts; revoked-subject clearing, no-copy and passive-focus
 checks remain in place. Footer OCR and native copy checks are unchanged.
 
+Retained native-menu tests capture the complete production details popover at
+explicit native 2x, including the unavailable state after each identity change.
+The unavailable heading and both explanatory lines must match an independent
+runtime literal reference, pixel for pixel at their expected locations: no OCR,
+translation or pixel tolerance. The reference uses the same native popover shell
+for its material/text rendering, not production text or a saved screenshot.
+Blank-reference checks and light/dark missing, hidden, wrong, partially clipped
+and misplaced warning controls exercise both embedded and native-popover captures.
+All 12 retained-menu cases keep their identity, copy, attention, navigation and
+pinned-subject assertions. Full captures and references use the existing
+`.build/layout-validation/offscreen/*.png` artifact path; geometry and exact
+pixel-difference sidecars remain beside them locally.
+
 The full-sidebar warning matrix retains both densities, both appearances,
 240x400/340x600-point sizes and both waiting/disconnected states (16 captures),
 alongside the connected-footer geometry and zero-painted host-clearance checks.
@@ -687,7 +763,8 @@ must reject; each render reports its filename and recognized lines. Exact model,
 session-ID, copy and inspector-pixel oracles do not use this normalization.
 
 All metadata is synthetic and local preferences are isolated for the render
-test. Its AppKit windows are never shown; this is not a desktop capture, live
+tests. Embedded render windows stay offscreen; native interaction/popover tests
+show only their own synthetic windows. These are view captures, not a desktop capture, live
 CMUX-host visual proof, system VoiceOver verification or a checked-in OS/font
 golden-image comparison. No transcripts, real workspace paths or desktop images are uploaded.
 
@@ -750,7 +827,7 @@ are read for authorization.
 
 ## Completed work history
 
-The sidebar's **ellipsis menu → Sidebar settings** opens history controls shared by
+The sidebar's **History** shortcut opens history controls shared by
 **Hierarchy** and **Taskboard**. The default active outline hides finished/cancelled
 children and confirmed ended processes, including their otherwise redundant
 surface rows. Managed workers leave when a terminal outcome is known; active

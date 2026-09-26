@@ -3,10 +3,32 @@ import SwiftUI
 import Testing
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarClarityTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    @Test func quietMetadataUsesOnlyConciseObservedContext() {
+        #expect(SidebarPresentation.rowMetadata(kind: "Agent", directory: "/synthetic/worktrees/design") == "Agent · design")
+        #expect(SidebarPresentation.rowMetadata(kind: "Terminal", directory: "/synthetic/worktrees/design/") == "Terminal · design")
+        #expect(SidebarPresentation.rowMetadata(kind: "Browser") == "Browser")
+        #expect(SidebarPresentation.rowMetadata(kind: "Surface", directory: nil) == "Surface")
+        #expect(SidebarPresentation.rowMetadata(kind: "Agent", directory: "/synthetic/design",
+                                              activity: "Running a command") == "Agent · Running a command")
+    }
+
+    @Test func consolidatedCueKeepsUnknownAndIncompleteEvidenceExplicit() {
+        let session = SidebarCopilotSession(
+            id: UUID(), workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .unknown, state: .working, model: "synthetic-model", observedAt: now, nodes: [],
+            childrenComplete: false, treeDegraded: true, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        #expect(SidebarPresentation.sessionStatus(session) ==
+                "State unavailable. Child history incomplete; missing work is not assumed finished")
+        #expect(SidebarPresentation.activityTreatment(SidebarPresentation.sessionState(session), reduceMotion: false) == .none)
+        #expect(SidebarPresentation.sessionDetails(session).contains(.init(title: "Child history",
+            value: "Incomplete; missing work is not assumed finished")))
+    }
 
     @Test func focusedBorderUsesOnlyTheSelectedWorkspacesUniqueFocusedSurface() {
         let a = UUID(), b = UUID(), surfaceA = UUID(), surfaceB = UUID()
@@ -122,8 +144,8 @@ struct SidebarClarityTests {
         #expect(inner.redComponent < 0.05 && inner.greenComponent < 0.05 && inner.blueComponent < 0.05)
     }
 
-    @Test func activityGlowsSeparateWorkingBlockedIdleAndReducedMotion() {
-        #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(.working), reduceMotion: false) == .shimmer)
+    @Test func activityIndicatorsSeparateWorkingBlockedIdleAndReducedMotion() {
+        #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(.working), reduceMotion: false) == .rotatingWorking)
         #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(.working), reduceMotion: true) == .steadyWorking)
         for state: CopilotWorkState in [.blocked, .failed] {
             #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(state), reduceMotion: false) == .steadyAlert)
@@ -202,22 +224,23 @@ struct SidebarClarityTests {
                     .padding(.vertical, 4)
                     .background {
                         if !["ghostty", "cli", "browser"].contains(preset.id) {
-                            SidebarActivityBackground(visual: SidebarPresentation.state(.working), suppressAnimation: true)
+                            SidebarActivityBackground(visual: SidebarPresentation.state(.working))
                         }
                     }
                 }
             }
             Divider()
-            Text("Runtime state · working shimmers live; this preview is static").font(.caption.weight(.semibold))
+            Text("Runtime state · working ring rotates live; this preview is static").font(.caption.weight(.semibold))
             HStack(spacing: 20) {
                 ForEach([CopilotWorkState.working, .blocked, .idle, .unknown, .failed], id: \.self) { state in
                     HStack(spacing: 6) {
                         SidebarAgentIcon(visual: SidebarPresentation.state(state), avatar: "md-robot")
+                        SidebarStateBadge(visual: SidebarPresentation.state(state)).environment(\._accessibilityReduceMotion, true)
                         Text(SidebarPresentation.state(state).title).font(.caption)
                     }
                     .frame(width: 140, alignment: .leading)
                     .padding(6)
-                    .background { SidebarActivityBackground(visual: SidebarPresentation.state(state), suppressAnimation: true) }
+                    .background { SidebarActivityBackground(visual: SidebarPresentation.state(state)) }
                 }
             }
             Text("Identity palette · state remains independent").font(.caption.weight(.semibold))
