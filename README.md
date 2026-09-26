@@ -655,6 +655,14 @@ Contrast uses the SDK's writable `_colorSchemeContrast` backing key only in
 tests, paired with native high-contrast AppKit appearances; no system display
 preferences are changed.
 
+The active-window footer renders all eight light/dark, 240/340-point width and
+144/220-point height combinations at explicit native 2x resolution. Exact model
+and copy-feedback text is recognized from those pixels without resampling or
+language correction; copy feedback also retains native accessibility and
+viewport-containment checks. Wrong, missing, hidden and clipped model controls
+must fail the same visibility check. Each text failure reports its image and
+recognized lines.
+
 All metadata is synthetic and local preferences are isolated for the render
 test. Its AppKit windows are never shown; this is not a desktop capture, live
 CMUX-host visual proof, system VoiceOver verification or a pixel-baseline

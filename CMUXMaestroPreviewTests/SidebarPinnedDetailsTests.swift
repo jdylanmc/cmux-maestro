@@ -474,16 +474,20 @@ struct SidebarPinnedDetailsTests {
                     #expect(drawing.height > 0 && feedback.visibleRect.contains(drawing))
                     let viewport = try #require(feedback.enclosingScrollView?.contentView)
                     #expect(viewport.bounds.contains(viewport.convert(drawing, from: feedback)))
-                    let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
-                    hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                    let bitmap = try capture(hosting)
+                    #expect(bitmap.pixelsWide == Int(width) * 2 && bitmap.pixelsHigh == Int(height + 70) * 2)
                     let png = try #require(bitmap.representation(using: .png, properties: [:]))
                     let destination = folder.appendingPathComponent(
                         "pinned46-\(dark ? "dark" : "light")-\(Int(width))x\(Int(height)).png"
                     )
                     try png.write(to: destination)
-                    let text = try SidebarRenderingEvidence.recognizedLines(in: destination, dark: dark)
-                    #expect(text.contains { $0.contains("Verified agent") })
-                    #expect(text.contains { $0.contains("verified-model") })
+                    let text = try SidebarRenderingEvidence.recognizedNativeLines(in: destination)
+                    #expect(text.contains { $0.contains("Verified agent") },
+                            "\(destination.lastPathComponent): \(text)")
+                    #expect(text.contains("verified-model"),
+                            "\(destination.lastPathComponent): \(text)")
+                    #expect(text.contains("Copied"),
+                            "\(destination.lastPathComponent): \(text)")
                     for scroll in views(hosting).compactMap({ $0 as? NSScrollView }) {
                         let document = try #require(scroll.documentView)
                         #expect(document.bounds.width <= scroll.contentView.bounds.width + 0.5)
@@ -492,6 +496,65 @@ struct SidebarPinnedDetailsTests {
             }
         }
         #expect(!copies.isEmpty && inspections == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func footerRenderEvidenceRejectsWrongMissingHiddenAndClippedModels(dark: Bool) async throws {
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for control in ["visible", "wrong", "missing", "hidden", "clipped"] {
+            var content = pinned(nodes: [managed()])
+            if control == "wrong" || control == "missing" {
+                content.lines.removeAll { $0.title == "Model" }
+                if control == "wrong" { content.lines.append(.init(title: "Model", value: "verifled-model")) }
+            }
+            let frame = NSRect(x: 0, y: 0, width: 240, height: 214)
+            let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let hosting = NSHostingView(rootView: VStack {
+                SidebarPinnedFooter(content: content, maximumHeight: 144,
+                                    inspect: { Issue.record("Rendering must not inspect") },
+                                    copySessionID: { _ in Issue.record("Rendering must not copy"); return false })
+                    .frame(height: control == "clipped" ? 60 : nil, alignment: .top)
+                    .clipped()
+                    .opacity(control == "hidden" ? 0 : 1)
+                Spacer(minLength: 50)
+            }
+            .padding(10)
+            .environment(\.colorScheme, dark ? .dark : .light)
+            .background(Color(nsColor: .windowBackgroundColor)))
+            window.contentView = hosting
+            defer { window.contentView = nil; window.close() }
+            try await settle(hosting)
+            #expect(!window.isVisible)
+            let bitmap = try capture(hosting)
+            let destination = folder.appendingPathComponent(
+                "pinned46-control-\(dark ? "dark" : "light")-\(control).png"
+            )
+            try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
+            let text = try SidebarRenderingEvidence.recognizedNativeLines(in: destination)
+            #expect(text.contains("verified-model") == (control == "visible"),
+                    "\(destination.lastPathComponent): \(text)")
+            #expect(!text.contains("Copied"), "\(destination.lastPathComponent): \(text)")
+            if control != "hidden" {
+                #expect(text.contains("Verified agent"), "\(destination.lastPathComponent): \(text)")
+            }
+        }
+    }
+
+    private func capture(_ view: NSView) throws -> NSBitmapImageRep {
+        // Match the layout/copy renderers: unchanged point geometry, actual 2x native glyphs.
+        let bitmap = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(view.bounds.width) * 2, pixelsHigh: Int(view.bounds.height) * 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        bitmap.size = view.bounds.size
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return bitmap
     }
 
     private func views(_ view: NSView) -> [NSView] {
