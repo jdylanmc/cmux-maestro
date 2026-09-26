@@ -1,0 +1,48 @@
+{
+  "checkedAt": "2026-09-26T01:04:39.673Z",
+  "checks": [
+    "Whole workspaces reorder with their collapsed content intact",
+    "Workspace order persists across reload",
+    "Worktree groups move as a unit without changing child membership",
+    "Individual agents reorder within their worktree",
+    "Cross-worktree drop is rejected without changing identity or layout",
+    "Keyboard reordering moves only the focused sibling",
+    "Keyboard reordering preserves focus",
+    "Worktree and child orders both survive reload",
+    "Agent trees reorder with their entire subtree",
+    "Child trees reorder among their own siblings",
+    "Dragging an agent into another family cannot reparent it",
+    "Pane groups carry their surface contents and preserve pane identities",
+    "Browser rows reorder within their pane and update the native tab strip",
+    "Sidebar surface drops cannot cross panes",
+    "Utility tabs participate in the same sibling ordering",
+    "Directory mock rejects ambiguous relative paths visibly",
+    "Folder-plus creates a synthetic workspace and terminal",
+    "Created demo workspace survives reload",
+    "Workspace reorder preserves unrelated siblings with three workspaces",
+    "Utility tab placement supports newly created demo workspaces",
+    "Reset removes only generated demo workspaces",
+    "Compact agent rows omit state words and the info button",
+    "Working spinner remains labelled for assistive technology",
+    "Working state animates while needs-input stays static",
+    "Reduced motion suppresses the spinner animation",
+    "Eight-level agent retains useful text width at 280px",
+    "Inline tags do not truncate the nested name at 280px",
+    "Deep nesting does not overflow the 280px sidebar",
+    "Eight-level agent retains useful text width at 350px",
+    "Inline tags do not truncate the nested name at 350px",
+    "Deep nesting does not overflow the 350px sidebar",
+    "No runtime errors"
+  ],
+  "widths": [
+    {
+      "sidebar": 280,
+      "label": 168
+    },
+    {
+      "sidebar": 350,
+      "label": 238
+    }
+  ],
+  "errors": []
+}

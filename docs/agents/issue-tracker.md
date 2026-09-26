@@ -11,6 +11,11 @@
 
 ## Selected Joe backlog
 
+The latest visual reference and full design-suite audit are
+[locked separately](../design/2026-09-25/README.md). The September 25
+design includes Beats and new follow-up work; auditing or publishing that
+reference does not silently expand the active Joe dispatch selection below.
+
 The approved visual delivery is parent [#57](https://github.com/jdylanmc/cmux-maestro/issues/57)
 and these fourteen children:
 **#39, #43, #44, #45, #46, #48, #49, #50, #51, #52, #55, #58, #59, #60**.

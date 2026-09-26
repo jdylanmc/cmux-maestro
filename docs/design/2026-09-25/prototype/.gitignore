@@ -1,0 +1,4 @@
+node_modules/
+.installer-tmp/
+review-*.png
+verification*.json
