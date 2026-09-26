@@ -185,7 +185,7 @@ final class SidebarHoverPanel: NSPanel {
     private var keyboardControls: [NSButton] {
         func visit(_ view: NSView) -> [NSButton] {
             if let button = view as? NSButton,
-               ["hover-close", "hover-copy-value"].contains(button.accessibilityIdentifier() ?? ""),
+               ["hover-close", "hover-copy-value"].contains(button.accessibilityIdentifier()),
                button.canBecomeKeyView { return [button] }
             return view.subviews.flatMap(visit)
         }
