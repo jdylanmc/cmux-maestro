@@ -27,14 +27,40 @@ struct SidebarCopyableValue: View {
                 .frame(width: 24, height: 24)
             }
             if copied != nil {
-                Text(feedback).foregroundStyle(.secondary)
+                SidebarCopyFeedback(text: feedback)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("hover-copy-feedback")
             }
         }
         .font(.caption)
         .accessibilityElement(children: .contain)
         .onChange(of: value) { copied = nil }
+    }
+}
+
+private struct SidebarCopyFeedback: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSTextField {
+        let label = NSTextField(wrappingLabelWithString: "")
+        label.isSelectable = false
+        label.font = .preferredFont(forTextStyle: .caption1)
+        label.textColor = .secondaryLabelColor
+        label.setAccessibilityElement(true)
+        label.setAccessibilityRole(.staticText)
+        label.setAccessibilityIdentifier("hover-copy-feedback")
+        return label
+    }
+
+    func updateNSView(_ label: NSTextField, context: Context) {
+        label.stringValue = text
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextField, context: Context) -> CGSize? {
+        guard let width = proposal.width, let cell = nsView.cell else { return nil }
+        let size = cell.cellSize(forBounds: NSRect(
+            x: 0, y: 0, width: width, height: .greatestFiniteMagnitude
+        ))
+        return CGSize(width: width, height: size.height)
     }
 }
 

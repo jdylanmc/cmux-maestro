@@ -18,6 +18,68 @@ struct SidebarSessionCopyTests {
             .first { $0.accessibilityIdentifier() == "hover-copy-value" })
     }
 
+    private func feedbackControl(in view: NSView) -> NSTextField? {
+        views(in: view).compactMap { $0 as? NSTextField }
+            .first { $0.accessibilityIdentifier() == "hover-copy-feedback" }
+    }
+
+    private func hasVisibleFeedback(_ text: String, in view: NSView) -> Bool {
+        guard let label = feedbackControl(in: view),
+              label.stringValue == text,
+              label.isAccessibilityElement(), label.accessibilityRole() == .staticText,
+              label.accessibilityValue() == text else { return false }
+        // SwiftUI aligns NSTextField by its content rect, excluding native transparent alignment margins.
+        let drawing = label.alignmentRect(forFrame: label.bounds)
+        guard drawing.width > 0, drawing.height > 0,
+              label.visibleRect.contains(drawing),
+              view.bounds.contains(view.convert(drawing, from: label)) else { return false }
+        var ancestor: NSView? = label
+        while let current = ancestor {
+            guard !current.isHidden, current.alphaValue > 0,
+                  current.layer?.isHidden != true, current.layer?.opacity != 0 else { return false }
+            ancestor = current.superview
+        }
+        if let viewport = label.enclosingScrollView?.contentView {
+            guard viewport.bounds.contains(viewport.convert(drawing, from: label)) else { return false }
+        }
+        return true
+    }
+
+    private func capture(_ view: NSView) throws -> NSBitmapImageRep {
+        let bitmap = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(view.bounds.width) * 2, pixelsHigh: Int(view.bounds.height) * 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        bitmap.size = view.bounds.size
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return bitmap
+    }
+
+    private func feedbackInk(in bitmap: NSBitmapImageRep, label: NSTextField, view: NSView) throws -> Int {
+        let rect = view.convert(label.alignmentRect(forFrame: label.bounds), from: label)
+        let scale = CGFloat(bitmap.pixelsWide) / view.bounds.width
+        let minX = Int(ceil(rect.minX * scale)), maxX = Int(floor(rect.maxX * scale))
+        let top = view.isFlipped ? rect.minY : view.bounds.height - rect.maxY
+        let minY = Int(ceil(top * scale)), maxY = Int(floor((top + rect.height) * scale))
+        try #require(minX >= 0 && minY >= 0 && maxX <= bitmap.pixelsWide && maxY <= bitmap.pixelsHigh)
+        try #require(minX < maxX && minY < maxY)
+        let background = try #require(bitmap.colorAt(x: minX, y: minY)?.usingColorSpace(.deviceRGB))
+        var ink = 0
+        for y in minY..<maxY {
+            for x in minX..<maxX {
+                let color = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                if max(abs(color.redComponent - background.redComponent),
+                       abs(color.greenComponent - background.greenComponent),
+                       abs(color.blueComponent - background.blueComponent)) > 0.1 {
+                    ink += 1
+                }
+            }
+        }
+        return ink
+    }
+
     private func settle(_ view: NSView) async throws {
         view.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(30))
@@ -61,6 +123,7 @@ struct SidebarSessionCopyTests {
         let originalResponder = window.firstResponder
         try await settle(hosting)
         #expect(copies.isEmpty)
+        #expect(feedbackControl(in: hosting) == nil)
         var button = try copyButton(in: hosting)
         #expect(button.accessibilityRole() == .button)
         #expect(button.isAccessibilityElement())
@@ -88,6 +151,7 @@ struct SidebarSessionCopyTests {
             try await settle(hosting)
             button = try copyButton(in: hosting)
             #expect(button.accessibilityValue() as? String == "Copied")
+            #expect(hasVisibleFeedback("Copied", in: hosting))
             #expect(pasteboard.string(forType: .string) == ownID.uuidString)
         }
         #expect(copies == [ownID, ownID])
@@ -100,6 +164,7 @@ struct SidebarSessionCopyTests {
         try await settle(hosting)
         button = try copyButton(in: hosting)
         #expect(button.accessibilityValue() as? String == "Could not copy. Try again.")
+        #expect(hasVisibleFeedback("Could not copy. Try again.", in: hosting))
         succeeds = true
         #expect(button.accessibilityPerformPress())
         try await settle(hosting)
@@ -109,6 +174,7 @@ struct SidebarSessionCopyTests {
         button = try copyButton(in: hosting)
         #expect(button.accessibilityLabel() == "Copy parent session ID")
         #expect(button.accessibilityValue() as? String == "Not copied")
+        #expect(feedbackControl(in: hosting) == nil)
         #expect(copies == [ownID, ownID, ownID, ownID])
         #expect(button.accessibilityPerformPress())
         try await settle(hosting)
@@ -190,6 +256,66 @@ struct SidebarSessionCopyTests {
         #expect(!views(in: hosting).contains { $0.accessibilityIdentifier() == "hover-copy-value" })
     }
 
+    @Test func feedbackInspectionRejectsWrongMissingHiddenClippedAndUnpaintedText() async throws {
+        let hosting = NSHostingView(rootView: SidebarHoverCard(
+            data: .init(id: "negative-controls", category: "Agent preview", title: "Synthetic agent",
+                        lines: [.sessionID(ownID)]),
+            close: {}, copySessionID: { _ in true }
+        ).background(Color(nsColor: .windowBackgroundColor)))
+        hosting.frame = NSRect(x: 0, y: 0, width: 224, height: 260)
+        try await settle(hosting)
+        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        #expect(try copyButton(in: hosting).accessibilityPerformPress())
+        try await settle(hosting)
+        let label = try #require(feedbackControl(in: hosting))
+        #expect(hasVisibleFeedback("Copied", in: hosting))
+        #expect(try feedbackInk(in: capture(hosting), label: label, view: hosting) > 0)
+        label.stringValue = "Wrong feedback"
+        #expect(try copyButton(in: hosting).accessibilityValue() as? String == "Copied")
+        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        label.stringValue = "Copied"
+        label.isHidden = true
+        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        label.isHidden = false
+        let parent = try #require(label.superview)
+        parent.isHidden = true
+        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        parent.isHidden = false
+        label.alphaValue = 0
+        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        label.alphaValue = 1
+        let frame = label.frame
+        label.frame = .zero
+        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        label.frame = frame.offsetBy(dx: 1_000, dy: 0)
+        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        label.frame = frame
+        label.textColor = .clear
+        try await settle(hosting)
+        #expect(hasVisibleFeedback("Copied", in: hosting))
+        #expect(try feedbackInk(in: capture(hosting), label: label, view: hosting) == 0)
+        label.textColor = .secondaryLabelColor
+        try await settle(hosting)
+        #expect(try feedbackInk(in: capture(hosting), label: label, view: hosting) > 0)
+        label.removeFromSuperview()
+        #expect(!hasVisibleFeedback("Copied", in: hosting))
+    }
+
+    @Test func nativeFeedbackWrapsWithoutClippingOrTakingFocus() async throws {
+        let hosting = NSHostingView(rootView: SidebarCopyableValue(
+            value: "Example", label: "Example value", copy: { false }
+        ).background(Color(nsColor: .windowBackgroundColor)))
+        hosting.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+        try await settle(hosting)
+        #expect(try copyButton(in: hosting).accessibilityPerformPress())
+        try await settle(hosting)
+        let label = try #require(feedbackControl(in: hosting))
+        #expect(hasVisibleFeedback("Could not copy. Try again.", in: hosting))
+        #expect(label.bounds.height > NSFont.preferredFont(forTextStyle: .caption1).pointSize * 2)
+        #expect(!label.acceptsFirstResponder)
+        #expect(try feedbackInk(in: capture(hosting), label: label, view: hosting) > 0)
+    }
+
     @Test(arguments: [false, true])
     func narrowCardKeepsCopyAccessibleAndFeedbackVisible(dark: Bool) async throws {
         for width in [224, 300] {
@@ -210,6 +336,7 @@ struct SidebarSessionCopyTests {
             hosting.frame = frame
             try await settle(hosting)
             #expect(copies == 0)
+            #expect(feedbackControl(in: hosting) == nil)
             for success in [true, false] {
                 succeeds = success
                 let button = try copyButton(in: hosting)
@@ -220,21 +347,25 @@ struct SidebarSessionCopyTests {
                 try await settle(hosting)
                 #expect(try copyButton(in: hosting).accessibilityValue() as? String
                     == (success ? "Copied" : "Could not copy. Try again."))
+                let feedback = try #require(feedbackControl(in: hosting))
+                #expect(hasVisibleFeedback(success ? "Copied" : "Could not copy. Try again.", in: hosting),
+                        "Bounds: \(feedback.bounds); visible: \(feedback.visibleRect); content: \(feedback.alignmentRect(forFrame: feedback.bounds))")
+                #expect(!feedback.isEditable && !feedback.isSelectable && !feedback.acceptsFirstResponder)
+                #expect(feedback.font == .preferredFont(forTextStyle: .caption1))
+                #expect(feedback.textColor == .secondaryLabelColor)
                 let metrics = SidebarRenderingEvidence.metrics(for: hosting)
                 #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
                 #expect(!window.isVisible)
-                // Fix capture density before rasterization, rather than enlarging a display-dependent 1x PNG.
-                let captureScale = 2
-                let bitmap = try #require(NSBitmapImageRep(
-                    bitmapDataPlanes: nil,
-                    pixelsWide: Int(hosting.bounds.width) * captureScale,
-                    pixelsHigh: Int(hosting.bounds.height) * captureScale,
-                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
-                    isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
-                ))
-                bitmap.size = hosting.bounds.size
-                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                let bitmap = try capture(hosting)
                 #expect(bitmap.pixelsWide == width * 2 && bitmap.pixelsHigh == 520)
+                let feedbackRect = hosting.convert(
+                    feedback.alignmentRect(forFrame: feedback.bounds), from: feedback
+                )
+                let buttonImageRect = hosting.convert(
+                    try #require(button.cell).imageRect(forBounds: button.bounds), from: button
+                )
+                #expect(!feedbackRect.intersects(buttonImageRect))
+                #expect(try feedbackInk(in: bitmap, label: feedback, view: hosting) > 0)
                 let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
                     .appendingPathComponent(".build/layout-validation/offscreen")
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -245,7 +376,6 @@ struct SidebarSessionCopyTests {
                 let text = try SidebarRenderingEvidence.recognizedLines(in: image, dark: dark, naturalLanguage: true)
                     .joined(separator: " ")
                 #expect(text.localizedCaseInsensitiveContains("Parent session ID"))
-                #expect(text.contains(success ? "Copied" : "Could not copy"))
             }
             #expect(copies == 2)
         }
