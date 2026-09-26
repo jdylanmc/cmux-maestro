@@ -218,6 +218,7 @@ struct SidebarLayoutRenderingTests {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
         let preferences = fixture.preferences()
+        var warningCaptures = 0
         for density in SidebarDensity.allCases {
             preferences.setDensity(density)
             for (width, height) in [(240, 400), (340, 600)] {
@@ -273,12 +274,69 @@ struct SidebarLayoutRenderingTests {
                         let statusText = try SidebarRenderingEvidence.recognizedLines(
                             in: statusImage, dark: appearance == .dark, naturalLanguage: true
                         )
-                        #expect(statusText.contains { $0.contains(waiting ? "Waiting for CMUX" : "CMUX disconnected.") },
+                        let completeWarning = Self.containsCompleteConnectionWarning(statusText, waiting: waiting)
+                        #expect(completeWarning, "\(statusImage.lastPathComponent): \(statusText)")
+                        #expect(!Self.containsCompleteConnectionWarning(statusText, waiting: !waiting),
                                 "\(statusImage.lastPathComponent): \(statusText)")
                         #expect(!statusText.contains { $0.contains("CMUX connected") })
+                        print("P46 status warning \(statusImage.lastPathComponent): complete=\(completeWarning), lines=\(statusText)")
+                        warningCaptures += 1
                     }
                 }
             }
+        }
+        #expect(warningCaptures == 16)
+    }
+
+    @Test func connectionWarningRequiresEveryWordAndPunctuation() {
+        let waitingMessage = "Waiting for CMUX"
+        let disconnectedMessage = "CMUX disconnected. Focus and live status unavailable."
+        for waiting in [true, false] {
+            let message = waiting ? waitingMessage : disconnectedMessage
+            let words = message.split(whereSeparator: \.isWhitespace).map(String.init)
+            #expect(Self.containsCompleteConnectionWarning([message], waiting: waiting))
+            #expect(Self.containsCompleteConnectionWarning(
+                words.map { " \t\($0.uppercased())\n" }, waiting: waiting
+            ))
+            let rejected: [[String]] = [
+                [], ["", " \t\n"],
+                [waiting ? disconnectedMessage : waitingMessage],
+                ["Active window", "Waiting for the current window", "Cannot focus while CMUX is disconnected."],
+                [message.replacingOccurrences(of: "CMUX", with: "CMUXextra")],
+                [message.replacingOccurrences(of: "CMUX", with: "XCMUX")],
+                [message + "."],
+                Array(words.reversed())
+            ]
+            for lines in rejected {
+                #expect(!Self.containsCompleteConnectionWarning(lines, waiting: waiting),
+                        "Must reject incomplete/wrong warning for \(message): \(lines)")
+            }
+            for index in words.indices {
+                var missing = words
+                missing.remove(at: index)
+                #expect(!Self.containsCompleteConnectionWarning(missing, waiting: waiting),
+                        "Must reject missing word \(words[index]): \(missing)")
+                var substituted = words
+                substituted[index] = "substituted"
+                #expect(!Self.containsCompleteConnectionWarning(substituted, waiting: waiting),
+                        "Must reject substituted word \(words[index]): \(substituted)")
+                if words[index].contains(".") {
+                    var unpunctuated = words
+                    unpunctuated[index] = words[index].replacingOccurrences(of: ".", with: "")
+                    #expect(!Self.containsCompleteConnectionWarning(unpunctuated, waiting: waiting),
+                            "Must reject missing punctuation: \(unpunctuated)")
+                }
+            }
+        }
+    }
+
+    private static func containsCompleteConnectionWarning(_ lines: [String], waiting: Bool) -> Bool {
+        let message = waiting ? "Waiting for CMUX" : "CMUX disconnected. Focus and live status unavailable."
+        // Natural-language OCR may wrap lines or vary case; words and punctuation must stay exact.
+        let expected = message.lowercased().split(whereSeparator: \.isWhitespace)
+        let words = lines.flatMap { $0.lowercased().split(whereSeparator: \.isWhitespace) }
+        return words.indices.contains { start in
+            words[start...].prefix(expected.count).elementsEqual(expected)
         }
     }
 

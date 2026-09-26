@@ -676,6 +676,16 @@ the same oracle. PNG references/captures and per-image pixel differences remain
 with the render artifacts; revoked-subject clearing, no-copy and passive-focus
 checks remain in place. Footer OCR and native copy checks are unchanged.
 
+The full-sidebar warning matrix retains both densities, both appearances,
+240x400/340x600-point sizes and both waiting/disconnected states (16 captures),
+alongside the connected-footer geometry and zero-painted host-clearance checks.
+Only these natural-language warnings normalize OCR whitespace and lettercase:
+`Waiting for CMUX` and `CMUX disconnected. Focus and live status unavailable.`
+must retain every word and punctuation mark across line wraps. Empty, partial,
+wrong-state, navigation-only, substituted-word and missing-punctuation controls
+must reject; each render reports its filename and recognized lines. Exact model,
+session-ID, copy and inspector-pixel oracles do not use this normalization.
+
 All metadata is synthetic and local preferences are isolated for the render
 test. Its AppKit windows are never shown; this is not a desktop capture, live
 CMUX-host visual proof, system VoiceOver verification or a checked-in OS/font
