@@ -482,6 +482,9 @@ pet integration or a provider asset. Metadata is bounded and scrollable; verifie
 Git counts reuse the row badge, full paths remain in Details, and the existing
 session-ID copy control stays near identity. No context percentages, elapsed
 durations, tags, pet preferences or lifecycle controls are added.
+Steady connection success adds no label or row, leaving the footer lower while
+preserving the host's 50-point clearance. Waiting, disconnection and navigation
+errors or permission summaries remain visible.
 
 The same preview is available on managed agent, observed session, and observed
 sub-agent titles in Hierarchy and Taskboard. Each card resolves its own exact
@@ -662,11 +665,21 @@ language correction; copy feedback also retains native accessibility and
 viewport-containment checks. Wrong, missing, hidden and clipped model controls
 must fail the same visibility check. Each text failure reports its image and
 recognized lines.
+The separate inspector uses native 2x production captures in both appearances.
+An independently rendered runtime literal `Model` / `verified-model` pair uses
+the same compact font and selectable-text modifiers. Every pixel of both lines,
+their borders and trailing column must match exactly, allowing only a one-pixel
+translation, not resizing, OCR spelling aliases or an averaged ink score.
+Blank references fail explicitly. Wrong, missing, hidden, partially clipped,
+wrong-model-with-the-right-value-elsewhere and suffixed values must reject through
+the same oracle. PNG references/captures and per-image pixel differences remain
+with the render artifacts; revoked-subject clearing, no-copy and passive-focus
+checks remain in place. Footer OCR and native copy checks are unchanged.
 
 All metadata is synthetic and local preferences are isolated for the render
 test. Its AppKit windows are never shown; this is not a desktop capture, live
-CMUX-host visual proof, system VoiceOver verification or a pixel-baseline
-comparison. No transcripts, real workspace paths or desktop images are uploaded.
+CMUX-host visual proof, system VoiceOver verification or a checked-in OS/font
+golden-image comparison. No transcripts, real workspace paths or desktop images are uploaded.
 
 ## Choose your session icon: `/cmux-maestro-native:maestro-icon`
 

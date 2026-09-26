@@ -385,7 +385,8 @@ struct SidebarPinnedDetailsTests {
         }
     }
 
-    @Test func inspectorRendersFullMetadataThenClearsRevokedSubjectWithoutAffectingFooter() async throws {
+    @Test(arguments: [false, true])
+    func inspectorRendersFullMetadataThenClearsRevokedSubjectWithoutAffectingFooter(dark: Bool) async throws {
         var observed = session()
         observed.nodes.append(.init(id: "skill", parentID: nil, depth: 0, kind: .skill, name: "Other work",
                                     state: .idle, model: nil, ancestryUnresolved: false, hasChildren: false))
@@ -399,8 +400,10 @@ struct SidebarPinnedDetailsTests {
         let frame = NSRect(x: 0, y: 0, width: 300, height: 460)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         func view(_ content: SidebarDetailContent?) -> some View {
             SidebarInspector(content: content, close: {})
+                .environment(\.colorScheme, dark ? .dark : .light)
                 .background(Color(nsColor: .windowBackgroundColor))
         }
         let hosting = NSHostingView(rootView: view(detail))
@@ -415,19 +418,80 @@ struct SidebarPinnedDetailsTests {
             if !available {
                 #expect(!views(hosting).contains { $0.accessibilityIdentifier() == "hover-copy-value" })
             }
-            let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
-            hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
-            let destination = folder.appendingPathComponent("pinned46-inspector-\(available ? "details" : "unavailable").png")
+            let bitmap = try capture(hosting)
+            #expect(bitmap.pixelsWide == 600 && bitmap.pixelsHigh == 920)
+            let destination = folder.appendingPathComponent(
+                "pinned46-inspector-\(dark ? "dark" : "light")-\(available ? "details" : "unavailable").png"
+            )
             try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
-            let text = try SidebarRenderingEvidence.recognizedLines(in: destination)
+            let text = try SidebarRenderingEvidence.recognizedNativeLines(in: destination)
+            let model = try await inspectorModelPixels(in: bitmap, dark: dark, destination: destination)
+            #expect(model == available, "\(destination.lastPathComponent): exact Model/value pixels")
             if available {
-                #expect(text.contains { $0.contains("verified-model") })
+                #expect(text.contains("Model"), "\(destination.lastPathComponent): \(text)")
             } else {
-                #expect(text.contains { $0.contains("Details no longer available") })
-                #expect(!text.contains { $0.contains("verified-model") })
+                #expect(text.contains("Details no longer available"), "\(destination.lastPathComponent): \(text)")
+                #expect(!text.contains { $0.contains("verified-model") }, "\(destination.lastPathComponent): \(text)")
+                #expect(!text.contains { $0.contains("Copilot") || $0 == "working" || $0 == "Model" },
+                        "\(destination.lastPathComponent): \(text)")
             }
         }
         #expect(self.pinned(sessions: [observed]) == pinned)
+    }
+
+    @Test(arguments: [false, true])
+    func inspectorRenderEvidenceRejectsWrongMissingHiddenAndClippedModels(dark: Bool) async throws {
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let subject = try #require(pinned().inspection)
+        for control in ["visible", "wrong", "missing", "hidden", "clipped", "elsewhere", "suffix"] {
+            var content = try #require(inspector(subject))
+            if control == "wrong" || control == "elsewhere" || control == "suffix" {
+                content.lines = content.lines.map {
+                    $0.title == "Model" ? .init(title: "Model", value: control == "suffix"
+                                              ? "verified-model-plus-suffix" : "verifled-model") : $0
+                }
+                if control == "elsewhere" {
+                    content.lines = content.lines.map {
+                        $0.title == "Process" ? .init(title: "Elsewhere", value: "verified-model") : $0
+                    }
+                }
+            } else if control == "missing" {
+                content.lines.removeAll { $0.title == "Model" }
+            }
+            let frame = NSRect(x: 0, y: 0, width: 300, height: 460)
+            let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let hosting = NSHostingView(rootView: SidebarInspector(
+                content: content, close: { Issue.record("Rendering must not close the inspector") }
+            )
+            .frame(width: frame.width, height: frame.height)
+            .frame(height: control == "clipped" ? 102 : frame.height, alignment: .top)
+            .clipped()
+            .opacity(control == "hidden" ? 0 : 1)
+            .frame(width: frame.width, height: frame.height, alignment: .top)
+            .environment(\.colorScheme, dark ? .dark : .light)
+            .background(Color(nsColor: .windowBackgroundColor)))
+            window.contentView = hosting
+            defer { window.contentView = nil; window.close() }
+            let responder = window.firstResponder
+            try await settle(hosting)
+            #expect(!window.isVisible && window.firstResponder === responder)
+            let bitmap = try capture(hosting)
+            #expect(bitmap.pixelsWide == 600 && bitmap.pixelsHigh == 920)
+            let destination = folder.appendingPathComponent(
+                "pinned46-inspector-control-\(dark ? "dark" : "light")-\(control).png"
+            )
+            try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
+            let text = try SidebarRenderingEvidence.recognizedNativeLines(in: destination)
+            let model = try await inspectorModelPixels(in: bitmap, dark: dark, destination: destination)
+            #expect(model == (control == "visible"), "\(destination.lastPathComponent): exact Model/value pixels")
+            if control != "hidden" {
+                #expect(text.contains("working"), "\(destination.lastPathComponent): \(text)")
+            }
+        }
     }
 
     @Test func footerRendersNativeLightDarkNarrowShortAndCopiesWithoutInspection() async throws {
@@ -542,6 +606,95 @@ struct SidebarPinnedDetailsTests {
                 #expect(text.contains("Verified agent"), "\(destination.lastPathComponent): \(text)")
             }
         }
+    }
+
+    private func inspectorModelPixels(
+        in actual: NSBitmapImageRep, dark: Bool, destination: URL
+    ) async throws -> Bool {
+        let frame = NSRect(x: 0, y: 0, width: 300, height: 460)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        // Independent literals and compact typography; no production projection or screenshot supplies the reference.
+        let reference = NSHostingView(rootView: VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("State").foregroundStyle(.secondary)
+                Text("working").textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Model").foregroundStyle(.secondary)
+                Text("verified-model").textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .font(.system(.caption).weight(.regular))
+        .frame(width: 251, alignment: .leading)
+        .padding(.leading, 12 + 8).padding(.top, 12 + 24 + 8 + 5)
+        .frame(width: 300, height: 460, alignment: .topLeading)
+        .environment(\.colorScheme, dark ? .dark : .light)
+        .background(Color(nsColor: .windowBackgroundColor)))
+        window.contentView = reference
+        defer { window.contentView = nil; window.close() }
+        let responder = window.firstResponder
+        try await settle(reference)
+        #expect(!window.isVisible && window.firstResponder === responder)
+        let expected = try capture(reference)
+        let referenceURL = destination.deletingPathExtension().appendingPathExtension("reference.png")
+        try #require(expected.representation(using: .png, properties: [:])).write(to: referenceURL)
+        let field = try #require(views(reference).compactMap { $0 as? NSTextField }
+            .first { $0.stringValue == "verified-model" })
+        let value = reference.convert(field.alignmentRect(forFrame: field.bounds), from: field)
+        // Both full lines plus a one-point border and the entire trailing column: suffix ink must also fail.
+        let left = Int((value.minX - 1) * 2), right = 542
+        let top = Int((value.minY - value.height - 2) * 2)
+        let middle = Int(value.minY * 2)
+        let bottom = Int((value.maxY + 1) * 2)
+        try #require(actual.pixelsWide == 600 && actual.pixelsHigh == 920)
+        try #require(expected.pixelsWide == actual.pixelsWide && expected.pixelsHigh == actual.pixelsHigh)
+        try #require(left > 0 && top > 0 && right < actual.pixelsWide && bottom < actual.pixelsHigh)
+        let background = try #require(expected.colorAt(x: right - 1, y: middle)?.usingColorSpace(.deviceRGB))
+        var best = Double.infinity
+        var differingPixels = Int.max
+        var alignment = [0, 0]
+        var referenceInk = [0, 0]
+        for dy in -1...1 {
+            for dx in -1...1 {
+                var error = 0.0, differences = 0
+                var ink = [0, 0]
+                for y in top..<bottom {
+                    for x in left..<right {
+                        let a = try #require(actual.colorAt(x: x + dx, y: y + dy)?.usingColorSpace(.deviceRGB))
+                        let e = try #require(expected.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                        let delta = Double(max(abs(a.redComponent - e.redComponent),
+                                               abs(a.greenComponent - e.greenComponent),
+                                               abs(a.blueComponent - e.blueComponent),
+                                               abs(a.alphaComponent - e.alphaComponent)))
+                        error = max(error, delta)
+                        if delta > 0 { differences += 1 }
+                        if max(abs(background.redComponent - e.redComponent),
+                               abs(background.greenComponent - e.greenComponent),
+                               abs(background.blueComponent - e.blueComponent)) > 0.1 {
+                            ink[y < middle ? 0 : 1] += 1
+                        }
+                    }
+                }
+                try #require(ink[0] > 20 && ink[1] > 100, "Blank or incomplete literal reference")
+                if error < best || (error == best && differences < differingPixels) {
+                    best = error
+                    differingPixels = differences
+                    alignment = [dx, dy]
+                    referenceInk = ink
+                }
+            }
+        }
+        let evidence: [String: Any] = [
+            "maximumChannelDifference": best, "differingPixels": differingPixels,
+            "alignmentPixels": alignment, "referenceInkPixels": referenceInk,
+            "regionPixels": [left, top, right - left, bottom - top], "tolerance": 0
+        ]
+        try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys])
+            .write(to: destination.deletingPathExtension().appendingPathExtension("pixels.json"))
+        print("P46 exact pixels \(destination.lastPathComponent): \(evidence)")
+        return best == 0
     }
 
     private func capture(_ view: NSView) throws -> NSBitmapImageRep {

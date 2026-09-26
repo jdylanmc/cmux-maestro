@@ -230,11 +230,19 @@ struct SidebarLayoutRenderingTests {
                     let metrics = try await render(
                         model: model, preferences: preferences, width: width, height: height,
                         appearance: appearance, managed: true, expectedSessions: 6, destination: destination
-                    )
+                    ) { view in
+                        let footer = try #require(scrollViews(in: view).last)
+                        let bottom = view.convert(footer.bounds, from: footer).maxY
+                        let clearance = CGFloat(height) - bottom
+                        #expect(abs(clearance - (50 + density.spacing(10))) <= 0.5,
+                                "Connected footer must end at host clearance plus existing padding, not an empty status row")
+                        print("P46 connected geometry \(destination.lastPathComponent): footerBottom=\(bottom), clearance=\(clearance)")
+                    }
                     #expect(metrics.viewportHeight >= 80)
                     let text = try SidebarRenderingEvidence.recognizedLines(in: destination, dark: appearance == .dark)
                     #expect(text.contains { $0.contains("Active window") })
                     #expect(text.contains { $0.contains("coordinator-model") })
+                    #expect(!text.contains { $0.contains("CMUX connected") })
                     let image = try #require(NSBitmapImageRep(data: Data(contentsOf: destination)))
                     var painted = 0
                     for y in (image.pixelsHigh - 100)..<image.pixelsHigh {
@@ -247,6 +255,27 @@ struct SidebarLayoutRenderingTests {
                             }
                         }
                         #expect(painted == 0)
+                    }
+                    for waiting in [true, false] {
+                        if waiting { model.showWaiting() } else { model.showDegraded(message: "Synthetic disconnect") }
+                        let statusImage = folder.appendingPathComponent(
+                            "pinned46-sidebar-\(density.rawValue)-\(appearance.name)-\(width)x\(height)-\(waiting ? "waiting" : "disconnected").png"
+                        )
+                        try await render(
+                            model: model, preferences: preferences, width: width, height: height,
+                            appearance: appearance, expectedSessions: 0, destination: statusImage
+                        ) { view in
+                            let footer = try #require(scrollViews(in: view).last)
+                            let clearance = CGFloat(height) - view.convert(footer.bounds, from: footer).maxY
+                            #expect(clearance > 50 + density.spacing(10) + density.spacing(6))
+                            print("P46 status geometry \(statusImage.lastPathComponent): clearance=\(clearance)")
+                        }
+                        let statusText = try SidebarRenderingEvidence.recognizedLines(
+                            in: statusImage, dark: appearance == .dark, naturalLanguage: true
+                        )
+                        #expect(statusText.contains { $0.contains(waiting ? "Waiting for CMUX" : "CMUX disconnected.") },
+                                "\(statusImage.lastPathComponent): \(statusText)")
+                        #expect(!statusText.contains { $0.contains("CMUX connected") })
                     }
                 }
             }
@@ -530,7 +559,7 @@ struct SidebarLayoutRenderingTests {
         model: SidebarConnectionModel, preferences: SidebarPreferences, width: Int,
         height: Int = 941, appearance: RenderAppearance = .light, managed: Bool = false,
         expectedSessions: Int = 1,
-        destination: URL
+        destination: URL, inspect: ((NSView) throws -> Void)? = nil
     ) async throws -> SidebarRenderingEvidence.Metrics {
         // Yield between renders so unrelated asynchronous navigation tests can service their deadlines.
         try await Task.sleep(for: .milliseconds(10))
@@ -578,7 +607,12 @@ struct SidebarLayoutRenderingTests {
         #expect(metrics.documentHeight > 0)
         #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
         try JSONEncoder().encode(metrics).write(to: destination.deletingPathExtension().appendingPathExtension("json"))
+        try inspect?(view)
         return metrics
+    }
+
+    private func scrollViews(in view: NSView) -> [NSScrollView] {
+        (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
     }
 
     private enum RenderAppearance {

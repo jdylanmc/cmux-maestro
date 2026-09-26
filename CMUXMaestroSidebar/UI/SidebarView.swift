@@ -788,8 +788,7 @@ struct SidebarView: View {
             Label("Waiting for CMUX", systemImage: "clock")
                 .font(.caption2).foregroundStyle(.secondary)
         case .connected:
-            Text("CMUX connected")
-                .font(.caption2).foregroundStyle(.secondary)
+            EmptyView()
         case .degraded:
             Label("CMUX disconnected. Focus and live status unavailable.", systemImage: "exclamationmark.triangle")
                 .font(.caption2).foregroundStyle(SidebarTone.attention.color)
