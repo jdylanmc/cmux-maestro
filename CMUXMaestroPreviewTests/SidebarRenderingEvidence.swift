@@ -62,11 +62,23 @@ enum SidebarRenderingEvidence {
             context.fill(CGRect(x: 0, y: 0, width: source.width * scale, height: source.height * scale))
         }
         guard let legible = context.makeImage() else { throw ImageInspectionError.scaleFailed }
+        return try recognize(legible, naturalLanguage: naturalLanguage)
+    }
+
+    static func recognizedNativeLines(in image: URL) throws -> [String] {
+        guard let source = NSBitmapImageRep(data: try Data(contentsOf: image))?.cgImage else {
+            throw ImageInspectionError.decodeFailed
+        }
+        // Already rasterized at an explicit native scale; do not resample the glyphs for OCR.
+        return try recognize(source, naturalLanguage: false)
+    }
+
+    private static func recognize(_ image: CGImage, naturalLanguage: Bool) throws -> [String] {
         let request = VNRecognizeTextRequest()
         request.recognitionLanguages = ["en-US"]
         request.usesLanguageCorrection = naturalLanguage
         request.recognitionLevel = .accurate
-        try VNImageRequestHandler(cgImage: legible).perform([request])
+        try VNImageRequestHandler(cgImage: image).perform([request])
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
     }
 

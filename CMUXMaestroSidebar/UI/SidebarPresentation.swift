@@ -1,5 +1,37 @@
 import Foundation
 
+enum UnmanagedSelection: Equatable {
+    case workspace(UUID)
+    case surface(workspaceID: UUID, surfaceID: UUID)
+    case session(UUID)
+    case child(sessionID: UUID, childID: String)
+}
+
+struct SidebarInspection: Equatable {
+    enum Target: Equatable {
+        case managed(SidebarOrchestrationNode)
+        case unmanaged(UnmanagedSelection)
+    }
+
+    let windowID: UUID
+    let workspaceID: UUID
+    let surfaceID: UUID?
+    let surfaceKind: HierarchySurfaceKind?
+    let sessionID: UUID?
+    let target: Target
+}
+
+struct SidebarDetailContent: Equatable {
+    var title: String
+    var visual: SidebarVisual? = nil
+    var lines: [SidebarDetailLine] = []
+    var notice: String? = nil
+    var isAgent = false
+    var gitChanges: SidebarGitChanges? = nil
+    var inspection: SidebarInspection? = nil
+    var otherActivity: [SidebarCopilotNode] = []
+}
+
 struct SidebarDetailLine: Equatable, Identifiable {
     let title: String
     let value: String
@@ -304,6 +336,200 @@ enum SidebarPresentation {
         let focused = surfaces.filter(\.isFocused)
         guard focused.count == 1, topology.workspaceBySurface[focused[0].id] == selected[0].id else { return nil }
         return .surface(workspaceID: selected[0].id, surfaceID: focused[0].id)
+    }
+
+    static func pinnedDetails(
+        hierarchy: HierarchySnapshot, connected: Bool, tree: SidebarCopilotTree,
+        managed: SidebarOrchestrationSnapshot, availability: SidebarOrchestrationAvailability, now: Date
+    ) -> SidebarDetailContent {
+        guard connected else { return .init(title: "Waiting for the current window") }
+        guard case .surface(let workspaceID, let surfaceID) = focusedSurface(in: hierarchy),
+              let native = inspection(
+                for: .unmanaged(.surface(workspaceID: workspaceID, surfaceID: surfaceID)),
+                hierarchy: hierarchy, connected: connected, tree: tree, managed: managed, availability: availability, now: now
+              ),
+              let surface = hierarchy.workspaces.first(where: { $0.id == workspaceID }).flatMap({ workspace in
+                  if case .available(let surfaces) = workspace.surfaces { return surfaces.first { $0.id == surfaceID } }
+                  return nil
+              }) else {
+            return .init(title: "No uniquely focused surface", notice: "Current window identity or focus is unavailable.")
+        }
+        let paths = paths(hierarchy.pathContext(workspaceID: workspaceID, surfaceID: surfaceID))
+        var result = SidebarDetailContent(
+            title: surface.title.isEmpty ? surface.kind.title : surface.title,
+            visual: .init(title: surface.kind.title, symbol: surface.kind.symbolName, tone: .neutral),
+            lines: paths, inspection: native
+        )
+        // Browser and other native surfaces cannot inherit an old terminal's agent.
+        guard [.terminal, .agentSession].contains(surface.kind) else { return result }
+        let sessions = tree.sessions.filter {
+            $0.workspaceID == workspaceID && $0.surfaceID == surfaceID && $0.liveness != .dead
+        }
+        guard sessions.count == 1, let session = sessions.first,
+              tree.sessions.filter({ $0.id == session.id }).count == 1,
+              session.liveness == .alive, [.ready, .partial].contains(tree.availability),
+              tree.generatedAt.map({ SidebarCopilotTree.isFresh($0, now: now) }) == true,
+              SidebarCopilotTree.isFresh(session.observedAt, now: now) else {
+            if !sessions.isEmpty || surface.kind == .agentSession {
+                result.notice = "Agent identity is stale, unavailable or unconfirmed."
+            }
+            return result
+        }
+        result.isAgent = true
+        result.visual = sessionState(session)
+        result.lines = sessionDetails(session).filter { ["Model", "Session ID"].contains($0.title) } + paths
+        result.inspection = inspection(
+            for: .unmanaged(.session(session.id)), hierarchy: hierarchy, connected: connected,
+            tree: tree, managed: managed, availability: availability, now: now
+        )
+        let nodes = managed.nodes.filter { $0.workspaceId == workspaceID && $0.surfaceId == surfaceID }
+        if nodes.count == 1, let node = nodes.first,
+           managed.nodes.filter({ $0.id == node.id }).count == 1,
+           [.ready, .partial].contains(availability),
+           (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(managed.generatedAt)),
+           (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(node.updatedAt)),
+           managedSession(for: node, in: tree, now: now)?.id == session.id {
+            result.title = node.label
+            result.visual = managedState(node, availability: availability, now: now, tree: tree)
+            let fields = Set(["Model", "Branch", "Worktree", "Git evidence", "Git changes", "Working directory", "Session ID"])
+            result.lines = managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
+                .filter { fields.contains($0.title) }
+            result.gitChanges = node.currentGitChanges(at: now)
+            if !result.lines.contains(where: { $0.title == "Session ID" }) {
+                result.lines.append(.sessionID(session.id))
+            }
+            result.inspection = inspection(
+                for: .managed(node), hierarchy: hierarchy, connected: connected,
+                tree: tree, managed: managed, availability: availability, now: now
+            )
+        } else if !nodes.isEmpty {
+            result.notice = "Managed metadata is not current or uniquely bound. Showing the observed session."
+        }
+        return result
+    }
+
+    static func inspection(
+        for target: SidebarInspection.Target, hierarchy: HierarchySnapshot, connected: Bool,
+        tree: SidebarCopilotTree, managed: SidebarOrchestrationSnapshot,
+        availability: SidebarOrchestrationAvailability, now: Date = Date()
+    ) -> SidebarInspection? {
+        let topology = SidebarTopology(hierarchy)
+        guard connected, hierarchy.receivedSnapshot, hierarchy.workspaceListAvailable,
+              hierarchy.workspaceMetadataAvailable, let windowID = topology.windowID else { return nil }
+        let workspaceID: UUID
+        let surfaceID: UUID?
+        var sessionID: UUID?
+        switch target {
+        case .managed(let captured):
+            let matches = managed.nodes.filter { $0.id == captured.id }
+            guard [.ready, .partial, .stale].contains(availability),
+                  matches.count == 1, let node = matches.first,
+                  node.runId == captured.runId, node.generation == captured.generation,
+                  node.copilotSessionId == captured.copilotSessionId,
+                  node.workspaceId == captured.workspaceId, node.surfaceId == captured.surfaceId else { return nil }
+            workspaceID = node.workspaceId
+            surfaceID = node.surfaceId
+            sessionID = managedSession(for: node, in: tree, now: now)?.id ?? node.copilotSessionId
+            let current = tree.sessions.filter {
+                $0.workspaceID == workspaceID && $0.surfaceID == surfaceID
+                    && $0.liveness == .alive && SidebarCopilotTree.isFresh($0.observedAt, now: now)
+            }
+            guard current.isEmpty || (current.count == 1 && current[0].id == sessionID
+                && tree.sessions.filter({ $0.id == current[0].id }).count == 1) else { return nil }
+        case .unmanaged(let selection):
+            switch selection {
+            case .workspace(let id):
+                workspaceID = id
+                surfaceID = nil
+            case .surface(let workspace, let surface):
+                workspaceID = workspace
+                surfaceID = surface
+            case .session(let id), .child(let id, _):
+                let matches = tree.sessions.filter { $0.id == id }
+                guard [.ready, .partial].contains(tree.availability),
+                      matches.count == 1, let session = matches.first,
+                      [.alive, .dead].contains(session.liveness) else { return nil }
+                if case .child(_, let childID) = selection {
+                    guard session.nodes.filter({ $0.id == childID }).count == 1 else { return nil }
+                }
+                workspaceID = session.workspaceID
+                surfaceID = session.surfaceID
+                sessionID = session.id
+            }
+        }
+        guard topology.workspaceIDs.contains(workspaceID) else { return nil }
+        var kind: HierarchySurfaceKind?
+        if let surfaceID {
+            guard topology.canReadSessions, topology.workspaceBySurface[surfaceID] == workspaceID,
+                  let workspace = hierarchy.workspaces.first(where: { $0.id == workspaceID }),
+                  case .available(let surfaces) = workspace.surfaces,
+                  let surface = surfaces.first(where: { $0.id == surfaceID }) else { return nil }
+            kind = surface.kind
+            switch target {
+            case .managed, .unmanaged(.session), .unmanaged(.child):
+                guard [.terminal, .agentSession].contains(surface.kind) else { return nil }
+            default: break
+            }
+        }
+        return .init(windowID: windowID, workspaceID: workspaceID, surfaceID: surfaceID,
+                     surfaceKind: kind, sessionID: sessionID, target: target)
+    }
+
+    static func inspectorDetails(
+        for subject: SidebarInspection, hierarchy: HierarchySnapshot, connected: Bool,
+        tree: SidebarCopilotTree, managed: SidebarOrchestrationSnapshot,
+        availability: SidebarOrchestrationAvailability, now: Date
+    ) -> SidebarDetailContent? {
+        guard inspection(for: subject.target, hierarchy: hierarchy, connected: connected, tree: tree,
+                         managed: managed, availability: availability, now: now) == subject else { return nil }
+        switch subject.target {
+        case .managed(let captured):
+            guard let node = managed.nodes.first(where: { $0.id == captured.id }) else { return nil }
+            let current = [.ready, .partial].contains(availability)
+                && (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(managed.generatedAt))
+                && (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(node.updatedAt))
+            return .init(
+                title: node.label, visual: managedState(node, availability: availability, now: now, tree: tree),
+                lines: managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now),
+                notice: current ? nil : "Managed observation is stale. Last-known metadata is not live state.",
+                isAgent: true
+            )
+        case .unmanaged(let selection):
+            switch selection {
+            case .workspace(let id):
+                guard let workspace = hierarchy.workspaces.first(where: { $0.id == id }) else { return nil }
+                let title: String
+                if case .available(let name) = workspace.title, !name.isEmpty { title = name } else { title = "Workspace" }
+                return .init(title: title, lines: [
+                    .init(title: "Workspace ID", value: id.uuidString),
+                    .init(title: "Workspace path", value: workspace.rootPath.pathDisplayText),
+                    .init(title: "Project path", value: workspace.projectRootPath.pathDisplayText)
+                ])
+            case .surface(let workspaceID, let surfaceID):
+                guard let workspace = hierarchy.workspaces.first(where: { $0.id == workspaceID }),
+                      case .available(let surfaces) = workspace.surfaces,
+                      let surface = surfaces.first(where: { $0.id == surfaceID }) else { return nil }
+                return .init(title: surface.title.isEmpty ? "Surface" : surface.title, lines: [
+                    .init(title: "Type", value: surface.kind.title),
+                    .init(title: "Surface ID", value: surface.id.uuidString),
+                    .init(title: "Working directory", value: surface.workingDirectory.pathDisplayText)
+                ])
+            case .session(let id), .child(let id, _):
+                guard let session = tree.sessions.first(where: { $0.id == id }) else { return nil }
+                let current = tree.generatedAt.map { SidebarCopilotTree.isFresh($0, now: now) } == true
+                    && SidebarCopilotTree.isFresh(session.observedAt, now: now)
+                let notice = current ? nil : "Session observation is stale. Last-known metadata is not live state."
+                let context = paths(hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID))
+                if case .child(_, let childID) = selection {
+                    guard let child = session.nodes.first(where: { $0.id == childID }) else { return nil }
+                    return .init(title: child.name, lines: nodeDetails(child, session: session) + [
+                        .init(title: "Placement", value: "Observed child; native placement belongs to its parent session")
+                    ] + context, notice: notice, isAgent: child.kind == .subagent)
+                }
+                return .init(title: "Copilot · \(session.shortID)", lines: sessionDetails(session) + context,
+                             notice: notice, isAgent: true, otherActivity: session.secondaryActivity)
+            }
+        }
     }
 
     static func state(_ state: CopilotWorkState) -> SidebarVisual {

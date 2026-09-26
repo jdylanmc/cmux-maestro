@@ -465,8 +465,26 @@ or ambiguous evidence is labeled unavailable.
 of sessions, navigation, preferences, and the bottom details. Passive panels
 cannot become key/main windows. Only an explicit Preview action enables keyboard
 interaction; closing that preview restores its original responder when appropriate.
-The current bottom details remain unchanged by previewing. This does not implement
-the separate active-window pinned-details overhaul, pets, tags, or lifecycle controls.
+Previewing never changes the **Active window** footer. It follows only the
+current window's selected workspace and uniquely focused native surface.
+Disconnected, redacted, missing or ambiguous focus clears the previous subject.
+Ordinary terminals and browsers show native context without agent fields or a pet.
+An agent on a terminal requires one fresh, live, exact observed session; managed
+labels and Git context additionally require current, uniquely bound managed
+evidence. Positively ended observations do not compete with a replacement live
+session; unknown or ambiguous owners still prevent a unique current identity.
+Reused surfaces, stale membership and matching titles never establish
+ownership. Existing observation expiry updates the footer without a new timer.
+
+The flush footer uses native adaptive colors and one small, original
+**placeholder pet** silhouette for verified agents only. It is not a functioning
+pet integration or a provider asset. Metadata is bounded and scrollable; verified
+Git counts reuse the row badge, full paths remain in Details, and the existing
+session-ID copy control stays near identity. No context percentages, elapsed
+durations, tags, pet preferences or lifecycle controls are added.
+Steady connection success adds no label or row, leaving the footer lower while
+preserving the host's 50-point clearance. Waiting, disconnection and navigation
+errors or permission summaries remain visible.
 
 The same preview is available on managed agent, observed session, and observed
 sub-agent titles in Hierarchy and Taskboard. Each card resolves its own exact
@@ -474,7 +492,7 @@ subject and only current or explicitly last-known metadata. Missing/expired
 observations are labeled, not replaced with invented model, context, timing or
 Git metrics. Windowless children retain parent-session placement context.
 Opening a card never invokes the existing inspection/mark-seen action; the icon
-picker, title-to-focus action, bottom details, and history controls are unchanged.
+picker, title-to-focus action, and history controls retain their explicit semantics.
 
 Agent previews put a **Copy session ID** button beside the exact session GUID.
 Observed children label their inherited identity **Parent session ID** and copy
@@ -514,11 +532,17 @@ Standalone state keys retain pause/check/error symbols for blocked, finished and
 failed states. Workspace headers are text with chevrons;
 their trailing ellipsis menu offers Focus, Expand/Collapse and Details as separate
 actions. The header menu exposes the two view modes directly, plus settings.
-Settings and selected details have explicit Close controls; details are bounded
-and scroll independently rather than consuming the outline.
+Settings and the separate Details inspector popover have explicit Close controls.
+The keyboard-accessible inspector scrolls independently, preserves full metadata
+and Other activity, and revalidates window, placement, session, run and generation
+identity against current permissions. Workspace-only details require current
+workspace access, not surface access; paths remain independently permission-gated.
+Surface and session details still require surface metadata. Replaced or revoked subjects show an
+unavailable message instead of silently keeping the old data. Escape or Close
+dismisses only the inspector; the footer has no Close or manual-pin override.
 Rows use concise state labels rather than diagnostic walls; blocked/failed state, incomplete ancestry,
 omitted active work and attention remain concise and visible. Selecting the state
-glyph opens one detail surface below the outline. Managed workers resolve verified
+glyph's Details action opens the inspector, not a replacement footer. Managed workers resolve verified
 model metadata only when both their controller-issued Copilot session UUID and
 surface match one fresh, live observation. Coordinators use one fresh, live,
 unambiguous observation on their exact surface. Same names, directories, stale
@@ -528,7 +552,9 @@ usage/window size is omitted because the current producer has no documented nume
 cumulative API tokens and context tiers are not presented as context occupancy.
 Full authorized paths and stable IDs remain in deliberate inspection. Successful
 tab focus and opening details mark that scope's nonblocking notices as read.
-Expansion never marks anything read; no interaction approves or answers a request.
+Passive footer refresh, hover, copying and expansion never mark anything read,
+focus a tab, send input, or change lifecycle; no interaction approves or answers
+a request. Existing explicit host-focus observation semantics remain unchanged.
 
 For unmanaged terminals with exactly one observed session, its state and children
 are presented on the named terminal row instead of adding a duplicate provider/ID
@@ -632,10 +658,38 @@ Contrast uses the SDK's writable `_colorSchemeContrast` backing key only in
 tests, paired with native high-contrast AppKit appearances; no system display
 preferences are changed.
 
+The active-window footer renders all eight light/dark, 240/340-point width and
+144/220-point height combinations at explicit native 2x resolution. Exact model
+and copy-feedback text is recognized from those pixels without resampling or
+language correction; copy feedback also retains native accessibility and
+viewport-containment checks. Wrong, missing, hidden and clipped model controls
+must fail the same visibility check. Each text failure reports its image and
+recognized lines.
+The separate inspector uses native 2x production captures in both appearances.
+An independently rendered runtime literal `Model` / `verified-model` pair uses
+the same compact font and selectable-text modifiers. Every pixel of both lines,
+their borders and trailing column must match exactly, allowing only a one-pixel
+translation, not resizing, OCR spelling aliases or an averaged ink score.
+Blank references fail explicitly. Wrong, missing, hidden, partially clipped,
+wrong-model-with-the-right-value-elsewhere and suffixed values must reject through
+the same oracle. PNG references/captures and per-image pixel differences remain
+with the render artifacts; revoked-subject clearing, no-copy and passive-focus
+checks remain in place. Footer OCR and native copy checks are unchanged.
+
+The full-sidebar warning matrix retains both densities, both appearances,
+240x400/340x600-point sizes and both waiting/disconnected states (16 captures),
+alongside the connected-footer geometry and zero-painted host-clearance checks.
+Only these natural-language warnings normalize OCR whitespace and lettercase:
+`Waiting for CMUX` and `CMUX disconnected. Focus and live status unavailable.`
+must retain every word and punctuation mark across line wraps. Empty, partial,
+wrong-state, navigation-only, substituted-word and missing-punctuation controls
+must reject; each render reports its filename and recognized lines. Exact model,
+session-ID, copy and inspector-pixel oracles do not use this normalization.
+
 All metadata is synthetic and local preferences are isolated for the render
 test. Its AppKit windows are never shown; this is not a desktop capture, live
-CMUX-host visual proof, system VoiceOver verification or a pixel-baseline
-comparison. No transcripts, real workspace paths or desktop images are uploaded.
+CMUX-host visual proof, system VoiceOver verification or a checked-in OS/font
+golden-image comparison. No transcripts, real workspace paths or desktop images are uploaded.
 
 ## Choose your session icon: `/cmux-maestro-native:maestro-icon`
 

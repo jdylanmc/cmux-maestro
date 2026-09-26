@@ -211,6 +211,135 @@ struct SidebarLayoutRenderingTests {
         #expect((treeHeight - rootHeight) / 4 <= 40)
     }
 
+    @Test func activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes() async throws {
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        var warningCaptures = 0
+        for density in SidebarDensity.allCases {
+            preferences.setDensity(density)
+            for (width, height) in [(240, 400), (340, 600)] {
+                for appearance in [RenderAppearance.light, .dark] {
+                    let model = makeManagedModel(fixtures: SidebarTreeFixtures(), focusFirst: true)
+                    defer { model.setVisible(false) }
+                    let destination = folder.appendingPathComponent(
+                        "pinned46-sidebar-\(density.rawValue)-\(appearance.name)-\(width)x\(height).png"
+                    )
+                    let metrics = try await render(
+                        model: model, preferences: preferences, width: width, height: height,
+                        appearance: appearance, managed: true, expectedSessions: 6, destination: destination
+                    ) { view in
+                        let footer = try #require(scrollViews(in: view).last)
+                        let bottom = view.convert(footer.bounds, from: footer).maxY
+                        let clearance = CGFloat(height) - bottom
+                        #expect(abs(clearance - (50 + density.spacing(10))) <= 0.5,
+                                "Connected footer must end at host clearance plus existing padding, not an empty status row")
+                        print("P46 connected geometry \(destination.lastPathComponent): footerBottom=\(bottom), clearance=\(clearance)")
+                    }
+                    #expect(metrics.viewportHeight >= 80)
+                    let text = try SidebarRenderingEvidence.recognizedLines(in: destination, dark: appearance == .dark)
+                    #expect(text.contains { $0.contains("Active window") })
+                    #expect(text.contains { $0.contains("coordinator-model") })
+                    #expect(!text.contains { $0.contains("CMUX connected") })
+                    let image = try #require(NSBitmapImageRep(data: Data(contentsOf: destination)))
+                    var painted = 0
+                    for y in (image.pixelsHigh - 100)..<image.pixelsHigh {
+                        for x in 0..<image.pixelsWide {
+                            let color = try #require(image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                            if appearance == .dark {
+                                if max(color.redComponent, color.greenComponent, color.blueComponent) >= 0.01 { painted += 1 }
+                            } else {
+                                if min(color.redComponent, color.greenComponent, color.blueComponent) <= 0.99 { painted += 1 }
+                            }
+                        }
+                        #expect(painted == 0)
+                    }
+                    for waiting in [true, false] {
+                        if waiting { model.showWaiting() } else { model.showDegraded(message: "Synthetic disconnect") }
+                        let statusImage = folder.appendingPathComponent(
+                            "pinned46-sidebar-\(density.rawValue)-\(appearance.name)-\(width)x\(height)-\(waiting ? "waiting" : "disconnected").png"
+                        )
+                        try await render(
+                            model: model, preferences: preferences, width: width, height: height,
+                            appearance: appearance, expectedSessions: 0, destination: statusImage
+                        ) { view in
+                            let footer = try #require(scrollViews(in: view).last)
+                            let clearance = CGFloat(height) - view.convert(footer.bounds, from: footer).maxY
+                            #expect(clearance > 50 + density.spacing(10) + density.spacing(6))
+                            print("P46 status geometry \(statusImage.lastPathComponent): clearance=\(clearance)")
+                        }
+                        let statusText = try SidebarRenderingEvidence.recognizedLines(
+                            in: statusImage, dark: appearance == .dark, naturalLanguage: true
+                        )
+                        let completeWarning = Self.containsCompleteConnectionWarning(statusText, waiting: waiting)
+                        #expect(completeWarning, "\(statusImage.lastPathComponent): \(statusText)")
+                        #expect(!Self.containsCompleteConnectionWarning(statusText, waiting: !waiting),
+                                "\(statusImage.lastPathComponent): \(statusText)")
+                        #expect(!statusText.contains { $0.contains("CMUX connected") })
+                        print("P46 status warning \(statusImage.lastPathComponent): complete=\(completeWarning), lines=\(statusText)")
+                        warningCaptures += 1
+                    }
+                }
+            }
+        }
+        #expect(warningCaptures == 16)
+    }
+
+    @Test func connectionWarningRequiresEveryWordAndPunctuation() {
+        let waitingMessage = "Waiting for CMUX"
+        let disconnectedMessage = "CMUX disconnected. Focus and live status unavailable."
+        for waiting in [true, false] {
+            let message = waiting ? waitingMessage : disconnectedMessage
+            let words = message.split(whereSeparator: \.isWhitespace).map(String.init)
+            #expect(Self.containsCompleteConnectionWarning([message], waiting: waiting))
+            #expect(Self.containsCompleteConnectionWarning(
+                words.map { " \t\($0.uppercased())\n" }, waiting: waiting
+            ))
+            let rejected: [[String]] = [
+                [], ["", " \t\n"],
+                [waiting ? disconnectedMessage : waitingMessage],
+                ["Active window", "Waiting for the current window", "Cannot focus while CMUX is disconnected."],
+                [message.replacingOccurrences(of: "CMUX", with: "CMUXextra")],
+                [message.replacingOccurrences(of: "CMUX", with: "XCMUX")],
+                [message + "."],
+                Array(words.reversed())
+            ]
+            for lines in rejected {
+                #expect(!Self.containsCompleteConnectionWarning(lines, waiting: waiting),
+                        "Must reject incomplete/wrong warning for \(message): \(lines)")
+            }
+            for index in words.indices {
+                var missing = words
+                missing.remove(at: index)
+                #expect(!Self.containsCompleteConnectionWarning(missing, waiting: waiting),
+                        "Must reject missing word \(words[index]): \(missing)")
+                var substituted = words
+                substituted[index] = "substituted"
+                #expect(!Self.containsCompleteConnectionWarning(substituted, waiting: waiting),
+                        "Must reject substituted word \(words[index]): \(substituted)")
+                if words[index].contains(".") {
+                    var unpunctuated = words
+                    unpunctuated[index] = words[index].replacingOccurrences(of: ".", with: "")
+                    #expect(!Self.containsCompleteConnectionWarning(unpunctuated, waiting: waiting),
+                            "Must reject missing punctuation: \(unpunctuated)")
+                }
+            }
+        }
+    }
+
+    private static func containsCompleteConnectionWarning(_ lines: [String], waiting: Bool) -> Bool {
+        let message = waiting ? "Waiting for CMUX" : "CMUX disconnected. Focus and live status unavailable."
+        // Natural-language OCR may wrap lines or vary case; words and punctuation must stay exact.
+        let expected = message.lowercased().split(whereSeparator: \.isWhitespace)
+        let words = lines.flatMap { $0.lowercased().split(whereSeparator: \.isWhitespace) }
+        return words.indices.contains { start in
+            words[start...].prefix(expected.count).elementsEqual(expected)
+        }
+    }
+
     @Test func frozenManagedRenderFixtureDoesNotExpireOnWallClock() async throws {
         let model = makeManagedModel(fixtures: SidebarTreeFixtures())
         defer { model.setVisible(false) }
@@ -228,7 +357,7 @@ struct SidebarLayoutRenderingTests {
     }
 
     private func makeManagedModel(
-        fixtures: SidebarTreeFixtures, nodeCount: Int = 6, mixed: Bool = false
+        fixtures: SidebarTreeFixtures, nodeCount: Int = 6, mixed: Bool = false, focusFirst: Bool = false
     ) -> SidebarConnectionModel {
         let workspace = fixtures.workspaceA
         let surfaces = (0..<nodeCount).map { _ in UUID() }
@@ -356,7 +485,7 @@ struct SidebarLayoutRenderingTests {
                 projectRootPath: .available("/synthetic/managed"),
                 surfaces: .available(Array(surfaces.prefix(min(nodeCount, 5))).map {
                     HierarchySurface(
-                        id: $0, title: "Terminal", kind: .terminal, isFocused: false,
+                        id: $0, title: "Terminal", kind: .terminal, isFocused: focusFirst && $0 == surfaces.first,
                         isPinned: false, unreadCount: 0,
                         workingDirectory: .available("/synthetic/managed")
                     )
@@ -488,7 +617,7 @@ struct SidebarLayoutRenderingTests {
         model: SidebarConnectionModel, preferences: SidebarPreferences, width: Int,
         height: Int = 941, appearance: RenderAppearance = .light, managed: Bool = false,
         expectedSessions: Int = 1,
-        destination: URL
+        destination: URL, inspect: ((NSView) throws -> Void)? = nil
     ) async throws -> SidebarRenderingEvidence.Metrics {
         // Yield between renders so unrelated asynchronous navigation tests can service their deadlines.
         try await Task.sleep(for: .milliseconds(10))
@@ -536,7 +665,12 @@ struct SidebarLayoutRenderingTests {
         #expect(metrics.documentHeight > 0)
         #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
         try JSONEncoder().encode(metrics).write(to: destination.deletingPathExtension().appendingPathExtension("json"))
+        try inspect?(view)
         return metrics
+    }
+
+    private func scrollViews(in view: NSView) -> [NSScrollView] {
+        (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
     }
 
     private enum RenderAppearance {
