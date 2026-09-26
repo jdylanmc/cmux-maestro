@@ -122,8 +122,8 @@ struct SidebarClarityTests {
         #expect(inner.redComponent < 0.05 && inner.greenComponent < 0.05 && inner.blueComponent < 0.05)
     }
 
-    @Test func activityGlowsSeparateWorkingBlockedIdleAndReducedMotion() {
-        #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(.working), reduceMotion: false) == .shimmer)
+    @Test func activityIndicatorsSeparateWorkingBlockedIdleAndReducedMotion() {
+        #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(.working), reduceMotion: false) == .rotatingWorking)
         #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(.working), reduceMotion: true) == .steadyWorking)
         for state: CopilotWorkState in [.blocked, .failed] {
             #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(state), reduceMotion: false) == .steadyAlert)
@@ -202,22 +202,23 @@ struct SidebarClarityTests {
                     .padding(.vertical, 4)
                     .background {
                         if !["ghostty", "cli", "browser"].contains(preset.id) {
-                            SidebarActivityBackground(visual: SidebarPresentation.state(.working), suppressAnimation: true)
+                            SidebarActivityBackground(visual: SidebarPresentation.state(.working))
                         }
                     }
                 }
             }
             Divider()
-            Text("Runtime state · working shimmers live; this preview is static").font(.caption.weight(.semibold))
+            Text("Runtime state · working ring rotates live; this preview is static").font(.caption.weight(.semibold))
             HStack(spacing: 20) {
                 ForEach([CopilotWorkState.working, .blocked, .idle, .unknown, .failed], id: \.self) { state in
                     HStack(spacing: 6) {
                         SidebarAgentIcon(visual: SidebarPresentation.state(state), avatar: "md-robot")
+                        SidebarStateBadge(visual: SidebarPresentation.state(state)).environment(\._accessibilityReduceMotion, true)
                         Text(SidebarPresentation.state(state).title).font(.caption)
                     }
                     .frame(width: 140, alignment: .leading)
                     .padding(6)
-                    .background { SidebarActivityBackground(visual: SidebarPresentation.state(state), suppressAnimation: true) }
+                    .background { SidebarActivityBackground(visual: SidebarPresentation.state(state)) }
                 }
             }
             Text("Identity palette · state remains independent").font(.caption.weight(.semibold))

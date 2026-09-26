@@ -59,7 +59,7 @@ struct SidebarVisual: Equatable {
 }
 
 enum SidebarActivityTreatment: Equatable {
-    case shimmer, steadyWorking, steadyAlert, none
+    case rotatingWorking, steadyWorking, steadyAlert, none
 }
 
 struct SidebarWorkspaceStateCount: Equatable, Identifiable {
@@ -315,10 +315,31 @@ enum SidebarPresentation {
 
     static func activityTreatment(_ visual: SidebarVisual, reduceMotion: Bool) -> SidebarActivityTreatment {
         switch visual.tone {
-        case .green: reduceMotion ? .steadyWorking : .shimmer
+        case .green: reduceMotion ? .steadyWorking : .rotatingWorking
         case .red: .steadyAlert
         default: .none
         }
+
+    }
+
+    static func workingRotation(at date: Date, reduceMotion: Bool) -> Double {
+        reduceMotion ? 0 : date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1) * 360
+    }
+
+    static func needsInput(_ attention: [AgentAttention]) -> Bool {
+        attention.contains { $0.kind == .answer || $0.kind == .permission }
+    }
+
+    static func managedNeedsInput(_ node: SidebarOrchestrationNode, tree: SidebarCopilotTree, now: Date) -> Bool {
+        managedSession(for: node, in: tree, now: now).map { needsInput($0.attention) } ?? false
+    }
+
+    static func childState(_ node: SidebarCopilotNode, session: SidebarCopilotSession) -> SidebarVisual {
+        if node.state == .blocked || node.state == .failed { return state(node.state) }
+        guard session.liveness == .alive else {
+            return process(session.liveness).titled("Last reported: \(state(node.state).title). \(process(session.liveness).title)")
+        }
+        return state(node.state)
     }
 
     static func focusInteraction(from old: HierarchySnapshot, to new: HierarchySnapshot) -> SidebarSeenTarget? {

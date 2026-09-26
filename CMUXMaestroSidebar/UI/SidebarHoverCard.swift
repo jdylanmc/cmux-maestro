@@ -589,6 +589,7 @@ final class SidebarTitleNativeButton: NSButton {
 struct SidebarTitleButton<Label: View>: NSViewRepresentable {
     let label: String
     let hint: String
+    var value = ""
     let action: () -> Void
     @ViewBuilder var content: Label
     @Environment(\.sidebarPreviewInteraction) private var preview
@@ -604,6 +605,7 @@ struct SidebarTitleButton<Label: View>: NSViewRepresentable {
         rowMenu?.dismissPreview = preview.dismiss
         rowMenu?.preview = preview.available ? { [weak button] in button?.enterPreview() ?? false } : nil
         button.setAccessibilityLabel(label)
+        button.setAccessibilityValue(value)
         button.setAccessibilityHelp(preview.available ? "\(hint). Tab enters preview controls; Escape or Shift-Tab returns. Shift-F10 opens actions." : hint)
         button.toolTip = hint
         _ = button.measure(width: button.bounds.width > 0 ? button.bounds.width : nil)

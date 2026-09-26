@@ -146,37 +146,12 @@ struct SidebarTerminalIcon: View {
 
 struct SidebarActivityBackground: View {
     let visual: SidebarVisual
-    var suppressAnimation = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var colorScheme
-    private let mint = Color(red: 0.68, green: 0.92, blue: 0.79)
 
     var body: some View {
         Group {
-            switch SidebarPresentation.activityTreatment(visual, reduceMotion: reduceMotion || suppressAnimation) {
-            case .shimmer:
-                GeometryReader { geometry in
-                    let width = max(48, geometry.size.width * 0.35)
-                    ZStack(alignment: .leading) {
-                        mint.opacity(colorScheme == .dark ? 0.035 : 0.06)
-                        LinearGradient(
-                            colors: [.clear, mint.opacity(colorScheme == .dark ? 0.17 : 0.26), .clear],
-                            startPoint: .leading, endPoint: .trailing
-                        )
-                        .frame(width: width)
-                        .phaseAnimator([false, true]) { content, trailing in
-                            content.offset(x: trailing ? geometry.size.width : -width)
-                        } animation: { trailing in
-                            trailing ? .linear(duration: 2.6) : .linear(duration: 0)
-                        }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                }
-            case .steadyWorking:
-                RoundedRectangle(cornerRadius: 4).fill(mint.opacity(colorScheme == .dark ? 0.07 : 0.11))
-            case .steadyAlert:
+            if visual.tone == .red {
                 RoundedRectangle(cornerRadius: 4).fill(.red.opacity(0.065))
-            case .none:
+            } else {
                 Color.clear
             }
         }
@@ -210,15 +185,40 @@ private struct SidebarFocusBorder: ViewModifier {
 
 struct SidebarStateBadge: View {
     let visual: SidebarVisual
+    var needsInput = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Image(systemName: visual.symbol)
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(visual.tone.color)
-            .frame(width: 18, height: 24)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(visual.title)
-            .help(visual.title)
+        Group {
+            if needsInput {
+                Image(systemName: "exclamationmark").font(.system(size: 10, weight: .bold))
+            } else if visual.tone == .green {
+                if reduceMotion {
+                    SidebarWorkingRing(rotation: 0)
+                } else {
+                    TimelineView(.animation) { context in
+                        SidebarWorkingRing(rotation: SidebarPresentation.workingRotation(at: context.date, reduceMotion: false))
+                    }
+                }
+            } else {
+                Image(systemName: visual.symbol).font(.system(size: 10, weight: .semibold))
+            }
+        }
+        .foregroundStyle(needsInput ? SidebarTone.red.color : visual.tone.color)
+        .frame(width: 12, height: 14)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(needsInput ? "Needs input. \(visual.title)" : visual.title)
+        .help(needsInput ? "Needs input. \(visual.title)" : visual.title)
+    }
+}
+
+struct SidebarWorkingRing: View {
+    let rotation: Double
+    var body: some View {
+        Circle().trim(from: 0.15, to: 1)
+            .stroke(style: StrokeStyle(lineWidth: 1.3, lineCap: .round))
+            .rotationEffect(.degrees(rotation))
+            .frame(width: 9, height: 9)
     }
 }
 
@@ -390,7 +390,7 @@ struct SidebarView: View {
     var body: some View {
         GeometryReader { geometry in
             content(pinnedHeight: min(220, max(80, geometry.size.height * 0.36)))
-                .environment(\.sidebarContentWidth, max(0, geometry.size.width - preferences.layout.density.spacing(20)))
+                .environment(\.sidebarContentWidth, max(0, geometry.size.width - preferences.layout.density.spacing(10)))
         }
     }
 
@@ -532,6 +532,7 @@ struct SidebarView: View {
                 case .unmanaged(let selection): inspect(selection)
                 }
             })
+            .padding(.horizontal, preferences.layout.density.spacing(5))
             .popover(isPresented: $showingInspector) {
                 SidebarInspector(content: inspectorDetails) {
                     showingInspector = false
@@ -543,17 +544,21 @@ struct SidebarView: View {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, preferences.layout.density.spacing(5))
                     .accessibilityIdentifier("sidebar-navigation-status")
             }
             if let explanation = model.navigation.permissionSummary {
                 Label(explanation, systemImage: "lock")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, preferences.layout.density.spacing(5))
             }
             connectionStatus
+                .padding(.horizontal, preferences.layout.density.spacing(5))
                 .accessibilityIdentifier("sidebar-connection-status")
         }
-        .padding(preferences.layout.density.spacing(10))
+        .padding(.horizontal, preferences.layout.density.spacing(5))
+        .padding(.vertical, preferences.layout.density.spacing(10))
         .padding(.bottom, Self.hostFooterClearance)
         .environment(preferences)
         .environment(\.sidebarHoverGroup, hoverGroup)
@@ -1049,6 +1054,8 @@ private struct ManagedNodeRow: View {
     let select: () -> Void
     @Environment(\.sidebarDismissManaged) private var dismissManaged
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
+    @Environment(\.sidebarDensity) private var density
+    @Environment(\.sidebarContentWidth) private var contentWidth
     @State private var showingPicker = false
 
     private var actions: [SidebarRowActionGroup] {
@@ -1089,15 +1096,12 @@ private struct ManagedNodeRow: View {
             )
             FocusButton(
                 target: .surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
-                navigation: navigation, label: "Focus \(node.label)"
+                navigation: navigation, label: "Focus \(node.label)", detail: metadataHelp
             ) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {
                         Text(node.label).sidebarFont(.caption, weight: .medium).lineLimit(1)
                         Spacer(minLength: 0)
-                        if let changes = node.currentGitChanges(at: evidenceDate) {
-                            GitChangeBadge(changes: changes)
-                        }
                         if activeDescendants > 0 && !expanded {
                             Label("\(activeDescendants)", systemImage: SidebarPresentation.state(.working).symbol)
                                 .sidebarFont(.caption2).foregroundStyle(.secondary)
@@ -1105,7 +1109,10 @@ private struct ManagedNodeRow: View {
                         }
                     }
                     HStack(spacing: 4) {
-                        Text(stateCaption).lineLimit(1).layoutPriority(1)
+                        SidebarStateBadge(visual: stateVisual, needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate))
+                        if density == .comfortable || (stateVisual.tone == .neutral && stateVisual.title != "Idle") {
+                            Text(stateCaption).lineLimit(1).layoutPriority(1)
+                        }
                         if let worktree = verifiedWorktree {
                             Label(
                                 node.hasFreshGitEvidence(at: evidenceDate) ? worktree : "Last verified · \(worktree)",
@@ -1113,6 +1120,10 @@ private struct ManagedNodeRow: View {
                             )
                                 .lineLimit(1).truncationMode(.middle)
                                 .accessibilityLabel("Worktree \(worktree)")
+                        }
+                        Spacer(minLength: 0)
+                        if let changes = node.currentGitChanges(at: evidenceDate) {
+                            GitChangeBadge(changes: changes)
                         }
                     }
                     .sidebarFont(.caption2)
@@ -1140,9 +1151,9 @@ private struct ManagedNodeRow: View {
         .sidebarRowActions(title: node.label, groups: actions)
         .background { SidebarActivityBackground(visual: stateVisual) }
         .modifier(SidebarFocusBorder(workspaceID: node.workspaceId, surfaceID: node.surfaceId))
-        .padding(.leading, CGFloat(depth * 12))
+        .padding(.leading, density.indentation(depth: depth, unresolved: false, width: contentWidth))
         .padding(.vertical, 2)
-        .padding(.trailing, 4)
+        .padding(.trailing, 2)
         .background {
             if selected {
                 RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.07))
@@ -1151,7 +1162,7 @@ private struct ManagedNodeRow: View {
         .overlay(alignment: .leading) {
             if depth > 0 {
                 Rectangle().fill(.quaternary).frame(width: 1)
-                    .padding(.leading, CGFloat(depth * 12 - 6))
+                    .padding(.leading, max(0, density.indentation(depth: depth, unresolved: false, width: contentWidth) - 4))
             }
         }
         .accessibilityElement(children: .contain)
@@ -1394,7 +1405,7 @@ private struct WorkspaceRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: density.spacing(4)) {
             HStack(spacing: 5) {
-                ExpandButton(expanded: expanded, label: title) {
+                ExpandButton(expanded: expanded, label: title, workspace: true) {
                     setExpanded(.workspace(workspace.id), !expanded)
                 }
                 SidebarHoverRegion(data: SidebarHoverContent.workspace(workspace.id, hierarchy: hierarchy, connected: connected), nameOnly: true) {
@@ -1557,13 +1568,23 @@ private struct SurfaceRow: View {
                 SidebarHoverRegion(data: preview) {
                   FocusButton(
                     target: .surface(workspaceID: workspaceID, surfaceID: surface.id),
-                    navigation: navigation, label: "Focus \(surface.kind.title) \(title)"
+                    navigation: navigation, label: "Focus \(surface.kind.title) \(title)", detail: rowMetadataHelp
                 ) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(title).sidebarFont(.caption, weight: .medium).lineLimit(1)
-                        Text(rowMetadata).sidebarFont(.caption2).foregroundStyle(.secondary)
-                            .lineLimit(1).truncationMode(.middle)
-                            .help(rowMetadataHelp)
+                        HStack(spacing: 3) {
+                            if let singleSession {
+                                SidebarStateBadge(visual: SidebarPresentation.sessionState(singleSession),
+                                                  needsInput: SidebarPresentation.needsInput(singleSession.attention))
+                            }
+                            Text(rowMetadata).sidebarFont(.caption2).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.middle)
+                                .help(rowMetadataHelp)
+                        }
+                        if let inlineSessionState {
+                            Text(inlineSessionState).sidebarFont(.caption, weight: .medium)
+                                .foregroundStyle(.secondary).lineLimit(1)
+                        }
                         if let singleSession {
                             ActivityCaption(text: SidebarPresentation.activityCaption(
                                 singleSession.activity,
@@ -1622,18 +1643,23 @@ private struct SurfaceRow: View {
         else { selection = .surface(workspaceID: workspaceID, surfaceID: surface.id) }
     }
 
+    private var inlineSessionState: String? {
+        singleSession.flatMap { session in
+            density == .comfortable || session.liveness != .alive || session.state == .unknown
+                ? SidebarPresentation.sessionState(session).title : nil
+        }
+    }
+
     private var rowMetadata: String {
-        var parts = [
-            singleSession == nil ? surface.kind.title : "Agent",
-            singleSession.map { SidebarPresentation.sessionState($0).title }
-        ].compactMap { $0 }
+        var parts = [singleSession == nil ? surface.kind.title : "Agent"]
         if let directoryLabel { parts.append(directoryLabel) }
         return parts.joined(separator: " · ")
     }
 
     private var rowMetadataHelp: String {
-        guard directoryLabel != nil else { return rowMetadata }
-        return "\(rowMetadata). Working directory; Git branch not verified by this source."
+        let state = singleSession.map { SidebarPresentation.sessionState($0).title + ". " } ?? ""
+        guard directoryLabel != nil else { return state + rowMetadata }
+        return "\(state)\(rowMetadata). Working directory; Git branch not verified by this source."
     }
 }
 
@@ -1680,11 +1706,20 @@ private struct CopilotSessionRow: View {
                 )
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
-                    navigation: navigation, label: "Focus Copilot session \(session.shortID)"
+                    navigation: navigation, label: "Focus Copilot session \(session.shortID)",
+                    detail: SidebarPresentation.sessionState(session).title
                 ) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(SidebarPresentation.sessionState(session).title)
+                        Text("Agent \(session.shortID)")
                             .sidebarFont(.caption, weight: .medium).lineLimit(1)
+                        HStack(spacing: 3) {
+                            SidebarStateBadge(visual: SidebarPresentation.sessionState(session),
+                                              needsInput: SidebarPresentation.needsInput(session.attention))
+                            if density == .comfortable || session.liveness != .alive || session.state == .unknown {
+                                Text(SidebarPresentation.sessionState(session).title)
+                                    .sidebarFont(.caption, weight: .medium).foregroundStyle(.secondary)
+                            }
+                        }
                         ActivityCaption(text: SidebarPresentation.activityCaption(
                             session.activity, runningShells: session.foldedShellCount(parentID: nil)
                         ))
@@ -1706,7 +1741,7 @@ private struct CopilotSessionRow: View {
                 dismiss: dismiss, acknowledge: acknowledge, selection: $selection
             )
         }
-        .padding(.leading, density.spacing(12))
+        .padding(.leading, density.spacing(8))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("copilot-session-\(session.id)")
         .help("Copilot session \(session.id.uuidString)")
@@ -1759,7 +1794,7 @@ private struct CopilotSessionContents: View {
                     dismiss: dismiss, acknowledge: acknowledge,
                     expansion: row, setExpanded: setExpanded, selection: $selection
                 )
-                .padding(.leading, density.spacing(12) + density.indentation(
+                .padding(.leading, density.spacing(8) + density.indentation(
                     depth: row.node.depth, unresolved: row.node.ancestryUnresolved, width: contentWidth
                 ))
             }
@@ -1780,6 +1815,7 @@ private struct CopilotWorkRow: View {
     @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
+    private var stateVisual: SidebarVisual { SidebarPresentation.childState(node, session: session) }
     private var hasOutcomeActions: Bool {
         node.dismissibleOutcome(sessionID: session.id) != nil
             || node.dismissibleFailure(sessionID: session.id) != nil
@@ -1856,12 +1892,19 @@ private struct CopilotWorkRow: View {
                 .accessibilityLabel("\(node.name), \(SidebarPresentation.state(node.state).title). Show details")
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
-                    navigation: navigation, label: "Focus \(node.name), \(node.state.rawValue), Copilot \(session.shortID)"
+                    navigation: navigation, label: "Open parent chat for \(node.name), Copilot \(session.shortID)",
+                    detail: stateVisual.title
                 ) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(node.name).sidebarFont(.caption, weight: .medium).lineLimit(2)
-                        Text("\(SidebarPresentation.kind(node.kind)) · \(SidebarPresentation.state(node.state).title)")
-                            .sidebarFont(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(node.name).sidebarFont(.caption, weight: .medium).lineLimit(density == .compact ? 1 : 2)
+                        HStack(spacing: 3) {
+                            SidebarStateBadge(visual: stateVisual, needsInput: SidebarPresentation.needsInput(node.attention))
+                            Text(SidebarPresentation.kind(node.kind))
+                            if density == .comfortable || session.liveness != .alive || node.state == .unknown {
+                                Text(stateVisual.title)
+                            }
+                        }
+                        .sidebarFont(.caption2).foregroundStyle(.secondary).lineLimit(1)
                         ActivityCaption(text: SidebarPresentation.activityCaption(
                             node.activity, runningShells: taskboard ? 0 : session.foldedShellCount(parentID: node.id)
                         ))
@@ -1890,7 +1933,7 @@ private struct CopilotWorkRow: View {
 
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, density.spacing(3))
-        .background { SidebarActivityBackground(visual: SidebarPresentation.state(node.state)) }
+        .background { SidebarActivityBackground(visual: stateVisual) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("\(taskboard ? "taskboard" : "copilot")-child-\(session.id)-\(node.id)")
     }
@@ -2316,6 +2359,7 @@ struct FocusButton<Content: View>: View {
     let target: SidebarNavigationTarget
     let navigation: SidebarNavigation
     let label: String
+    var detail: String? = nil
     @ViewBuilder var content: Content
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
     func focus() {
@@ -2323,7 +2367,8 @@ struct FocusButton<Content: View>: View {
     }
 
     var body: some View {
-        SidebarTitleButton(label: label, hint: navigation.disabledReason(for: target) ?? label, action: focus) {
+        SidebarTitleButton(label: label, hint: navigation.disabledReason(for: target) ?? detail ?? label,
+                           value: detail ?? "", action: focus) {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2354,12 +2399,17 @@ extension SidebarRowAction {
 private struct ExpandButton: View {
     let expanded: Bool
     let label: String
+    var workspace = false
     let toggle: () -> Void
     @Environment(\.sidebarDensity) private var density
     var body: some View {
         Button(action: toggle) {
-            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+            Image(systemName: workspace ? (expanded ? "minus" : "plus") : (expanded ? "chevron.down" : "chevron.right"))
                 .sidebarFont(.caption2)
+                .frame(width: 18, height: 18)
+                .overlay {
+                    if workspace { RoundedRectangle(cornerRadius: 3).stroke(.tertiary, lineWidth: 0.5) }
+                }
                 .frame(width: max(SidebarPresentation.minimumControlSize, density.controlSize),
                        height: max(SidebarPresentation.minimumControlSize, density.controlSize))
                 .contentShape(Rectangle())

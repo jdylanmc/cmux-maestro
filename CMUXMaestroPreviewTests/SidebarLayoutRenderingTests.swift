@@ -5,6 +5,44 @@ import Testing
 /// Offscreen synthetic SwiftUI/AppKit rendering only, not CMUX-host visual or system AX verification.
 @MainActor
 struct SidebarLayoutRenderingTests {
+    @Test func productionEightLevelOutlineRetainsNameWidthAt280() async throws {
+        let fixtures = SidebarTreeFixtures()
+        let model = makeModel(fixtures: fixtures, longMetadata: true, deep: true)
+        let fixture = try SidebarPreferenceFixture()
+        defer { model.setVisible(false); fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for density in SidebarDensity.allCases {
+            preferences.setDensity(density)
+            for appearance in [RenderAppearance.light, .dark] {
+                let file = folder.appendingPathComponent("polish-deep8-\(density.rawValue)-\(appearance.name)-280x400.png")
+                try await render(model: model, preferences: preferences, width: 280, height: 400,
+                                 appearance: appearance, destination: file) { host in
+                    func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+                    let title = try #require(descendants(host).compactMap { $0 as? SidebarTitleNativeButton }
+                        .first { $0.accessibilityLabel()?.contains("Synthetic level 8") == true })
+                    #expect(title.bounds.width >= 150, "Deep title must retain useful width: \(title.bounds.width)")
+                    #expect(title.bounds.height <= 70)
+                    #expect(model.copilot.tree.sessions[0].nodes.map(\.depth).max() == 8)
+                    print("P57 deep geometry \(density.rawValue) \(appearance.name): titleWidth=\(title.bounds.width), titleHeight=\(title.bounds.height)")
+                    title.scrollToVisible(title.bounds)
+                    host.layoutSubtreeIfNeeded()
+                    let bitmap = try #require(NSBitmapImageRep(
+                        bitmapDataPlanes: nil, pixelsWide: 560, pixelsHigh: 800,
+                        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+                    ))
+                    bitmap.size = host.bounds.size
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    try #require(bitmap.representation(using: .png, properties: [:])).write(to:
+                        folder.appendingPathComponent("polish-deep8-\(density.rawValue)-\(appearance.name)-deepest-280x400.png"))
+                }
+            }
+        }
+    }
+
     @Test func syntheticSidebarRendersAtNarrowWidthsInBothDensitiesAndModes() async throws {
         let fixtures = SidebarTreeFixtures()
         let model = makeModel(fixtures: fixtures, longMetadata: false)
@@ -533,7 +571,7 @@ struct SidebarLayoutRenderingTests {
     }
 
     private func makeModel(
-        fixtures: SidebarTreeFixtures, longMetadata: Bool, childLimit: Int? = nil, shellActivity: Bool = false
+        fixtures: SidebarTreeFixtures, longMetadata: Bool, childLimit: Int? = nil, shellActivity: Bool = false, deep: Bool = false
     ) -> SidebarConnectionModel {
         let now = Date()
         let rootLabel = "Synthetic coordinator reviewing deeply nested layout and accessibility coverage"
@@ -566,6 +604,12 @@ struct SidebarLayoutRenderingTests {
         if shellActivity {
             children = [.init(id: "shell:command", parentID: nil, kind: .shell, name: "bash invocation",
                               state: .working, model: nil)]
+        }
+        if deep {
+            children = (0...8).map { level in
+                .init(id: "level-\(level)", parentID: level == 0 ? nil : "level-\(level - 1)", kind: .subagent,
+                      name: "Synthetic level \(level) with a deliberately long title", state: .working, model: nil)
+            }
         }
         let snapshot = fixtures.snapshot(sessions: [
             .init(sessionID: fixtures.sessionID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,

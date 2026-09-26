@@ -523,16 +523,19 @@ failure shows **Could not copy. Try again.** Changing the GUID clears feedback.
 The small `SidebarCopyableValue` control receives an injected action and knows
 nothing about session lookup, persistence, host navigation, or the pasteboard.
 
-Working agent rows have a pale pastel-green shimmer moving left to right; blocked rows have a
-steady subtle red background. Idle/unknown rows do not pulse or glow. Reduce
-Motion replaces the working shimmer with a steady subtle tint. The glow stays on
-each agent's own row, not its descendants, and never intercepts input.
+Working agents use one 9-point open ring, rotating linearly once per second.
+Reduce Motion keeps the ring static; questions and approval requests use a
+distinct static exclamation mark. Working rows have no shimmer or moving wash.
+Blocked rows retain a subtle static red background. Idle/unknown rows do not
+pulse or glow. State cues belong to their exact row, never its descendants.
 The selected workspace's uniquely focused surface has a glowing left border,
 separate from activity and icon color. Other workspaces' remembered focus does
 not light a border, and ambiguous/unavailable focus evidence does not guess.
 Identity colors do not change this treatment. Icons have no wand decoration;
 choosing an icon or role preset does not imply orchestration ownership.
-State remains explicit in row text and accessibility labels. Coordinator
+Compact rows omit routine inline state words; state remains in tooltips,
+accessibility and details. Unknown/stale evidence and protected attention remain
+visible. Coordinator
 activity comes only from a fresh, unique, live Copilot observation on its exact
 workspace/surface; registration or child activity alone cannot start a pulse.
 **Sidebar settings → Terminal icon** offers Ghost and plain `>_` styles.
@@ -546,7 +549,7 @@ Agent totals, idle counts and repeated completeness warnings are not primary UI;
 source diagnostics remain in details. Glyphs have 2 pt insets in their existing
 24 pt slots.
 Standalone state keys retain pause/check/error symbols for blocked, finished and
-failed states. Workspace headers are text with chevrons;
+failed states. Workspace headers have a boxed disclosure;
 their trailing ellipsis menu offers Focus, Expand/Collapse and Details as separate
 actions. The six header shortcuts are directory-plus, Beats, Taskboard, History,
 Maestro settings and Fermata, in that order. Settings reuses the existing sidebar
@@ -598,7 +601,7 @@ managed evidence and unconfirmed/ended process ownership cannot show a live stat
 
 With or without a managed graph, the same outline groups real CMUX
 surfaces and valid inferred Copilot sessions beneath workspace headers. Working
-directory basenames are explicitly described as directory labels, never Git
+directory labels are home-relative where applicable, never inferred Git
 branches. Uncertain ownership and incomplete evidence remain honest glyphs or
 summaries, and incidental diagnostics stay behind selection or settings.
 Taskboard remains available from its header button and retains each
@@ -622,6 +625,11 @@ Sidebar **settings** includes **Compact** and
 Hierarchy and Taskboard keep the same data, counts, paths and independent
 focus, dismissal and acknowledgement actions. Narrow rows stack actions;
 full paths remain available to accessibility and tooltips.
+
+The outline uses 5-point side gutters (scaled for Comfortable), 8-point shallow
+nesting and 4-point increments beyond level three, bounded to 32 points or 12%
+of available width. Git counts sit with secondary metadata so titles keep priority, including
+the eight-level, 280-point case. The 50-point host-footer clearance is unchanged.
 
 Hierarchy expansion persists by workspace/surface UUID and provider/session/
 child identity—not names, paths or the current window. Moves and reloads keep
