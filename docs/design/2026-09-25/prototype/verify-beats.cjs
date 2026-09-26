@@ -1,0 +1,198 @@
+const { chromium } = require("playwright");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+(async () => {
+  const baseURL = process.env.PROTOTYPE_URL || "http://127.0.0.1:8765/";
+  const browser = await chromium.launch({ channel: "chrome", headless: true });
+  const checks = [], errors = [], requests = [];
+  try {
+    const page = await browser.newPage({ viewport: { width: 1512, height: 1050 }, reducedMotion: "reduce" });
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("request", request => requests.push(request.url()));
+    const check = (name, condition) => { assert.ok(condition, name); checks.push(name); };
+    const state = () => page.evaluate(() => JSON.parse(localStorage.getItem("maestro-cosmetic-lab-v2")));
+    const beat = async id => (await state()).beats.find(item => item.id === id);
+    const choose = id => page.locator(`[data-beat-select="${id}"]`).click();
+    const openSimulation = async () => {
+      if (!await page.locator(".beat-simulator").evaluate(element => element.open)) await page.locator(".beat-simulator summary").click();
+    };
+    await page.goto(baseURL);
+    await page.locator("#reset-demo").click();
+    for (const grouping of ["worktrees", "subagents", "workspace"]) {
+      await page.locator(`[data-grouping="${grouping}"]`).click();
+      check(`Default ${grouping} view omits diagnostic fixture agents and sections`, await page.locator('[data-row="unknown-agent"], [data-row="stale-agent"], [data-observed="contrast-probe"]').count() === 0 && !/Stale evidence|Observed activity|Contrast probe/.test(await page.locator("#workspaces").textContent()));
+    }
+    await page.evaluate(() => {
+      const key = "maestro-cosmetic-lab-v2", saved = JSON.parse(localStorage.getItem(key));
+      saved.active = "stale-agent";
+      saved.beats[0].prompt = "Preserve my saved prompt.";
+      saved.fermata = true;
+      localStorage.setItem(key, JSON.stringify(saved));
+    });
+    await page.reload();
+    check("Removing a selected fixture preserves saved Beats and preferences", (await state()).active === "implementer" && (await state()).beats[0].prompt === "Preserve my saved prompt." && (await state()).fermata);
+    await page.locator("#reset-demo").click();
+    for (const selector of ['[data-backlog="design"]', '[data-workspace-menu="design"]', '[data-workspace-collapse="design"]', '[data-toggle-finished="design"]']) {
+      await page.locator(selector).hover();
+      await page.waitForTimeout(450);
+      check(`Workspace preview excludes action ${selector}`, !await page.locator("#hover-card").isVisible());
+    }
+    await page.locator('[data-hover-workspace="design"]').hover();
+    await page.locator("#hover-card").waitFor({ state: "visible" });
+    check("Workspace name alone opens its preview", (await page.locator("#hover-card").textContent()).includes("WORKSPACE PREVIEW"));
+    await page.mouse.move(1300, 50);
+    await page.locator("#hover-card").waitFor({ state: "hidden" });
+    assert.deepEqual(await page.locator(".sidebar-heading-actions button").evaluateAll(buttons => buttons.map(button => button.getAttribute("aria-label"))), ["Open directory as new workspace", "Beats", "Taskboard", "History", "Maestro settings", "Fermata: Keep Mac Awake"]);
+    check("All header controls are icon-only, with Fermata last", (await page.locator(".sidebar-heading-actions").textContent()).trim() === "");
+    check("Removed sidebar captions and placement markers stay absent", await page.locator(".grouping-caption, .placement-label").count() === 0 && !(await page.locator("#workspaces").textContent()).includes("Outside repositories") && !(await page.locator("#workspaces").textContent()).includes("Membership unknown"));
+    const eye = page.getByRole("button", { name: "Show finished agents in Maestro design", exact: true });
+    const scratchEye = page.getByRole("button", { name: "Show finished agents in Scratch space", exact: true });
+    check("Eyes live beside workspace backlog links, without the top Workspaces heading", await page.locator(".outline-label").count() === 0 && await page.locator('.workspace-actions [data-toggle-finished="design"] + [data-backlog="design"]').count() === 1);
+    check("Finished visibility is an icon toggle", (await eye.textContent()).trim() === "" && await eye.getAttribute("aria-pressed") === "false");
+    await eye.click();
+    check("Eye toggles finished participants into the outline", await eye.getAttribute("aria-pressed") === "true" && await page.locator('[data-worktree-id="tree-001"] [data-focus="researcher"]').count() === 1);
+    check("Finished visibility is independent for each workspace", await scratchEye.getAttribute("aria-pressed") === "false");
+    await scratchEye.click();
+    check("Toggling another workspace does not change the first", await eye.getAttribute("aria-pressed") === "true" && await scratchEye.getAttribute("aria-pressed") === "true");
+    await eye.click();
+    check("Hiding one workspace leaves the other visible", await scratchEye.getAttribute("aria-pressed") === "true" && await eye.getAttribute("aria-pressed") === "false");
+    await scratchEye.click();
+    await page.locator('[data-grouping="workspace"]').click();
+    check("Native workspace outline omits explanatory labels", await page.locator(".native-organization-note").count() === 0 && !(await page.locator("#workspaces").textContent()).includes("observed child has no separate tab") && !(await page.locator("#workspaces").textContent()).includes("Surface = tab"));
+    check("Workspace view keeps every open tab and disables filtering", await eye.isDisabled() && await eye.getAttribute("aria-pressed") === "true");
+    await page.locator('[data-grouping="worktrees"]').click();
+    await page.locator("#maestro-settings-button").focus();
+    await page.keyboard.press("Enter");
+    check("Settings gear opens the existing Maestro settings dialog", await page.locator("#settings-dialog").isVisible());
+    await page.keyboard.press("Escape");
+    check("Settings returns focus to the gear", await page.locator("#maestro-settings-button").evaluate(element => element === document.activeElement));
+    await page.locator("#fermata-button").click();
+    check("Fermata reflects a simulated on state", (await state()).fermata && await page.locator("#fermata-button").getAttribute("aria-pressed") === "true" && (await page.locator("#notice").textContent()).includes("Mac sleep settings are unchanged"));
+    await page.reload();
+    check("Fermata demo choice persists", await page.locator("#fermata-button").getAttribute("aria-pressed") === "true");
+    await page.locator("#fermata-button").click();
+    await page.locator("#beats-button").click();
+    await page.locator("#beats-panel").waitFor();
+    check("Beats opens as a pane content tab", (await state()).active === "tool-beats" && await page.locator('[data-pane="2"] #beats-panel').isVisible());
+    await page.locator("#beats-button").click();
+    check("Opening Beats again reuses one tab", await page.locator('[data-drag="tool-beats"]').count() === 1);
+    const seeds = (await state()).beats;
+    check("Several Beats can share one exact agent", seeds.filter(item => item.agentId === "reviewer").length === 2);
+
+    const cronProof = await page.evaluate(() => {
+      const expected = Date.UTC(2026, 8, 28, 9, 30);
+      const actual = nextCron("30 9 * * 1-5", Date.UTC(2026, 8, 25, 9, 31));
+      const domOrDow = nextCron("0 9 1 * 1", Date.UTC(2026, 8, 25, 9, 31));
+      const sunday = nextCron("0 9 * * 7", Date.UTC(2026, 8, 25, 9, 31));
+      const invalid = ["99 * * * *", "* * * *", "*/0 * * * *", "0 0 * JAN MON"].every(expression => {
+        try { parseCron(expression); return false; } catch { return true; }
+      });
+      return { weekdays: actual === expected, domOrDow: domOrDow === Date.UTC(2026, 8, 28, 9), sunday: sunday === Date.UTC(2026, 8, 27, 9), invalid, minuteSteps: cronDescription("*/7 * * * *").includes("resets hourly") };
+    });
+    check("Cron preview handles weekdays, day-or-weekday, Sunday alias and invalid input", Object.values(cronProof).every(Boolean));
+    await openSimulation();
+    await page.locator('[data-beat-tick="beat-review"]').click();
+    await page.locator('[data-beat-tick="beat-review"]').click();
+    check("Repeated occurrences do not duplicate an already queued Beat", (await beat("beat-review")).pending && (await beat("beat-review")).skipped === 2 && (await beat("beat-review")).deliveries === 0);
+    check("Simulation controls remain open after transitions", await page.locator(".beat-simulator").evaluate(element => element.open));
+    await choose("beat-checks");
+    await page.locator('[data-beat-run="beat-checks"]').click();
+    check("A second Beat may queue once for the same busy agent", (await state()).beats.filter(item => item.agentId === "reviewer" && item.pending).length === 2);
+    await openSimulation();
+    await page.locator("#beat-availability").selectOption("available");
+    check("Becoming available delivers each pending Beat once", (await beat("beat-review")).deliveries === 1 && (await beat("beat-checks")).deliveries === 1 && !(await beat("beat-review")).pending && !(await beat("beat-checks")).pending);
+    await page.locator("#beat-availability").selectOption("available");
+    check("Repeated available state does not redeliver", (await beat("beat-review")).deliveries === 1 && (await beat("beat-checks")).deliveries === 1);
+
+    await page.locator("#beat-cron").fill("99 * * * *");
+    await page.locator("#beat-editor-form [type=submit]").click();
+    check("Invalid cron leaves the saved expression intact with a visible error", (await beat("beat-checks")).cron === "0 * * * *" && (await page.locator("#beat-form-error").textContent()).length > 0);
+    await page.locator('[data-beat-discard="beat-checks"]').click();
+    await page.locator("[data-cron-builder]").click();
+    await page.locator("#cron-frequency").selectOption("weekdays");
+    await page.locator("#cron-time").fill("10:30");
+    check("Genie popup previews the expression from friendly controls", (await page.locator("#cron-preview").textContent()).includes("30 10 * * 1-5"));
+    await page.locator("#cron-form [type=submit]").click();
+    check("Cron helper fills an unsaved draft, not a second schedule", await page.locator("#beat-cron").inputValue() === "30 10 * * 1-5" && (await beat("beat-checks")).cron === "0 * * * *");
+    await page.locator("#beat-editor-form [type=submit]").click();
+    check("Saving applies the generated cron", (await beat("beat-checks")).cron === "30 10 * * 1-5");
+    await page.locator("[data-cron-builder]").click();
+    await page.locator("#cron-frequency").selectOption("minutes");
+    await page.locator("#cron-interval").fill("0");
+    check("Invalid helper interval blocks Apply", await page.locator("#cron-form [type=submit]").isDisabled());
+    await page.keyboard.press("Escape");
+    check("Cancelling the helper keeps the current expression", await page.locator("#beat-cron").inputValue() === "30 10 * * 1-5");
+    await page.locator("#beat-prompt").fill("A draft to preserve while moving this tab.");
+    await page.locator("#taskboard-button").click();
+    check("Taskboard and Beats are independent background tabs", await page.locator('[data-drag="tool-beats"]').count() === 1 && await page.locator('[data-drag="tool-taskboard"]').count() === 1 && await page.locator("#taskboard").isVisible());
+    await page.locator("#beats-button").click();
+    check("Returning to Beats preserves unsaved prompt text", await page.locator("#beat-prompt").inputValue() === "A draft to preserve while moving this tab.");
+    const bindings = (await state()).beats.map(item => [item.id, item.agentId]);
+    await page.locator('#native-layout [data-tool-move="beats"]').click();
+    await page.locator("#tool-move-workspace").selectOption("scratch");
+    await page.locator("#tool-move-pane").selectOption("1");
+    await page.locator("#tool-move-form [type=submit]").click();
+    assert.deepEqual((await state()).beats.map(item => [item.id, item.agentId]), bindings);
+    check("Moving a view across workspaces preserves agent bindings and draft text", (await state()).utilityTabs.beats.workspace === "scratch" && (await state()).utilityTabs.beats.pane === 1 && await page.locator("#beat-prompt").inputValue() === "A draft to preserve while moving this tab.");
+    await page.locator('[data-drag="tool-beats"]').dragTo(page.locator('[data-workspace="design"] .workspace-title'));
+    check("Dragging the utility tab to a workspace moves only the view", (await state()).utilityTabs.beats.workspace === "design");
+    await page.locator('[data-drag="tool-beats"]').dragTo(page.locator('[data-pane="2"] .pane-header'));
+    check("Utility tab can be dragged between panes", (await state()).utilityTabs.beats.pane === 2);
+    await page.locator("#beat-editor-form [type=submit]").click();
+    await page.locator('[data-close-tool="beats"]').click();
+    check("Closing Beats leaves all Beat definitions", !(await state()).utilityTabs.beats && (await state()).beats.length === 4);
+    await page.locator("#beats-button").click();
+    check("Reopening restores saved prompt and selected Beat", await page.locator("#beat-prompt").inputValue() === "A draft to preserve while moving this tab.");
+
+    await choose("beat-progress");
+    await page.locator('[data-beat-run="beat-progress"]').click();
+    await page.locator("#beat-prompt").fill("Do not silently change a pending prompt.");
+    await page.locator("#beat-editor-form [type=submit]").click();
+    check("Editing a pending Beat requires explicit cancellation", (await page.locator("#beat-form-error").textContent()).includes("Cancel the queued occurrence") && (await beat("beat-progress")).prompt !== "Do not silently change a pending prompt.");
+    await page.locator('[data-beat-discard="beat-progress"]').click();
+    await page.locator('[data-beat-pause="beat-progress"]').click();
+    await openSimulation();
+    await page.locator('[data-beat-tick="beat-progress"]').click();
+    check("Pause stops future occurrences without silently discarding a queued prompt", !(await beat("beat-progress")).enabled && (await beat("beat-progress")).pending);
+    await page.locator('[data-beat-cancel="beat-progress"]').click();
+    check("Explicit cancel removes the pending occurrence", !(await beat("beat-progress")).pending);
+    await page.locator("#beat-availability").selectOption("available");
+    await page.locator('[data-beat-run="beat-progress"]').click();
+    check("Run now can deliver once while the schedule remains paused", !(await beat("beat-progress")).enabled && (await beat("beat-progress")).deliveries === 1);
+    await page.locator("#beat-availability").selectOption("unavailable");
+    await page.locator('[data-beat-run="beat-progress"]').click();
+    check("Unavailable targets expose failure rather than retargeting or claiming delivery", (await beat("beat-progress")).agentId === "implementer" && (await beat("beat-progress")).deliveries === 1 && (await beat("beat-progress")).error.includes("unavailable"));
+
+    await page.locator("[data-beat-add]").click();
+    await page.locator("#beat-agent").selectOption("notes");
+    await page.locator("#beat-cron").fill("*/7 * * * *");
+    await page.locator("#beat-prompt").fill("Treat <b>this text</b> as a prompt, not markup.");
+    await page.locator("#beat-editor-form [type=submit]").click();
+    const newId = (await state()).selectedBeat;
+    check("New Beat stores exact target, cron and prompt", (await beat(newId)).agentId === "notes" && (await beat(newId)).cron === "*/7 * * * *" && await page.locator(".beat-list-item b b").count() === 0);
+    await page.reload();
+    check("Beats, utility tab location and selected record survive reload", (await state()).selectedBeat === newId && (await state()).utilityTabs.beats.pane === 2 && await page.locator("#beat-prompt").inputValue() === (await beat(newId)).prompt);
+    await page.locator(`[data-beat-remove="${newId}"]`).click();
+    await page.locator("[data-beat-remove-cancel]").click();
+    check("Remove is explicitly confirmed", (await state()).beats.length === 5);
+    await page.locator(`[data-beat-remove="${newId}"]`).click();
+    await page.locator(`[data-beat-remove-confirm="${newId}"]`).click();
+    check("Removing a Beat leaves the target agent intact", (await state()).beats.length === 4 && !(await state()).dismissed.notes);
+
+    await page.locator("#reset-demo").click();
+    await page.locator("#beats-button").click();
+    await page.screenshot({ path: path.join(__dirname, "review-beats.png"), fullPage: true });
+    await page.locator("[data-cron-builder]").click();
+    await page.screenshot({ path: path.join(__dirname, "review-cron-builder.png") });
+    await page.keyboard.press("Escape");
+    await page.setViewportSize({ width: 800, height: 1000 });
+    await page.screenshot({ path: path.join(__dirname, "review-beats-narrow.png"), fullPage: true });
+    check("Narrow panel remains within its content pane", await page.locator("#beats-panel").evaluate(element => element.scrollWidth <= element.clientWidth));
+    check("No script errors", errors.length === 0);
+    check("No external connections", requests.every(url => new URL(url).origin === new URL(baseURL).origin));
+    fs.writeFileSync(path.join(__dirname, "verification-beats.json"), JSON.stringify({ checkedAt: new Date().toISOString(), checks, errors }, null, 2));
+    console.log(`PASS: ${checks.length} Beats and header checks.`);
+  } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exitCode = 1; });

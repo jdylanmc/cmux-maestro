@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maestro — cosmetic design lab</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="native-refinement.css">
+</head>
+<body>
+  <header class="lab-bar">
+    <div><strong>Maestro</strong><span class="divider">/</span> Design lab <span class="lab-badge">SYNTHETIC DATA</span></div>
+    <div class="lab-tools">
+      <label class="width-control">Sidebar <input id="sidebar-width" type="range" min="280" max="460" value="350" aria-label="Sidebar width"></label>
+      <button id="settings-button">CLI integration</button>
+      <button id="reset-demo">Reset demo</button>
+    </div>
+  </header>
+  <main class="app-frame">
+    <aside id="sidebar" aria-label="Maestro sidebar">
+      <div class="sidebar-heading">
+        <h1>Maestro</h1>
+        <div class="sidebar-heading-actions">
+          <button id="open-directory-button" data-open-directory title="Open directory as new workspace" aria-label="Open directory as new workspace" aria-haspopup="dialog" aria-controls="directory-dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M8 13h8m-4-4v8"/></svg></button>
+          <button id="beats-button" data-open-tool="beats" title="Beats" aria-label="Beats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15 3v13"/><ellipse cx="11" cy="17" rx="4" ry="3" transform="rotate(-20 11 17)" fill="currentColor" stroke="none"/></svg></button>
+          <button id="taskboard-button" data-open-tool="taskboard" title="Taskboard" aria-label="Taskboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg></button>
+          <button id="history-button" title="History" aria-label="History" aria-haspopup="dialog" aria-controls="history-dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/></svg></button>
+          <button id="maestro-settings-button" data-open-settings title="Maestro settings" aria-label="Maestro settings" aria-haspopup="dialog" aria-controls="settings-dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m10 3 4 0 .6 2.4 2 .9 2.2-.7 2 3.4-1.7 1.7v2.6l1.7 1.7-2 3.4-2.2-.7-2 .9L14 21h-4l-.6-2.4-2-.9-2.2.7-2-3.4 1.7-1.7v-2.6L3.2 9l2-3.4 2.2.7 2-.9z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          <button id="fermata-button" data-fermata title="Fermata · Keep Mac Awake off (simulated)" aria-label="Fermata: Keep Mac Awake" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M3 14a9 9 0 0 1 18 0"/><circle cx="12" cy="14" r="1.6" fill="currentColor" stroke="none"/></svg></button>
+        </div>
+      </div>
+      <div id="global-grouping" class="view-toggle global-grouping" role="group" aria-label="Grouping for all workspaces"><button data-grouping="worktrees" aria-pressed="true">Worktrees</button><button data-grouping="subagents" aria-pressed="false">Sub-agents</button><button data-grouping="workspace" aria-pressed="false">Workspace</button></div>
+      <section class="workspace-outline" aria-label="Synthetic window outline"><div id="window-context" class="window-context" hidden>Window 1 <span>synthetic native organization</span></div><div class="workspaces" id="workspaces"></div></section>
+      <section id="pinned-details" class="pinned-details" aria-label="Active window details"></section>
+    </aside>
+    <section class="stage" aria-label="Synthetic native window layout">
+      <header class="stage-header"><div><span class="eyebrow">Layout experiment · synthetic windows</span><h2 id="stage-title"></h2></div><span class="quiet">Worktree ≠ family ≠ pane</span></header>
+      <div class="design-note">One grouping for <b>all workspaces</b>: Worktrees, Sub-agents, or native Workspace organization. Switching only changes presentation. Hover previews stay separate from the pinned active-window details.</div>
+      <div id="native-layout" class="native-layout"></div>
+      <section class="design-ledger">
+        <h3>Review this direction</h3>
+        <div><span class="ledger-dot"></span><p><b>Worktree ≠ ancestry ≠ pane.</b> Reviewer shares the implementer's worktree, but has its own child. The coordinator's children span worktrees.</p></div>
+        <div><span class="ledger-dot"></span><p><b>Placement is not ownership.</b> Drag tabs between the two panes, or use their Move button. This never changes worktree groups or spawn relationships.</p></div>
+        <div><span class="ledger-dot"></span><p><b>Views, not modes.</b> Beats and Taskboard open reusable content tabs. Move them between panes or workspaces; close and reopen them without changing agents or Beat definitions.</p></div>
+        <div><span class="ledger-dot"></span><p><b>A Beat is a cron prompt.</b> One exact agent, one cron expression, one prompt. Each Beat can wait once; another occurrence does not add another queued prompt. The wand builds an expression, not a second schedule.</p></div>
+        <div><span class="ledger-dot"></span><p><b>Finished is not exited.</b> Open a finished chat to continue. Proposed “Exit session & close tab” is simulated here; active sessions require confirmation. No production graceful-exit capability is implied.</p></div>
+        <div><span class="ledger-dot"></span><p><b>Nothing here controls CMUX.</b> Diagnostics, Beats, tabs, and pets are synthetic. Beats adds a visual exploration of #42, not live scheduling or an expansion of the native delivery backlog. No prompts or commands are sent.</p></div>
+        <footer><a href="https://github.com/jdylanmc/cmux-maestro/issues/57" target="_blank" rel="noreferrer">Design parent #57 ↗</a><button id="capability-button">Research & capability notes</button></footer>
+      </section>
+    </section>
+  </main>
+  <div id="hover-card" class="hover-card" role="region" aria-label="Temporary details preview" tabindex="-1" hidden></div>
+  <dialog id="history-dialog" class="settings-dialog" aria-labelledby="history-title">
+    <header><h2 id="history-title">Completed activity</h2><button data-close="history-dialog" aria-label="Close history">×</button></header>
+    <p class="muted">A completed turn can leave its chat open for continued interaction. “Show finished” only changes outline visibility; it is not dismissal.</p>
+    <p class="lifecycle-note"><b>Dismiss means exit the session and close its terminal tab.</b> With open descendants, choose this agent only or this agent and its descendants. Working or awaiting-input targets require confirmation; idle or task-finished targets close directly after any scope choice. Proposed capability, simulated only: production does not currently expose a per-worker graceful-exit command. Exited chats cannot be reopened here.</p>
+    <div id="history-content"></div>
+  </dialog>
+  <dialog id="dismiss-scope-dialog" class="settings-dialog" aria-labelledby="dismiss-scope-title">
+    <header><h2 id="dismiss-scope-title">Also close descendants?</h2><button data-close="dismiss-scope-dialog" aria-label="Cancel closure choice">×</button></header>
+    <p class="lifecycle-note">Proposed capability · simulation only. Scope follows recorded spawn ancestry, never shared worktree or pane placement.</p>
+    <div id="dismiss-scope-content"></div>
+    <div class="button-row"><button data-dismiss-scope="only">Close only this agent</button><button data-dismiss-scope="descendants" class="primary">Close agent & descendants</button></div>
+    <button data-close="dismiss-scope-dialog">Keep everything open</button>
+  </dialog>
+  <dialog id="dismiss-dialog" class="settings-dialog" aria-labelledby="dismiss-title">
+    <header><h2 id="dismiss-title">Exit session & close tab?</h2><button data-close="dismiss-dialog" aria-label="Cancel session exit">×</button></header>
+    <p class="lifecycle-note">Proposed capability · simulation only. No agent command or native tab operation is sent.</p>
+    <div id="dismiss-content"></div>
+    <div class="button-row"><button data-close="dismiss-dialog">Keep sessions open</button><button id="confirm-dismiss" class="primary">Exit & close · simulated</button></div>
+  </dialog>
+  <dialog id="picker" class="picker">
+    <header><div><span class="eyebrow" id="picker-kind"></span><h2 id="picker-title"></h2></div><button class="close" data-close="picker" aria-label="Close picker">×</button></header>
+    <div id="picker-content"></div>
+  </dialog>
+  <dialog id="context-menu" class="context-menu" aria-label="Item actions"><div id="context-content"></div></dialog>
+  <dialog id="directory-dialog" class="settings-dialog compact-dialog" aria-labelledby="directory-title">
+    <header><h2 id="directory-title">Open directory as new workspace</h2><button data-close="directory-dialog" aria-label="Cancel opening directory">×</button></header>
+    <form id="directory-form">
+      <label>Directory<input id="directory-path" placeholder="~/Projects/my-project" maxlength="240" required autocomplete="off"></label>
+      <p class="muted">Enter an example path to create a demo workspace and terminal. No directory is read and no process is launched.</p>
+      <p id="directory-error" class="beat-error" role="alert"></p>
+      <div class="button-row"><button type="button" data-close="directory-dialog">Cancel</button><button type="submit" class="primary">Open workspace</button></div>
+    </form>
+  </dialog>
+  <dialog id="tool-move-dialog" class="settings-dialog compact-dialog" aria-labelledby="tool-move-title">
+    <header><h2 id="tool-move-title">Move tab</h2><button data-close="tool-move-dialog" aria-label="Cancel tab move">×</button></header>
+    <form id="tool-move-form">
+      <label>Workspace<select id="tool-move-workspace"><option value="design">Maestro design</option><option value="scratch">Scratch space</option></select></label>
+      <label>Pane<select id="tool-move-pane"><option value="1">Pane 1 · left</option><option value="2">Pane 2 · right</option></select></label>
+      <p class="muted">Move the view only. Agent targets and saved Beats stay unchanged.</p>
+      <div class="button-row"><button type="button" data-close="tool-move-dialog">Cancel</button><button type="submit" class="primary">Move tab</button></div>
+    </form>
+  </dialog>
+  <dialog id="cron-dialog" class="settings-dialog compact-dialog" aria-labelledby="cron-title">
+    <header><div><h2 id="cron-title">Build a cron expression</h2><p class="muted">Friendly controls. One expression.</p></div><button data-close="cron-dialog" aria-label="Close cron builder">×</button></header>
+    <form id="cron-form">
+      <label>Repeat<select id="cron-frequency"><option value="minutes">Every few minutes</option><option value="hourly">Every hour</option><option value="daily">Every day</option><option value="weekdays">Weekdays</option><option value="weekly">Every week</option></select></label>
+      <label id="cron-interval-label">Minute step within each hour<input id="cron-interval" type="number" min="1" max="59" value="15" required></label>
+      <label id="cron-minute-label" hidden>Minute of the hour<input id="cron-minute" type="number" min="0" max="59" value="0"></label>
+      <label id="cron-time-label" hidden>Time · UTC<input id="cron-time" type="time" value="09:00"></label>
+      <label id="cron-weekday-label" hidden>Day<select id="cron-weekday"><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="0">Sunday</option></select></label>
+      <output id="cron-preview" class="cron-preview" aria-live="polite"></output>
+      <p class="muted">UTC is a prototype convention, not a settled timezone policy. Applying this only fills the editor; save the Beat to keep it.</p>
+      <div class="button-row"><button type="button" data-close="cron-dialog">Cancel</button><button type="submit" class="primary">Use expression</button></div>
+    </form>
+  </dialog>
+  <dialog id="tag-color-dialog" class="settings-dialog compact-dialog" aria-labelledby="tag-color-title">
+    <header><h2 id="tag-color-title">Tag color</h2><button data-close="tag-color-dialog" aria-label="Close tag color picker">×</button></header>
+    <div id="tag-color-preview"></div>
+    <p class="muted">This color applies to the same tag slug on every agent and in every workspace. Only you choose overrides.</p>
+    <div id="tag-color-options" class="tag-color-options" role="group" aria-label="Tag color swatches"></div>
+    <p id="tag-color-source" class="muted"></p>
+    <button type="button" data-tag-color-reset>Use automatic color</button>
+  </dialog>
+  <dialog id="tags-dialog" class="settings-dialog" aria-labelledby="tags-title">
+    <header><h2 id="tags-title">Edit tags</h2><button data-close="tags-dialog" aria-label="Close tag editor">×</button></header>
+    <p class="muted">Human tags and agent tags retain separate ownership. This prototype edits your tags only.</p>
+    <form id="tag-form"><label>Your tags <input id="tag-input" maxlength="160" placeholder="design, frontend"></label><p id="agent-tags" class="muted"></p><p id="tag-editor-error" class="beat-error" role="alert"></p><button type="submit" class="primary">Save tags</button></form>
+    <h3>Tag colors</h3><p class="muted">Click a saved tag to change its color everywhere. Case and spaces normalize to the same slug: “Design Review” becomes “design-review”.</p><div id="tag-editor-colors" class="tags tag-chips"></div>
+  </dialog>
+  <dialog id="settings-dialog" class="settings-dialog">
+    <header><h2>Maestro settings</h2><button data-close="settings-dialog" aria-label="Close settings">×</button></header>
+    <section class="integration-card">
+      <div class="integration-title"><span class="integration-logo">M</span><div><h3>Maestro guide</h3><p>Peer discovery, messages, and replies.</p></div><span class="pill">GitHub Copilot</span></div>
+      <div id="install-status"></div>
+      <code>npx skills add jdylanmc/cmux-maestro --skill maestro --agent github-copilot --global --copy</code>
+      <div class="button-row"><button id="copy-command" class="primary">Copy install / update command</button><button id="recheck">Re-check</button></div>
+      <p class="muted">You run the command and review the installer. Runtime integration is separate. Nothing is executed here.</p>
+    </section>
+    <label class="simulation">Prototype status scenario <select id="install-scenario"><option value="matching">Matching content</option><option value="missing">Not installed</option><option value="different">Different content</option><option value="unreadable">Cannot read</option></select></label>
+    <p class="muted">Simulated states only. This page never inspects your installed skills.</p>
+  </dialog>
+  <dialog id="notes-dialog" class="settings-dialog">
+    <header><h2>Design boundaries</h2><button data-close="notes-dialog" aria-label="Close notes">×</button></header>
+    <p>Native CMUX keeps workspace, pane, tab selection, and focused surface distinct. This design preserves that model while projecting verified agents by worktree or ancestry.</p>
+    <ul>
+      <li>One global Worktrees / Sub-agents / Workspace choice applies to all workspaces. It replaces the earlier per-workspace preference; saved appearance, placement, lifecycle, and disclosure settings are retained.</li>
+      <li><a href="https://cmux.com/docs/concepts" target="_blank" rel="noreferrer">Official CMUX concepts</a>: a macOS Window owns its sidebar Workspaces; each Workspace contains split Panes; each Pane holds Surface tabs. A Panel is the terminal or browser content inside a Surface, mostly an internal concept. This prototype uses one surface row with an inline content-kind label, not a second independently controlled panel row.</li>
+      <li>Workspaces may also be called tabs in CMUX's sidebar UI. Here “tab” within a pane means Surface. Synthetic pane and tab order comes only from placement, never spawn ancestry or worktree membership.</li>
+      <li>Workspace mode shows every still-open surface, including finished-task chats. Finished-row filtering remains available in agent groupings. Pane disclosures are remembered independently from worktree and ancestry disclosures.</li>
+      <li>Maestro's pinned compiled SDK has workspace/surface identity and paths, but not authoritative worktree membership, pane membership, browser URL, or favicon metadata.</li>
+      <li>Current Git probing reports a root basename and branch from an assigned directory, not a dynamic terminal cwd. Unavailable includes non-repository results and probe errors/timeouts; it cannot establish confirmed non-repository status. Detached HEAD is still a repository.</li>
+      <li>The same basename appears under two distinct opaque synthetic worktree IDs in this prototype. Verified, confirmed non-repository, unknown, and stale evidence are separate.</li>
+      <li>Hover is preview-only and never marks attention seen. Production explicit inspect/prepareSeen semantics must not be reused for hover.</li>
+      <li>Pane/tab placement and movement are exploratory here. Native host capabilities do not establish support in Maestro's pinned sidebar SDK.</li>
+      <li>Native CMUX has browser favicons and movement commands. Exposing them through the sidebar requires separately scoped host/SDK work.</li>
+      <li>Codex documents pets and a custom sprite contract. Built-in artwork redistribution permission is unverified. All three pets here are original geometric placeholders.</li>
+      <li>Proposed Dismiss exits a session and closes its tab. Current production archive refuses live/uncertain interactive sessions and retains tabs after exit; current history Dismiss only hides records. Adapter close() is not agent exit. Reopening a chat after actual exit is not implemented.</li>
+      <li>Observed provider children have no individual surface/worktree identity; parent-chat fallback is not an independent child chat, pet, or exit capability.</li>
+      <li>Beats is a synthetic extension to this prototype only. There is no live scheduler, provider connection, prompt delivery, or shell-command support. The demo uses numeric five-field cron in UTC; production timezone, persistence, offline catch-up, permissions, and delivery integration remain open.</li>
+      <li>Beats and Taskboard use simulated reusable tabs. Closing or moving a view preserves Beat definitions and exact agent targets. Pause stops future simulated occurrences; a queued occurrence remains visible until delivered or explicitly cancelled. These interactions are candidates for human review, not shipped behavior.</li>
+      <li>Sidebar units reorder among siblings only: workspaces, worktree groups, agent trees, panes, and individual rows. Groups carry their children. Drop lines show before/after placement; cross-container drops are rejected. Option+Up/Down offers the same reorder from a focused row or heading. Identity, ancestry, focus, and preferences stay unchanged.</li>
+      <li>Tag colors are deterministic from normalized slugs and shared across the prototype. Human swatch overrides apply everywhere; agents only assign tags. Black or white chip text is selected for at least 4.5:1 contrast. Shared storage and agent-facing enforcement in the real app remain implementation work.</li>
+    </ul>
+    <p>Preference ownership and visual behavior are demonstrated here; production persistence, exact identity resolution, and host permissions still need implementation design.</p>
+    <p><a href="https://github.com/manaflow-ai/cmux/blob/f11bd6142d476ae9dfe00b094198664cb924b38b/docs/custom-sidebars.md" target="_blank" rel="noreferrer">CMUX native sidebar research ↗</a></p>
+    <p><a href="https://learn.chatgpt.com/docs/pets?surface=app" target="_blank" rel="noreferrer">Official pet documentation ↗</a></p>
+  </dialog>
+  <div id="notice" role="status" aria-live="polite"></div>
+  <script src="beats.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

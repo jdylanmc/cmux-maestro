@@ -1,0 +1,10 @@
+{
+  "name": "maestro-cosmetic-prototype",
+  "private": true,
+  "scripts": {
+    "test": "node verify.cjs && node verify-beats.cjs && node verify-sidebar.cjs && node verify-tags.cjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1"
+  }
+}

@@ -1,0 +1,155 @@
+{
+  "capturedAt": "2026-09-26T01:04:13.830Z",
+  "browser": "153.0.8010.54",
+  "viewport": {
+    "width": 1512,
+    "height": 1080
+  },
+  "scale": 2,
+  "motion": "reduce",
+  "synthetic": true,
+  "noNativeIntegration": true,
+  "images": [
+    {
+      "file": "images/overview.png",
+      "caption": "Default approved design: compact sidebar and native-layout review stage.",
+      "sha256": "3b46486488005adce33fe0964364f0bbac55076ebeb36e7e2a4e58c9dca0cb5f"
+    },
+    {
+      "file": "images/worktrees.png",
+      "caption": "Worktrees: compact groups, title-inline tags and icon-only agent status.",
+      "sha256": "b267ac2f91866cd34d0180fdd0e2c79a04e0701e2244838a4978741b06e0cb45"
+    },
+    {
+      "file": "images/header.png",
+      "caption": "Header order: directory, Beats, Taskboard, History, Settings, Fermata.",
+      "sha256": "d4b287ff10e213a220a2608b7c03fdd7b2b0782b5d0815858b28f62e3c6ee8ca"
+    },
+    {
+      "file": "images/subagents.png",
+      "caption": "Sub-agents: verified ancestry, reduced indentation and compact tags.",
+      "sha256": "e9704a7d401381f506bec6acdc753dd4348fd321ce6ab1598407f502c621bbb9"
+    },
+    {
+      "file": "images/workspace.png",
+      "caption": "Workspace: real hierarchy concepts, pane-local surfaces and no explanatory clutter.",
+      "sha256": "85f4d604107f68d5ac42f4c7533aef48e56e72848be9cf91915a7ba3019f3955"
+    },
+    {
+      "file": "images/workspace-hover.png",
+      "caption": "Workspace-name-only hover; eye, backlog, menu and collapse controls do not trigger it.",
+      "sha256": "9569fdd6e42e687b27efbb299f3ca26c60e3c903c01d93fefc868f6937a6bbbc"
+    },
+    {
+      "file": "images/agent-hover.png",
+      "caption": "Hovered agent details and its pet stay separate from the pinned active agent. Values are synthetic.",
+      "sha256": "57036424125a86705880af274ea091f50108cbcbf3015ae88d3938480949cc94"
+    },
+    {
+      "file": "images/tags-inline.png",
+      "caption": "Shared slug colors; tags are unchanged in size, inline with agent names, aligned right.",
+      "sha256": "a75bbc09dd8c21cf642933f22b7c8973ca6d2987787ad9c03818501e8221a4c7"
+    },
+    {
+      "file": "images/tag-colors.png",
+      "caption": "Human swatch overrides apply everywhere; automatic colors derive from the slug.",
+      "sha256": "8d261aef2c08467440361df1cd5b49c37cd5fc8d6510954bebef346db9d2c00a"
+    },
+    {
+      "file": "images/tag-editor.png",
+      "caption": "Human tag assignment and tag colors preserve agent-owned tag attribution.",
+      "sha256": "a2311bbf7981a0fd4001d8fe8cf0d8afeb7e556e8d1b2cdcab17ee89659e14e6"
+    },
+    {
+      "file": "images/pet-picker.png",
+      "caption": "Independent per-agent pet choice, reset and visibility; original placeholder artwork.",
+      "sha256": "0fe2c7a98546a840c9e566254c6fc539082ca68a74ea768ca0f35605a47fd5d0"
+    },
+    {
+      "file": "images/browser-icon.png",
+      "caption": "Browser appearance picker with explicit website-favicon mode; no favicon fetching is demonstrated.",
+      "sha256": "50e7ce0d72ccdec68d9fce82e286b2c61988e5b343ca1ccac6d43c5f6da44e11"
+    },
+    {
+      "file": "images/history.png",
+      "caption": "History preserves completed activity and open-chat versus explicit exit semantics.",
+      "sha256": "b02c443d24ae59ce10dd53ba2b32cd897f68ce178ef96c9617905754a7958999"
+    },
+    {
+      "file": "images/workspace-history-eye.png",
+      "caption": "Workspace-specific finished visibility: first eye enabled, second unaffected.",
+      "sha256": "1364f06858d4b85094da96080a002a6d529a38eee01b618d5cb12e2ef6dc7bdd"
+    },
+    {
+      "file": "images/agent-menu.png",
+      "caption": "Agent overflow keeps focus, appearance, tags and lifecycle actions separate.",
+      "sha256": "43de89f10dc81413be810d9469b30ebec0db8aa5396c69f0262911f9ab8b939b"
+    },
+    {
+      "file": "images/workspace-menu.png",
+      "caption": "Workspace menu and adjacent per-workspace eye/backlog affordances.",
+      "sha256": "cc96366e5441e18c14a7891027d3ac41f385d0ba4c35c1b9e8fca5587a39b656"
+    },
+    {
+      "file": "images/exit-confirm.png",
+      "caption": "Working-agent exit requires explicit confirmation; simulated only.",
+      "sha256": "34e0aa12b45ba61595992cecbbcfb2409ffd15830b7be9914cc9a970da95f648"
+    },
+    {
+      "file": "images/exit-scope.png",
+      "caption": "Parent-only versus exact descendant scope; no live lifecycle action.",
+      "sha256": "2e7434c6aa4e3d4779b51385a75a4ccd677d7d91261a681df43c4bf1e5291588"
+    },
+    {
+      "file": "images/settings.png",
+      "caption": "Header gear opens Maestro settings; guide status is a simulated scenario.",
+      "sha256": "0448bf5403883143082a0d170cc36d437123f7d669eb090e90064436a0ff22e0"
+    },
+    {
+      "file": "images/beats.png",
+      "caption": "Beats content tab: exact agent, cron, prompt and per-Beat queued state.",
+      "sha256": "b653ac9d25ba6c51c20537001fab2acfef421854b3f1661bccfe228d4fe31d8f"
+    },
+    {
+      "file": "images/cron-builder.png",
+      "caption": "Inline wand opens friendly controls that fill a single cron expression.",
+      "sha256": "3f4fb87322fbedaa39c5073c09c758797b3f392b6dc9a1829c23fed37f46414b"
+    },
+    {
+      "file": "images/beat-diagnostics.png",
+      "caption": "Two extra triggers leave only one pending occurrence; scheduling controls are explicit simulation.",
+      "sha256": "b53afb1836239b9359b6ca6e10ec27c01cb6c4ee51bc6ed4f06b7e3b839b2b3d"
+    },
+    {
+      "file": "images/taskboard.png",
+      "caption": "Taskboard is a reusable content tab, not a sidebar grouping mode.",
+      "sha256": "4b4e146d48c9d977e9bdbdd4fed222a87169c53ac14910058e76f7f9fd01ca96"
+    },
+    {
+      "file": "images/utility-move.png",
+      "caption": "Move a utility view to a pane/workspace without changing agents or Beats.",
+      "sha256": "844bc8f4743a0c5ef5da65eb39fefa8b3d8710d630c80486aa14b852d9c1bb69"
+    },
+    {
+      "file": "images/open-directory.png",
+      "caption": "Directory-plus entry point; example-path simulation stands in for a native directory chooser.",
+      "sha256": "c480730b17fd55900e6c3d27b86f3dd485e0c5bc7f5bd503604d6b31fcdfbf12"
+    },
+    {
+      "file": "images/fermata.png",
+      "caption": "Final header icon: musical fermata, Keep Mac Awake on/off; local demo state only.",
+      "sha256": "1ea7b3832f4e0a7eabda2b6a824ab499a02fa751c6cb895edd8461941283fe03"
+    },
+    {
+      "file": "images/sidebar-reorder.png",
+      "caption": "Real prototype drag gesture: insertion line among sibling rows; no reparenting.",
+      "sha256": "6cf2c3d3ebeb17d02e731d5fb02181f723047a5469fc324739822cfe165a97bf"
+    },
+    {
+      "file": "images/deep-nesting.png",
+      "caption": "Explicit test-only eight-level fixture at 280px; not part of the default demo.",
+      "sha256": "71225c1d09233a6972a5e7852eb7dade36db08b48df283a91ab1f26f066e642d"
+    }
+  ],
+  "errors": []
+}
