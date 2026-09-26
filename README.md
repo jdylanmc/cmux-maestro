@@ -478,6 +478,9 @@ interaction; closing that preview restores its original responder when appropria
 Right-click a row, use its transient overflow, or press **Shift-F10** on its title
 for the same native grouped menu. Opening it is passive. **Preview details** is
 also passive; **Open details** retains the existing explicit mark-read behavior.
+Managed inspection requests retain the captured node, run, generation, session,
+workspace and surface. A changed subject shows **Details no longer available**
+without inspecting or marking the replacement read.
 Icon-direct right-click still opens the compact icon picker, not the row menu.
 Menu icon requests retain their exact identity; a replacement target shows
 **Icon target changed** rather than applying the old request to a new session.

@@ -238,7 +238,7 @@ struct SidebarLayoutRenderingTests {
             let view = NSHostingView(rootView: ManagedHierarchyContent(
                 polling: model.orchestration, hierarchy: model.hierarchy,
                 navigation: model.navigation, layout: preferences.layout,
-                setExpanded: { _, _ in }, selectedID: .constant(nil)
+                setExpanded: { _, _ in }, selectedNode: .constant(nil)
             ).environment(preferences).frame(width: 300, alignment: .leading))
             view.layoutSubtreeIfNeeded()
             return view.fittingSize.height

@@ -436,11 +436,11 @@ struct SidebarView: View {
         }
     }
 
-    private var managedSelection: Binding<UUID?> {
+    private var managedSelection: Binding<SidebarOrchestrationNode?> {
         Binding(get: {
-            if case .managed(let node) = inspector?.target { return node.id }
+            if case .managed(let node) = inspector?.target { return node }
             return nil
-        }, set: { if let id = $0 { inspectManaged(id) } })
+        }, set: { if let node = $0 { inspectManaged(node) } })
     }
 
     private var unmanagedSelection: Binding<UnmanagedSelection?> {
@@ -530,10 +530,11 @@ struct SidebarView: View {
             }
             .accessibilityIdentifier("sidebar-mode-content")
 
-            SidebarPinnedFooter(content: pinnedDetails, maximumHeight: pinnedHeight, inspect: {
-                guard let target = pinnedDetails.inspection?.target else { return }
+            let pinned = pinnedDetails
+            SidebarPinnedFooter(content: pinned, maximumHeight: pinnedHeight, inspect: {
+                guard let target = pinned.inspection?.target else { return }
                 switch target {
-                case .managed(let node): inspectManaged(node.id)
+                case .managed(let node): inspectManaged(node)
                 case .unmanaged(let selection): inspect(selection)
                 }
             })
@@ -635,7 +636,7 @@ struct SidebarView: View {
                     polling: model.orchestration, hierarchy: model.hierarchy,
                     navigation: model.navigation, layout: preferences.layout,
                     setExpanded: { preferences.setExpanded($1, for: $0) },
-                    selectedID: managedSelection,
+                    selectedNode: managedSelection,
                     displayNodes: visibleWork.managed, copilotTree: visibleWork.tree
                 )
             }
@@ -698,9 +699,8 @@ struct SidebarView: View {
         }
     }
 
-    private func inspectManaged(_ id: UUID) {
-        guard let node = model.orchestration.snapshot.nodes.first(where: { $0.id == id }),
-              openInspector(.managed(node)) else { return }
+    private func inspectManaged(_ node: SidebarOrchestrationNode) {
+        guard openInspector(.managed(node)) else { return }
         prepareSeen(.surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId))()
     }
 
@@ -959,7 +959,7 @@ struct ManagedHierarchyContent: View {
     let navigation: SidebarNavigation
     let layout: SidebarLayoutSettings
     let setExpanded: (SidebarExpansionID, Bool) -> Void
-    @Binding var selectedID: UUID?
+    @Binding var selectedNode: SidebarOrchestrationNode?
     var workspaceID: UUID? = nil
     var showsWorkspaceHeaders = true
     var displayNodes: [SidebarOrchestrationNode]? = nil
@@ -999,7 +999,7 @@ struct ManagedHierarchyContent: View {
                             hasChildren: row.hasChildren,
                             activeDescendants: row.activeDescendants,
                             expanded: layout.isExpanded(.managed(row.node.id)),
-                            selected: selectedID == row.node.id,
+                            selected: selectedNode?.id == row.node.id,
                             evidenceDate: Date(),
                             availability: polling.availability,
                             copilotTree: copilotTree,
@@ -1007,7 +1007,7 @@ struct ManagedHierarchyContent: View {
                             toggleExpanded: {
                                 setExpanded(.managed(row.node.id), !layout.isExpanded(.managed(row.node.id)))
                             },
-                            select: { selectedID = row.node.id }
+                            select: { selectedNode = row.node }
                         )
                     }
                 }
@@ -1320,7 +1320,7 @@ private struct HierarchyContent: View {
     let setExpanded: (SidebarExpansionID, Bool) -> Void
     let dismiss: (SidebarDismissedOutcome) -> Void
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
-    @Binding var managedSelection: UUID?
+    @Binding var managedSelection: SidebarOrchestrationNode?
     @Binding var selection: UnmanagedSelection?
 
     var body: some View {
@@ -1360,7 +1360,7 @@ private struct WorkspaceRow: View {
     let displayManaged: [SidebarOrchestrationNode]
     let hiddenSurfaces: Set<UUID>
     let copilotTree: SidebarCopilotTree
-    @Binding var managedSelection: UUID?
+    @Binding var managedSelection: SidebarOrchestrationNode?
     let dismiss: (SidebarDismissedOutcome) -> Void
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
@@ -1442,7 +1442,7 @@ private struct WorkspaceRow: View {
                     ManagedHierarchyContent(
                         polling: orchestration, hierarchy: hierarchy,
                         navigation: navigation, layout: layout, setExpanded: setExpanded,
-                        selectedID: $managedSelection, workspaceID: workspace.id,
+                        selectedNode: $managedSelection, workspaceID: workspace.id,
                         showsWorkspaceHeaders: false, displayNodes: displayManaged, copilotTree: copilotTree
                     )
                 }

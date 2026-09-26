@@ -4,6 +4,31 @@ import Testing
 @_spi(CmuxHostTransport) import CmuxExtensionKit
 
 @MainActor
+private final class RetainedMenuSource {
+    var node: SidebarOrchestrationNode
+    let evidence: AgentAttention
+    let date: Date
+
+    init(node: SidebarOrchestrationNode, evidence: AgentAttention, date: Date) {
+        self.node = node
+        self.evidence = evidence
+        self.date = date
+    }
+
+    var managed: SidebarOrchestrationSnapshot {
+        .init(version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [node])
+    }
+
+    var observed: CopilotSnapshot {
+        .init(generatedAt: date, sessions: [
+            .init(sessionID: node.copilotSessionId!, surfaceID: node.surfaceId, launchWorkspaceID: node.workspaceId,
+                  liveness: .alive, state: .idle, model: "retained-menu-model", children: [], observedAt: date,
+                  attention: [evidence])
+        ], issues: [], isComplete: true)
+    }
+}
+
+@MainActor
 @Suite(.serialized)
 struct SidebarPinnedDetailsTests {
     private let fixtures = SidebarTreeFixtures()
@@ -267,6 +292,141 @@ struct SidebarPinnedDetailsTests {
         let coordinator = managed(coordinator: true)
         let coordinatorSubject = try #require(pinned(nodes: [coordinator]).inspection)
         #expect(inspector(coordinatorSubject, sessions: [session(id: UUID())], nodes: [coordinator]) == nil)
+    }
+
+    @Test(arguments: ["unchanged", "generation", "run", "session", "workspace", "surface"], SidebarMode.allCases)
+    func retainedManagedMenuValidatesCapturedSubjectBeforeInspectionAndSeen(change: String, mode: SidebarMode) async throws {
+        let preferenceFixture = try SidebarPreferenceFixture()
+        defer { preferenceFixture.cleanup() }
+        let preferences = preferenceFixture.preferences()
+        preferences.selectedMode = mode
+        let date = Date()
+        let nodeID = UUID(), runID = UUID(), alternateSurface = UUID()
+        func node(replaced: Bool) -> SidebarOrchestrationNode {
+            .init(
+                id: nodeID, runId: replaced && change == "run" ? UUID() : runID, parentId: nil,
+                role: "worker", label: "Retained managed subject",
+                workspaceId: replaced && change == "workspace" ? fixtures.workspaceB : fixtures.workspaceA,
+                surfaceId: replaced && change == "surface" ? alternateSurface : fixtures.surfaceA,
+                generation: replaced && change == "generation" ? 2 : 1,
+                phase: "turn-running", availability: "busy",
+                copilotSessionId: replaced && change == "session" ? fixtures.otherSessionID : fixtures.sessionID,
+                executionMode: .interactive, createdAt: date, updatedAt: date
+            )
+        }
+        let original = node(replaced: false), replacement = node(replaced: true)
+        let evidence = AgentAttention(kind: .turnFinished,
+                                      evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: date)
+        let source = RetainedMenuSource(node: original, evidence: evidence, date: date)
+        let orchestration = SidebarOrchestrationPolling(
+            read: { await source.managed }, pause: { try await Task.sleep(for: .seconds(60)) }
+        )
+        let polling = SidebarCopilotPolling(
+            read: { _ in await source.observed }, pause: { try await Task.sleep(for: .seconds(60)) },
+            expiryPause: sidebarFrozenExpiry, now: { date }
+        )
+        let model = SidebarConnectionModel(copilot: polling, orchestration: orchestration)
+        var nativeActions: [SidebarNavigationTarget] = []
+        func refreshHierarchy(moved: Bool) {
+            let original = fixtures.hierarchy(moved: moved)
+            let current = HierarchySnapshot(
+                sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+                workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: true,
+                workspaces: original.workspaces.map { workspace in
+                    guard workspace.id == fixtures.workspaceA,
+                          case .available(var surfaces) = workspace.surfaces else { return workspace }
+                    surfaces.append(.init(id: alternateSurface, title: "Other terminal", kind: .terminal,
+                                          isFocused: false, isPinned: false, unreadCount: 0, workingDirectory: .unavailable))
+                    return .init(id: workspace.id, title: workspace.title, detail: workspace.detail,
+                                 isSelected: workspace.isSelected, isPinned: workspace.isPinned,
+                                 unreadCount: workspace.unreadCount, rootPath: workspace.rootPath,
+                                 projectRootPath: workspace.projectRootPath, surfaces: .available(surfaces))
+                }, windowID: fixtures.windowID
+            )
+            model.replaceHierarchy(with: current)
+            model.showConnected(workspaceCount: 2, surfaceCount: 3)
+            let topology = SidebarTopology(current)
+            polling.update(topology: topology, connected: true)
+            orchestration.update(topology: topology, connected: true)
+            model.navigation.update(topology: topology, connected: true, workspaceAllowed: true,
+                                    surfaceAllowed: true, perform: { nativeActions.append($0) })
+        }
+        refreshHierarchy(moved: false)
+        model.setVisible(true)
+        defer { model.setVisible(false) }
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 600),
+                              styleMask: .titled, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences))
+        window.contentView = hosting
+        window.orderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        await sidebarEventually { orchestration.snapshot.nodes == [original] && polling.tree.attentionOwnerCount == 1 }
+        try await settle(hosting)
+        var capturedMenu: NSMenu?
+        for presenter in views(hosting).compactMap({ ($0 as? SidebarRowMenuAnchorView)?.presenter }) {
+            presenter.present = { menu, _, _ in capturedMenu = menu }
+        }
+        let title = try #require(views(hosting).compactMap { $0 as? SidebarTitleNativeButton }
+            .first { $0.accessibilityLabel() == "Focus Retained managed subject" })
+        let showActions = try #require(title.showActions)
+        showActions()
+        let menu = try #require(capturedMenu)
+        let item = try #require(menu.items.flatMap { $0.submenu?.items ?? [] }.first { $0.title == "Open details" })
+        let presenter = try #require(item.target as? SidebarRowMenuPresenter)
+        #expect(item.isEnabled && preferences.attention.acknowledged.isEmpty && nativeActions.isEmpty)
+
+        source.node = replacement
+        model.setVisible(false)
+        refreshHierarchy(moved: change == "workspace")
+        model.setVisible(true)
+        await sidebarEventually {
+            orchestration.snapshot.nodes == [replacement] && polling.tree.sessions.first?.id == replacement.copilotSessionId
+                && polling.tree.attentionOwnerCount == 1
+        }
+        try await settle(hosting)
+        let pinnedBefore = SidebarPresentation.pinnedDetails(
+            hierarchy: model.hierarchy, connected: true, tree: polling.tree,
+            managed: orchestration.snapshot, availability: orchestration.availability, now: date
+        )
+        #expect(preferences.attention.acknowledged.isEmpty && nativeActions.isEmpty)
+        #expect(item.target === presenter)
+        #expect(NSApp.sendAction(try #require(item.action), to: presenter, from: item))
+        try await Task.sleep(for: .milliseconds(100))
+        let inspectorWindows = window.childWindows ?? []
+        let inspectorViews = inspectorWindows.compactMap(\.contentView).flatMap { [$0] + views($0) }
+        let copyControls = inspectorViews.compactMap { $0 as? NSButton }
+            .filter { $0.accessibilityIdentifier() == "hover-copy-value" }
+        #expect(!inspectorWindows.isEmpty, "Production inspection must show details or its explicit unavailable state")
+        let fields = inspectorViews.compactMap { ($0 as? NSTextField)?.stringValue }
+        let panelContent = try #require(inspectorWindows.first?.contentView)
+        panelContent.layoutSubtreeIfNeeded()
+        let bitmap = try #require(panelContent.bitmapImageRepForCachingDisplay(in: panelContent.bounds))
+        panelContent.cacheDisplay(in: panelContent.bounds, to: bitmap)
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/polish/remediation1")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let capture = folder.appendingPathComponent("retained-menu-\(mode.rawValue)-\(change).png")
+        try #require(bitmap.representation(using: .png, properties: [:])).write(to: capture)
+        let text = try SidebarRenderingEvidence.recognizedNativeLines(in: capture)
+        if change == "unchanged" {
+            #expect(copyControls.count == 1)
+            #expect(fields.contains(fixtures.sessionID.uuidString))
+            #expect(preferences.attention.acknowledged == [
+                .init(sessionID: fixtures.sessionID, ownerID: nil, evidence: evidence.evidence)
+            ])
+        } else {
+            #expect(copyControls.isEmpty, "A retained action must not inspect a replacement session")
+            #expect(text.contains("Details no longer available"), "\(text)")
+            #expect(!fields.contains("retained-menu-model") && !fields.contains(replacement.copilotSessionId!.uuidString))
+            #expect(preferences.attention.acknowledged.isEmpty && polling.tree.attentionOwnerCount == 1)
+        }
+        #expect(nativeActions.isEmpty && model.navigation.status == .idle)
+        #expect(SidebarPresentation.pinnedDetails(
+            hierarchy: model.hierarchy, connected: true, tree: polling.tree,
+            managed: orchestration.snapshot, availability: orchestration.availability, now: date
+        ) == pinnedBefore)
+        print("R2 \(mode.rawValue)/\(change): retained production NSMenuItem dispatched; copies=\(copyControls.count), acknowledgements=\(preferences.attention.acknowledged.count), host=0")
     }
 
     @Test func childInspectionRetainsParentPlacementAndDoesNotChangePinnedSubject() throws {
