@@ -291,12 +291,92 @@ private struct WorkspaceAttentionLabel: View {
     }
 }
 
+enum SidebarHeaderAction: String, CaseIterable, Identifiable {
+    case directory, beats, taskboard, history, settings, fermata
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .directory: "Open directory as new workspace"
+        case .beats: "Beats"
+        case .taskboard: "Taskboard"
+        case .history: "History"
+        case .settings: "Maestro settings"
+        case .fermata: "Fermata"
+        }
+    }
+    var symbol: String? {
+        switch self {
+        case .directory: "folder.badge.plus"
+        case .beats: "music.note"
+        case .taskboard: "rectangle.split.3x1"
+        case .history: "clock.arrow.circlepath"
+        case .settings: "gearshape"
+        case .fermata: nil
+        }
+    }
+    var unavailable: String? {
+        switch self {
+        case .directory: "Opening a directory as a new workspace is not available in this sidebar."
+        case .beats: "Beats scheduling is not available. No schedule has been created."
+        case .fermata: "CMUX Keep Mac Awake access is not available. No power setting has changed."
+        case .taskboard, .history, .settings: nil
+        }
+    }
+}
+
+struct SidebarHeader: View {
+    let taskboardActive: Bool
+    let activate: (SidebarHeaderAction) -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(SidebarHeaderAction.allCases) { action in
+                Button { activate(action) } label: {
+                    VStack(spacing: 2) {
+                        Group {
+                            if let symbol = action.symbol {
+                                Image(systemName: symbol).font(.system(size: 14))
+                            } else {
+                                SidebarFermata().stroke(lineWidth: 1.5).frame(width: 16, height: 12)
+                            }
+                        }
+                        .frame(height: 18)
+                        Capsule().fill(action == .taskboard && taskboardActive ? Color.primary : .clear)
+                            .frame(width: 12, height: 2)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 28)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .help(action == .taskboard
+                      ? "Taskboard: \(taskboardActive ? "return to outline" : "show existing sidebar view")"
+                      : action.unavailable.map { "\(action.title). \($0)" } ?? action.title)
+                .accessibilityLabel(action.title)
+                .accessibilityValue(action == .taskboard ? (taskboardActive ? "Shown; activate to return to outline" : "Not shown") : "")
+                .accessibilityIdentifier("sidebar-header-\(action.rawValue)")
+            }
+        }
+    }
+}
+
+private struct SidebarFermata: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.addArc(center: CGPoint(x: rect.midX, y: rect.maxY - 2), radius: rect.width * 0.45,
+                    startAngle: .degrees(180), endAngle: .degrees(0), clockwise: false)
+        path.addEllipse(in: CGRect(x: rect.midX - 1, y: rect.maxY - 3, width: 2, height: 2))
+        return path
+    }
+}
+
 struct SidebarView: View {
     // CMUX overlays 50 points of bottom chrome; the current SDK forwards no inset.
     private static let hostFooterClearance: CGFloat = 50
     let model: SidebarConnectionModel
     @Bindable private var preferences: SidebarPreferences
     @State private var showingHistory = false
+    @State private var settingsStartInHistory = false
+    @State private var unavailableHeaderAction: SidebarHeaderAction?
     @State private var inspector: SidebarInspection?
     @State private var showingInspector = false
     @State private var hoverGroup = SidebarHoverGroup()
@@ -372,43 +452,33 @@ struct SidebarView: View {
 
     private func content(pinnedHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: preferences.layout.density.spacing(6)) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Workspaces").sidebarFont(.subheadline, weight: .semibold)
-                Spacer()
+            SidebarHeader(taskboardActive: preferences.selectedMode == .taskboard) { action in
+                switch action {
+                case .directory, .beats, .fermata: unavailableHeaderAction = action
+                case .taskboard:
+                    preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
+                case .history, .settings:
+                    settingsStartInHistory = action == .history
+                    showingHistory = true
+                }
+            }
+            .popover(isPresented: $showingHistory) { historySettings }
+            .popover(item: $unavailableHeaderAction) { action in
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(action.title).font(.headline)
+                    Text(action.unavailable ?? "").font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Close") { unavailableHeaderAction = nil }
+                        .keyboardShortcut(.cancelAction)
+                }
+                .padding(14)
+                .frame(width: 260)
+            }
+            HStack {
                 ManagedSourceNotice(
                     availability: model.orchestration.availability,
                     hasNodes: !model.orchestration.snapshot.nodes.isEmpty
                 )
-                Menu {
-                    ForEach(SidebarMode.allCases) { mode in
-                        Button {
-                            preferences.selectedMode = mode
-                        } label: {
-                            if mode == preferences.selectedMode {
-                                Label(mode.title, systemImage: "checkmark")
-                            } else {
-                                Text(mode.title)
-                            }
-                        }
-                        .accessibilityIdentifier("sidebar-mode-\(mode.rawValue)")
-                    }
-                    Divider()
-                    Button("Mark all nonblocking notices as read") {
-                        acknowledge(model.copilot.tree.acknowledgeableOutcomes)
-                    }
-                    .disabled(model.copilot.tree.acknowledgeableOutcomes.isEmpty)
-                    .accessibilityIdentifier("sidebar-acknowledge-all")
-                    Button("Sidebar settings…") { showingHistory = true }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
-                }
-                .buttonStyle(.borderless)
-                .menuIndicator(.hidden)
-                .help("View and sidebar settings")
-                .accessibilityLabel("View and sidebar settings")
-                .accessibilityIdentifier("sidebar-history-settings")
-                .popover(isPresented: $showingHistory) { historySettings }
             }
             if attentionSummary.total > 0 {
                 HStack {
@@ -661,7 +731,12 @@ struct SidebarView: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
-            ScrollView { settingsContents }
+            ScrollViewReader { proxy in
+                ScrollView { settingsContents }
+                    .onAppear {
+                        if settingsStartInHistory { proxy.scrollTo("sidebar-settings-history", anchor: .top) }
+                    }
+            }
         }
         .frame(width: 300)
         .frame(maxHeight: 600)
@@ -693,10 +768,6 @@ struct SidebarView: View {
                 .disabled(preferences.icons.overrides.isEmpty && preferences.iconNotice == nil)
                 .help("Remove human icon choices in every window and follow agent selections again. Other preferences are unchanged.")
                 .accessibilityIdentifier("sidebar-reset-icons")
-            Picker("View", selection: $preferences.selectedMode) {
-                ForEach(SidebarMode.allCases) { mode in Text(mode.title).tag(mode) }
-            }
-            .accessibilityIdentifier("sidebar-mode-picker")
             Picker("Density", selection: Binding(
                 get: { preferences.layout.density },
                 set: { preferences.setDensity($0) }
@@ -723,7 +794,7 @@ struct SidebarView: View {
                 .help("Restore Compact density and expand every branch. History and acknowledgements are unchanged.")
                 .accessibilityIdentifier("sidebar-reset-layout")
             Divider()
-            Text("Completed work history").font(.headline)
+            Text("Completed work history").font(.headline).id("sidebar-settings-history")
             Toggle("Show ended agents", isOn: $preferences.showEnded)
                 .help("Show ended observations still retained by history. Never restarts an agent or opens a terminal.")
             Text("Ended agents leave the active outline automatically. Failures stay until dismissed with ×; blockers and live descendants remain visible.")
@@ -766,6 +837,11 @@ struct SidebarView: View {
             }
             Divider()
             Text("Attention").font(.headline)
+            Button("Mark all nonblocking notices as read") {
+                acknowledge(model.copilot.tree.acknowledgeableOutcomes)
+            }
+            .disabled(model.copilot.tree.acknowledgeableOutcomes.isEmpty)
+            .accessibilityIdentifier("sidebar-acknowledge-all")
             Text("Focusing a tab or opening details marks its nonblocking notices as read. Permissions and questions still require a response in the agent. Turn finished does not mean background work ended.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

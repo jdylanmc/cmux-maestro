@@ -548,7 +548,13 @@ source diagnostics remain in details. Glyphs have 2 pt insets in their existing
 Standalone state keys retain pause/check/error symbols for blocked, finished and
 failed states. Workspace headers are text with chevrons;
 their trailing ellipsis menu offers Focus, Expand/Collapse and Details as separate
-actions. The header menu exposes the two view modes directly, plus settings.
+actions. The six header shortcuts are directory-plus, Beats, Taskboard, History,
+Maestro settings and Fermata, in that order. Settings reuses the existing sidebar
+preferences; History opens the same popover at completed-work controls.
+Taskboard temporarily toggles the existing sidebar view (its underline and
+accessible state indicate selection); activate it again to return to the outline.
+Reusable utility hosting is not implemented. Directory, Beats and Fermata explain
+their unavailability without creating workspaces, schedules or power assertions.
 Settings and the separate Details inspector popover have explicit Close controls.
 The keyboard-accessible inspector scrolls independently, preserves full metadata
 and Other activity, and revalidates window, placement, session, run and generation
@@ -595,7 +601,7 @@ surfaces and valid inferred Copilot sessions beneath workspace headers. Working
 directory basenames are explicitly described as directory labels, never Git
 branches. Uncertain ownership and incomplete evidence remain honest glyphs or
 summaries, and incidental diagnostics stay behind selection or settings.
-Taskboard remains available from the compact view/settings menu and retains each
+Taskboard remains available from its header button and retains each
 primary session's state even when it has no attention or child rows.
 
 A healthy outline has no diagnostic paragraphs. Source availability is a header
@@ -604,14 +610,14 @@ its owning row. Blockers, attention and omitted active work remain visible.
 Workspaces use quiet headings; directory labels sit beneath terminal names.
 Complete path metadata remains in Details rather than repeating unavailable
 workspace/project/path lines on every row.
-The header menu remains the entry for density and stored preferences. Saved
+The header gear remains the entry for density and stored preferences. Saved
 expansion, retention, acknowledgement, navigation and source records are preserved;
 the outline's activity filtering is presentation-only.
 When several source warnings apply, the overview keeps the primary warning
 and omitted active-work count visible; its Details disclosure lists every reason.
 The current host's overlaid footer has 50 points of reserved clearance.
 
-The sidebar **menu** includes **Compact** (the original spacing) and
+Sidebar **settings** includes **Compact** and
 **Comfortable** (more room and larger native detail text) density. Both
 Hierarchy and Taskboard keep the same data, counts, paths and independent
 focus, dismissal and acknowledgement actions. Narrow rows stack actions;
@@ -767,7 +773,7 @@ are read for authorization.
 
 ## Completed work history
 
-The sidebar's **ellipsis menu → Sidebar settings** opens history controls shared by
+The sidebar's **History** shortcut opens history controls shared by
 **Hierarchy** and **Taskboard**. The default active outline hides finished/cancelled
 children and confirmed ended processes, including their otherwise redundant
 surface rows. Managed workers leave when a terminal outcome is known; active
