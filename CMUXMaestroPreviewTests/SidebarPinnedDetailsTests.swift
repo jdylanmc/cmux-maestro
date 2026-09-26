@@ -401,18 +401,22 @@ struct SidebarPinnedDetailsTests {
         let inspectorViews = inspectorWindows.compactMap(\.contentView).flatMap { [$0] + views($0) }
         let copyControls = inspectorViews.compactMap { $0 as? NSButton }
             .filter { $0.accessibilityIdentifier() == "hover-copy-value" }
-        #expect(!inspectorWindows.isEmpty, "Production inspection must show details or its explicit unavailable state")
+        try #require(inspectorWindows.count == 1, "Production inspection must show one details or unavailable popover")
         let fields = inspectorViews.compactMap { ($0 as? NSTextField)?.stringValue }
         let panelContent = try #require(inspectorWindows.first?.contentView)
-        panelContent.layoutSubtreeIfNeeded()
-        let bitmap = try #require(panelContent.bitmapImageRepForCachingDisplay(in: panelContent.bounds))
-        panelContent.cacheDisplay(in: panelContent.bounds, to: bitmap)
+        try await settle(panelContent)
+        let bitmap = try capture(panelContent)
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build/polish/remediation2")
+            .appendingPathComponent(".build/layout-validation/offscreen")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let capture = folder.appendingPathComponent("retained-menu-\(mode.rawValue)-\(change).png")
-        try #require(bitmap.representation(using: .png, properties: [:])).write(to: capture)
-        let text = try SidebarRenderingEvidence.recognizedNativeLines(in: capture)
+        let destination = folder.appendingPathComponent("polish-retained-menu-\(mode.rawValue)-\(change).png")
+        try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
+        let geometry = views(panelContent).map { view in
+            "\(type(of: view)): frame=\(view.frame) bounds=\(view.bounds) visible=\(view.visibleRect) panel=\(panelContent.convert(view.bounds, from: view)) label=\(view.accessibilityLabel() ?? "")"
+        }.joined(separator: "\n")
+        try geometry.write(to: destination.appendingPathExtension("geometry.txt"), atomically: true, encoding: .utf8)
+        #expect(bitmap.pixelsWide == Int(panelContent.bounds.width) * 2
+                && bitmap.pixelsHigh == Int(panelContent.bounds.height) * 2)
         if change == "unchanged" {
             #expect(copyControls.count == 1)
             #expect(fields.contains(fixtures.sessionID.uuidString))
@@ -421,7 +425,21 @@ struct SidebarPinnedDetailsTests {
             ])
         } else {
             #expect(copyControls.isEmpty, "A retained action must not inspect a replacement session")
-            #expect(text.contains("Details no longer available"), "\(text)")
+            let dark = panelContent.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let inset = (panelContent.bounds.width - 300) / 2
+            let scrolls = views(panelContent).compactMap { $0 as? NSScrollView }
+            try #require(scrolls.count == 1)
+            let viewport = try #require(scrolls.first?.contentView)
+            let document = try #require(scrolls.first?.documentView)
+            #expect(panelContent.visibleRect.contains(panelContent.bounds))
+            #expect(document.bounds.size == viewport.bounds.size)
+            #expect(panelContent.convert(viewport.bounds, from: viewport)
+                    == NSRect(x: inset + 12, y: inset + 44, width: 276, height: 26))
+            let warning = try await unavailableInspectorPixels(
+                in: bitmap, dark: dark, inset: inset, opaque: false, destination: destination
+            )
+            #expect(warning, "\(destination.lastPathComponent): exact unavailable heading and explanation pixels")
+            #expect(fields.isEmpty, "Unavailable details must not retain any native metadata fields")
             #expect(!fields.contains("retained-menu-model") && !fields.contains(replacement.copilotSessionId!.uuidString))
             #expect(preferences.attention.acknowledged.isEmpty && polling.tree.attentionOwnerCount == 1)
         }
@@ -656,6 +674,7 @@ struct SidebarPinnedDetailsTests {
                 #expect(text.contains("working"), "\(destination.lastPathComponent): \(text)")
             }
         }
+        try await unavailableInspectorEvidenceRejectsMissingHiddenWrongClippedAndMisplacedWarnings(dark: dark)
     }
 
     @Test func footerRendersNativeLightDarkNarrowShortAndCopiesWithoutInspection() async throws {
@@ -770,6 +789,173 @@ struct SidebarPinnedDetailsTests {
                 #expect(text.contains("Verified agent"), "\(destination.lastPathComponent): \(text)")
             }
         }
+    }
+
+    private func unavailableInspectorEvidenceRejectsMissingHiddenWrongClippedAndMisplacedWarnings(dark: Bool) async throws {
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let frame = NSRect(x: 0, y: 0, width: 300, height: 460)
+        let controls = ["visible", "missing", "hidden", "wrong", "clipped", "elsewhere"]
+        for (popover, control) in [false, true].flatMap({ popover in controls.map { (popover, $0) } }) {
+            let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let content = SidebarInspector(
+                content: nil, close: { Issue.record("Warning rendering must not close details") }
+            )
+            .frame(width: frame.width, height: frame.height)
+            .overlay(alignment: .topLeading) {
+                if control == "missing" || control == "wrong" {
+                    Color(nsColor: .windowBackgroundColor)
+                        .frame(width: 244, height: 24)
+                        .overlay(alignment: .leading) {
+                            if control == "wrong" {
+                                Text("Details are still available")
+                                    .font(.system(.subheadline).weight(.semibold))
+                            }
+                        }
+                        .padding(12)
+                }
+            }
+            .frame(height: control == "clipped" ? 24 : frame.height, alignment: .top)
+            .clipped()
+            .opacity(control == "hidden" ? 0 : 1)
+            .offset(y: control == "elsewhere" ? 100 : 0)
+            .frame(width: frame.width, height: frame.height, alignment: .top)
+            .environment(\.colorScheme, dark ? .dark : .light)
+            .background(popover ? .clear : Color(nsColor: .windowBackgroundColor))
+            @ViewBuilder func root() -> some View {
+                if popover {
+                    Color.clear.frame(width: frame.width, height: frame.height)
+                        .popover(isPresented: .constant(true)) { content }
+                        .environment(\.colorScheme, dark ? .dark : .light)
+                } else {
+                    content
+                }
+            }
+            let hosting = NSHostingView(rootView: root())
+            window.contentView = hosting
+            defer {
+                for child in window.childWindows ?? [] { child.close() }
+                window.contentView = nil
+                window.close()
+            }
+            let responder = window.firstResponder
+            if popover { window.orderFront(nil) }
+            try await settle(hosting)
+            #expect(window.isVisible == popover && window.firstResponder === responder)
+            let captureView = popover ? try #require(window.childWindows?.first?.contentView) : hosting
+            try await settle(captureView)
+            let bitmap = try capture(captureView)
+            let destination = folder.appendingPathComponent(
+                "polish-unavailable-control-\(popover ? "popover" : "embedded")-\(dark ? "dark" : "light")-\(control).png"
+            )
+            try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
+            let warning = try await unavailableInspectorPixels(
+                in: bitmap, dark: dark, inset: (captureView.bounds.width - 300) / 2,
+                opaque: !popover, destination: destination
+            )
+            #expect(warning == (control == "visible"), "\(destination.lastPathComponent): exact warning pixels")
+        }
+    }
+
+    private func unavailableInspectorPixels(
+        in actual: NSBitmapImageRep, dark: Bool, inset: CGFloat, opaque: Bool, destination: URL
+    ) async throws -> Bool {
+        let size = actual.size
+        try #require(actual.pixelsWide == Int(size.width) * 2 && actual.pixelsHigh == Int(size.height) * 2)
+        try #require(inset >= 0 && size.width == 300 + inset * 2 && size.height >= 82 + inset * 2)
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 300, height: size.height),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        // Literal copy and fixed compact geometry are independent of the production view and its text fields.
+        func reference(visible: Bool) -> some View {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Details no longer available")
+                    .font(.system(.subheadline).weight(.semibold))
+                    .frame(width: 244, height: 24, alignment: .leading)
+                ScrollView {
+                    Text("The subject changed or access is unavailable. Open Details again from a current row.")
+                        .font(.system(.caption).weight(.regular)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxHeight: 420)
+            }
+            .opacity(visible ? 1 : 0)
+            .padding(12)
+            .frame(width: 300, height: size.height - inset * 2, alignment: .topLeading)
+            .environment(\.colorScheme, dark ? .dark : .light)
+            .background(opaque ? Color(nsColor: .windowBackgroundColor) : .clear)
+        }
+        @ViewBuilder func root(visible: Bool) -> some View {
+            if opaque {
+                reference(visible: visible)
+            } else {
+                Color.clear.frame(width: 300, height: size.height)
+                    .popover(isPresented: .constant(true)) { reference(visible: visible) }
+                    .environment(\.colorScheme, dark ? .dark : .light)
+            }
+        }
+        let hosting = NSHostingView(rootView: root(visible: true))
+        window.contentView = hosting
+        defer {
+            for child in window.childWindows ?? [] { child.close() }
+            window.contentView = nil
+            window.close()
+        }
+        let responder = window.firstResponder
+        let keyWindow = NSApp.keyWindow
+        if !opaque { window.orderFront(nil) }
+        try await settle(hosting)
+        let referenceView = opaque ? hosting : try #require(window.childWindows?.first?.contentView)
+        try await settle(referenceView)
+        try #require(referenceView.bounds.size == size)
+        let expected = try capture(referenceView)
+        try #require(expected.representation(using: .png, properties: [:]))
+            .write(to: destination.deletingPathExtension().appendingPathExtension("reference.png"))
+        hosting.rootView = root(visible: false)
+        try await settle(hosting)
+        try await settle(referenceView)
+        let blank = try capture(referenceView)
+        #expect(window.firstResponder === responder)
+        #expect(NSApp.keyWindow === keyWindow)
+        #expect(window.isVisible == !opaque)
+        // Complete title band and both explanation lines, including borders/trailing space. No translation or tolerance.
+        let regions = [
+            NSRect(x: 11 + inset, y: 11 + inset, width: 246, height: 26),
+            NSRect(x: 11 + inset, y: 43 + inset, width: 278, height: 28)
+        ]
+        var differences: [Int] = [], nonblank: [Int] = []
+        for region in regions {
+            try #require(NSRect(origin: .zero, size: size).contains(region))
+            var changed = 0, painted = 0
+            for y in Int(region.minY * 2)..<Int(region.maxY * 2) {
+                for x in Int(region.minX * 2)..<Int(region.maxX * 2) {
+                    let a = try #require(actual.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                    let e = try #require(expected.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                    let b = try #require(blank.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                    if a.redComponent != e.redComponent || a.greenComponent != e.greenComponent
+                        || a.blueComponent != e.blueComponent || a.alphaComponent != e.alphaComponent { changed += 1 }
+                    if e.redComponent != b.redComponent || e.greenComponent != b.greenComponent
+                        || e.blueComponent != b.blueComponent || e.alphaComponent != b.alphaComponent { painted += 1 }
+                }
+            }
+            try #require(painted > 0, "A blank literal reference cannot prove visible text")
+            differences.append(changed)
+            nonblank.append(painted)
+        }
+        let evidence: [String: Any] = [
+            "differingPixels": differences, "referenceNonblankPixels": nonblank,
+            "regionsPoints": regions.map { [$0.minX, $0.minY, $0.width, $0.height] },
+            "sizePoints": [size.width, size.height], "scale": 2, "tolerance": 0, "translation": 0
+        ]
+        try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys])
+            .write(to: destination.deletingPathExtension().appendingPathExtension("pixels.json"))
+        print("R4 exact warning \(destination.lastPathComponent): \(evidence)")
+        return differences.allSatisfy { $0 == 0 }
     }
 
     private func inspectorModelPixels(

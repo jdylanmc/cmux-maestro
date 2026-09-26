@@ -725,6 +725,19 @@ the same oracle. PNG references/captures and per-image pixel differences remain
 with the render artifacts; revoked-subject clearing, no-copy and passive-focus
 checks remain in place. Footer OCR and native copy checks are unchanged.
 
+Retained native-menu tests capture the complete production details popover at
+explicit native 2x, including the unavailable state after each identity change.
+The unavailable heading and both explanatory lines must match an independent
+runtime literal reference, pixel for pixel at their expected locations: no OCR,
+translation or pixel tolerance. The reference uses the same native popover shell
+for its material/text rendering, not production text or a saved screenshot.
+Blank-reference checks and light/dark missing, hidden, wrong, partially clipped
+and misplaced warning controls exercise both embedded and native-popover captures.
+All 12 retained-menu cases keep their identity, copy, attention, navigation and
+pinned-subject assertions. Full captures and references use the existing
+`.build/layout-validation/offscreen/*.png` artifact path; geometry and exact
+pixel-difference sidecars remain beside them locally.
+
 The full-sidebar warning matrix retains both densities, both appearances,
 240x400/340x600-point sizes and both waiting/disconnected states (16 captures),
 alongside the connected-footer geometry and zero-painted host-clearance checks.
@@ -736,7 +749,8 @@ must reject; each render reports its filename and recognized lines. Exact model,
 session-ID, copy and inspector-pixel oracles do not use this normalization.
 
 All metadata is synthetic and local preferences are isolated for the render
-test. Its AppKit windows are never shown; this is not a desktop capture, live
+tests. Embedded render windows stay offscreen; native interaction/popover tests
+show only their own synthetic windows. These are view captures, not a desktop capture, live
 CMUX-host visual proof, system VoiceOver verification or a checked-in OS/font
 golden-image comparison. No transcripts, real workspace paths or desktop images are uploaded.
 
