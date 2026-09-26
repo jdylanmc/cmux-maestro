@@ -164,6 +164,7 @@ extension EnvironmentValues {
 
 final class SidebarHoverPanel: NSPanel {
     var allowsKeyboard = false
+    var advanceFromPreview: () -> Void = {}
     override var canBecomeKey: Bool { allowsKeyboard }
     override var canBecomeMain: Bool { false }
 
@@ -177,7 +178,8 @@ final class SidebarHoverPanel: NSPanel {
     override func selectNextKeyView(_ sender: Any?) {
         let controls = keyboardControls
         guard allowsKeyboard, !controls.isEmpty else { super.selectNextKeyView(sender); return }
-        let index = controls.firstIndex { $0 === firstResponder }.map { ($0 + 1) % controls.count } ?? 0
+        let index = controls.firstIndex { $0 === firstResponder }.map { $0 + 1 } ?? 0
+        guard index < controls.count else { advanceFromPreview(); return }
         controls[index].scrollToVisible(controls[index].bounds)
         makeFirstResponder(controls[index])
     }
@@ -314,6 +316,12 @@ final class SidebarHoverPresenter {
             backing: .buffered, defer: false
         )
         self.panel = panel
+        panel.advanceFromPreview = { [weak self] in
+            guard let self, self.state.mode == .explicit, self.panel?.isKeyWindow == true,
+                  let parent = self.parentWindow, let origin = self.originalResponder else { return }
+            self.dismiss(restoreFocus: true)
+            parent.selectNextKeyView(origin)
+        }
         panel.allowsKeyboard = explicit
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
@@ -587,18 +595,23 @@ final class SidebarTitleNativeButton: NSButton {
         if result {
             focusChanged(true)
             if !returningFromPreview { preview.focus(true) }
-            returningFromPreview = false
             needsDisplay = true
         }
         return result
     }
     override func resignFirstResponder() -> Bool {
         let result = super.resignFirstResponder()
-        if result { preview.focus(false); focusChanged(false); needsDisplay = true }
+        if result {
+            returningFromPreview = false
+            preview.focus(false)
+            focusChanged(false)
+            needsDisplay = true
+        }
         return result
     }
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 48 && !event.modifierFlags.contains(.shift), enterPreview() { return }
+        if event.keyCode == 48 && !event.modifierFlags.contains(.shift),
+           !returningFromPreview, enterPreview() { return }
         if event.keyCode == 53 { preview.dismiss(); return }
         if event.keyCode == 109 && event.modifierFlags.contains(.shift), let showActions {
             preview.dismiss()
@@ -650,7 +663,7 @@ struct SidebarTitleButton<Label: View>: NSViewRepresentable {
         rowMenu?.preview = preview.available ? { [weak button] in button?.enterPreview() ?? false } : nil
         button.setAccessibilityLabel(label)
         button.setAccessibilityValue(value)
-        button.setAccessibilityHelp(preview.available ? "\(hint). Tab enters preview controls; Escape or Shift-Tab returns. Shift-F10 opens actions." : hint)
+        button.setAccessibilityHelp(preview.available ? "\(hint). Tab enters preview controls, then continues past this title. Escape or Shift-Tab returns; the next Tab continues onward. Shift-F10 opens actions." : hint)
         button.toolTip = hint
         _ = button.measure(width: button.bounds.width > 0 ? button.bounds.width : nil)
     }

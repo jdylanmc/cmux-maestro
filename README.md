@@ -465,8 +465,10 @@ blank title fill, and actions do not. Leaving that text cancels or dismisses the
 workspace hover immediately. Agent previews retain a 300 ms crossing grace.
 The shared native card prefers the right edge, fits the available screen, and
 scrolls long metadata. Hover waits 350 ms. Keyboard focus on a title previews it
-without pressing it; **Tab** enters its preview controls, and **Escape** or
-**Shift-Tab** returns to that title. Explicit previews also close on outside
+without pressing it; **Tab** enters its preview controls and continues past the
+originating title after the last control. **Escape** or **Shift-Tab** returns to
+that title; the next **Tab** continues onward instead of re-entering the preview.
+Explicit previews also close on outside
 interaction. Workspace previews
 show only current granted workspace metadata and shared-surface counts; denied
 or ambiguous evidence is labeled unavailable.
@@ -484,8 +486,11 @@ without inspecting or marking the replacement read.
 Icon-direct right-click still opens the compact icon picker, not the row menu.
 Menu icon requests retain their exact identity; a replacement target shows
 **Icon target changed** rather than applying the old request to a new session.
-Preview Close/Copy controls have an explicit native Tab loop, independent of
+Preview Close/Copy controls have an explicit native Tab order, independent of
 system-wide keyboard-navigation preferences.
+The hosted keyboard regression requires an unlocked graphical login so its
+test-created windows can actually exchange key focus; it does not substitute
+simulated key ownership when WindowServer denies focus.
 Activity-only children offer **Open parent chat**, never an independent surface.
 Unsupported pet, tag, backlog, placement and exit actions show disabled reasons;
 menus add no capability or lifecycle authority.
