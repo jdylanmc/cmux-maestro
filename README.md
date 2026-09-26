@@ -465,8 +465,21 @@ or ambiguous evidence is labeled unavailable.
 of sessions, navigation, preferences, and the bottom details. Passive panels
 cannot become key/main windows. Only an explicit Preview action enables keyboard
 interaction; closing that preview restores its original responder when appropriate.
-The current bottom details remain unchanged by previewing. This does not implement
-the separate active-window pinned-details overhaul, pets, tags, or lifecycle controls.
+Previewing never changes the **Active window** footer. It follows only the
+current window's selected workspace and uniquely focused native surface.
+Disconnected, redacted, missing or ambiguous focus clears the previous subject.
+Ordinary terminals and browsers show native context without agent fields or a pet.
+An agent on a terminal requires one fresh, live, exact observed session; managed
+labels and Git context additionally require current, uniquely bound managed
+evidence. Reused surfaces, stale membership and matching titles never establish
+ownership. Existing observation expiry updates the footer without a new timer.
+
+The flush footer uses native adaptive colors and one small, original
+**placeholder pet** silhouette for verified agents only. It is not a functioning
+pet integration or a provider asset. Metadata is bounded and scrollable; verified
+Git counts reuse the row badge, full paths remain in Details, and the existing
+session-ID copy control stays near identity. No context percentages, elapsed
+durations, tags, pet preferences or lifecycle controls are added.
 
 The same preview is available on managed agent, observed session, and observed
 sub-agent titles in Hierarchy and Taskboard. Each card resolves its own exact
@@ -474,7 +487,7 @@ subject and only current or explicitly last-known metadata. Missing/expired
 observations are labeled, not replaced with invented model, context, timing or
 Git metrics. Windowless children retain parent-session placement context.
 Opening a card never invokes the existing inspection/mark-seen action; the icon
-picker, title-to-focus action, bottom details, and history controls are unchanged.
+picker, title-to-focus action, and history controls retain their explicit semantics.
 
 Agent previews put a **Copy session ID** button beside the exact session GUID.
 Observed children label their inherited identity **Parent session ID** and copy
@@ -514,11 +527,15 @@ Standalone state keys retain pause/check/error symbols for blocked, finished and
 failed states. Workspace headers are text with chevrons;
 their trailing ellipsis menu offers Focus, Expand/Collapse and Details as separate
 actions. The header menu exposes the two view modes directly, plus settings.
-Settings and selected details have explicit Close controls; details are bounded
-and scroll independently rather than consuming the outline.
+Settings and the separate Details inspector popover have explicit Close controls.
+The keyboard-accessible inspector scrolls independently, preserves full metadata
+and Other activity, and revalidates window, placement, session, run and generation
+identity against current permissions. Replaced or revoked subjects show an
+unavailable message instead of silently keeping the old data. Escape or Close
+dismisses only the inspector; the footer has no Close or manual-pin override.
 Rows use concise state labels rather than diagnostic walls; blocked/failed state, incomplete ancestry,
 omitted active work and attention remain concise and visible. Selecting the state
-glyph opens one detail surface below the outline. Managed workers resolve verified
+glyph's Details action opens the inspector, not a replacement footer. Managed workers resolve verified
 model metadata only when both their controller-issued Copilot session UUID and
 surface match one fresh, live observation. Coordinators use one fresh, live,
 unambiguous observation on their exact surface. Same names, directories, stale
@@ -528,7 +545,9 @@ usage/window size is omitted because the current producer has no documented nume
 cumulative API tokens and context tiers are not presented as context occupancy.
 Full authorized paths and stable IDs remain in deliberate inspection. Successful
 tab focus and opening details mark that scope's nonblocking notices as read.
-Expansion never marks anything read; no interaction approves or answers a request.
+Passive footer refresh, hover, copying and expansion never mark anything read,
+focus a tab, send input, or change lifecycle; no interaction approves or answers
+a request. Existing explicit host-focus observation semantics remain unchanged.
 
 For unmanaged terminals with exactly one observed session, its state and children
 are presented on the named terminal row instead of adding a duplicate provider/ID

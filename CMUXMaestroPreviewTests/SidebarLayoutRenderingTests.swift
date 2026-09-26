@@ -211,6 +211,48 @@ struct SidebarLayoutRenderingTests {
         #expect((treeHeight - rootHeight) / 4 <= 40)
     }
 
+    @Test func activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes() async throws {
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        for density in SidebarDensity.allCases {
+            preferences.setDensity(density)
+            for (width, height) in [(240, 400), (340, 600)] {
+                for appearance in [RenderAppearance.light, .dark] {
+                    let model = makeManagedModel(fixtures: SidebarTreeFixtures(), focusFirst: true)
+                    defer { model.setVisible(false) }
+                    let destination = folder.appendingPathComponent(
+                        "pinned46-sidebar-\(density.rawValue)-\(appearance.name)-\(width)x\(height).png"
+                    )
+                    let metrics = try await render(
+                        model: model, preferences: preferences, width: width, height: height,
+                        appearance: appearance, managed: true, expectedSessions: 6, destination: destination
+                    )
+                    #expect(metrics.viewportHeight >= 80)
+                    let text = try SidebarRenderingEvidence.recognizedLines(in: destination, dark: appearance == .dark)
+                    #expect(text.contains { $0.contains("Active window") })
+                    #expect(text.contains { $0.contains("coordinator-model") })
+                    let image = try #require(NSBitmapImageRep(data: Data(contentsOf: destination)))
+                    var painted = 0
+                    for y in (image.pixelsHigh - 100)..<image.pixelsHigh {
+                        for x in 0..<image.pixelsWide {
+                            let color = try #require(image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                            if appearance == .dark {
+                                if max(color.redComponent, color.greenComponent, color.blueComponent) >= 0.01 { painted += 1 }
+                            } else {
+                                if min(color.redComponent, color.greenComponent, color.blueComponent) <= 0.99 { painted += 1 }
+                            }
+                        }
+                        #expect(painted == 0)
+                    }
+                }
+            }
+        }
+    }
+
     @Test func frozenManagedRenderFixtureDoesNotExpireOnWallClock() async throws {
         let model = makeManagedModel(fixtures: SidebarTreeFixtures())
         defer { model.setVisible(false) }
@@ -228,7 +270,7 @@ struct SidebarLayoutRenderingTests {
     }
 
     private func makeManagedModel(
-        fixtures: SidebarTreeFixtures, nodeCount: Int = 6, mixed: Bool = false
+        fixtures: SidebarTreeFixtures, nodeCount: Int = 6, mixed: Bool = false, focusFirst: Bool = false
     ) -> SidebarConnectionModel {
         let workspace = fixtures.workspaceA
         let surfaces = (0..<nodeCount).map { _ in UUID() }
@@ -356,7 +398,7 @@ struct SidebarLayoutRenderingTests {
                 projectRootPath: .available("/synthetic/managed"),
                 surfaces: .available(Array(surfaces.prefix(min(nodeCount, 5))).map {
                     HierarchySurface(
-                        id: $0, title: "Terminal", kind: .terminal, isFocused: false,
+                        id: $0, title: "Terminal", kind: .terminal, isFocused: focusFirst && $0 == surfaces.first,
                         isPinned: false, unreadCount: 0,
                         workingDirectory: .available("/synthetic/managed")
                     )
