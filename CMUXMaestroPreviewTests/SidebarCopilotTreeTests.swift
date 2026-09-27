@@ -291,14 +291,21 @@ struct SidebarCopilotTreeTests {
     @Test
     func pollingUsesOnlyGrantedVisibleSurfacesAndClearsOnRevocation() async {
         let harness = SidebarReadHarness()
-        let poller = SidebarCopilotPolling(read: { try await harness.read($0) })
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        // Permission assertions must not race snapshot expiry or the next poll.
+        let poller = SidebarCopilotPolling(
+            read: { try await harness.read($0) },
+            pause: { try await sidebarFrozenExpiry(0) },
+            expiryPause: sidebarFrozenExpiry,
+            now: { now }
+        )
         poller.update(topology: fixtures.topology(), connected: true)
         await Task.yield()
         #expect(await harness.callCount == 0)
         poller.setVisible(true)
         await sidebarEventually { await harness.callCount == 1 }
         #expect(await harness.request(0) == Set([fixtures.surfaceA, fixtures.surfaceB]))
-        await harness.succeed(0, with: fixtures.snapshot(sessions: [fixtures.session()]))
+        await harness.succeed(0, with: fixtures.snapshot(sessions: [fixtures.session(now: now)], now: now))
         await sidebarEventually { poller.tree.sessions.count == 1 }
         poller.update(topology: fixtures.topology(granted: false), connected: true)
         #expect(poller.tree.sessions.isEmpty)
@@ -306,6 +313,7 @@ struct SidebarCopilotTreeTests {
         await sidebarEventually { !poller.isReading }
         #expect(await harness.callCount == 1)
         poller.setVisible(false)
+        await harness.finishPending()
     }
 
     @Test
