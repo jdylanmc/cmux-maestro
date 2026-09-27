@@ -201,6 +201,9 @@ once: explicit managed agents and remaining terminals share its outline. An exac
 managed workspace/surface pair normally replaces its observed terminal row.
 If fresh, unique live observation proves a different session ID on that pair,
 the observed session keeps its own row alongside the retained managed branch.
+When ended agents are shown, an exact old observation stays with its managed
+identity rather than creating a duplicate row; its observed descendants and
+attention remain available beneath that branch.
 The old node and its descendants keep their identities and states; no session
 is adopted or retargeted. Missing, stale or ambiguous evidence does not trigger
 this distinction. Names, paths and guessed relationships never establish ownership. The Taskboard view

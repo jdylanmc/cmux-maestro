@@ -162,6 +162,12 @@ struct SidebarSeenWork {
     }
 }
 
+struct SidebarSessionPlacement {
+    let session: SidebarCopilotSession
+    let managedNodeID: UUID?
+    let retainsContents: Bool
+}
+
 struct SidebarVisibleWork {
     var tree: SidebarCopilotTree
     var managed: [SidebarOrchestrationNode]
@@ -284,12 +290,9 @@ enum SidebarPresentation {
             if signals.contains(where: { $0.kind == .permission }) { approvals.insert(owner) }
             if live && state == .blocked { blocked.insert(owner) }
         }
-        let coalescing = coalescingManagedNodes(managed, observations: observations, now: now)
-        for session in sessions {
-            let claimed = coalescing.first {
-                $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
-            }
-            let owner = claimed.map { Owner.managed($0.id) } ?? .session(session.id)
+        for placement in sessionPlacements(sessions, managed: managed, observations: observations, now: now) {
+            let session = placement.session
+            let owner = placement.managedNodeID.map { Owner.managed($0) } ?? .session(session.id)
             include(owner, state: session.state, signals: session.attention, live: session.liveness == .alive)
             for child in session.nodes {
                 include(.child(session.id, child.id), state: child.state, signals: child.attention,
@@ -735,6 +738,30 @@ enum SidebarPresentation {
         return surfaces.filter { !owned.contains($0.id) }
     }
 
+    static func sessionPlacements(
+        _ sessions: [SidebarCopilotSession], managed: [SidebarOrchestrationNode],
+        observations: SidebarCopilotTree?, now: Date
+    ) -> [SidebarSessionPlacement] {
+        let surfaceOwners = coalescingManagedNodes(managed, observations: observations, now: now)
+        let surfaceOwnerIDs = Set(surfaceOwners.map(\.id))
+        return sessions.map { session in
+            let exact = managed.filter {
+                $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
+                    && $0.copilotSessionId == session.id
+            }
+            // Releasing a surface for a replacement does not release the old identity.
+            // Its observed contents still need a home; the managed row cannot replace them.
+            if exact.count == 1, let owner = exact.first, !surfaceOwnerIDs.contains(owner.id),
+               observations?.sessions.filter({ $0.id == session.id }).count == 1 {
+                return .init(session: session, managedNodeID: owner.id, retainsContents: true)
+            }
+            let owner = surfaceOwners.first {
+                $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
+            }
+            return .init(session: session, managedNodeID: owner?.id, retainsContents: false)
+        }
+    }
+
     static func workspaceSummary(
         surfaces: [HierarchySurface],
         sessions: [SidebarCopilotSession],
@@ -745,8 +772,8 @@ enum SidebarPresentation {
         observations: SidebarCopilotTree? = nil
     ) -> SidebarWorkspaceSummary {
         let managedSurfaces = Set(managed.map(\.surfaceId))
-        let coalescingSurfaces = Set(coalescingManagedNodes(managed, observations: observations, now: now).map(\.surfaceId))
-        let unmanagedSessions = sessions.filter { !coalescingSurfaces.contains($0.surfaceID) }
+        let placements = sessionPlacements(sessions, managed: managed, observations: observations, now: now)
+        let unmanagedSessions = placements.filter { $0.managedNodeID == nil }.map(\.session)
         var counts: [AgentSummaryState: Int] = [:]
         var incomplete = !countsComplete || orchestrationAvailability != .ready
 
@@ -756,10 +783,13 @@ enum SidebarPresentation {
             counts[state, default: 0] += 1
             if state == .unknown { incomplete = true }
         }
-        for session in unmanagedSessions {
-            let state = sessionSummaryState(session)
-            counts[state, default: 0] += 1
-            if state == .unknown { incomplete = true }
+        for placement in placements where placement.managedNodeID == nil || placement.retainsContents {
+            let session = placement.session
+            if placement.managedNodeID == nil {
+                let state = sessionSummaryState(session)
+                counts[state, default: 0] += 1
+                if state == .unknown { incomplete = true }
+            }
             for node in session.nodes where node.kind == .subagent {
                 let state = observedSummaryState(node.state)
                 counts[state, default: 0] += 1
@@ -781,9 +811,7 @@ enum SidebarPresentation {
             return .init(title: state.title, count: count, visual: state.visual)
         }
         return SidebarWorkspaceSummary(
-            agentCount: managed.count + unmanagedSessions.reduce(0) {
-                $0 + 1 + $1.nodes.filter { $0.kind == .subagent }.count
-            },
+            agentCount: counts.values.reduce(0, +),
             states: states,
             tabs: tabs,
             incomplete: incomplete

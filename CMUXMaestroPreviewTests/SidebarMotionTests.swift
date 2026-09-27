@@ -5,7 +5,11 @@ import Testing
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarMotionTests {
-    @Test func retainedManagedIdentityDoesNotMaskNewWorkingObservation() async throws {
+    @Test(arguments: [(false, true, false), (false, true, true), (true, true, false), (true, false, false),
+                      (true, true, true), (true, false, true)])
+    func retainedManagedIdentityDoesNotMaskNewWorkingObservation(
+        _ scenario: (showEnded: Bool, expanded: Bool, protectedObservation: Bool)
+    ) async throws {
         let f = SidebarTreeFixtures()
         let preferenceFixture = try SidebarPreferenceFixture()
         defer { preferenceFixture.cleanup() }
@@ -24,11 +28,22 @@ struct SidebarMotionTests {
             phase: "permission-denied", availability: "idle", copilotSessionId: UUID(),
             executionMode: .interactive, createdAt: oldDate, updatedAt: oldDate
         )
-        let snapshot = f.snapshot(sessions: [
-            f.session(id: f.otherSessionID, liveness: .dead, state: .unknown, now: now),
-            f.session(state: .working, now: now)
-        ], now: now)
-        let poller = SidebarCopilotPolling(read: { _ in snapshot }, pause: { try await Task.sleep(for: .seconds(60)) },
+        let oldObservation = CopilotSessionObservation(
+            sessionID: f.otherSessionID, surfaceID: f.surfaceA, launchWorkspaceID: f.workspaceA,
+            liveness: .dead, state: .unknown, model: nil,
+            children: scenario.protectedObservation ? [
+                .init(id: "protected-observed", parentID: nil, kind: .subagent, name: "Protected observed child",
+                      state: .blocked, model: nil)
+            ] : [], observedAt: now,
+            attention: scenario.protectedObservation ? [
+                .init(kind: .answer, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
+            ] : []
+        )
+        let snapshots = SidebarMotionSnapshots(f.snapshot(sessions: [
+            oldObservation, f.session(state: .working, now: now)
+        ], now: now))
+        let poller = SidebarCopilotPolling(read: { _ in await snapshots.read() },
+                                          pause: { try await Task.sleep(for: .milliseconds(10)) },
                                           expiryPause: sidebarFrozenExpiry, now: { now })
         let orchestration = SidebarOrchestrationPolling(read: {
             .init(version: 1, generatedAt: oldDate, complete: true, omittedCount: 0, nodes: [old, child])
@@ -52,7 +67,9 @@ struct SidebarMotionTests {
                                 perform: { _ in Issue.record("Projection must not navigate") })
         model.setVisible(true)
         defer { model.setVisible(false) }
+        preferences.showEnded = scenario.showEnded
         preferences.setExpanded(true, for: .managed(old.id))
+        preferences.setExpanded(scenario.expanded, for: .surface(f.surfaceA))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 700),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -61,19 +78,60 @@ struct SidebarMotionTests {
         window.contentView = hosting
         defer { window.contentView = nil; window.close() }
         await sidebarEventually { poller.tree.sessions.count == 2 && orchestration.snapshot.nodes.count == 2 }
-        hosting.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(40))
-        hosting.layoutSubtreeIfNeeded()
         func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
-        let rows = descendants(hosting).compactMap { $0 as? SidebarTitleNativeButton }
-        let retainedRow = try #require(rows.first { $0.accessibilityLabel() == "Focus Retained coordinator" })
-        let observedRow = try #require(rows.first { $0.accessibilityLabel() == "Focus Terminal New observed session" })
-        #expect(rows.contains { $0.accessibilityLabel() == "Focus Protected descendant" })
-        #expect(try greenPixels(in: retainedRow) == 0, "Never borrow the new session's working state")
-        #expect(try greenPixels(in: observedRow) > 0, "The new session retains its own production status row")
-        #expect(orchestration.snapshot.nodes == [old, child], "Ownership, ancestry and generations are unchanged")
-        #expect(!window.isVisible && model.navigation.status == .idle)
-        #expect(preferences.attention.acknowledged.isEmpty)
+        let history = preferences.history
+        for state: CopilotWorkState in [.working, .idle] {
+            if state == .idle {
+                await snapshots.replace(f.snapshot(sessions: [
+                    oldObservation, f.session(state: state, now: now)
+                ], now: now))
+                await sidebarEventually { poller.tree.sessions.first { $0.id == f.sessionID }?.state == .idle }
+            }
+            hosting.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(40))
+            hosting.layoutSubtreeIfNeeded()
+            let rows = descendants(hosting).compactMap { $0 as? SidebarTitleNativeButton }
+            let retained = rows.filter { $0.accessibilityLabel() == "Focus Retained coordinator" }
+            let retainedRow = try #require(retained.first)
+            let current = rows.filter { $0.accessibilityLabel() == "Focus Terminal New observed session" }
+            let observedRow = try #require(current.first)
+            #expect(retained.count == 1 && current.count == 1)
+            #expect(!rows.contains { $0.accessibilityLabel() == "Focus Copilot session 20000000" },
+                    "History must not duplicate the exact managed identity")
+            #expect(rows.contains { $0.accessibilityLabel() == "Focus Protected descendant" })
+            if scenario.protectedObservation {
+                #expect(rows.contains {
+                    $0.accessibilityLabel() == "Open parent chat for Protected observed child, Copilot 20000000"
+                }, "Coalescing must preserve observed descendants without a managed equivalent")
+            }
+            #expect(try greenPixels(in: retainedRow) == 0, "Never borrow the new session's working state")
+            #expect((try greenPixels(in: observedRow) > 0) == (state == .working),
+                    "The primary production row reflects its own working-to-idle transition, even when collapsed")
+            #expect(observedRow.toolTip?.contains(state == .working ? "Working" : "Idle") == true)
+            let visible = SidebarVisibleWork(tree: poller.tree, managed: [old, child],
+                                             history: preferences.history, showEnded: preferences.showEnded)
+            let summary = SidebarPresentation.workspaceSummary(
+                surfaces: [], sessions: visible.tree.sessions, managed: visible.managed,
+                orchestrationAvailability: orchestration.availability, countsComplete: true,
+                now: now, observations: visible.tree
+            )
+            print("R117 history scenario=\(scenario) state=\(state.rawValue) agents=\(summary.agentCount) "
+                  + "states=\(summary.states.map { "\($0.title):\($0.count)" }) "
+                  + "primaryGreenPixels=\(try greenPixels(in: observedRow)) "
+                  + "oldObservedRows=\(rows.filter { $0.accessibilityLabel() == "Focus Copilot session 20000000" }.count)")
+            #expect(summary.agentCount == (scenario.protectedObservation ? 4 : 3))
+            #expect(summary.states.first { $0.title == (state == .working ? "Working" : "Idle") }?.count == 1)
+            #expect(orchestration.snapshot.nodes == [old, child], "Ownership, ancestry and generations are unchanged")
+            #expect(!window.isVisible && model.navigation.status == .idle)
+            #expect(preferences.attention.acknowledged.isEmpty && preferences.history == history)
+        }
+    }
+
+    private actor SidebarMotionSnapshots {
+        private var snapshot: CopilotSnapshot
+        init(_ snapshot: CopilotSnapshot) { self.snapshot = snapshot }
+        func read() -> CopilotSnapshot { snapshot }
+        func replace(_ snapshot: CopilotSnapshot) { self.snapshot = snapshot }
     }
 
     private func greenPixels(in row: NSView) throws -> Int {

@@ -656,6 +656,112 @@ struct SidebarClarityTests {
         #expect(tree.sessions.first?.attention == session.attention)
     }
 
+    @Test(arguments: [CopilotWorkState.working, .idle])
+    func retainedObservedIdentityCountsOnceAlongsideItsLiveReplacement(state: CopilotWorkState) {
+        let old = managedNode(role: "coordinator", surface: fixtures.surfaceA,
+                              sessionID: fixtures.otherSessionID, phase: "reported-blocked")
+        var ended = managedSession(id: fixtures.otherSessionID, surface: fixtures.surfaceA,
+                                   model: nil, liveness: .dead)
+        ended.attention = [signal(.answer)]
+        var current = SidebarCopilotSession(
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .alive, state: state, model: nil, observedAt: now, nodes: [],
+            childrenComplete: true, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        current.attention = [signal(.permission)]
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [ended, current], issues: [], generatedAt: now)
+        let visible = SidebarVisibleWork(tree: tree, managed: [old], history: .init(), showEnded: true)
+        let summary = SidebarPresentation.workspaceSummary(
+            surfaces: [], sessions: visible.tree.sessions, managed: visible.managed,
+            orchestrationAvailability: .ready, countsComplete: true, now: now, observations: tree
+        )
+        #expect(summary.agentCount == 2)
+        #expect(summary.states.map { "\($0.title):\($0.count)" } ==
+                (state == .working ? ["Working:1", "Blocked:1"] : ["Blocked:1", "Idle:1"]))
+        let attention = SidebarPresentation.workspaceAttention(
+            sessions: visible.tree.sessions, managed: visible.managed,
+            availability: .ready, now: now, observations: tree
+        )
+        print("R117 identity state=\(state.rawValue) agents=\(summary.agentCount) "
+              + "states=\(summary.states.map { "\($0.title):\($0.count)" }) "
+              + "needsInput=\(attention.needsInput) otherBlocked=\(attention.blocked)")
+        #expect(attention.needsInput == 2)
+        #expect(attention.questions == 1 && attention.approvals == 1)
+        #expect(attention.blocked == 0, "The old question belongs to the old managed block, not a third agent")
+        #expect(visible.managed == [old] && visible.tree == tree)
+    }
+
+    @Test func retainedHistoryPlacementPreservesUncertainEvidenceFallbacks() {
+        let old = managedNode(role: "coordinator", surface: fixtures.surfaceA,
+                              sessionID: fixtures.otherSessionID, phase: "turn-failed")
+        let ended = managedSession(id: fixtures.otherSessionID, surface: fixtures.surfaceA,
+                                   model: nil, liveness: .dead)
+        let current = managedSession(id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil)
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [ended, current], issues: [], generatedAt: now)
+        func placements(_ observations: SidebarCopilotTree?) -> [SidebarSessionPlacement] {
+            SidebarPresentation.sessionPlacements([ended, current], managed: [old],
+                                                   observations: observations, now: now)
+        }
+        #expect(placements(tree).map(\.managedNodeID) == [old.id, nil])
+        #expect(placements(tree).map(\.retainsContents) == [true, false])
+        var cases: [(String, SidebarCopilotTree?)] = [("missing", nil)]
+        for availability: SidebarCopilotAvailability in [.waiting, .loading, .hidden, .disconnected, .unavailable] {
+            var unavailable = tree
+            unavailable.availability = availability
+            cases.append(("\(availability)", unavailable))
+        }
+        for date: Date? in [nil, now.addingTimeInterval(-9), now.addingTimeInterval(2)] {
+            var stale = tree
+            stale.generatedAt = date
+            cases.append(("missing/stale/future snapshot", stale))
+        }
+        var denied = tree
+        denied.availability = .partial
+        denied.issues = [.permissionDenied]
+        cases.append(("denied", denied))
+        for liveness: CopilotLiveness in [.unknown, .ambiguous, .dead] {
+            var uncertain = tree
+            uncertain.sessions = [ended, managedSession(
+                id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil, liveness: liveness
+            )]
+            cases.append(("\(liveness)", uncertain))
+        }
+        var stale = tree
+        stale.sessions = [ended, managedSession(id: fixtures.sessionID, surface: fixtures.surfaceA,
+                                               model: nil, observedAt: now.addingTimeInterval(-9))]
+        cases.append(("stale observation", stale))
+        var future = tree
+        future.generatedAt = now.addingTimeInterval(-2)
+        cases.append(("observation later than snapshot", future))
+        var wrongWorkspace = tree
+        wrongWorkspace.sessions = [ended, managedSession(id: fixtures.sessionID, surface: fixtures.surfaceA,
+                                                        model: nil, workspace: fixtures.workspaceB)]
+        cases.append(("wrong workspace", wrongWorkspace))
+        var wrongSurface = tree
+        wrongSurface.sessions = [ended, managedSession(id: fixtures.sessionID, surface: fixtures.surfaceB, model: nil)]
+        cases.append(("wrong surface", wrongSurface))
+        var ambiguous = tree
+        ambiguous.sessions.append(managedSession(id: UUID(), surface: fixtures.surfaceA, model: nil))
+        cases.append(("multiple live candidates", ambiguous))
+        var duplicate = tree
+        duplicate.sessions.append(managedSession(id: fixtures.sessionID, surface: fixtures.surfaceB, model: nil))
+        cases.append(("duplicate live identity", duplicate))
+        for (name, candidate) in cases {
+            let result = placements(candidate)
+            #expect(result.map(\.managedNodeID) == [old.id, old.id], "Preserve surface fallback: \(name)")
+            #expect(result.allSatisfy { !$0.retainsContents }, "No new identity attachment from \(name)")
+        }
+        var partial = tree
+        partial.availability = .partial
+        #expect(placements(partial).map(\.managedNodeID) == [old.id, nil])
+        var duplicateHistory = tree
+        duplicateHistory.sessions.append(managedSession(
+            id: fixtures.otherSessionID, surface: fixtures.surfaceB, model: nil, liveness: .dead
+        ))
+        #expect(placements(duplicateHistory).allSatisfy { $0.managedNodeID == nil && !$0.retainsContents },
+                "Do not attach a duplicated historical identity")
+    }
+
     @Test func workspaceSummaryKeepsStaleAndUnknownEvidenceExplicit() {
         let managed = managedNode(role: "worker", surface: fixtures.surfaceA)
         let unknown = managedSession(

@@ -653,6 +653,7 @@ struct SidebarView: View {
                     navigation: model.navigation, layout: preferences.layout,
                     setExpanded: { preferences.setExpanded($1, for: $0) },
                     selectedNode: managedSelection,
+                    dismiss: dismiss, acknowledge: acknowledge, selection: unmanagedSelection,
                     displayNodes: visibleWork.managed, copilotTree: visibleWork.tree
                 )
             }
@@ -972,10 +973,14 @@ struct ManagedHierarchyContent: View {
     let layout: SidebarLayoutSettings
     let setExpanded: (SidebarExpansionID, Bool) -> Void
     @Binding var selectedNode: SidebarOrchestrationNode?
+    let dismiss: (SidebarDismissedOutcome) -> Void
+    let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
+    @Binding var selection: UnmanagedSelection?
     var workspaceID: UUID? = nil
     var showsWorkspaceHeaders = true
     var displayNodes: [SidebarOrchestrationNode]? = nil
     var copilotTree: SidebarCopilotTree = .waiting
+    var retainedSessions: [SidebarSessionPlacement] = []
     private var nodes: [SidebarOrchestrationNode] { displayNodes ?? polling.snapshot.nodes }
     private func children(of id: UUID) -> [SidebarOrchestrationNode] {
         nodes.filter { $0.parentId == id }
@@ -1006,11 +1011,13 @@ struct ManagedHierarchyContent: View {
                         WorkspaceOutlineHeader(workspace: group.workspace, hierarchy: hierarchy, navigation: navigation)
                     }
                     ForEach(rows(for: group.roots)) { row in
+                        let retained = retainedSessions.filter { $0.managedNodeID == row.id }.map(\.session)
+                        let expanded = layout.isExpanded(.managed(row.node.id))
                         ManagedNodeRow(
                             node: row.node, depth: row.depth,
-                            hasChildren: row.hasChildren,
+                            hasChildren: row.hasChildren || retained.contains { !$0.outlineNodes.isEmpty },
                             activeDescendants: row.activeDescendants,
-                            expanded: layout.isExpanded(.managed(row.node.id)),
+                            expanded: expanded,
                             selected: selectedNode?.id == row.node.id,
                             evidenceDate: Date(),
                             availability: polling.availability,
@@ -1021,6 +1028,17 @@ struct ManagedHierarchyContent: View {
                             },
                             select: { selectedNode = row.node }
                         )
+                        if !expanded && retained.contains(where: { !$0.outlineNodes.isEmpty }) {
+                            CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: retained))
+                                .padding(.leading, 28)
+                        }
+                        ForEach(retained) { session in
+                            CopilotSessionContents(
+                                session: session, expanded: expanded,
+                                navigation: navigation, layout: layout, setExpanded: setExpanded,
+                                dismiss: dismiss, acknowledge: acknowledge, selection: $selection
+                            )
+                        }
                     }
                 }
             }
@@ -1375,11 +1393,8 @@ private struct WorkspaceRow: View {
     private var managedNodes: [SidebarOrchestrationNode] {
         displayManaged.filter { $0.workspaceId == workspace.id }
     }
-    private var unmanagedSessions: [SidebarCopilotSession] {
-        let surfaces = Set(SidebarPresentation.coalescingManagedNodes(
-            managedNodes, observations: copilotTree, now: Date()
-        ).map(\.surfaceId))
-        return sessions.filter { !surfaces.contains($0.surfaceID) }
+    private var sessionPlacements: [SidebarSessionPlacement] {
+        SidebarPresentation.sessionPlacements(sessions, managed: managedNodes, observations: copilotTree, now: Date())
     }
     private var attentionSummary: SidebarWorkspaceAttention {
         SidebarPresentation.workspaceAttention(
@@ -1417,6 +1432,7 @@ private struct WorkspaceRow: View {
     }
 
     var body: some View {
+        let placements = sessionPlacements
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 5) {
                 ExpandButton(expanded: expanded, label: title, workspace: true) {
@@ -1451,8 +1467,11 @@ private struct WorkspaceRow: View {
                     ManagedHierarchyContent(
                         polling: orchestration, hierarchy: hierarchy,
                         navigation: navigation, layout: layout, setExpanded: setExpanded,
-                        selectedNode: $managedSelection, workspaceID: workspace.id,
-                        showsWorkspaceHeaders: false, displayNodes: displayManaged, copilotTree: copilotTree
+                        selectedNode: $managedSelection,
+                        dismiss: dismiss, acknowledge: acknowledge, selection: $selection,
+                        workspaceID: workspace.id, showsWorkspaceHeaders: false,
+                        displayNodes: displayManaged, copilotTree: copilotTree,
+                        retainedSessions: placements.filter(\.retainsContents)
                     )
                 }
                 switch workspace.surfaces {
@@ -1467,7 +1486,9 @@ private struct WorkspaceRow: View {
                     )) { surface in
                         SurfaceRow(
                             workspaceID: workspace.id, surface: surface,
-                            sessions: unmanagedSessions.filter { $0.surfaceID == surface.id },
+                            sessions: placements.filter {
+                                $0.managedNodeID == nil && $0.session.surfaceID == surface.id
+                            }.map(\.session),
                             countsComplete: countsComplete,
                             navigation: navigation, layout: layout, setExpanded: setExpanded,
                             dismiss: dismiss, acknowledge: acknowledge, selection: $selection
