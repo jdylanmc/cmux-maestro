@@ -981,6 +981,8 @@ struct ManagedHierarchyContent: View {
     var displayNodes: [SidebarOrchestrationNode]? = nil
     var copilotTree: SidebarCopilotTree = .waiting
     var retainedSessions: [SidebarSessionPlacement] = []
+    @Environment(\.sidebarDensity) private var density
+    @Environment(\.sidebarContentWidth) private var contentWidth
     private var nodes: [SidebarOrchestrationNode] { displayNodes ?? polling.snapshot.nodes }
     private func children(of id: UUID) -> [SidebarOrchestrationNode] {
         nodes.filter { $0.parentId == id }
@@ -1030,13 +1032,16 @@ struct ManagedHierarchyContent: View {
                         )
                         if !expanded && retained.contains(where: { !$0.outlineNodes.isEmpty }) {
                             CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: retained))
-                                .padding(.leading, 28)
+                                .padding(.leading, 28 + density.indentation(
+                                    depth: row.depth, unresolved: false, width: contentWidth
+                                ))
                         }
                         ForEach(retained) { session in
                             CopilotSessionContents(
                                 session: session, expanded: expanded,
                                 navigation: navigation, layout: layout, setExpanded: setExpanded,
-                                dismiss: dismiss, acknowledge: acknowledge, selection: $selection
+                                dismiss: dismiss, acknowledge: acknowledge, selection: $selection,
+                                ownerDepth: row.depth
                             )
                         }
                     }
@@ -1788,6 +1793,7 @@ private struct CopilotSessionContents: View {
     let dismiss: (SidebarDismissedOutcome) -> Void
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
+    var ownerDepth = 0
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
 
@@ -1798,11 +1804,12 @@ private struct CopilotSessionContents: View {
             SidebarActionLayout {
                 AttentionSummary(attention: session.attention, state: session.state, degraded: session.attentionDegraded)
             }
-            .padding(.leading, 28)
+            .padding(.leading, 28 + density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
         if session.omittedActiveChildrenCount > 0 {
             Text("\(session.omittedActiveChildrenCount) working/blocked tasks could not fit.")
                 .sidebarFont(.caption).foregroundStyle(SidebarTone.attention.color)
+                .padding(.leading, density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
         if expanded {
             ForEach(session.outlineChildRows(layout: layout)) { row in
@@ -1812,7 +1819,7 @@ private struct CopilotSessionContents: View {
                     expansion: row, setExpanded: setExpanded, selection: $selection
                 )
                 .padding(.leading, density.spacing(8) + density.indentation(
-                    depth: row.node.depth, unresolved: row.node.ancestryUnresolved, width: contentWidth
+                    depth: ownerDepth + row.node.depth, unresolved: row.node.ancestryUnresolved, width: contentWidth
                 ))
             }
         }
