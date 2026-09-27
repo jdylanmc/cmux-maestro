@@ -5,10 +5,12 @@ import Testing
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarMotionTests {
-    @Test(arguments: [(false, true, false), (false, true, true), (true, true, false), (true, false, false),
-                      (true, true, true), (true, false, true)])
+    @Test(arguments: [(false, true, false, false), (false, true, true, false),
+                      (true, true, false, false), (true, false, false, false),
+                      (true, true, true, false), (true, false, true, false),
+                      (false, true, false, true)])
     func retainedManagedIdentityDoesNotMaskNewWorkingObservation(
-        _ scenario: (showEnded: Bool, expanded: Bool, protectedObservation: Bool)
+        _ scenario: (showEnded: Bool, expanded: Bool, protectedObservation: Bool, delayedIdle: Bool)
     ) async throws {
         let f = SidebarTreeFixtures()
         let preferenceFixture = try SidebarPreferenceFixture()
@@ -43,8 +45,7 @@ struct SidebarMotionTests {
             oldObservation, f.session(state: .working, now: now)
         ], now: now))
         let poller = SidebarCopilotPolling(read: { _ in await snapshots.read() },
-                                          pause: { try await Task.sleep(for: .milliseconds(10)) },
-                                          expiryPause: sidebarFrozenExpiry, now: { now })
+                                          pause: { try await Task.sleep(for: .milliseconds(10)) })
         let orchestration = SidebarOrchestrationPolling(read: {
             .init(version: 1, generatedAt: oldDate, complete: true, omittedCount: 0, nodes: [old, child])
         }, pause: { try await Task.sleep(for: .seconds(60)) })
@@ -82,14 +83,21 @@ struct SidebarMotionTests {
         let history = preferences.history
         for state: CopilotWorkState in [.working, .idle] {
             if state == .idle {
+                if scenario.delayedIdle {
+                    try await Task.sleep(for: .seconds(SidebarCopilotTree.maximumAge + 0.1))
+                }
                 await snapshots.replace(f.snapshot(sessions: [
                     oldObservation, f.session(state: state, now: now)
                 ], now: now))
                 await sidebarEventually { poller.tree.sessions.first { $0.id == f.sessionID }?.state == .idle }
             }
-            hosting.layoutSubtreeIfNeeded()
-            try await Task.sleep(for: .milliseconds(40))
-            hosting.layoutSubtreeIfNeeded()
+            await sidebarEventually {
+                hosting.layoutSubtreeIfNeeded()
+                return descendants(hosting).compactMap { $0 as? SidebarTitleNativeButton }.contains {
+                    $0.accessibilityLabel() == "Focus Terminal New observed session"
+                        && $0.toolTip?.contains(state == .working ? "Working" : "Idle") == true
+                }
+            }
             let rows = descendants(hosting).compactMap { $0 as? SidebarTitleNativeButton }
             let retained = rows.filter { $0.accessibilityLabel() == "Focus Retained coordinator" }
             let retainedRow = try #require(retained.first)
@@ -108,12 +116,17 @@ struct SidebarMotionTests {
             #expect((try greenPixels(in: observedRow) > 0) == (state == .working),
                     "The primary production row reflects its own working-to-idle transition, even when collapsed")
             #expect(observedRow.toolTip?.contains(state == .working ? "Working" : "Idle") == true)
+            if state == .idle && scenario.delayedIdle {
+                let observation = try #require(poller.tree.sessions.first { $0.id == f.sessionID })
+                #expect(observation.observedAt.timeIntervalSince(now) > SidebarCopilotTree.maximumAge,
+                        "The delayed transition must use a new observation, not the aged fixture timestamp")
+            }
             let visible = SidebarVisibleWork(tree: poller.tree, managed: [old, child],
                                              history: preferences.history, showEnded: preferences.showEnded)
             let summary = SidebarPresentation.workspaceSummary(
                 surfaces: [], sessions: visible.tree.sessions, managed: visible.managed,
                 orchestrationAvailability: orchestration.availability, countsComplete: true,
-                now: now, observations: visible.tree
+                now: Date(), observations: visible.tree
             )
             print("R117 history scenario=\(scenario) state=\(state.rawValue) agents=\(summary.agentCount) "
                   + "states=\(summary.states.map { "\($0.title):\($0.count)" }) "
@@ -175,10 +188,11 @@ struct SidebarMotionTests {
                       ])
             ], observedAt: now
         )
-        let snapshot = f.snapshot(sessions: [oldObservation, f.session(state: .working, now: now)], now: now)
-        let poller = SidebarCopilotPolling(read: { _ in snapshot },
-                                          pause: { try await Task.sleep(for: .seconds(60)) },
-                                          expiryPause: sidebarFrozenExpiry, now: { now })
+        let snapshots = SidebarMotionSnapshots(f.snapshot(
+            sessions: [oldObservation, f.session(state: .working, now: now)], now: now
+        ))
+        let poller = SidebarCopilotPolling(read: { _ in await snapshots.read() },
+                                          pause: { try await Task.sleep(for: .milliseconds(10)) })
         let orchestration = SidebarOrchestrationPolling(read: {
             .init(version: 1, generatedAt: oldDate, complete: true, omittedCount: 0, nodes: managed)
         }, pause: { try await Task.sleep(for: .seconds(60)) })
@@ -219,9 +233,15 @@ struct SidebarMotionTests {
         for (ancestorExpanded, ownerExpanded) in [(true, true), (true, false), (false, true)] {
             preferences.setExpanded(ancestorExpanded, for: .managed(ancestor.id))
             preferences.setExpanded(ownerExpanded, for: .managed(owner.id))
-            hosting.layoutSubtreeIfNeeded()
-            try await Task.sleep(for: .milliseconds(40))
-            hosting.layoutSubtreeIfNeeded()
+            await sidebarEventually {
+                hosting.layoutSubtreeIfNeeded()
+                let rows = titles(hosting)
+                return rows.contains {
+                    $0.accessibilityLabel() == "Focus Terminal Replacement" && $0.toolTip?.contains("Working") == true
+                } && rows.contains { $0.accessibilityLabel() == "Focus Managed \(scenario.depth)" } == ancestorExpanded
+                    && rows.filter { $0.accessibilityLabel()?.hasPrefix("Open parent chat for Observed ") == true }.count
+                        == (ancestorExpanded && ownerExpanded ? 2 : 0)
+            }
             let rows = titles(hosting)
             let rootRow = try #require(rows.first { $0.accessibilityLabel() == "Focus Managed 0" })
             let siblingRow = try #require(rows.first { $0.accessibilityLabel() == "Focus Unrelated sibling" })
@@ -230,7 +250,8 @@ struct SidebarMotionTests {
             let replacement = try #require(rows.first { $0.accessibilityLabel() == "Focus Terminal Replacement" })
             let origin = hosting.convert(rootRow.bounds, from: rootRow).minX
             let step = scenario.density == .compact ? 8.0 : 10.8
-            #expect(abs(hosting.convert(siblingRow.bounds, from: siblingRow).minX - origin - step) <= 0.5)
+            let scale = window.backingScaleFactor
+            #expect(Double(hosting.convert(siblingRow.bounds, from: siblingRow).minX) == pixelAligned(origin + step, scale: scale))
             #expect(observedRows.count == (ancestorExpanded && ownerExpanded ? 2 : 0))
             #expect((ownerRow != nil) == ancestorExpanded)
             if ancestorExpanded, let ownerRow {
@@ -240,10 +261,18 @@ struct SidebarMotionTests {
                     let grandchild = try #require(observedRows.first { $0.accessibilityLabel()?.contains("Observed grandchild,") == true })
                     let childFrame = hosting.convert(child.bounds, from: child)
                     let grandchildFrame = hosting.convert(grandchild.bounds, from: grandchild)
-                    print("R117 nesting \(scenario) ownerX=\(ownerX) childX=\(childFrame.minX) grandchildX=\(grandchildFrame.minX)")
-                    #expect(abs(childFrame.minX - ownerX - step) <= 0.5)
-                    #expect(grandchildFrame.minX >= childFrame.minX)
+                    let densityScale = scenario.density == .compact ? 1.0 : 1.35
                     let cap = min(32, (scenario.width - (scenario.density == .compact ? 10 : 13.5)) * 0.12)
+                    let ownerIndent = min((scenario.depth == 2 ? 16.0 : 44.0) * densityScale, cap)
+                    let grandchildIndent = min((scenario.depth == 2 ? 24.0 : 48.0) * densityScale, cap)
+                    print("R117 nesting \(scenario) scale=\(scale) originX=\(origin) ownerX=\(ownerX) "
+                          + "childX=\(childFrame.minX) grandchildX=\(grandchildFrame.minX) "
+                          + "expectedOwner=\(pixelAligned(origin + ownerIndent, scale: scale)) "
+                          + "expectedChild=\(pixelAligned(origin + step + ownerIndent, scale: scale))")
+                    #expect(Double(ownerX) == pixelAligned(origin + ownerIndent, scale: scale))
+                    #expect(Double(childFrame.minX) == pixelAligned(origin + step + ownerIndent, scale: scale))
+                    #expect(Double(grandchildFrame.minX) == pixelAligned(origin + step + grandchildIndent, scale: scale))
+                    #expect(grandchildFrame.minX >= childFrame.minX)
                     let renderedCap = ceil((step + cap) * window.backingScaleFactor) / window.backingScaleFactor
                     #expect(grandchildFrame.minX - origin <= renderedCap,
                             "Combined managed/session depth must be capped once, not accumulated")
@@ -281,12 +310,12 @@ struct SidebarMotionTests {
             #expect(try greenPixels(in: replacement) > 0)
             let summary = SidebarPresentation.workspaceSummary(
                 surfaces: [], sessions: poller.tree.sessions, managed: managed,
-                orchestrationAvailability: orchestration.availability, countsComplete: true, now: now,
+                orchestrationAvailability: orchestration.availability, countsComplete: true, now: Date(),
                 observations: poller.tree
             )
             let attention = SidebarPresentation.workspaceAttention(
                 sessions: poller.tree.sessions, managed: managed, availability: orchestration.availability,
-                now: now, observations: poller.tree
+                now: Date(), observations: poller.tree
             )
             #expect(summary.agentCount == scenario.depth + 5)
             #expect(attention.needsInput == 2 && attention.questions == 1 && attention.approvals == 1)
@@ -295,10 +324,39 @@ struct SidebarMotionTests {
         }
     }
 
+    @Test(arguments: [(1.0, 85.0, 95.0), (2.0, 84.5, 95.5)])
+    func retainedGeometryMatchesIndependentlyAlignedBackingCoordinates(
+        _ sample: (scale: Double, ownerX: Double, childX: Double)
+    ) {
+        #expect(pixelAligned(63 + 21.6, scale: sample.scale) == sample.ownerX)
+        #expect(pixelAligned(63 + 21.6 + 10.8, scale: sample.scale) == sample.childX)
+        #expect(pixelAligned(63 + 27.18 + 10.8, scale: sample.scale) == 101)
+        #expect(pixelAligned(63 + 10.8, scale: sample.scale) != sample.childX,
+                "Omitting the managed-owner indentation must still fail on either backing grid")
+    }
+
+    private func pixelAligned(_ coordinate: Double, scale: Double) -> Double {
+        (coordinate * scale).rounded() / scale
+    }
+
     private actor SidebarMotionSnapshots {
         private var snapshot: CopilotSnapshot
         init(_ snapshot: CopilotSnapshot) { self.snapshot = snapshot }
-        func read() -> CopilotSnapshot { snapshot }
+        func read() -> CopilotSnapshot {
+            // Production rows use wall time; each synthetic read is a new observation.
+            let now = Date()
+            return .init(generatedAt: now, sessions: snapshot.sessions.map { session in
+                var observation = CopilotSessionObservation(
+                    sessionID: session.sessionID, surfaceID: session.surfaceID,
+                    launchWorkspaceID: session.launchWorkspaceID, liveness: session.liveness,
+                    state: session.state, model: session.model, children: session.children, observedAt: now,
+                    attention: session.attention, activity: session.activity
+                )
+                observation.iconId = session.iconId
+                observation.iconColor = session.iconColor
+                return observation
+            }, issues: snapshot.issues, isComplete: snapshot.isComplete)
+        }
         func replace(_ snapshot: CopilotSnapshot) { self.snapshot = snapshot }
     }
 
