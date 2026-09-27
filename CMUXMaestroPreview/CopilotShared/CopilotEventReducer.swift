@@ -1,6 +1,6 @@
 import Foundation
 
-// Projection from Copilot 1.0.84-4, with 1.0.88 multi-turn configuration. This decoder
+// Projection from Copilot 1.0.84-4, with 1.0.88 multi-turn attribution. This decoder
 // deliberately has no keys for prompts, arguments, results, errors, paths or questions.
 nonisolated struct CopilotEventProjection: Decodable, Sendable {
     let id: String
@@ -25,6 +25,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
     let interactionID: String?
     let parentEventID: String?
     let multiTurn: Bool?
+    let messageHasTurnMetadata: Bool
 
     private static let knownTypes: Set<String> = [
         "session.start", "session.resume", "session.idle", "session.model_change", "session.shutdown",
@@ -76,7 +77,21 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
         var session: UUID?, format: Int?
         var shell: String?, exitCode: Int?
         var hookResolved: Bool?, turn: String?, interaction: String?, acceptsFollowUps: Bool?
-        if Self.knownTypes.contains(type) {
+        var messageHasTags = false
+        if type == "assistant.message" {
+            // Message payloads remain opaque. Unusable advisory tags must neither
+            // suppress the session nor fall back to unscoped envelope proof.
+            messageHasTags = true
+            if let data = try? outer.nestedContainer(keyedBy: Fields.self, forKey: .data) {
+                messageHasTags = data.contains(.turnId) || data.contains(.interactionId)
+                if let messageTurn = try? data.decode(String.self, forKey: .turnId),
+                   let messageInteraction = try? data.decode(String.self, forKey: .interactionId),
+                   Self.validID(messageTurn), Self.validInteractionID(messageInteraction) {
+                    turn = messageTurn
+                    interaction = messageInteraction
+                }
+            }
+        } else if Self.knownTypes.contains(type) {
             let data = try outer.nestedContainer(keyedBy: Fields.self, forKey: .data)
             switch type {
             case "session.start":
@@ -140,9 +155,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
             }
         }
         if let interaction {
-            guard !interaction.isEmpty, interaction.utf8.count <= 256,
-                  !interaction.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
-            else { throw Self.invalid(decoder) }
+            guard Self.validInteractionID(interaction) else { throw Self.invalid(decoder) }
         }
         for identifier in [tool, parent, request, shell, turn].compactMap({ $0 }) {
             guard Self.validID(identifier) else { throw Self.invalid(decoder) }
@@ -164,6 +177,12 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
         turnID = turn
         interactionID = interaction
         multiTurn = acceptsFollowUps
+        messageHasTurnMetadata = messageHasTags
+    }
+
+    private static func validInteractionID(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 256
+            && !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
     }
 
     private static func validID(_ value: String) -> Bool {
@@ -473,7 +492,7 @@ nonisolated struct CopilotEventReducer: Sendable {
         let start = startIdentity(for: event)
         let lifecyclePrefixes = ["session.", "assistant.turn_", "tool.execution_", "subagent.", "skill.",
                                  "permission.", "user_input.", "system.notification", "abort"]
-        if lifecyclePrefixes.contains(where: { event.type.hasPrefix($0) }) {
+        if event.type == "assistant.message" || lifecyclePrefixes.contains(where: { event.type.hasPrefix($0) }) {
             let eventMatch = seenLifecycleEvents.match(event.id)
             let startMatch = startReplayMatch(for: event)
             if eventMatch == .exact || startMatch == .exact { return }
@@ -1136,12 +1155,17 @@ nonisolated struct CopilotEventReducer: Sendable {
 
     private mutating func observeCausalEvent(_ event: CopilotEventProjection) {
         // One tip per active owner, not a transcript graph. Unknown gaps fail
-        // closed; ignored payload-bearing events contribute only their envelope.
+        // closed unless a message explicitly attests that owner's current turn.
         guard event.type != "assistant.turn_start", event.type != "assistant.turn_end",
               !event.type.hasPrefix("tool.execution_"), event.toolCallID == nil, event.shellID == nil else { return }
         let owner = Owner(agentID: event.agentID)
-        guard let turn = turns[owner], event.id != turn.eventID,
-              isCausallyLinked(event, to: turn) else { return }
+        guard let turn = turns[owner], event.id != turn.eventID else { return }
+        if event.type == "assistant.message", event.messageHasTurnMetadata {
+            guard let interaction = event.interactionID, interaction == turn.interactionID,
+                  event.turnID == turn.id else { return }
+        } else {
+            guard isCausallyLinked(event, to: turn) else { return }
+        }
         turns[owner]?.causalTip = event.id
     }
 

@@ -181,6 +181,178 @@ nonisolated struct CopilotInteractionTests {
         #expect(reducer.canPublishProjection)
     }
 
+    @Test func producerTaggedMessagesProveRepeatedChildFollowUpCompletion() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumWorkItems: 2,
+                                          maximumRelationships: 16, maximumLifecycleEvents: 8)
+        var rebuilt = reducer
+        let fragment = try multiTurnFragment()
+        for row in fragment.prefix(5) { reducer.consume(row); rebuilt.consume(row) }
+        let originalParent = try #require(reducer.value().children.first).parentID
+        for index in 0..<128 {
+            let rows = try interleavedUntaggedFollowUp(
+                seed: 2_000 + index * 10, interaction: "followup-\(index)", messageTags: true
+            )
+            for row in rows { reducer.consume(row); rebuilt.consume(row) }
+            let child = try #require(reducer.value().children.first)
+            #expect(child.state == .idle)
+            #expect(child.name == "Synthetic child" && child.kind == .subagent)
+            #expect(child.parentID == originalParent && child.terminalEvent == nil)
+            #expect(reducer.issues.isEmpty)
+            let counts = reducer.retentionCounts
+            #expect(counts.work == 1 && counts.agents == 0 && counts.owners == 0 && counts.turns == 0)
+            #expect(counts.tombstones <= 16 && counts.events <= 8)
+        }
+        #expect(reducer.value() == rebuilt.value())
+        let beforeReplay = reducer.value()
+        for row in fragment.prefix(5) { reducer.consume(row) }
+        #expect(reducer.value() == beforeReplay)
+    }
+
+    @Test(arguments: ["matching", "old-interaction", "wrong-turn", "interaction-only", "turn-only",
+                       "null", "malformed", "wrong-owner"], [nil, "child"] as [String?])
+    func messageAttributionCannotBorrowCurrentParent(proof: String, owner: String?) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let first = UUID(), current = UUID(), message = UUID()
+        reducer.consume(try interactionEvent("assistant.turn_start", id: first, owner: owner,
+                                             turn: "0", interaction: "A"))
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: first, owner: owner, turn: "0"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: current, owner: owner,
+                                             turn: "0", interaction: "B"))
+        var tags: [String: Any] = ["turnId": "0", "interactionId": "B"]
+        switch proof {
+        case "old-interaction": tags["interactionId"] = "A"
+        case "wrong-turn": tags["turnId"] = "1"
+        case "interaction-only": tags.removeValue(forKey: "turnId")
+        case "turn-only": tags.removeValue(forKey: "interactionId")
+        case "null": tags["interactionId"] = NSNull()
+        case "malformed": tags["turnId"] = ["not-an-identifier"]
+        default: break
+        }
+        let row = try interactionEvent("assistant.message", id: message,
+                                        parent: proof == "matching" ? UUID() : current,
+                                        owner: proof == "wrong-owner" ? "other" : owner, data: tags)
+        let before = reducer.value()
+        reducer.consume(row)
+        #expect(reducer.value() == before)
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: message, owner: owner, turn: "0"))
+        let state = owner == nil ? reducer.value().state : reducer.value().children.first?.state
+        #expect(state == (proof == "matching" ? .idle : .unknown))
+        #expect(reducer.issues == (proof == "matching" ? [] : [.ambiguousTurn]))
+        #expect(reducer.canPublishProjection)
+    }
+
+    @Test func invalidMessageTagsStayUnusableWithoutSuppressingTheSession() throws {
+        for key in ["turnId", "interactionId"] {
+            for invalid: Any in ["", String(repeating: "x", count: 257), "bad\nid", 12, ["value"], NSNull()] {
+                var reducer = CopilotEventReducer(sessionID: UUID())
+                let first = UUID(), current = UUID(), message = UUID()
+                reducer.consume(try interactionEvent("assistant.turn_start", id: first, turn: "0", interaction: "A"))
+                reducer.consume(try interactionEvent("assistant.turn_end", parent: first, turn: "0"))
+                reducer.consume(try interactionEvent("assistant.turn_start", id: current, turn: "0", interaction: "B"))
+                var data: [String: Any] = ["turnId": "0", "interactionId": "B"]
+                data[key] = invalid
+                reducer.consume(try interactionEvent("assistant.message", id: message, parent: current, data: data))
+                reducer.consume(try interactionEvent("assistant.turn_end", parent: message, turn: "0"))
+                #expect(reducer.value().state == .unknown)
+                #expect(reducer.issues == [.ambiguousTurn])
+                #expect(reducer.canPublishProjection)
+            }
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func replayedMessageCannotAnchorAnotherInteraction(spill: Bool) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumLifecycleEvents: spill ? 4 : 65_536)
+        let first = UUID(), messageID = UUID()
+        let message = try interactionEvent("assistant.message", id: messageID, parent: first,
+                                           turn: "0", interaction: "A")
+        reducer.consume(try interactionEvent("assistant.turn_start", id: first, turn: "0", interaction: "A"))
+        reducer.consume(message)
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: messageID, turn: "0"))
+        if spill {
+            for index in 0..<16 {
+                reducer.consume(try interactionEvent("assistant.turn_start", turn: "noise-\(index)",
+                                                     interaction: "noise-\(index)"))
+            }
+        }
+        let current = UUID()
+        reducer.consume(try interactionEvent("assistant.turn_start", id: current, turn: "0", interaction: "B"))
+        reducer.consume(message)
+        // A reused event ID cannot become fresh proof by changing its tags or parent.
+        reducer.consume(try interactionEvent("assistant.message", id: messageID, parent: current,
+                                             turn: "0", interaction: "B"))
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: messageID, turn: "0"))
+        #expect(reducer.value().state == .unknown)
+        #expect(reducer.issues.contains(.ambiguousTurn))
+    }
+
+    @Test(arguments: ["abort", "session.resume", "session.shutdown"])
+    func messageAttributionCannotReviveInvalidatedWork(boundary: String) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        for row in try multiTurnFragment().prefix(6) { reducer.consume(row) }
+        reducer.consume(try interactionEvent(boundary, owner: boundary == "abort" ? "child" : nil,
+                                             data: boundary == "session.shutdown" ? ["shutdownType": "routine"] : [:]))
+        let before = reducer.value()
+        let message = UUID()
+        reducer.consume(try interactionEvent("assistant.message", id: message, owner: "child",
+                                             turn: "0", interaction: "B"))
+        #expect(reducer.value() == before)
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: message, owner: "child", turn: "0"))
+        #expect(reducer.value() == before)
+    }
+
+    @Test func malformedMessageContainerIsNotLegacyEnvelopeProof() throws {
+        for data: Any in [NSNull(), "opaque", ["not-an-object"]] {
+            var reducer = CopilotEventReducer(sessionID: UUID())
+            let first = UUID(), current = UUID(), message = UUID()
+            reducer.consume(try interactionEvent("assistant.turn_start", id: first, turn: "0", interaction: "A"))
+            reducer.consume(try interactionEvent("assistant.turn_end", parent: first, turn: "0"))
+            reducer.consume(try interactionEvent("assistant.turn_start", id: current, turn: "0", interaction: "B"))
+            reducer.consume(try JSONSerialization.data(withJSONObject: [
+                "id": message.uuidString, "type": "assistant.message", "parentId": current.uuidString, "data": data
+            ]))
+            reducer.consume(try interactionEvent("assistant.turn_end", parent: message, turn: "0"))
+            #expect(reducer.value().state == .unknown)
+            #expect(reducer.issues == [.ambiguousTurn])
+            #expect(reducer.canPublishProjection)
+        }
+    }
+
+    @Test @MainActor
+    func readerProjectsTaggedInterleavedParentChildAndGrandchildIdle() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let now = Date(timeIntervalSince1970: 2_020)
+        let names = ["parent", "child", "grandchild"]
+        var rows = try [
+            interactionEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            interactionEvent("tool.execution_start", data: ["toolCallId": "spawn-parent", "toolName": "task"])
+        ]
+        for (index, owner) in names.enumerated() {
+            rows += try multiTurnFragment(owner: owner, seed: 200 + index * 100,
+                                           parentAgent: index == 0 ? nil : names[index - 1]).prefix(5)
+            rows += try interleavedUntaggedFollowUp(seed: 4_000 + index * 10, owner: owner, messageTags: true)
+        }
+        try fixture.writeEvents(rows)
+        let snapshot = try await fixture.reader(clock: { now }).read(surfaceIDs: [fixture.surface])
+        let tree = interactionTree(snapshot, fixture: fixture)
+        let session = try #require(tree.sessions.first)
+        #expect(snapshot.isComplete && snapshot.issues.isEmpty && tree.hasCompleteCounts)
+        #expect(tree.sessions.count == 1 && session.surfaceID == fixture.surface)
+        #expect(session.nodes.map(\.id) == names)
+        #expect(session.nodes.map(\.name) == names.map { "Synthetic \($0)" })
+        #expect(session.nodes.map(\.parentID) == [nil, "parent", "child"])
+        #expect(session.nodes.map(\.depth) == [0, 1, 2])
+        #expect(session.nodes.allSatisfy { $0.kind == .subagent && $0.state == .idle && $0.terminalEvent == nil })
+        #expect(tree.knownRunningChildren == 0 && tree.attentionOwnerCount == 0)
+        let rebuilt = try await fixture.reader(clock: { now }).read(surfaceIDs: [fixture.surface])
+        #expect(rebuilt == snapshot)
+        let publicText = String(decoding: try JSONEncoder().encode(snapshot), as: UTF8.self)
+        #expect(!publicText.contains("SYNTHETIC_MESSAGE_PAYLOAD"))
+        #expect(!publicText.contains("SYNTHETIC_WARNING_PAYLOAD"))
+        #expect(!publicText.contains("interactionId") && !publicText.contains("messageId"))
+    }
+
     @Test @MainActor
     func readerReportsProducerInterleavingAsPartialUnknownWithoutLosingChildIdentity() async throws {
         let fixture = try CopilotReaderFixture()
@@ -419,6 +591,16 @@ nonisolated struct CopilotInteractionTests {
             interactionEvent("assistant.turn_start", owner: "child", turn: "unseen", interaction: "A")
         ] { reducer.consume(row) }
         #expect(reducer.value() == active)
+        reducer.consume(try interactionEvent("subagent.configured", at: Date(timeIntervalSince1970: 2_001),
+                                             owner: "child", data: ["model": "old-model", "multiTurn": true]))
+        let afterConfiguration = try #require(reducer.value().children.first)
+        let beforeConfiguration = try #require(active.children.first)
+        #expect(afterConfiguration.model == "old-model")
+        #expect(afterConfiguration.name == beforeConfiguration.name && afterConfiguration.kind == beforeConfiguration.kind)
+        #expect(afterConfiguration.parentID == beforeConfiguration.parentID)
+        #expect(afterConfiguration.state == beforeConfiguration.state)
+        #expect(afterConfiguration.terminalEvent == beforeConfiguration.terminalEvent)
+        #expect(afterConfiguration.attention == beforeConfiguration.attention)
         #expect(reducer.retentionCounts.requests == 1)
         #expect(reducer.retentionCounts.agents == 0)
         reducer.consume(try multiTurnEndBridge())
@@ -1020,8 +1202,7 @@ nonisolated struct CopilotInteractionTests {
         reducer.consume(try interactionEvent("assistant.turn_end", parent: a, turn: "0"))
         reducer.consume(try interactionEvent("assistant.turn_start", id: b, turn: "0", interaction: "PRIVATE_INTERACTION_B"))
         let row = try interactionEvent("assistant.message", id: message, parent: b, data: [
-            "content": "PRIVATE_PAYLOAD", "arguments": ["command": "PRIVATE_ARGUMENT"],
-            "interactionId": "PRIVATE_UNSELECTED_DATA"
+            "content": "PRIVATE_PAYLOAD", "arguments": ["command": "PRIVATE_ARGUMENT"]
         ])
         let projection = try JSONDecoder().decode(CopilotEventProjection.self, from: row)
         #expect(projection.parentEventID == b.uuidString)
@@ -1301,10 +1482,11 @@ nonisolated func multiTurnEndBridge(owner: String = "child", seed: Int = 100) th
     )
 }
 
-// "none" mirrors the review's sanitized producer envelope sequence. Tool modes
-// are synthetic controls for existing ownership proofs, not observed live traces.
+// Missing message tags retain the original review's evidence gap. Tagged messages
+// mirror the later metadata-only 1.0.88 probe; tool modes remain synthetic controls.
 nonisolated func interleavedUntaggedFollowUp(
-    seed: Int = 1_000, interaction: String = "B", toolMode: String = "none"
+    seed: Int = 1_000, interaction: String = "B", toolMode: String = "none",
+    owner: String = "child", messageTags: Bool = false
 ) throws -> [Data] {
     let ids = (0..<7).map {
         UUID(uuidString: String(format: "11820000-0000-0000-0000-%012X", seed + $0))!
@@ -1312,10 +1494,10 @@ nonisolated func interleavedUntaggedFollowUp(
     let date = Date(timeIntervalSince1970: 2_010)
     let tool = "followup-tool-\(seed)"
     var rows = [try interactionEvent("assistant.turn_start", id: ids[0], at: date,
-                                     owner: "child", turn: "0", interaction: interaction)]
+                                     owner: owner, turn: "0", interaction: interaction)]
     if toolMode == "proven" {
         rows.append(try interactionEvent("tool.execution_start", id: ids[3], parent: ids[0],
-                                         at: date.addingTimeInterval(1), owner: "child",
+                                         at: date.addingTimeInterval(1), owner: owner,
                                          data: ["toolCallId": tool, "toolName": "view"]))
     }
     rows += try [
@@ -1327,21 +1509,22 @@ nonisolated func interleavedUntaggedFollowUp(
     ]
     if toolMode == "unproven" {
         rows.append(try interactionEvent("tool.execution_start", id: ids[3], parent: ids[2],
-                                         at: date.addingTimeInterval(4), owner: "child",
+                                         at: date.addingTimeInterval(4), owner: owner,
                                          data: ["toolCallId": tool, "toolName": "view"]))
     }
     if toolMode != "none" {
         rows.append(try interactionEvent("tool.execution_complete", id: ids[4],
                                          parent: toolMode == "proven" ? ids[2] : ids[3],
-                                         at: date.addingTimeInterval(5), owner: "child",
+                                         at: date.addingTimeInterval(5), owner: owner,
                                          data: ["toolCallId": tool, "success": true]))
     }
     rows += try [
         interactionEvent("assistant.message", id: ids[5], parent: toolMode == "none" ? ids[2] : ids[4],
-                         at: date.addingTimeInterval(6), owner: "child",
+                         at: date.addingTimeInterval(6), owner: owner,
+                         turn: messageTags ? "0" : nil, interaction: messageTags ? interaction : nil,
                          data: ["messageId": "synthetic-message-\(seed)", "content": "SYNTHETIC_MESSAGE_PAYLOAD"]),
         interactionEvent("assistant.turn_end", id: ids[6], parent: ids[5], at: date.addingTimeInterval(7),
-                         owner: "child", turn: "0")
+                         owner: owner, turn: "0")
     ]
     return rows
 }

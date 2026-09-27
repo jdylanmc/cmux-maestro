@@ -54,7 +54,7 @@ Managed polling fences read success, failure, and task cleanup by generation.
 covers late success/missing/unsafe reads, current-task cancellation, and hide/show
 restart without erasing newer state or creating extra pollers.
 
-### Multi-turn child identity and unresolved completion evidence
+### Multi-turn child identity and completion attribution
 
 Copilot 1.0.88 can persist `subagent.configured(multiTurn: true)`, complete the
 original spawn task, then start another interaction on the same child without
@@ -68,19 +68,34 @@ still invalidate it. Reused turn numbers require the existing causal guards.
 replays a redacted seven-event producer fragment; its omitted causal envelopes
 do not prove an untagged final end.
 
-**Final idle on the reported producer path remains unmet.** The review-supplied
-envelope sequence passes from the child's fresh turn through root-owned
-`session.warning` and `hook.start`, then a child message and untagged turn end.
+An approved metadata-only Copilot 1.0.88 probe subsequently established that
+`assistant.message` carries both the current `interactionId` and `turnId`, even
+across root-owned warning/hook envelopes. Its linked `assistant.turn_end` still
+carries only the reused turn number. The reducer reads only those two bounded
+message identifiers, verifies the exact owner and current interaction/turn, and
+uses the message as that owner's completion anchor. Message content is never
+decoded or projected. Messages cannot create a turn, revive ended work, or
+replace spawn identity. Their event IDs use the existing bounded replay guard.
+
+`producerTaggedMessagesProveRepeatedChildFollowUpCompletion` and
+`readerProjectsTaggedInterleavedParentChildAndGrandchildIdle` cover this
+producer-shaped attribution through repeated follow-ups and the reader/tree
+seams, retaining identity and ancestry while returning to Idle. The nested
+fixture is a synthetic composition of the observed single-child sequence,
+not a claim of installed-app or live grandchild acceptance.
+
+**Missing current-turn proof remains Unknown.** The earlier review packet did
+not establish message tags; its negative regressions remain intact:
 `interleavedUntaggedFollowUpNeedsOwnedProofNotGlobalChronology`,
 `repeatedProducerShapedUntaggedFollowUpsRemainExplicitlyUnknown` and the matching
 reader/tree regression preserve the child's name/kind/ancestry but report
 Unknown / `ambiguousTurn`, including repeated follow-ups. The global chronological
-chain is not treated as ownership proof. A synthetic current-tool-origin control
-can establish idle; a tool first observed after the gap cannot.
-Same-owner direct-link, tagged-end and parent/child/grandchild idle fixtures are
-hypothetical controls for existing seams, not evidence of producer-realistic
-idle. Resolving that gap requires supported current-interaction evidence or an
-explicitly approved proof policy; no causal guard is weakened here.
+chain is not treated as ownership proof. Partial, malformed, null, conflicting,
+wrong-owner and replayed message tags cannot borrow a current parent link.
+Unusable advisory message metadata does not suppress the whole session; a
+completion lacking another valid anchor reports the explicit ambiguity.
+Legacy untagged same-owner envelope linkage and current-tool-origin controls
+remain supported. A tool first observed after a gap still cannot attest a turn.
 
 Capability is private, bounded reducer state: strict boolean configuration in a
 timestamped initial spawn window, before any child turn, with one admission per
@@ -92,7 +107,7 @@ shutdown/resume and uncertain lifecycle boundaries invalidate it; a root-turn
 abort/error does not imply independent background children ended. Retired rows
 remain retired. Legacy model projection, including lagging configuration
 timestamps, is independent of capability admission; public snapshots are unchanged.
-This fixes demonstrated continuation metadata, not every Unknown agent or a
+This fixes demonstrated continuation identity and tagged-message attribution, not every Unknown agent or a
 particular screenshot, and does not complete #118/#119, select a shared runtime
 architecture, add saved-session resurrection, or grant child control/placement.
 
