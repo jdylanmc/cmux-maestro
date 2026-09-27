@@ -4,7 +4,6 @@ import Foundation
 // never accumulated. The ordinary event decoder still owns all interpretation.
 nonisolated struct CopilotAssetEnvelope {
     static let maximumDepth = 64
-    static let maximumKeysPerObject = 64
     static let maximumKeyBytes = 1_024
     static let maximumLiveKeyBytes = 65_536
     static let maximumScalarBytes = 2_048
@@ -293,7 +292,6 @@ nonisolated struct CopilotAssetEnvelope {
             case 34:
                 if stringIsKey {
                     guard let key = try? JSONDecoder().decode(String.self, from: scalar),
-                          frames[frames.count - 1].keys.count < Self.maximumKeysPerObject,
                           liveKeyBytes + scalar.count <= Self.maximumLiveKeyBytes,
                           frames[frames.count - 1].keys.insert(key).inserted else {
                         valid = false

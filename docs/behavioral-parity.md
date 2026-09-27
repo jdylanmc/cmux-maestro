@@ -70,8 +70,18 @@ they are not treated as harmless model diagnostics.
 The streaming validator rejects malformed tokens, invalid UTF-8/escapes,
 unpaired Unicode surrogates, duplicate keys (including escaped equivalents),
 and invalid/truncated container structure. Bounds are 64 total container
-levels, 64 keys per object, 1,024 encoded bytes per key and 65,536 encoded key
-bytes across open objects. Arrays and opaque strings are scanned, not buffered.
+levels, 1,024 encoded bytes per key and 65,536 encoded key bytes across open
+objects. Arbitrary binary-asset `metadata` and tool-result `structuredContent`
+maps have no separate per-object key-count ceiling. Even an empty JSON string
+key costs two encoded bytes including its quotes, so the aggregate budget
+implies at most 32,768 live key entries across the open objects. This is a
+conservative cardinality bound, not a 64 KiB heap-allocation limit: Swift
+String/Set storage and frame overhead are additional, with their cardinality
+bounded by the same budget and depth limit. Wide maps can cost more overhead
+than narrow maps within that bound. Retained projection-field cardinality is
+separately fixed by the existing decoder's CodingKeys; admitting wider opaque
+maps does not add projected fields. Arrays and opaque strings are scanned,
+not buffered.
 Selected scalar retention is capped at 2,048 encoded bytes per field. A scalar
 beyond that cap remains present but unusable to the existing decoder, never
 silently omitted or defaulted; irrelevant fields of opaque events stay ignored.
@@ -95,6 +105,14 @@ controls, advisory message attribution, and a multi-batch large-history
 reader-to-sidebar Working-to-Idle transition. This is source-level recovery
 evidence for #121, not installed-app acceptance or proof of every reported
 missing/Unknown row.
+
+The wide-map regressions cover 64, 65 and 256 unique keys in asset metadata
+and tool structured results, both below and above the ordinary line limit
+and across chunk boundaries. Their red/green proof corrects the earlier
+unsupported 64-key ceiling rather than waiving a producer-contract failure.
+Duplicate keys and malformed values after the 64th entry remain rejected;
+the aggregate-key control admits exactly 65,536 encoded bytes across open
+objects and rejects 65,537.
 
 ### Multi-turn child identity and completion attribution
 

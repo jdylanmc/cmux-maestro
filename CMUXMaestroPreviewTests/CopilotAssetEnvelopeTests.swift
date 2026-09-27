@@ -244,7 +244,9 @@ struct CopilotAssetEnvelopeTests {
         }
         let keys = (0..<64).map { "\"k\($0)\":0" }.joined(separator: ",")
         #expect(project("{" + keys + "}") != nil)
-        #expect(project("{" + keys + ",\"extra\":0}") == nil)
+        // Arbitrary payload maps are bounded by encoded key memory, not the
+        // unrelated fixed cardinality of the observer's projection fields.
+        #expect(project("{" + keys + ",\"extra\":0}") != nil)
         #expect(project("{\"" + String(repeating: "k", count: 1022) + "\":0}") != nil)
         #expect(project("{\"" + String(repeating: "k", count: 1023) + "\":0}") == nil)
         #expect(project("{\"x\":" + String(repeating: "[", count: 62) + "0" + String(repeating: "]", count: 62) + "}") != nil)
@@ -448,6 +450,132 @@ struct CopilotAssetEnvelopeTests {
         var usage = rusage()
         let rss = getrusage(RUSAGE_SELF, &usage) == 0 ? usage.ru_maxrss : -1
         print("READER121_SYNTHETIC bytes=\(size) reads=\(reads) elapsed=\(started.duration(to: .now)) maximumBatch=\(maximumBatch) processPeakRSSBytes=\(rss)")
+    }
+
+    @Test(arguments: [64, 65, 256], [false, true])
+    func arbitraryAssetAndToolMapsRecoverAcrossOrdinaryLineLimit(keyCount: Int, oversized: Bool) async throws {
+        for type in ["session.binary_asset", "tool.execution_complete"] {
+            let fixture = try CopilotReaderFixture()
+            defer { fixture.remove() }
+            let start = UUID(), tool = UUID(), completion = UUID()
+            let row = try widePayloadEvent(
+                type, id: completion, parent: tool, keyCount: keyCount,
+                targetBytes: oversized ? 1_200_000 : 1_048_572
+            )
+            #expect((row.count > CopilotReaderLimits().maximumLineBytes) == oversized)
+            let ordinary = try JSONDecoder().decode(CopilotEventProjection.self, from: row)
+            #expect(ordinary.type == type)
+            try fixture.writeEvents([
+                interactionEvent("assistant.turn_start", id: start, turn: "0", interaction: "current"),
+                interactionEvent("tool.execution_start", id: tool, parent: start,
+                                 data: ["toolCallId": "tool", "toolName": "view"])
+            ])
+            let reader = fixture.reader(limits: .init(bytesPerRead: 262_144, bytesPerSession: 262_144))
+            let working = try await settled(reader, surface: fixture.surface)
+            #expect(tree(working, fixture: fixture).sessions.first?.state == .working)
+            try fixture.append(row + Data([10]))
+            let afterPayload = try await settled(reader, surface: fixture.surface)
+            #expect(afterPayload.isComplete && afterPayload.issues.isEmpty)
+            #expect(afterPayload.sessions.first?.state == .working)
+            let endParent: UUID
+            if type == "session.binary_asset" {
+                endParent = UUID()
+                try fixture.append(try interactionEvent(
+                    "tool.execution_complete", id: endParent, parent: tool,
+                    turn: "0", interaction: "current", data: ["toolCallId": "tool", "success": true]
+                ) + Data([10]))
+            } else {
+                endParent = completion
+            }
+            try fixture.append(try interactionEvent("assistant.turn_end", parent: endParent, turn: "0") + Data([10]))
+            let idle = try await settled(reader, surface: fixture.surface)
+            let projected = tree(idle, fixture: fixture)
+            #expect(idle.isComplete && idle.issues.isEmpty)
+            #expect(projected.availability == .ready)
+            #expect(projected.sessions.map(\.id) == [fixture.sessionID])
+            #expect(projected.sessions.first?.surfaceID == fixture.surface)
+            #expect(projected.sessions.first?.state == .idle)
+            let published = String(decoding: try JSONEncoder().encode(idle), as: UTF8.self)
+            #expect(!published.contains("PRIVATE_MAP_VALUE") && !published.contains("structuredContent"))
+        }
+    }
+
+    @Test(arguments: [64, 65, 256], [1, 257, 262_144])
+    func arbitraryPayloadMapProjectionSurvivesChunkBoundaries(keyCount: Int, chunkSize: Int) throws {
+        for type in ["session.binary_asset", "tool.execution_complete"] {
+            let id = UUID(), parent = UUID()
+            let row = try widePayloadEvent(type, id: id, parent: parent, keyCount: keyCount, targetBytes: 32_768)
+            let ordinary = try JSONDecoder().decode(CopilotEventProjection.self, from: row)
+            var envelope = CopilotAssetEnvelope(maximumBytes: 512)
+            var peak = 0
+            for index in stride(from: 0, to: row.count, by: chunkSize) {
+                envelope.consume(Data(row[index..<min(row.count, index + chunkSize)]))
+                peak = max(peak, envelope.retainedByteCount)
+            }
+            #expect(peak < 8192)
+            let projected = try #require(envelope.projectedEvent)
+            let event = try JSONDecoder().decode(CopilotEventProjection.self, from: projected)
+            #expect(event.id == ordinary.id && event.parentEventID == ordinary.parentEventID)
+            #expect(event.type == type && event.toolCallID == ordinary.toolCallID)
+            #expect(event.success == ordinary.success && event.turnID == ordinary.turnID)
+            #expect(event.interactionID == ordinary.interactionID)
+            #expect(!String(decoding: projected, as: UTF8.self).contains("PRIVATE_MAP_VALUE"))
+        }
+    }
+
+    @Test func arbitraryMapStillRejectsExactAggregateKeyBudgetOverflow() throws {
+        func encodedKey(_ index: Int, bytes: Int) -> String {
+            let prefix = "k\(index)"
+            return "\"" + prefix + String(repeating: "x", count: bytes - prefix.utf8.count - 2) + "\""
+        }
+        let firstKeys = (0..<65).map { encodedKey($0, bytes: 1000) + ":0" }.joined(separator: ",")
+        // Root id/type/data keys consume 16 encoded bytes; metadata consumes 10.
+        // The inner map's 65,510 bytes make exactly 65,536 across open objects.
+        for extraByte in [0, 1] {
+            let payload = firstKeys + "," + encodedKey(65, bytes: 510 + extraByte) + ":0"
+            let row = Data(#"{"id":"\#(UUID())","type":"session.binary_asset","data":{"metadata":{\#(payload)}}}"#.utf8)
+            _ = try JSONDecoder().decode(CopilotEventProjection.self, from: row)
+            var envelope = CopilotAssetEnvelope(maximumBytes: 512)
+            for index in stride(from: 0, to: row.count, by: 257) {
+                envelope.consume(Data(row[index..<min(row.count, index + 257)]))
+            }
+            #expect((envelope.projectedEvent != nil) == (extraByte == 0))
+        }
+    }
+
+    @Test func wideOpaqueMapsStillRejectDuplicatesAndMalformedValues() {
+        let fields = (0..<256).map { "\"k\($0)\":0" }.joined(separator: ",")
+        for suffix in [#""k65":1"#, #""\u006b65":1"#, #""extra":[1,]"#] {
+            let row = Data(#"{"id":"\#(UUID())","type":"session.binary_asset","data":{"metadata":{\#(fields),\#(suffix)}}}"#.utf8)
+            var envelope = CopilotAssetEnvelope(maximumBytes: 512)
+            for index in stride(from: 0, to: row.count, by: 257) {
+                envelope.consume(Data(row[index..<min(row.count, index + 257)]))
+            }
+            #expect(envelope.projectedEvent == nil)
+        }
+    }
+
+    private func widePayloadEvent(
+        _ type: String, id: UUID, parent: UUID, keyCount: Int, targetBytes: Int
+    ) throws -> Data {
+        let metadata = Dictionary(uniqueKeysWithValues: (0..<keyCount).map { ("k\($0)", "PRIVATE_MAP_VALUE") })
+        func encode(padding: Int) throws -> Data {
+            let content = String(repeating: "YWJj", count: padding / 4)
+            if type == "session.binary_asset" {
+                return try interactionEvent(type, id: id, parent: parent, data: [
+                    "data": content, "mimeType": "image/png", "metadata": metadata
+                ])
+            }
+            return try interactionEvent(type, id: id, parent: parent, turn: "0", interaction: "current", data: [
+                "toolCallId": "tool", "success": true,
+                "result": ["content": [["type": "text", "text": content]], "structuredContent": metadata]
+            ])
+        }
+        let base = try encode(padding: 0)
+        try #require(base.count <= targetBytes)
+        let row = try encode(padding: targetBytes - base.count)
+        #expect((targetBytes - 3...targetBytes).contains(row.count))
+        return row
     }
 
     private func tree(_ snapshot: CopilotSnapshot, fixture: CopilotReaderFixture) -> SidebarCopilotTree {
