@@ -1,6 +1,6 @@
 import Foundation
 
-// Projection from the installed Copilot 1.0.84-4 program schema. This decoder
+// Projection from Copilot 1.0.84-4, with 1.0.88 multi-turn configuration. This decoder
 // deliberately has no keys for prompts, arguments, results, errors, paths or questions.
 nonisolated struct CopilotEventProjection: Decodable, Sendable {
     let id: String
@@ -24,6 +24,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
     let turnID: String?
     let interactionID: String?
     let parentEventID: String?
+    let multiTurn: Bool?
 
     private static let knownTypes: Set<String> = [
         "session.start", "session.resume", "session.idle", "session.model_change", "session.shutdown",
@@ -43,7 +44,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
     private enum Fields: String, CodingKey {
         case toolCallId, parentId, toolName, agentDisplayName, name, model
         case selectedModel, newModel, currentModel, requestId, success, cancelled
-        case shutdownType, sessionId, version, turnId, interactionId, trigger, kind, resolvedByHook
+        case shutdownType, sessionId, version, turnId, interactionId, trigger, kind, resolvedByHook, multiTurn
     }
     private enum NotificationFields: String, CodingKey { case type, shellId, exitCode }
 
@@ -74,7 +75,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
         var request: String?, didSucceed: Bool?, wasCancelled: Bool?, shutdown: String?
         var session: UUID?, format: Int?
         var shell: String?, exitCode: Int?
-        var hookResolved: Bool?, turn: String?, interaction: String?
+        var hookResolved: Bool?, turn: String?, interaction: String?, acceptsFollowUps: Bool?
         if Self.knownTypes.contains(type) {
             let data = try outer.nestedContainer(keyedBy: Fields.self, forKey: .data)
             switch type {
@@ -119,6 +120,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
                 }
             case "subagent.configured":
                 selectedModel = try data.decode(String.self, forKey: .model)
+                acceptsFollowUps = try data.decodeIfPresent(Bool.self, forKey: .multiTurn)
             case "skill.invoked":
                 label = try data.decode(String.self, forKey: .name)
                 selectedModel = try data.decodeIfPresent(String.self, forKey: .model)
@@ -161,6 +163,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
         resolvedByHook = hookResolved
         turnID = turn
         interactionID = interaction
+        multiTurn = acceptsFollowUps
     }
 
     private static func validID(_ value: String) -> Bool {
@@ -290,6 +293,8 @@ nonisolated struct CopilotEventReducer: Sendable {
         var spawnTool: String?
         var turnID: String?
         var interactionID: String?
+        var configurationStart: Date?
+        var multiTurn = false
     }
     private struct Owner: Hashable, Sendable { let agentID: String? }
     private struct Turn: Sendable {
@@ -550,7 +555,20 @@ nonisolated struct CopilotEventReducer: Sendable {
                 || (event.interactionID != nil && replay.match(Self.turnKey(turn, owner: event.agentID)) != .absent)
             guard prepareInteraction(event) else { limitLifecycle(event); return }
             if let id = event.agentID {
-                if let previous = work[id], !Self.terminal(previous.state) {
+                let previous = work[id]
+                let continuation = previous?.multiTurn == true && !ended
+                    && previous?.kind == .subagent
+                    && previous?.interactionID != nil && event.interactionID != nil
+                    && previous?.interactionID != event.interactionID
+                    && (previous?.state == .completed || previous?.state.isTerminal == false)
+                if continuation {
+                    // The spawn task's result cannot finish a later interaction,
+                    // even if that result arrives for the first time after it.
+                    guard removeSpawnJoins(for: id) else { limitLifecycle(event); return }
+                    work[id]?.spawnTool = nil
+                }
+                work[id]?.configurationStart = nil
+                if let previous, !Self.terminal(previous.state) || continuation {
                     guard remember(key) else { limitLifecycle(event); return }
                     // Fresh scoped identity wins over an untrusted wall clock.
                     work[id]?.startedAt = event.timestamp
@@ -754,7 +772,8 @@ nonisolated struct CopilotEventReducer: Sendable {
             if insert(Work(
                 id: id, parent: parent, unresolvedTool: unresolved, kind: .subagent,
                 name: event.name ?? "Subagent", state: .working, model: event.model,
-                startedAt: event.timestamp, lifecycle: lifecycle, spawnTool: tool
+                startedAt: event.timestamp, lifecycle: lifecycle, spawnTool: tool,
+                configurationStart: event.agentID != nil && work[id] == nil ? event.timestamp : nil
             ), validatedStart: true) {
                 agentForTool[tool] = id
             } else {
@@ -766,7 +785,21 @@ nonisolated struct CopilotEventReducer: Sendable {
             finish(id, state: event.type == "subagent.failed" ? .failed
                 : event.cancelled == true ? .cancelled : .completed, event: event)
         case "subagent.configured":
-            if let agent = event.agentID { setModel(event.model, agent: agent) }
+            guard let agent = event.agentID, !predatesLifecycle(event, owner: agent) else { return }
+            setModel(event.model, agent: agent)
+            if event.multiTurn == false { work[agent]?.multiTurn = false }
+            // Configuration has no spawn/interaction tag. Admit it only in the
+            // timestamped initial spawn window, never from a pending side table
+            // or again for a previously configured raw agent ID.
+            guard !ended, let item = work[agent], item.kind == .subagent,
+                  !item.state.isTerminal, item.turnID == nil,
+                  let tool = item.spawnTool, agentForTool[tool] == agent,
+                  let start = item.configurationStart, let timestamp = event.timestamp,
+                  timestamp >= start else { return }
+            work[agent]?.configurationStart = nil
+            let key = "configured-agent:\(agent)"
+            guard !rejectReplay(key), remember(key) else { return }
+            work[agent]?.multiTurn = event.multiTurn == true
         case "skill.invoked":
             insert(Work(
                 id: "skill:\(event.id)", parent: event.agentID, kind: .skill,
@@ -876,6 +909,8 @@ nonisolated struct CopilotEventReducer: Sendable {
         work[id]?.startedAt = nil
         work[id]?.spawnTool = nil
         work[id]?.turnID = nil
+        work[id]?.configurationStart = nil
+        work[id]?.multiTurn = false
         clearActivity(owner: Owner(agentID: id))
     }
 
@@ -921,6 +956,8 @@ nonisolated struct CopilotEventReducer: Sendable {
             clearActivity(owner: Owner(agentID: id))
             work[id]?.spawnTool = nil
             work[id]?.turnID = nil
+            work[id]?.configurationStart = nil
+            work[id]?.multiTurn = false
         }
     }
 
@@ -936,7 +973,9 @@ nonisolated struct CopilotEventReducer: Sendable {
         work[id]?.state = state
         let evidence = matchedEvidence ?? completionEvidence(event)
         work[id]?.terminalEvent = evidence
+        work[id]?.configurationStart = nil
         if state == .failed || state == .cancelled {
+            work[id]?.multiTurn = false
             recordOutcome(state == .failed ? .error : .aborted, owner: id, evidence: evidence)
         }
         retireRequests(owner: id)
@@ -955,6 +994,7 @@ nonisolated struct CopilotEventReducer: Sendable {
             inserted.turnID = previous.turnID
             inserted.interactionID = previous.interactionID
             inserted.startedAt = previous.startedAt ?? item.startedAt
+            inserted.configurationStart = nil
             if inserted.model == nil { inserted.model = previous.model }
         }
         // Start callers already proved all their keys absent before any mutation.
@@ -1001,6 +1041,8 @@ nonisolated struct CopilotEventReducer: Sendable {
         }) else { return false }
         guard retireInteraction(owner: id) else { return false }
         guard remember(work[id]?.lifecycle ?? "work:\(id)") else { return false }
+        // Untagged configuration cannot establish a new lifetime for a retired ID.
+        if work[id]?.kind == .subagent, !remember("configured-agent:\(id)") { return false }
         let tools = agentForTool.filter { $0.value == id }.map(\.key).sorted()
         for tool in tools {
             guard remember("tool:\(tool)") else { return false }
@@ -1112,6 +1154,8 @@ nonisolated struct CopilotEventReducer: Sendable {
     private mutating func markTurnUnknown(owner: String?) {
         if let owner {
             if work[owner]?.state.isTerminal == false { work[owner]?.state = .unknown }
+            work[owner]?.configurationStart = nil
+            work[owner]?.multiTurn = false
         } else if !rootState.isTerminal {
             rootState = .unknown
         }
@@ -1161,9 +1205,13 @@ nonisolated struct CopilotEventReducer: Sendable {
 
     private mutating func demoteNonterminalChildren() {
         // A resumed owner cannot attest that pre-crash background work is active.
-        for id in order where !Self.terminal(work[id]?.state ?? .unknown) {
-            work[id]?.state = .unknown
-            work[id]?.turnID = nil
+        for id in order {
+            work[id]?.configurationStart = nil
+            work[id]?.multiTurn = false
+            if !Self.terminal(work[id]?.state ?? .unknown) {
+                work[id]?.state = .unknown
+                work[id]?.turnID = nil
+            }
         }
     }
 

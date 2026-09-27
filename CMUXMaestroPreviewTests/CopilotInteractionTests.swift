@@ -4,6 +4,366 @@ import Testing
 
 @Suite(.serialized)
 nonisolated struct CopilotInteractionTests {
+    @Test func demonstratedMultiTurnFragmentPreservesIdentityOnlyOnFreshContinuation() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let rows = try multiTurnFragment()
+        for row in rows.prefix(5) { reducer.consume(row) }
+        let completed = try #require(reducer.value().children.first)
+        #expect(completed.state == .completed)
+        #expect(completed.name == "Synthetic child")
+        #expect(completed.kind == .subagent)
+        #expect(completed.terminalEvent != nil)
+
+        reducer.consume(rows[5])
+        let continued = try #require(reducer.value().children.first)
+        #expect(continued.state == .working)
+        #expect(continued.id == completed.id)
+        #expect(continued.name == completed.name)
+        #expect(continued.kind == completed.kind)
+        #expect(continued.parentID == completed.parentID)
+        #expect(continued.terminalEvent == nil)
+        #expect(reducer.issues.isEmpty)
+
+        // The sanitized seven-event excerpt omits intervening causal envelopes.
+        // Metadata continuity must not make its unlinked, untagged end authoritative.
+        reducer.consume(rows[6])
+        #expect(reducer.value().children.first?.state == .unknown)
+        #expect(reducer.issues == [.ambiguousTurn])
+    }
+
+    @Test func demonstratedMultiTurnWithCausalEnvelopeFinishesIdleWithoutRespawn() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let rows = try multiTurnFragment()
+        reducer.consume(try interactionEvent("tool.execution_start", data: [
+            "toolCallId": "spawn-child", "toolName": "task"
+        ]))
+        for row in rows.prefix(6) { reducer.consume(row) }
+        // Synthetic metadata-only bridge supplies the omitted causal seam, not
+        // a fabricated interaction tag on the provider's untagged end.
+        reducer.consume(try multiTurnEndBridge())
+        reducer.consume(rows[6])
+        let child = try #require(reducer.value().children.first)
+        #expect(child.id == "child")
+        #expect(child.name == "Synthetic child")
+        #expect(child.kind == .subagent)
+        #expect(child.parentID == nil)
+        #expect(child.state == .idle)
+        #expect(child.terminalEvent == nil)
+        #expect(child.attention?.isEmpty != false)
+        #expect(reducer.issues.isEmpty)
+    }
+
+    @Test @MainActor
+    func readerProjectsMultiTurnParentChildAndGrandchildWithoutInventingSurfaces() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let now = Date(timeIntervalSince1970: 2_010)
+        let reader = fixture.reader(clock: { now })
+        let parentRows = try multiTurnFragment(owner: "parent", seed: 200)
+        let childRows = try multiTurnFragment(owner: "child", seed: 300, parentAgent: "parent")
+        let grandchildRows = try multiTurnFragment(owner: "grandchild", seed: 400, parentAgent: "child")
+        let families = [parentRows, childRows, grandchildRows]
+        try fixture.writeEvents([
+            interactionEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            interactionEvent("tool.execution_start", data: ["toolCallId": "spawn-parent", "toolName": "task"])
+        ] + families.flatMap { Array($0.prefix(5)) } + [interactionEvent("session.idle")])
+        let initial = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(initial.isComplete)
+        let first = try #require(interactionTree(initial, fixture: fixture).sessions.first)
+        #expect(first.nodes.map(\.state) == [.completed, .completed, .completed])
+        #expect(first.nodes.map(\.name) == ["Synthetic parent", "Synthetic child", "Synthetic grandchild"])
+        #expect(first.nodes.map(\.parentID) == [nil, "parent", "child"])
+        #expect(first.nodes.map(\.depth) == [0, 1, 2])
+        for rows in families { try fixture.append(rows[5] + Data([10])) }
+        let active = try await reader.read(surfaceIDs: [fixture.surface])
+        let tree = interactionTree(active, fixture: fixture)
+        let session = try #require(tree.sessions.first)
+        #expect(tree.sessions.count == 1)
+        #expect(session.id == fixture.sessionID)
+        #expect(session.surfaceID == fixture.surface)
+        #expect(session.workspaceID == fixture.workspace)
+        #expect(session.state == .idle)
+        #expect(session.nodes.map(\.id) == first.nodes.map(\.id))
+        #expect(session.nodes.map(\.name) == first.nodes.map(\.name))
+        #expect(session.nodes.map(\.parentID) == first.nodes.map(\.parentID))
+        #expect(session.nodes.map(\.kind) == [.subagent, .subagent, .subagent])
+        #expect(session.nodes.map(\.depth) == [0, 1, 2])
+        #expect(session.nodes.allSatisfy { !$0.ancestryUnresolved && $0.state == .working && $0.terminalEvent == nil })
+        #expect(tree.hasCompleteCounts)
+        #expect(tree.knownRunningChildren == 3)
+        #expect(tree.attentionOwnerCount == 0)
+        for (index, owner) in ["parent", "child", "grandchild"].enumerated() {
+            try fixture.append(multiTurnEndBridge(owner: owner, seed: 200 + index * 100) + Data([10]))
+            try fixture.append(families[index][6] + Data([10]))
+        }
+        let idle = try await reader.read(surfaceIDs: [fixture.surface])
+        let idleTree = interactionTree(idle, fixture: fixture)
+        #expect(idle.isComplete)
+        #expect(idleTree.sessions.first?.nodes.map(\.state) == [.idle, .idle, .idle])
+        #expect(idleTree.knownRunningChildren == 0)
+        #expect(idleTree.attentionOwnerCount == 0)
+        #expect(idleTree.retainedHistoryCount == 0)
+        let rebuilt = try await fixture.reader(clock: { now }).read(surfaceIDs: [fixture.surface])
+        #expect(rebuilt == idle)
+        let publicText = String(decoding: try JSONEncoder().encode(idle), as: UTF8.self)
+        #expect(!publicText.contains("multiTurn"))
+        #expect(!publicText.contains("configurationStart"))
+        #expect(!publicText.contains("interactionID"))
+    }
+
+    @Test func configurationMustBelongToInitialKnownSpawnAndUseStrictBoolean() throws {
+        let rows = try multiTurnFragment()
+        for value: Any in [false, NSNull(), "true", 1, ["true"]] {
+            var reducer = CopilotEventReducer(sessionID: UUID())
+            reducer.consume(rows[0])
+            reducer.consume(try interactionEvent("subagent.configured", at: Date(timeIntervalSince1970: 2_001),
+                                                 owner: "child", data: ["model": "new-model", "multiTurn": value]))
+            for row in rows[2...5] { reducer.consume(row) }
+            #expect(reducer.value().children.first?.kind == .unknown)
+            #expect(reducer.value().children.first?.name == "Unknown agent")
+            if value is String || value is Int || value is [String] {
+                #expect(reducer.issues == [.malformedData])
+                #expect(!reducer.canPublishProjection)
+            }
+        }
+        for placement in ["absent", "model-only", "before-spawn", "after-turn", "after-completion",
+                          "missing-spawn", "missing-time", "old-time", "unrelated", "root", "late-spawn"] {
+            var reducer = CopilotEventReducer(sessionID: UUID())
+            if placement == "before-spawn" || placement == "late-spawn" { reducer.consume(rows[1]) }
+            if placement != "missing-spawn" && placement != "late-spawn" { reducer.consume(rows[0]) }
+            if ["model-only", "missing-time", "old-time", "unrelated", "root"].contains(placement) {
+                reducer.consume(try interactionEvent(
+                    "subagent.configured",
+                    at: placement == "missing-time" ? nil : Date(timeIntervalSince1970: placement == "old-time" ? 1_999 : 2_001),
+                    owner: placement == "root" ? nil : placement == "unrelated" ? "other" : "child",
+                    data: placement == "model-only" ? ["model": "new-model"]
+                        : ["model": "new-model", "multiTurn": true]
+                ))
+            }
+            reducer.consume(rows[2])
+            if placement == "late-spawn" { reducer.consume(rows[0]); reducer.consume(rows[1]) }
+            if placement == "after-turn" || placement == "missing-spawn" { reducer.consume(rows[1]) }
+            reducer.consume(rows[3])
+            reducer.consume(rows[4])
+            if placement == "after-completion" { reducer.consume(rows[1]) }
+            reducer.consume(rows[5])
+            #expect(reducer.value().children.first?.kind == .unknown, "\(placement)")
+            #expect(reducer.value().children.first?.name == "Unknown agent", "\(placement)")
+            #expect(reducer.value().children.first?.state == .working, "\(placement)")
+            #expect(reducer.retentionCounts.work == 1)
+        }
+    }
+
+    @Test(arguments: ["subagent.failed", "cancelled", "abort", "session.error", "session.shutdown", "session.resume"])
+    func multiTurnCannotCrossInvalidatedOrUnprovenTerminalBoundary(boundary: String) throws {
+        let rows = try multiTurnFragment()
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        for row in rows.prefix(4) { reducer.consume(row) }
+        if boundary == "session.shutdown" || boundary == "session.resume" { reducer.consume(rows[4]) }
+        reducer.consume(try interactionEvent(
+            boundary == "cancelled" ? "subagent.completed" : boundary,
+            at: Date(timeIntervalSince1970: 2_004),
+            owner: boundary == "session.shutdown" || boundary == "session.resume" ? nil : "child",
+            data: ["toolCallId": "spawn-child", "agentDisplayName": "Synthetic child",
+                   "cancelled": true, "shutdownType": "routine"]
+        ))
+        // An old/newly delivered configuration cannot re-attest this lifetime.
+        reducer.consume(try interactionEvent("subagent.configured", at: Date(timeIntervalSince1970: 2_005),
+                                             owner: "child", data: ["model": "synthetic-model", "multiTurn": true]))
+        reducer.consume(rows[5])
+        #expect(reducer.value().children.first?.kind == .unknown)
+        #expect(reducer.value().children.first?.name == "Unknown agent")
+        #expect(reducer.value().children.first?.state == .working)
+    }
+
+    @Test(arguments: ["abort", "session.error"])
+    func primaryTurnFailureDoesNotInvalidateIndependentMultiTurnChild(boundary: String) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let rows = try multiTurnFragment()
+        for row in rows.prefix(5) { reducer.consume(row) }
+        reducer.consume(try interactionEvent(boundary))
+        let root = reducer.value()
+        reducer.consume(rows[5])
+        reducer.consume(try multiTurnEndBridge())
+        reducer.consume(rows[6])
+        #expect(reducer.value().state == root.state)
+        #expect(reducer.value().attention == root.attention)
+        #expect(reducer.value().children.first?.name == "Synthetic child")
+        #expect(reducer.value().children.first?.state == .idle)
+    }
+
+    @Test(arguments: [false, true])
+    func continuedInteractionRejectsDelayedSpawnOutcomeAndOldStarts(completionBeforeFollowUp: Bool) throws {
+        let rows = try multiTurnFragment()
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        for row in rows.prefix(completionBeforeFollowUp ? 5 : 4) { reducer.consume(row) }
+        reducer.consume(rows[5])
+        reducer.consume(try interactionEvent("permission.requested", owner: "child", data: ["requestId": "current"]))
+        let active = reducer.value()
+        #expect(active.children.first?.state == .blocked)
+        #expect(active.children.first?.kind == .subagent)
+        for row in [rows[0], rows[1], rows[2], rows[3], rows[4]] { reducer.consume(row) }
+        for row in try [
+            interactionEvent("subagent.started", owner: "child", data: [
+                "toolCallId": "spawn-child", "agentDisplayName": "Wrong old label", "model": "old-model"
+            ]),
+            interactionEvent("subagent.failed", owner: "child", data: [
+                "toolCallId": "spawn-child", "agentDisplayName": "Wrong old label"
+            ]),
+            interactionEvent("assistant.turn_start", owner: "child", turn: "unseen", interaction: "A"),
+            interactionEvent("subagent.configured", at: Date(timeIntervalSince1970: 2_001),
+                             owner: "child", data: ["model": "old-model", "multiTurn": true])
+        ] { reducer.consume(row) }
+        #expect(reducer.value() == active)
+        #expect(reducer.retentionCounts.requests == 1)
+        #expect(reducer.retentionCounts.agents == 0)
+        reducer.consume(try multiTurnEndBridge())
+        reducer.consume(rows[6])
+        reducer.consume(try interactionEvent("permission.completed", owner: "child", data: ["requestId": "current"]))
+        #expect(reducer.value().children.first?.state == .idle)
+        #expect(reducer.value().children.first?.name == "Synthetic child")
+        #expect(reducer.issues.isEmpty)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func newSpawnOrRetiredChildCannotInheritPriorMultiTurnConfiguration(
+        retire: Bool, configuredInitially: Bool
+    ) throws {
+        let rows = try multiTurnFragment()
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumWorkItems: 1)
+        for (index, row) in rows.prefix(5).enumerated() where configuredInitially || index != 1 {
+            reducer.consume(row)
+        }
+        if retire {
+            reducer.consume(try interactionEvent("system.notification", data: [
+                "kind": ["type": "shell_completed", "shellId": "retire", "exitCode": 0]
+            ]))
+        }
+        reducer.consume(try interactionEvent("subagent.started", at: Date(timeIntervalSince1970: 2_010),
+                                             owner: "child", data: [
+                                                "toolCallId": "new-spawn", "agentDisplayName": "New child",
+                                                "parentId": "new-parent", "model": "new-model"
+                                             ]))
+        let fresh = reducer.value()
+        for row in rows.prefix(5) { reducer.consume(row) }
+        #expect(reducer.value() == fresh)
+        // Even fresh-looking configuration cannot borrow an already used raw ID.
+        reducer.consume(try interactionEvent("subagent.configured", at: Date(timeIntervalSince1970: 2_011),
+                                             owner: "child", data: ["model": "new-model", "multiTurn": true]))
+        for row in try [
+            interactionEvent("assistant.turn_start", at: Date(timeIntervalSince1970: 2_012),
+                             owner: "child", turn: "0", interaction: "new-A"),
+            interactionEvent("subagent.completed", at: Date(timeIntervalSince1970: 2_013), owner: "child",
+                             data: ["toolCallId": "new-spawn", "agentDisplayName": "New child"]),
+            interactionEvent("assistant.turn_start", at: Date(timeIntervalSince1970: 2_014),
+                             owner: "child", turn: "0", interaction: "new-B")
+        ] { reducer.consume(row) }
+        #expect(reducer.value().children.first?.name == "Unknown agent")
+        #expect(reducer.value().children.first?.kind == .unknown)
+        #expect(reducer.value().children.first?.parentID == "unresolved-owner")
+    }
+
+    @Test(arguments: ["missing", "same"])
+    func terminalContinuationRequiresANewExplicitInteraction(namespace: String) throws {
+        let rows = try multiTurnFragment()
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        for row in rows.prefix(5) { reducer.consume(row) }
+        reducer.consume(try interactionEvent("assistant.turn_start", owner: "child", turn: "unseen",
+                                             interaction: namespace == "same" ? "A" : nil))
+        #expect(reducer.value().children.first?.kind == .unknown)
+        #expect(reducer.value().children.first?.state == .working)
+    }
+
+    @Test func modelOnlyConfigurationDoesNotReviveWorkAndExplicitFalseRevokesContinuation() throws {
+        let rows = try multiTurnFragment()
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        for row in rows.prefix(5) { reducer.consume(row) }
+        let terminal = reducer.value().children.first?.terminalEvent
+        reducer.consume(try interactionEvent("subagent.configured", at: Date(timeIntervalSince1970: 2_004),
+                                             owner: "child", data: ["model": "updated-model"]))
+        #expect(reducer.value().children.first?.state == .completed)
+        #expect(reducer.value().children.first?.terminalEvent == terminal)
+        #expect(reducer.value().children.first?.model == "updated-model")
+        reducer.consume(try interactionEvent("subagent.configured", at: Date(timeIntervalSince1970: 2_004),
+                                             owner: "child", data: ["model": "updated-model", "multiTurn": false]))
+        reducer.consume(rows[5])
+        #expect(reducer.value().children.first?.kind == .unknown)
+    }
+
+    @Test func malformedConfigurationCannotPublishPreviouslyAttestedContinuation() throws {
+        let rows = try multiTurnFragment()
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        for row in rows.prefix(5) { reducer.consume(row) }
+        reducer.consume(try interactionEvent("subagent.configured", owner: "child", data: [
+            "model": "synthetic-model", "multiTurn": "true"
+        ]))
+        reducer.consume(rows[5])
+        #expect(!reducer.canPublishProjection)
+        #expect(reducer.issues == [.malformedData])
+    }
+
+    @Test func continuationRemainsBoundedAndReconstructsAfterReplayWindowSpill() throws {
+        let session = UUID()
+        var reducer = CopilotEventReducer(sessionID: session, maximumWorkItems: 2,
+                                          maximumRelationships: 8, maximumLifecycleEvents: 4)
+        var rebuilt = reducer
+        let fragment = try multiTurnFragment()
+        for row in fragment.prefix(5) { reducer.consume(row); rebuilt.consume(row) }
+        for index in 0..<128 {
+            for row in try [
+                interactionEvent("assistant.turn_start", owner: "child", turn: "0", interaction: "followup-\(index)"),
+                interactionEvent("assistant.turn_end", owner: "child", turn: "0", interaction: "followup-\(index)")
+            ] {
+                reducer.consume(row)
+                rebuilt.consume(row)
+                let counts = reducer.retentionCounts
+                #expect(counts.work == 1 && counts.agents == 0 && counts.owners == 0)
+                #expect(counts.tombstones <= 8 && counts.events <= 4)
+                #expect(counts.interactionOwners == 1 && counts.turns <= 1)
+            }
+        }
+        #expect(reducer.value() == rebuilt.value())
+        #expect(reducer.value().children.first?.name == "Synthetic child")
+        #expect(reducer.value().children.first?.state == .idle)
+        #expect(reducer.issues.isEmpty)
+        let current = reducer.value()
+        for row in fragment.prefix(5) { reducer.consume(row) }
+        #expect(reducer.value() == current)
+        #expect(reducer.issues == [.readLimitReached])
+    }
+
+    @Test(arguments: [false, true])
+    func retiredOrReplayLimitedContinuationCannotBorrowTerminalIdentity(limited: Bool) throws {
+        let rows = try multiTurnFragment()
+        var reducer = CopilotEventReducer(
+            sessionID: UUID(), maximumWorkItems: 1, maximumLifecycleEvents: limited ? 2 : 65_536,
+            maximumReplayFilterWords: limited ? 1 : 16_384
+        )
+        for row in rows.prefix(5) { reducer.consume(row) }
+        if limited {
+            for row in try copilotTestReplayPressure() { reducer.consume(row) }
+        } else {
+            reducer.consume(try interactionEvent("system.notification", data: [
+                "kind": ["type": "shell_completed", "shellId": "retire", "exitCode": 0]
+            ]))
+            #expect(reducer.value().children.first?.id != "child")
+        }
+        reducer.consume(rows[5])
+        let child = try #require(reducer.value().children.first { $0.id == "child" })
+        #expect(child.terminalEvent == nil)
+        if limited {
+            #expect(child.state == .unknown)
+            #expect(reducer.issues.contains(.readLimitReached))
+        } else {
+            #expect(child.state == .working)
+            #expect(child.kind == .unknown)
+            #expect(child.name == "Unknown agent")
+        }
+        let current = reducer.value()
+        reducer.consume(rows[4])
+        #expect(reducer.value() == current)
+    }
+
     @Test func unjoinedShellNotificationCannotProveCurrentPrimaryTurnCompletion() throws {
         var reducer = CopilotEventReducer(sessionID: UUID())
         let a = UUID(), b = UUID(), notification = UUID()
@@ -684,4 +1044,46 @@ nonisolated func interactionEvent(
     if let date { event["timestamp"] = date.ISO8601Format() }
     if let owner { event["agentId"] = owner }
     return try JSONSerialization.data(withJSONObject: event, options: [.sortedKeys])
+}
+
+// Copilot 1.0.88's observed seven-event sequence, with deterministic replacement
+// IDs/labels/times. The excerpt's missing chronological predecessors stay missing.
+nonisolated func multiTurnFragment(
+    owner: String = "child", seed: Int = 100, parentAgent: String? = nil
+) throws -> [Data] {
+    let ids = (0..<12).map {
+        UUID(uuidString: String(format: "11800000-0000-0000-0000-%012X", seed + $0))!
+    }
+    let date = Date(timeIntervalSince1970: 2_000)
+    var spawn: [String: Any] = [
+        "toolCallId": "spawn-\(owner)", "agentDisplayName": "Synthetic \(owner)",
+        "agentName": "task", "resumable": false, "model": "synthetic-model"
+    ]
+    if let parentAgent { spawn["parentId"] = parentAgent }
+    return try [
+        interactionEvent("subagent.started", id: ids[0], parent: ids[7], at: date,
+                         owner: owner, data: spawn),
+        interactionEvent("subagent.configured", id: ids[1], parent: ids[8],
+                         at: date.addingTimeInterval(1), owner: owner,
+                         data: ["multiTurn": true, "model": "synthetic-model"]),
+        interactionEvent("assistant.turn_start", id: ids[2], parent: ids[9],
+                         at: date.addingTimeInterval(2), owner: owner, turn: "0", interaction: "A"),
+        interactionEvent("assistant.turn_end", id: ids[3], parent: ids[10],
+                         at: date.addingTimeInterval(3), owner: owner, turn: "0"),
+        interactionEvent("subagent.completed", id: ids[4], parent: ids[10],
+                         at: date.addingTimeInterval(4), owner: owner, data: spawn),
+        interactionEvent("assistant.turn_start", id: ids[5], parent: ids[10],
+                         at: date.addingTimeInterval(5), owner: owner, turn: "0", interaction: "B"),
+        interactionEvent("assistant.turn_end", id: ids[6], parent: ids[11],
+                         at: date.addingTimeInterval(7), owner: owner, turn: "0")
+    ]
+}
+
+nonisolated func multiTurnEndBridge(owner: String = "child", seed: Int = 100) throws -> Data {
+    try interactionEvent(
+        "assistant.message",
+        id: UUID(uuidString: String(format: "11800000-0000-0000-0000-%012X", seed + 11))!,
+        parent: UUID(uuidString: String(format: "11800000-0000-0000-0000-%012X", seed + 5))!,
+        owner: owner
+    )
 }

@@ -54,6 +54,32 @@ Managed polling fences read success, failure, and task cleanup by generation.
 covers late success/missing/unsafe reads, current-task cancellation, and hide/show
 restart without erasing newer state or creating extra pollers.
 
+### Observed multi-turn child continuation
+
+Copilot 1.0.88 can persist `subagent.configured(multiTurn: true)`, complete the
+original spawn task, then start another interaction on the same child without
+another `subagent.started`. The reducer retains that child's observed name,
+kind and ancestry on the fresh interaction, retiring the old spawn-result join.
+Completion remains a terminal task outcome until fresh activity is observed.
+Reused turn numbers still require the existing interaction and causal guards.
+`CopilotInteractionTests.demonstratedMultiTurnFragmentPreservesIdentityOnlyOnFreshContinuation`
+replays a redacted seven-event producer fragment; its omitted causal envelopes
+do not prove an untagged final end. Separate metadata-only causal and reader/tree
+fixtures demonstrate final idle and parent/child/grandchild continuity.
+
+Capability is private, bounded reducer state: strict boolean configuration in a
+timestamped initial spawn window, before any child turn, with one admission per
+observed child ID. Missing/late configuration, missing spawn evidence,
+known old timestamps and reused child IDs cannot grant continuation, even if the
+old child was retired before its configuration was observed.
+Explicit false revokes it. Failed/cancelled child outcomes, scoped abort/error,
+shutdown/resume and uncertain lifecycle boundaries invalidate it; a root-turn
+abort/error does not imply independent background children ended. Retired rows
+remain retired. Legacy model-only decoding and public snapshots are unchanged.
+This fixes demonstrated continuation metadata, not every Unknown agent or a
+particular screenshot, and does not complete #118/#119, select a shared runtime
+architecture, add saved-session resurrection, or grant child control/placement.
+
 Managed report fixtures include the real terminal sequence: `final_answer`,
 `assistant.turn_end`, `session.usage_checkpoint`, `assistant.idle`, then `result`.
 Only non-content terminal bookkeeping is permitted; later assistant/tool work
