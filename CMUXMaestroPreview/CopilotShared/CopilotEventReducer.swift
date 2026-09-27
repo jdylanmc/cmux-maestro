@@ -30,7 +30,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
         "session.start", "session.resume", "session.idle", "session.model_change", "session.shutdown",
         "session.error", "abort", "assistant.turn_start", "assistant.turn_end",
         "tool.execution_start", "tool.execution_complete", "tool.execution_partial_result", "subagent.started",
-        "subagent.completed", "subagent.failed", "subagent.configured", "skill.invoked",
+        "subagent.completed", "subagent.failed", "subagent.configured", "subagent.selected", "skill.invoked",
         "permission.requested", "permission.completed", "user_input.requested", "user_input.completed",
         "system.notification"
     ]
@@ -785,8 +785,9 @@ nonisolated struct CopilotEventReducer: Sendable {
             finish(id, state: event.type == "subagent.failed" ? .failed
                 : event.cancelled == true ? .cancelled : .completed, event: event)
         case "subagent.configured":
-            guard let agent = event.agentID, !predatesLifecycle(event, owner: agent) else { return }
+            guard let agent = event.agentID else { return }
             setModel(event.model, agent: agent)
+            guard !predatesLifecycle(event, owner: agent) else { return }
             if event.multiTurn == false { work[agent]?.multiTurn = false }
             // Configuration has no spawn/interaction tag. Admit it only in the
             // timestamped initial spawn window, never from a pending side table
@@ -800,6 +801,9 @@ nonisolated struct CopilotEventReducer: Sendable {
             let key = "configured-agent:\(agent)"
             guard !rejectReplay(key), remember(key) else { return }
             work[agent]?.multiTurn = event.multiTurn == true
+        case "subagent.selected":
+            // Profile selection is not a new instance, spawn name or task outcome.
+            break
         case "skill.invoked":
             insert(Work(
                 id: "skill:\(event.id)", parent: event.agentID, kind: .skill,
@@ -1042,7 +1046,7 @@ nonisolated struct CopilotEventReducer: Sendable {
         guard retireInteraction(owner: id) else { return false }
         guard remember(work[id]?.lifecycle ?? "work:\(id)") else { return false }
         // Untagged configuration cannot establish a new lifetime for a retired ID.
-        if work[id]?.kind == .subagent, !remember("configured-agent:\(id)") { return false }
+        guard remember("configured-agent:\(id)") else { return false }
         let tools = agentForTool.filter { $0.value == id }.map(\.key).sorted()
         for tool in tools {
             guard remember("tool:\(tool)") else { return false }

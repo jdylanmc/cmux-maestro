@@ -54,28 +54,44 @@ Managed polling fences read success, failure, and task cleanup by generation.
 covers late success/missing/unsafe reads, current-task cancellation, and hide/show
 restart without erasing newer state or creating extra pollers.
 
-### Observed multi-turn child continuation
+### Multi-turn child identity and unresolved completion evidence
 
 Copilot 1.0.88 can persist `subagent.configured(multiTurn: true)`, complete the
 original spawn task, then start another interaction on the same child without
 another `subagent.started`. The reducer retains that child's observed name,
 kind and ancestry on the fresh interaction, retiring the old spawn-result join.
 Completion remains a terminal task outcome until fresh activity is observed.
-Reused turn numbers still require the existing interaction and causal guards.
+Documented `subagent.selected` profile metadata does not replace the spawn
+identity or revoke that capability. Other unknown subagent lifecycle events
+still invalidate it. Reused turn numbers require the existing causal guards.
 `CopilotInteractionTests.demonstratedMultiTurnFragmentPreservesIdentityOnlyOnFreshContinuation`
 replays a redacted seven-event producer fragment; its omitted causal envelopes
-do not prove an untagged final end. Separate metadata-only causal and reader/tree
-fixtures demonstrate final idle and parent/child/grandchild continuity.
+do not prove an untagged final end.
+
+**Final idle on the reported producer path remains unmet.** The review-supplied
+envelope sequence passes from the child's fresh turn through root-owned
+`session.warning` and `hook.start`, then a child message and untagged turn end.
+`interleavedUntaggedFollowUpNeedsOwnedProofNotGlobalChronology`,
+`repeatedProducerShapedUntaggedFollowUpsRemainExplicitlyUnknown` and the matching
+reader/tree regression preserve the child's name/kind/ancestry but report
+Unknown / `ambiguousTurn`, including repeated follow-ups. The global chronological
+chain is not treated as ownership proof. A synthetic current-tool-origin control
+can establish idle; a tool first observed after the gap cannot.
+Same-owner direct-link, tagged-end and parent/child/grandchild idle fixtures are
+hypothetical controls for existing seams, not evidence of producer-realistic
+idle. Resolving that gap requires supported current-interaction evidence or an
+explicitly approved proof policy; no causal guard is weakened here.
 
 Capability is private, bounded reducer state: strict boolean configuration in a
 timestamped initial spawn window, before any child turn, with one admission per
 observed child ID. Missing/late configuration, missing spawn evidence,
 known old timestamps and reused child IDs cannot grant continuation, even if the
-old child was retired before its configuration was observed.
+old child became Unknown and was retired before its configuration was observed.
 Explicit false revokes it. Failed/cancelled child outcomes, scoped abort/error,
 shutdown/resume and uncertain lifecycle boundaries invalidate it; a root-turn
 abort/error does not imply independent background children ended. Retired rows
-remain retired. Legacy model-only decoding and public snapshots are unchanged.
+remain retired. Legacy model projection, including lagging configuration
+timestamps, is independent of capability admission; public snapshots are unchanged.
 This fixes demonstrated continuation metadata, not every Unknown agent or a
 particular screenshot, and does not complete #118/#119, select a shared runtime
 architecture, add saved-session resurrection, or grant child control/placement.
