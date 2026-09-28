@@ -59,6 +59,7 @@ final class SetupDeadlineClock: @unchecked Sendable {
     private let origin: ContinuousClock.Instant
     private var instant: ContinuousClock.Instant
     private var sampled = false
+    private var driverEntered = false
     private let startup = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
 
     init() {
@@ -85,6 +86,18 @@ final class SetupDeadlineClock: @unchecked Sendable {
 
     func finishStartup() {
         startup.continuation.finish()
+    }
+
+    func noteDriverEntry() {
+        lock.lock()
+        defer { lock.unlock() }
+        driverEntered = true
+    }
+
+    var driverDidEnter: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return driverEntered
     }
 
     var wasSampled: Bool {
@@ -354,8 +367,9 @@ struct CopilotSetupTests {
                                                  deadlineNow: { clock.now() })
             let arguments = gatedInstallerArguments(in: directory)
             return Task.detached {
-                await runner.run(executable: URL(fileURLWithPath: "/bin/sh"),
-                                 arguments: arguments, path: "/usr/bin:/bin")
+                clock.noteDriverEntry()
+                return await runner.run(executable: URL(fileURLWithPath: "/bin/sh"),
+                                        arguments: arguments, path: "/usr/bin:/bin")
             }
         }
         defer { tasks.forEach { $0.cancel() } }
@@ -379,14 +393,17 @@ struct CopilotSetupTests {
             FileManager.default.fileExists(atPath: $0.directory.appendingPathComponent("ready").path)
         }.count
         let sampledCount = clocks.filter(\.wasSampled).count
+        let enteredCount = clocks.filter(\.driverDidEnter).count
         if !startedConcurrently { tasks.forEach { $0.cancel() } }
         clocks.forEach { $0.advance(by: .seconds(0.4)) }
+        var results: [CopilotProcessResult] = []
         for task in tasks {
             let result = await task.value
+            results.append(result)
             if startedConcurrently { #expect(result == .timedOut) }
         }
         #expect(startedConcurrently,
-                "Blocking supervision: \(readyCount)/2 writers ready; \(sampledCount)/2 supervisors sampled their clocks")
+                "Blocking supervision: \(readyCount)/2 writers ready; \(sampledCount)/2 supervisors sampled their clocks; \(enteredCount)/2 detached drivers entered before cancellation; results=\(results)")
         for fixture in fixtures {
             try fixture.reader.close()
             _ = releaseMutationGate(fixture.writer)
