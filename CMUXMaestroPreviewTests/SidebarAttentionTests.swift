@@ -241,7 +241,12 @@ struct SidebarAttentionTests {
         #expect(view.contains("SidebarPresentation.focusInteraction(from: old, to: new)"))
         #expect(view.contains("SidebarTitleButton(label: label,"))
         #expect(view.contains("value: detail ?? \"\", action: focus)"))
-        #expect(view.contains("SidebarRowAction.focus(target, navigation: navigation, prepareSeen: prepareSeen).perform()"))
+        let normalized = view.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        #expect(normalized.contains(
+            "SidebarRowAction.focus(target, navigation: navigation, prepareSeen: prepareSeen, subject: inspection, revalidate: focusInspection).perform()"
+        ))
+        #expect(view.contains("if let subject, let revalidate { revalidate(subject, target); return }"))
+        #expect(view.contains("capturedPlacement: (capturedWorkspaceID, capturedSurfaceID)"))
         #expect(presentation.contains("Blocking reason unavailable"))
         #expect(presentation.contains("Activity time unknown"))
         let project = try String(contentsOf: root.appendingPathComponent("CMUXMaestroPreview.xcodeproj/project.pbxproj"), encoding: .utf8)

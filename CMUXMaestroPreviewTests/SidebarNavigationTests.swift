@@ -374,8 +374,8 @@ struct SidebarNavigationTests {
         )
         #expect(view.contains("selection = .workspace(workspace.id)"))
         #expect(view.contains("selection = .surface(workspaceID: workspaceID, surfaceID: surface.id)"))
-        #expect(view.components(separatedBy: "selection: unmanagedSelection").count == 4,
-                "Hierarchy, managed hierarchy, and taskboard each retain the inspection binding")
+        #expect(view.components(separatedBy: "selection: unmanagedSelection").count == 6,
+                "Hierarchy and both primary/retained managed and taskboard sections retain the inspection binding")
         #expect(view.contains("SidebarPresentation.inspectorDetails("))
         #expect(view.contains("SidebarInspector(content: inspectorDetails)"))
         let now = Date()

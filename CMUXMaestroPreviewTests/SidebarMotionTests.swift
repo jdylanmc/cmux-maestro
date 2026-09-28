@@ -8,14 +8,17 @@ struct SidebarMotionTests {
     @Test(arguments: [(false, true, false, false), (false, true, true, false),
                       (true, true, false, false), (true, false, false, false),
                       (true, true, true, false), (true, false, true, false),
-                      (false, true, false, true)])
+                      (false, true, false, true)], SidebarMode.allCases)
     func retainedManagedIdentityDoesNotMaskNewWorkingObservation(
-        _ scenario: (showEnded: Bool, expanded: Bool, protectedObservation: Bool, delayedIdle: Bool)
+        _ scenario: (showEnded: Bool, expanded: Bool, protectedObservation: Bool, delayedIdle: Bool),
+        mode: SidebarMode
     ) async throws {
         let f = SidebarTreeFixtures()
         let preferenceFixture = try SidebarPreferenceFixture()
         defer { preferenceFixture.cleanup() }
         let preferences = preferenceFixture.preferences()
+        preferences.selectedMode = mode
+        let currentLabel = mode == .hierarchy ? "Focus Terminal New observed session" : "Focus Copilot session 10000000"
         let now = Date()
         let oldDate = now.addingTimeInterval(-172_800)
         let childSessionID = UUID(), otherSurfaceID = UUID(), otherSessionID = UUID()
@@ -97,7 +100,7 @@ struct SidebarMotionTests {
         preferences.showEnded = scenario.showEnded
         preferences.setExpanded(true, for: .managed(old.id))
         preferences.setExpanded(scenario.expanded, for: .surface(f.surfaceA))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 700),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: mode == .hierarchy ? 700 : 1100),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .aqua)
@@ -145,14 +148,14 @@ struct SidebarMotionTests {
             await sidebarEventually {
                 hosting.layoutSubtreeIfNeeded()
                 return descendants(hosting).compactMap { $0 as? SidebarTitleNativeButton }.contains {
-                    $0.accessibilityLabel() == "Focus Terminal New observed session"
+                    $0.accessibilityLabel() == currentLabel
                         && $0.toolTip?.contains(state == .working ? "Working" : "Idle") == true
                 }
             }
             let rows = descendants(hosting).compactMap { $0 as? SidebarTitleNativeButton }
             let retained = rows.filter { $0.accessibilityLabel() == "Inspect retained record New observed session" }
             let retainedRow = try #require(retained.first)
-            let current = rows.filter { $0.accessibilityLabel() == "Focus Terminal New observed session" }
+            let current = rows.filter { $0.accessibilityLabel() == currentLabel }
             let observedRow = try #require(current.first)
             #expect(retained.count == 1 && current.count == 1)
             #expect(retainedRow.toolTip?.contains("Retained record") == true)
@@ -161,7 +164,8 @@ struct SidebarMotionTests {
                     > hosting.convert(observedRow.bounds, from: observedRow).minY)
             let retainedActions = descendants(hosting).compactMap { ($0 as? SidebarRowMenuAnchorView)?.presenter }
                 .flatMap(\.groups).flatMap(\.actions).filter { $0.title == "Focus original session" }
-            #expect(retainedActions.count == 1 && retainedActions.allSatisfy { $0.unavailable != nil })
+            let retainedActionCount = mode == .hierarchy || (!scenario.showEnded && !scenario.protectedObservation) ? 1 : 2
+            #expect(retainedActions.count == retainedActionCount && retainedActions.allSatisfy { $0.unavailable != nil })
             retainedRow.activate()
             capturedPrimary?()
             if let (presenter, item) = capturedFocus {
@@ -174,6 +178,15 @@ struct SidebarMotionTests {
                     "History must not duplicate the exact managed identity")
             #expect(rows.contains { $0.accessibilityLabel() == "Focus Protected descendant" })
             #expect(rows.contains { $0.accessibilityLabel() == "Focus Other current root" })
+            if mode == .taskboard {
+                let labels = ["Focus Other current root", "Focus Copilot session \(String(childSessionID.uuidString.prefix(8)).lowercased())"]
+                for label in labels {
+                    let currentRow = try #require(rows.first { $0.accessibilityLabel() == label })
+                    #expect(hosting.convert(currentRow.bounds, from: currentRow).minY
+                            < hosting.convert(retainedRow.bounds, from: retainedRow).minY,
+                            "Independent current content must precede retained context")
+                }
+            }
             #expect(try leadingInk(of: retainedRow, in: hosting) == 0, "Retained record has no current focus stripe")
             #expect(try leadingInk(of: observedRow, in: hosting) > 0, "Current session keeps its focus stripe")
             if scenario.protectedObservation {
@@ -182,7 +195,13 @@ struct SidebarMotionTests {
                 }, "Coalescing must preserve observed descendants without a managed equivalent")
             }
             #expect(try greenPixels(in: retainedRow) == 0, "Never borrow the new session's working state")
-            #expect((try greenPixels(in: observedRow) > 0) == (state == .working),
+            let statePixels: Int
+            if mode == .hierarchy { statePixels = try greenPixels(in: observedRow) }
+            else {
+                let frame = hosting.convert(observedRow.bounds, from: observedRow)
+                statePixels = try greenPixels(in: hosting, rect: NSRect(x: 0, y: frame.maxY + 4, width: 340, height: 14))
+            }
+            #expect((statePixels > 0) == (state == .working),
                     "The primary production row reflects its own working-to-idle transition, even when collapsed")
             #expect(observedRow.toolTip?.contains(state == .working ? "Working" : "Idle") == true)
             if state == .idle && scenario.delayedIdle {
@@ -197,9 +216,9 @@ struct SidebarMotionTests {
                 orchestrationAvailability: orchestration.availability, countsComplete: true,
                 now: Date(), observations: visible.tree
             )
-            print("R117 history scenario=\(scenario) state=\(state.rawValue) agents=\(summary.agentCount) "
+            print("Retained rows mode=\(mode.rawValue) scenario=\(scenario) state=\(state.rawValue) agents=\(summary.agentCount) "
                   + "states=\(summary.states.map { "\($0.title):\($0.count)" }) "
-                  + "primaryGreenPixels=\(try greenPixels(in: observedRow)) "
+                  + "primaryGreenPixels=\(statePixels) "
                   + "oldObservedRows=\(rows.filter { $0.accessibilityLabel() == "Focus Copilot session 20000000" }.count)")
             #expect(summary.agentCount == (scenario.protectedObservation ? 5 : 4))
             #expect(summary.retainedRecordCount == 1)
@@ -227,7 +246,7 @@ struct SidebarMotionTests {
                 context.draw(try #require(bitmap.cgImage), in: bounds)
                 let opaque = NSBitmapImageRep(cgImage: try #require(context.makeImage()))
                 try #require(opaque.representation(using: .png, properties: [:]))
-                    .write(to: folder.appendingPathComponent("retained118-\(state.rawValue).png"))
+                    .write(to: folder.appendingPathComponent("retained118-\(mode.rawValue)-\(state.rawValue).png"))
             }
         }
         let currentChild = try #require(descendants(hosting).compactMap { $0 as? SidebarTitleNativeButton }
@@ -472,10 +491,11 @@ struct SidebarMotionTests {
         func replace(_ snapshot: CopilotSnapshot) { self.snapshot = snapshot }
     }
 
-    private func greenPixels(in row: NSView) throws -> Int {
+    private func greenPixels(in row: NSView, rect: NSRect? = nil) throws -> Int {
         row.layoutSubtreeIfNeeded()
-        let bitmap = try #require(row.bitmapImageRepForCachingDisplay(in: row.bounds))
-        row.cacheDisplay(in: row.bounds, to: bitmap)
+        let bounds = rect ?? row.bounds
+        let bitmap = try #require(row.bitmapImageRepForCachingDisplay(in: bounds))
+        row.cacheDisplay(in: bounds, to: bitmap)
         var green = 0
         for y in 0..<bitmap.pixelsHigh {
             for x in 0..<bitmap.pixelsWide {

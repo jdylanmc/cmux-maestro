@@ -459,13 +459,16 @@ enum SidebarPresentation {
     static func inspection(
         for target: SidebarInspection.Target, hierarchy: HierarchySnapshot, connected: Bool,
         tree: SidebarCopilotTree, managed: SidebarOrchestrationSnapshot,
-        availability: SidebarOrchestrationAvailability, now: Date = Date()
+        availability: SidebarOrchestrationAvailability, now: Date = Date(),
+        capturedPlacement: (workspaceID: UUID, surfaceID: UUID)? = nil
     ) -> SidebarInspection? {
         let topology = SidebarTopology(hierarchy)
         guard connected, hierarchy.receivedSnapshot, hierarchy.workspaceListAvailable,
               hierarchy.workspaceMetadataAvailable, let windowID = topology.windowID else { return nil }
         let workspaceID: UUID
         let surfaceID: UUID?
+        // Retained records have no focus target, but still have an exact source placement.
+        var placementSurfaceID: UUID? = nil
         var sessionID: UUID?
         switch target {
         case .managed(let captured):
@@ -476,6 +479,7 @@ enum SidebarPresentation {
                   node.copilotSessionId == captured.copilotSessionId,
                   node.workspaceId == captured.workspaceId, node.surfaceId == captured.surfaceId else { return nil }
             workspaceID = node.workspaceId
+            placementSurfaceID = node.surfaceId
             let retained = displacedManagedNodeIDs([node], observations: tree, now: now).contains(node.id)
             surfaceID = retained ? nil : node.surfaceId
             sessionID = managedSession(for: node, in: tree, now: now)?.id ?? node.copilotSessionId
@@ -493,6 +497,7 @@ enum SidebarPresentation {
             case .surface(let workspace, let surface):
                 workspaceID = workspace
                 surfaceID = surface
+                placementSurfaceID = surface
             case .session(let id), .child(let id, _):
                 let matches = tree.sessions.filter { $0.id == id }
                 guard [.ready, .partial].contains(tree.availability),
@@ -502,9 +507,14 @@ enum SidebarPresentation {
                     guard session.nodes.filter({ $0.id == childID }).count == 1 else { return nil }
                 }
                 workspaceID = session.workspaceID
+                placementSurfaceID = session.surfaceID
                 surfaceID = retainedSessionIDs(tree, managed: managed.nodes, now: now).contains(session.id) ? nil : session.surfaceID
                 sessionID = session.id
             }
+        }
+        if let capturedPlacement {
+            guard workspaceID == capturedPlacement.workspaceID,
+                  placementSurfaceID == capturedPlacement.surfaceID else { return nil }
         }
         guard topology.workspaceIDs.contains(workspaceID) else { return nil }
         var kind: HierarchySurfaceKind?

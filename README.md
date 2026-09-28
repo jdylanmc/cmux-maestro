@@ -208,6 +208,9 @@ Retained-record primary actions open details, original-session focus is explicit
 unavailable, and the replacement terminal's focus stripe is not shown on the old
 record. Mixed summary totals use **entries** with an explicit retained-record
 count rather than implying every record is a current session.
+Taskboard also places current session/activity content before retained branches
+and retained activity. Captured focus actions stay bound to their original
+workspace and surface; after a move, use the newly rendered row.
 When ended agents are shown, an exact old observation stays with its managed
 identity rather than creating a duplicate row; its observed descendants and
 attention remain available beneath that branch.

@@ -17,7 +17,7 @@ private struct SidebarDismissManagedKey: EnvironmentKey {
 }
 
 private struct SidebarFocusInspectionKey: EnvironmentKey {
-    static let defaultValue: ((SidebarInspection.Target) -> Void)? = nil
+    static let defaultValue: ((SidebarInspection.Target, SidebarNavigationTarget) -> Void)? = nil
 }
 
 private struct SidebarAgentIconStyleKey: EnvironmentKey {
@@ -33,7 +33,7 @@ private struct SidebarFocusedSurfaceKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
-    var sidebarFocusInspection: ((SidebarInspection.Target) -> Void)? {
+    var sidebarFocusInspection: ((SidebarInspection.Target, SidebarNavigationTarget) -> Void)? {
         get { self[SidebarFocusInspectionKey.self] }
         set { self[SidebarFocusInspectionKey.self] = newValue }
     }
@@ -657,6 +657,8 @@ struct SidebarView: View {
                 selection: unmanagedSelection
             )
         case .taskboard:
+            let work = visibleWork
+            let retainedIDs = SidebarPresentation.retainedSessionIDs(work.tree, managed: work.managed, now: Date())
             if !model.orchestration.snapshot.nodes.isEmpty {
                 ManagedHierarchyContent(
                     polling: model.orchestration, hierarchy: model.hierarchy,
@@ -664,16 +666,30 @@ struct SidebarView: View {
                     setExpanded: { preferences.setExpanded($1, for: $0) },
                     selectedNode: managedSelection,
                     dismiss: dismiss, acknowledge: acknowledge, selection: unmanagedSelection,
-                    displayNodes: visibleWork.managed, copilotTree: visibleWork.tree
+                    displayNodes: work.managed, copilotTree: work.tree, rootGroup: .primary
                 )
             }
             TaskboardContent(
-                tree: visibleWork.tree, hierarchy: model.hierarchy,
+                tree: work.tree, hierarchy: model.hierarchy,
                 navigation: model.navigation, dismiss: dismiss, acknowledge: acknowledge,
                 selection: unmanagedSelection,
-                retainedSessionIDs: SidebarPresentation.retainedSessionIDs(
-                    visibleWork.tree, managed: visibleWork.managed, now: Date()
+                retainedSessionIDs: retainedIDs
+            )
+            if !model.orchestration.snapshot.nodes.isEmpty {
+                ManagedHierarchyContent(
+                    polling: model.orchestration, hierarchy: model.hierarchy,
+                    navigation: model.navigation, layout: preferences.layout,
+                    setExpanded: { preferences.setExpanded($1, for: $0) },
+                    selectedNode: managedSelection,
+                    dismiss: dismiss, acknowledge: acknowledge, selection: unmanagedSelection,
+                    displayNodes: work.managed, copilotTree: work.tree, rootGroup: .retained
                 )
+            }
+            TaskboardContent(
+                tree: work.tree, hierarchy: model.hierarchy,
+                navigation: model.navigation, dismiss: dismiss, acknowledge: acknowledge,
+                selection: unmanagedSelection,
+                retainedSessionIDs: retainedIDs, retainedOnly: true
             )
         }
     }
@@ -738,11 +754,13 @@ struct SidebarView: View {
         }
     }
 
-    private func focusInspection(_ target: SidebarInspection.Target) {
-        guard let subject = SidebarPresentation.inspection(
+    private func focusInspection(_ target: SidebarInspection.Target, capturedPlacement: SidebarNavigationTarget) {
+        guard case .surface(let capturedWorkspaceID, let capturedSurfaceID) = capturedPlacement,
+              let subject = SidebarPresentation.inspection(
             for: target, hierarchy: model.hierarchy, connected: connected,
             tree: model.copilot.tree, managed: model.orchestration.snapshot,
-            availability: model.orchestration.availability, now: Date()
+            availability: model.orchestration.availability, now: Date(),
+            capturedPlacement: (capturedWorkspaceID, capturedSurfaceID)
         ) else {
             inspector = nil
             showingInspector = true
@@ -2133,6 +2151,7 @@ private struct TaskboardContent: View {
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
     var retainedSessionIDs: Set<UUID> = []
+    var retainedOnly = false
     @Environment(\.sidebarDensity) private var density
 
     private let groups: [(String, [CopilotWorkState])] = [
@@ -2140,8 +2159,15 @@ private struct TaskboardContent: View {
         ("Done / ended", [.completed, .failed, .cancelled]), ("Unknown", [.unknown]),
     ]
 
+    private var sessions: [SidebarCopilotSession] {
+        tree.sessions.filter { retainedSessionIDs.contains($0.id) == retainedOnly }
+    }
+
     var body: some View {
-        ForEach(tree.sessions) { session in
+        if retainedOnly && !sessions.isEmpty {
+            Text("Retained activity").sidebarFont(.caption, weight: .semibold)
+        }
+        ForEach(sessions) { session in
             let paths = hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID)
             TaskboardSessionRow(
                 session: session, title: SidebarPresentation.surfaceTitle(for: session, in: hierarchy),
@@ -2149,21 +2175,21 @@ private struct TaskboardContent: View {
                 retained: retainedSessionIDs.contains(session.id)
             )
         }
-        if tree.sessions.allSatisfy({ $0.nodes.isEmpty }) {
+        if !retainedOnly && tree.sessions.allSatisfy({ $0.nodes.isEmpty }) {
             SidebarNotice(
                 title: SidebarPresentation.emptyChildHistoryTitle(complete: tree.hasCompleteCounts),
                 detail: "History may hide ended work; this does not mean the session is finished. Workspace focus remains in Hierarchy."
             )
         } else {
             ForEach(groups, id: \.0) { title, states in
-                let sessions = tree.sessions.filter { session in session.nodes.contains { states.contains($0.state) } }
-                if !sessions.isEmpty {
+                let matching = sessions.filter { session in session.nodes.contains { states.contains($0.state) } }
+                if !matching.isEmpty {
                     if let state = states.first {
                         Text(title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(SidebarPresentation.state(state).tone.color)
                     }
-                    ForEach(sessions) { session in
+                    ForEach(matching) { session in
                         let paths = hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID)
                         Text(SidebarPresentation.surfaceTitle(for: session, in: hierarchy))
                             .sidebarFont(.caption).foregroundStyle(.secondary)
@@ -2512,7 +2538,8 @@ extension SidebarRowAction {
     static func focus(
         _ target: SidebarNavigationTarget, navigation: SidebarNavigation,
         prepareSeen: @escaping (SidebarSeenTarget) -> () -> Void, parentChat: Bool = false,
-        subject: SidebarInspection.Target? = nil, revalidate: ((SidebarInspection.Target) -> Void)? = nil
+        subject: SidebarInspection.Target? = nil,
+        revalidate: ((SidebarInspection.Target, SidebarNavigationTarget) -> Void)? = nil
     ) -> Self {
         let title: String
         switch target {
@@ -2520,7 +2547,7 @@ extension SidebarRowAction {
         case .surface: title = parentChat ? "Open parent chat" : "Focus surface"
         }
         return .init(title: title, unavailable: navigation.disabledReason(for: target)) {
-            if let subject, let revalidate { revalidate(subject); return }
+            if let subject, let revalidate { revalidate(subject, target); return }
             switch target {
             case .workspace: navigation.select(target)
             case .surface(let workspaceID, let surfaceID):
