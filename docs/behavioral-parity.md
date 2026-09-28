@@ -49,6 +49,16 @@ serialization, startup retry or larger readiness timeout. Startup observation
 has no added wall-time limit before the first sample; the existing dedicated
 concurrency test remains the bounded dispatch-progress regression.
 
+### Deep-outline fixture readiness
+
+Focus-layout fixtures bring the deepest title into the viewport and wait for
+native scroller/document geometry to settle before capturing their baseline.
+A no-focus control reproduced the initial overlay-to-legacy scroller transition
+and its 17-point viewport change; the correction does not change global scroller
+preferences or production layout. Exact focus-frame equality and width/depth
+caps remain unchanged. No-focus and real-width-change controls verify that the
+baseline is not refreshed after the effect or used to hide later layout changes.
+
 ## Capability matrix
 
 Links below point to test files; named methods identify representative checks,

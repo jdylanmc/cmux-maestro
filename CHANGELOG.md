@@ -23,6 +23,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 - Start setup-test fixture readiness after installer spawn rather than task
   enqueue, preserving timeout, cancellation and process-cleanup checks.
+- Wait for a visible, settled native viewport before measuring offscreen focus
+  layout, preserving exact frame and width invariants.
 - Automatically omit unneeded old managed registrations when an exact current
   replacement is verified. Preserve ancestors and original-session context
   needed by work or unresolved attention, without deleting records or closing
