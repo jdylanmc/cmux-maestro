@@ -419,7 +419,7 @@ struct SidebarView: View {
         let work = visibleWork
         return SidebarPresentation.workspaceAttention(
             sessions: work.tree.sessions, managed: work.managed,
-            availability: model.orchestration.availability, now: Date()
+            availability: model.orchestration.availability, now: Date(), observations: work.tree
         )
     }
 
@@ -653,6 +653,7 @@ struct SidebarView: View {
                     navigation: model.navigation, layout: preferences.layout,
                     setExpanded: { preferences.setExpanded($1, for: $0) },
                     selectedNode: managedSelection,
+                    dismiss: dismiss, acknowledge: acknowledge, selection: unmanagedSelection,
                     displayNodes: visibleWork.managed, copilotTree: visibleWork.tree
                 )
             }
@@ -972,10 +973,16 @@ struct ManagedHierarchyContent: View {
     let layout: SidebarLayoutSettings
     let setExpanded: (SidebarExpansionID, Bool) -> Void
     @Binding var selectedNode: SidebarOrchestrationNode?
+    let dismiss: (SidebarDismissedOutcome) -> Void
+    let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
+    @Binding var selection: UnmanagedSelection?
     var workspaceID: UUID? = nil
     var showsWorkspaceHeaders = true
     var displayNodes: [SidebarOrchestrationNode]? = nil
     var copilotTree: SidebarCopilotTree = .waiting
+    var retainedSessions: [SidebarSessionPlacement] = []
+    @Environment(\.sidebarDensity) private var density
+    @Environment(\.sidebarContentWidth) private var contentWidth
     private var nodes: [SidebarOrchestrationNode] { displayNodes ?? polling.snapshot.nodes }
     private func children(of id: UUID) -> [SidebarOrchestrationNode] {
         nodes.filter { $0.parentId == id }
@@ -1006,11 +1013,13 @@ struct ManagedHierarchyContent: View {
                         WorkspaceOutlineHeader(workspace: group.workspace, hierarchy: hierarchy, navigation: navigation)
                     }
                     ForEach(rows(for: group.roots)) { row in
+                        let retained = retainedSessions.filter { $0.managedNodeID == row.id }.map(\.session)
+                        let expanded = layout.isExpanded(.managed(row.node.id))
                         ManagedNodeRow(
                             node: row.node, depth: row.depth,
-                            hasChildren: row.hasChildren,
+                            hasChildren: row.hasChildren || retained.contains { !$0.outlineNodes.isEmpty },
                             activeDescendants: row.activeDescendants,
-                            expanded: layout.isExpanded(.managed(row.node.id)),
+                            expanded: expanded,
                             selected: selectedNode?.id == row.node.id,
                             evidenceDate: Date(),
                             availability: polling.availability,
@@ -1021,6 +1030,20 @@ struct ManagedHierarchyContent: View {
                             },
                             select: { selectedNode = row.node }
                         )
+                        if !expanded && retained.contains(where: { !$0.outlineNodes.isEmpty }) {
+                            CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: retained))
+                                .padding(.leading, 28 + density.indentation(
+                                    depth: row.depth, unresolved: false, width: contentWidth
+                                ))
+                        }
+                        ForEach(retained) { session in
+                            CopilotSessionContents(
+                                session: session, expanded: expanded,
+                                navigation: navigation, layout: layout, setExpanded: setExpanded,
+                                dismiss: dismiss, acknowledge: acknowledge, selection: $selection,
+                                ownerDepth: row.depth
+                            )
+                        }
                     }
                 }
             }
@@ -1375,14 +1398,13 @@ private struct WorkspaceRow: View {
     private var managedNodes: [SidebarOrchestrationNode] {
         displayManaged.filter { $0.workspaceId == workspace.id }
     }
-    private var unmanagedSessions: [SidebarCopilotSession] {
-        let surfaces = Set(managedNodes.map(\.surfaceId))
-        return sessions.filter { !surfaces.contains($0.surfaceID) }
+    private var sessionPlacements: [SidebarSessionPlacement] {
+        SidebarPresentation.sessionPlacements(sessions, managed: managedNodes, observations: copilotTree, now: Date())
     }
     private var attentionSummary: SidebarWorkspaceAttention {
         SidebarPresentation.workspaceAttention(
             sessions: sessions, managed: managedNodes,
-            availability: orchestration.availability, now: Date()
+            availability: orchestration.availability, now: Date(), observations: copilotTree
         )
     }
 
@@ -1415,6 +1437,7 @@ private struct WorkspaceRow: View {
     }
 
     var body: some View {
+        let placements = sessionPlacements
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 5) {
                 ExpandButton(expanded: expanded, label: title, workspace: true) {
@@ -1449,8 +1472,11 @@ private struct WorkspaceRow: View {
                     ManagedHierarchyContent(
                         polling: orchestration, hierarchy: hierarchy,
                         navigation: navigation, layout: layout, setExpanded: setExpanded,
-                        selectedNode: $managedSelection, workspaceID: workspace.id,
-                        showsWorkspaceHeaders: false, displayNodes: displayManaged, copilotTree: copilotTree
+                        selectedNode: $managedSelection,
+                        dismiss: dismiss, acknowledge: acknowledge, selection: $selection,
+                        workspaceID: workspace.id, showsWorkspaceHeaders: false,
+                        displayNodes: displayManaged, copilotTree: copilotTree,
+                        retainedSessions: placements.filter(\.retainsContents)
                     )
                 }
                 switch workspace.surfaces {
@@ -1461,11 +1487,13 @@ private struct WorkspaceRow: View {
                 case .available(let surfaces):
                     ForEach(SidebarPresentation.unmanagedSurfaces(
                         surfaces.filter { !hiddenSurfaces.contains($0.id) },
-                        workspaceID: workspace.id, managed: managedNodes
+                        workspaceID: workspace.id, managed: managedNodes, observations: copilotTree
                     )) { surface in
                         SurfaceRow(
                             workspaceID: workspace.id, surface: surface,
-                            sessions: unmanagedSessions.filter { $0.surfaceID == surface.id },
+                            sessions: placements.filter {
+                                $0.managedNodeID == nil && $0.session.surfaceID == surface.id
+                            }.map(\.session),
                             countsComplete: countsComplete,
                             navigation: navigation, layout: layout, setExpanded: setExpanded,
                             dismiss: dismiss, acknowledge: acknowledge, selection: $selection
@@ -1765,6 +1793,7 @@ private struct CopilotSessionContents: View {
     let dismiss: (SidebarDismissedOutcome) -> Void
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
+    var ownerDepth = 0
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
 
@@ -1775,11 +1804,12 @@ private struct CopilotSessionContents: View {
             SidebarActionLayout {
                 AttentionSummary(attention: session.attention, state: session.state, degraded: session.attentionDegraded)
             }
-            .padding(.leading, 28)
+            .padding(.leading, 28 + density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
         if session.omittedActiveChildrenCount > 0 {
             Text("\(session.omittedActiveChildrenCount) working/blocked tasks could not fit.")
                 .sidebarFont(.caption).foregroundStyle(SidebarTone.attention.color)
+                .padding(.leading, density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
         if expanded {
             ForEach(session.outlineChildRows(layout: layout)) { row in
@@ -1789,7 +1819,7 @@ private struct CopilotSessionContents: View {
                     expansion: row, setExpanded: setExpanded, selection: $selection
                 )
                 .padding(.leading, density.spacing(8) + density.indentation(
-                    depth: row.node.depth, unresolved: row.node.ancestryUnresolved, width: contentWidth
+                    depth: ownerDepth + row.node.depth, unresolved: row.node.ancestryUnresolved, width: contentWidth
                 ))
             }
         }

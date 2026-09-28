@@ -21,6 +21,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Keep a replacement session's working or idle status visible when ended agents
+  are shown, without duplicating retained managed identities or hiding their
+  descendants and attention (#111).
 - Keep Copilot session observation current across valid oversized tool, message,
   model and asset payloads, including metadata maps, using bounded metadata-only
   projection with exact completion attribution and explicit degradation for
