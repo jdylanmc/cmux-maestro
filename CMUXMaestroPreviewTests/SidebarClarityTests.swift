@@ -8,6 +8,152 @@ struct SidebarClarityTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test func obsoleteRegistrationVisibilityPreservesOnlyNeededContextAndExactObservations() throws {
+        let old = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Previous failed coordinator",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 1, phase: "turn-failed",
+            availability: "idle", copilotSessionId: fixtures.otherSessionID, executionMode: .interactive,
+            createdAt: now.addingTimeInterval(-120), updatedAt: now.addingTimeInterval(-120)
+        )
+        func validate(_ nodes: [SidebarOrchestrationNode]) throws {
+            try SidebarOrchestrationReader.validate(
+                .init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: nodes), now: now
+            )
+        }
+        try validate([old])
+        var observation = managedSession(id: fixtures.otherSessionID, surface: fixtures.surfaceA, model: nil, liveness: .dead)
+        var current = managedSession(id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil)
+        current.attention = [signal(.permission)]
+        var tree = SidebarCopilotTree(availability: .partial, sessions: [observation, current],
+                                     issues: [.ambiguousTurn], generatedAt: now)
+        func visible(_ candidate: SidebarCopilotTree, nodes: [SidebarOrchestrationNode]? = nil, showEnded: Bool = true) -> SidebarVisibleWork {
+            SidebarVisibleWork(tree: candidate, managed: nodes ?? [old], history: .init(), showEnded: showEnded, now: now)
+        }
+        for showEnded in [false, true] {
+            #expect(visible(tree, showEnded: showEnded).managed.isEmpty)
+            #expect(visible(tree, showEnded: showEnded).tree.sessions == [current])
+            #expect(visible(tree, showEnded: showEnded).hiddenSurfaces.isEmpty)
+        }
+        for liveness: CopilotLiveness in [.alive, .ambiguous, .unknown] {
+            var noEndProof = tree
+            noEndProof.sessions = [
+                managedSession(id: fixtures.otherSessionID, surface: fixtures.surfaceA, model: nil, liveness: liveness),
+                current
+            ]
+            #expect(visible(noEndProof).managed == [old], "A recorded failed turn is not process-end proof")
+        }
+        for observedAt in [now.addingTimeInterval(-9), now.addingTimeInterval(2)] {
+            var noEndProof = tree
+            noEndProof.sessions = [managedSession(
+                id: fixtures.otherSessionID, surface: fixtures.surfaceA, model: nil, liveness: .dead, observedAt: observedAt
+            ), current]
+            #expect(visible(noEndProof).managed == [old], "Original death observation must itself be fresh")
+        }
+        var absentOld = tree
+        absentOld.sessions = [current]
+        #expect(visible(absentOld).managed == [old], "Missing original observation is not death proof")
+        for kind: AgentAttentionKind in [.answer, .permission, .error] {
+            observation.attention = [signal(kind)]
+            tree.sessions = [observation, current]
+            #expect(visible(tree).managed == [old] && visible(tree).tree.sessions == tree.sessions)
+        }
+        observation.attention = []
+        for state: CopilotWorkState in [.working, .idle, .unknown, .blocked, .failed] {
+            observation.nodes = [node(state: state)]
+            tree.sessions = [observation, current]
+            for showEnded in [false, true] {
+                #expect(visible(tree, showEnded: showEnded).managed == [old])
+                #expect(visible(tree, showEnded: showEnded).tree.sessions.first?.nodes == observation.nodes,
+                        "Unknown/active original child context must survive the Show ended shortcut")
+            }
+        }
+        observation.nodes = []
+        observation.attentionDegraded = true
+        tree.sessions = [observation, current]
+        #expect(visible(tree).managed == [old])
+        observation.attentionDegraded = false
+        tree.sessions = [observation, current]
+        for (degraded, omitted) in [(true, 0), (false, 1)] {
+            var protected = tree
+            protected.sessions[0] = .init(
+                id: observation.id, workspaceID: observation.workspaceID, surfaceID: observation.surfaceID,
+                liveness: .dead, state: .unknown, model: nil, observedAt: now, nodes: [],
+                childrenComplete: false, treeDegraded: degraded, omittedChildrenCount: omitted, omittedActiveChildrenCount: omitted
+            )
+            #expect(visible(protected).managed == [old])
+        }
+        for phase in ["reported-blocked", "permission-denied", "reported-failed", "report-missing", "turn-running"] {
+            let protected = SidebarOrchestrationNode(
+                id: UUID(), runId: old.runId, parentId: old.id, role: "worker", label: "Unresolved child",
+                workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceB, generation: 1,
+                phase: phase, availability: phase == "turn-running" ? "busy" : "idle",
+                copilotSessionId: UUID(), executionMode: .bounded, createdAt: now, updatedAt: now
+            )
+            try validate([old, protected])
+            var withReplacement = tree
+            withReplacement.sessions.append(managedSession(id: UUID(), surface: fixtures.surfaceB, model: nil))
+            #expect(visible(withReplacement, nodes: [old, protected]).managed == [old, protected])
+        }
+        let child = SidebarOrchestrationNode(
+            id: UUID(), runId: old.runId, parentId: old.id, role: "worker", label: "Context ancestor",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceB, generation: 1,
+            phase: "reported-completed", availability: "idle", copilotSessionId: UUID(),
+            createdAt: now, updatedAt: now
+        )
+        let otherCurrent = managedSession(id: UUID(), surface: fixtures.surfaceB, model: nil)
+        tree.sessions.append(otherCurrent)
+        try validate([old, child])
+        #expect(visible(tree, nodes: [old, child]).managed.isEmpty,
+                "Entire obsolete branches can disappear when none of their nodes are needed")
+        let grandchild = SidebarOrchestrationNode(
+            id: UUID(), runId: old.runId, parentId: child.id, role: "worker", label: "Protected grandchild",
+            workspaceId: fixtures.workspaceA, surfaceId: UUID(), generation: 1,
+            phase: "permission-denied", availability: "idle", createdAt: now, updatedAt: now
+        )
+        try validate([old, child, grandchild])
+        #expect(visible(tree, nodes: [old, child, grandchild]).managed == [old, child, grandchild],
+                "A kept grandchild retains the full original managed ancestor chain")
+        for availability: SidebarCopilotAvailability in [.waiting, .loading, .hidden, .disconnected, .unavailable] {
+            var candidate = tree
+            candidate.availability = availability
+            #expect(visible(candidate).managed == [old])
+        }
+        for date: Date? in [nil, now.addingTimeInterval(-9), now.addingTimeInterval(2)] {
+            var candidate = tree
+            candidate.generatedAt = date
+            #expect(visible(candidate).managed == [old])
+        }
+        var denied = tree
+        denied.issues = [.permissionDenied]
+        #expect(visible(denied).managed == [old])
+        for observations in [
+            [observation], [observation, current, current], [observation, observation, current],
+            [observation, current, managedSession(id: UUID(), surface: fixtures.surfaceA, model: nil)],
+            [managedSession(id: fixtures.otherSessionID, surface: fixtures.surfaceA, model: nil)],
+            [observation, managedSession(id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil, liveness: .ambiguous)],
+            [observation, managedSession(id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil, workspace: fixtures.workspaceB)]
+        ] {
+            var candidate = tree
+            candidate.sessions = observations
+            #expect(visible(candidate).managed == [old])
+        }
+        let sameSession = SidebarOrchestrationNode(
+            id: old.id, runId: old.runId, parentId: nil, role: "coordinator", label: old.label,
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 1, phase: "turn-running",
+            availability: "busy", copilotSessionId: fixtures.sessionID, executionMode: .interactive,
+            createdAt: now, updatedAt: now
+        )
+        try validate([sameSession])
+        #expect(visible(tree, nodes: [sameSession]).managed == [sameSession],
+                "A source-valid managed instance matching the current session is not an obsolete registration")
+        let registration = managedNode(role: "coordinator", surface: fixtures.surfaceA)
+        try validate([registration])
+        #expect(registration.generation == 0 && registration.copilotSessionId == nil)
+        #expect(SidebarPresentation.displacedManagedNodeIDs([registration], observations: tree, now: now).isEmpty)
+        #expect(visible(tree, nodes: [registration]).managed == [registration],
+                "Nil-ID generation-zero registration behavior stays unchanged; never fabricate provider identity")
+    }
+
     @Test func quietMetadataUsesOnlyConciseObservedContext() {
         #expect(SidebarPresentation.rowMetadata(kind: "Agent", directory: "/synthetic/worktrees/design") == "Agent · design")
         #expect(SidebarPresentation.rowMetadata(kind: "Terminal", directory: "/synthetic/worktrees/design/") == "Terminal · design")
@@ -632,6 +778,8 @@ struct SidebarClarityTests {
             orchestrationAvailability: .stale, countsComplete: true, now: now, observations: tree
         )
         #expect(summary.agentCount == 2)
+        #expect(summary.agentLine.hasPrefix("2 entries · 1 needed for context"),
+                "Record totals must not claim two current sessions")
         #expect(summary.incomplete)
         let session = try #require(tree.sessions.first)
         #expect(SidebarPresentation.sessionState(session) == SidebarPresentation.state(state))

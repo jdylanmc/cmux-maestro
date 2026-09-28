@@ -196,18 +196,31 @@ When a coordinator explicitly registers a terminal-backed run, its coordinator
 Every worker is a genuine unfocused terminal tab in the coordinator's current
 CMUX pane/workspace. Rows show safe labels and explicit lifecycle state; Details
 contains exact run, parent, worker, workspace, surface and generation IDs.
-Selecting a row uses the existing typed CMUX Focus action. Each workspace appears
-once: explicit managed agents and remaining terminals share its outline. An exact
+Selecting a current row uses the existing typed CMUX Focus action. Each workspace
+appears once: explicit managed agents and remaining terminals share its outline. An exact
 managed workspace/surface pair normally replaces its observed terminal row.
 If fresh, unique live observation proves a different session ID on that pair,
-the observed session keeps its own row alongside the retained managed branch.
-When ended agents are shown, an exact old observation stays with its managed
-identity rather than creating a duplicate row; its observed descendants and
-attention remain available beneath that branch.
-The old node and its descendants keep their identities and states; no session
-is adopted or retargeted. Missing, stale or ambiguous evidence does not trigger
-this distinction. Names, paths and guessed relationships never establish ownership. The Taskboard view
-keeps the complete inferred activity projection available independently.
+the observed session keeps its own primary row. Unneeded old registrations and
+their exact unprotected observed copies are omitted automatically in both views,
+regardless of **Show ended agents**. Unrelated incomplete history does not hide
+the current session or keep an otherwise unneeded old registration on screen.
+A recorded failed turn qualifies only when its exact original session is freshly
+confirmed dead and the current replacement is verified; the failed phase alone
+never proves that the old work ended.
+
+Ancestors and original-session content needed by known descendants, unresolved
+attention or incomplete own evidence remain as **Work context**. Their actions
+inspect that context, not the replacement terminal; each descendant keeps its
+own state, attention and supported navigation. Counts distinguish required
+context from current agents. Both views put current content before old context.
+Captured focus actions stay bound to their original workspace and surface;
+after a move, use the newly rendered row.
+
+This is presentation filtering, not deletion, session termination or an inferred
+end state. Stored registrations, observations and history preferences stay
+unchanged. Missing, stale, denied or ambiguous replacement evidence preserves
+the conservative view. Names, paths and guessed relationships never establish
+ownership.
 
 The installed skill exposes `launch-coordinator`, `launch-settings`, `status`,
 `focus`, and `archive`; `register` and exact stale-surface `recover` remain for

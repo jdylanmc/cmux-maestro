@@ -21,6 +21,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Automatically omit unneeded old managed registrations when an exact current
+  replacement is verified. Preserve ancestors and original-session context
+  needed by work or unresolved attention, without deleting records or closing
+  terminals and sessions.
 - Keep a replacement session's working or idle status visible when ended agents
   are shown, without duplicating retained managed identities or hiding their
   descendants and attention (#111).
