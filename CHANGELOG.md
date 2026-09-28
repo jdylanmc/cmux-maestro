@@ -21,6 +21,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Start setup-test fixture readiness after installer spawn rather than task
+  enqueue, preserving timeout, cancellation and process-cleanup checks.
 - Automatically omit unneeded old managed registrations when an exact current
   replacement is verified. Preserve ancestors and original-session context
   needed by work or unresolved attention, without deleting records or closing
