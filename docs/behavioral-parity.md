@@ -54,6 +54,63 @@ Managed polling fences read success, failure, and task cleanup by generation.
 covers late success/missing/unsafe reads, current-task cancellation, and hide/show
 restart without erasing newer state or creating extra pollers.
 
+### Multi-turn child identity and completion attribution
+
+Copilot 1.0.88 can persist `subagent.configured(multiTurn: true)`, complete the
+original spawn task, then start another interaction on the same child without
+another `subagent.started`. The reducer retains that child's observed name,
+kind and ancestry on the fresh interaction, retiring the old spawn-result join.
+Completion remains a terminal task outcome until fresh activity is observed.
+Documented `subagent.selected` profile metadata does not replace the spawn
+identity or revoke that capability. Other unknown subagent lifecycle events
+still invalidate it. Reused turn numbers require the existing causal guards.
+`CopilotInteractionTests.demonstratedMultiTurnFragmentPreservesIdentityOnlyOnFreshContinuation`
+replays a redacted seven-event producer fragment; its omitted causal envelopes
+do not prove an untagged final end.
+
+An approved metadata-only Copilot 1.0.88 probe subsequently established that
+`assistant.message` carries both the current `interactionId` and `turnId`, even
+across root-owned warning/hook envelopes. Its linked `assistant.turn_end` still
+carries only the reused turn number. The reducer reads only those two bounded
+message identifiers, verifies the exact owner and current interaction/turn, and
+uses the message as that owner's completion anchor. Message content is never
+decoded or projected. Messages cannot create a turn, revive ended work, or
+replace spawn identity. Their event IDs use the existing bounded replay guard.
+
+`producerTaggedMessagesProveRepeatedChildFollowUpCompletion` and
+`readerProjectsTaggedInterleavedParentChildAndGrandchildIdle` cover this
+producer-shaped attribution through repeated follow-ups and the reader/tree
+seams, retaining identity and ancestry while returning to Idle. The nested
+fixture is a synthetic composition of the observed single-child sequence,
+not a claim of installed-app or live grandchild acceptance.
+
+**Missing current-turn proof remains Unknown.** The earlier review packet did
+not establish message tags; its negative regressions remain intact:
+`interleavedUntaggedFollowUpNeedsOwnedProofNotGlobalChronology`,
+`repeatedProducerShapedUntaggedFollowUpsRemainExplicitlyUnknown` and the matching
+reader/tree regression preserve the child's name/kind/ancestry but report
+Unknown / `ambiguousTurn`, including repeated follow-ups. The global chronological
+chain is not treated as ownership proof. Partial, malformed, null, conflicting,
+wrong-owner and replayed message tags cannot borrow a current parent link.
+Unusable advisory message metadata does not suppress the whole session; a
+completion lacking another valid anchor reports the explicit ambiguity.
+Legacy untagged same-owner envelope linkage and current-tool-origin controls
+remain supported. A tool first observed after a gap still cannot attest a turn.
+
+Capability is private, bounded reducer state: strict boolean configuration in a
+timestamped initial spawn window, before any child turn, with one admission per
+observed child ID. Missing/late configuration, missing spawn evidence,
+known old timestamps and reused child IDs cannot grant continuation, even if the
+old child became Unknown and was retired before its configuration was observed.
+Explicit false revokes it. Failed/cancelled child outcomes, scoped abort/error,
+shutdown/resume and uncertain lifecycle boundaries invalidate it; a root-turn
+abort/error does not imply independent background children ended. Retired rows
+remain retired. Legacy model projection, including lagging configuration
+timestamps, is independent of capability admission; public snapshots are unchanged.
+This fixes demonstrated continuation identity and tagged-message attribution, not every Unknown agent or a
+particular screenshot, and does not complete #118/#119, select a shared runtime
+architecture, add saved-session resurrection, or grant child control/placement.
+
 Managed report fixtures include the real terminal sequence: `final_answer`,
 `assistant.turn_end`, `session.usage_checkpoint`, `assistant.idle`, then `result`.
 Only non-content terminal bookkeeping is permitted; later assistant/tool work

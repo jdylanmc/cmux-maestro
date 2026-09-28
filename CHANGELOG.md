@@ -21,6 +21,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Preserve observed child names, kinds and ancestry on explicitly configured
+  Copilot multi-turn continuations, without letting old spawn outcomes finish
+  the new interaction. Match observed message interaction/turn metadata to
+  restore Idle after interleaved follow-up completion; missing or contradictory
+  proof still reports Unknown. This fixes demonstrated continuation behavior,
+  not every Unknown agent or all of #118.
 - Preserve managed-session custody through failed startup and partial storage
   publication; allow safe failed or exited managed roots to archive without a
   surviving tab, and keep moved terminals counted against the eight-resource
