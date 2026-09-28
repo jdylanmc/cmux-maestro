@@ -594,7 +594,7 @@ actor CopilotSessionReader {
                     if !tail.droppingOversizedLine {
                         if tail.partial.last == 13 { tail.partial.removeLast() }
                         tail.reducer.consume(tail.partial, observedAt: now)
-                    } else if let metadata = tail.assetEnvelope?.projectedBinaryAsset {
+                    } else if let metadata = tail.assetEnvelope?.projectedEvent {
                         tail.reducer.consume(metadata, observedAt: now)
                     } else {
                         tail.reducer.markMalformed()

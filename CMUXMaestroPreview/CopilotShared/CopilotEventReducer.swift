@@ -41,13 +41,20 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
             && ["subagent.", "tool.execution_", "assistant.turn_"].contains(where: { type.hasPrefix($0) })
     }
 
-    private enum Keys: String, CodingKey { case id, type, agentId, data, timestamp, parentId }
-    private enum Fields: String, CodingKey {
+    // The streaming envelope uses these same keys; this decoder remains the
+    // sole interpreter of metadata types, validity and lifecycle attribution.
+    enum Keys: String, CodingKey { case id, type, agentId, data, timestamp, parentId }
+    enum Fields: String, CodingKey {
         case toolCallId, parentId, toolName, agentDisplayName, name, model
         case selectedModel, newModel, currentModel, requestId, success, cancelled
         case shutdownType, sessionId, version, turnId, interactionId, trigger, kind, resolvedByHook, multiTurn
     }
-    private enum NotificationFields: String, CodingKey { case type, shellId, exitCode }
+    enum NotificationFields: String, CodingKey { case type, shellId, exitCode }
+
+    var supportsPayloadProjection: Bool {
+        !Self.knownTypes.contains(type)
+            || ["tool.execution_start", "tool.execution_complete", "tool.execution_partial_result"].contains(type)
+    }
 
     init(from decoder: any Decoder) throws {
         let outer = try decoder.container(keyedBy: Keys.self)

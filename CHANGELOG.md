@@ -21,6 +21,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Keep Copilot session observation current across valid oversized tool, message,
+  model and asset payloads, including metadata maps, using bounded metadata-only
+  projection with exact completion attribution and explicit degradation for
+  malformed history (#121).
 - Preserve observed child names, kinds and ancestry on explicitly configured
   Copilot multi-turn continuations, without letting old spawn outcomes finish
   the new interaction. Match observed message interaction/turn metadata to
