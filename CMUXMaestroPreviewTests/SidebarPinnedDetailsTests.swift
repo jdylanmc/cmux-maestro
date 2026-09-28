@@ -331,7 +331,7 @@ struct SidebarPinnedDetailsTests {
         #expect(subject.surfaceID == nil && subject.surfaceKind == nil)
         #expect(subject.sessionID == fixtures.otherSessionID)
         let detail = try #require(inspector(subject, nodes: [node]))
-        #expect(detail.notice?.contains("Retained record") == true)
+        #expect(detail.notice?.contains("Work context") == true)
         #expect(detail.lines.contains(.sessionID(fixtures.otherSessionID)))
         #expect(!detail.lines.contains { $0.value == "/synthetic/worktree-0" || $0.value == "verified-model" })
         #expect(detail.lines.contains { $0.title == "Focus" && $0.value.contains("Original session") })

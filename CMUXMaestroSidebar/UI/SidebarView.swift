@@ -1077,8 +1077,8 @@ struct ManagedHierarchyContent: View {
                         if !roots.isEmpty {
                             if kind == .retained {
                                 VStack(alignment: .leading, spacing: density.spacing(3)) {
-                                    Text("Retained records").sidebarFont(.caption, weight: .semibold)
-                                    Text("Preserved branches; descendants keep their own state.")
+                                    Text("Work context").sidebarFont(.caption, weight: .semibold)
+                                    Text("Needed by descendants or unresolved attention.")
                                         .sidebarFont(.caption2).foregroundStyle(.secondary)
                                 }
                                 .padding(.top, density.spacing(8))
@@ -1218,7 +1218,7 @@ private struct ManagedNodeRow: View {
             FocusButton(
                 target: .surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
                 navigation: navigation,
-                label: isRetainedRecord ? "Inspect retained record \(node.label)" : "Focus \(node.label)",
+                label: isRetainedRecord ? "Inspect work context \(node.label)" : "Focus \(node.label)",
                 detail: metadataHelp, inspection: .managed(node), inspectOnly: isRetainedRecord ? select : nil
             ) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -1236,7 +1236,7 @@ private struct ManagedNodeRow: View {
                                           needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate),
                                           detail: metadataHelp)
                         Text(SidebarPresentation.rowMetadata(
-                            kind: isRetainedRecord ? "Retained record · \(stateCaption)"
+                            kind: isRetainedRecord ? "Needed context · \(stateCaption)"
                                 : stateVisual.tone == .red || stateVisual.tone == .attention ? stateCaption
                                 : node.role == "worker" && node.executionMode != .interactive ? "Legacy worker" : "Agent",
                             directory: verifiedWorktree
@@ -1315,7 +1315,7 @@ private struct ManagedNodeRow: View {
         let ownState = SidebarPresentation.statusDescription(
             stateVisual, needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate)
         )
-        let state = isRetainedRecord ? "Retained record. \(ownState). \(SidebarPresentation.retainedFocusUnavailable)" : ownState
+        let state = isRetainedRecord ? "Work context. \(ownState). \(SidebarPresentation.retainedFocusUnavailable)" : ownState
         let git = node.currentGitChanges(at: evidenceDate)?.description ?? "Current Git counts unavailable"
         guard let metadataLine else { return "\(state). \(git)" }
         let location = node.hasFreshGitEvidence(at: evidenceDate)
@@ -2018,7 +2018,7 @@ private struct CopilotWorkRow: View {
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation,
                     label: parentFocusUnavailable == nil ? "Open parent chat for \(node.name), Copilot \(session.shortID)"
-                        : "Inspect retained activity \(node.name), Copilot \(session.shortID)",
+                        : "Inspect context activity \(node.name), Copilot \(session.shortID)",
                     detail: parentFocusUnavailable ?? SidebarPresentation.statusDescription(
                         stateVisual, needsInput: SidebarPresentation.needsInput(node.attention)),
                     inspection: .unmanaged(.child(sessionID: session.id, childID: node.id)),
@@ -2165,7 +2165,7 @@ private struct TaskboardContent: View {
 
     var body: some View {
         if retainedOnly && !sessions.isEmpty {
-            Text("Retained activity").sidebarFont(.caption, weight: .semibold)
+            Text("Context activity").sidebarFont(.caption, weight: .semibold)
         }
         ForEach(sessions) { session in
             let paths = hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID)
@@ -2240,7 +2240,7 @@ private struct TaskboardSessionRow: View {
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation,
-                    label: retained ? "Inspect retained session \(session.shortID)" : "Focus Copilot session \(session.shortID)",
+                    label: retained ? "Inspect context session \(session.shortID)" : "Focus Copilot session \(session.shortID)",
                     detail: retained ? SidebarPresentation.retainedFocusUnavailable : SidebarPresentation.sessionStatus(session),
                     inspection: .unmanaged(.session(session.id)),
                     inspectOnly: retained ? { selection = .session(session.id) } : nil
@@ -2252,7 +2252,7 @@ private struct TaskboardSessionRow: View {
             }
             .sidebarRowActions(title: title, groups: actions)
             if retained {
-                Text("Retained session activity").sidebarFont(.caption2).foregroundStyle(.secondary)
+                Text("Session context").sidebarFont(.caption2).foregroundStyle(.secondary)
             }
             SidebarActionLayout {
                 SessionStateSummary(session: session)

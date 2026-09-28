@@ -200,25 +200,24 @@ Selecting a current row uses the existing typed CMUX Focus action. Each workspac
 appears once: explicit managed agents and remaining terminals share its outline. An exact
 managed workspace/surface pair normally replaces its observed terminal row.
 If fresh, unique live observation proves a different session ID on that pair,
-the observed session keeps its own primary row. Displaced root branches appear
-under **Retained records**; displaced nested records stay in their original
-ancestry. Retained means preserved, not ended: descendants keep their own states,
-attention, and supported navigation.
-Retained-record primary actions open details, original-session focus is explicitly
-unavailable, and the replacement terminal's focus stripe is not shown on the old
-record. Mixed summary totals use **entries** with an explicit retained-record
-count rather than implying every record is a current session.
-Taskboard also places current session/activity content before retained branches
-and retained activity. Captured focus actions stay bound to their original
-workspace and surface; after a move, use the newly rendered row.
-When ended agents are shown, an exact old observation stays with its managed
-identity rather than creating a duplicate row; its observed descendants and
-attention remain available beneath that branch.
-The old node and its descendants keep their identities and states; no session
-is adopted, deleted, or retargeted. Missing, stale, denied, or ambiguous evidence
-does not trigger this distinction. Names, paths and guessed relationships never
-establish ownership. The Taskboard view
-keeps the complete inferred activity projection available independently.
+the observed session keeps its own primary row. Unneeded old registrations and
+their exact unprotected observed copies are omitted automatically in both views,
+regardless of **Show ended agents**. Unrelated incomplete history does not hide
+the current session or keep an otherwise unneeded old registration on screen.
+
+Ancestors and original-session content needed by known descendants, unresolved
+attention or incomplete own evidence remain as **Work context**. Their actions
+inspect that context, not the replacement terminal; each descendant keeps its
+own state, attention and supported navigation. Counts distinguish required
+context from current agents. Both views put current content before old context.
+Captured focus actions stay bound to their original workspace and surface;
+after a move, use the newly rendered row.
+
+This is presentation filtering, not deletion, session termination or an inferred
+end state. Stored registrations, observations and history preferences stay
+unchanged. Missing, stale, denied or ambiguous replacement evidence preserves
+the conservative view. Names, paths and guessed relationships never establish
+ownership.
 
 The installed skill exposes `launch-coordinator`, `launch-settings`, `status`,
 `focus`, and `archive`; `register` and exact stale-surface `recover` remain for

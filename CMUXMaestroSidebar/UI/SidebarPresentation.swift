@@ -86,7 +86,7 @@ struct SidebarWorkspaceSummary: Equatable {
         var parts = [retainedRecordCount > 0 ? "\(agentCount) entries"
                      : "\(agentCount) \(agentCount == 1 ? "agent" : "agents")"]
         if retainedRecordCount > 0 {
-            parts.append("\(retainedRecordCount) retained \(retainedRecordCount == 1 ? "record" : "records")")
+            parts.append("\(retainedRecordCount) needed for context")
         }
         parts += states.map { "\($0.count) \($0.title.lowercased())" }
         if incomplete { parts.append("counts incomplete") }
@@ -180,8 +180,42 @@ struct SidebarVisibleWork {
 
     init(
         tree: SidebarCopilotTree, managed: [SidebarOrchestrationNode],
-        history: SidebarHistorySettings, showEnded: Bool
+        history: SidebarHistorySettings, showEnded: Bool, now: Date = Date()
     ) {
+        let displaced = SidebarPresentation.displacedManagedNodeIDs(managed, observations: tree, now: now)
+        let unneeded = managed.filter { node in
+            guard displaced.contains(node.id), managed.filter({ $0.id == node.id }).count == 1,
+                  ["registered", "reported-completed", "process-disappeared", "terminal-disappeared", "resource-retired"].contains(node.phase)
+            else { return false }
+            let observations = tree.sessions.filter { $0.id == node.copilotSessionId }
+            return observations.count <= 1 && observations.allSatisfy { session in
+                session.workspaceID == node.workspaceId && session.surfaceID == node.surfaceId
+                    && SidebarCopilotTree.isFresh(session.observedAt, now: now)
+                    && tree.generatedAt.map { session.observedAt <= $0.addingTimeInterval(1) } == true
+                    && !session.requiresWorkContext
+            }
+        }
+        var needed = Set(managed.map(\.id)).subtracting(unneeded.map(\.id))
+        for node in managed where needed.contains(node.id) {
+            var parentID = node.parentId
+            while let id = parentID, let parent = managed.first(where: { $0.id == id }), needed.insert(id).inserted {
+                parentID = parent.parentId
+            }
+        }
+        let obsolete = unneeded.filter { !needed.contains($0.id) }
+        let managed = managed.filter { needed.contains($0.id) }
+        var tree = tree
+        tree.sessions.removeAll { session in
+            obsolete.contains {
+                $0.copilotSessionId == session.id && $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
+            }
+        }
+        let contextSessions = Set(tree.sessions.filter { session in
+            session.requiresWorkContext && managed.contains {
+                displaced.contains($0.id) && $0.copilotSessionId == session.id
+                    && $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
+            }
+        }.map(\.id))
         self.tree = tree
         self.managed = managed
         guard !showEnded else { return }
@@ -209,7 +243,7 @@ struct SidebarVisibleWork {
                     $0.state == .failed || $0.state == .blocked || $0.attentionDegraded
                         || $0.attention.contains(where: { $0.kind.isBlocking })
                 }
-            if session.liveness == .dead && !protected { return nil }
+            if session.liveness == .dead && !protected && !contextSessions.contains(session.id) { return nil }
             return result
         }
         let byID = Dictionary(uniqueKeysWithValues: managed.map { ($0.id, $0) })
@@ -247,6 +281,15 @@ struct SidebarVisibleWork {
 }
 
 private extension SidebarCopilotSession {
+    var requiresWorkContext: Bool {
+        treeDegraded || attentionDegraded || omittedChildrenCount > 0 || omittedActiveChildrenCount > 0
+            || [.blocked, .failed].contains(state) || attention.contains { $0.kind.isBlocking || $0.kind == .error }
+            || nodes.contains {
+                !$0.state.isTerminal || $0.state == .failed || $0.attentionDegraded
+                    || $0.attention.contains { $0.kind.isBlocking || $0.kind == .error }
+            }
+    }
+
     var hasBlockingEvidence: Bool {
         attentionDegraded || state == .blocked || attention.contains(where: { $0.kind.isBlocking })
             || nodes.contains { $0.attentionDegraded || $0.state == .blocked || $0.attention.contains(where: { $0.kind.isBlocking }) }
@@ -551,7 +594,7 @@ enum SidebarPresentation {
             return .init(
                 title: node.label, visual: managedState(node, availability: availability, now: now, tree: tree),
                 lines: managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now),
-                notice: retained ? "Retained record. \(retainedFocusUnavailable)"
+                notice: retained ? "Work context. \(retainedFocusUnavailable)"
                     : current ? nil : "Managed observation is stale. Last-known metadata is not live state.",
                 isAgent: true
             )
@@ -580,7 +623,7 @@ enum SidebarPresentation {
                 let current = tree.generatedAt.map { SidebarCopilotTree.isFresh($0, now: now) } == true
                     && SidebarCopilotTree.isFresh(session.observedAt, now: now)
                 let retained = retainedSessionIDs(tree, managed: managed.nodes, now: now).contains(session.id)
-                let notice = retained ? "Retained observation. \(retainedFocusUnavailable)"
+                let notice = retained ? "Work context. \(retainedFocusUnavailable)"
                     : current ? nil : "Session observation is stale. Last-known metadata is not live state."
                 let context = retained ? [] : paths(hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID))
                 if case .child(_, let childID) = selection {
@@ -735,7 +778,7 @@ enum SidebarPresentation {
     }
 
     static let retainedFocusUnavailable =
-        "Original session is not current on this surface. Inspect the retained record instead."
+        "Original session is not current on this surface. Inspect its work context instead."
 
     static func displacedManagedNodeIDs(
         _ managed: [SidebarOrchestrationNode], observations: SidebarCopilotTree?, now: Date
@@ -929,7 +972,7 @@ enum SidebarPresentation {
         var result: [SidebarDetailLine] = []
         let retained = displacedManagedNodeIDs([node], observations: tree, now: now).contains(node.id)
         if retained {
-            result += [.init(title: "Record", value: "Retained record"),
+            result += [.init(title: "Context", value: "Needed by work or attention"),
                        .init(title: "Focus", value: retainedFocusUnavailable)]
         }
         if let model = managedModel(for: node, in: tree, now: now) {
@@ -968,7 +1011,7 @@ enum SidebarPresentation {
             .init(title: "Copilot observation", value: tree.summary),
             .init(title: "Session glyph", value: node.iconId ?? "Sidebar default"),
             .init(title: "Icon color", value: node.iconColor?.title ?? "Theme default"),
-            .init(title: "Working directory", value: retained ? "Not current for this retained record" : paths.workingDirectory.pathDisplayText),
+            .init(title: "Working directory", value: retained ? "Not current for this original session" : paths.workingDirectory.pathDisplayText),
             .init(title: "Role", value: node.role.capitalized)
         ]
         if node.role == "worker" {
