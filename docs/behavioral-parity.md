@@ -91,8 +91,11 @@ The implemented fallback is deliberately smaller than a speculative settings
 migrator: when a change needs unavailable destination-key mapping, refuse
 **before changing the legacy registration**. Never enable a duplicate just to
 discover a key, reverse-engineer hashes, drop old keys or approximate a
-single-event disable with a new blanket policy. Global settings are read, not
-rewritten. An explicit global/file disable instead preserves a disabled owned
+single-event disable with a new blanket policy. Maestro reads global settings
+without writing them. The official CLI can replace `settings.json`; after a
+successful command only identical values or an added empty `enabledPlugins`
+map are acknowledged, with fresh safe-file checks. Any changed disable or
+unrelated value still refuses. An explicit global/file disable preserves a disabled owned
 file; setup does not claim it repaired provider-wide enforcement.
 
 Migration stages only the exact owned **disabled** file, confirms disabled

@@ -54,7 +54,7 @@ private final class SetupAccessSpy: CopilotSetupFileSystem, @unchecked Sendable 
     }
 }
 
-private final class SetupDeadlineClock: @unchecked Sendable {
+final class SetupDeadlineClock: @unchecked Sendable {
     private let lock = NSLock()
     private let origin: ContinuousClock.Instant
     private var instant: ContinuousClock.Instant

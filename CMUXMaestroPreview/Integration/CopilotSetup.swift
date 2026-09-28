@@ -663,6 +663,7 @@ nonisolated struct CopilotSetup: Sendable {
                 guard result == .exited(0) else {
                     return .incomplete(operation.phase, Self.processFailure(result).message)
                 }
+                try await CopilotSetupFileWork.run { try operation.pluginCommandSucceeded() }
             }
             let changed: CopilotSetupMetadata
             switch await runner.metadata(executable: executable, path: path, providerHome: registration.providerHome) {

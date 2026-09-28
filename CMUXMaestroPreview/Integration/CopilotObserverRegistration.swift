@@ -568,7 +568,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         let generation: CopilotObserverGeneration
         private let previous: CopilotObserverGeneration?
         let disabled: Bool
-        private let settings: CopilotSetupFileState
+        private var settings: CopilotSetupFileState
         private let others: [CopilotSetupFileState]
         private let otherPlugins: [CopilotSetupFileState]
         private var owned: CopilotSetupFileState
@@ -579,6 +579,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         private var helperRecord: CopilotSetupFileState
         let pluginWasInstalled: Bool
         private var stagingVerified = false
+        private var pluginCommandPending = false
         private var lock: Int32 = -1
         private var ownsLock = false
         private var pluginIdentity: String?
@@ -609,10 +610,14 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         }
 
         func revalidate() throws {
+            try revalidateOtherInputs()
+            try settings.revalidate()
+        }
+
+        private func revalidateOtherInputs() throws {
             try Task.checkCancellation()
             guard !isCancelled() else { throw CancellationError() }
             try store.validateHome()
-            try settings.revalidate()
             guard try store.otherHooks() == others else { throw CopilotFileError.changed }
             try owned.revalidate()
             try receipt.revalidate()
@@ -693,6 +698,32 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             try revalidate()
             try installed.manifest.revalidate(); try installed.hooks.revalidate()
             try source.manifest.revalidate(); try source.hooks.revalidate()
+            pluginCommandPending = action == .install || pluginWasInstalled
+        }
+
+        func pluginCommandSucceeded() throws {
+            guard pluginCommandPending, phase == .pluginPrepared || phase == .registrationRemoved else {
+                throw CopilotFileError.io
+            }
+            pluginCommandPending = false
+            try revalidateOtherInputs()
+            let current = try CopilotSetupFileState.read(settings.url)
+            if current == settings { return }
+            guard let data = current.data else { throw CopilotFileError.changed }
+            let original = try settings.data.map(CopilotSetupJSON.object) ?? [:]
+            var normalized = original
+            if normalized["enabledPlugins"] == nil { normalized["enabledPlugins"] = [String: Any]() }
+            let observed = try CopilotSetupJSON.data(CopilotSetupJSON.object(data))
+            let originalValues = try CopilotSetupJSON.data(original)
+            let normalizedValues = try CopilotSetupJSON.data(normalized)
+            // 1.0.88 rewrites this file on successful plugin commands, even
+            // without a value change. Accept only that rewrite or an added
+            // empty plugin map; never refresh over changed user/disable intent.
+            guard observed == originalValues || observed == normalizedValues else {
+                throw CopilotFileError.changed
+            }
+            settings = current
+            try revalidate()
         }
 
         func verifyPlugin(_ metadata: CopilotSetupMetadata) throws {

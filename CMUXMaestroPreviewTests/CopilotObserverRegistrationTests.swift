@@ -107,14 +107,17 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
     var failingMetadataCall: Int?
     var invalidInstall = false
     var stagingEnabled = false
+    var settingsEffect: String?
+    private var writtenSettings: CopilotSetupFileState?
 
     init(_ fixture: ObserverFixture, installed: Bool = false) {
         self.fixture = fixture; self.installed = installed
     }
     func configure(result: CopilotProcessResult = .exited(0), failingMetadataCall: Int? = nil,
-                   invalidInstall: Bool = false, stagingEnabled: Bool = false) {
+                   invalidInstall: Bool = false, stagingEnabled: Bool = false, settingsEffect: String? = nil) {
         self.result = result; self.failingMetadataCall = failingMetadataCall
         self.invalidInstall = invalidInstall; self.stagingEnabled = stagingEnabled
+        self.settingsEffect = settingsEffect
     }
     func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
         providerHomes.append(providerHome)
@@ -129,6 +132,27 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
                     try fixture.write(data, to: fixture.cache.appendingPathComponent(name))
                 }
                 if invalidInstall { try fixture.write(["version": 2, "hooks": [:]], to: fixture.cache.appendingPathComponent("hooks.json")) }
+            }
+            if let settingsEffect {
+                var object: [String: Any] = [:]
+                if FileManager.default.fileExists(atPath: fixture.settings.path) {
+                    guard let decoded = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture.settings)) as? [String: Any] else {
+                        throw CMUXMaestroPreview.CopilotFileError.io
+                    }
+                    object = decoded
+                }
+                if object["enabledPlugins"] == nil { object["enabledPlugins"] = [String: Any]() }
+                switch settingsEffect {
+                case "disable-all": object["disableAllHooks"] = true
+                case "disabled-keys": object["disabledHooks"] = ["new-user-choice"]
+                case "unrelated": object["userNote"] = "concurrent change"
+                case "plugin-map": object["enabledPlugins"] = ["other@marketplace": false]
+                default: break
+                }
+                let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .prettyPrinted])
+                try data.write(to: fixture.settings, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fixture.settings.path)
+                writtenSettings = try CopilotSetupFileState.read(fixture.settings)
             }
             return result
         } catch { return .unavailable }
@@ -146,6 +170,10 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
             }
             return .value(value)
         } catch { return .failed(.unavailable) }
+    }
+
+    func settingsUnchangedSinceCLI() throws -> Bool {
+        try CopilotSetupFileState.read(fixture.settings) == writtenSettings
     }
 }
 
@@ -367,7 +395,7 @@ struct CopilotObserverRegistrationTests {
         let metadata = try fixture.metadata(installed: false)
         let operation = try fixture.registration.begin(.install, metadata: metadata)
         try fixture.write(["disableAllHooks": true], to: fixture.settings)
-        #expect(throws: CopilotFileError.changed) { try operation.stage() }
+        #expect(throws: CMUXMaestroPreview.CopilotFileError.changed) { try operation.stage() }
         #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
         let runner = ObserverSetupRunner(fixture)
         #expect(await perform(setup(fixture, runner: runner), fixture) == .installedDisabled)
@@ -471,7 +499,7 @@ struct CopilotObserverRegistrationTests {
         try operation.verifyPlugin(fixture.metadata(installed: true))
         try fixture.write(["version": 1, "hooks": CopilotPluginManifest.observerHooks(helper: fixture.helper)],
                           to: fixture.cache.appendingPathComponent("hooks.json"))
-        #expect(throws: CopilotFileError.changed) { try operation.publish() }
+        #expect(throws: CMUXMaestroPreview.CopilotFileError.changed) { try operation.publish() }
         #expect(try CopilotSetupJSON.bool(CopilotSetupJSON.object(Data(contentsOf: fixture.file))["disableAllHooks"]))
     }
 
@@ -568,7 +596,7 @@ struct CopilotObserverRegistrationTests {
         try fixture.legacy()
         let unsafe = fixture.provider.appendingPathComponent("installed-plugins")
         try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: unsafe.path)
-        #expect(throws: CopilotFileError.unsafePath) {
+        #expect(throws: CMUXMaestroPreview.CopilotFileError.unsafePath) {
             try CopilotSetupFileState.read(fixture.cache.appendingPathComponent("hooks.json"))
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: unsafe.path)
@@ -694,21 +722,41 @@ struct CopilotObserverRegistrationTests {
         }
     }
 
-    @Test func cancellingMetadataStopsItsOwnedProcessBeforeReturning() async throws {
+    @Test(arguments: [Duration.zero, .seconds(4)])
+    func cancellingMetadataStopsItsOwnedProcessBeforeReturning(launchDelay: Duration) async throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let server = fixture.directory.appendingPathComponent("metadata-waiter")
         let ready = fixture.directory.appendingPathComponent("metadata.pid")
         let command = "#!/bin/sh\nprintf '%s' $$ > \(CopilotPluginManifest.shellQuoted(ready.path))\ntrap '' TERM\n/bin/cat >/dev/null\n"
         try fixture.write(Data(command.utf8), to: server)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: server.path)
-        let runner = LocalCopilotSetupRunner(terminationGrace: 0.02)
-        let task = Task { await runner.metadata(executable: server, path: "/usr/bin:/bin") }
+        let clock = SetupDeadlineClock()
+        let runner = LocalCopilotSetupRunner(terminationGrace: 0.02, deadlineNow: { clock.now() })
+        let task = Task {
+            defer { clock.finishStartup() }
+            do { try await Task.sleep(for: launchDelay) }
+            catch is CancellationError { return CopilotMetadataResult.failed(.cancelled) }
+            catch { Issue.record(error); return CopilotMetadataResult.failed(.unavailable) }
+            return await runner.metadata(executable: server, path: "/usr/bin:/bin")
+        }
         defer { task.cancel() }
+        let started = await clock.waitForStartup()
+        if !started {
+            let stopped = await task.value
+            Issue.record("Metadata did not spawn; result=\(stopped)")
+            return
+        }
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while !FileManager.default.fileExists(atPath: ready.path), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        try #require(FileManager.default.fileExists(atPath: ready.path))
+        let readyExists = FileManager.default.fileExists(atPath: ready.path)
+        if !readyExists {
+            task.cancel()
+            let stopped = await task.value
+            Issue.record("Metadata writer was not ready after spawn; result=\(stopped); sampled=\(clock.wasSampled)")
+        }
+        try #require(readyExists)
         let pid = try #require(Int32(String(contentsOf: ready, encoding: .utf8)))
         task.cancel()
         guard case .failed(.cancelled) = await task.value else {
@@ -716,6 +764,60 @@ struct CopilotObserverRegistrationTests {
         }
         #expect(HookProcess.current(pid) == nil)
         #expect(kill(pid, 0) == -1 && errno == ESRCH)
+    }
+
+    @Test func registrationErrorsHaveTheAppModuleIdentity() throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: fixture.provider.path)
+        do {
+            _ = try CopilotSetupFileState.read(fixture.settings)
+            Issue.record("Expected the setup adapter's unsafe-path rejection")
+        } catch {
+            let expected = String(reflecting: CMUXMaestroPreview.CopilotFileError.self)
+            let actual = String(reflecting: type(of: error))
+            print("H114_ERROR_TYPES local=\(String(reflecting: CopilotFileError.self)) app=\(expected) thrown=\(actual)")
+            #expect(actual == expected)
+            #expect(error as? CMUXMaestroPreview.CopilotFileError == .unsafePath)
+        }
+    }
+
+    @Test(arguments: ["absent", "empty", "unrelated", "plugin-map"])
+    func successfulCLISettingsRewritePreservesAllIntent(initial: String) async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        var original: [String: Any] = [:]
+        if initial == "unrelated" { original["userNote"] = ["preserve": true] }
+        if initial == "plugin-map" { original["enabledPlugins"] = ["other@marketplace": false] }
+        if initial != "absent" { try fixture.write(original, to: fixture.settings) }
+        let runner = ObserverSetupRunner(fixture)
+        await runner.configure(settingsEffect: "cli-rewrite")
+        let setup = setup(fixture, runner: runner)
+        for action: CopilotSetupAction in [.install, .install, .uninstall] {
+            #expect(await perform(setup, fixture, action: action) == (action == .install ? .installed : .uninstalled))
+            #expect(try await runner.settingsUnchangedSinceCLI())
+        }
+        var expected = original
+        if expected["enabledPlugins"] == nil { expected["enabledPlugins"] = [String: Any]() }
+        #expect(try CopilotSetupJSON.data(CopilotSetupJSON.object(Data(contentsOf: fixture.settings)))
+            == CopilotSetupJSON.data(expected))
+    }
+
+    @Test(arguments: ["disable-all", "disabled-keys", "unrelated", "plugin-map"])
+    func unexpectedCLIWindowSettingsChangesStillRefuse(effect: String) async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        try fixture.write([:], to: fixture.settings)
+        let runner = ObserverSetupRunner(fixture)
+        await runner.configure(settingsEffect: effect)
+        guard case .incomplete(.pluginPrepared, _) = await perform(setup(fixture, runner: runner), fixture) else {
+            Issue.record("Changed disable or unrelated intent must not be accepted as CLI normalization"); return
+        }
+        #expect(try await runner.settingsUnchangedSinceCLI())
+        #expect(try CopilotSetupJSON.bool(CopilotSetupJSON.object(Data(contentsOf: fixture.file))["disableAllHooks"]))
+    }
+
+    @Test func CLISettingsReconciliationRequiresTheExplicitCommandBoundary() throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let operation = try fixture.registration.begin(.install, metadata: fixture.metadata(installed: false))
+        #expect(throws: CMUXMaestroPreview.CopilotFileError.io) { try operation.pluginCommandSucceeded() }
     }
 
     @Test func fileWorkLeavesTheCooperativeExecutorAndJoinsCancelledWriter() async throws {

@@ -97,7 +97,12 @@ and stages an **owned disabled** dedicated file, confirms disabled discovery,
 prepares the hookless plugin, runs the official plugin installer, verifies that
 the installed observer declarations are gone, and only then publishes the
 intended dedicated state. An enabled competing source is never staged.
-Unrelated hooks, old disable keys and settings remain untouched.
+Maestro does not rewrite unrelated hooks, disable keys or global settings.
+The official CLI does rewrite `settings.json` during plugin install/uninstall,
+including when values are unchanged. After a successful command, setup accepts
+only an identical settings object or addition of an empty `enabledPlugins` map.
+All other values, including disable choices and unrelated preferences, must
+remain identical; unsafe or unexpected changes leave setup incomplete.
 
 **Disable preservation is conservative.** The provider omits destination keys
 for a file-disabled source. When a registration change would require mapping
@@ -109,7 +114,9 @@ later re-enabling must not lose a disabled subset. Otherwise, explicit
 global/file `disableAllHooks` leaves the owned file disabled,
 including after the global flag is later cleared. Review the owned file and
 explicitly change its disable flag before requesting activation again.
-No additive global-settings write is implemented in this release.
+No application settings writer or additive disable-key migration is implemented
+in this release. Acknowledging the CLI's bounded normalization does not grant
+permission to accept arbitrary concurrent settings edits.
 
 Failures identify the last completed phase, not blanket installation success.
 An interrupted transaction may retain a disabled owned file while the old

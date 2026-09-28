@@ -43,7 +43,7 @@ struct ContentView: View {
                     .disabled(busy)
             }
 
-            Text("Enable installs the hookless cmux-maestro-native lifecycle and icon plugin, ~/.copilot/hooks/cmux-maestro-observer.json, the local controller and the loader under ~/.copilot/extensions/maestro. Private observer-registration.json provenance and .observer-setup.lock live in the app's Copilot support directory. The loader is inert outside newly Maestro-launched participating sessions. Global settings and unrelated hooks are not rewritten. Choose only a Copilot executable you trust.")
+            Text("Enable installs the hookless cmux-maestro-native lifecycle and icon plugin, ~/.copilot/hooks/cmux-maestro-observer.json, the local controller and the loader under ~/.copilot/extensions/maestro. Private observer-registration.json provenance and .observer-setup.lock live in the app's Copilot support directory. The loader is inert outside newly Maestro-launched participating sessions. Maestro does not write global settings; the official CLI may normalize its plugin settings. Choose only a Copilot executable you trust.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -99,7 +99,7 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) { pendingAction = nil }
         } message: {
-            Text("This runs bounded metadata checks and plugin commands through the selected Copilot CLI. Enable stages only a disabled owned hook file, replaces recognized legacy observer declarations, then verifies before activation. Unresolvable per-hook disables, foreign content or unsafe paths stop setup; settings are not cleared or rewritten. Remove deletes only recognized owned observer registration and its native messaging entry point. Partial changes are reported. Existing CLI sessions and other integrations are not restarted, adopted or removed.")
+            Text("This runs bounded metadata checks and plugin commands through the selected Copilot CLI. Enable stages only a disabled owned hook file, replaces recognized legacy observer declarations, then verifies before activation. Maestro never clears disable keys. The CLI may rewrite settings without value changes or add an empty plugin map; other changed values stop setup. Unresolvable disables, foreign content and unsafe paths also stop setup. Remove deletes only recognized owned observer registration and its native messaging entry point. Partial changes are reported. Existing CLI sessions and other integrations are not restarted, adopted or removed.")
         }
     }
 
