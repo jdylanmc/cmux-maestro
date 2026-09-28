@@ -7,10 +7,11 @@ private actor SetupRunnerSpy: CopilotSetupProcessRunner {
     var calls: [[String]] = []
     let result: CopilotProcessResult
     init(result: CopilotProcessResult = .exited(0)) { self.result = result }
-    func run(executable: URL, arguments: [String], path: String) async -> CopilotProcessResult {
+    func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
         calls.append([executable.path] + arguments)
         return result
     }
+    func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult { .failed(.unavailable) }
 }
 
 private struct SetupFileStub: CopilotSetupFileSystem {
@@ -155,40 +156,51 @@ struct CopilotSetupTests {
         #expect(process.terminationStatus == 0, Comment(rawValue: detail))
     }
 
-    @Test func constructionDoesNotInstallAndConsentUsesExactOwnPluginArguments() async {
-        let runner = SetupRunnerSpy()
-        let setup = CopilotSetup(files: SetupFileStub(fail: false), runner: runner,
-                                 bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
+    @Test func constructionDoesNotInstallAndConsentUsesExactOwnPluginArguments() async throws {
+        let fixture = try ObserverFixture()
+        defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        let setup = CopilotSetup(files: ObserverSetupFiles(fixture: fixture), runner: runner,
+                                 bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier,
+                                 registration: fixture.registration)
         #expect(await runner.calls.isEmpty)
-        #expect(await setup.perform(.install, selected: nil, path: "", root: root, helper: helper,
+        #expect(await runner.metadataCalls == 0)
+        #expect(await setup.perform(.install, selected: nil, path: "", root: fixture.root, helper: fixture.helper,
                                     controller: controller, skill: skill) == .installed)
-        #expect(await setup.perform(.uninstall, selected: nil, path: "", root: root, helper: helper,
+        #expect(await setup.perform(.uninstall, selected: nil, path: "", root: fixture.root, helper: fixture.helper,
                                     controller: controller, skill: skill) == .uninstalled)
         #expect(await runner.calls == [
-            ["/chosen/copilot", "--no-auto-update", "plugin", "install", "/synthetic/integration/plugin"],
-            ["/chosen/copilot", "--no-auto-update", "plugin", "uninstall", "cmux-maestro-native"],
+            [fixture.helper.path, "--no-auto-update", "plugin", "install", fixture.source.path],
+            [fixture.helper.path, "--no-auto-update", "plugin", "uninstall", "cmux-maestro-native"],
         ])
     }
 
-    @Test func reportsRealFailureAndNeverRunsWhenFilesystemFails() async {
-        let failure = SetupRunnerSpy(result: .exited(7))
-        let setup = CopilotSetup(files: SetupFileStub(fail: false), runner: failure,
-                                 bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
-        #expect(await setup.perform(.install, selected: nil, path: "", root: root, helper: helper,
-                                    controller: controller, skill: skill) == .failed(7))
+    @Test func reportsRealFailureAndNeverRunsWhenFilesystemFails() async throws {
+        let fixture = try ObserverFixture()
+        defer { try? fixture.clean() }
+        let failure = ObserverSetupRunner(fixture)
+        await failure.configure(result: .exited(7))
+        let setup = CopilotSetup(files: ObserverSetupFiles(fixture: fixture), runner: failure,
+                                 bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier,
+                                 registration: fixture.registration)
+        #expect(await setup.perform(.install, selected: nil, path: "", root: fixture.root, helper: fixture.helper,
+                                    controller: controller, skill: skill)
+            == .incomplete(.pluginPrepared, CopilotSetupResult.failed(7).message))
         let unavailable = CopilotSetup(files: SetupFileStub(fail: true), runner: failure,
-                                       bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
-        #expect(await unavailable.perform(.install, selected: nil, path: "", root: root, helper: helper,
-                                          controller: controller, skill: skill) == .unavailable)
+                                       bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier,
+                                       registration: fixture.registration)
+        guard case .conflict = await unavailable.perform(.install, selected: nil, path: "", root: fixture.root,
+                helper: fixture.helper, controller: controller, skill: skill) else {
+            Issue.record("Filesystem failure must be explicit"); return
+        }
         #expect(await failure.calls.count == 1)
-        let timeout = CopilotSetup(files: SetupFileStub(fail: false), runner: SetupRunnerSpy(result: .timedOut),
-                                   bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
-        #expect(await timeout.perform(.install, selected: nil, path: "", root: root, helper: helper,
-                                      controller: controller, skill: skill) == .timedOut)
-        let cancelled = CopilotSetup(files: SetupFileStub(fail: false), runner: SetupRunnerSpy(result: .cancelled),
-                                     bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier)
-        #expect(await cancelled.perform(.install, selected: nil, path: "", root: root, helper: helper,
-                                        controller: controller, skill: skill) == .cancelled)
+        for outcome: CopilotProcessResult in [.timedOut, .cancelled] {
+            await failure.configure(result: outcome)
+            let result = await setup.perform(.install, selected: nil, path: "", root: fixture.root,
+                helper: fixture.helper, controller: controller, skill: skill)
+            let message = outcome == .timedOut ? CopilotSetupResult.timedOut.message : CopilotSetupResult.cancelled.message
+            #expect(result == .incomplete(.pluginPrepared, message))
+        }
     }
 
     @Test(arguments: [
@@ -633,7 +645,7 @@ struct CopilotSetupTests {
     }
 
     @Test func manifestRegistersOnlySafeIdentityEventsAndAbsoluteHelper() throws {
-        let files = try CopilotPluginManifest.files(helper: helper)
+        let files = try CopilotPluginManifest.files(helper: helper, includeObserverHooks: true)
         let manifestData = try #require(files["plugin.json"])
         let hooksData = try #require(files["hooks.json"])
         let manifest = try #require(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
@@ -737,8 +749,8 @@ struct CopilotSetupTests {
         let plugin = try local.preparePlugin(
             root: integration, helper: executable, controller: controller, skill: skill
         )
-        #expect(try Data(contentsOf: plugin.appendingPathComponent("hooks.json"))
-            == CopilotPluginManifest.files(helper: executable)["hooks.json"])
+        #expect(!FileManager.default.fileExists(atPath: plugin.appendingPathComponent("hooks.json").path),
+                "Resource preparation must not publish observer declarations outside the guarded transaction")
         #expect(try Data(contentsOf: plugin.appendingPathComponent("skills/cmux-maestro-orchestrate/SKILL.md"))
             == Data(contentsOf: skill))
         #expect(try Data(contentsOf: plugin.appendingPathComponent("skills/maestro-icon/SKILL.md"))

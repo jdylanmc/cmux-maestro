@@ -20,13 +20,18 @@ nonisolated enum CopilotSetupAccess {
 
 nonisolated enum CopilotSetupResult: Equatable, Sendable {
     case installed, uninstalled, unavailable, failed(Int32), timedOut, cancelled, validationOnly
+    case installedDisabled
+    case conflict(String)
+    case incomplete(IntegrationSetupPhase, String)
 
     var message: String {
         switch self {
         case .installed:
-            "Copilot reported installation success. New Maestro-launched sessions get messaging automatically. Existing sessions are not adopted or restarted; restart or resume manually only to load skills and identity hooks."
+            "The hookless native plugin and dedicated observer registration are verified on disk. Loaded hooks, observation and messaging readiness are not implied. Maestro did not restart or reload existing sessions."
+        case .installedDisabled:
+            "The native plugin is installed and observer registration remains disabled on disk. Disable choices were preserved; no effective provider-wide suppression is claimed."
         case .uninstalled:
-            "Copilot reported uninstallation success. New messaging launches are disabled. Existing sessions and their in-memory adapters remain untouched; close them normally."
+            "Owned observer registration and the native plugin are removed, and new messaging entry points are disabled. Existing sessions may retain cached hooks and adapters; close them normally."
         case .unavailable:
             "Setup could not access the selected executable, bundled helper, or integration directory. Choose a trusted Copilot CLI executable and retry."
         case .failed(let status):
@@ -37,6 +42,10 @@ nonisolated enum CopilotSetupResult: Equatable, Sendable {
             "Copilot setup was cancelled and its installer processes were stopped."
         case .validationOnly:
             "This validation copy cannot install or uninstall Copilot integration. Use the installed CMUX Maestro Preview app."
+        case .conflict(let reason):
+            "Setup refused before changing observer registration: \(reason)"
+        case .incomplete(let phase, let reason):
+            "Setup is incomplete after \(phase.label). \(reason) Review registration status before retrying. Maestro did not restart or reload sessions."
         }
     }
 }
@@ -87,12 +96,16 @@ nonisolated enum CopilotPluginManifest {
         "{ \(shellQuoted(helper.path)) >/dev/null 2>&1 || :; } >/dev/null 2>&1; exit 0"
     }
 
-    static func files(helper: URL) throws -> [String: Data] {
+    static func observerHooks(helper: URL) -> [String: [[String: Any]]] {
+        let hook: [String: Any] = ["type": "command", "bash": command(helper: helper), "timeoutSec": 2]
+        return Dictionary(uniqueKeysWithValues: events.map { ($0, [hook]) })
+    }
+
+    static func files(helper: URL, includeObserverHooks: Bool = false) throws -> [String: Data] {
         guard helper.isFileURL, helper.path.hasPrefix("/"), !helper.path.contains("\0") else {
             throw HookFiles.Failure.unavailable
         }
-        let hook: [String: Any] = ["type": "command", "bash": command(helper: helper), "timeoutSec": 2]
-        let hooks = Dictionary(uniqueKeysWithValues: events.map { ($0, [hook]) })
+        let hooks = includeObserverHooks ? observerHooks(helper: helper) : [:]
         return [
             "plugin.json": try JSONSerialization.data(withJSONObject: [
                 "name": name, "version": "1.1.0",
@@ -166,9 +179,8 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         let plugin = root.appendingPathComponent("plugin", isDirectory: true)
         let directory = try HookFiles.privateDirectory(plugin)
         defer { close(directory) }
-        for (name, data) in try CopilotPluginManifest.files(helper: helper) {
-            try HookFiles.atomicWrite(data, name: name, directory: directory)
-        }
+        // Observer setup owns the conditional manifest writes and the
+        // disabled-stage / official-replacement / publication transaction.
         let skills = try HookFiles.privateDirectory(plugin.appendingPathComponent("skills", isDirectory: true))
         defer { close(skills) }
         let orchestrationSkill = try HookFiles.privateDirectory(
@@ -300,7 +312,8 @@ nonisolated enum CopilotProcessResult: Equatable, Sendable {
 }
 
 nonisolated protocol CopilotSetupProcessRunner: Sendable {
-    func run(executable: URL, arguments: [String], path: String) async -> CopilotProcessResult
+    func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult
+    func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult
 }
 
 private nonisolated final class CopilotSetupCancellation: @unchecked Sendable {
@@ -320,6 +333,33 @@ private nonisolated final class CopilotSetupCancellation: @unchecked Sendable {
     }
 }
 
+nonisolated enum CopilotSetupFileWork {
+    private static let queue = DispatchQueue(
+        label: "com.jdylanmc.CMUXMaestroPreview.copilot-setup-files",
+        qos: .userInitiated, attributes: .concurrent)
+
+    static func run<Value: Sendable>(_ operation: @escaping @Sendable () throws -> Value) async throws -> Value {
+        let cancellation = CopilotSetupCancellation()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            let value: Value = try await withCheckedThrowingContinuation { continuation in
+                queue.async {
+                    do {
+                        guard !cancellation.isCancelled else { throw CancellationError() }
+                        continuation.resume(returning: try operation())
+                    } catch { continuation.resume(throwing: error) }
+                }
+            }
+            // Cancellation waits for an already-started writer to finish. A
+            // returned result must never race a still-running file mutation.
+            try Task.checkCancellation()
+            return value
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+}
+
 nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
     var timeout: TimeInterval = 45
     var terminationGrace: TimeInterval = 0.25
@@ -333,7 +373,27 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         attributes: .concurrent
     )
 
-    func run(executable: URL, arguments: [String], path: String) async -> CopilotProcessResult {
+    func run(executable: URL, arguments: [String], path: String, providerHome: URL? = nil) async -> CopilotProcessResult {
+        await invoke(executable: executable, arguments: arguments, path: path, providerHome: providerHome, exchange: nil)
+    }
+
+    func metadata(executable: URL, path: String, providerHome: URL? = nil) async -> CopilotMetadataResult {
+        do {
+            let exchange = try CopilotMetadataExchange()
+            defer { exchange.closeAll() }
+            let result = await invoke(executable: executable, arguments: [
+                "--no-auto-update", "--headless", "--stdio", "--disable-builtin-mcps",
+                "--no-custom-instructions", "--no-remote", "--no-remote-export", "--log-level", "error",
+            ], path: path, providerHome: providerHome, exchange: exchange)
+            guard result == .exited(0), let snapshot = exchange.snapshot else {
+                return .failed(result == .exited(0) ? .unavailable : result)
+            }
+            return .value(snapshot)
+        } catch { return .failed(.unavailable) }
+    }
+
+    private func invoke(executable: URL, arguments: [String], path: String, providerHome: URL?,
+                        exchange: CopilotMetadataExchange?) async -> CopilotProcessResult {
         guard !Task.isCancelled else { return .cancelled }
         let cancellation = CopilotSetupCancellation()
         return await withTaskCancellationHandler {
@@ -345,8 +405,9 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
                     } else {
                         var environment = ProcessInfo.processInfo.environment
                         environment["PATH"] = executable.deletingLastPathComponent().path + ":" + path
+                        if let providerHome { environment["COPILOT_HOME"] = providerHome.path }
                         result = execute(executable: executable, arguments: arguments,
-                                         environment: environment, cancellation: cancellation)
+                                         environment: environment, cancellation: cancellation, exchange: exchange)
                     }
                     continuation.resume(returning: result)
                 }
@@ -357,17 +418,23 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
     }
 
     private func execute(executable: URL, arguments: [String], environment: [String: String],
-                         cancellation: CopilotSetupCancellation) -> CopilotProcessResult {
+                         cancellation: CopilotSetupCancellation,
+                         exchange: CopilotMetadataExchange?) -> CopilotProcessResult {
         guard !cancellation.isCancelled else { return .cancelled }
         guard timeout.isFinite, timeout > 0, terminationGrace.isFinite, terminationGrace >= 0
         else { return .unavailable }
         guard let pid = Self.spawn(executable: executable, arguments: arguments,
-                                   environment: environment, cancellation: cancellation) else {
+                                   environment: environment, cancellation: cancellation, exchange: exchange) else {
             return cancellation.isCancelled ? .cancelled : .unavailable
         }
+        exchange?.spawned()
         let deadline = deadlineNow().advanced(by: .seconds(timeout))
         var outcome: CopilotProcessResult
         while true {
+            do { try exchange?.poll() } catch {
+                _ = Self.stopGroup(pid, grace: terminationGrace)
+                return .unavailable
+            }
             if cancellation.isCancelled {
                 outcome = .cancelled
                 break
@@ -396,7 +463,8 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
 
     private static func spawn(executable: URL, arguments: [String],
                               environment: [String: String],
-                              cancellation: CopilotSetupCancellation) -> Int32? {
+                              cancellation: CopilotSetupCancellation,
+                              exchange: CopilotMetadataExchange?) -> Int32? {
         // Automatic child reaping would invalidate the retained PID/group anchor.
         var disposition = sigaction()
         guard sigaction(SIGCHLD, nil, &disposition) == 0,
@@ -419,10 +487,17 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
               posix_spawnattr_setpgroup(&attributes, 0) == 0,
               posix_spawnattr_setsigmask(&attributes, &mask) == 0,
               posix_spawnattr_setsigdefault(&attributes, &defaults) == 0,
-              posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0,
-              posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0) == 0,
               posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) == 0
         else { return nil }
+        if let exchange {
+            guard posix_spawn_file_actions_adddup2(&actions, exchange.input[0], STDIN_FILENO) == 0,
+                  posix_spawn_file_actions_adddup2(&actions, exchange.output[1], STDOUT_FILENO) == 0
+            else { return nil }
+        } else {
+            guard posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0,
+                  posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0) == 0
+            else { return nil }
+        }
         let strings = [executable.path] + arguments
         let variables = environment.map { "\($0.key)=\($0.value)" }
         guard !(strings + variables).contains(where: { $0.contains("\0") }) else { return nil }
@@ -510,17 +585,20 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
     }
 }
 
-nonisolated struct CopilotSetup {
+nonisolated struct CopilotSetup: Sendable {
     let files: any CopilotSetupFileSystem
     let runner: any CopilotSetupProcessRunner
     private let allowsChanges: Bool
+    private let registration: CopilotObserverRegistration?
 
     init(files: any CopilotSetupFileSystem = LocalCopilotSetupFiles(),
          runner: any CopilotSetupProcessRunner = LocalCopilotSetupRunner(),
-         bundleIdentifier: String? = Bundle.main.bundleIdentifier) {
+         bundleIdentifier: String? = Bundle.main.bundleIdentifier,
+         registration: CopilotObserverRegistration? = nil) {
         self.files = files
         self.runner = runner
         allowsChanges = CopilotSetupAccess.allowsChanges(bundleIdentifier: bundleIdentifier)
+        self.registration = registration
     }
 
     // Only the explicit consent buttons call this; constructing the app performs
@@ -528,27 +606,103 @@ nonisolated struct CopilotSetup {
     func perform(_ action: CopilotSetupAction, selected: URL?, path: String,
                  root: URL, helper: URL, controller: URL, skill: URL) async -> CopilotSetupResult {
         guard allowsChanges else { return .validationOnly }
+        let cancellation = CopilotSetupCancellation()
+        return await withTaskCancellationHandler {
+            await executeSetup(action, selected: selected, path: path, root: root,
+                               helper: helper, controller: controller, skill: skill, cancellation: cancellation)
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+
+    private func executeSetup(_ action: CopilotSetupAction, selected: URL?, path: String,
+                              root: URL, helper: URL, controller: URL, skill: URL,
+                              cancellation: CopilotSetupCancellation) async -> CopilotSetupResult {
+        var transaction: CopilotObserverRegistration.Transaction?
         do {
-            let executable = try files.executable(selected: selected, path: path)
+            try Task.checkCancellation()
+            let (registration, executable) = try await CopilotSetupFileWork.run {
+                let registration = try self.registration ?? CopilotObserverRegistration(
+                    home: CopilotPaths.realUserHome(), root: root, helper: helper)
+                try registration.validateLocal()
+                return (registration, try self.files.executable(selected: selected, path: path))
+            }
+            let initial: CopilotSetupMetadata
+            switch await runner.metadata(executable: executable, path: path, providerHome: registration.providerHome) {
+            case .value(let value): initial = value
+            case .failed(let failure): return Self.processFailure(failure)
+            }
+            let operation = try await CopilotSetupFileWork.run {
+                try registration.begin(action, metadata: initial, isCancelled: { cancellation.isCancelled })
+            }
+            transaction = operation
+            try await CopilotSetupFileWork.run { try operation.stage() }
+            switch await runner.metadata(executable: executable, path: path, providerHome: registration.providerHome) {
+            case .value(let value): try await CopilotSetupFileWork.run { try operation.verifyStaging(value) }
+            case .failed(let failure): return .incomplete(operation.phase, Self.processFailure(failure).message)
+            }
             let arguments: [String]
             switch action {
             case .install:
-                let plugin = try files.preparePlugin(
-                    root: root, helper: helper, controller: controller, skill: skill
-                )
+                let plugin = try await CopilotSetupFileWork.run {
+                    let plugin = try self.files.preparePlugin(
+                        root: root, helper: helper, controller: controller, skill: skill)
+                    try operation.acceptPreparedResources()
+                    try operation.preparePluginManifest()
+                    return plugin
+                }
                 arguments = ["--no-auto-update", "plugin", "install", plugin.path]
             case .uninstall:
+                try await CopilotSetupFileWork.run { try operation.removeRegistration() }
                 arguments = ["--no-auto-update", "plugin", "uninstall", CopilotPluginManifest.name]
             }
-            switch await runner.run(executable: executable, arguments: arguments, path: path) {
-            case .exited(0):
-                if action == .uninstall { try files.removeMessaging(root: root) }
-                return action == .install ? .installed : .uninstalled
-            case .exited(let status): return .failed(status)
-            case .unavailable: return .unavailable
-            case .timedOut: return .timedOut
-            case .cancelled: return .cancelled
+            try await CopilotSetupFileWork.run { try operation.beforePluginCommand() }
+            if action == .install || operation.pluginWasInstalled {
+                let result = await runner.run(executable: executable, arguments: arguments, path: path,
+                                              providerHome: registration.providerHome)
+                guard result == .exited(0) else {
+                    return .incomplete(operation.phase, Self.processFailure(result).message)
+                }
             }
-        } catch { return .unavailable }
+            let changed: CopilotSetupMetadata
+            switch await runner.metadata(executable: executable, path: path, providerHome: registration.providerHome) {
+            case .value(let value): changed = value
+            case .failed(let failure): return .incomplete(operation.phase, Self.processFailure(failure).message)
+            }
+            if action == .uninstall {
+                try await CopilotSetupFileWork.run {
+                    try operation.verifyRemoval(changed)
+                    try self.files.removeMessaging(root: root)
+                }
+                return .uninstalled
+            }
+            try await CopilotSetupFileWork.run {
+                try operation.verifyPlugin(changed)
+                try operation.publish()
+            }
+            switch await runner.metadata(executable: executable, path: path, providerHome: registration.providerHome) {
+            case .value(let value): try await CopilotSetupFileWork.run { try operation.verifyPublished(value) }
+            case .failed(let failure): return .incomplete(operation.phase, Self.processFailure(failure).message)
+            }
+            return operation.disabled ? .installedDisabled : .installed
+        } catch {
+            let reason: String
+            if let conflict = error as? CopilotRegistrationConflict { reason = conflict.message }
+            else if error is CancellationError { reason = CopilotSetupResult.cancelled.message }
+            else { reason = "A required file is unsafe, unreadable, malformed or changed during setup. No unverified rollback was attempted." }
+            if let transaction, transaction.phase != .preflight {
+                return .incomplete(transaction.phase, reason)
+            }
+            return error is CancellationError ? .cancelled : .conflict(reason)
+        }
+    }
+
+    private static func processFailure(_ result: CopilotProcessResult) -> CopilotSetupResult {
+        switch result {
+        case .exited(let status): status == 0 ? .unavailable : .failed(status)
+        case .unavailable: .unavailable
+        case .timedOut: .timedOut
+        case .cancelled: .cancelled
+        }
     }
 }

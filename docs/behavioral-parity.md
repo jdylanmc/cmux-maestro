@@ -49,6 +49,71 @@ serialization, startup retry or larger readiness timeout. Startup observation
 has no added wall-time limit before the first sample; the existing dedicated
 concurrency test remains the bounded dispatch-progress regression.
 
+### Dedicated observer registration (#114)
+
+Explicit setup now owns a dedicated version-1 user file for exactly
+`sessionStart`, `userPromptSubmitted` and `postToolUse`. The bundled helper,
+identity checks, session reader and renderer are unchanged. The lifecycle/icon
+plugin remains, without observer declarations. Generation/provenance checks,
+bounded descriptor-relative reads, conditional writes, a same-setup lock and
+phase-specific results distinguish missing, stale, disabled, conflicting,
+incomplete and current-on-disk registration.
+
+The accepted compatibility boundary is **Copilot CLI 1.0.88, SDK protocol 3**.
+Setup uses only `status.get`, `hooks.discover` and `plugins.list` over a new,
+bounded public stdio connection. It sends no agent/session creation or model
+request, never attaches to an existing session and shuts the metadata process
+down after its three replies. Framing, malformed replies, output limits,
+timeout, cancellation and process-group cleanup are independently checked.
+No private native module or hash implementation is a product dependency.
+Host-only discovery labels this file `hooks/cmux-maestro-observer.json`;
+project-scoped discovery uses its absolute path. Only those exact user-origin
+labels are recognized, alongside independent file/provenance checks; arbitrary
+relative paths and other origins are not normalized into ownership.
+Registration file work and the setup UI's read-only status checks use a
+concurrent file-worker queue rather than MainActor or the cooperative executor.
+Each invocation awaits its own transaction steps; cancellation joins an
+already-started writer before returning. This does not serialize the test suite
+or widen the original process-cleanup/readiness deadlines.
+
+Disposable exact-version probes established these separate facts:
+
+| Evidence level | Observed result and limit |
+|---|---|
+| Source/on-disk format | User version-1 files are accepted independently of plugins. Sources combine; there is no provider deduplication. |
+| Public discovery | File-level `disableAllHooks` returns disabled rows but omits their destination disable keys. The actual legacy sorted-key producer and four justified user representations did not preserve legacy keys: normalization changed serialized config order, not inherently source identity. |
+| Disable-key mapping | Additive old/new **global** keys preserve all-three and single-event intent in discovery. Repository `disabledHooks` was ineffective even against the unchanged legacy source. These are not event-execution claims. |
+| Actual activation | `sessionStart` and `userPromptSubmitted` markers preceded the sole quota-rejected model request. Permission-free public `tools.execute` produced `postToolUse` markers. No successful model turn was available. |
+| Concrete session cache | Existing disposable-session `postToolUse` retained A after disk changed to B; a fresh session used B; explicit supported hook reload switched the existing session to B. Other events were not separately re-proved after reload. |
+| Global disable limitation | `disableAllHooks:true` did **not** suppress `postToolUse` on the tested `tools.execute` path, including in a fresh runtime. This is not generalized to a successful model loop. |
+
+The implemented fallback is deliberately smaller than a speculative settings
+migrator: when a change needs unavailable destination-key mapping, refuse
+**before changing the legacy registration**. Never enable a duplicate just to
+discover a key, reverse-engineer hashes, drop old keys or approximate a
+single-event disable with a new blanket policy. Global settings are read, not
+rewritten. An explicit global/file disable instead preserves a disabled owned
+file; setup does not claim it repaired provider-wide enforcement.
+
+Migration stages only the exact owned **disabled** file, confirms disabled
+discovery, prepares and officially installs the hookless plugin, verifies its
+cached declarations and public metadata, then publishes the intended file.
+Foreign/modified registrations, unknown installed identities, overlapping
+observer sources and changing inputs refuse rather than being overwritten.
+A failed step reports the last completed phase; the next phase may have
+partially refreshed setup resources. Retry revalidates recorded generations
+and known partial preparation, preserving a retained disabled stage. It never
+rolls back blindly or changes existing sessions. Removing integration preserves
+global keys, unrelated hooks and live messaging route/session state.
+
+[CopilotObserverRegistrationTests](../CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift)
+cover isolated registration, migration, exact event/wrapper content, preserved
+disables, unavailable-key refusal, unsafe/foreign/modified state, interrupted
+phases, retry, concurrent replacement, metadata and owned removal.
+The existing setup cleanup tests retain their original deadlines, negative
+controls and unrelated-process assertions. Complete CI, independent review and
+any later production/live acceptance remain separate candidate gates.
+
 ### Deep-outline fixture readiness
 
 Focus-layout fixtures bring the deepest title into the viewport and wait for

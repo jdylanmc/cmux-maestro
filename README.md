@@ -53,26 +53,72 @@ unchanged. If account-home resolution fails, the absolute label explains it.
    Copy the global install command and run it yourself as described below.
    Runtime setup never installs the global guide.
 
-The containing app is an installer, not an observer. It may be closed after
-setup. A successful setup message means the selected CLI exited successfully;
-it does not claim a running session has already loaded the plugin or that the
-host extension has been enabled.
+The containing app is an installer, not a session observer. It may be closed
+after setup. **Check Registration** reads only registration files. A successful
+setup verifies the dedicated file and hookless installed plugin on disk and
+through provider discovery; it does not imply loaded hooks, observed events,
+messaging readiness or an enabled host extension.
 
 Installer invocations start in their own process group. **Cancel Setup** and
 the 45-second timeout stop that invocation's launcher and descendants, then
 wait for cleanup before permitting retry; existing Copilot sessions are never
-signalled. CLI output remains suppressed.
+signalled. This also applies to the bounded, metadata-only `status.get`,
+`hooks.discover` and `plugins.list` checks during explicit setup. Each process
+has the same deadline; setup starts no agent/model session or persistent
+service. Metadata output is capped at 256 KiB and is never displayed as raw
+CLI output.
 Setup passes `--no-auto-update` so a plugin change does not opt into upgrading
 the selected CLI.
 
-Only the distinct **`cmux-maestro-native`** plugin, its bundled skills, private
-local controller, and native loader at `~/.copilot/extensions/maestro/extension.mjs`
-are installed. The loader is inert without matching launcher/session/workspace/
+Setup installs the distinct, now **hookless `cmux-maestro-native`** plugin and
+its bundled skills, private local controller, native loader at
+`~/.copilot/extensions/maestro/extension.mjs`, and
+**`~/.copilot/hooks/cmux-maestro-observer.json`**. The dedicated version-1 file
+declares only `sessionStart`, `userPromptSubmitted` and `postToolUse`, using the
+unchanged silenced helper wrapper. Private generation/provenance and an
+advisory setup lock live under the existing application `Copilot/` support
+directory. The loader is inert without matching launcher/session/workspace/
 generation bindings. Existing
 `maestro-cmux`, other plugins, provider settings, and sidebar selection are
 never replaced automatically. Moving/replacing the native app requires enabling
 the integration again: Copilot caches local plugin contents, and generated hooks
 contain the **absolute current bundled helper path**.
+
+Observer setup is version-bound to **Copilot CLI 1.0.88, protocol 3**. A
+conflicting `HOME` or `COPILOT_HOME` is rejected; this does not broaden the
+reader beyond standard `~/.copilot`. Setup rejects unsafe, symlinked,
+hard-linked, modified or foreign registration and ambiguous duplicate sources.
+It does not chmod an existing shared hooks directory.
+Historical plugin-hook reformatting also requires review: provider disable-key
+identity can depend on serialization, not just semantically equal JSON.
+
+For a recognized direct legacy installation, setup first records provenance
+and stages an **owned disabled** dedicated file, confirms disabled discovery,
+prepares the hookless plugin, runs the official plugin installer, verifies that
+the installed observer declarations are gone, and only then publishes the
+intended dedicated state. An enabled competing source is never staged.
+Unrelated hooks, old disable keys and settings remain untouched.
+
+**Disable preservation is conservative.** The provider omits destination keys
+for a file-disabled source. When a registration change would require mapping
+global `disabledHooks`, setup refuses before changing the legacy registration;
+it neither guesses hashes nor enables a duplicate to obtain keys. Already
+current dedicated registrations retain their unchanged hook configuration and
+keys. A whole-file/global disable does not bypass the unresolved per-key gate:
+later re-enabling must not lose a disabled subset. Otherwise, explicit
+global/file `disableAllHooks` leaves the owned file disabled,
+including after the global flag is later cleared. Review the owned file and
+explicitly change its disable flag before requesting activation again.
+No additive global-settings write is implemented in this release.
+
+Failures identify the last completed phase, not blanket installation success.
+An interrupted transaction may retain a disabled owned file while the old
+plugin remains installed, or leave a hookless plugin awaiting publication.
+Retry revalidates provenance and content; a retained disabled stage stays
+disabled conservatively. Foreign edits require manual review, not automatic
+rollback. Existing sessions retain their cached hooks; any provider reload,
+restart or resume is human-owned. See the
+[compatibility limits](docs/behavioral-parity.md#dedicated-observer-registration-114).
 
 Messaging launch configuration and stored nodes retain the three-field
 `{version, routes, extension}` contract. The obsolete `pluginDirectory` setup
@@ -125,9 +171,12 @@ icon and global guides; it never sweeps global paths or cached/live sessions.
 
 ### Disable or uninstall
 
-Use **Uninstall Native Plugin…**, then explicitly confirm. This runs only
-`copilot --no-auto-update plugin uninstall cmux-maestro-native`, then removes
-Maestro's native loader entry point and launch configuration. Live route bindings,
+Use **Remove Copilot Integration…**, then explicitly confirm. After ownership
+and metadata checks, this disables and removes only the recognized dedicated
+file, runs `copilot --no-auto-update plugin uninstall cmux-maestro-native`
+when installed, verifies removal, then removes Maestro's native loader entry
+point and launch configuration. Foreign or modified observer files are refused.
+Global settings and disable keys are not removed. Live route bindings,
 sockets and in-memory adapters are not touched; close those sessions normally.
 Restart/resume existing CLI
 sessions to unload their cached hooks. Disable this sidebar in CMUX separately
