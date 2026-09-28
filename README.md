@@ -204,6 +204,9 @@ the observed session keeps its own primary row. Unneeded old registrations and
 their exact unprotected observed copies are omitted automatically in both views,
 regardless of **Show ended agents**. Unrelated incomplete history does not hide
 the current session or keep an otherwise unneeded old registration on screen.
+A recorded failed turn qualifies only when its exact original session is freshly
+confirmed dead and the current replacement is verified; the failed phase alone
+never proves that the old work ended.
 
 Ancestors and original-session content needed by known descendants, unresolved
 attention or incomplete own evidence remain as **Work context**. Their actions

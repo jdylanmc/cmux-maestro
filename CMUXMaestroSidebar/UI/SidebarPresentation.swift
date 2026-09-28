@@ -184,10 +184,13 @@ struct SidebarVisibleWork {
     ) {
         let displaced = SidebarPresentation.displacedManagedNodeIDs(managed, observations: tree, now: now)
         let unneeded = managed.filter { node in
-            guard displaced.contains(node.id), managed.filter({ $0.id == node.id }).count == 1,
-                  ["registered", "reported-completed", "process-disappeared", "terminal-disappeared", "resource-retired"].contains(node.phase)
-            else { return false }
+            guard displaced.contains(node.id), managed.filter({ $0.id == node.id }).count == 1 else { return false }
             let observations = tree.sessions.filter { $0.id == node.copilotSessionId }
+            let endedFailure = node.phase == "turn-failed" && observations.count == 1 && observations[0].liveness == .dead
+            guard ["registered", "reported-completed", "process-disappeared", "terminal-disappeared", "resource-retired"].contains(node.phase)
+                    || endedFailure else { return false }
+            // A recorded failed turn is obsolete only with fresh original-lifetime end proof,
+            // never in place of the exact observation's own attention and child protections.
             return observations.count <= 1 && observations.allSatisfy { session in
                 session.workspaceID == node.workspaceId && session.surfaceID == node.surfaceId
                     && SidebarCopilotTree.isFresh(session.observedAt, now: now)

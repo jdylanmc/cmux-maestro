@@ -16,10 +16,24 @@ struct SidebarMotionTests {
         let now = Date()
         let old = SidebarOrchestrationNode(
             id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Same title",
-            workspaceId: f.workspaceA, surfaceId: f.surfaceA, generation: 0, phase: "registered", availability: "active",
+            workspaceId: f.workspaceA, surfaceId: f.surfaceA, generation: 1, phase: "turn-failed", availability: "idle",
             copilotSessionId: f.otherSessionID, executionMode: .interactive,
             createdAt: now.addingTimeInterval(-172_800), updatedAt: now.addingTimeInterval(-172_800)
         )
+        let goneChild = SidebarOrchestrationNode(
+            id: UUID(), runId: old.runId, parentId: old.id, role: "worker", label: "Absent child surface",
+            workspaceId: f.workspaceA, surfaceId: UUID(), generation: 1, phase: "turn-running", availability: "busy",
+            copilotSessionId: UUID(), executionMode: .interactive, createdAt: old.createdAt, updatedAt: old.updatedAt
+        )
+        let goneGrandchild = SidebarOrchestrationNode(
+            id: UUID(), runId: old.runId, parentId: goneChild.id, role: "worker", label: "Absent grandchild surface",
+            workspaceId: f.workspaceA, surfaceId: UUID(), generation: 1, phase: "turn-running", availability: "busy",
+            copilotSessionId: UUID(), executionMode: .interactive, createdAt: old.createdAt, updatedAt: old.updatedAt
+        )
+        let raw = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: old.updatedAt, complete: true, omittedCount: 0, nodes: [old, goneChild, goneGrandchild]
+        )
+        try SidebarOrchestrationReader.validate(raw, now: now)
         let current = CopilotSessionObservation(
             sessionID: f.sessionID, surfaceID: f.surfaceA, launchWorkspaceID: f.workspaceA,
             liveness: .alive, state: .working, model: nil,
@@ -33,9 +47,7 @@ struct SidebarMotionTests {
         ], issues: [.ambiguousTurn], complete: false, now: now))
         let polling = SidebarCopilotPolling(read: { _ in await snapshots.read() },
                                            pause: { try await Task.sleep(for: .milliseconds(10)) })
-        let orchestration = SidebarOrchestrationPolling(read: {
-            .init(version: 1, generatedAt: old.updatedAt, complete: true, omittedCount: 0, nodes: [old])
-        }, pause: { try await Task.sleep(for: .seconds(60)) })
+        let orchestration = SidebarOrchestrationPolling(read: { raw }, pause: { try await Task.sleep(for: .seconds(60)) })
         let model = SidebarConnectionModel(copilot: polling, orchestration: orchestration)
         let hierarchy = HierarchySnapshot(
             sequence: 1, receivedSnapshot: true, workspaceListAvailable: true, workspaceMetadataAvailable: true,
@@ -60,6 +72,11 @@ struct SidebarMotionTests {
         defer { window.contentView = nil; window.close() }
         func views(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + views($0) } }
         await sidebarEventually { polling.tree.sessions.count == 2 && orchestration.snapshot.nodes.count == 1 }
+        #expect(orchestration.snapshot.nodes == [old], "Existing topology/ancestor projection excludes absent child surfaces")
+        #expect(raw.nodes == [old, goneChild, goneGrandchild], "No stored node or lifetime was changed")
+        let originalObservation = try #require(polling.tree.sessions.first { $0.id == f.otherSessionID })
+        #expect(originalObservation.liveness == .dead && originalObservation.state == .unknown && originalObservation.nodes.isEmpty)
+        #expect(SidebarCopilotTree.isFresh(originalObservation.observedAt, now: Date()))
         let currentLabel = mode == .hierarchy ? "Focus Terminal Same title" : "Focus Copilot session 10000000"
         await sidebarEventually {
             hosting.layoutSubtreeIfNeeded()
@@ -90,7 +107,7 @@ struct SidebarMotionTests {
         try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
         let text = try SidebarRenderingEvidence.recognizedLines(in: destination).joined(separator: " ")
         #expect(text.contains("Same title") && !text.contains("Retained records") && !text.contains("Work context"))
-        print("Live-only \(mode.rawValue)/ended\(showEnded): visibleManaged=\(visible.managed.count), observed=\(visible.tree.sessions.count), entries=\(summary.agentCount)")
+        print("Live-only valid gen1/interactive/turn-failed \(mode.rawValue)/ended\(showEnded): rawManaged=\(raw.nodes.count), projectedManaged=\(orchestration.snapshot.nodes.count), visibleManaged=\(visible.managed.count), observed=\(visible.tree.sessions.count), entries=\(summary.agentCount)")
     }
 
     @Test(arguments: [(false, true, false, false), (false, true, true, false),
