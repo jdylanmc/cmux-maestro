@@ -213,7 +213,15 @@ struct SidebarHistoryTests {
         let presentation = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarPresentation.swift"), encoding: .utf8)
         #expect(view.contains("model: model, layout: preferences.layout,"))
         #expect(view.contains("dismiss: dismiss, acknowledge: acknowledge"))
-        #expect(view.contains("tree: visibleWork.tree, hierarchy: model.hierarchy"))
+        let normalized = view.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        #expect(normalized.contains("case .taskboard: let work = visibleWork"))
+        let taskboard = "TaskboardContent( tree: work.tree, hierarchy: model.hierarchy, "
+            + "navigation: model.navigation, dismiss: dismiss, acknowledge: acknowledge, "
+            + "selection: unmanagedSelection, retainedSessionIDs: retainedIDs"
+        #expect(normalized.components(separatedBy: taskboard).count == 3,
+                "Both Taskboard sections must consume the same captured history projection")
+        #expect(normalized.contains(taskboard + " )"))
+        #expect(normalized.contains(taskboard + ", retainedOnly: true )"))
         #expect(view.contains("visibleWork: visibleWork,"))
         #expect(view.components(separatedBy: "DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)").count == 2)
         #expect(view.components(separatedBy: "CopilotWorkRow(").count == 3)
