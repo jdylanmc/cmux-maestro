@@ -6,6 +6,7 @@ import Testing
 @MainActor
 private final class RetainedMenuSource {
     var node: SidebarOrchestrationNode
+    var includesNode = true
     let evidence: AgentAttention
     let date: Date
 
@@ -16,7 +17,7 @@ private final class RetainedMenuSource {
     }
 
     var managed: SidebarOrchestrationSnapshot {
-        .init(version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [node])
+        .init(version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: includesNode ? [node] : [])
     }
 
     var observed: CopilotSnapshot {
@@ -294,7 +295,25 @@ struct SidebarPinnedDetailsTests {
         #expect(inspector(coordinatorSubject, sessions: [session(id: UUID())], nodes: [coordinator]) == nil)
     }
 
-    @Test(arguments: ["unchanged", "generation", "run", "session", "workspace", "surface"], SidebarMode.allCases)
+    @Test func displacedManagedRecordCanBeInspectedWithoutBorrowingCurrentSurface() throws {
+        let node = managed(sessionID: fixtures.otherSessionID)
+        let observations = tree([session()])
+        let subject = try #require(SidebarPresentation.inspection(
+            for: .managed(node), hierarchy: hierarchy(), connected: true, tree: observations,
+            managed: snapshot([node]), availability: .ready, now: now
+        ))
+        #expect(subject.surfaceID == nil && subject.surfaceKind == nil)
+        #expect(subject.sessionID == fixtures.otherSessionID)
+        let detail = try #require(inspector(subject, nodes: [node]))
+        #expect(detail.notice?.contains("Retained record") == true)
+        #expect(detail.lines.contains(.sessionID(fixtures.otherSessionID)))
+        #expect(!detail.lines.contains { $0.value == "/synthetic/worktree-0" || $0.value == "verified-model" })
+        #expect(detail.lines.contains { $0.title == "Focus" && $0.value.contains("Original session") })
+        #expect(pinned(nodes: [node]).inspection?.sessionID == fixtures.sessionID)
+    }
+
+    @Test(arguments: ["unchanged", "generation", "run", "session", "workspace", "surface",
+                      "focus-generation", "focus-missing", "primary-generation"], SidebarMode.allCases)
     func retainedManagedMenuValidatesCapturedSubjectBeforeInspectionAndSeen(change: String, mode: SidebarMode) async throws {
         let preferenceFixture = try SidebarPreferenceFixture()
         defer { preferenceFixture.cleanup() }
@@ -308,9 +327,9 @@ struct SidebarPinnedDetailsTests {
                 role: "worker", label: "Retained managed subject",
                 workspaceId: replaced && change == "workspace" ? fixtures.workspaceB : fixtures.workspaceA,
                 surfaceId: replaced && change == "surface" ? alternateSurface : fixtures.surfaceA,
-                generation: replaced && change == "generation" ? 2 : 1,
+                generation: replaced && ["generation", "focus-generation", "primary-generation"].contains(change) ? 2 : 1,
                 phase: "turn-running", availability: "busy",
-                copilotSessionId: replaced && change == "session" ? fixtures.otherSessionID : fixtures.sessionID,
+                copilotSessionId: replaced && ["session", "focus-missing"].contains(change) ? fixtures.otherSessionID : fixtures.sessionID,
                 executionMode: .interactive, createdAt: date, updatedAt: date
             )
         }
@@ -373,19 +392,23 @@ struct SidebarPinnedDetailsTests {
         }
         let title = try #require(views(hosting).compactMap { $0 as? SidebarTitleNativeButton }
             .first { $0.accessibilityLabel() == "Focus Retained managed subject" })
+        let capturedPrimary = title.activate
         let showActions = try #require(title.showActions)
         showActions()
         let menu = try #require(capturedMenu)
-        let item = try #require(menu.items.flatMap { $0.submenu?.items ?? [] }.first { $0.title == "Open details" })
+        let actionTitle = change.hasPrefix("focus-") || change.hasPrefix("primary-") ? "Focus surface" : "Open details"
+        let item = try #require(menu.items.flatMap { $0.submenu?.items ?? [] }.first { $0.title == actionTitle })
         let presenter = try #require(item.target as? SidebarRowMenuPresenter)
         #expect(item.isEnabled && preferences.attention.acknowledged.isEmpty && nativeActions.isEmpty)
 
         source.node = replacement
+        source.includesNode = change != "focus-missing"
         model.setVisible(false)
         refreshHierarchy(moved: change == "workspace")
         model.setVisible(true)
         await sidebarEventually {
-            orchestration.snapshot.nodes == [replacement] && polling.tree.sessions.first?.id == replacement.copilotSessionId
+            orchestration.snapshot.nodes == (source.includesNode ? [replacement] : [])
+                && polling.tree.sessions.first?.id == replacement.copilotSessionId
                 && polling.tree.attentionOwnerCount == 1
         }
         try await settle(hosting)
@@ -395,7 +418,8 @@ struct SidebarPinnedDetailsTests {
         )
         #expect(preferences.attention.acknowledged.isEmpty && nativeActions.isEmpty)
         #expect(item.target === presenter)
-        #expect(NSApp.sendAction(try #require(item.action), to: presenter, from: item))
+        if change.hasPrefix("primary-") { capturedPrimary() }
+        else { #expect(NSApp.sendAction(try #require(item.action), to: presenter, from: item)) }
         try await Task.sleep(for: .milliseconds(100))
         let inspectorWindows = window.childWindows ?? []
         let inspectorViews = inspectorWindows.compactMap(\.contentView).flatMap { [$0] + views($0) }

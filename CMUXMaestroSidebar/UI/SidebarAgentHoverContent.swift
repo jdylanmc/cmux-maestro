@@ -19,7 +19,8 @@ enum SidebarAgentHoverContent {
             let matches = managed.nodes.filter { $0.id == id && $0.generation == generation }
             guard matches.count == 1, let node = matches.first,
                   topology.workspaceBySurface[node.surfaceId] == node.workspaceId else { return nil }
-            let allowed = Set(["Model", "Role", "Branch", "Worktree", "Last verified location", "Git evidence", "Git changes", "Working directory", "Session ID"])
+            let retained = SidebarPresentation.displacedManagedNodeIDs([node], observations: tree, now: now).contains(node.id)
+            let allowed = Set(["Record", "Focus", "Model", "Role", "Branch", "Worktree", "Last verified location", "Git evidence", "Git changes", "Working directory", "Session ID"])
             var lines = SidebarPresentation.managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { allowed.contains($0.title) }
             let current = availability == .ready || availability == .partial
@@ -31,15 +32,17 @@ enum SidebarAgentHoverContent {
                 }
             }
             return .init(
-                id: "managed-\(id)-\(generation)", category: "Agent preview", title: node.label,
+                id: "managed-\(id)-\(generation)", category: retained ? "Retained record" : "Agent preview", title: node.label,
                 subtitle: SidebarPresentation.managedState(node, availability: availability, now: now, tree: tree).title,
                 lines: lines,
-                notice: current ? nil : "Managed observation is stale or unavailable. Last-known metadata is not live state."
+                notice: retained ? SidebarPresentation.retainedFocusUnavailable
+                    : current ? nil : "Managed observation is stale or unavailable. Last-known metadata is not live state."
             )
         case .session(let id):
             guard let session = uniqueSession(id, in: tree),
                   topology.workspaceBySurface[session.surfaceID] == session.workspaceID else { return nil }
-            return sessionCard(session, hierarchy: hierarchy, tree: tree, now: now)
+            return sessionCard(session, hierarchy: hierarchy, tree: tree, now: now,
+                               retained: SidebarPresentation.retainedSessionIDs(tree, managed: managed.nodes, now: now).contains(id))
         case .child(let sessionID, let childID):
             guard let session = uniqueSession(sessionID, in: tree),
                   topology.workspaceBySurface[session.surfaceID] == session.workspaceID else { return nil }
@@ -50,18 +53,21 @@ enum SidebarAgentHoverContent {
                              notice: "Child observation is no longer current.")
             }
             let allowed = Set(["Name", "Kind", "Model", "Ancestry", "Completion", "Child ID", "Parent session ID"])
+            let retained = SidebarPresentation.retainedSessionIDs(tree, managed: managed.nodes, now: now).contains(sessionID)
             var lines = SidebarPresentation.nodeDetails(child, session: session).filter { allowed.contains($0.title) }
             lines += [
                 .init(title: "Placement", value: "Observed child; native placement belongs to its parent session"),
-                .init(title: "Parent working directory", value: hierarchy.pathContext(
+                .init(title: "Parent working directory", value: retained ? "Not current for this retained observation" : hierarchy.pathContext(
                     workspaceID: session.workspaceID, surfaceID: session.surfaceID
                 ).workingDirectory.pathDisplayText)
             ]
+            let notices = [retained ? SidebarPresentation.retainedFocusUnavailable : nil,
+                session.childrenComplete && !session.treeDegraded ? nil : "Child history is incomplete; missing work is not assumed finished."]
+                .compactMap { $0 }
             return .init(
-                id: "child-\(sessionID)-\(childID)", category: child.kind == .subagent ? "Agent preview" : "Activity preview", title: child.name,
+                id: "child-\(sessionID)-\(childID)", category: retained ? "Retained activity" : child.kind == .subagent ? "Agent preview" : "Activity preview", title: child.name,
                 subtitle: session.liveness == .alive ? SidebarPresentation.state(child.state).title : "Last reported: \(child.state.rawValue)",
-                lines: lines, notice: session.childrenComplete && !session.treeDegraded
-                    ? nil : "Child history is incomplete; missing work is not assumed finished."
+                lines: lines, notice: notices.isEmpty ? nil : notices.joined(separator: " ")
             )
         }
     }
@@ -78,7 +84,8 @@ enum SidebarAgentHoverContent {
     }
 
     private static func sessionCard(
-        _ session: SidebarCopilotSession, hierarchy: HierarchySnapshot, tree: SidebarCopilotTree, now: Date
+        _ session: SidebarCopilotSession, hierarchy: HierarchySnapshot, tree: SidebarCopilotTree, now: Date,
+        retained: Bool = false
     ) -> SidebarHoverCardData {
         let title = SidebarPresentation.surfaceTitle(for: session, in: hierarchy)
         guard isFresh(session, tree: tree, now: now) else {
@@ -90,13 +97,14 @@ enum SidebarAgentHoverContent {
         if session.liveness != .alive {
             lines = lines.map { $0.title == "Model" ? .init(title: "Last reported model", value: $0.value) : $0 }
         }
-        lines += SidebarPresentation.paths(hierarchy.pathContext(
+        if !retained { lines += SidebarPresentation.paths(hierarchy.pathContext(
             workspaceID: session.workspaceID, surfaceID: session.surfaceID
-        ))
+        )) }
         return .init(
-            id: "session-\(session.id)", category: "Agent preview", title: title,
+            id: "session-\(session.id)", category: retained ? "Retained session activity" : "Agent preview", title: title,
             subtitle: SidebarPresentation.sessionState(session).title,
-            lines: lines, notice: session.liveness == .alive ? nil : "Live session ownership is not confirmed."
+            lines: lines, notice: retained ? SidebarPresentation.retainedFocusUnavailable
+                : session.liveness == .alive ? nil : "Live session ownership is not confirmed."
         )
     }
 }

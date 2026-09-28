@@ -196,17 +196,25 @@ When a coordinator explicitly registers a terminal-backed run, its coordinator
 Every worker is a genuine unfocused terminal tab in the coordinator's current
 CMUX pane/workspace. Rows show safe labels and explicit lifecycle state; Details
 contains exact run, parent, worker, workspace, surface and generation IDs.
-Selecting a row uses the existing typed CMUX Focus action. Each workspace appears
-once: explicit managed agents and remaining terminals share its outline. An exact
+Selecting a current row uses the existing typed CMUX Focus action. Each workspace
+appears once: explicit managed agents and remaining terminals share its outline. An exact
 managed workspace/surface pair normally replaces its observed terminal row.
 If fresh, unique live observation proves a different session ID on that pair,
-the observed session keeps its own row alongside the retained managed branch.
+the observed session keeps its own primary row. Displaced root branches appear
+under **Retained records**; displaced nested records stay in their original
+ancestry. Retained means preserved, not ended: descendants keep their own states,
+attention, and supported navigation.
+Retained-record primary actions open details, original-session focus is explicitly
+unavailable, and the replacement terminal's focus stripe is not shown on the old
+record. Mixed summary totals use **entries** with an explicit retained-record
+count rather than implying every record is a current session.
 When ended agents are shown, an exact old observation stays with its managed
 identity rather than creating a duplicate row; its observed descendants and
 attention remain available beneath that branch.
 The old node and its descendants keep their identities and states; no session
-is adopted or retargeted. Missing, stale or ambiguous evidence does not trigger
-this distinction. Names, paths and guessed relationships never establish ownership. The Taskboard view
+is adopted, deleted, or retargeted. Missing, stale, denied, or ambiguous evidence
+does not trigger this distinction. Names, paths and guessed relationships never
+establish ownership. The Taskboard view
 keeps the complete inferred activity projection available independently.
 
 The installed skill exposes `launch-coordinator`, `launch-settings`, `status`,

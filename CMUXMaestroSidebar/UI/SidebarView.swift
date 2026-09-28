@@ -16,6 +16,10 @@ private struct SidebarDismissManagedKey: EnvironmentKey {
     static let defaultValue: ((SidebarDismissedManagedOutcome) -> Void)? = nil
 }
 
+private struct SidebarFocusInspectionKey: EnvironmentKey {
+    static let defaultValue: ((SidebarInspection.Target) -> Void)? = nil
+}
+
 private struct SidebarAgentIconStyleKey: EnvironmentKey {
     static let defaultValue = SidebarAgentIconStyle.maestro
 }
@@ -29,6 +33,10 @@ private struct SidebarFocusedSurfaceKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
+    var sidebarFocusInspection: ((SidebarInspection.Target) -> Void)? {
+        get { self[SidebarFocusInspectionKey.self] }
+        set { self[SidebarFocusInspectionKey.self] = newValue }
+    }
     var sidebarFocusedSurface: SidebarSeenTarget? {
         get { self[SidebarFocusedSurfaceKey.self] }
         set { self[SidebarFocusedSurfaceKey.self] = newValue }
@@ -163,8 +171,9 @@ struct SidebarActivityBackground: View {
 private struct SidebarFocusBorder: ViewModifier {
     let workspaceID: UUID
     let surfaceID: UUID
+    var enabled = true
     @Environment(\.sidebarFocusedSurface) private var target
-    private var focused: Bool { target == .surface(workspaceID: workspaceID, surfaceID: surfaceID) }
+    private var focused: Bool { enabled && target == .surface(workspaceID: workspaceID, surfaceID: surfaceID) }
 
     func body(content: Content) -> some View {
         content
@@ -602,6 +611,7 @@ struct SidebarView: View {
         .environment(\.sidebarTerminalIconStyle, preferences.terminalIconStyle)
         .environment(\.sidebarFocusedSurface, focusedSurface)
         .environment(\.sidebarPrepareSeen, prepareSeen)
+        .environment(\.sidebarFocusInspection, focusInspection)
         .environment(\.sidebarDismissManaged, dismissManaged)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
@@ -660,7 +670,10 @@ struct SidebarView: View {
             TaskboardContent(
                 tree: visibleWork.tree, hierarchy: model.hierarchy,
                 navigation: model.navigation, dismiss: dismiss, acknowledge: acknowledge,
-                selection: unmanagedSelection
+                selection: unmanagedSelection,
+                retainedSessionIDs: SidebarPresentation.retainedSessionIDs(
+                    visibleWork.tree, managed: visibleWork.managed, now: Date()
+                )
             )
         }
     }
@@ -718,7 +731,32 @@ struct SidebarView: View {
 
     private func inspectManaged(_ node: SidebarOrchestrationNode) {
         guard openInspector(.managed(node)) else { return }
-        prepareSeen(.surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId))()
+        if SidebarPresentation.displacedManagedNodeIDs([node], observations: model.copilot.tree, now: Date()).contains(node.id) {
+            if let sessionID = node.copilotSessionId { prepareSeen(.session(sessionID))() }
+        } else {
+            prepareSeen(.surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId))()
+        }
+    }
+
+    private func focusInspection(_ target: SidebarInspection.Target) {
+        guard let subject = SidebarPresentation.inspection(
+            for: target, hierarchy: model.hierarchy, connected: connected,
+            tree: model.copilot.tree, managed: model.orchestration.snapshot,
+            availability: model.orchestration.availability, now: Date()
+        ) else {
+            inspector = nil
+            showingInspector = true
+            return
+        }
+        guard let surfaceID = subject.surfaceID else {
+            switch target {
+            case .managed(let node): inspectManaged(node)
+            case .unmanaged(let selection): inspect(selection)
+            }
+            return
+        }
+        SidebarRowAction.focus(.surface(workspaceID: subject.workspaceID, surfaceID: surfaceID),
+                               navigation: model.navigation, prepareSeen: prepareSeen).perform()
     }
 
     private func inspect(_ selection: UnmanagedSelection) {
@@ -967,6 +1005,7 @@ private struct ManagedDisplayNode: Identifiable {
 }
 
 struct ManagedHierarchyContent: View {
+    enum RootGroup: CaseIterable, Hashable { case primary, retained }
     let polling: SidebarOrchestrationPolling
     let hierarchy: HierarchySnapshot
     let navigation: SidebarNavigation
@@ -981,6 +1020,7 @@ struct ManagedHierarchyContent: View {
     var displayNodes: [SidebarOrchestrationNode]? = nil
     var copilotTree: SidebarCopilotTree = .waiting
     var retainedSessions: [SidebarSessionPlacement] = []
+    var rootGroup: RootGroup? = nil
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
     private var nodes: [SidebarOrchestrationNode] { displayNodes ?? polling.snapshot.nodes }
@@ -1006,43 +1046,61 @@ struct ManagedHierarchyContent: View {
     }
 
     var body: some View {
+        let evidenceDate = Date()
+        let displaced = SidebarPresentation.displacedManagedNodeIDs(nodes, observations: copilotTree, now: evidenceDate)
         VStack(alignment: .leading, spacing: 12) {
             ForEach(workspaceGroups, id: \.id) { group in
                 VStack(alignment: .leading, spacing: 0) {
                     if showsWorkspaceHeaders {
                         WorkspaceOutlineHeader(workspace: group.workspace, hierarchy: hierarchy, navigation: navigation)
                     }
-                    ForEach(rows(for: group.roots)) { row in
-                        let retained = retainedSessions.filter { $0.managedNodeID == row.id }.map(\.session)
-                        let expanded = layout.isExpanded(.managed(row.node.id))
-                        ManagedNodeRow(
-                            node: row.node, depth: row.depth,
-                            hasChildren: row.hasChildren || retained.contains { !$0.outlineNodes.isEmpty },
-                            activeDescendants: row.activeDescendants,
-                            expanded: expanded,
-                            selected: selectedNode?.id == row.node.id,
-                            evidenceDate: Date(),
-                            availability: polling.availability,
-                            copilotTree: copilotTree,
-                            navigation: navigation,
-                            toggleExpanded: {
-                                setExpanded(.managed(row.node.id), !layout.isExpanded(.managed(row.node.id)))
-                            },
-                            select: { selectedNode = row.node }
-                        )
-                        if !expanded && retained.contains(where: { !$0.outlineNodes.isEmpty }) {
-                            CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: retained))
-                                .padding(.leading, 28 + density.indentation(
-                                    depth: row.depth, unresolved: false, width: contentWidth
-                                ))
-                        }
-                        ForEach(retained) { session in
-                            CopilotSessionContents(
-                                session: session, expanded: expanded,
-                                navigation: navigation, layout: layout, setExpanded: setExpanded,
-                                dismiss: dismiss, acknowledge: acknowledge, selection: $selection,
-                                ownerDepth: row.depth
-                            )
+                    ForEach(rootGroup.map { [$0] } ?? RootGroup.allCases, id: \.self) { kind in
+                        let roots = group.roots.filter { displaced.contains($0.id) == (kind == .retained) }
+                        if !roots.isEmpty {
+                            if kind == .retained {
+                                VStack(alignment: .leading, spacing: density.spacing(3)) {
+                                    Text("Retained records").sidebarFont(.caption, weight: .semibold)
+                                    Text("Preserved branches; descendants keep their own state.")
+                                        .sidebarFont(.caption2).foregroundStyle(.secondary)
+                                }
+                                .padding(.top, density.spacing(8))
+                                .padding(.bottom, density.spacing(4))
+                                .accessibilityIdentifier("retained-records-\(group.id)")
+                            }
+                            ForEach(rows(for: roots)) { row in
+                                let retained = retainedSessions.filter { $0.managedNodeID == row.id }.map(\.session)
+                                let expanded = layout.isExpanded(.managed(row.node.id))
+                                ManagedNodeRow(
+                                    node: row.node, depth: row.depth,
+                                    hasChildren: row.hasChildren || retained.contains { !$0.outlineNodes.isEmpty },
+                                    activeDescendants: row.activeDescendants,
+                                    expanded: expanded,
+                                    selected: selectedNode?.id == row.node.id,
+                                    evidenceDate: evidenceDate,
+                                    availability: polling.availability,
+                                    copilotTree: copilotTree,
+                                    navigation: navigation,
+                                    isRetainedRecord: displaced.contains(row.id),
+                                    toggleExpanded: {
+                                        setExpanded(.managed(row.node.id), !layout.isExpanded(.managed(row.node.id)))
+                                    },
+                                    select: { selectedNode = row.node }
+                                )
+                                if !expanded && retained.contains(where: { !$0.outlineNodes.isEmpty }) {
+                                    CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: retained))
+                                        .padding(.leading, 28 + density.indentation(
+                                            depth: row.depth, unresolved: false, width: contentWidth
+                                        ))
+                                }
+                                ForEach(retained) { session in
+                                    CopilotSessionContents(
+                                        session: session, expanded: expanded,
+                                        navigation: navigation, layout: layout, setExpanded: setExpanded,
+                                        dismiss: dismiss, acknowledge: acknowledge, selection: $selection,
+                                        ownerDepth: row.depth, parentFocusUnavailable: SidebarPresentation.retainedFocusUnavailable
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1090,10 +1148,12 @@ private struct ManagedNodeRow: View {
     let availability: SidebarOrchestrationAvailability
     let copilotTree: SidebarCopilotTree
     let navigation: SidebarNavigation
+    let isRetainedRecord: Bool
     let toggleExpanded: () -> Void
     let select: () -> Void
     @Environment(\.sidebarDismissManaged) private var dismissManaged
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
+    @Environment(\.sidebarFocusInspection) private var focusInspection
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
     @State private var showingPicker: SidebarIconTarget?
@@ -1101,8 +1161,11 @@ private struct ManagedNodeRow: View {
     private var actions: [SidebarRowActionGroup] {
         let iconTarget = SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate)
         var navigationActions = [
-            SidebarRowAction.focus(.surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
-                                   navigation: navigation, prepareSeen: prepareSeen),
+            isRetainedRecord
+                ? SidebarRowAction.unavailable("Focus original session", SidebarPresentation.retainedFocusUnavailable)
+                : SidebarRowAction.focus(.surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
+                                         navigation: navigation, prepareSeen: prepareSeen,
+                                         subject: .managed(node), revalidate: focusInspection),
             .init(title: "Open details", perform: { select() })
         ]
         if hasChildren {
@@ -1136,7 +1199,9 @@ private struct ManagedNodeRow: View {
             )
             FocusButton(
                 target: .surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
-                navigation: navigation, label: "Focus \(node.label)", detail: metadataHelp
+                navigation: navigation,
+                label: isRetainedRecord ? "Inspect retained record \(node.label)" : "Focus \(node.label)",
+                detail: metadataHelp, inspection: .managed(node), inspectOnly: isRetainedRecord ? select : nil
             ) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {
@@ -1153,7 +1218,8 @@ private struct ManagedNodeRow: View {
                                           needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate),
                                           detail: metadataHelp)
                         Text(SidebarPresentation.rowMetadata(
-                            kind: stateVisual.tone == .red || stateVisual.tone == .attention ? stateCaption
+                            kind: isRetainedRecord ? "Retained record · \(stateCaption)"
+                                : stateVisual.tone == .red || stateVisual.tone == .attention ? stateCaption
                                 : node.role == "worker" && node.executionMode != .interactive ? "Legacy worker" : "Agent",
                             directory: verifiedWorktree
                         )).lineLimit(1).truncationMode(.tail)
@@ -1181,7 +1247,7 @@ private struct ManagedNodeRow: View {
         .frame(minHeight: density.rowHeight)
         .sidebarRowActions(title: node.label, groups: actions)
         .background { SidebarActivityBackground(visual: stateVisual) }
-        .modifier(SidebarFocusBorder(workspaceID: node.workspaceId, surfaceID: node.surfaceId))
+        .modifier(SidebarFocusBorder(workspaceID: node.workspaceId, surfaceID: node.surfaceId, enabled: !isRetainedRecord))
         .padding(.leading, density.indentation(depth: depth, unresolved: false, width: contentWidth))
         .background {
             if selected {
@@ -1228,9 +1294,10 @@ private struct ManagedNodeRow: View {
     }
 
     private var metadataHelp: String {
-        let state = SidebarPresentation.statusDescription(
+        let ownState = SidebarPresentation.statusDescription(
             stateVisual, needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate)
         )
+        let state = isRetainedRecord ? "Retained record. \(ownState). \(SidebarPresentation.retainedFocusUnavailable)" : ownState
         let git = node.currentGitChanges(at: evidenceDate)?.description ?? "Current Git counts unavailable"
         guard let metadataLine else { return "\(state). \(git)" }
         let location = node.hasFreshGitEvidence(at: evidenceDate)
@@ -1436,6 +1503,22 @@ private struct WorkspaceRow: View {
         ]
     }
 
+    @ViewBuilder private func managedContent(
+        _ group: ManagedHierarchyContent.RootGroup, placements: [SidebarSessionPlacement]
+    ) -> some View {
+        if !managedNodes.isEmpty {
+            ManagedHierarchyContent(
+                polling: orchestration, hierarchy: hierarchy,
+                navigation: navigation, layout: layout, setExpanded: setExpanded,
+                selectedNode: $managedSelection,
+                dismiss: dismiss, acknowledge: acknowledge, selection: $selection,
+                workspaceID: workspace.id, showsWorkspaceHeaders: false,
+                displayNodes: displayManaged, copilotTree: copilotTree,
+                retainedSessions: placements.filter(\.retainsContents), rootGroup: group
+            )
+        }
+    }
+
     var body: some View {
         let placements = sessionPlacements
         VStack(alignment: .leading, spacing: 0) {
@@ -1468,17 +1551,7 @@ private struct WorkspaceRow: View {
             WorkspaceAttentionLabel(summary: attentionSummary)
                 .padding(.leading, SidebarPresentation.minimumControlSize + 5)
             if expanded {
-                if !managedNodes.isEmpty {
-                    ManagedHierarchyContent(
-                        polling: orchestration, hierarchy: hierarchy,
-                        navigation: navigation, layout: layout, setExpanded: setExpanded,
-                        selectedNode: $managedSelection,
-                        dismiss: dismiss, acknowledge: acknowledge, selection: $selection,
-                        workspaceID: workspace.id, showsWorkspaceHeaders: false,
-                        displayNodes: displayManaged, copilotTree: copilotTree,
-                        retainedSessions: placements.filter(\.retainsContents)
-                    )
-                }
+                managedContent(.primary, placements: placements)
                 switch workspace.surfaces {
                 case .unavailable:
                     Text("Surface metadata unavailable").font(.caption2).foregroundStyle(.secondary)
@@ -1500,6 +1573,7 @@ private struct WorkspaceRow: View {
                         )
                     }
                 }
+                managedContent(.retained, placements: placements)
             }
         }
         .padding(.bottom, density.spacing(8))
@@ -1794,6 +1868,7 @@ private struct CopilotSessionContents: View {
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
     var ownerDepth = 0
+    var parentFocusUnavailable: String? = nil
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
 
@@ -1816,7 +1891,8 @@ private struct CopilotSessionContents: View {
                 CopilotWorkRow(
                     node: row.node, session: session, navigation: navigation,
                     dismiss: dismiss, acknowledge: acknowledge,
-                    expansion: row, setExpanded: setExpanded, selection: $selection
+                    expansion: row, setExpanded: setExpanded, selection: $selection,
+                    parentFocusUnavailable: parentFocusUnavailable
                 )
                 .padding(.leading, density.spacing(8) + density.indentation(
                     depth: ownerDepth + row.node.depth, unresolved: row.node.ancestryUnresolved, width: contentWidth
@@ -1836,9 +1912,11 @@ private struct CopilotWorkRow: View {
     var setExpanded: ((SidebarExpansionID, Bool) -> Void)? = nil
     var paths: HierarchyPathContext? = nil
     var taskboard = false
+    var parentFocusUnavailable: String? = nil
     @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
+    @Environment(\.sidebarFocusInspection) private var focusInspection
     private var stateVisual: SidebarVisual { SidebarPresentation.childState(node, session: session) }
     private var hasOutcomeActions: Bool {
         node.dismissibleOutcome(sessionID: session.id) != nil
@@ -1846,8 +1924,10 @@ private struct CopilotWorkRow: View {
     }
     private var actions: [SidebarRowActionGroup] {
         var items: [SidebarRowAction] = [
-            .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
-                   navigation: navigation, prepareSeen: prepareSeen, parentChat: true),
+            parentFocusUnavailable.map { .unavailable("Open original parent chat", $0) }
+                ?? .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
+                          navigation: navigation, prepareSeen: prepareSeen, parentChat: true,
+                          subject: .unmanaged(.child(sessionID: session.id, childID: node.id)), revalidate: focusInspection),
             .init(title: "Open activity details", perform: { selection = .child(sessionID: session.id, childID: node.id) })
         ]
         if let expansion, node.hasChildren, let setExpanded {
@@ -1873,7 +1953,8 @@ private struct CopilotWorkRow: View {
         setExpanded: ((SidebarExpansionID, Bool) -> Void)? = nil,
         paths: HierarchyPathContext? = nil,
         taskboard: Bool = false,
-        selection: Binding<UnmanagedSelection?> = .constant(nil)
+        selection: Binding<UnmanagedSelection?> = .constant(nil),
+        parentFocusUnavailable: String? = nil
     ) {
         self.node = node
         self.session = session
@@ -1885,6 +1966,7 @@ private struct CopilotWorkRow: View {
         self.paths = paths
         self.taskboard = taskboard
         self._selection = selection
+        self.parentFocusUnavailable = parentFocusUnavailable
     }
 
     var body: some View {
@@ -1916,8 +1998,15 @@ private struct CopilotWorkRow: View {
                 .accessibilityLabel("\(node.name), \(SidebarPresentation.state(node.state).title). Show details")
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
-                    navigation: navigation, label: "Open parent chat for \(node.name), Copilot \(session.shortID)",
-                    detail: SidebarPresentation.statusDescription(stateVisual, needsInput: SidebarPresentation.needsInput(node.attention))
+                    navigation: navigation,
+                    label: parentFocusUnavailable == nil ? "Open parent chat for \(node.name), Copilot \(session.shortID)"
+                        : "Inspect retained activity \(node.name), Copilot \(session.shortID)",
+                    detail: parentFocusUnavailable ?? SidebarPresentation.statusDescription(
+                        stateVisual, needsInput: SidebarPresentation.needsInput(node.attention)),
+                    inspection: .unmanaged(.child(sessionID: session.id, childID: node.id)),
+                    inspectOnly: parentFocusUnavailable == nil ? nil : {
+                        selection = .child(sessionID: session.id, childID: node.id)
+                    }
                 ) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(node.name).font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
@@ -2043,6 +2132,7 @@ private struct TaskboardContent: View {
     let dismiss: (SidebarDismissedOutcome) -> Void
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
+    var retainedSessionIDs: Set<UUID> = []
     @Environment(\.sidebarDensity) private var density
 
     private let groups: [(String, [CopilotWorkState])] = [
@@ -2055,7 +2145,8 @@ private struct TaskboardContent: View {
             let paths = hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID)
             TaskboardSessionRow(
                 session: session, title: SidebarPresentation.surfaceTitle(for: session, in: hierarchy),
-                paths: paths, navigation: navigation, acknowledge: acknowledge, selection: $selection
+                paths: paths, navigation: navigation, acknowledge: acknowledge, selection: $selection,
+                retained: retainedSessionIDs.contains(session.id)
             )
         }
         if tree.sessions.allSatisfy({ $0.nodes.isEmpty }) {
@@ -2079,7 +2170,9 @@ private struct TaskboardContent: View {
                         ForEach(session.nodes.filter { states.contains($0.state) }) { node in
                             CopilotWorkRow(
                                 node: node, session: session, navigation: navigation, dismiss: dismiss,
-                                acknowledge: acknowledge, paths: paths, taskboard: true, selection: $selection
+                                acknowledge: acknowledge, paths: paths, taskboard: true, selection: $selection,
+                                parentFocusUnavailable: retainedSessionIDs.contains(session.id)
+                                    ? SidebarPresentation.retainedFocusUnavailable : nil
                             )
                         }
                     }
@@ -2096,12 +2189,16 @@ private struct TaskboardSessionRow: View {
     let navigation: SidebarNavigation
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
+    var retained = false
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
+    @Environment(\.sidebarFocusInspection) private var focusInspection
     @State private var showingPicker: SidebarIconTarget?
     private var actions: [SidebarRowActionGroup] {
         [.init(title: "Navigation", actions: [
-            .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
-                   navigation: navigation, prepareSeen: prepareSeen),
+            retained ? .unavailable("Focus original session", SidebarPresentation.retainedFocusUnavailable)
+                : .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
+                         navigation: navigation, prepareSeen: prepareSeen,
+                         subject: .unmanaged(.session(session.id)), revalidate: focusInspection),
             .init(title: "Open details", perform: { selection = .session(session.id) })
         ]), .appearance(icon: { showingPicker = .session(session.id) }, agent: true), .placement, .lifecycle()]
     }
@@ -2116,7 +2213,11 @@ private struct TaskboardSessionRow: View {
                 )
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
-                    navigation: navigation, label: "Focus Copilot session \(session.shortID)"
+                    navigation: navigation,
+                    label: retained ? "Inspect retained session \(session.shortID)" : "Focus Copilot session \(session.shortID)",
+                    detail: retained ? SidebarPresentation.retainedFocusUnavailable : SidebarPresentation.sessionStatus(session),
+                    inspection: .unmanaged(.session(session.id)),
+                    inspectOnly: retained ? { selection = .session(session.id) } : nil
                 ) {
                     Text(title).sidebarFont(.caption, weight: .semibold).lineLimit(1)
                 }
@@ -2124,6 +2225,9 @@ private struct TaskboardSessionRow: View {
                 Spacer(minLength: 0)
             }
             .sidebarRowActions(title: title, groups: actions)
+            if retained {
+                Text("Retained session activity").sidebarFont(.caption2).foregroundStyle(.secondary)
+            }
             SidebarActionLayout {
                 SessionStateSummary(session: session)
             }
@@ -2138,7 +2242,7 @@ private struct TaskboardSessionRow: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("taskboard-session-attention-\(session.id)")
         .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session)) }
-        .modifier(SidebarFocusBorder(workspaceID: session.workspaceID, surfaceID: session.surfaceID))
+        .modifier(SidebarFocusBorder(workspaceID: session.workspaceID, surfaceID: session.surfaceID, enabled: !retained))
     }
 }
 
@@ -2384,14 +2488,19 @@ struct FocusButton<Content: View>: View {
     let navigation: SidebarNavigation
     let label: String
     var detail: String? = nil
+    var inspection: SidebarInspection.Target? = nil
+    var inspectOnly: (() -> Void)? = nil
     @ViewBuilder var content: Content
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
+    @Environment(\.sidebarFocusInspection) private var focusInspection
     func focus() {
-        SidebarRowAction.focus(target, navigation: navigation, prepareSeen: prepareSeen).perform()
+        if let inspectOnly { inspectOnly(); return }
+        SidebarRowAction.focus(target, navigation: navigation, prepareSeen: prepareSeen,
+                               subject: inspection, revalidate: focusInspection).perform()
     }
 
     var body: some View {
-        SidebarTitleButton(label: label, hint: navigation.disabledReason(for: target) ?? detail ?? label,
+        SidebarTitleButton(label: label, hint: (inspectOnly == nil ? navigation.disabledReason(for: target) : nil) ?? detail ?? label,
                            value: detail ?? "", action: focus) {
             content
         }
@@ -2402,7 +2511,8 @@ struct FocusButton<Content: View>: View {
 extension SidebarRowAction {
     static func focus(
         _ target: SidebarNavigationTarget, navigation: SidebarNavigation,
-        prepareSeen: @escaping (SidebarSeenTarget) -> () -> Void, parentChat: Bool = false
+        prepareSeen: @escaping (SidebarSeenTarget) -> () -> Void, parentChat: Bool = false,
+        subject: SidebarInspection.Target? = nil, revalidate: ((SidebarInspection.Target) -> Void)? = nil
     ) -> Self {
         let title: String
         switch target {
@@ -2410,6 +2520,7 @@ extension SidebarRowAction {
         case .surface: title = parentChat ? "Open parent chat" : "Focus surface"
         }
         return .init(title: title, unavailable: navigation.disabledReason(for: target)) {
+            if let subject, let revalidate { revalidate(subject); return }
             switch target {
             case .workspace: navigation.select(target)
             case .surface(let workspaceID, let surfaceID):

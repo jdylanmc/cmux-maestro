@@ -80,9 +80,14 @@ struct SidebarWorkspaceSummary: Equatable {
     let states: [SidebarWorkspaceStateCount]
     let tabs: [SidebarWorkspaceTabCount]
     let incomplete: Bool
+    var retainedRecordCount = 0
 
     var agentLine: String {
-        var parts = ["\(agentCount) \(agentCount == 1 ? "agent" : "agents")"]
+        var parts = [retainedRecordCount > 0 ? "\(agentCount) entries"
+                     : "\(agentCount) \(agentCount == 1 ? "agent" : "agents")"]
+        if retainedRecordCount > 0 {
+            parts.append("\(retainedRecordCount) retained \(retainedRecordCount == 1 ? "record" : "records")")
+        }
         parts += states.map { "\($0.count) \($0.title.lowercased())" }
         if incomplete { parts.append("counts incomplete") }
         return parts.joined(separator: " · ")
@@ -471,13 +476,14 @@ enum SidebarPresentation {
                   node.copilotSessionId == captured.copilotSessionId,
                   node.workspaceId == captured.workspaceId, node.surfaceId == captured.surfaceId else { return nil }
             workspaceID = node.workspaceId
-            surfaceID = node.surfaceId
+            let retained = displacedManagedNodeIDs([node], observations: tree, now: now).contains(node.id)
+            surfaceID = retained ? nil : node.surfaceId
             sessionID = managedSession(for: node, in: tree, now: now)?.id ?? node.copilotSessionId
             let current = tree.sessions.filter {
                 $0.workspaceID == workspaceID && $0.surfaceID == surfaceID
                     && $0.liveness == .alive && SidebarCopilotTree.isFresh($0.observedAt, now: now)
             }
-            guard current.isEmpty || (current.count == 1 && current[0].id == sessionID
+            guard retained || current.isEmpty || (current.count == 1 && current[0].id == sessionID
                 && tree.sessions.filter({ $0.id == current[0].id }).count == 1) else { return nil }
         case .unmanaged(let selection):
             switch selection {
@@ -496,7 +502,7 @@ enum SidebarPresentation {
                     guard session.nodes.filter({ $0.id == childID }).count == 1 else { return nil }
                 }
                 workspaceID = session.workspaceID
-                surfaceID = session.surfaceID
+                surfaceID = retainedSessionIDs(tree, managed: managed.nodes, now: now).contains(session.id) ? nil : session.surfaceID
                 sessionID = session.id
             }
         }
@@ -528,13 +534,15 @@ enum SidebarPresentation {
         switch subject.target {
         case .managed(let captured):
             guard let node = managed.nodes.first(where: { $0.id == captured.id }) else { return nil }
+            let retained = displacedManagedNodeIDs([node], observations: tree, now: now).contains(node.id)
             let current = [.ready, .partial].contains(availability)
                 && (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(managed.generatedAt))
                 && (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(node.updatedAt))
             return .init(
                 title: node.label, visual: managedState(node, availability: availability, now: now, tree: tree),
                 lines: managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now),
-                notice: current ? nil : "Managed observation is stale. Last-known metadata is not live state.",
+                notice: retained ? "Retained record. \(retainedFocusUnavailable)"
+                    : current ? nil : "Managed observation is stale. Last-known metadata is not live state.",
                 isAgent: true
             )
         case .unmanaged(let selection):
@@ -561,8 +569,10 @@ enum SidebarPresentation {
                 guard let session = tree.sessions.first(where: { $0.id == id }) else { return nil }
                 let current = tree.generatedAt.map { SidebarCopilotTree.isFresh($0, now: now) } == true
                     && SidebarCopilotTree.isFresh(session.observedAt, now: now)
-                let notice = current ? nil : "Session observation is stale. Last-known metadata is not live state."
-                let context = paths(hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID))
+                let retained = retainedSessionIDs(tree, managed: managed.nodes, now: now).contains(session.id)
+                let notice = retained ? "Retained observation. \(retainedFocusUnavailable)"
+                    : current ? nil : "Session observation is stale. Last-known metadata is not live state."
+                let context = retained ? [] : paths(hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID))
                 if case .child(_, let childID) = selection {
                     guard let child = session.nodes.first(where: { $0.id == childID }) else { return nil }
                     return .init(title: child.name, lines: nodeDetails(child, session: session) + [
@@ -710,23 +720,33 @@ enum SidebarPresentation {
     static func coalescingManagedNodes(
         _ managed: [SidebarOrchestrationNode], observations: SidebarCopilotTree?, now: Date
     ) -> [SidebarOrchestrationNode] {
+        let displaced = displacedManagedNodeIDs(managed, observations: observations, now: now)
+        return managed.filter { !displaced.contains($0.id) }
+    }
+
+    static let retainedFocusUnavailable =
+        "Original session is not current on this surface. Inspect the retained record instead."
+
+    static func displacedManagedNodeIDs(
+        _ managed: [SidebarOrchestrationNode], observations: SidebarCopilotTree?, now: Date
+    ) -> Set<UUID> {
         guard let observations, [.ready, .partial].contains(observations.availability),
               !observations.issues.contains(.permissionDenied),
               let generatedAt = observations.generatedAt,
-              SidebarCopilotTree.isFresh(generatedAt, now: now) else { return managed }
-        return managed.filter { node in
-            guard let managedSessionID = node.copilotSessionId else { return true }
+              SidebarCopilotTree.isFresh(generatedAt, now: now) else { return [] }
+        return Set(managed.filter { node in
+            guard let managedSessionID = node.copilotSessionId else { return false }
             let candidates = observations.sessions.filter {
                 $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId && $0.liveness != .dead
             }
             guard candidates.count == 1, let session = candidates.first, session.liveness == .alive,
                   SidebarCopilotTree.isFresh(session.observedAt, now: now),
                   session.observedAt <= generatedAt.addingTimeInterval(1),
-                  observations.sessions.filter({ $0.id == session.id }).count == 1 else { return true }
+                  observations.sessions.filter({ $0.id == session.id }).count == 1 else { return false }
             // Placement is not identity. Retain the managed branch, but do not
             // coalesce away a different verified live session on its surface.
-            return session.id == managedSessionID
-        }
+            return session.id != managedSessionID
+        }.map(\.id))
     }
 
     static func unmanagedSurfaces(
@@ -760,6 +780,13 @@ enum SidebarPresentation {
             }
             return .init(session: session, managedNodeID: owner?.id, retainsContents: false)
         }
+    }
+
+    static func retainedSessionIDs(
+        _ tree: SidebarCopilotTree, managed: [SidebarOrchestrationNode], now: Date
+    ) -> Set<UUID> {
+        Set(sessionPlacements(tree.sessions, managed: managed, observations: tree, now: now)
+            .filter(\.retainsContents).map { $0.session.id })
     }
 
     static func workspaceSummary(
@@ -814,7 +841,8 @@ enum SidebarPresentation {
             agentCount: counts.values.reduce(0, +),
             states: states,
             tabs: tabs,
-            incomplete: incomplete
+            incomplete: incomplete,
+            retainedRecordCount: displacedManagedNodeIDs(managed, observations: observations, now: now).count
         )
     }
 
@@ -889,6 +917,11 @@ enum SidebarPresentation {
         now: Date = Date()
     ) -> [SidebarDetailLine] {
         var result: [SidebarDetailLine] = []
+        let retained = displacedManagedNodeIDs([node], observations: tree, now: now).contains(node.id)
+        if retained {
+            result += [.init(title: "Record", value: "Retained record"),
+                       .init(title: "Focus", value: retainedFocusUnavailable)]
+        }
         if let model = managedModel(for: node, in: tree, now: now) {
             result.append(.init(title: "Model", value: model))
         }
@@ -925,13 +958,13 @@ enum SidebarPresentation {
             .init(title: "Copilot observation", value: tree.summary),
             .init(title: "Session glyph", value: node.iconId ?? "Sidebar default"),
             .init(title: "Icon color", value: node.iconColor?.title ?? "Theme default"),
-            .init(title: "Working directory", value: paths.workingDirectory.pathDisplayText),
+            .init(title: "Working directory", value: retained ? "Not current for this retained record" : paths.workingDirectory.pathDisplayText),
             .init(title: "Role", value: node.role.capitalized)
         ]
         if node.role == "worker" {
             result.append(.init(
                 title: "Interaction",
-                value: node.executionMode == .interactive
+                value: retained ? retainedFocusUnavailable : node.executionMode == .interactive
                     ? "Interactive Copilot session · talk directly in its tab"
                     : "Legacy bounded worker · coordinator follow-up required"
             ))

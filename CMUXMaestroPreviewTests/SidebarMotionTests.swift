@@ -18,8 +18,9 @@ struct SidebarMotionTests {
         let preferences = preferenceFixture.preferences()
         let now = Date()
         let oldDate = now.addingTimeInterval(-172_800)
+        let childSessionID = UUID(), otherSurfaceID = UUID(), otherSessionID = UUID()
         let old = SidebarOrchestrationNode(
-            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Retained coordinator",
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "New observed session",
             workspaceId: f.workspaceA, surfaceId: f.surfaceA, generation: 1,
             phase: "turn-failed", availability: "idle", copilotSessionId: f.otherSessionID,
             executionMode: .interactive, createdAt: oldDate, updatedAt: oldDate
@@ -27,9 +28,28 @@ struct SidebarMotionTests {
         let child = SidebarOrchestrationNode(
             id: UUID(), runId: old.runId, parentId: old.id, role: "worker", label: "Protected descendant",
             workspaceId: f.workspaceA, surfaceId: f.surfaceB, generation: 1,
-            phase: "permission-denied", availability: "idle", copilotSessionId: UUID(),
-            executionMode: .interactive, createdAt: oldDate, updatedAt: oldDate
+            phase: "turn-running", availability: "busy", copilotSessionId: childSessionID,
+            executionMode: .interactive, createdAt: oldDate, updatedAt: now
         )
+        let otherRoot = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Other current root",
+            workspaceId: f.workspaceA, surfaceId: otherSurfaceID, generation: 1,
+            phase: "registered", availability: "active", copilotSessionId: otherSessionID,
+            executionMode: .interactive, createdAt: now, updatedAt: now
+        )
+        let currentNotice = AgentAttention(
+            kind: .turnFinished, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now
+        )
+        func currentObservation(_ state: CopilotWorkState) -> CopilotSessionObservation {
+            .init(sessionID: f.sessionID, surfaceID: f.surfaceA, launchWorkspaceID: f.workspaceA,
+                  liveness: .alive, state: state, model: nil, children: [], observedAt: now, attention: [currentNotice])
+        }
+        let childObservation = CopilotSessionObservation(
+            sessionID: childSessionID, surfaceID: f.surfaceB, launchWorkspaceID: f.workspaceA,
+            liveness: .alive, state: .blocked, model: nil, children: [], observedAt: now,
+            attention: [.init(kind: .permission, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)]
+        )
+        let otherObservation = f.session(id: otherSessionID, surface: otherSurfaceID, state: .idle, now: now)
         let oldObservation = CopilotSessionObservation(
             sessionID: f.otherSessionID, surfaceID: f.surfaceA, launchWorkspaceID: f.workspaceA,
             liveness: .dead, state: .unknown, model: nil,
@@ -42,12 +62,17 @@ struct SidebarMotionTests {
             ] : []
         )
         let snapshots = SidebarMotionSnapshots(f.snapshot(sessions: [
-            oldObservation, f.session(state: .working, now: now)
+            oldObservation, currentObservation(.working), childObservation, otherObservation
         ], now: now))
+        if scenario.delayedIdle {
+            await snapshots.replace(f.snapshot(sessions: [
+                f.session(id: f.otherSessionID, state: .idle, now: now), childObservation, otherObservation
+            ], now: now))
+        }
         let poller = SidebarCopilotPolling(read: { _ in await snapshots.read() },
                                           pause: { try await Task.sleep(for: .milliseconds(10)) })
         let orchestration = SidebarOrchestrationPolling(read: {
-            .init(version: 1, generatedAt: oldDate, complete: true, omittedCount: 0, nodes: [old, child])
+            .init(version: 1, generatedAt: oldDate, complete: true, omittedCount: 0, nodes: [old, child, otherRoot])
         }, pause: { try await Task.sleep(for: .seconds(60)) })
         let model = SidebarConnectionModel(copilot: poller, orchestration: orchestration)
         let hierarchy = HierarchySnapshot(
@@ -56,16 +81,17 @@ struct SidebarMotionTests {
             workspaces: [.init(id: f.workspaceA, title: .available("Synthetic"), detail: .available(nil),
                               isSelected: .available(true), isPinned: .available(false), unreadCount: .available(0),
                               rootPath: .unavailable, projectRootPath: .unavailable,
-                              surfaces: .available([f.surfaceA, f.surfaceB].map {
-                                  .init(id: $0, title: "New observed session", kind: .terminal, isFocused: false,
+                              surfaces: .available([f.surfaceA, f.surfaceB, otherSurfaceID].map {
+                                  .init(id: $0, title: "New observed session", kind: .terminal, isFocused: $0 == f.surfaceA,
                                         isPinned: false, unreadCount: 0, workingDirectory: .unavailable)
                               }))], windowID: f.windowID
         )
-        model.showConnected(workspaceCount: 1, surfaceCount: 2)
+        model.showConnected(workspaceCount: 1, surfaceCount: 3)
         model.replaceHierarchy(with: hierarchy)
+        var navigationCalls: [SidebarNavigationTarget] = []
         model.navigation.update(topology: SidebarTopology(hierarchy), connected: true,
                                 workspaceAllowed: true, surfaceAllowed: true,
-                                perform: { _ in Issue.record("Projection must not navigate") })
+                                perform: { navigationCalls.append($0) })
         model.setVisible(true)
         defer { model.setVisible(false) }
         preferences.showEnded = scenario.showEnded
@@ -78,8 +104,33 @@ struct SidebarMotionTests {
         let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences))
         window.contentView = hosting
         defer { window.contentView = nil; window.close() }
-        await sidebarEventually { poller.tree.sessions.count == 2 && orchestration.snapshot.nodes.count == 2 }
+        await sidebarEventually {
+            poller.tree.sessions.count == (scenario.delayedIdle ? 3 : 4) && orchestration.snapshot.nodes.count == 3
+        }
         func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+        var capturedPrimary: (() -> Void)?
+        var capturedFocus: (SidebarRowMenuPresenter, NSMenuItem)?
+        if scenario.delayedIdle {
+            await sidebarEventually {
+                hosting.layoutSubtreeIfNeeded()
+                return descendants(hosting).contains { $0.accessibilityLabel() == "Focus New observed session" }
+            }
+            let previousRow = try #require(descendants(hosting).compactMap { $0 as? SidebarTitleNativeButton }
+                .first { $0.accessibilityLabel() == "Focus New observed session" })
+            capturedPrimary = previousRow.activate
+            var menu: NSMenu?
+            for presenter in descendants(hosting).compactMap({ ($0 as? SidebarRowMenuAnchorView)?.presenter }) {
+                presenter.present = { captured, _, _ in menu = captured }
+            }
+            let showActions = try #require(previousRow.showActions)
+            showActions()
+            let item = try #require(menu?.items.flatMap { $0.submenu?.items ?? [] }.first { $0.title == "Focus surface" })
+            capturedFocus = (try #require(item.target as? SidebarRowMenuPresenter), item)
+            await snapshots.replace(f.snapshot(sessions: [
+                oldObservation, currentObservation(.working), childObservation, otherObservation
+            ], now: now))
+            await sidebarEventually { poller.tree.sessions.count == 4 }
+        }
         let history = preferences.history
         for state: CopilotWorkState in [.working, .idle] {
             if state == .idle {
@@ -87,7 +138,7 @@ struct SidebarMotionTests {
                     try await Task.sleep(for: .seconds(SidebarCopilotTree.maximumAge + 0.1))
                 }
                 await snapshots.replace(f.snapshot(sessions: [
-                    oldObservation, f.session(state: state, now: now)
+                    oldObservation, currentObservation(state), childObservation, otherObservation
                 ], now: now))
                 await sidebarEventually { poller.tree.sessions.first { $0.id == f.sessionID }?.state == .idle }
             }
@@ -99,17 +150,35 @@ struct SidebarMotionTests {
                 }
             }
             let rows = descendants(hosting).compactMap { $0 as? SidebarTitleNativeButton }
-            let retained = rows.filter { $0.accessibilityLabel() == "Focus Retained coordinator" }
+            let retained = rows.filter { $0.accessibilityLabel() == "Inspect retained record New observed session" }
             let retainedRow = try #require(retained.first)
             let current = rows.filter { $0.accessibilityLabel() == "Focus Terminal New observed session" }
             let observedRow = try #require(current.first)
             #expect(retained.count == 1 && current.count == 1)
+            #expect(retainedRow.toolTip?.contains("Retained record") == true)
+            #expect(!rows.contains { $0.accessibilityLabel() == "Focus New observed session" })
+            #expect(hosting.convert(retainedRow.bounds, from: retainedRow).minY
+                    > hosting.convert(observedRow.bounds, from: observedRow).minY)
+            let retainedActions = descendants(hosting).compactMap { ($0 as? SidebarRowMenuAnchorView)?.presenter }
+                .flatMap(\.groups).flatMap(\.actions).filter { $0.title == "Focus original session" }
+            #expect(retainedActions.count == 1 && retainedActions.allSatisfy { $0.unavailable != nil })
+            retainedRow.activate()
+            capturedPrimary?()
+            if let (presenter, item) = capturedFocus {
+                #expect(item.isEnabled, "Exercise a menu captured before the surface was reused")
+                presenter.invoke(item)
+            }
+            #expect(model.navigation.status == .idle && navigationCalls.isEmpty, "Retained record primary action only inspects")
+            #expect(poller.tree.sessions.first { $0.id == f.sessionID }?.attention == [currentNotice])
             #expect(!rows.contains { $0.accessibilityLabel() == "Focus Copilot session 20000000" },
                     "History must not duplicate the exact managed identity")
             #expect(rows.contains { $0.accessibilityLabel() == "Focus Protected descendant" })
+            #expect(rows.contains { $0.accessibilityLabel() == "Focus Other current root" })
+            #expect(try leadingInk(of: retainedRow, in: hosting) == 0, "Retained record has no current focus stripe")
+            #expect(try leadingInk(of: observedRow, in: hosting) > 0, "Current session keeps its focus stripe")
             if scenario.protectedObservation {
                 #expect(rows.contains {
-                    $0.accessibilityLabel() == "Open parent chat for Protected observed child, Copilot 20000000"
+                    $0.accessibilityLabel() == "Inspect retained activity Protected observed child, Copilot 20000000"
                 }, "Coalescing must preserve observed descendants without a managed equivalent")
             }
             #expect(try greenPixels(in: retainedRow) == 0, "Never borrow the new session's working state")
@@ -121,7 +190,7 @@ struct SidebarMotionTests {
                 #expect(observation.observedAt.timeIntervalSince(now) > SidebarCopilotTree.maximumAge,
                         "The delayed transition must use a new observation, not the aged fixture timestamp")
             }
-            let visible = SidebarVisibleWork(tree: poller.tree, managed: [old, child],
+            let visible = SidebarVisibleWork(tree: poller.tree, managed: [old, child, otherRoot],
                                              history: preferences.history, showEnded: preferences.showEnded)
             let summary = SidebarPresentation.workspaceSummary(
                 surfaces: [], sessions: visible.tree.sessions, managed: visible.managed,
@@ -132,12 +201,55 @@ struct SidebarMotionTests {
                   + "states=\(summary.states.map { "\($0.title):\($0.count)" }) "
                   + "primaryGreenPixels=\(try greenPixels(in: observedRow)) "
                   + "oldObservedRows=\(rows.filter { $0.accessibilityLabel() == "Focus Copilot session 20000000" }.count)")
-            #expect(summary.agentCount == (scenario.protectedObservation ? 4 : 3))
-            #expect(summary.states.first { $0.title == (state == .working ? "Working" : "Idle") }?.count == 1)
-            #expect(orchestration.snapshot.nodes == [old, child], "Ownership, ancestry and generations are unchanged")
+            #expect(summary.agentCount == (scenario.protectedObservation ? 5 : 4))
+            #expect(summary.retainedRecordCount == 1)
+            #expect(summary.states.first { $0.title == (state == .working ? "Working" : "Idle") }?.count == (state == .idle ? 2 : 1))
+            #expect(orchestration.snapshot.nodes == [old, child, otherRoot], "Ownership, ancestry and generations are unchanged")
             #expect(!window.isVisible && model.navigation.status == .idle)
             #expect(preferences.attention.acknowledged.isEmpty && preferences.history == history)
+            if scenario.showEnded && scenario.expanded && scenario.protectedObservation {
+                let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                    .appendingPathComponent(".build/layout-validation/offscreen")
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                let context = try #require(CGContext(
+                    data: nil, width: bitmap.pixelsWide, height: bitmap.pixelsHigh, bitsPerComponent: 8,
+                    bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ))
+                let bounds = CGRect(x: 0, y: 0, width: bitmap.pixelsWide, height: bitmap.pixelsHigh)
+                let appearance = try #require(window.appearance)
+                appearance.performAsCurrentDrawingAppearance {
+                    context.setFillColor(NSColor.windowBackgroundColor.cgColor)
+                    context.fill(bounds)
+                }
+                context.draw(try #require(bitmap.cgImage), in: bounds)
+                let opaque = NSBitmapImageRep(cgImage: try #require(context.makeImage()))
+                try #require(opaque.representation(using: .png, properties: [:]))
+                    .write(to: folder.appendingPathComponent("retained118-\(state.rawValue).png"))
+            }
         }
+        let currentChild = try #require(descendants(hosting).compactMap { $0 as? SidebarTitleNativeButton }
+            .first { $0.accessibilityLabel() == "Focus Protected descendant" })
+        currentChild.activate()
+        await sidebarEventually { model.navigation.status == .selected }
+        #expect(navigationCalls == [.surface(workspaceID: f.workspaceA, surfaceID: f.surfaceB)])
+        #expect(poller.tree.sessions.first { $0.id == f.sessionID }?.attention == [currentNotice])
+    }
+
+    private func leadingInk(of row: NSView, in hosting: NSView) throws -> Int {
+        let frame = hosting.convert(row.bounds, from: row)
+        let strip = NSRect(x: 0, y: frame.midY - 2, width: 9, height: 4)
+        let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: strip))
+        hosting.cacheDisplay(in: strip, to: bitmap)
+        var count = 0
+        for x in 0..<bitmap.pixelsWide {
+            for y in 0..<bitmap.pixelsHigh {
+                if try #require(bitmap.colorAt(x: x, y: y)).alphaComponent > 0.1 { count += 1 }
+            }
+        }
+        return count
     }
 
     @Test(arguments: [(2, 340.0, SidebarDensity.compact), (2, 240.0, SidebarDensity.comfortable),
@@ -238,15 +350,15 @@ struct SidebarMotionTests {
                 let rows = titles(hosting)
                 return rows.contains {
                     $0.accessibilityLabel() == "Focus Terminal Replacement" && $0.toolTip?.contains("Working") == true
-                } && rows.contains { $0.accessibilityLabel() == "Focus Managed \(scenario.depth)" } == ancestorExpanded
-                    && rows.filter { $0.accessibilityLabel()?.hasPrefix("Open parent chat for Observed ") == true }.count
+                } && rows.contains { $0.accessibilityLabel() == "Inspect retained record Managed \(scenario.depth)" } == ancestorExpanded
+                    && rows.filter { $0.accessibilityLabel()?.hasPrefix("Inspect retained activity Observed ") == true }.count
                         == (ancestorExpanded && ownerExpanded ? 2 : 0)
             }
             let rows = titles(hosting)
             let rootRow = try #require(rows.first { $0.accessibilityLabel() == "Focus Managed 0" })
             let siblingRow = try #require(rows.first { $0.accessibilityLabel() == "Focus Unrelated sibling" })
-            let ownerRow = rows.first { $0.accessibilityLabel() == "Focus Managed \(scenario.depth)" }
-            let observedRows = rows.filter { $0.accessibilityLabel()?.hasPrefix("Open parent chat for Observed ") == true }
+            let ownerRow = rows.first { $0.accessibilityLabel() == "Inspect retained record Managed \(scenario.depth)" }
+            let observedRows = rows.filter { $0.accessibilityLabel()?.hasPrefix("Inspect retained activity Observed ") == true }
             let replacement = try #require(rows.first { $0.accessibilityLabel() == "Focus Terminal Replacement" })
             let origin = hosting.convert(rootRow.bounds, from: rootRow).minX
             let step = scenario.density == .compact ? 8.0 : 10.8

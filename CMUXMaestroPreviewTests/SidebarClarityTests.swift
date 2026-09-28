@@ -632,6 +632,8 @@ struct SidebarClarityTests {
             orchestrationAvailability: .stale, countsComplete: true, now: now, observations: tree
         )
         #expect(summary.agentCount == 2)
+        #expect(summary.agentLine.hasPrefix("2 entries · 1 retained record"),
+                "Record totals must not claim two current sessions")
         #expect(summary.incomplete)
         let session = try #require(tree.sessions.first)
         #expect(SidebarPresentation.sessionState(session) == SidebarPresentation.state(state))

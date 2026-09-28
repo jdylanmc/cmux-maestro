@@ -21,6 +21,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Separate displaced managed records from current terminal sessions, preserving
+  descendants and attention while preventing retained-record actions from
+  focusing replacement sessions.
 - Keep a replacement session's working or idle status visible when ended agents
   are shown, without duplicating retained managed identities or hiding their
   descendants and attention (#111).
