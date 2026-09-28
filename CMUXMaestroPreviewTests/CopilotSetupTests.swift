@@ -58,6 +58,7 @@ private final class SetupDeadlineClock: @unchecked Sendable {
     private let origin: ContinuousClock.Instant
     private var instant: ContinuousClock.Instant
     private var sampled = false
+    private let startup = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
 
     init() {
         let initial = ContinuousClock.now
@@ -68,8 +69,21 @@ private final class SetupDeadlineClock: @unchecked Sendable {
     func now() -> ContinuousClock.Instant {
         lock.lock()
         defer { lock.unlock() }
-        sampled = true
+        if !sampled {
+            sampled = true
+            startup.continuation.yield(())
+            startup.continuation.finish()
+        }
         return instant
+    }
+
+    func waitForStartup() async -> Bool {
+        for await _ in startup.stream { return !Task.isCancelled }
+        return false
+    }
+
+    func finishStartup() {
+        startup.continuation.finish()
     }
 
     var wasSampled: Bool {
@@ -216,6 +230,64 @@ struct CopilotSetupTests {
         try await exerciseCleanup(cancel: false, delayStartup: true)
     }
 
+    @Test(arguments: [false, true])
+    func queuedStartupDoesNotConsumeChildReadinessBudget(cancel: Bool) async throws {
+        try await exerciseCleanup(cancel: cancel, delayStartup: true, launchDelay: .seconds(4))
+    }
+
+    @Test func lateQueuedStartupRetainsFullChildReadinessBudget() async throws {
+        try await exerciseCleanup(cancel: false, delayStartup: true, launchDelay: .seconds(2.7))
+    }
+
+    @Test(arguments: [false, true])
+    func startupObservationFinishesWhenRunnerCannotSpawn(cancel: Bool) async {
+        let clock = SetupDeadlineClock()
+        let runner = LocalCopilotSetupRunner(deadlineNow: { clock.now() })
+        let task = Task {
+            defer { clock.finishStartup() }
+            if cancel { withUnsafeCurrentTask { $0?.cancel() } }
+            return await runner.run(executable: URL(fileURLWithPath: "/nonexistent/maestro-test-executable"),
+                                    arguments: [], path: "/usr/bin:/bin")
+        }
+        #expect(await clock.waitForStartup() == false)
+        #expect(await task.value == (cancel ? .cancelled : .unavailable))
+        #expect(!clock.wasSampled)
+        #expect(clock.elapsed == .zero)
+    }
+
+    @Test func startupObservationIsCancellationAware() async {
+        let clock = SetupDeadlineClock()
+        defer { clock.finishStartup() }
+        let waiter = Task { await clock.waitForStartup() }
+        waiter.cancel()
+        #expect(await waiter.value == false)
+        #expect(!clock.wasSampled)
+    }
+
+    @Test func startedRunnerDoesNotBypassMissingWriterReadiness() async throws {
+        let fixture = try gatedInstallerFixture()
+        defer {
+            try? fixture.reader.close()
+            try? fixture.writer.close()
+            try? fixture.completion.close()
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+        let clock = SetupDeadlineClock()
+        let runner = LocalCopilotSetupRunner(deadlineNow: { clock.now() })
+        let task = Task {
+            defer { clock.finishStartup() }
+            return await runner.run(executable: URL(fileURLWithPath: "/bin/sh"),
+                                    arguments: ["-c", "exit 7"], path: "/usr/bin:/bin")
+        }
+        defer { task.cancel() }
+        #expect(await clock.waitForStartup())
+        let waiting = ContinuousClock.now
+        #expect(try await waitForGatedWriter(in: fixture.directory, deadlineClock: clock) == false)
+        #expect(waiting.duration(to: .now) >= .seconds(3))
+        #expect(await task.value == .exited(7))
+        #expect(clock.elapsed == .zero)
+    }
+
     @Test func supervisionDefaultsKeepTheRealMonotonicClock() {
         let before = ContinuousClock.now
         let runner = LocalCopilotSetupRunner()
@@ -311,7 +383,9 @@ struct CopilotSetupTests {
         }
     }
 
-    private func exerciseCleanup(cancel: Bool, delayStartup: Bool = false) async throws {
+    private func exerciseCleanup(
+        cancel: Bool, delayStartup: Bool = false, launchDelay: Duration = .zero
+    ) async throws {
         let fixture = try gatedInstallerFixture()
         let directory = fixture.directory
         defer {
@@ -339,11 +413,30 @@ struct CopilotSetupTests {
         let arguments = gatedInstallerArguments(in: directory) + (delayStartup ? ["--delay-startup"] : [])
         let startupStarted = ContinuousClock.now
         let task = Task {
-            await runner.run(executable: URL(fileURLWithPath: "/bin/sh"),
-                             arguments: arguments, path: "/usr/bin:/bin")
+            defer { clock.finishStartup() }
+            let actor: (any Actor)? = #isolation
+            #expect(actor == nil, "The nonisolated fixture driver must not inherit MainActor")
+            if launchDelay > .zero {
+                print("SETUP_STARTUP_PROBE cancel=\(cancel) actorIsNil=\(actor == nil) launchDelay=\(launchDelay)")
+                do {
+                    try await Task.sleep(for: launchDelay)
+                } catch is CancellationError {
+                    return CopilotProcessResult.cancelled
+                } catch {
+                    Issue.record(error)
+                    return CopilotProcessResult.unavailable
+                }
+            }
+            return await runner.run(executable: URL(fileURLWithPath: "/bin/sh"),
+                                    arguments: arguments, path: "/usr/bin:/bin")
         }
         defer { task.cancel() }
-        let ready = try await waitForGatedWriter(in: directory, deadlineClock: clock)
+        // The runner first samples after posix_spawn. Scheduling its driver is
+        // not part of the child's three-second readiness budget.
+        var ready = false
+        if await clock.waitForStartup() {
+            ready = try await waitForGatedWriter(in: directory, deadlineClock: clock)
+        }
         var readinessFailure = "Synthetic child must execute before the timeout/cancellation assertion"
         if !ready {
             let sampled = clock.wasSampled
