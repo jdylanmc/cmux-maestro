@@ -12,6 +12,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Manage Copilot CLI 1.0.88 observers in a dedicated user-hook file through
+  explicit setup, with verified migration/removal and truthful disabled or
+  incomplete status. Unsafe ownership and unresolved per-hook disables refuse
+  migration without changing the existing registration; existing sessions are
+  not restarted or reloaded (#114).
 - Commit project-local skill files, references, helpers, and upstream notices
   alongside the lockfile so a checkout includes the reviewed skill set.
 - Standardize repository agents on upstream CMUX and refreshed personal skills,
