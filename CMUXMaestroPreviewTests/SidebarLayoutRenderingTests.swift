@@ -153,6 +153,40 @@ struct SidebarLayoutRenderingTests {
     }
 
     @Test(arguments: [NSScroller.Style.overlay, .legacy])
+    func nativeEightLevelOutlineRetainsMinimumTitleWidthAt280(style: NSScroller.Style) async throws {
+        let model = makeModel(fixtures: SidebarTreeFixtures(), longMetadata: true, deep: true)
+        let fixture = try SidebarPreferenceFixture()
+        defer { model.setVisible(false); fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for density in SidebarDensity.allCases {
+            preferences.setDensity(density)
+            for appearance in [RenderAppearance.light, .dark] {
+                let file = folder.appendingPathComponent("deep8-native-minimum-\(style.rawValue)-\(density.rawValue)-\(appearance.name).png")
+                try await render(model: model, preferences: preferences, width: 280, height: 400,
+                                 appearance: appearance, destination: file) { host in
+                    let title = try #require(nativeTitles(in: host)
+                        .first { $0.accessibilityLabel()?.contains("Synthetic level 8") == true })
+                    try await prepareDeepTitle(title, host: host)
+                    let scroll = try #require(title.enclosingScrollView)
+                    scroll.scrollerStyle = style
+                    try await prepareDeepTitle(title, host: host, nativeStyle: style)
+                    // Measure the requested native composition now, not stability
+                    // across a later event or the fixed-input fixture's inset.
+                    try #require(host.bounds.width == 280)
+                    try #require(scroll.scrollerStyle == style && scroll.hasVerticalScroller)
+                    #expect(title.bounds.width >= 124, "Native deep title must retain useful width: \(title.bounds.width)")
+                    #expect(title.bounds.height <= 70)
+                    #expect(model.copilot.tree.sessions[0].nodes.map(\.depth).max() == 8)
+                    print("V127 native minimum style \(style.rawValue) \(density.rawValue) \(appearance.name): titleWidth=\(title.bounds.width), titleHeight=\(title.bounds.height)")
+                }
+            }
+        }
+    }
+
+    @Test(arguments: [NSScroller.Style.overlay, .legacy])
     func productionEightLevelOutlineRetainsNameAndStableActionsAt280(budget: NSScroller.Style) async throws {
         let fixtures = SidebarTreeFixtures()
         let model = makeModel(fixtures: fixtures, longMetadata: true, deep: true)
@@ -380,7 +414,8 @@ struct SidebarLayoutRenderingTests {
     }
 
     private func prepareDeepTitle(
-        _ title: SidebarTitleNativeButton, host: NSView, fixedViewport: Bool = false
+        _ title: SidebarTitleNativeButton, host: NSView, fixedViewport: Bool = false,
+        nativeStyle: NSScroller.Style? = nil
     ) async throws {
         let scroll = try #require(title.enclosingScrollView)
         let document = try #require(scroll.documentView)
@@ -402,7 +437,7 @@ struct SidebarLayoutRenderingTests {
                 && (fixedViewport
                     ? !scroll.hasVerticalScroller && !scroll.hasHorizontalScroller
                         && scroll.contentView.bounds.width == scroll.bounds.width
-                    : scroll.scrollerStyle == NSScroller.preferredScrollerStyle)
+                    : scroll.scrollerStyle == (nativeStyle ?? NSScroller.preferredScrollerStyle))
                 && document.bounds.width == scroll.contentView.bounds.width
                 && current == previous
             previous = current

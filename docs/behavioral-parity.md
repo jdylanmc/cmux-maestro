@@ -80,6 +80,16 @@ densities and appearances, the 124-point minimum, height/depth caps and 20 ms
 effect interval. The real-window-width negative control also runs both budgets,
 requires the full 26-point viewport loss and still rejects changed title frames.
 
+`nativeEightLevelOutlineRetainsMinimumTitleWidthAt280` separately protects the
+actual native depth-eight title at a 280-point host: at least 124 points wide,
+at most 70 points high, in both densities, light/dark appearances and both
+native scroller styles. It verifies the requested style and visible native
+geometry before each static measurement, without the fixed-input inset or a
+subsequent timed equality check. This absolute guard is necessary because the
+equivalent-width fixture's inset changes indentation and gives its legacy
+title two extra points; that fixture alone cannot protect the native minimum.
+Style assignment is not treated as a pin against later AppKit updates.
+
 `deepOutlineLateNativeStyleChangeInvalidatesSampledBaseline` exercises both
 overlay-to-legacy and legacy-to-overlay transitions through the public setter,
 in run-owned offscreen fixtures without focus. It requires opposite viewport
