@@ -12,6 +12,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Route live Copilot observations through the existing provider-neutral session
+  snapshot, preserving lifecycle/liveness distinctions, partial ancestry,
+  history and attention behavior. Retain v1 decoding without adding control
+  capabilities (#10).
 - Commit project-local skill files, references, helpers, and upstream notices
   alongside the lockfile so a checkout includes the reviewed skill set.
 - Standardize repository agents on upstream CMUX and refreshed personal skills,
