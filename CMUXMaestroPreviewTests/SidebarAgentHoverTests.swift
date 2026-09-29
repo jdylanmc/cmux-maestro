@@ -9,7 +9,7 @@ struct SidebarAgentHoverTests {
 
     private func session(
         id: UUID? = nil, surface: UUID? = nil, name: String = "model",
-        liveness: CopilotLiveness = .alive
+        liveness: AgentProcessLiveness = .alive
     ) -> SidebarCopilotSession {
         .init(
             id: id ?? fixtures.sessionID, workspaceID: fixtures.workspaceA,
@@ -117,7 +117,7 @@ struct SidebarAgentHoverTests {
     }
 
     @Test func unavailableAndAmbiguousSessionIdentitiesHaveNoCopyAction() throws {
-        for liveness in [CopilotLiveness.ambiguous, .unknown] {
+        for liveness in [AgentProcessLiveness.ambiguous, .unknown] {
             var a = session(liveness: liveness)
             a.nodes = [.init(id: "child", parentID: nil, depth: 0, kind: .subagent, name: "Child",
                              state: .working, model: nil, ancestryUnresolved: false, hasChildren: false)]

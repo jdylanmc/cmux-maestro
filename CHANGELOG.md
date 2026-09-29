@@ -12,6 +12,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Route live Copilot observations through the existing provider-neutral session
+  snapshot, preserving lifecycle/liveness distinctions, partial ancestry,
+  history and attention behavior. Retain v1 decoding and nested validation,
+  checking neutral evidence before history filtering without adding control
+  capabilities (#10).
 - Commit project-local skill files, references, helpers, and upstream notices
   alongside the lockfile so a checkout includes the reviewed skill set.
 - Standardize repository agents on upstream CMUX and refreshed personal skills,
@@ -26,8 +31,9 @@ Notable changes are recorded using Keep a Changelog categories.
   terminal resources without retries or guessed cleanup (#61).
 - Start setup-test fixture readiness after installer spawn rather than task
   enqueue, preserving timeout, cancellation and process-cleanup checks.
-- Wait for a visible, settled native viewport before measuring offscreen focus
-  layout, preserving exact frame and width invariants.
+- Stabilize offscreen focus-layout fixtures with owned overlay/legacy-equivalent
+  content widths, retaining real-native scroller coverage and detection of
+  genuine geometry changes (#127).
 - Automatically omit unneeded old managed registrations when an exact current
   replacement is verified. Preserve ancestors and original-session context
   needed by work or unresolved attention, without deleting records or closing
