@@ -18,7 +18,7 @@ struct AgentSnapshotCompatibilityTests {
         #expect(current.issues == nil)
         #expect(current.sessions.allSatisfy {
             $0.stateDetail == nil && $0.liveness == nil && $0.observedAt == nil
-                && $0.launchBinding == nil && $0.childWorkLayout == nil && $0.appearance == nil && $0.attention == nil
+                && $0.launchBinding == nil && $0.childWorkObservation == nil && $0.appearance == nil && $0.attention == nil
         })
         if name == "taskboard" {
             #expect(current.sessions.last?.state == .known(.done))
@@ -33,7 +33,7 @@ struct AgentSnapshotCompatibilityTests {
         let states: [CopilotWorkState] = [.working, .idle, .blocked, .completed, .failed, .cancelled, .unknown]
         let observations = states.enumerated().map { index, state in
             fixtures.session(id: UUID(), state: state, children: [
-                .init(id: "child-\(index)", parentID: "not-yet-observed", kind: .subagent, name: "Synthetic",
+                .init(id: "child-\(index)", parentID: nil, kind: .subagent, name: "Synthetic",
                       state: state, model: "child-model", terminalEvent: .init(id: UUID(), timestamp: now))
             ], now: now)
         }

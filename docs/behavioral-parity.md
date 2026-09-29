@@ -245,14 +245,19 @@ any profile granting orchestration access still require the complete asset pair.
   `CopilotSnapshot` remains the reader's parsing result, not a sidebar envelope.
   Optional typed evidence preserves idle/failure/cancellation separately from
   legacy `done`, liveness independently from work, and launch placement separately
-  from current host binding. Ordered flat child observations retain unresolved
-  ancestry without fabricated parents; original nested v1 fixtures retain strict
-  validation. [Adapter tests](../CMUXMaestroPreviewTests/CopilotSnapshotAdapterTests.swift)
+  from current host binding. The existing `childWork` always remains a valid
+  nested v1 hierarchy; additional `childWorkObservation` carries ordered literal
+  edges and explicitly marks lossy legacy projections without fabricated parents.
+  [Adapter tests](../CMUXMaestroPreviewTests/CopilotSnapshotAdapterTests.swift)
   exercise the real polling reader seam and unknown/partial evidence.
   [Compatibility tests](../CMUXMaestroPreviewTests/AgentSnapshotCompatibilityTests.swift)
-  use a frozen v1 decoder, including a negative unsupported-state control.
-  Old decoding is preserved; old complete-hierarchy validation is not claimed
-  for the additive flat-observation form. This implements the literal
+  retain the negative unsupported-state control.
+  [Actual frozen validation](../CMUXMaestroPreviewTests/LegacySnapshotValidationTests.swift)
+  checks the original codec and validator against fixtures and new graph shapes.
+  [Consumer validation](../CMUXMaestroPreviewTests/NeutralObservationValidationTests.swift)
+  exercises malformed neutral projection and polling, safe peers, retained active
+  descendants, history protection and bounded traversal with explicit unknown
+  omission totals. This implements the literal
   [#10](https://github.com/jdylanmc/cmux-maestro/issues/10) data path, not all of
   #118's lifetime correspondence, recovery, ownership or control gates. No hook
   policy, independent child focus/resume capability or new runtime is introduced.

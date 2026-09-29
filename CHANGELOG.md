@@ -14,7 +14,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 - Route live Copilot observations through the existing provider-neutral session
   snapshot, preserving lifecycle/liveness distinctions, partial ancestry,
-  history and attention behavior. Retain v1 decoding without adding control
+  history and attention behavior. Retain v1 decoding and nested validation,
+  checking neutral evidence before history filtering without adding control
   capabilities (#10).
 - Commit project-local skill files, references, helpers, and upstream notices
   alongside the lockfile so a checkout includes the reviewed skill set.

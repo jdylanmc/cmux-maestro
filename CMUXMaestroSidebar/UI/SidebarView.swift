@@ -1415,7 +1415,7 @@ private struct CopilotOverview: View {
                     .init(title: "Counts", value: tree.hasCompleteCounts ? "Complete current observation" : "Known counts only"),
                     .init(title: "Retained outcomes", value: "\(tree.retainedHistoryCount)"),
                     .init(title: "Hidden history", value: "\(tree.hiddenHistoryCount)"),
-                    .init(title: "Omitted tasks", value: "\(tree.omittedChildrenCount)"),
+                    .init(title: "Omitted tasks", value: tree.omittedChildrenDescription),
                     .init(title: "Observed", value: tree.generatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Observation time unknown")
                 ])
             }
@@ -1899,8 +1899,10 @@ private struct CopilotSessionContents: View {
             }
             .padding(.leading, 28 + density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
-        if session.omittedActiveChildrenCount > 0 {
-            Text("\(session.omittedActiveChildrenCount) working/blocked tasks could not fit.")
+        if session.hasUncountedChildren || session.omittedActiveChildrenCount > 0 {
+            Text(session.hasUncountedChildren
+                 ? "At least \(session.omittedChildrenCount) tasks omitted; total and active counts unknown."
+                 : "\(session.omittedActiveChildrenCount) working/blocked tasks could not fit.")
                 .sidebarFont(.caption).foregroundStyle(SidebarTone.attention.color)
                 .padding(.leading, density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }

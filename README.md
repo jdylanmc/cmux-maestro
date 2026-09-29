@@ -1107,16 +1107,25 @@ explicit `stateDetail` with an unknown legacy state; contradictory combinations
 are invalid. Consumers resolve that pair once and keep process liveness separate.
 Unavailable/degraded model or activity values cannot become current evidence.
 
-An absent `childWorkLayout` retains v1's strictly validated nested hierarchy.
-`flatObservations` instead preserves bounded reader order and literal parent
-edges, including late/missing parents and cycles, without inventing ancestors.
-Its validator still rejects duplicate/empty identities, foreign session parents,
-nested entries, invalid availability and contradictory state/timing. Projection
-resolves these observed edges using the existing 256-node/12-depth limits and
-explicit omissions. Original v1 fixtures and a frozen v1 decoder are tested;
-old decoders ignore the additions and see unknown for the new state details.
-This is decoding compatibility, not a claim that an old complete-hierarchy
-validator understands flat observations.
+The existing `childWork` property always retains v1's strictly validated nested
+meaning. The adapter derives an old-compatible view of representable relations;
+unresolved components are omitted, never reparented. Additional typed
+`childWorkObservation.items` preserves the complete reader order and literal
+edges, including late/missing parents and cycles. Its
+`legacyProjectionIsLossless` flag explicitly records whether the compatibility
+view covers every observation; it does not claim complete provider history.
+New consumers use this evidence when present, never merge it with the derived
+compatibility view. The actual frozen v1 codec **and validator** are exercised
+against original fixtures, ordinary/child-first pairs, missing parents and cycles.
+
+Strict validation and live projection share per-observation structural and
+cross-field checks before history filtering. Malformed ancestry stays unresolved,
+contradictory terminal evidence cannot hide work, and valid peer sessions survive.
+Each graph assessment visits at most 4,096 nodes and 64 nesting levels. On a
+limit, visited evidence remains partial, history actions are disabled for that
+session, and omission counts are explicitly lower bounds with unknown totals.
+The existing display caps remain 256 nodes and 12 levels. Legacy invalid parent
+references still fail validation even when additional observation evidence exists.
 
 Reader identity, partial-read, corruption, freshness and replay-cap safeguards,
 history/attention actions and exact host navigation remain unchanged. No PID,

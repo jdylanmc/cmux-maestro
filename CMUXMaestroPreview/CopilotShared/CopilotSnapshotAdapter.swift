@@ -33,22 +33,47 @@ nonisolated enum CopilotSnapshotAdapter {
                 } else {
                     binding = .unknown(detail: "Observed surface is not in the supplied current topology")
                 }
+                let children = observation.children.map { child($0, session: identity) }
+                let legacy = legacyHierarchy(children, session: identity)
                 return AgentSessionSnapshotItem(
                     identity: identity, binding: binding, title: .unknown(),
                     state: state(observation.state),
                     activity: observation.activity.map { .known($0) } ?? .unknown(),
                     model: model(observation.model), paths: .unknown(), timing: .unknown(),
-                    childWork: observation.children.map { child($0, session: identity) },
+                    childWork: legacy.roots,
                     stateDetail: detail(observation.state), liveness: liveness(observation.liveness),
                     observedAt: observation.observedAt, launchBinding: launch,
                     appearance: observation.iconId == nil && observation.iconColor == nil ? nil
                         : .init(iconId: observation.iconId, iconColor: observation.iconColor),
-                    attention: observation.attention, childWorkLayout: .flatObservations
+                    attention: observation.attention,
+                    childWorkObservation: .init(items: children, legacyProjectionIsLossless: legacy.count == children.count)
                 )
             },
             issues: source.issues.map { .init(rawValue: $0.rawValue) },
             completeness: .known(source.isComplete)
         )
+    }
+
+    // Compatibility output only. Live consumers use the ordered observations,
+    // never this derived view. Unreachable/ambiguous edges are not reparented.
+    private static func legacyHierarchy(
+        _ observations: [AgentChildWork], session: ProviderSessionIdentity
+    ) -> (roots: [AgentChildWork], count: Int) {
+        let groups = Dictionary(grouping: observations, by: \.id)
+        let unique = observations.filter {
+            !$0.id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && groups[$0.id]?.count == 1
+        }
+        let byParent = Dictionary(grouping: unique.filter { $0.parentID != nil }, by: \.parentID)
+        var count = 0
+        func nest(_ child: AgentChildWork, depth: Int) -> AgentChildWork? {
+            guard count < AgentSessionObservationAssessment.maximumNodes,
+                  depth < AgentSessionObservationAssessment.maximumDepth else { return nil }
+            count += 1
+            let nested = (byParent[child.id.rawValue] ?? []).compactMap { nest($0, depth: depth + 1) }
+            return child.containing(nested)
+        }
+        let roots = unique.filter { $0.parent == .session(session) }.compactMap { nest($0, depth: 0) }
+        return (roots, count)
     }
 
     static func child(_ source: CopilotChildWork, session: ProviderSessionIdentity) -> AgentChildWork {

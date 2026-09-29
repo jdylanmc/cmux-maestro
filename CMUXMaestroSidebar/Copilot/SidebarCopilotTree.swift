@@ -50,6 +50,7 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     let treeDegraded: Bool
     let omittedChildrenCount: Int
     let omittedActiveChildrenCount: Int
+    var hasUncountedChildren = false
     var hiddenHistoryCount = 0
     var attention: [AgentAttention] = []
     var attentionDegraded = false
@@ -102,6 +103,10 @@ struct SidebarCopilotTree: Equatable {
 
     var omittedChildrenCount: Int { sessions.reduce(0) { $0 + $1.omittedChildrenCount } }
     var omittedActiveChildrenCount: Int { sessions.reduce(0) { $0 + $1.omittedActiveChildrenCount } }
+    var hasUncountedChildren: Bool { sessions.contains(where: \.hasUncountedChildren) }
+    var omittedChildrenDescription: String {
+        hasUncountedChildren ? "At least \(omittedChildrenCount); total unknown" : "\(omittedChildrenCount)"
+    }
     var retainedHistoryCount: Int { sessions.reduce(0) { $0 + $1.retainedHistoryCount } }
     var hiddenHistoryCount: Int { sessions.reduce(0) { $0 + $1.hiddenHistoryCount } }
     var attentionOwnerCount: Int { sessions.reduce(0) { $0 + $1.attentionOwnerCount } }
@@ -180,7 +185,7 @@ struct SidebarCopilotTree: Equatable {
         var rejected = groups.values.contains { $0.count != 1 }
         var sessions: [SidebarCopilotSession] = []
         var nextExpiry: Date?
-        for observation in snapshot.sessions {
+        for (sessionIndex, observation) in snapshot.sessions.enumerated() {
             guard observation.identity.providerID == CopilotSnapshotAdapter.providerID,
                   let sessionID = UUID(uuidString: observation.identity.sessionID),
                   groups[sessionID]?.count == 1,
@@ -194,22 +199,26 @@ struct SidebarCopilotTree: Equatable {
                 continue
             }
             let liveness = observation.liveness ?? .unknown
-            let children = observation.observedChildren
+            let assessment = snapshot.assess(observation, at: "sessions[\(sessionIndex)]")
+            let children = assessment.children
             let groups = Dictionary(grouping: children, by: \.id)
             let validated = children.filter {
                 guard !$0.id.rawValue.isEmpty, groups[$0.id]?.count == 1 else { return false }
                 if case .session(let parent) = $0.parent { return parent == observation.identity }
                 return true
             }
-            let sessionAttention = signals(
+            var sessionAttention = signals(
                 observation.attention, sessionID: sessionID, ownerID: nil,
                 settings: attention, observedAt: observedAt, now: now
             )
+            if !assessment.sessionStateIsValid || assessment.hasUncountedChildren { sessionAttention.degraded = true }
             let sessionActivity = safeActivity(observation.activity.knownValue, liveness: liveness,
                                                observedAt: observedAt, now: now)
             let childAttention = Dictionary(uniqueKeysWithValues: validated.map { child in
-                (child.id.rawValue, signals(child.attention, sessionID: sessionID, ownerID: child.id.rawValue,
-                                           settings: attention, observedAt: observedAt, now: now))
+                var value = signals(child.attention, sessionID: sessionID, ownerID: child.id.rawValue,
+                                    settings: attention, observedAt: observedAt, now: now)
+                if assessment.invalidChildren.contains(child.id) || assessment.hasUncountedChildren { value.degraded = true }
+                return (child.id.rawValue, value)
             })
             var hidden: Set<String> = []
             for child in validated {
@@ -242,11 +251,13 @@ struct SidebarCopilotTree: Equatable {
             let tree = childTree(
                 validated.filter { retained.contains($0.id.rawValue) }, liveness: liveness,
                 historyAncestors: hidden.intersection(retained), observedAt: observedAt, now: now,
-                attention: childAttention
+                attention: childAttention, invalidStates: assessment.invalidStates,
+                unresolvedParents: assessment.unresolvedParents
             )
             let degraded = tree.degraded || validated.count != children.count
                 || sessionAttention.degraded || sessionActivity.degraded
                 || observation.state.isDegraded || observation.activity.isDegraded || observation.model.isDegraded
+                || !assessment.isValid
             let complete = snapshot.isComplete && issues.isEmpty
                 && liveness == .alive && !degraded
             sessions.append(SidebarCopilotSession(
@@ -255,14 +266,15 @@ struct SidebarCopilotTree: Equatable {
                 workspaceID: workspaceID,
                 surfaceID: surfaceID,
                 liveness: liveness,
-                state: trustworthyState(observation.workState, liveness: liveness),
+                state: trustworthyState(assessment.sessionStateIsValid ? observation.workState : .unknown, liveness: liveness),
                 model: displayMetadata(observation.model.knownValue?.identifier),
                 observedAt: observedAt,
                 nodes: tree.nodes,
                 childrenComplete: complete,
                 treeDegraded: degraded,
-                omittedChildrenCount: tree.omitted,
+                omittedChildrenCount: tree.omitted + assessment.omittedChildren,
                 omittedActiveChildrenCount: tree.omittedActive,
+                hasUncountedChildren: assessment.hasUncountedChildren,
                 hiddenHistoryCount: hidden.count,
                 attention: sessionAttention.values, attentionDegraded: sessionAttention.degraded, activity: sessionActivity.value
             ))
@@ -295,14 +307,17 @@ struct SidebarCopilotTree: Equatable {
     private static func childTree(
         _ children: [AgentChildWork], liveness: AgentProcessLiveness,
         historyAncestors: Set<String>, observedAt: Date, now: Date,
-        attention: [String: (values: [AgentAttention], degraded: Bool)]
+        attention: [String: (values: [AgentAttention], degraded: Bool)],
+        invalidStates: Set<ChildWorkID>, unresolvedParents: Set<ChildWorkID>
     ) -> (nodes: [SidebarCopilotNode], degraded: Bool, omitted: Int, omittedActive: Int) {
         let groups = Dictionary(grouping: children, by: \.id)
         let validated = children.filter { !$0.id.rawValue.isEmpty && groups[$0.id]?.count == 1 }
         let byID = Dictionary(uniqueKeysWithValues: validated.map { ($0.id.rawValue, $0) })
         let active = validated.filter {
-            let state = trustworthyState($0.workState, liveness: liveness)
-            return state == .working || state == .blocked || attention[$0.id.rawValue]?.values.contains { $0.kind.isBlocking } == true
+            let state = trustworthyState(invalidStates.contains($0.id) ? .unknown : $0.workState, liveness: liveness)
+            return state == .working || state == .blocked
+                || attention[$0.id.rawValue]?.values.contains { $0.kind.isBlocking } == true
+                || (invalidStates.contains($0.id) && liveness == .alive && $0.activity.knownValue?.kind == .executing)
         }
         var selectedIDs: Set<String> = []
         var valid: [AgentChildWork] = []
@@ -331,7 +346,10 @@ struct SidebarCopilotTree: Equatable {
         var roots: [AgentChildWork] = []
         var detachedRoots: [AgentChildWork] = []
         for child in valid {
-            if let parent = child.parentID, ids.contains(parent), parent != child.id.rawValue {
+            if unresolvedParents.contains(child.id) {
+                degraded = true
+                detachedRoots.append(child)
+            } else if let parent = child.parentID, ids.contains(parent), parent != child.id.rawValue {
                 byParent[parent, default: []].append(child)
             } else {
                 if child.parentID != nil {
@@ -360,7 +378,7 @@ struct SidebarCopilotTree: Equatable {
             nodes.append(SidebarCopilotNode(
                 id: child.id.rawValue, parentID: parentID, depth: depth, kind: child.kind ?? .unknown,
                 name: displayMetadata(child.title.knownValue) ?? (child.kind ?? .unknown).rawValue.capitalized,
-                state: trustworthyState(child.workState, liveness: liveness),
+                state: trustworthyState(invalidStates.contains(child.id) ? .unknown : child.workState, liveness: liveness),
                 model: displayMetadata(child.model?.knownValue?.identifier),
                 ancestryUnresolved: unresolved,
                 hasChildren: false,

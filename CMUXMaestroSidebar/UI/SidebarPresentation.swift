@@ -727,7 +727,9 @@ enum SidebarPresentation {
             (.readLimitReached, "History read limit reached"),
             (.appearanceUnavailable, "Session icon metadata unavailable")
         ] where tree.issues.contains(issue) { result.append(message) }
-        if tree.omittedActiveChildrenCount > 0 {
+        if tree.hasUncountedChildren {
+            result.append("At least \(tree.omittedChildrenCount) tasks omitted; total and active counts unknown")
+        } else if tree.omittedActiveChildrenCount > 0 {
             result.append("\(tree.omittedActiveChildrenCount) working/blocked tasks beyond display limits")
         } else if tree.omittedChildrenCount > 0 {
             result.append("\(tree.omittedChildrenCount) tasks beyond display limits")
@@ -740,7 +742,9 @@ enum SidebarPresentation {
         if tree.issues.contains(.permissionDenied) { warnings.append("Copilot access denied") }
         else if tree.issues.contains(.integrationNotInstalled) { warnings.append("Enable Copilot integration") }
         else if let warning = overviewWarnings(tree).first { warnings.append(warning) }
-        if tree.omittedActiveChildrenCount > 0 {
+        if tree.hasUncountedChildren {
+            warnings.append("Child observation limit reached; omitted totals unknown")
+        } else if tree.omittedActiveChildrenCount > 0 {
             warnings.append("\(tree.omittedActiveChildrenCount) working/blocked tasks not shown")
         }
         return warnings
@@ -1124,7 +1128,8 @@ enum SidebarPresentation {
             .init(title: "Known working children", value: "\(session.knownRunningChildren)"),
             .init(title: "Retained outcomes", value: "\(session.retainedHistoryCount)"),
             .init(title: "Hidden history", value: "\(session.hiddenHistoryCount)"),
-            .init(title: "Omitted children", value: "\(session.omittedChildrenCount)"),
+            .init(title: "Omitted children", value: session.hasUncountedChildren
+                  ? "At least \(session.omittedChildrenCount); total unknown" : "\(session.omittedChildrenCount)"),
             .init(title: "Child history", value: session.childrenComplete && !session.treeDegraded
                 ? "Complete" : "Incomplete; missing work is not assumed finished")
         ]

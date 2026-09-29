@@ -17,7 +17,7 @@ struct CopilotSnapshotAdapterTests {
         try snapshot.validate()
         let item = try #require(snapshot.sessions.first)
         #expect(item.workState.rawValue == state.rawValue)
-        #expect(item.childWork.first?.workState.rawValue == state.rawValue)
+        #expect(item.childWorkObservation?.items.first?.workState.rawValue == state.rawValue)
         #expect(item.liveness?.rawValue == liveness.rawValue)
         #expect(item.timing == .unknown())
         #expect(item.paths == .unknown())
@@ -71,13 +71,16 @@ struct CopilotSnapshotAdapterTests {
         #expect(item.model.value?.identifier == "root-model")
         #expect(item.appearance == .init(iconId: "md-robot", iconColor: "blue"))
         #expect(item.attention == [attention])
-        #expect(item.childWorkLayout == .flatObservations)
-        #expect(item.childWork.map(\.id.rawValue) == ["child", "parent", "shell", "orphan", "cycle-a", "cycle-b"])
-        #expect(item.childWork.map(\.parentID) == ["parent", nil, "child", "not-observed", "cycle-b", "cycle-a"])
-        #expect(item.childWork.map(\.kind) == [.subagent, .skill, .shell, .unknown, .subagent, .subagent])
-        #expect(item.childWork[0].model?.value?.identifier == "child-model")
-        #expect(item.childWork[0].activity.value == activity)
-        #expect(item.childWork[1].terminalEvent?.id == eventID)
+        let evidence = try #require(item.childWorkObservation)
+        #expect(!evidence.legacyProjectionIsLossless)
+        #expect(evidence.items.map(\.id.rawValue) == ["child", "parent", "shell", "orphan", "cycle-a", "cycle-b"])
+        #expect(evidence.items.map(\.parentID) == ["parent", nil, "child", "not-observed", "cycle-b", "cycle-a"])
+        #expect(evidence.items.map(\.kind) == [.subagent, .skill, .shell, .unknown, .subagent, .subagent])
+        #expect(evidence.items[0].model?.value?.identifier == "child-model")
+        #expect(evidence.items[0].activity.value == activity)
+        #expect(evidence.items[1].terminalEvent?.id == eventID)
+        #expect(item.childWork.map(\.id.rawValue) == ["parent"])
+        #expect(item.childWork.first?.children.first?.id.rawValue == "child")
         #expect(!snapshot.isComplete)
         let tree = SidebarCopilotTree.project(snapshot, onto: fixtures.topology(moved: true), now: now,
                                               history: .init(retention: .never))
@@ -179,12 +182,13 @@ struct CopilotSnapshotAdapterTests {
     @Test func validatesStateDetailPrecedenceAndFlatObservationStructure() throws {
         let identity = ProviderSessionIdentity(providerID: "copilot", sessionID: fixtures.sessionID.uuidString)
         func snapshot(
-            _ child: AgentChildWork, layout: AgentChildWorkLayout? = .flatObservations
+            _ child: AgentChildWork, observed: Bool = true
         ) -> AgentSessionSnapshot {
             .init(generatedAt: now, workspaces: [], sessions: [
                 .init(identity: identity, binding: .unknown(), title: .unknown(), state: .unknown(),
                       activity: .unknown(), model: .unknown(), paths: .unknown(), timing: .unknown(),
-                      childWork: [child], childWorkLayout: layout)
+                      childWork: observed ? [] : [child],
+                      childWorkObservation: observed ? .init(items: [child]) : nil)
             ])
         }
         let unresolved = AgentChildWork(
@@ -192,13 +196,13 @@ struct CopilotSnapshotAdapterTests {
             title: .known("Child"), state: .unknown(), activity: .unknown(), stateDetail: .failed
         )
         try snapshot(unresolved).validate()
-        #expect(throws: AgentSessionSnapshotValidationError.self) { try snapshot(unresolved, layout: nil).validate() }
+        #expect(throws: AgentSessionSnapshotValidationError.self) { try snapshot(unresolved, observed: false).validate() }
         let contradiction = AgentChildWork(
             id: ChildWorkID("child"), parent: .session(identity), title: .known("Child"),
             state: .known(.done), activity: .unknown(), stateDetail: .failed
         )
         #expect(contradiction.workState == .unknown)
-        #expect(throws: AgentSessionSnapshotValidationError.incompatibleStateDetail(path: "sessions[0].childWork[0].stateDetail")) {
+        #expect(throws: AgentSessionSnapshotValidationError.incompatibleStateDetail(path: "sessions[0].childWorkObservation.items[0].stateDetail")) {
             try snapshot(contradiction).validate()
         }
         let foreign = AgentChildWork(
@@ -233,7 +237,7 @@ struct CopilotSnapshotAdapterTests {
             generatedAt: now, workspaces: source.workspaces, sessions: [.init(
                 identity: original.identity, binding: original.binding, title: .unknown(), state: state,
                 activity: activity, model: model, paths: .unknown(), timing: .unknown(),
-                childWork: [child], liveness: .alive, observedAt: now, childWorkLayout: .flatObservations
+                liveness: .alive, observedAt: now, childWorkObservation: .init(items: [child])
             )], issues: [], completeness: .known(true)
         )
         if availability == .degraded {
