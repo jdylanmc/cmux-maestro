@@ -7,6 +7,8 @@ The acts are the frozen native-only local-preview update and rollback commands.
 No containing-app launch, Copilot installation, hooks, input, or production claim.
 Exit 0 requires both loaded generations and restoration; 1 is failure, 2 unavailable.
 All runtime evidence, including unsuccessful setup and cleanup, goes to the artifact.
+Register the verified stock point before discovery from the signed observer bundle.
+The observer declares no extension point and never launches or connects to Maestro.
 """
 
 import argparse
@@ -32,6 +34,8 @@ STOCK_REVISION = "b685a275c2e411799857155e37264daf84f7e4d6"
 DMG_URL = "https://github.com/manaflow-ai/cmux/releases/download/v0.64.25/cmux-macos.dmg"
 DMG_SHA256 = "0afb2f8ff9bfef10f03e61ff12e65ce02dbca5c96cb9047118e13483ac5b08ad"
 EXT_ID = "com.jdylanmc.CMUXMaestroPreview.Extension"
+POINT_ID = "com.cmuxterm.app.cmux.sidebar"
+OBSERVER_ID = "com.jdylanmc.CMUXMaestroPreview.HostProofObserver"
 DOMAIN = "com.cmuxterm.app"
 SETUP_DEFAULTS = {
     "extensions.beta.enabled": True,
@@ -72,7 +76,8 @@ class Probe:
         self.source = self.preview.DEVELOPMENT_APP
         self.stock = self.work / "cmux.app"
         self.mount = self.work / "dmg-mount"
-        self.helper = self.work / "stock-host-observer"
+        self.observer_app = self.work / "Stock Host Observer.app"
+        self.helper = self.observer_app / "Contents/MacOS/stock-host-observer"
         self.observer = None
         self.child = None
         self.command_incomplete = False
@@ -317,17 +322,6 @@ class Probe:
         require(not self.preview.metadata.registration_records(
             registrations.decode(), allow_empty=True), "Existing Maestro extension refused")
         require(not self.ops.app_paths(), "Existing Maestro app registration refused")
-        self.run(["/usr/bin/xcrun", "swiftc", "-parse-as-library",
-                  ROOT / "scripts/stock-host-observer.swift", "-o", self.helper], timeout=180)
-        with (self.evidence / "observer.jsonl").open("wb") as out, (
-            self.evidence / "observer.stderr"
-        ).open("wb") as err:
-            self.observer = subprocess.Popen([str(self.helper), "watch"], stdin=subprocess.DEVNULL,
-                                             stdout=out, stderr=err)
-        time.sleep(1)
-        observations = self.observer_rows()
-        require(observations and not any(r.get("hostPIDs") for r in observations),
-                "Preexisting CMUX host or unavailable desktop observation")
         dmg = self.work / "cmux-macos.dmg"
         self.run(["/usr/bin/curl", "--fail", "--location", "--silent", "--show-error",
                   "--max-time", "300", "--output", dmg, DMG_URL], timeout=310)
@@ -345,6 +339,54 @@ class Probe:
         _, version = self.run([self.stock / "Contents/Resources/bin/cmux", "--version"])
         require("b685a275c" in version.decode(), "Stock CLI source revision mismatch")
         self.host_hashes = self.executable_hashes(self.stock)
+        # Stock owns the public point declaration. Do not redeclare it in the observer.
+        # https://github.com/manaflow-ai/cmux/blob/b685a275c2e411799857155e37264daf84f7e4d6/scripts/write-sidebar-extension-point.sh
+        point = self.stock / "Contents/Extensions" / f"{POINT_ID}.appextensionpoint"
+        declaration = plistlib.loads(point.read_bytes())
+        require(set(declaration) == {POINT_ID}
+                and declaration[POINT_ID].get("EXExtensionPointIsPublic") is True
+                and declaration[POINT_ID].get("EXPresentsUserInterface") is True,
+                "Verified stock bundle lacks its expected public native point")
+        self.event("stock-point-declaration", path=str(point), sha256=sha256(point),
+                   extensionPoint=POINT_ID)
+        self.run([self.preview.LSREGISTER, "-f", self.stock])
+        # Discovery is a host-app API, not a global registry query from a bare executable.
+        # https://developer.apple.com/documentation/extensionfoundation/discovering-app-extensions-from-your-app
+        self.helper.parent.mkdir(parents=True, mode=0o700)
+        (self.observer_app / "Contents/Info.plist").write_bytes(plistlib.dumps({
+            "CFBundleIdentifier": OBSERVER_ID,
+            "CFBundleExecutable": self.helper.name,
+            "CFBundleName": "Stock Host Observer",
+            "CFBundlePackageType": "APPL",
+            "CFBundleInfoDictionaryVersion": "6.0",
+            "CFBundleVersion": "1",
+            "LSBackgroundOnly": True,
+        }))
+        self.run(["/usr/bin/xcrun", "swiftc", "-parse-as-library",
+                  ROOT / "scripts/stock-host-observer.swift", "-o", self.helper], timeout=180)
+        self.run(["/usr/bin/codesign", "--sign", "-", "--timestamp=none",
+                  "--identifier", OBSERVER_ID, self.observer_app])
+        self.run(["/usr/bin/codesign", "--verify", "--strict", self.observer_app])
+        self.run([self.preview.LSREGISTER, "-f", self.observer_app])
+        with (self.evidence / "observer.jsonl").open("wb") as out, (
+            self.evidence / "observer.stderr"
+        ).open("wb") as err:
+            self.observer = subprocess.Popen([str(self.helper), "watch"], stdin=subprocess.DEVNULL,
+                                             stdout=out, stderr=err)
+        deadline = time.monotonic() + 15
+        while True:
+            observations = self.observer_rows()
+            require(not any(r.get("hostPIDs") for r in observations), "Preexisting CMUX host")
+            contexts = [r for r in observations if r["kind"] == "observer-context"]
+            samples = [r for r in observations if r["kind"] == "sample"]
+            identities = [r for r in observations if r["kind"] == "identities"]
+            if contexts and samples and identities:
+                require(contexts[-1]["bundleIdentifier"] == OBSERVER_ID
+                        and contexts[-1]["bundlePath"] == str(self.observer_app),
+                        "Discovery observer is not the exact test-only app")
+                break
+            require(time.monotonic() < deadline, "Observer context/desktop/native discovery not ready")
+            time.sleep(0.25)
         self.apps_owned.append(self.source)
         self.run([ROOT / "scripts/build-register.sh"], timeout=900)
         self.hashes["A"] = self.executable_hashes(self.source / self.preview.EXTENSION)
@@ -510,6 +552,10 @@ class Probe:
                 self.observer.terminate()
                 self.observer.wait(timeout=10)
             attempt("stop exact owned read-only observer", stop_observer)
+        if (self.work_owned and self.observer_app.exists() and not self.command_incomplete
+                and (self.observer is None or self.observer.poll() is not None)):
+            attempt("unregister exact run-created observer app",
+                    lambda: self.run([self.preview.LSREGISTER, "-u", self.observer_app]))
         receipt = self.home / "Applications" / self.preview.STATE_NAME / "receipt.json"
         if self.apps_owned and receipt.is_file():
             (self.evidence / "final-receipt.json").write_bytes(receipt.read_bytes())

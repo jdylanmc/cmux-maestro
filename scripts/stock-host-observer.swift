@@ -36,6 +36,16 @@ struct StockHostObserver {
             return
         }
         guard args == ["watch"] else { throw NSError(domain: "Usage", code: 1) }
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier,
+              bundleIdentifier == "com.jdylanmc.CMUXMaestroPreview.HostProofObserver",
+              Bundle.main.bundleURL.pathExtension == "app" else {
+            throw NSError(domain: "ObserverBundleIdentityMissing", code: 1)
+        }
+        emit(["kind": "observer-context",
+              "bundleIdentifier": bundleIdentifier,
+              "bundlePath": Bundle.main.bundleURL.path,
+              "extensionPoint": "com.cmuxterm.app.cmux.sidebar",
+              "role": "discovery only; no extension launch or XPC connection"])
         let center = NSWorkspace.shared.notificationCenter
         let token = center.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
@@ -53,7 +63,11 @@ struct StockHostObserver {
                     emit(["kind": "identities", "ids": values.map(\.bundleIdentifier).sorted()])
                 }
             } catch {
-                emit(["kind": "observer-error", "error": String(describing: error)])
+                let diagnostic = error as NSError
+                emit(["kind": "observer-error", "error": String(describing: error),
+                      "domain": diagnostic.domain, "code": diagnostic.code,
+                      "description": diagnostic.localizedDescription,
+                      "failureReason": diagnostic.localizedFailureReason ?? "not supplied"])
             }
         }
         defer { identities.cancel() }
