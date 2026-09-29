@@ -379,13 +379,13 @@ class Probe:
             require(not any(r.get("hostPIDs") for r in observations), "Preexisting CMUX host")
             contexts = [r for r in observations if r["kind"] == "observer-context"]
             samples = [r for r in observations if r["kind"] == "sample"]
-            identities = [r for r in observations if r["kind"] == "identities"]
-            if contexts and samples and identities:
+            if contexts and samples:
                 require(contexts[-1]["bundleIdentifier"] == OBSERVER_ID
                         and contexts[-1]["bundlePath"] == str(self.observer_app),
                         "Discovery observer is not the exact test-only app")
+                self.event("observer-desktop-ready", nativeDiscovery="pending registered fixture")
                 break
-            require(time.monotonic() < deadline, "Observer context/desktop/native discovery not ready")
+            require(time.monotonic() < deadline, "Observer context/desktop not ready")
             time.sleep(0.25)
         self.apps_owned.append(self.source)
         self.run([ROOT / "scripts/build-register.sh"], timeout=900)
@@ -430,6 +430,18 @@ class Probe:
                 break
             time.sleep(0.5)
         require(self.host, "Stock CMUX did not start")
+        # A quiet sequence is not an observed empty registry. Require the actual fixture.
+        deadline = time.monotonic() + 120
+        while True:
+            observations = self.observer_rows()
+            identities = [r for r in observations if r["kind"] == "identities"]
+            if identities and EXT_ID in identities[-1]["ids"]:
+                self.event("observer-fixture-ready", extension=EXT_ID,
+                           identityEventTime=identities[-1]["time"], destination=str(self.destination))
+                break
+            require(time.monotonic() < deadline,
+                    "Registered/enabled fixture identity not observed; native discovery unavailable")
+            time.sleep(0.25)
         self.initial = self.wait_loaded("A")
         self.registration()
         observations = self.observer_rows()
