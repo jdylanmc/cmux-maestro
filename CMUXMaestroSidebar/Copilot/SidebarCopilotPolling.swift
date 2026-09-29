@@ -4,7 +4,7 @@ import Observation
 @Observable
 @MainActor
 final class SidebarCopilotPolling {
-    typealias Read = @Sendable (Set<UUID>) async throws -> CopilotSnapshot
+    typealias Read = @Sendable ([UUID: UUID]) async throws -> AgentSessionSnapshot
     typealias Pause = @Sendable () async throws -> Void
     typealias PendingHistory = @Sendable () async -> Bool
     typealias ExpiryPause = @Sendable (TimeInterval) async throws -> Void
@@ -21,7 +21,7 @@ final class SidebarCopilotPolling {
     private var historyExpiry: Task<Void, Never>?
     private var historyDeadline: Date?
     private var historyGeneration: UInt64 = 0
-    private var snapshot: CopilotSnapshot?
+    private var snapshot: AgentSessionSnapshot?
     private var history = SidebarHistorySettings()
     private var attention = SidebarAttentionSettings()
     private let read: Read
@@ -32,6 +32,7 @@ final class SidebarCopilotPolling {
     private let now: @Sendable () -> Date
 
     init(
+        reader: CopilotSessionReader = CopilotSessionReader(),
         read: Read? = nil,
         hasPendingHistory: PendingHistory? = nil,
         pause: @escaping Pause = { try await Task.sleep(for: .seconds(2)) },
@@ -39,8 +40,10 @@ final class SidebarCopilotPolling {
         expiryPause: @escaping ExpiryPause = { try await Task.sleep(for: .seconds($0)) },
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
-        let reader = CopilotSessionReader()
-        self.read = read ?? { try await reader.read(surfaceIDs: $0) }
+        self.read = read ?? { placements in
+            let source = try await reader.read(surfaceIDs: Set(placements.keys))
+            return CopilotSnapshotAdapter.snapshot(source, workspaceBySurface: placements)
+        }
         if let hasPendingHistory {
             self.hasPendingHistory = hasPendingHistory
         } else if read == nil {
@@ -111,7 +114,7 @@ final class SidebarCopilotPolling {
                 self?.isReading = true
                 var hasUnreadHistory = false
                 do {
-                    let snapshot = try await read(Set(capturedTopology.workspaceBySurface.keys))
+                    let snapshot = try await read(capturedTopology.workspaceBySurface)
                     let pending = await hasPendingHistory()
                     guard let self, self.generation == token, !Task.isCancelled else { break }
                     let accepted = self.accept(snapshot, topology: capturedTopology, token: token)
@@ -139,16 +142,16 @@ final class SidebarCopilotPolling {
         }
     }
 
-    private func accept(_ snapshot: CopilotSnapshot, topology: SidebarTopology, token: UInt64) -> Bool {
+    private func accept(_ snapshot: AgentSessionSnapshot, topology: SidebarTopology, token: UInt64) -> Bool {
         guard lastGeneratedAt.map({ snapshot.generatedAt >= $0 }) ?? true else { return false }
         lastGeneratedAt = snapshot.generatedAt
-        if snapshot.issues.contains(.permissionDenied) {
+        if snapshot.issues?.contains(.permissionDenied) == true {
             self.snapshot = nil
             expiry?.cancel()
             expiry = nil
             cancelHistoryExpiry()
             tree = SidebarCopilotTree(
-                availability: .partial, sessions: [], issues: snapshot.issues, generatedAt: snapshot.generatedAt
+                availability: .partial, sessions: [], issues: snapshot.issues ?? [], generatedAt: snapshot.generatedAt
             )
             return false
         }

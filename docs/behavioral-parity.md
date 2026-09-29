@@ -282,11 +282,27 @@ any profile granting orchestration access still require the complete asset pair.
   `--continue`, recent sessions, titles, paths, focus, or terminal text.
 - **Neutral contract versus adapter internals.** The versioned
   [AgentSessionSnapshot](../CMUXMaestroPreview/Domain/AgentSessionSnapshot.swift)
-  contract exists and has fixtures. The live `SidebarCopilotPolling.Read` still
-  returns the adapter-specific `CopilotSnapshot` from `CopilotSessionReader`,
-  sharing neutral activity/attention primitives. This is not completion of the
-  literal generic-envelope integration in
-  [#10](https://github.com/jdylanmc/cmux-maestro/issues/10).
+  now feeds live polling and projection through the pure
+  [CopilotSnapshotAdapter](../CMUXMaestroPreview/CopilotShared/CopilotSnapshotAdapter.swift).
+  `CopilotSnapshot` remains the reader's parsing result, not a sidebar envelope.
+  Optional typed evidence preserves idle/failure/cancellation separately from
+  legacy `done`, liveness independently from work, and launch placement separately
+  from current host binding. The existing `childWork` always remains a valid
+  nested v1 hierarchy; additional `childWorkObservation` carries ordered literal
+  edges and explicitly marks lossy legacy projections without fabricated parents.
+  [Adapter tests](../CMUXMaestroPreviewTests/CopilotSnapshotAdapterTests.swift)
+  exercise the real polling reader seam and unknown/partial evidence.
+  [Compatibility tests](../CMUXMaestroPreviewTests/AgentSnapshotCompatibilityTests.swift)
+  retain the negative unsupported-state control.
+  [Actual frozen validation](../CMUXMaestroPreviewTests/LegacySnapshotValidationTests.swift)
+  checks the original codec and validator against fixtures and new graph shapes.
+  [Consumer validation](../CMUXMaestroPreviewTests/NeutralObservationValidationTests.swift)
+  exercises malformed neutral projection and polling, safe peers, retained active
+  descendants, history protection and bounded traversal with explicit unknown
+  omission totals. This implements the literal
+  [#10](https://github.com/jdylanmc/cmux-maestro/issues/10) data path, not all of
+  #118's lifetime correspondence, recovery, ownership or control gates. No hook
+  policy, independent child focus/resume capability or new runtime is introduced.
 - **Unsupported telemetry stays unknown.** No guessed token/context percentage
   or hang diagnosis substitutes for unavailable provider evidence.
 - **Bounded uncertainty is visible.** Read/display limits, missing ancestry,

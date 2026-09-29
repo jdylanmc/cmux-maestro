@@ -251,7 +251,7 @@ struct SidebarCopilotTreeTests {
             fixtures.child("history-\($0)", state: .completed)
         }
         let poller = SidebarCopilotPolling(
-            read: { try await harness.read($0) },
+            read: neutralRead { try await harness.read($0) },
             pause: { try await Task.sleep(for: .milliseconds(5)) }
         )
         poller.update(topology: fixtures.topology(), connected: true)
@@ -294,7 +294,7 @@ struct SidebarCopilotTreeTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         // Permission assertions must not race snapshot expiry or the next poll.
         let poller = SidebarCopilotPolling(
-            read: { try await harness.read($0) },
+            read: neutralRead { try await harness.read($0) },
             pause: { try await sidebarFrozenExpiry(0) },
             expiryPause: sidebarFrozenExpiry,
             now: { now }
@@ -319,7 +319,7 @@ struct SidebarCopilotTreeTests {
     @Test
     func lateTopologyReadSettlesBeforeNextReadAndCannotReattachOldPlacement() async {
         let harness = SidebarReadHarness()
-        let poller = SidebarCopilotPolling(read: { try await harness.read($0) })
+        let poller = SidebarCopilotPolling(read: neutralRead { try await harness.read($0) })
         poller.update(topology: fixtures.topology(), connected: true)
         poller.setVisible(true)
         await sidebarEventually { await harness.callCount == 1 }
@@ -338,7 +338,7 @@ struct SidebarCopilotTreeTests {
     @Test
     func hideShowDropsLateResultAndCooperativeCancellationAllowsNewTopology() async {
         let harness = SidebarReadHarness()
-        let poller = SidebarCopilotPolling(read: { try await harness.read($0) })
+        let poller = SidebarCopilotPolling(read: neutralRead { try await harness.read($0) })
         poller.update(topology: fixtures.topology(), connected: true)
         poller.setVisible(true)
         await sidebarEventually { await harness.callCount == 1 }
@@ -354,7 +354,7 @@ struct SidebarCopilotTreeTests {
         await sidebarEventually { !poller.isReading }
 
         let cooperative = SidebarCancellationHarness()
-        let next = SidebarCopilotPolling(read: { try await cooperative.read($0) })
+        let next = SidebarCopilotPolling(read: neutralRead { try await cooperative.read($0) })
         next.update(topology: fixtures.topology(), connected: true)
         next.setVisible(true)
         await sidebarEventually { await cooperative.calls == 1 }
@@ -371,7 +371,7 @@ struct SidebarCopilotTreeTests {
         let harness = SidebarReadHarness()
         let now = Date()
         let poller = SidebarCopilotPolling(
-            read: { try await harness.read($0) },
+            read: neutralRead { try await harness.read($0) },
             pause: { try await Task.sleep(for: .milliseconds(5)) },
             expiryPause: sidebarFrozenExpiry,
             now: { now }
@@ -399,7 +399,7 @@ struct SidebarCopilotTreeTests {
         let expiry = SidebarExpiryHarness()
         let now = Date()
         let poller = SidebarCopilotPolling(
-            read: { try await harness.read($0) },
+            read: neutralRead { try await harness.read($0) },
             pause: { try await Task.sleep(for: .milliseconds(5)) },
             expiryPause: { try await expiry.wait($0) },
             now: { now }
@@ -426,7 +426,7 @@ struct SidebarCopilotTreeTests {
         let cadence = SidebarCadenceHarness()
         let now = Date(timeIntervalSince1970: 2_000)
         let poller = SidebarCopilotPolling(
-            read: { try await harness.read($0) },
+            read: neutralRead { try await harness.read($0) },
             hasPendingHistory: { await harness.hasPendingHistory },
             pause: { try await cadence.idle() },
             catchUpPause: { try await cadence.catchUp() },
@@ -462,7 +462,7 @@ struct SidebarCopilotTreeTests {
         let harness = SidebarReadHarness()
         let cadence = SidebarCadenceHarness()
         let poller = SidebarCopilotPolling(
-            read: { try await harness.read($0) },
+            read: neutralRead { try await harness.read($0) },
             hasPendingHistory: { await harness.hasPendingHistory },
             pause: { try await cadence.idle() },
             catchUpPause: { try await cadence.catchUp() }
@@ -486,7 +486,7 @@ struct SidebarCopilotTreeTests {
         let cadence = SidebarCadenceHarness()
         let now = Date()
         let poller = SidebarCopilotPolling(
-            read: { try await harness.read($0) },
+            read: neutralRead { try await harness.read($0) },
             hasPendingHistory: { await harness.hasPendingHistory },
             pause: { try await cadence.idle() },
             catchUpPause: { try await cadence.catchUp() },

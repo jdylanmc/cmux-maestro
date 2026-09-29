@@ -30,7 +30,7 @@ struct SidebarHoverTests {
         ]
         let snapshot = fixture.snapshot(sessions: observations, now: date)
         let polling = SidebarCopilotPolling(
-            read: { _ in snapshot },
+            read: neutralRead { _ in snapshot },
             pause: { try await Task.sleep(for: .seconds(60)) }, expiryPause: sidebarFrozenExpiry, now: { date }
         )
         let orchestration = SidebarOrchestrationPolling(

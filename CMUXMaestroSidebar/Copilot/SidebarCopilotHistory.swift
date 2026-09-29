@@ -49,20 +49,20 @@ nonisolated struct SidebarHistorySettings: Codable, Equatable, Sendable {
             && dismissed.allSatisfy(\.isValid) && (dismissedManaged?.allSatisfy(\.isValid) ?? true)
     }
 
-    func isDismissed(sessionID: UUID, child: CopilotChildWork) -> Bool {
-        guard child.state.isTerminal, let event = child.terminalEvent else { return false }
-        return dismissed.contains(.init(sessionID: sessionID, childID: child.id, eventID: event.id))
+    func isDismissed(sessionID: UUID, child: AgentChildWork) -> Bool {
+        guard child.workState.isTerminal, let event = child.terminalEvent else { return false }
+        return dismissed.contains(.init(sessionID: sessionID, childID: child.id.rawValue, eventID: event.id))
     }
 
-    func deadline(for child: CopilotChildWork, observedAt: Date, now: Date) -> Date? {
-        guard child.state.isTerminal, child.state != .failed, let duration = retention.duration,
+    func deadline(for child: AgentChildWork, observedAt: Date, now: Date) -> Date? {
+        guard child.workState.isTerminal, child.workState != .failed, let duration = retention.duration,
               let timestamp = Self.knownTimestamp(child.terminalEvent, observedAt: observedAt, now: now) else {
             return nil
         }
         return timestamp.addingTimeInterval(duration)
     }
 
-    static func knownTimestamp(_ event: CopilotTerminalEvent?, observedAt: Date, now: Date) -> Date? {
+    static func knownTimestamp(_ event: AgentTerminalEvent?, observedAt: Date, now: Date) -> Date? {
         knownDate(event?.timestamp, observedAt: observedAt, now: now)
     }
 
