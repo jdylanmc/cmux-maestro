@@ -101,6 +101,22 @@ struct ObserverSetupFiles: CopilotSetupFileSystem {
     }
 }
 
+struct FailingResourceSetupFiles: CopilotSetupFileSystem {
+    let fixture: ObserverFixture
+    let blockedDirectory: URL
+
+    func executable(selected: URL?, path: String) throws -> URL { fixture.helper }
+    func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
+        let plan = CopilotPluginResources(writes: [
+            .init(file: fixture.helperRecord, data: try CopilotSetupJSON.data(["helper": helper.path])),
+            .init(file: blockedDirectory.appendingPathComponent("blocked-resource"), data: Data("write".utf8)),
+        ], routes: fixture.home)
+        try plan.publish()
+        return fixture.source
+    }
+    func removeMessaging(root: URL) throws {}
+}
+
 actor ObserverSetupRunner: CopilotSetupProcessRunner {
     let fixture: ObserverFixture
     var installed: Bool
@@ -439,6 +455,30 @@ struct CopilotObserverRegistrationTests {
         let foreign = try CopilotSetupFileState.read(fixture.file)
         #expect(throws: CMUXMaestroPreview.CopilotFileError.changed) { try operation.restoreStaging() }
         #expect(try CopilotSetupFileState.read(fixture.file) == foreign)
+    }
+
+    @Test func resourcePreparationFailureRestoresStagingAndPreviousHelperBeforePluginCommand() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let oldHelper = fixture.directory.appendingPathComponent("old/CMUXMaestroCopilotHook")
+        try fixture.legacy(helper: oldHelper)
+        let helperBefore = try CopilotSetupFileState.read(fixture.helperRecord)
+        let legacyBefore = try CopilotSetupFileState.read(fixture.cache.appendingPathComponent("hooks.json"))
+        let blocked = fixture.directory.appendingPathComponent("blocked")
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o500])
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: blocked.path) }
+        let runner = ObserverSetupRunner(fixture, installed: true)
+        let service = CopilotSetup(
+            files: FailingResourceSetupFiles(fixture: fixture, blockedDirectory: blocked), runner: runner,
+            bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier, registration: fixture.registration)
+        let result = await perform(service, fixture)
+        #expect(result.message.contains("previous owned resource files were restored and verified"))
+        #expect(result.message.contains("Previous observer-file and provenance"))
+        #expect(await runner.calls.isEmpty)
+        #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
+        #expect(try CopilotSetupFileState.read(fixture.root.appendingPathComponent(CopilotObserverRegistration.receiptName)).data == nil)
+        #expect(try CopilotSetupFileState.read(fixture.helperRecord).data == helperBefore.data)
+        #expect(try CopilotSetupFileState.read(legacyBefore.url) == legacyBefore)
     }
 
     @Test func cancellationWaitsForStagingAbsenceRestoration() async throws {

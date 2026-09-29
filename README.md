@@ -138,8 +138,14 @@ If setup fails during disabled staging, before resource preparation or any
 plugin command starts, it restores and verifies the previous owned observer
 file and provenance (including prior absence and permissions). Cancellation
 waits for that bounded restoration. A changed owned file is never overwritten
-to force rollback. Later resource/plugin failures still report incomplete;
-they do not have verified whole-integration restoration.
+to force rollback. Resource preparation snapshots all named owned resources
+before writing. A later resource-file write failure conditionally restores their
+previous bytes, absence and permissions, then restores observer staging when
+that restoration is verified. Unchanged resources retain their file identity.
+Preflight refusal is reported as no resource-file writes, not as a rollback.
+Unverifiable restoration, process interruption, or failures after preparation
+has completed still report incomplete; whole-integration restoration is not
+yet implemented.
 
 **Disable preservation is conservative.** The provider omits destination keys
 for a file-disabled source. When a registration change would require mapping

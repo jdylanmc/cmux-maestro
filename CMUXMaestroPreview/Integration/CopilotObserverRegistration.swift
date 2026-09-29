@@ -47,6 +47,7 @@ nonisolated struct CopilotSetupFileState: Equatable {
     let url: URL
     let data: Data?
     let stamp: CopilotFileStamp?
+    let maximum: Int
 
     static func read(_ url: URL, maximum: Int = 65_536) throws -> Self {
         try validateAncestors(url.deletingLastPathComponent())
@@ -54,7 +55,7 @@ nonisolated struct CopilotSetupFileState: Equatable {
         do {
             directory = try CopilotFileAccess.openDirectory(url.deletingLastPathComponent(), owner: getuid())
         } catch CopilotFileError.missing {
-            return Self(url: url, data: nil, stamp: nil)
+            return Self(url: url, data: nil, stamp: nil, maximum: maximum)
         }
         defer { close(directory) }
         _ = try HookFiles.metadata(directory, directory: true)
@@ -62,7 +63,7 @@ nonisolated struct CopilotSetupFileState: Equatable {
         do {
             fd = try CopilotFileAccess.openRegular(at: directory, name: url.lastPathComponent, owner: getuid())
         } catch CopilotFileError.missing {
-            return Self(url: url, data: nil, stamp: nil)
+            return Self(url: url, data: nil, stamp: nil, maximum: maximum)
         }
         defer { close(fd) }
         let info = try HookFiles.metadata(fd)
@@ -74,7 +75,7 @@ nonisolated struct CopilotSetupFileState: Equatable {
         guard data.count == before.size, before == (try CopilotFileAccess.statFile(fd)),
               before == (try CopilotFileAccess.statEntry(at: directory, name: url.lastPathComponent))
         else { throw CopilotFileError.changed }
-        return Self(url: url, data: data, stamp: before)
+        return Self(url: url, data: data, stamp: before, maximum: maximum)
     }
 
     private static func validateAncestors(_ directory: URL) throws {
@@ -97,7 +98,7 @@ nonisolated struct CopilotSetupFileState: Equatable {
     }
 
     func revalidate() throws {
-        guard try Self.read(url) == self else { throw CopilotFileError.changed }
+        guard try Self.read(url, maximum: maximum) == self else { throw CopilotFileError.changed }
     }
 
     @discardableResult
@@ -141,7 +142,7 @@ nonisolated struct CopilotSetupFileState: Equatable {
             throw CopilotFileError.current()
         }
         guard fsync(directory) == 0 else { throw CopilotFileError.io }
-        return try Self.read(url)
+        return try Self.read(url, maximum: maximum)
     }
 }
 
@@ -803,6 +804,16 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         }
 
         func preparingResources() { resourcesPreparationStarted = true }
+
+        func resourcesWereRestored() throws {
+            let restored = try CopilotSetupFileState.read(helperRecord.url)
+            guard restored.data == helperRecord.data,
+                  restored.stamp?.permissions == helperRecord.stamp?.permissions else {
+                throw CopilotFileError.changed
+            }
+            helperRecord = restored
+            resourcesPreparationStarted = false
+        }
 
         func restoreStaging() throws -> Bool {
             guard !resourcesPreparationStarted, !pluginCommandPending,

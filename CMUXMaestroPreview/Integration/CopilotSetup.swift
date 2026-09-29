@@ -149,6 +149,80 @@ nonisolated protocol CopilotSetupFileSystem: Sendable {
     func removeMessaging(root: URL) throws
 }
 
+nonisolated struct CopilotResourcePreparationFailure: Error {
+    enum Outcome { case untouched, restored, unverified }
+    let outcome: Outcome
+    var restored: Bool { outcome == .restored }
+}
+
+nonisolated struct CopilotPluginResources {
+    struct Write {
+        let file: URL
+        let data: Data?
+        var permissions: UInt16 = 0o600
+        var maximum: Int = 65_536
+    }
+
+    let writes: [Write]
+    let routes: URL
+
+    func publish() throws {
+        let before: [CopilotSetupFileState]
+        do {
+            guard writes.count <= 32, Set(writes.map(\.file)).count == writes.count,
+                  writes.allSatisfy({ change in
+                      change.maximum > 0 && change.maximum <= 4_194_304
+                          && (change.data.map { !$0.isEmpty && $0.count <= change.maximum } ?? true)
+                  })
+            else { throw CopilotFileError.tooLarge }
+            before = try writes.map { try CopilotSetupFileState.read($0.file, maximum: $0.maximum) }
+            let routeDirectory = try HookFiles.directory(routes, create: true)
+            defer { close(routeDirectory) }
+            let info = try HookFiles.metadata(routeDirectory, directory: true)
+            guard info.st_mode & 0o777 == 0o700 else { throw CopilotFileError.unsafePath }
+        } catch {
+            throw CopilotResourcePreparationFailure(outcome: .untouched)
+        }
+        var current = before
+        var attempted: Int?
+        do {
+            for (index, change) in writes.enumerated() {
+                attempted = index
+                current[index] = try current[index].replacing(with: change.data, permissions: change.permissions)
+            }
+            for file in current { try file.revalidate() }
+        } catch {
+            do {
+                // A rename can succeed before fsync/readback fails. Only the
+                // in-flight write may be reconciled to its exact desired bytes.
+                if let index = attempted {
+                    let actual = try CopilotSetupFileState.read(writes[index].file, maximum: writes[index].maximum)
+                    if actual != current[index] {
+                        guard actual.data == writes[index].data,
+                              actual.stamp?.permissions == (writes[index].data == nil ? nil : writes[index].permissions)
+                        else { throw CopilotFileError.changed }
+                        current[index] = actual
+                    }
+                }
+                for file in current { try file.revalidate() }
+                for index in current.indices.reversed() {
+                    current[index] = try current[index].replacing(
+                        with: before[index].data, permissions: before[index].stamp?.permissions)
+                }
+                for index in current.indices {
+                    try current[index].revalidate()
+                    guard current[index].data == before[index].data,
+                          current[index].stamp?.permissions == before[index].stamp?.permissions
+                    else { throw CopilotFileError.changed }
+                }
+            } catch {
+                throw CopilotResourcePreparationFailure(outcome: .unverified)
+            }
+            throw CopilotResourcePreparationFailure(outcome: .restored)
+        }
+    }
+}
+
 nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
     var nativeExtensions = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".copilot/extensions", isDirectory: true)
@@ -178,6 +252,14 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
     }
 
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
+        let plan: CopilotPluginResources
+        do { plan = try resources(root: root, helper: helper, controller: controller, skill: skill) }
+        catch { throw CopilotResourcePreparationFailure(outcome: .untouched) }
+        try plan.publish()
+        return root.appendingPathComponent("plugin", isDirectory: true)
+    }
+
+    private func resources(root: URL, helper: URL, controller: URL, skill: URL) throws -> CopilotPluginResources {
         let iconSkill = skill.deletingLastPathComponent().appendingPathComponent("maestro-icon/SKILL.md")
         let resources = skill.deletingLastPathComponent()
         let adapterData = try boundedResource(resources.appendingPathComponent("adapter.mjs"), maximum: 65_536)
@@ -205,72 +287,39 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         guard routes.appendingPathComponent(String(repeating: "0", count: 16) + ".sock").path.utf8.count <= 100 else {
             throw HookFiles.Failure.unavailable
         }
-        let rootFD = try HookFiles.privateDirectory(root)
-        defer { close(rootFD) }
         let plugin = root.appendingPathComponent("plugin", isDirectory: true)
-        let directory = try HookFiles.privateDirectory(plugin)
-        defer { close(directory) }
-        // Observer setup owns the conditional manifest writes and the
-        // disabled-stage / official-replacement / publication transaction.
-        let skills = try HookFiles.privateDirectory(plugin.appendingPathComponent("skills", isDirectory: true))
-        defer { close(skills) }
-        let orchestrationSkill = try HookFiles.privateDirectory(
-            plugin.appendingPathComponent("skills/cmux-maestro-orchestrate", isDirectory: true)
-        )
-        defer { close(orchestrationSkill) }
-        try HookFiles.atomicWrite(skillData, name: "SKILL.md", directory: orchestrationSkill)
-        let iconSkillDirectory = try HookFiles.privateDirectory(
-            plugin.appendingPathComponent("skills/maestro-icon", isDirectory: true)
-        )
-        defer { close(iconSkillDirectory) }
-        try HookFiles.atomicWrite(iconSkillData, name: "SKILL.md", directory: iconSkillDirectory)
-        try removeBundledMessagingSkill(at: skills)
-
         let orchestration = root.deletingLastPathComponent()
             .appendingPathComponent("Orchestration", isDirectory: true)
-        let orchestrationRoot = try HookFiles.privateDirectory(orchestration)
-        defer { close(orchestrationRoot) }
-        let bin = try HookFiles.privateDirectory(orchestration.appendingPathComponent("bin", isDirectory: true))
-        defer { close(bin) }
-        try HookFiles.atomicWrite(
-            JSONSerialization.data(withJSONObject: ["helper": helper.path], options: [.sortedKeys]),
-            name: "identity-helper.json", directory: bin
-        )
-        let glyphDirectory = try HookFiles.privateDirectory(
-            orchestration.appendingPathComponent("bin/NerdFonts", isDirectory: true)
-        )
-        defer { close(glyphDirectory) }
-        for (name, data) in glyphData {
-            try HookFiles.atomicWrite(data, name: name, directory: glyphDirectory)
-        }
-        try executableWrite(
-            controllerData,
-            name: "cmux-maestro-orchestrator", directory: bin
-        )
-        let extensions = try HookFiles.directory(nativeExtensions, create: true)
-        defer { close(extensions) }
-        _ = try HookFiles.metadata(extensions, directory: true)
-        let nativeDirectory = try HookFiles.privateDirectory(nativeRoot)
-        defer { close(nativeDirectory) }
-        let routeDirectory = try HookFiles.privateDirectory(routes)
-        defer { close(routeDirectory) }
-        try HookFiles.atomicWrite(adapterData, name: "adapter.mjs", directory: nativeDirectory)
-        try HookFiles.atomicWrite(loaderData, name: "extension.mjs", directory: nativeDirectory)
-        try HookFiles.atomicWrite(
-            JSONSerialization.data(withJSONObject: [
+        let bin = orchestration.appendingPathComponent("bin", isDirectory: true)
+        var writes: [CopilotPluginResources.Write] = [
+            .init(file: plugin.appendingPathComponent("skills/cmux-maestro-orchestrate/SKILL.md"), data: skillData),
+            .init(file: plugin.appendingPathComponent("skills/maestro-icon/SKILL.md"), data: iconSkillData),
+            .init(file: bin.appendingPathComponent("identity-helper.json"),
+                  data: try JSONSerialization.data(withJSONObject: ["helper": helper.path], options: [.sortedKeys])),
+            .init(file: bin.appendingPathComponent("cmux-maestro-orchestrator"), data: controllerData,
+                  permissions: 0o700, maximum: 1_048_576),
+            .init(file: nativeRoot.appendingPathComponent("adapter.mjs"), data: adapterData),
+            .init(file: nativeRoot.appendingPathComponent("extension.mjs"), data: loaderData),
+            .init(file: bin.appendingPathComponent("messaging.json"), data: try JSONSerialization.data(withJSONObject: [
                 "version": 1, "routes": routes.path, "extension": nativeRoot.path,
-            ], options: [.sortedKeys]),
-            name: "messaging.json", directory: bin
-        )
-        return plugin
+            ], options: [.sortedKeys])),
+        ]
+        for (index, resource) in glyphData.enumerated() {
+            writes.append(.init(file: bin.appendingPathComponent("NerdFonts/\(resource.0)"),
+                                data: resource.1, maximum: glyphFiles[index].1))
+        }
+        if let obsolete = try obsoleteMessagingSkill(plugin: plugin) {
+            writes.append(.init(file: obsolete, data: nil))
+        }
+        return CopilotPluginResources(writes: writes, routes: routes)
     }
 
-    private func removeBundledMessagingSkill(at skills: Int32) throws {
+    private func obsoleteMessagingSkill(plugin: URL) throws -> URL? {
         // Only the obsolete copy in this installer's plugin, never global skills.
         let directory: Int32
         do {
-            directory = try CopilotFileAccess.openDirectory(at: skills, name: "maestro", owner: getuid())
-        } catch CopilotFileError.missing { return }
+            directory = try CopilotFileAccess.openDirectory(plugin.appendingPathComponent("skills/maestro"), owner: getuid())
+        } catch CopilotFileError.missing { return nil }
         defer { close(directory) }
         let info = try HookFiles.metadata(directory, directory: true)
         guard info.st_mode & 0o777 == 0o700 else { throw HookFiles.Failure.unavailable }
@@ -278,8 +327,8 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
             _ = try CopilotFileAccess.readStableRegular(
                 at: directory, filename: "SKILL.md", owner: getuid(), maximum: 65_536, permissions: 0o600
             )
-        } catch CopilotFileError.missing { return }
-        guard unlinkat(directory, "SKILL.md", 0) == 0 else { throw HookFiles.Failure.unavailable }
+        } catch CopilotFileError.missing { return nil }
+        return plugin.appendingPathComponent("skills/maestro/SKILL.md")
     }
 
     func removeMessaging(root: URL) throws {
@@ -312,23 +361,6 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
         guard data.count == size else { throw HookFiles.Failure.unavailable }
         return data
-    }
-
-    private func executableWrite(_ data: Data, name: String, directory: Int32) throws {
-        let pending = ".pending-\(UUID().uuidString)"
-        let descriptor = openat(
-            directory, pending, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o700
-        )
-        guard descriptor >= 0 else { throw HookFiles.Failure.unavailable }
-        defer {
-            close(descriptor)
-            unlinkat(directory, pending, 0)
-        }
-        let written = data.withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress, $0.count) }
-        guard written == data.count, fchmod(descriptor, 0o700) == 0, fsync(descriptor) == 0,
-              renameat(directory, pending, directory, name) == 0 else {
-            throw HookFiles.Failure.unavailable
-        }
     }
 }
 
@@ -731,7 +763,19 @@ nonisolated struct CopilotSetup: Sendable {
         } catch {
             let reason: String
             if let conflict = error as? CopilotRegistrationConflict { reason = conflict.message }
-            else if error is CancellationError { reason = CopilotSetupResult.cancelled.message }
+            else if let resources = error as? CopilotResourcePreparationFailure {
+                if resources.outcome != .unverified, let transaction {
+                    do { try await CopilotSetupFileWork.restore { try transaction.resourcesWereRestored() } }
+                    catch {
+                        return .incomplete(transaction.phase, "Resource restoration could not be verified against helper provenance.")
+                    }
+                }
+                switch resources.outcome {
+                case .untouched: reason = "Resource preparation refused before changing resource files."
+                case .restored: reason = "Resource preparation failed; previous owned resource files were restored and verified."
+                case .unverified: reason = "Resource preparation failed and previous owned resources could not be restored and verified."
+                }
+            } else if error is CancellationError { reason = CopilotSetupResult.cancelled.message }
             else { reason = "A required file is unsafe, unreadable, malformed or changed during setup. No unverified rollback was attempted." }
             if let transaction, transaction.phase != .preflight {
                 return await Self.incomplete(transaction, reason: reason)
@@ -745,7 +789,7 @@ nonisolated struct CopilotSetup: Sendable {
         do {
             let restored = try await CopilotSetupFileWork.restore { try operation.restoreStaging() }
             return .incomplete(operation.phase, reason + (restored
-                ? " Previous observer-file and provenance bytes, absence and permissions were restored and verified before any plugin/resource changes."
+                ? " Previous observer-file and provenance bytes, absence and permissions were restored and verified; no plugin command ran."
                 : " Previous integration state has not been restored."))
         } catch {
             return .incomplete(operation.phase,

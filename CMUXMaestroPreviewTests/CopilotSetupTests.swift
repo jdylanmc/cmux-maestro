@@ -126,6 +126,80 @@ struct CopilotSetupTests {
     private let controller = URL(fileURLWithPath: "/Applications/Maestro.app/Contents/Resources/cmux-maestro-orchestrator.py")
     private let skill = URL(fileURLWithPath: "/Applications/Maestro.app/Contents/Resources/SKILL.md")
 
+    @Test(arguments: [false, true])
+    func resourceFailureRestoresPreviousFilesOrAbsence(firstInstall: Bool) throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let first = fixture.root.appendingPathComponent("large-resource")
+        let second = fixture.root.appendingPathComponent("controller")
+        let blocked = fixture.root.appendingPathComponent("blocked")
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: blocked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: blocked.path) }
+        if !firstInstall {
+            try fixture.write(Data(repeating: 7, count: 100_000), to: first)
+            try fixture.write(Data("previous executable".utf8), to: second)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: second.path)
+        }
+        let previous = try [first, second].map { try CopilotSetupFileState.read($0, maximum: 131_072) }
+        let unrelated = fixture.root.appendingPathComponent("unrelated")
+        try fixture.write(Data("retain".utf8), to: unrelated)
+        let unrelatedBefore = try CopilotSetupFileState.read(unrelated)
+        let plan = CopilotPluginResources(writes: [
+            .init(file: first, data: Data(repeating: 9, count: 100_000), maximum: 131_072),
+            .init(file: second, data: Data("new executable".utf8), permissions: 0o700),
+            .init(file: blocked.appendingPathComponent("late-file"), data: Data("cannot write".utf8)),
+        ], routes: fixture.home)
+        do {
+            try plan.publish()
+            Issue.record("Expected a real late filesystem write failure")
+        } catch let failure as CopilotResourcePreparationFailure {
+            #expect(failure.restored)
+        }
+        for old in previous {
+            let restored = try CopilotSetupFileState.read(old.url, maximum: old.maximum)
+            #expect(restored.data == old.data)
+            #expect(restored.stamp?.permissions == old.stamp?.permissions)
+            if old.data != nil { #expect(restored.stamp != old.stamp, "The earlier write must actually have occurred before restoration") }
+        }
+        #expect(try CopilotSetupFileState.read(unrelated) == unrelatedBefore)
+        #expect(try CopilotSetupFileState.read(blocked.appendingPathComponent("late-file")).data == nil)
+    }
+
+    @Test func identicalResourcePublicationRetainsFileIdentityAndLargeFileBound() throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let target = fixture.root.appendingPathComponent("resource")
+        let plan = CopilotPluginResources(writes: [
+            .init(file: target, data: Data(repeating: 3, count: 100_000), maximum: 131_072),
+        ], routes: fixture.home)
+        try plan.publish()
+        let before = try CopilotSetupFileState.read(target, maximum: 131_072)
+        try plan.publish()
+        #expect(try CopilotSetupFileState.read(target, maximum: 131_072) == before)
+        try before.revalidate()
+        let oversized = CopilotPluginResources(writes: [
+            .init(file: target, data: Data(repeating: 5, count: 131_073), maximum: 131_072),
+        ], routes: fixture.home)
+        #expect(throws: CopilotResourcePreparationFailure.self) { try oversized.publish() }
+        #expect(try CopilotSetupFileState.read(target, maximum: 131_072) == before)
+    }
+
+    @Test func unsafeLateResourceRefusesBeforeEarlierResourceMutation() throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let target = fixture.root.appendingPathComponent("safe-resource")
+        let alias = fixture.root.appendingPathComponent("linked-resource")
+        try fixture.write(Data("unchanged".utf8), to: target)
+        let before = try CopilotSetupFileState.read(target)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        let plan = CopilotPluginResources(writes: [
+            .init(file: target, data: Data("must not publish".utf8)),
+            .init(file: alias, data: Data("must not follow".utf8)),
+        ], routes: fixture.home)
+        #expect(throws: CopilotResourcePreparationFailure.self) { try plan.publish() }
+        #expect(try CopilotSetupFileState.read(target) == before)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: alias.path) == target.path)
+    }
+
     @Test func commandLineSetupIsExplicitAndRejectsAmbiguousArguments() throws {
         #expect(try CopilotSetupCommandLine.executable(arguments: []) == nil)
         #expect(try CopilotSetupCommandLine.executable(arguments: ["--unrelated"]) == nil)

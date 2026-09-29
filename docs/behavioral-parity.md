@@ -146,6 +146,18 @@ than overwriting foreign bytes. All resource inputs and the unchanged socket
 path bound are checked before resource writes begin. The resource fixture uses
 an exclusive short disposable directory rather than depending on checkout
 path length; it also exercises the overlong-path refusal before effects.
+Owned resource preparation now preflights the complete fixed file set and uses
+the existing conditional file-state writer. Its failure path verifies and
+restores earlier resource writes, including executable modes, absent files,
+large bounded font/catalog resources and the obsolete owned guide. A verified
+resource restoration also permits restoration of disabled observer staging.
+Unchanged resource bytes/modes are no-ops rather than inode replacements.
+Real permission-denied late writes exercise reversal, with changed file stamps
+proving an earlier write actually occurred. Unsafe later targets refuse before
+earlier writes. Preflight/no-write, verified restoration and unverified
+restoration are separate outcomes; unrelated files and live routes remain
+untouched. This is in-process resource compensation, not crash recovery or
+reversal of a completed provider command.
 A later failed step reports the last completed phase; the next phase may have
 partially refreshed setup resources. Retry revalidates recorded generations
 and known partial preparation, preserving a retained disabled stage. It never
@@ -168,7 +180,7 @@ waiting and restoration when release fails; no signal, UI selection, host
 restart or script-sidebar reload is used.
 These tests use synthetic registries and real disposable filesystem exchanges;
 they do not prove stock-host unload/reload or a combined app/Copilot transaction.
-Copilot resource/plugin rollback, automatic integration during installation,
+Crash-durable resource/provider rollback, automatic integration during installation,
 native lifecycle proof and later installed fresh-session acceptance remain
 open. Hosted CI and independent review are separate gates.
 
