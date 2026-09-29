@@ -193,17 +193,6 @@ nonisolated struct SnapshotValue<Value: Codable & Equatable & Sendable>: Codable
     static func degraded(_ detail: String, value: Value? = nil) -> Self {
         Self(availability: .degraded, value: value, detail: detail)
     }
-
-    var isValidObservation: Bool {
-        switch availability {
-        case .known: value != nil && detail == nil
-        case .unknown: value == nil
-        case .degraded: detail?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        }
-    }
-
-    var knownValue: Value? { availability == .known && isValidObservation ? value : nil }
-    var isDegraded: Bool { availability == .degraded || !isValidObservation }
 }
 
 nonisolated enum AgentSessionState: String, Codable, Equatable, Sendable {
@@ -212,87 +201,6 @@ nonisolated enum AgentSessionState: String, Codable, Equatable, Sendable {
     case working
     case blocked
     case done
-}
-
-// Only distinctions that v1 cannot express. The legacy state must be unknown
-// when a detail is present, so old decoders never mistake idle/failure for done.
-nonisolated enum AgentSessionStateDetail: String, Codable, Equatable, Sendable {
-    case idle, failed, cancelled
-}
-
-nonisolated enum AgentWorkState: String, Codable, Equatable, Sendable {
-    case unknown, queued, working, idle, blocked, completed, failed, cancelled
-
-    var isTerminal: Bool { self == .completed || self == .failed || self == .cancelled }
-
-    static func resolve(
-        _ state: SnapshotValue<AgentSessionState>, detail: AgentSessionStateDetail?
-    ) -> Self {
-        guard state.isValidObservation else { return .unknown }
-        if let detail {
-            guard state.availability == .unknown, state.value == nil else { return .unknown }
-            switch detail {
-            case .idle: return .idle
-            case .failed: return .failed
-            case .cancelled: return .cancelled
-            }
-        }
-        guard state.availability == .known, let state = state.value else { return .unknown }
-        switch state {
-        case .unknown: return .unknown
-        case .queued: return .queued
-        case .working: return .working
-        case .blocked: return .blocked
-        case .done: return .completed
-        }
-    }
-}
-
-nonisolated enum AgentProcessLiveness: String, Codable, Equatable, Sendable {
-    case alive, dead, ambiguous, unknown
-}
-
-nonisolated enum AgentWorkKind: String, Codable, Equatable, Sendable {
-    case subagent, skill, shell, unknown
-}
-
-nonisolated struct AgentTerminalEvent: Codable, Equatable, Sendable {
-    let id: UUID
-    let timestamp: Date?
-}
-
-nonisolated struct AgentSessionAppearance: Codable, Equatable, Sendable {
-    let iconId: String?
-    let iconColor: String?
-}
-
-// Additional evidence, never a reinterpretation of v1's nested childWork.
-// Items are ordered literal edges; missing parents and cycles are permissible.
-nonisolated struct AgentChildWorkObservation: Codable, Equatable, Sendable {
-    let items: [AgentChildWork]
-    let legacyProjectionIsLossless: Bool
-
-    init(items: [AgentChildWork], legacyProjectionIsLossless: Bool = false) {
-        self.items = items
-        self.legacyProjectionIsLossless = legacyProjectionIsLossless
-    }
-}
-
-nonisolated struct AgentSnapshotIssue: RawRepresentable, Codable, Equatable, Sendable {
-    let rawValue: String
-
-    static let integrationNotInstalled = Self(rawValue: "integrationNotInstalled")
-    static let noIdentityRecords = Self(rawValue: "noIdentityRecords")
-    static let permissionDenied = Self(rawValue: "permissionDenied")
-    static let loadingHistory = Self(rawValue: "loadingHistory")
-    static let stateUnavailable = Self(rawValue: "stateUnavailable")
-    static let malformedData = Self(rawValue: "malformedData")
-    static let unsupportedFormat = Self(rawValue: "unsupportedFormat")
-    static let identityChanged = Self(rawValue: "identityChanged")
-    static let ambiguousIdentity = Self(rawValue: "ambiguousIdentity")
-    static let ambiguousTurn = Self(rawValue: "ambiguousTurn")
-    static let readLimitReached = Self(rawValue: "readLimitReached")
-    static let appearanceUnavailable = Self(rawValue: "appearanceUnavailable")
 }
 
 nonisolated struct AgentModel: Codable, Equatable, Sendable {
@@ -514,23 +422,6 @@ nonisolated struct AgentChildWork: Codable, Equatable, Sendable {
     let state: SnapshotValue<AgentSessionState>
     let activity: SnapshotValue<AgentActivity>
     let children: [AgentChildWork]
-    let stateDetail: AgentSessionStateDetail?
-    let kind: AgentWorkKind?
-    let model: SnapshotValue<AgentModel>?
-    let terminalEvent: AgentTerminalEvent?
-    let attention: [AgentAttention]?
-
-    var workState: AgentWorkState { .resolve(state, detail: stateDetail) }
-    var parentID: String? {
-        if case .child(let id) = parent { return id.rawValue }
-        return nil
-    }
-
-    func containing(_ children: [AgentChildWork]) -> Self {
-        Self(id: id, parent: parent, title: title, state: state, activity: activity,
-             children: children, stateDetail: stateDetail, kind: kind, model: model,
-             terminalEvent: terminalEvent, attention: attention)
-    }
 
     init(
         id: ChildWorkID,
@@ -538,12 +429,7 @@ nonisolated struct AgentChildWork: Codable, Equatable, Sendable {
         title: SnapshotValue<String>,
         state: SnapshotValue<AgentSessionState>,
         activity: SnapshotValue<AgentActivity>,
-        children: [AgentChildWork] = [],
-        stateDetail: AgentSessionStateDetail? = nil,
-        kind: AgentWorkKind? = nil,
-        model: SnapshotValue<AgentModel>? = nil,
-        terminalEvent: AgentTerminalEvent? = nil,
-        attention: [AgentAttention]? = nil
+        children: [AgentChildWork] = []
     ) {
         self.id = id
         self.parent = parent
@@ -551,11 +437,6 @@ nonisolated struct AgentChildWork: Codable, Equatable, Sendable {
         self.state = state
         self.activity = activity
         self.children = children
-        self.stateDetail = stateDetail
-        self.kind = kind
-        self.model = model
-        self.terminalEvent = terminalEvent
-        self.attention = attention
     }
 }
 
@@ -569,15 +450,6 @@ nonisolated struct AgentSessionSnapshotItem: Codable, Equatable, Sendable {
     let paths: SnapshotValue<AgentSessionPaths>
     let timing: SnapshotValue<AgentSessionTiming>
     let childWork: [AgentChildWork]
-    let stateDetail: AgentSessionStateDetail?
-    let liveness: AgentProcessLiveness?
-    let observedAt: Date?
-    let launchBinding: AgentSessionBinding?
-    let appearance: AgentSessionAppearance?
-    let attention: [AgentAttention]?
-    let childWorkObservation: AgentChildWorkObservation?
-
-    var workState: AgentWorkState { .resolve(state, detail: stateDetail) }
 
     init(
         identity: ProviderSessionIdentity,
@@ -588,14 +460,7 @@ nonisolated struct AgentSessionSnapshotItem: Codable, Equatable, Sendable {
         model: SnapshotValue<AgentModel>,
         paths: SnapshotValue<AgentSessionPaths>,
         timing: SnapshotValue<AgentSessionTiming>,
-        childWork: [AgentChildWork] = [],
-        stateDetail: AgentSessionStateDetail? = nil,
-        liveness: AgentProcessLiveness? = nil,
-        observedAt: Date? = nil,
-        launchBinding: AgentSessionBinding? = nil,
-        appearance: AgentSessionAppearance? = nil,
-        attention: [AgentAttention]? = nil,
-        childWorkObservation: AgentChildWorkObservation? = nil
+        childWork: [AgentChildWork] = []
     ) {
         self.identity = identity
         self.binding = binding
@@ -606,13 +471,6 @@ nonisolated struct AgentSessionSnapshotItem: Codable, Equatable, Sendable {
         self.paths = paths
         self.timing = timing
         self.childWork = childWork
-        self.stateDetail = stateDetail
-        self.liveness = liveness
-        self.observedAt = observedAt
-        self.launchBinding = launchBinding
-        self.appearance = appearance
-        self.attention = attention
-        self.childWorkObservation = childWorkObservation
     }
 }
 
@@ -621,35 +479,22 @@ nonisolated struct AgentSessionSnapshot: Codable, Equatable, Sendable {
     let generatedAt: Date
     let workspaces: [CMUXWorkspaceSnapshot]
     let sessions: [AgentSessionSnapshotItem]
-    let issues: [AgentSnapshotIssue]?
-    let completeness: SnapshotValue<Bool>?
-
-    var isComplete: Bool { completeness?.knownValue == true }
 
     init(
         schemaVersion: SnapshotSchemaVersion = .current,
         generatedAt: Date,
         workspaces: [CMUXWorkspaceSnapshot],
-        sessions: [AgentSessionSnapshotItem],
-        issues: [AgentSnapshotIssue]? = nil,
-        completeness: SnapshotValue<Bool>? = nil
+        sessions: [AgentSessionSnapshotItem]
     ) {
         self.schemaVersion = schemaVersion
         self.generatedAt = generatedAt
         self.workspaces = workspaces
         self.sessions = sessions
-        self.issues = issues
-        self.completeness = completeness
     }
 
     func validate() throws {
         guard SnapshotSchemaVersion.supported.contains(schemaVersion) else {
             throw AgentSessionSnapshotValidationError.unsupportedSchemaVersion(schemaVersion.rawValue)
-        }
-        try validateDate(generatedAt, at: "generatedAt")
-        if let completeness { try validateValue(completeness, at: "completeness") }
-        for (index, issue) in (issues ?? []).enumerated() {
-            try validateIdentity(issue.rawValue, at: "issues[\(index)]")
         }
 
         var workspaceIDs = Set<WorkspaceID>()
@@ -697,96 +542,38 @@ nonisolated struct AgentSessionSnapshot: Codable, Equatable, Sendable {
                 at: "\(sessionPath).binding"
             )
 
-            if let error = assess(session, at: sessionPath).firstError { throw error }
-        }
-    }
-}
+            try validateValue(session.title, at: "\(sessionPath).title")
+            try validateValue(session.state, at: "\(sessionPath).state")
+            try validateActivity(session.activity, at: "\(sessionPath).activity")
+            try validateStateActivity(
+                state: session.state,
+                activity: session.activity,
+                at: sessionPath
+            )
+            try validateModel(session.model, at: "\(sessionPath).model")
+            try validatePaths(session.paths, at: "\(sessionPath).paths")
+            try validateTiming(
+                session.timing,
+                state: session.state,
+                generatedAt: generatedAt,
+                at: "\(sessionPath).timing"
+            )
+            try validateActivityTiming(
+                activity: session.activity,
+                timing: session.timing,
+                at: sessionPath
+            )
 
-nonisolated struct AgentSessionObservationAssessment {
-    static let maximumNodes = 4096
-    static let maximumDepth = 64
-
-    var firstError: (any Error)?
-    var sessionStateIsValid = true
-    var children: [AgentChildWork] = []
-    var invalidChildren: Set<ChildWorkID> = []
-    var invalidStates: Set<ChildWorkID> = []
-    var unresolvedParents: Set<ChildWorkID> = []
-    var omittedChildren = 0
-    var hasUncountedChildren = false
-
-    var isValid: Bool { firstError == nil }
-
-    @discardableResult
-    mutating func check(_ operation: () throws -> Void) -> Bool {
-        do {
-            try operation()
-            return true
-        } catch {
-            if firstError == nil { firstError = error }
-            return false
-        }
-    }
-}
-
-extension AgentSessionSnapshot {
-    // Both strict validation and the live consumer use these checks. A consumer
-    // can retain safe peers/fields while refusing invalid history and ancestry.
-    nonisolated func assess(
-        _ session: AgentSessionSnapshotItem, at path: String
-    ) -> AgentSessionObservationAssessment {
-        var result = AgentSessionObservationAssessment()
-        result.check { try validateValue(session.title, at: "\(path).title") }
-        result.sessionStateIsValid = result.check {
-            try validateWorkState(session.state, detail: session.stateDetail, activity: session.activity, at: path)
-        }
-        result.check {
-            if let date = session.observedAt { try validateDate(date, at: "\(path).observedAt") }
-            if let launch = session.launchBinding {
-                try validateIdentity(launch.workspaceID.rawValue, at: "\(path).launchBinding.workspaceID")
-                try validateIdentity(launch.surfaceID.rawValue, at: "\(path).launchBinding.surfaceID")
+            var childIDs = Set<ChildWorkID>()
+            for (childIndex, child) in session.childWork.enumerated() {
+                try validate(
+                    child,
+                    expectedParent: .session(session.identity),
+                    path: "\(sessionPath).childWork[\(childIndex)]",
+                    childIDs: &childIDs
+                )
             }
-            try validateActivity(session.activity, at: "\(path).activity")
-            try validateModel(session.model, at: "\(path).model")
-            try validatePaths(session.paths, at: "\(path).paths")
-            try validateTiming(session.timing, state: session.state, detail: session.stateDetail,
-                               generatedAt: generatedAt, at: "\(path).timing")
-            try validateActivityTiming(activity: session.activity, timing: session.timing, at: path)
         }
-        let legacy = assessChildren(session.childWork, session: session.identity, flat: false, at: "\(path).childWork")
-        let evidence = session.childWorkObservation.map {
-            assessChildren($0.items, session: session.identity, flat: true, at: "\(path).childWorkObservation.items")
-        } ?? legacy
-        if result.firstError == nil { result.firstError = legacy.firstError ?? evidence.firstError }
-        result.children = evidence.children
-        result.invalidChildren = evidence.invalidChildren
-        result.invalidStates = evidence.invalidStates
-        result.unresolvedParents = evidence.unresolvedParents
-        result.omittedChildren = evidence.omittedChildren
-        result.hasUncountedChildren = evidence.hasUncountedChildren
-        if session.childWorkObservation != nil, !legacy.isValid {
-            result.invalidChildren.formUnion(evidence.children.map(\.id))
-        }
-        if let observation = session.childWorkObservation, legacy.isValid {
-            // Unrelated errors cannot waive consistency; only unique, valid
-            // entries may establish a match against the compatibility view.
-            let groups = Dictionary(grouping: evidence.children, by: \.id)
-            let byID = groups.compactMapValues { matches -> AgentChildWork? in
-                guard matches.count == 1, let child = matches.first,
-                      !evidence.invalidChildren.contains(child.id),
-                      !evidence.unresolvedParents.contains(child.id) else { return nil }
-                return child
-            }
-            let consistent = result.check {
-                guard legacy.children.allSatisfy({ byID[$0.id] == $0.containing([]) }),
-                      !observation.legacyProjectionIsLossless
-                        || (evidence.isValid && legacy.children.count == observation.items.count) else {
-                    throw AgentSessionSnapshotValidationError.inconsistentChildProjection(path: "\(path).childWork")
-                }
-            }
-            if !consistent { result.invalidChildren.formUnion(evidence.children.map(\.id)) }
-        }
-        return result
     }
 }
 
@@ -800,30 +587,9 @@ nonisolated enum AgentSessionSnapshotValidationError: Error, Equatable {
     case timestampAfterSnapshot(path: String)
     case invalidStateTiming(path: String)
     case incompatibleStateActivity(path: String)
-    case incompatibleStateDetail(path: String)
-    case invalidTimestamp(path: String)
-    case observationLimitExceeded(path: String)
-    case inconsistentChildProjection(path: String)
 }
 
 private extension AgentSessionSnapshot {
-    nonisolated func validateDate(_ date: Date, at path: String) throws {
-        guard date.timeIntervalSince1970.isFinite else {
-            throw AgentSessionSnapshotValidationError.invalidTimestamp(path: path)
-        }
-        guard date <= generatedAt else {
-            throw AgentSessionSnapshotValidationError.timestampAfterSnapshot(path: path)
-        }
-    }
-
-    nonisolated func validateStateDetail(
-        _ detail: AgentSessionStateDetail?, state: SnapshotValue<AgentSessionState>, at path: String
-    ) throws {
-        if detail != nil, state.availability != .unknown || state.value != nil {
-            throw AgentSessionSnapshotValidationError.incompatibleStateDetail(path: "\(path).stateDetail")
-        }
-    }
-
     nonisolated func validateIdentity(_ value: String, at path: String) throws {
         guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentSessionSnapshotValidationError.invalidIdentity(path: path)
@@ -831,8 +597,21 @@ private extension AgentSessionSnapshot {
     }
 
     nonisolated func validateValue<Value>(_ snapshotValue: SnapshotValue<Value>, at path: String) throws {
-        guard snapshotValue.isValidObservation else {
-            throw AgentSessionSnapshotValidationError.invalidAvailability(path: path)
+        let hasDetail = snapshotValue.detail?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+
+        switch snapshotValue.availability {
+        case .known:
+            guard snapshotValue.value != nil, snapshotValue.detail == nil else {
+                throw AgentSessionSnapshotValidationError.invalidAvailability(path: path)
+            }
+        case .unknown:
+            guard snapshotValue.value == nil else {
+                throw AgentSessionSnapshotValidationError.invalidAvailability(path: path)
+            }
+        case .degraded:
+            guard hasDetail else {
+                throw AgentSessionSnapshotValidationError.invalidAvailability(path: path)
+            }
         }
     }
 
@@ -934,7 +713,6 @@ private extension AgentSessionSnapshot {
     nonisolated func validateTiming(
         _ value: SnapshotValue<AgentSessionTiming>,
         state: SnapshotValue<AgentSessionState>,
-        detail: AgentSessionStateDetail?,
         generatedAt: Date,
         at path: String
     ) throws {
@@ -954,12 +732,11 @@ private extension AgentSessionSnapshot {
             throw AgentSessionSnapshotValidationError.timestampAfterSnapshot(path: path)
         }
 
-        if value.availability == .known {
-            let state = AgentWorkState.resolve(state, detail: detail)
-            if state.isTerminal, timing.completedAt == nil {
+        if value.availability == .known, state.availability == .known, let state = state.value {
+            if state == .done, timing.completedAt == nil {
                 throw AgentSessionSnapshotValidationError.invalidStateTiming(path: path)
             }
-            if [.queued, .working, .blocked, .idle].contains(state), timing.completedAt != nil {
+            if [.queued, .working, .blocked].contains(state), timing.completedAt != nil {
                 throw AgentSessionSnapshotValidationError.invalidStateTiming(path: path)
             }
         }
@@ -967,12 +744,12 @@ private extension AgentSessionSnapshot {
 
     nonisolated func validateStateActivity(
         state: SnapshotValue<AgentSessionState>,
-        detail: AgentSessionStateDetail?,
         activity: SnapshotValue<AgentActivity>,
         at path: String
     ) throws {
-        guard activity.availability == .known,
-              AgentWorkState.resolve(state, detail: detail).isTerminal,
+        guard state.availability == .known,
+              activity.availability == .known,
+              state.value == .done,
               activity.value?.kind == .executing
         else {
             return
@@ -1004,87 +781,39 @@ private extension AgentSessionSnapshot {
         }
     }
 
-    nonisolated func validateWorkState(
-        _ state: SnapshotValue<AgentSessionState>, detail: AgentSessionStateDetail?,
-        activity: SnapshotValue<AgentActivity>, at path: String
+    nonisolated func validate(
+        _ child: AgentChildWork,
+        expectedParent: AgentChildWorkParent,
+        path: String,
+        childIDs: inout Set<ChildWorkID>
     ) throws {
-        try validateValue(state, at: "\(path).state")
-        try validateStateDetail(detail, state: state, at: path)
-        try validateStateActivity(state: state, detail: detail, activity: activity, at: path)
-    }
+        try validateIdentity(child.id.rawValue, at: "\(path).id")
+        guard childIDs.insert(child.id).inserted else {
+            throw AgentSessionSnapshotValidationError.duplicateIdentity(child.id.rawValue)
+        }
+        guard child.parent == expectedParent else {
+            throw AgentSessionSnapshotValidationError.invalidHierarchyReference(
+                path: "\(path).parent",
+                reference: String(describing: child.parent)
+            )
+        }
 
-    nonisolated func assessChildren(
-        _ children: [AgentChildWork], session: ProviderSessionIdentity, flat: Bool, at path: String
-    ) -> AgentSessionObservationAssessment {
-        struct Frame {
-            let children: [AgentChildWork]
-            var next = 0
-            let parent: AgentChildWorkParent
-            let path: String
-            let unresolved: Bool
+        try validateValue(child.title, at: "\(path).title")
+        try validateValue(child.state, at: "\(path).state")
+        try validateActivity(child.activity, at: "\(path).activity")
+        try validateStateActivity(
+            state: child.state,
+            activity: child.activity,
+            at: path
+        )
+
+        for (childIndex, nestedChild) in child.children.enumerated() {
+            try validate(
+                nestedChild,
+                expectedParent: .child(child.id),
+                path: "\(path).children[\(childIndex)]",
+                childIDs: &childIDs
+            )
         }
-        var result = AgentSessionObservationAssessment()
-        var ids: Set<ChildWorkID> = []
-        var frames = [Frame(children: children, parent: .session(session), path: path, unresolved: false)]
-        while let frame = frames.last, result.children.count < AgentSessionObservationAssessment.maximumNodes {
-            guard frame.next < frame.children.count else { frames.removeLast(); continue }
-            frames[frames.count - 1].next += 1
-            let child = frame.children[frame.next]
-            let childPath = "\(frame.path)[\(frame.next)]"
-            var valid = result.check {
-                try validateIdentity(child.id.rawValue, at: "\(childPath).id")
-                guard ids.insert(child.id).inserted else {
-                    throw AgentSessionSnapshotValidationError.duplicateIdentity(child.id.rawValue)
-                }
-            }
-            let parentValid = result.check {
-                if flat {
-                    switch child.parent {
-                    case .session(let owner):
-                        guard owner == session else {
-                            throw AgentSessionSnapshotValidationError.invalidHierarchyReference(
-                                path: "\(childPath).parent", reference: String(describing: child.parent))
-                        }
-                    case .child(let id): try validateIdentity(id.rawValue, at: "\(childPath).parent")
-                    }
-                } else if child.parent != frame.parent {
-                    throw AgentSessionSnapshotValidationError.invalidHierarchyReference(
-                        path: "\(childPath).parent", reference: String(describing: child.parent))
-                }
-            }
-            let unresolved = frame.unresolved || !parentValid
-            if unresolved { result.unresolvedParents.insert(child.id) }
-            valid = parentValid && valid
-            if !result.check({ try validateWorkState(child.state, detail: child.stateDetail,
-                                                     activity: child.activity, at: childPath) }) {
-                result.invalidStates.insert(child.id)
-                valid = false
-            }
-            if !result.check({
-                try validateValue(child.title, at: "\(childPath).title")
-                if let model = child.model { try validateModel(model, at: "\(childPath).model") }
-                try validateActivity(child.activity, at: "\(childPath).activity")
-                if flat && !child.children.isEmpty {
-                    throw AgentSessionSnapshotValidationError.invalidHierarchyReference(
-                        path: "\(childPath).children", reference: "Nested contents in flat observations")
-                }
-            }) { valid = false }
-            if !valid { result.invalidChildren.insert(child.id) }
-            result.children.append(child)
-            if !child.children.isEmpty {
-                if frames.count < AgentSessionObservationAssessment.maximumDepth {
-                    frames.append(Frame(children: child.children, parent: .child(child.id),
-                                        path: "\(childPath).children", unresolved: unresolved || flat))
-                } else {
-                    result.omittedChildren += child.children.count
-                }
-            }
-        }
-        result.omittedChildren += frames.reduce(0) { $0 + $1.children.count - $1.next }
-        if result.omittedChildren > 0 {
-            result.hasUncountedChildren = true
-            result.check { throw AgentSessionSnapshotValidationError.observationLimitExceeded(path: path) }
-        }
-        return result
     }
 }

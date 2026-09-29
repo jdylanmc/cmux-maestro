@@ -174,7 +174,7 @@ struct SidebarHistoryPollingTests {
 
     private func poller(_ clock: HistoryTestClock, _ harness: HistoryPollingHarness) -> SidebarCopilotPolling {
         SidebarCopilotPolling(
-            read: { _ in try await harness.read() },
+            read: neutralRead { _ in try await harness.read() },
             pause: { try await harness.pause() },
             expiryPause: { try await harness.wait($0) },
             now: { clock.read() }

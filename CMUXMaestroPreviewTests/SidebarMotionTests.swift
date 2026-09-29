@@ -45,7 +45,7 @@ struct SidebarMotionTests {
         let snapshots = SidebarMotionSnapshots(f.snapshot(sessions: [
             f.session(id: f.otherSessionID, liveness: .dead, state: .unknown, now: now), current
         ], issues: [.ambiguousTurn], complete: false, now: now))
-        let polling = SidebarCopilotPolling(read: { _ in await snapshots.read() },
+        let polling = SidebarCopilotPolling(read: neutralRead { _ in await snapshots.read() },
                                            pause: { try await Task.sleep(for: .milliseconds(10)) })
         let orchestration = SidebarOrchestrationPolling(read: { raw }, pause: { try await Task.sleep(for: .seconds(60)) })
         let model = SidebarConnectionModel(copilot: polling, orchestration: orchestration)
@@ -177,7 +177,7 @@ struct SidebarMotionTests {
                 f.session(id: f.otherSessionID, state: .idle, now: now), childObservation, otherObservation
             ], now: now))
         }
-        let poller = SidebarCopilotPolling(read: { _ in await snapshots.read() },
+        let poller = SidebarCopilotPolling(read: neutralRead { _ in await snapshots.read() },
                                           pause: { try await Task.sleep(for: .milliseconds(10)) })
         let orchestration = SidebarOrchestrationPolling(read: {
             .init(version: 1, generatedAt: oldDate, complete: true, omittedCount: 0, nodes: [old, child, otherRoot])
@@ -427,7 +427,7 @@ struct SidebarMotionTests {
         let snapshots = SidebarMotionSnapshots(f.snapshot(
             sessions: [oldObservation, f.session(state: .working, now: now)], now: now
         ))
-        let poller = SidebarCopilotPolling(read: { _ in await snapshots.read() },
+        let poller = SidebarCopilotPolling(read: neutralRead { _ in await snapshots.read() },
                                           pause: { try await Task.sleep(for: .milliseconds(10)) })
         let orchestration = SidebarOrchestrationPolling(read: {
             .init(version: 1, generatedAt: oldDate, complete: true, omittedCount: 0, nodes: managed)

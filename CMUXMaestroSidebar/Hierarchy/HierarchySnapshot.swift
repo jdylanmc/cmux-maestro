@@ -51,8 +51,15 @@ struct HierarchyPathContext: Equatable {
     )
 
     var accessibilityDescription: String {
-        "Workspace: \(rootPath.pathDisplayText). Project: \(projectRootPath.pathDisplayText). Path: \(workingDirectory.pathDisplayText)."
+        "Workspace: \(rootPath.pathDisplayText). Project: \(projectRootPath.pathDisplayText). \(SidebarSurfaceDirectory.title): \(workingDirectory.pathDisplayText). \(SidebarSurfaceDirectory.help)"
     }
+}
+
+enum SidebarSurfaceDirectory {
+    static let title = "Surface directory"
+    static let parentTitle = "Parent surface directory"
+    static let help = "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory."
+    static let parentHelp = "Reported by CMUX for the parent surface; no report time supplied. Not an independently reported child directory."
 }
 
 extension HierarchyAvailability where Value == String? {

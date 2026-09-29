@@ -36,11 +36,24 @@ struct SidebarDetailLine: Equatable, Identifiable {
     let title: String
     let value: String
     var copyableSessionID: UUID? = nil
+    var help: String? = nil
     var id: String { title }
 
     static func sessionID(_ id: UUID, isParent: Bool = false, canCopy: Bool = true) -> Self {
         .init(title: isParent ? "Parent session ID" : "Session ID", value: id.uuidString,
               copyableSessionID: canCopy ? id : nil)
+    }
+}
+
+extension SidebarSurfaceDirectory {
+    static func line(
+        _ directory: HierarchyAvailability<String?>, isParent: Bool = false, retained: Bool = false
+    ) -> SidebarDetailLine {
+        .init(
+            title: isParent ? parentTitle : title,
+            value: retained ? "Not current for this original session" : directory.pathDisplayText,
+            help: isParent ? parentHelp : help
+        )
     }
 }
 
@@ -336,7 +349,7 @@ enum SidebarPresentation {
         var approvals = Set<Owner>()
         var blocked = Set<Owner>()
         var historical = Set<Owner>()
-        func include(_ owner: Owner, state: CopilotWorkState, signals: [AgentAttention], live: Bool) {
+        func include(_ owner: Owner, state: AgentWorkState, signals: [AgentAttention], live: Bool) {
             if signals.contains(where: { $0.kind == .answer }) { questions.insert(owner) }
             if signals.contains(where: { $0.kind == .permission }) { approvals.insert(owner) }
             if live && state == .blocked { blocked.insert(owner) }
@@ -485,7 +498,7 @@ enum SidebarPresentation {
            managedSession(for: node, in: tree, now: now)?.id == session.id {
             result.title = node.label
             result.visual = managedState(node, availability: availability, now: now, tree: tree)
-            let fields = Set(["Model", "Branch", "Worktree", "Git evidence", "Git changes", "Working directory", "Session ID"])
+            let fields = Set(["Model", "Branch", "Worktree", "Git evidence", "Git changes", SidebarSurfaceDirectory.title, "Session ID"])
             result.lines = managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { fields.contains($0.title) }
             result.gitChanges = node.currentGitChanges(at: now)
@@ -619,7 +632,7 @@ enum SidebarPresentation {
                 return .init(title: surface.title.isEmpty ? "Surface" : surface.title, lines: [
                     .init(title: "Type", value: surface.kind.title),
                     .init(title: "Surface ID", value: surface.id.uuidString),
-                    .init(title: "Working directory", value: surface.workingDirectory.pathDisplayText)
+                    SidebarSurfaceDirectory.line(surface.workingDirectory)
                 ])
             case .session(let id), .child(let id, _):
                 guard let session = tree.sessions.first(where: { $0.id == id }) else { return nil }
@@ -628,20 +641,23 @@ enum SidebarPresentation {
                 let retained = retainedSessionIDs(tree, managed: managed.nodes, now: now).contains(session.id)
                 let notice = retained ? "Work context. \(retainedFocusUnavailable)"
                     : current ? nil : "Session observation is stale. Last-known metadata is not live state."
-                let context = retained ? [] : paths(hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID))
                 if case .child(_, let childID) = selection {
                     guard let child = session.nodes.first(where: { $0.id == childID }) else { return nil }
+                    let context = retained ? [] : paths(
+                        hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID), isParent: true
+                    )
                     return .init(title: child.name, lines: nodeDetails(child, session: session) + [
                         .init(title: "Placement", value: "Observed child; native placement belongs to its parent session")
                     ] + context, notice: notice, isAgent: child.kind == .subagent)
                 }
+                let context = retained ? [] : paths(hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID))
                 return .init(title: "Copilot · \(session.shortID)", lines: sessionDetails(session) + context,
                              notice: notice, isAgent: true, otherActivity: session.secondaryActivity)
             }
         }
     }
 
-    static func state(_ state: CopilotWorkState) -> SidebarVisual {
+    static func state(_ state: AgentWorkState) -> SidebarVisual {
         switch state {
         case .working: .init(title: "Working", symbol: "circle.fill", tone: .green)
         case .blocked: .init(title: "Blocked", symbol: "pause.circle", tone: .red)
@@ -649,11 +665,12 @@ enum SidebarPresentation {
         case .failed: .init(title: "Failed", symbol: "exclamationmark.circle", tone: .red)
         case .cancelled: .init(title: "Cancelled", symbol: "xmark.circle", tone: .neutral)
         case .idle: .init(title: "Idle", symbol: "circle", tone: .neutral)
+        case .queued: .init(title: "Queued", symbol: "circle", tone: .neutral)
         case .unknown: .init(title: "Unknown", symbol: "circle.dashed", tone: .neutral)
         }
     }
 
-    static func process(_ liveness: CopilotLiveness) -> SidebarVisual {
+    static func process(_ liveness: AgentProcessLiveness) -> SidebarVisual {
         switch liveness {
         case .alive: .init(title: "Process alive", symbol: "circle", tone: .neutral)
         case .dead: .init(title: "Process ended", symbol: "minus.circle", tone: .neutral)
@@ -662,7 +679,7 @@ enum SidebarPresentation {
         }
     }
 
-    static func kind(_ kind: CopilotWorkKind) -> String {
+    static func kind(_ kind: AgentWorkKind) -> String {
         switch kind {
         case .subagent: "Agent"
         case .skill: "Skill"
@@ -716,7 +733,7 @@ enum SidebarPresentation {
         if tree.issues.contains(.permissionDenied) { result.append("Copilot access denied") }
         if tree.issues.contains(.integrationNotInstalled) { result.append("Copilot integration is not enabled") }
         if tree.issues.contains(.loadingHistory), tree.availability != .loading { result.append("Child history is still loading") }
-        for (issue, message): (CopilotIssue, String) in [
+        for (issue, message): (AgentSnapshotIssue, String) in [
             (.malformedData, "Some Copilot history is unreadable"),
             (.unsupportedFormat, "Unsupported Copilot history format"),
             (.identityChanged, "Session identity changed"),
@@ -726,7 +743,9 @@ enum SidebarPresentation {
             (.readLimitReached, "History read limit reached"),
             (.appearanceUnavailable, "Session icon metadata unavailable")
         ] where tree.issues.contains(issue) { result.append(message) }
-        if tree.omittedActiveChildrenCount > 0 {
+        if tree.hasUncountedChildren {
+            result.append("At least \(tree.omittedChildrenCount) tasks omitted; total and active counts unknown")
+        } else if tree.omittedActiveChildrenCount > 0 {
             result.append("\(tree.omittedActiveChildrenCount) working/blocked tasks beyond display limits")
         } else if tree.omittedChildrenCount > 0 {
             result.append("\(tree.omittedChildrenCount) tasks beyond display limits")
@@ -739,7 +758,9 @@ enum SidebarPresentation {
         if tree.issues.contains(.permissionDenied) { warnings.append("Copilot access denied") }
         else if tree.issues.contains(.integrationNotInstalled) { warnings.append("Enable Copilot integration") }
         else if let warning = overviewWarnings(tree).first { warnings.append(warning) }
-        if tree.omittedActiveChildrenCount > 0 {
+        if tree.hasUncountedChildren {
+            warnings.append("Child observation limit reached; omitted totals unknown")
+        } else if tree.omittedActiveChildrenCount > 0 {
             warnings.append("\(tree.omittedActiveChildrenCount) working/blocked tasks not shown")
         }
         return warnings
@@ -749,7 +770,7 @@ enum SidebarPresentation {
         complete ? "No visible child tasks" : "Child history unavailable"
     }
 
-    static func attention(_ signals: [AgentAttention], state: CopilotWorkState, degraded: Bool) -> [String] {
+    static func attention(_ signals: [AgentAttention], state: AgentWorkState, degraded: Bool) -> [String] {
         var result = AgentAttentionKind.allCases.compactMap { kind -> String? in
             let count = signals.filter { $0.kind == kind }.count
             guard count > 0 else { return nil }
@@ -958,11 +979,11 @@ enum SidebarPresentation {
         return nil
     }
 
-    static func paths(_ paths: HierarchyPathContext) -> [SidebarDetailLine] {
+    static func paths(_ paths: HierarchyPathContext, isParent: Bool = false) -> [SidebarDetailLine] {
         [
             .init(title: "Workspace path", value: paths.rootPath.pathDisplayText),
             .init(title: "Project path", value: paths.projectRootPath.pathDisplayText),
-            .init(title: "Working directory", value: paths.workingDirectory.pathDisplayText)
+            SidebarSurfaceDirectory.line(paths.workingDirectory, isParent: isParent)
         ]
     }
 
@@ -1014,7 +1035,7 @@ enum SidebarPresentation {
             .init(title: "Copilot observation", value: tree.summary),
             .init(title: "Session glyph", value: node.iconId ?? "Sidebar default"),
             .init(title: "Icon color", value: node.iconColor?.title ?? "Theme default"),
-            .init(title: "Working directory", value: retained ? "Not current for this original session" : paths.workingDirectory.pathDisplayText),
+            SidebarSurfaceDirectory.line(paths.workingDirectory, retained: retained),
             .init(title: "Role", value: node.role.capitalized)
         ]
         if node.role == "worker" {
@@ -1123,7 +1144,8 @@ enum SidebarPresentation {
             .init(title: "Known working children", value: "\(session.knownRunningChildren)"),
             .init(title: "Retained outcomes", value: "\(session.retainedHistoryCount)"),
             .init(title: "Hidden history", value: "\(session.hiddenHistoryCount)"),
-            .init(title: "Omitted children", value: "\(session.omittedChildrenCount)"),
+            .init(title: "Omitted children", value: session.hasUncountedChildren
+                  ? "At least \(session.omittedChildrenCount); total unknown" : "\(session.omittedChildrenCount)"),
             .init(title: "Child history", value: session.childrenComplete && !session.treeDegraded
                 ? "Complete" : "Incomplete; missing work is not assumed finished")
         ]
@@ -1196,7 +1218,7 @@ enum SidebarPresentation {
         }
     }
 
-    private static func observedSummaryState(_ state: CopilotWorkState) -> AgentSummaryState {
+    private static func observedSummaryState(_ state: AgentWorkState) -> AgentSummaryState {
         switch state {
         case .working: .working
         case .blocked: .blocked
@@ -1204,7 +1226,7 @@ enum SidebarPresentation {
         case .completed: .finished
         case .failed: .failed
         case .cancelled: .cancelled
-        case .unknown: .unknown
+        case .unknown, .queued: .unknown
         }
     }
 

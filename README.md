@@ -9,11 +9,31 @@ See the [behavioral parity matrix](docs/behavioral-parity.md) for regression
 evidence, live acceptance scope, intentional differences and remaining limits.
 
 Sidebar path labels use the real user's account home (`~` or `~/…`), including
-workspace/project paths, working directories, hover and pinned details.
+workspace/project paths, surface directories, hover and pinned details.
 Formatting normalizes separators and dot components lexically; it neither
 probes the filesystem nor resolves symlinks. Outside paths stay absolute,
 missing/denied states stay explicit, and ownership/navigation values are
 unchanged. If account-home resolution fails, the absolute label explains it.
+
+**Surface directory** means the directory reported by CMUX for that exact
+surface, not independently verified agent process or last-tool working
+directory. **Parent surface directory** is parent placement only, not a
+windowless child's own directory. Help and accessibility retain this source
+qualification and the absence of a report timestamp. A fresh session observation
+does not establish directory-report age; assigned/last-verified Git worktree
+labels are separate evidence, never directory fallbacks. Retained original
+sessions do not borrow their replacements' paths.
+
+At the pinned SDK/host revision `ae7fbce99f98c98df5ccf915e548dd080d33cfa8`,
+[`CmuxSidebarSurface.workingDirectory`](https://github.com/manaflow-ai/cmux/blob/ae7fbce99f98c98df5ccf915e548dd080d33cfa8/Packages/macOS/CmuxExtensionKit/Sources/CmuxExtensionKit/Sidebar/CMUXSidebarSurface.swift)
+is optional and filtered by `workspacePaths`.
+The [sidebar producer](https://github.com/manaflow-ai/cmux/blob/ae7fbce99f98c98df5ccf915e548dd080d33cfa8/Sources/ContentView.swift#L12736-L12748)
+uses `reportedPanelDirectory(panelId:)`, whose
+[implementation](https://github.com/manaflow-ai/cmux/blob/ae7fbce99f98c98df5ccf915e548dd080d33cfa8/Sources/Workspace%2BSidebarDirectories.swift#L48-L70)
+normalizes the panel report and applies remote trust gating. It does not use
+the separate `effectivePanelDirectory` local/requested-directory fallback.
+This is source-level provenance, not installed-host acceptance of #77 or
+runtime-directory collection.
 
 ## One-time setup
 
@@ -1164,13 +1184,48 @@ The legacy shell-row alias remains checked even for non-shell tool names, keepin
 global tool-ID replay protection conservative across metadata/name differences.
 Both ordinary tool and actual shell starts have selective-alias regressions.
 
-The reusable neutral `AgentActivity` contract lives in `Domain/AgentSignals.swift`
-alongside evidence-bearing attention primitives, compiled into app, sidebar and
-tests, not the hook. Existing snapshot behavior is unchanged. New live model
-fields are optional for backward Codable compatibility. Reader identity,
-partial-read, corruption, freshness and replay-cap safeguards still apply;
-untrusted or unavailable evidence cannot fabricate an outcome or an action.
-Telemetry and the remaining backlog are not claimed by this feature.
+Live `SidebarCopilotPolling.Read` and projection consume the existing
+`Domain/AgentSessionSnapshot.swift` contract through the pure
+`CopilotSnapshotAdapter`. `CopilotSessionReader` still owns bounded provider
+parsing; only the caller's granted current host topology establishes a binding.
+Launch workspace/surface evidence is separate and cannot create current topology.
+Activity and attention reuse `Domain/AgentSignals.swift`; these shared types
+compile into app, sidebar and tests, not the hook.
+
+Schema version remains 1. Optional observation fields preserve process liveness,
+observation time, appearance, child kinds/models/outcome-event identities, issues
+and completeness. An absent completeness field means unknown, not complete.
+Legacy `state: done` retains its meaning. Idle, failed and cancelled use an
+explicit `stateDetail` with an unknown legacy state; contradictory combinations
+are invalid. Consumers resolve that pair once and keep process liveness separate.
+Unavailable/degraded model or activity values cannot become current evidence.
+
+The existing `childWork` property always retains v1's strictly validated nested
+meaning. The adapter derives an old-compatible view of representable relations;
+unresolved components are omitted, never reparented. Additional typed
+`childWorkObservation.items` preserves the complete reader order and literal
+edges, including late/missing parents and cycles. Its
+`legacyProjectionIsLossless` flag explicitly records whether the compatibility
+view covers every observation; it does not claim complete provider history.
+New consumers use this evidence when present, never merge it with the derived
+compatibility view. The actual frozen v1 codec **and validator** are exercised
+against original fixtures, ordinary/child-first pairs, missing parents and cycles.
+
+Strict validation and live projection share per-observation structural and
+cross-field checks before history filtering. Malformed ancestry stays unresolved,
+contradictory terminal evidence cannot hide work, and valid peer sessions survive.
+Each graph assessment visits at most 4,096 nodes and 64 nesting levels. On a
+limit, visited evidence remains partial, history actions are disabled for that
+session, and omission counts are explicitly lower bounds with unknown totals.
+The existing display caps remain 256 nodes and 12 levels. Legacy invalid parent
+references still fail validation even when additional observation evidence exists.
+
+Reader identity, partial-read, corruption, freshness and replay-cap safeguards,
+history/attention actions and exact host navigation remain unchanged. No PID,
+process-start identity, raw provider payload, capability or control authority
+is added. Saved identity still does not imply resume; an observed child has no
+independent terminal. This literal #10 integration does not complete the broader
+#118 lifetime/control foundation or change observation-hook policy.
 
 ### Bounded retention and discovery
 

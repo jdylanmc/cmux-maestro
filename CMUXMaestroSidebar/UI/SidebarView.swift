@@ -1415,7 +1415,7 @@ private struct CopilotOverview: View {
                     .init(title: "Counts", value: tree.hasCompleteCounts ? "Complete current observation" : "Known counts only"),
                     .init(title: "Retained outcomes", value: "\(tree.retainedHistoryCount)"),
                     .init(title: "Hidden history", value: "\(tree.hiddenHistoryCount)"),
-                    .init(title: "Omitted tasks", value: "\(tree.omittedChildrenCount)"),
+                    .init(title: "Omitted tasks", value: tree.omittedChildrenDescription),
                     .init(title: "Observed", value: tree.generatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Observation time unknown")
                 ])
             }
@@ -1666,7 +1666,7 @@ private struct SurfaceRow: View {
         if let singleSession { return hoverProvider(.session(singleSession.id)) }
         guard connected else { return nil }
         return .init(id: "surface-\(surface.id)", category: "\(surface.kind.title) preview", title: title,
-                     lines: [.init(title: "Working directory", value: surface.workingDirectory.pathDisplayText),
+                     lines: [SidebarSurfaceDirectory.line(surface.workingDirectory),
                              .init(title: "Surface ID", value: surface.id.uuidString)])
     }
 
@@ -1779,7 +1779,7 @@ private struct SurfaceRow: View {
         } ?? ""
         let kind = singleSession == nil ? surface.kind.title : "Agent"
         guard let directoryLabel else { return state + kind }
-        return "\(state)\(kind). Working directory: \(directoryLabel). Git branch not verified by this source."
+        return "\(state)\(kind). \(SidebarSurfaceDirectory.title): \(directoryLabel). \(SidebarSurfaceDirectory.help) Git branch not verified by this source."
     }
 }
 
@@ -1899,8 +1899,10 @@ private struct CopilotSessionContents: View {
             }
             .padding(.leading, 28 + density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
-        if session.omittedActiveChildrenCount > 0 {
-            Text("\(session.omittedActiveChildrenCount) working/blocked tasks could not fit.")
+        if session.hasUncountedChildren || session.omittedActiveChildrenCount > 0 {
+            Text(session.hasUncountedChildren
+                 ? "At least \(session.omittedChildrenCount) tasks omitted; total and active counts unknown."
+                 : "\(session.omittedActiveChildrenCount) working/blocked tasks could not fit.")
                 .sidebarFont(.caption).foregroundStyle(SidebarTone.attention.color)
                 .padding(.leading, density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
@@ -2154,7 +2156,7 @@ private struct TaskboardContent: View {
     var retainedOnly = false
     @Environment(\.sidebarDensity) private var density
 
-    private let groups: [(String, [CopilotWorkState])] = [
+    private let groups: [(String, [AgentWorkState])] = [
         ("Blocked", [.blocked]), ("Working", [.working]), ("Idle", [.idle]),
         ("Done / ended", [.completed, .failed, .cancelled]), ("Unknown", [.unknown]),
     ]
@@ -2274,7 +2276,7 @@ private struct TaskboardSessionRow: View {
 
 private struct AttentionSummary: View {
     let attention: [AgentAttention]
-    let state: CopilotWorkState
+    let state: AgentWorkState
     let degraded: Bool
 
     var body: some View {
@@ -2351,6 +2353,8 @@ struct SidebarMetadataDetails: View {
                     Text(line.value).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 }
                 .accessibilityElement(children: .combine)
+                .help(line.help ?? "")
+                .accessibilityHint(line.help ?? "")
             }
         }
         .sidebarFont(.caption)
@@ -2441,14 +2445,15 @@ struct SidebarPinnedFooter: View {
             }
             if let changes = content.gitChanges { GitChangeBadge(changes: changes) }
             ForEach(content.lines.filter {
-                ["Branch", "Worktree", "Git evidence", "Git changes", "Working directory"].contains($0.title)
+                ["Branch", "Worktree", "Git evidence", "Git changes", SidebarSurfaceDirectory.title].contains($0.title)
                     && ($0.title != "Git changes" || content.gitChanges == nil)
             }) { line in
-                Text(line.title == "Working directory" ? line.value : "\(line.title): \(line.value)")
+                Text("\(line.title): \(line.value)")
                     .sidebarFont(.caption2).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
-                    .help("\(line.title): \(line.value)")
+                    .help("\(line.title): \(line.value)" + (line.help.map { ". \($0)" } ?? ""))
                     .accessibilityLabel("\(line.title): \(line.value)")
+                    .accessibilityHint(line.help ?? "")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2587,7 +2592,7 @@ private struct ExpandButton: View {
 }
 
 private struct WorkStateLabel: View {
-    let state: CopilotWorkState
+    let state: AgentWorkState
     var body: some View {
         let visual = SidebarPresentation.state(state)
         Text(visual.title)

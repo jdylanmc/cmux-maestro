@@ -193,7 +193,7 @@ struct SidebarNavigationTests {
         let recorder = SidebarHostRecorder()
         let reads = SidebarTopologyReadProbe()
         let polling = SidebarCopilotPolling(
-            read: { await reads.read($0) }, pause: { try await Task.sleep(for: .seconds(60)) }
+            read: neutralRead { await reads.read($0) }, pause: { try await Task.sleep(for: .seconds(60)) }
         )
         let model = SidebarConnectionModel(copilot: polling)
         model.setVisible(true)
@@ -238,7 +238,7 @@ struct SidebarNavigationTests {
         let recorder = SidebarHostRecorder()
         let reads = SidebarTopologyReadProbe()
         let polling = SidebarCopilotPolling(
-            read: { await reads.read($0) }, pause: { try await Task.sleep(for: .seconds(60)) }
+            read: neutralRead { await reads.read($0) }, pause: { try await Task.sleep(for: .seconds(60)) }
         )
         let model = SidebarConnectionModel(copilot: polling)
         model.setVisible(true)
@@ -393,7 +393,8 @@ struct SidebarNavigationTests {
             let expectedPaths: [SidebarDetailLine] = [
                 .init(title: "Workspace path", value: granted ? "/repo/.worktrees/feature" : "Path unavailable"),
                 .init(title: "Project path", value: granted ? "/repo" : "Path unavailable"),
-                .init(title: "Working directory", value: granted ? "/repo/.worktrees/feature/src" : "Path unavailable")
+                .init(title: "Surface directory", value: granted ? "/repo/.worktrees/feature/src" : "Path unavailable",
+                      help: "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory.")
             ]
             for selection in [
                 UnmanagedSelection.workspace(fixtures.workspaceA),
@@ -412,9 +413,16 @@ struct SidebarNavigationTests {
                 switch selection {
                 case .workspace: expected = Array(expectedPaths.prefix(2))
                 case .surface: expected = Array(expectedPaths.suffix(1))
-                case .session, .child: expected = expectedPaths
+                case .session: expected = expectedPaths
+                case .child:
+                    expected = Array(expectedPaths.prefix(2)) + [
+                        .init(title: "Parent surface directory", value: granted ? "/repo/.worktrees/feature/src" : "Path unavailable",
+                              help: "Reported by CMUX for the parent surface; no report time supplied. Not an independently reported child directory.")
+                    ]
                 }
-                #expect(detail.lines.filter { ["Workspace path", "Project path", "Working directory"].contains($0.title) } == expected)
+                #expect(detail.lines.filter {
+                    ["Workspace path", "Project path", "Surface directory", "Parent surface directory"].contains($0.title)
+                } == expected)
             }
         }
     }

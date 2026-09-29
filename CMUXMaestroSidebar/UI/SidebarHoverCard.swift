@@ -47,6 +47,8 @@ struct SidebarHoverCard: View {
                             }
                             .font(.caption)
                             .accessibilityElement(children: .combine)
+                            .help(line.help ?? "")
+                            .accessibilityHint(line.help ?? "")
                         }
                     }
                     if let notice = data.notice {
