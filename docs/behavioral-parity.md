@@ -51,27 +51,45 @@ concurrency test remains the bounded dispatch-progress regression.
 
 ### Deep-outline fixture readiness
 
-Focus-layout fixtures bring the deepest title into the viewport and wait for
-two equal native scroller/document geometry samples before capturing their baseline.
-A no-focus control reproduced the initial overlay-to-legacy scroller transition
-and its 17-point viewport change. Sampling does not establish quiescence:
-[AppKit can subsequently update each scroll view's style and retile it](https://developer.apple.com/documentation/appkit/nsscroller/preferredscrollerstyle).
-An explicit `scrollerStyle` assignment is not a documented opt-out; a local
-startup probe also observed that assignment being overridden. The remaining
-fixture-isolation correction in [#127](https://github.com/jdylanmc/cmux-maestro/issues/127)
-is unresolved, and the trigger of its hosted failure is not established by the
-matching width delta.
+Focus-layout fixtures own **available content width**, not AppKit's preferred
+scroller style. A test-host-only modifier applies `scrollIndicators(.never)`
+to the unchanged production sidebar/tree and reserves a constant trailing
+gutter derived from the public `NSScrollView.contentSize` API, separately for
+overlay and legacy budgets. No gutter size is hardcoded and no content width
+is frozen: resizing the owned window still changes the viewport and title.
+These are **overlay/legacy-equivalent available-width inputs**, not native
+indicator appearance or identical row-geometry claims.
+
+The stronger policy is intentional:
+[`.hidden` can still show macOS indicators when a mouse is connected](https://developer.apple.com/documentation/swiftui/scrollindicatorvisibility/hidden);
+[`.never` overrides that policy](https://developer.apple.com/documentation/swiftui/scrollindicatorvisibility/never).
+Before immutable baseline capture, preparation requires absent native scrollers,
+no native width gutter, a visible deep title, document/clip width agreement and
+matching geometry samples. It does not claim native quiescence or pin style:
+[AppKit can subsequently update style and retile](https://developer.apple.com/documentation/appkit/nsscroller/preferredscrollerstyle).
+Cold-start evidence observed that update on both fixed-budget fixtures without
+changing their title/viewport frames, alongside an unmodified native control
+whose width changed. A one-time explicit style assignment alone failed that
+stress. The matching hosted width delta still does not establish its trigger.
+
+`deepOutlineFixedViewportSurvivesNativeStyleChanges` compares each budget's
+available viewport against a separate, real-native production render, then
+requires exact title/viewport equality through both native style-transition
+directions. Focus and no-focus tests run both budgets; focus retains both
+densities and appearances, the 124-point minimum, height/depth caps and 20 ms
+effect interval. The real-window-width negative control also runs both budgets,
+requires the full 26-point viewport loss and still rejects changed title frames.
 
 `deepOutlineLateNativeStyleChangeInvalidatesSampledBaseline` exercises both
 overlay-to-legacy and legacy-to-overlay transitions through the public setter,
 in run-owned offscreen fixtures without focus. It requires opposite viewport
 width directions, equal title/viewport width deltas and an unchanged title
 height; the original exact frame comparison rejects both changes. This control
-does not pin the style or restore geometry after baseline. Global scroller
-preferences and production layout remain unchanged, as do exact focus-frame
-equality, width/depth/height caps, the 20 ms effect interval, no-focus and real
-window-width-change controls. These controls are sensitivity evidence, not a
-claim that subsequent native updates are isolated.
+and all ordinary full production renders remain outside the fixed-input modifier.
+Neither layer restores geometry after baseline. Global preferences, production
+layout and AppKit test gates remain unchanged. Fixed-input focus coverage and
+actual native composition/transition coverage are separate layers; neither
+substitutes for the other.
 
 ## Capability matrix
 

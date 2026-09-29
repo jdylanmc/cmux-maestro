@@ -152,7 +152,8 @@ struct SidebarLayoutRenderingTests {
         return model
     }
 
-    @Test func productionEightLevelOutlineRetainsNameAndStableActionsAt280() async throws {
+    @Test(arguments: [NSScroller.Style.overlay, .legacy])
+    func productionEightLevelOutlineRetainsNameAndStableActionsAt280(budget: NSScroller.Style) async throws {
         let fixtures = SidebarTreeFixtures()
         let model = makeModel(fixtures: fixtures, longMetadata: true, deep: true)
         let fixture = try SidebarPreferenceFixture()
@@ -164,13 +165,14 @@ struct SidebarLayoutRenderingTests {
         for density in SidebarDensity.allCases {
             preferences.setDensity(density)
             for appearance in [RenderAppearance.light, .dark] {
-                let file = folder.appendingPathComponent("polish-deep8-\(density.rawValue)-\(appearance.name)-280x400.png")
+                let file = folder.appendingPathComponent("polish-deep8-budget-\(budget.rawValue)-\(density.rawValue)-\(appearance.name)-280x400.png")
                 try await render(model: model, preferences: preferences, width: 280, height: 400,
+                                 focusViewportBudget: budget,
                                  appearance: appearance, destination: file) { host in
                     func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
                     let title = try #require(descendants(host).compactMap { $0 as? SidebarTitleNativeButton }
                         .first { $0.accessibilityLabel()?.contains("Synthetic level 8") == true })
-                    try await prepareDeepTitle(title, host: host)
+                    try await prepareDeepTitle(title, host: host, fixedViewport: true)
                     // The approved stable 24-point action slot plus 2-point gap replaces hover-time insertion.
                     #expect(title.bounds.width >= 150 - 26, "Deep title must retain useful width: \(title.bounds.width)")
                     #expect(title.bounds.height <= 70)
@@ -181,7 +183,7 @@ struct SidebarLayoutRenderingTests {
                     #expect(title.frame == frame)
                     title.focusChanged(false)
                     #expect(model.copilot.tree.sessions[0].nodes.map(\.depth).max() == 8)
-                    print("P57 deep geometry \(density.rawValue) \(appearance.name): titleWidth=\(title.bounds.width), titleHeight=\(title.bounds.height)")
+                    print("P57 deep geometry budget \(budget.rawValue) \(density.rawValue) \(appearance.name): titleWidth=\(title.bounds.width), titleHeight=\(title.bounds.height)")
                     title.scrollToVisible(title.bounds)
                     host.layoutSubtreeIfNeeded()
                     let bitmap = try #require(NSBitmapImageRep(
@@ -192,13 +194,14 @@ struct SidebarLayoutRenderingTests {
                     bitmap.size = host.bounds.size
                     host.cacheDisplay(in: host.bounds, to: bitmap)
                     try #require(bitmap.representation(using: .png, properties: [:])).write(to:
-                        folder.appendingPathComponent("polish-deep8-\(density.rawValue)-\(appearance.name)-deepest-280x400.png"))
+                        folder.appendingPathComponent("polish-deep8-budget-\(budget.rawValue)-\(density.rawValue)-\(appearance.name)-deepest-280x400.png"))
                 }
             }
         }
     }
 
-    @Test func deepOutlineViewportRemainsStableWithoutFocus() async throws {
+    @Test(arguments: [NSScroller.Style.overlay, .legacy])
+    func deepOutlineViewportRemainsStableWithoutFocus(budget: NSScroller.Style) async throws {
         let model = makeModel(fixtures: SidebarTreeFixtures(), longMetadata: true, deep: true)
         let fixture = try SidebarPreferenceFixture()
         defer { model.setVisible(false); fixture.cleanup() }
@@ -208,10 +211,11 @@ struct SidebarLayoutRenderingTests {
             .appendingPathComponent(".build/layout-validation/offscreen")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try await render(model: model, preferences: preferences, width: 280, height: 400,
-                         appearance: .light, destination: folder.appendingPathComponent("deep8-no-focus-probe.png")) { host in
+                         focusViewportBudget: budget, appearance: .light,
+                         destination: folder.appendingPathComponent("deep8-no-focus-budget-\(budget.rawValue)-probe.png")) { host in
             let title = try #require(nativeTitles(in: host)
                 .first { $0.accessibilityLabel()?.contains("Synthetic level 8") == true })
-            try await prepareDeepTitle(title, host: host)
+            try await prepareDeepTitle(title, host: host, fixedViewport: true)
             let frame = title.frame
             try await Task.sleep(for: .milliseconds(20))
             host.layoutSubtreeIfNeeded()
@@ -219,7 +223,8 @@ struct SidebarLayoutRenderingTests {
         }
     }
 
-    @Test func deepOutlineFrameComparisonRejectsRealWidthChange() async throws {
+    @Test(arguments: [NSScroller.Style.overlay, .legacy])
+    func deepOutlineFrameComparisonRejectsRealWidthChange(budget: NSScroller.Style) async throws {
         let model = makeModel(fixtures: SidebarTreeFixtures(), longMetadata: true, deep: true)
         let fixture = try SidebarPreferenceFixture()
         defer { model.setVisible(false); fixture.cleanup() }
@@ -229,11 +234,14 @@ struct SidebarLayoutRenderingTests {
             .appendingPathComponent(".build/layout-validation/offscreen")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try await render(model: model, preferences: preferences, width: 280, height: 400,
-                         appearance: .light, destination: folder.appendingPathComponent("deep8-width-control.png")) { host in
+                         focusViewportBudget: budget, appearance: .light,
+                         destination: folder.appendingPathComponent("deep8-width-budget-\(budget.rawValue)-control.png")) { host in
             let title = try #require(nativeTitles(in: host)
                 .first { $0.accessibilityLabel()?.contains("Synthetic level 8") == true })
             let window = try #require(host.window)
-            try await prepareDeepTitle(title, host: host)
+            try await prepareDeepTitle(title, host: host, fixedViewport: true)
+            let scroll = try #require(title.enclosingScrollView)
+            let viewportWidth = scroll.contentView.bounds.width
             let frame = title.frame
             title.focusChanged(true)
             // Consume real layout width after the valid baseline without
@@ -244,8 +252,10 @@ struct SidebarLayoutRenderingTests {
                 return host.bounds.width == 254 && title.frame.width < frame.width
             }
             #expect(host.bounds.width == 254)
+            #expect(scroll.contentView.bounds.width == viewportWidth - 26)
             #expect(title.frame.width < frame.width)
             #expect(title.frame != frame, "The exact comparison must reject real width changes after preparation")
+            print("V127 real resize budget \(budget.rawValue): viewport \(viewportWidth)->\(scroll.contentView.bounds.width), title \(frame)->\(title.frame)")
             title.focusChanged(false)
         }
     }
@@ -300,10 +310,82 @@ struct SidebarLayoutRenderingTests {
         }
     }
 
-    private func prepareDeepTitle(_ title: SidebarTitleNativeButton, host: NSView) async throws {
+    @Test(arguments: [NSScroller.Style.overlay, .legacy], [NSScroller.Style.overlay, .legacy])
+    func deepOutlineFixedViewportSurvivesNativeStyleChanges(
+        budget: NSScroller.Style, initialStyle: NSScroller.Style
+    ) async throws {
+        let model = makeModel(fixtures: SidebarTreeFixtures(), longMetadata: true, deep: true)
+        let fixture = try SidebarPreferenceFixture()
+        defer { model.setVisible(false); fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.setDensity(.compact)
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var nativeViewportWidth: CGFloat = 0
+        try await render(model: model, preferences: preferences, width: 280, height: 400,
+                         destination: folder.appendingPathComponent("deep8-native-budget-\(budget.rawValue)-reference.png")) { host in
+            let title = try #require(nativeTitles(in: host)
+                .first { $0.accessibilityLabel()?.contains("Synthetic level 8") == true })
+            let scroll = try #require(title.enclosingScrollView)
+            scroll.scrollerStyle = budget
+            scroll.tile()
+            try #require(scroll.scrollerStyle == budget)
+            try #require(scroll.hasVerticalScroller)
+            nativeViewportWidth = scroll.contentView.bounds.width
+        }
+        try await render(model: model, preferences: preferences, width: 280, height: 400,
+                         focusViewportBudget: budget,
+                         destination: folder.appendingPathComponent("deep8-fixed-budget-\(budget.rawValue)-style-\(initialStyle.rawValue)-control.png")) { host in
+            let title = try #require(nativeTitles(in: host)
+                .first { $0.accessibilityLabel()?.contains("Synthetic level 8") == true })
+            let scroll = try #require(title.enclosingScrollView)
+            scroll.scrollerStyle = initialStyle
+            try await prepareDeepTitle(title, host: host, fixedViewport: true)
+            try #require(scroll.scrollerStyle == initialStyle)
+            #expect(scroll.contentView.bounds.width == nativeViewportWidth)
+            let frame = title.frame
+            let viewport = scroll.contentView.bounds
+            let changedStyle: NSScroller.Style = initialStyle == .overlay ? .legacy : .overlay
+            scroll.scrollerStyle = changedStyle
+            try await Task.sleep(for: .milliseconds(20))
+            host.layoutSubtreeIfNeeded()
+            #expect(scroll.scrollerStyle == changedStyle)
+            #expect(title.frame == frame)
+            #expect(scroll.contentView.bounds == viewport)
+            #expect(!scroll.hasVerticalScroller && !scroll.hasHorizontalScroller)
+            print("V127 fixed budget \(budget.rawValue), style \(initialStyle.rawValue)->\(scroll.scrollerStyle.rawValue): viewport \(viewport)->\(scroll.contentView.bounds), title \(frame)->\(title.frame), vertical=\(scroll.hasVerticalScroller)")
+        }
+    }
+
+    private struct FocusViewport: ViewModifier {
+        let budget: NSScroller.Style?
+        let frameSize: NSSize
+
+        func body(content: Content) -> some View {
+            if let budget {
+                let nativeContent = NSScrollView.contentSize(
+                    forFrameSize: frameSize, horizontalScrollerClass: nil,
+                    verticalScrollerClass: NSScroller.self, borderType: .noBorder,
+                    controlSize: .regular, scrollerStyle: budget
+                )
+                // Own available width, not native style. Unlike .hidden, .never
+                // also overrides macOS's mouse-dependent indicator policy.
+                content.scrollIndicators(.never)
+                    .padding(.trailing, frameSize.width - nativeContent.width)
+            } else {
+                content
+            }
+        }
+    }
+
+    private func prepareDeepTitle(
+        _ title: SidebarTitleNativeButton, host: NSView, fixedViewport: Bool = false
+    ) async throws {
         let scroll = try #require(title.enclosingScrollView)
         let document = try #require(scroll.documentView)
-        // Native scroller preferences can settle after the first cacheDisplay.
+        // Matching samples verify layout. Fixed-input fixtures additionally
+        // exclude native gutters; ordinary renders still follow native style.
         var previous: [NSRect]?
         var settled = false
         await sidebarEventually {
@@ -317,13 +399,16 @@ struct SidebarLayoutRenderingTests {
                 scroll.verticalScroller?.frame ?? .zero
             ]
             settled = scroll.documentVisibleRect.contains(titleInDocument)
-                && scroll.scrollerStyle == NSScroller.preferredScrollerStyle
+                && (fixedViewport
+                    ? !scroll.hasVerticalScroller && !scroll.hasHorizontalScroller
+                        && scroll.contentView.bounds.width == scroll.bounds.width
+                    : scroll.scrollerStyle == NSScroller.preferredScrollerStyle)
                 && document.bounds.width == scroll.contentView.bounds.width
                 && current == previous
             previous = current
             return settled
         }
-        try #require(settled, "Deep-title baseline requires a visible, settled native viewport")
+        try #require(settled, "Deep-title baseline requires visible, matching geometry and its declared viewport inputs")
     }
 
     @Test func syntheticSidebarRendersAtNarrowWidthsInBothDensitiesAndModes() async throws {
@@ -1060,7 +1145,8 @@ struct SidebarLayoutRenderingTests {
     @discardableResult
     private func render(
         model: SidebarConnectionModel, preferences: SidebarPreferences, width: Int,
-        height: Int = 941, appearance: RenderAppearance = .light, managed: Bool = false,
+        height: Int = 941, focusViewportBudget: NSScroller.Style? = nil,
+        appearance: RenderAppearance = .light, managed: Bool = false,
         expectedSessions: Int = 1, nativeBackground: Bool = false,
         destination: URL, inspect: ((NSView) async throws -> Void)? = nil
     ) async throws -> SidebarRenderingEvidence.Metrics {
@@ -1075,6 +1161,7 @@ struct SidebarLayoutRenderingTests {
         // The public contrast getter is read-only; this SDK-exposed backing key is test-only.
         // A high-contrast NSAppearance alone does not update SwiftUI's contrast environment.
         let view = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
+            .modifier(FocusViewport(budget: focusViewportBudget, frameSize: frame.size))
             .background(AppearanceProbe(evidence: evidence).frame(width: 0, height: 0))
             .environment(\._colorSchemeContrast, appearance.contrast)
             .background(nativeBackground ? Color(nsColor: .windowBackgroundColor)
