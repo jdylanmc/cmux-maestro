@@ -432,13 +432,13 @@ struct SidebarHistoryReaderTests {
         #expect(restarted.sessions.first?.children.first?.state == expected)
         #expect(restarted.sessions.first?.children.first?.terminalEvent == nil)
         let tree = try project(restarted, fixture: fixture, history: history, attention: attention)
-        #expect(tree.sessions.first?.nodes.first?.state == expected)
+        #expect(tree.sessions.first?.nodes.first?.state.rawValue == expected.rawValue)
         #expect(tree.hiddenHistoryCount == 0)
         #expect(tree.dismissibleOutcomes.isEmpty)
         #expect(!tree.hasCompleteCounts)
         clock.advance(30)
         let refreshed = try await reader.read(surfaceIDs: [fixture.surface])
-        #expect(try project(refreshed, fixture: fixture, history: history).sessions.first?.nodes.first?.state == expected)
+        #expect(try project(refreshed, fixture: fixture, history: history).sessions.first?.nodes.first?.state.rawValue == expected.rawValue)
         let rebuilt = try await self.reader(fixture, clock: clock, limits: limits).read(surfaceIDs: [fixture.surface])
         #expect(rebuilt == refreshed)
     }
@@ -668,7 +668,7 @@ struct SidebarHistoryReaderTests {
         #expect(completed.terminalEvent?.id != oldEvent.id)
         #expect(completed.terminalEvent?.timestamp == clock.read())
         let visible = try project(finished, fixture: fixture, history: dismissed)
-        #expect(visible.sessions.first?.nodes.contains { $0.id == "worker" && $0.state == outcome } == true)
+        #expect(visible.sessions.first?.nodes.contains { $0.id == "worker" && $0.state.rawValue == outcome.rawValue } == true)
         let acknowledgedB = SidebarAttentionSettings(
             acknowledged: acknowledgedA.acknowledged.union(visible.acknowledgeableOutcomes)
         )
@@ -682,7 +682,7 @@ struct SidebarHistoryReaderTests {
         let finalRebuilt = try await self.reader(fixture, clock: clock, limits: limits).read(surfaceIDs: [fixture.surface])
         #expect(finalRebuilt.sessions == refreshed.sessions)
         #expect(try project(finalRebuilt, fixture: fixture, history: dismissed).sessions.first?.nodes.contains {
-            $0.id == "worker" && $0.state == outcome
+            $0.id == "worker" && $0.state.rawValue == outcome.rawValue
         } == true)
     }
 

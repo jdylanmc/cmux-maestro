@@ -91,7 +91,7 @@ struct SidebarPinnedDetailsTests {
     }
 
     private func session(
-        id: UUID? = nil, other: Bool = false, liveness: CopilotLiveness = .alive,
+        id: UUID? = nil, other: Bool = false, liveness: AgentProcessLiveness = .alive,
         observedAt: Date? = nil
     ) -> SidebarCopilotSession {
         .init(
@@ -350,7 +350,7 @@ struct SidebarPinnedDetailsTests {
         let source = ObservedPlacementSource(
             sessionID: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA
         )
-        let polling = SidebarCopilotPolling(read: { _ in await source.snapshot },
+        let polling = SidebarCopilotPolling(read: neutralRead { _ in await source.snapshot },
                                            pause: { try await Task.sleep(for: .milliseconds(10)) })
         let orchestration = SidebarOrchestrationPolling(read: {
             .init(version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [])
@@ -475,7 +475,7 @@ struct SidebarPinnedDetailsTests {
             read: { await source.managed }, pause: { try await Task.sleep(for: .seconds(60)) }
         )
         let polling = SidebarCopilotPolling(
-            read: { _ in await source.observed }, pause: { try await Task.sleep(for: .seconds(60)) },
+            read: neutralRead { _ in await source.observed }, pause: { try await Task.sleep(for: .seconds(60)) },
             expiryPause: sidebarFrozenExpiry, now: { date }
         )
         let model = SidebarConnectionModel(copilot: polling, orchestration: orchestration)

@@ -73,7 +73,7 @@ struct SidebarPreferencesTests {
         let preferences = fixture.preferences()
         preferences.setDensity(density)
         let model = SidebarConnectionModel(copilot: SidebarCopilotPolling(
-            read: { _ in .init(generatedAt: Date(), sessions: [], issues: [], isComplete: true) }
+            read: neutralRead { _ in .init(generatedAt: Date(), sessions: [], issues: [], isComplete: true) }
         ))
         defer { model.setVisible(false) }
         model.showConnected(workspaceCount: 1, surfaceCount: 1)
@@ -126,7 +126,7 @@ struct SidebarPreferencesTests {
         }
         let snapshot = data.snapshot(sessions: [data.session(children: children, now: now)], now: now)
         let polling = SidebarCopilotPolling(
-            read: { _ in snapshot }, pause: { try await Task.sleep(for: .seconds(60)) },
+            read: neutralRead { _ in snapshot }, pause: { try await Task.sleep(for: .seconds(60)) },
             expiryPause: { _ in
                 let (ticks, continuation) = AsyncStream<Void>.makeStream()
                 defer { continuation.finish() }

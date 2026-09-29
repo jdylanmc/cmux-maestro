@@ -34,7 +34,7 @@ struct SidebarClarityTests {
             #expect(visible(tree, showEnded: showEnded).tree.sessions == [current])
             #expect(visible(tree, showEnded: showEnded).hiddenSurfaces.isEmpty)
         }
-        for liveness: CopilotLiveness in [.alive, .ambiguous, .unknown] {
+        for liveness: AgentProcessLiveness in [.alive, .ambiguous, .unknown] {
             var noEndProof = tree
             noEndProof.sessions = [
                 managedSession(id: fixtures.otherSessionID, surface: fixtures.surfaceA, model: nil, liveness: liveness),
@@ -58,7 +58,7 @@ struct SidebarClarityTests {
             #expect(visible(tree).managed == [old] && visible(tree).tree.sessions == tree.sessions)
         }
         observation.attention = []
-        for state: CopilotWorkState in [.working, .idle, .unknown, .blocked, .failed] {
+        for state: AgentWorkState in [.working, .idle, .unknown, .blocked, .failed] {
             observation.nodes = [node(state: state)]
             tree.sessions = [observation, current]
             for showEnded in [false, true] {
@@ -293,11 +293,11 @@ struct SidebarClarityTests {
     @Test func activityIndicatorsSeparateWorkingBlockedIdleAndReducedMotion() {
         #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(.working), reduceMotion: false) == .rotatingWorking)
         #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(.working), reduceMotion: true) == .steadyWorking)
-        for state: CopilotWorkState in [.blocked, .failed] {
+        for state: AgentWorkState in [.blocked, .failed] {
             #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(state), reduceMotion: false) == .steadyAlert)
             #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(state), reduceMotion: true) == .steadyAlert)
         }
-        for state: CopilotWorkState in [.idle, .unknown, .completed, .cancelled] {
+        for state: AgentWorkState in [.idle, .unknown, .completed, .cancelled] {
             #expect(SidebarPresentation.activityTreatment(SidebarPresentation.state(state), reduceMotion: false) == .none)
         }
     }
@@ -378,7 +378,7 @@ struct SidebarClarityTests {
             Divider()
             Text("Runtime state · working ring rotates live; this preview is static").font(.caption.weight(.semibold))
             HStack(spacing: 20) {
-                ForEach([CopilotWorkState.working, .blocked, .idle, .unknown, .failed], id: \.self) { state in
+                ForEach([AgentWorkState.working, .blocked, .idle, .unknown, .failed], id: \.self) { state in
                     HStack(spacing: 6) {
                         SidebarAgentIcon(visual: SidebarPresentation.state(state), avatar: "md-robot")
                         SidebarStateBadge(visual: SidebarPresentation.state(state)).environment(\._accessibilityReduceMotion, true)
@@ -442,7 +442,7 @@ struct SidebarClarityTests {
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        let rows: [(String, CopilotWorkState)] = [
+        let rows: [(String, AgentWorkState)] = [
             ("Orchestrator", .working), ("Implementation", .working),
             ("Waiting for input", .blocked), ("Idle agent", .idle),
             ("Unknown agent", .unknown), ("Failed agent", .failed)
@@ -726,7 +726,7 @@ struct SidebarClarityTests {
         #expect(SidebarPresentation.coalescingManagedNodes(
             [old], observations: tree, now: now.addingTimeInterval(9)
         ) == [old])
-        for liveness: CopilotLiveness in [.dead, .ambiguous, .unknown] {
+        for liveness: AgentProcessLiveness in [.dead, .ambiguous, .unknown] {
             var uncertain = tree
             uncertain.sessions = [managedSession(id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil, liveness: liveness)]
             #expect(coalesced(uncertain))
@@ -764,7 +764,7 @@ struct SidebarClarityTests {
         let visible = SidebarVisibleWork(tree: tree, managed: [old], history: .init(), showEnded: false)
         #expect(visible.managed == [old])
         #expect(visible.tree.sessions.first?.id == fixtures.sessionID)
-        #expect(visible.tree.sessions.first?.state == state)
+        #expect(visible.tree.sessions.first?.state.rawValue == state.rawValue)
         #expect(visible.hiddenSurfaces.isEmpty)
         let surface = HierarchySurface(id: fixtures.surfaceA, title: "Same title", kind: .terminal,
                                        isFocused: false, isPinned: false, unreadCount: 0, workingDirectory: .unavailable)
@@ -782,7 +782,7 @@ struct SidebarClarityTests {
                 "Record totals must not claim two current sessions")
         #expect(summary.incomplete)
         let session = try #require(tree.sessions.first)
-        #expect(SidebarPresentation.sessionState(session) == SidebarPresentation.state(state))
+        #expect(SidebarPresentation.sessionState(session) == SidebarPresentation.state(try #require(AgentWorkState(rawValue: state.rawValue))))
     }
 
     @Test func distinctObservedIdentityDoesNotAcknowledgeOrMergeRetainedAttention() {
@@ -804,8 +804,8 @@ struct SidebarClarityTests {
         #expect(tree.sessions.first?.attention == session.attention)
     }
 
-    @Test(arguments: [CopilotWorkState.working, .idle])
-    func retainedObservedIdentityCountsOnceAlongsideItsLiveReplacement(state: CopilotWorkState) {
+    @Test(arguments: [AgentWorkState.working, .idle])
+    func retainedObservedIdentityCountsOnceAlongsideItsLiveReplacement(state: AgentWorkState) {
         let old = managedNode(role: "coordinator", surface: fixtures.surfaceA,
                               sessionID: fixtures.otherSessionID, phase: "reported-blocked")
         var ended = managedSession(id: fixtures.otherSessionID, surface: fixtures.surfaceA,
@@ -867,7 +867,7 @@ struct SidebarClarityTests {
         denied.availability = .partial
         denied.issues = [.permissionDenied]
         cases.append(("denied", denied))
-        for liveness: CopilotLiveness in [.unknown, .ambiguous, .dead] {
+        for liveness: AgentProcessLiveness in [.unknown, .ambiguous, .dead] {
             var uncertain = tree
             uncertain.sessions = [ended, managedSession(
                 id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil, liveness: liveness
@@ -976,7 +976,7 @@ struct SidebarClarityTests {
     }
 
     @Test func endedOrUnconfirmedSessionsNeverBorrowWorkingColor() {
-        for liveness: CopilotLiveness in [.dead, .unknown, .ambiguous] {
+        for liveness: AgentProcessLiveness in [.dead, .unknown, .ambiguous] {
             let session = managedSession(
                 id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil, liveness: liveness
             )
@@ -985,7 +985,7 @@ struct SidebarClarityTests {
     }
 
     @Test func commandActivityIsFoldedOnlyIntoItsExactOwnerWithoutHidingProblems() throws {
-        func shell(_ id: String, parent: String? = nil, state: CopilotWorkState = .working,
+        func shell(_ id: String, parent: String? = nil, state: AgentWorkState = .working,
                    attention: [AgentAttention] = []) -> SidebarCopilotNode {
             .init(id: id, parentID: parent, depth: parent == nil ? 0 : 1, kind: .shell,
                   name: "bash invocation", state: state, model: nil, ancestryUnresolved: false,
@@ -1032,7 +1032,7 @@ struct SidebarClarityTests {
     }
 
     @Test func statusGlyphsUseOneFamilyWithoutRelyingOnColorAlone() {
-        let states: [CopilotWorkState] = [.working, .idle, .blocked, .completed, .failed, .cancelled, .unknown]
+        let states: [AgentWorkState] = [.working, .idle, .blocked, .completed, .failed, .cancelled, .unknown]
         let visuals = states.map(SidebarPresentation.state)
         #expect(Set(visuals.map(\.symbol)).count == states.count)
         #expect(Set(visuals.map(\.title)).count == states.count)
@@ -1054,7 +1054,7 @@ struct SidebarClarityTests {
     }
 
     @Test func managedAndObservedWorkUseTheSameStatusGlyphs() {
-        let phases: [(String, CopilotWorkState)] = [
+        let phases: [(String, AgentWorkState)] = [
             ("turn-running", .working), ("reported-blocked", .blocked),
             ("reported-completed", .completed), ("reported-failed", .failed),
             ("permission-denied", .blocked)
@@ -1078,7 +1078,7 @@ struct SidebarClarityTests {
 
     @Test(arguments: [false, true])
     func statusGlyphPaletteRendersInLightAndDark(dark: Bool) throws {
-        let states: [CopilotWorkState] = [.working, .blocked, .completed, .failed, .idle, .cancelled, .unknown]
+        let states: [AgentWorkState] = [.working, .blocked, .completed, .failed, .idle, .cancelled, .unknown]
         let frame = NSRect(x: 0, y: 0, width: 349, height: 600)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -1272,8 +1272,8 @@ struct SidebarClarityTests {
         #expect(SidebarPresentation.managedModel(for: worker, in: absent, now: now) == nil)
     }
 
-    @Test(arguments: [CopilotLiveness.dead, .ambiguous, .unknown])
-    func managedModelRejectsNonLiveOwners(liveness: CopilotLiveness) {
+    @Test(arguments: [AgentProcessLiveness.dead, .ambiguous, .unknown])
+    func managedModelRejectsNonLiveOwners(liveness: AgentProcessLiveness) {
         let sessionID = UUID()
         let surfaceID = UUID()
         let root = managedNode(role: "coordinator", surface: surfaceID)
@@ -1403,7 +1403,7 @@ struct SidebarClarityTests {
         }
     }
 
-    private func node(state: CopilotWorkState, attention: [AgentAttention] = []) -> SidebarCopilotNode {
+    private func node(state: AgentWorkState, attention: [AgentAttention] = []) -> SidebarCopilotNode {
         .init(id: state.rawValue, parentID: nil, depth: 0, kind: .subagent, name: "Synthetic task",
               state: state, model: nil, ancestryUnresolved: false, hasChildren: false, attention: attention)
     }
@@ -1435,7 +1435,7 @@ struct SidebarClarityTests {
     }
 
     private func managedSession(
-        id: UUID, surface: UUID, model: String?, liveness: CopilotLiveness = .alive,
+        id: UUID, surface: UUID, model: String?, liveness: AgentProcessLiveness = .alive,
         workspace: UUID? = nil, observedAt: Date? = nil
     ) -> SidebarCopilotSession {
         SidebarCopilotSession(

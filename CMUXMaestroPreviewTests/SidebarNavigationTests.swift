@@ -193,7 +193,7 @@ struct SidebarNavigationTests {
         let recorder = SidebarHostRecorder()
         let reads = SidebarTopologyReadProbe()
         let polling = SidebarCopilotPolling(
-            read: { await reads.read($0) }, pause: { try await Task.sleep(for: .seconds(60)) }
+            read: neutralRead { await reads.read($0) }, pause: { try await Task.sleep(for: .seconds(60)) }
         )
         let model = SidebarConnectionModel(copilot: polling)
         model.setVisible(true)
@@ -238,7 +238,7 @@ struct SidebarNavigationTests {
         let recorder = SidebarHostRecorder()
         let reads = SidebarTopologyReadProbe()
         let polling = SidebarCopilotPolling(
-            read: { await reads.read($0) }, pause: { try await Task.sleep(for: .seconds(60)) }
+            read: neutralRead { await reads.read($0) }, pause: { try await Task.sleep(for: .seconds(60)) }
         )
         let model = SidebarConnectionModel(copilot: polling)
         model.setVisible(true)
