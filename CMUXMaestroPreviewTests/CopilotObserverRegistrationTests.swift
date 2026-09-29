@@ -406,11 +406,12 @@ struct CopilotObserverRegistrationTests {
         #expect(fixture.registration.health() == .missing)
     }
 
-    @Test func metadataParserEnforcesFramingAndOutputBound() throws {
+    @Test(arguments: ["1.0.88", "1.0.89"])
+    func metadataParserEnforcesFramingAndOutputBound(version: String) throws {
         let exchange = try CopilotMetadataExchange()
         defer { exchange.closeAll() }
         let responses: [[String: Any]] = [
-            ["jsonrpc": "2.0", "id": 1, "result": ["version": "1.0.88", "protocolVersion": 3]],
+            ["jsonrpc": "2.0", "id": 1, "result": ["version": version, "protocolVersion": 3]],
             ["jsonrpc": "2.0", "id": 2, "result": ["hooks": [], "warnings": [], "errors": []]],
             ["jsonrpc": "2.0", "id": 3, "result": ["plugins": []]],
         ]
@@ -541,7 +542,7 @@ struct CopilotObserverRegistrationTests {
         try fixture.legacy()
         let known = try fixture.metadata(installed: true)
         for metadata in [
-            CopilotSetupMetadata(version: "1.0.89", protocolVersion: 3, hooks: known.hooks, plugins: known.plugins),
+            CopilotSetupMetadata(version: "1.0.90", protocolVersion: 3, hooks: known.hooks, plugins: known.plugins),
             CopilotSetupMetadata(version: "1.0.88", protocolVersion: 3, hooks: known.hooks,
                 plugins: [.init(name: CopilotPluginManifest.name, marketplace: "", enabled: false, directSourceId: "opaque")]),
             CopilotSetupMetadata(version: "1.0.88", protocolVersion: 3, hooks: known.hooks,
@@ -550,6 +551,16 @@ struct CopilotObserverRegistrationTests {
             #expect(throws: CopilotRegistrationConflict.self) { try fixture.registration.begin(.install, metadata: metadata) }
         }
         #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
+    }
+
+    @Test(arguments: [
+        ("1.0.88", 3, true), ("1.0.89", 3, true),
+        ("1.0.87", 3, false), ("1.0.90", 3, false), ("2.0.0", 3, false),
+        ("1.0.89-preview", 3, false), ("1.0.89", 2, false), ("1.0.89", 4, false),
+    ])
+    func metadataAllowsOnlyExactTestedVersionProtocolPairs(version: String, protocolVersion: Int, expected: Bool) {
+        let metadata = CopilotSetupMetadata(version: version, protocolVersion: protocolVersion, hooks: [], plugins: [])
+        #expect(metadata.supported == expected)
     }
 
     @Test func staleHelperUpdatesOnlyWithoutUnresolvedDisableIntent() async throws {

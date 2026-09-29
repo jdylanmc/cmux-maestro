@@ -59,7 +59,8 @@ bounded descriptor-relative reads, conditional writes, a same-setup lock and
 phase-specific results distinguish missing, stale, disabled, conflicting,
 incomplete and current-on-disk registration.
 
-The accepted compatibility boundary is **Copilot CLI 1.0.88, SDK protocol 3**.
+The tested setup compatibility boundary is **Copilot CLI 1.0.88 and 1.0.89,
+SDK protocol 3**. Other version/protocol pairs refuse before registration changes.
 Setup uses only `status.get`, `hooks.discover` and `plugins.list` over a new,
 bounded public stdio connection. It sends no agent/session creation or model
 request, never attaches to an existing session and shuts the metadata process
@@ -76,7 +77,13 @@ Each invocation awaits its own transaction steps; cancellation joins an
 already-started writer before returning. This does not serialize the test suite
 or widen the original process-cleanup/readiness deadlines.
 
-Disposable exact-version probes established these separate facts:
+The 1.0.89 maintenance probe covers public metadata, inactive file staging,
+official plugin settings normalization, real-core migration/install/update/
+removal, and related/unrelated-key refusal using disposable homes. It makes
+zero model calls and does not extend the earlier 1.0.88 event-execution,
+running-session reload or global-disable observations to 1.0.89.
+
+The earlier 1.0.88 probes established these separate facts:
 
 | Evidence level | Observed result and limit |
 |---|---|

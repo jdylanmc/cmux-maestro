@@ -84,7 +84,8 @@ never replaced automatically. Moving/replacing the native app requires enabling
 the integration again: Copilot caches local plugin contents, and generated hooks
 contain the **absolute current bundled helper path**.
 
-Observer setup is version-bound to **Copilot CLI 1.0.88, protocol 3**. A
+Observer setup is version-bound to **Copilot CLI 1.0.88 and 1.0.89, protocol 3**.
+Other versions or protocols remain unsupported. A
 conflicting `HOME` or `COPILOT_HOME` is rejected; this does not broaden the
 reader beyond standard `~/.copilot`. Setup rejects unsafe, symlinked,
 hard-linked, modified or foreign registration and ambiguous duplicate sources.

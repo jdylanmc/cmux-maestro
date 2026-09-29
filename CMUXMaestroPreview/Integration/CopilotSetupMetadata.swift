@@ -22,7 +22,7 @@ nonisolated struct CopilotSetupMetadata: Equatable, Sendable {
     let hooks: [Hook]
     let plugins: [Plugin]
 
-    var supported: Bool { version == "1.0.88" && protocolVersion == 3 }
+    var supported: Bool { ["1.0.88", "1.0.89"].contains(version) && protocolVersion == 3 }
 }
 
 nonisolated enum CopilotMetadataResult: Sendable {

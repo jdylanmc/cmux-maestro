@@ -257,7 +257,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
     private var cache: URL { providerHome.appendingPathComponent("installed-plugins/_direct/plugin") }
 
     private func isOwnedSource(_ hook: CopilotSetupMetadata.Hook) -> Bool {
-        // Host-only discovery uses a provider-home-relative label in 1.0.88;
+        // Tested host-only discovery uses a provider-home-relative label;
         // project-scoped discovery uses the absolute path. No arbitrary relative
         // path or another origin is interpreted as this owned file.
         hook.origin == "user"
@@ -444,7 +444,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                isCancelled: @escaping @Sendable () -> Bool = { false }) throws -> Transaction {
         try validateHome()
         guard metadata.supported else {
-            throw CopilotRegistrationConflict("Observer setup is verified only for Copilot CLI 1.0.88, protocol 3.")
+            throw CopilotRegistrationConflict("Observer setup is verified only for Copilot CLI 1.0.88 or 1.0.89, protocol 3.")
         }
         let settings = try readSettings()
         let others = try otherHooks()
@@ -716,7 +716,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             let observed = try CopilotSetupJSON.data(CopilotSetupJSON.object(data))
             let originalValues = try CopilotSetupJSON.data(original)
             let normalizedValues = try CopilotSetupJSON.data(normalized)
-            // 1.0.88 rewrites this file on successful plugin commands, even
+            // Tested versions rewrite this file on successful plugin commands, even
             // without a value change. Accept only that rewrite or an added
             // empty plugin map; never refresh over changed user/disable intent.
             guard observed == originalValues || observed == normalizedValues else {
