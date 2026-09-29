@@ -336,7 +336,7 @@ enum SidebarPresentation {
         var approvals = Set<Owner>()
         var blocked = Set<Owner>()
         var historical = Set<Owner>()
-        func include(_ owner: Owner, state: CopilotWorkState, signals: [AgentAttention], live: Bool) {
+        func include(_ owner: Owner, state: AgentWorkState, signals: [AgentAttention], live: Bool) {
             if signals.contains(where: { $0.kind == .answer }) { questions.insert(owner) }
             if signals.contains(where: { $0.kind == .permission }) { approvals.insert(owner) }
             if live && state == .blocked { blocked.insert(owner) }
@@ -641,7 +641,7 @@ enum SidebarPresentation {
         }
     }
 
-    static func state(_ state: CopilotWorkState) -> SidebarVisual {
+    static func state(_ state: AgentWorkState) -> SidebarVisual {
         switch state {
         case .working: .init(title: "Working", symbol: "circle.fill", tone: .green)
         case .blocked: .init(title: "Blocked", symbol: "pause.circle", tone: .red)
@@ -649,11 +649,12 @@ enum SidebarPresentation {
         case .failed: .init(title: "Failed", symbol: "exclamationmark.circle", tone: .red)
         case .cancelled: .init(title: "Cancelled", symbol: "xmark.circle", tone: .neutral)
         case .idle: .init(title: "Idle", symbol: "circle", tone: .neutral)
+        case .queued: .init(title: "Queued", symbol: "circle", tone: .neutral)
         case .unknown: .init(title: "Unknown", symbol: "circle.dashed", tone: .neutral)
         }
     }
 
-    static func process(_ liveness: CopilotLiveness) -> SidebarVisual {
+    static func process(_ liveness: AgentProcessLiveness) -> SidebarVisual {
         switch liveness {
         case .alive: .init(title: "Process alive", symbol: "circle", tone: .neutral)
         case .dead: .init(title: "Process ended", symbol: "minus.circle", tone: .neutral)
@@ -662,7 +663,7 @@ enum SidebarPresentation {
         }
     }
 
-    static func kind(_ kind: CopilotWorkKind) -> String {
+    static func kind(_ kind: AgentWorkKind) -> String {
         switch kind {
         case .subagent: "Agent"
         case .skill: "Skill"
@@ -716,7 +717,7 @@ enum SidebarPresentation {
         if tree.issues.contains(.permissionDenied) { result.append("Copilot access denied") }
         if tree.issues.contains(.integrationNotInstalled) { result.append("Copilot integration is not enabled") }
         if tree.issues.contains(.loadingHistory), tree.availability != .loading { result.append("Child history is still loading") }
-        for (issue, message): (CopilotIssue, String) in [
+        for (issue, message): (AgentSnapshotIssue, String) in [
             (.malformedData, "Some Copilot history is unreadable"),
             (.unsupportedFormat, "Unsupported Copilot history format"),
             (.identityChanged, "Session identity changed"),
@@ -749,7 +750,7 @@ enum SidebarPresentation {
         complete ? "No visible child tasks" : "Child history unavailable"
     }
 
-    static func attention(_ signals: [AgentAttention], state: CopilotWorkState, degraded: Bool) -> [String] {
+    static func attention(_ signals: [AgentAttention], state: AgentWorkState, degraded: Bool) -> [String] {
         var result = AgentAttentionKind.allCases.compactMap { kind -> String? in
             let count = signals.filter { $0.kind == kind }.count
             guard count > 0 else { return nil }
@@ -1196,7 +1197,7 @@ enum SidebarPresentation {
         }
     }
 
-    private static func observedSummaryState(_ state: CopilotWorkState) -> AgentSummaryState {
+    private static func observedSummaryState(_ state: AgentWorkState) -> AgentSummaryState {
         switch state {
         case .working: .working
         case .blocked: .blocked
@@ -1204,7 +1205,7 @@ enum SidebarPresentation {
         case .completed: .finished
         case .failed: .failed
         case .cancelled: .cancelled
-        case .unknown: .unknown
+        case .unknown, .queued: .unknown
         }
     }
 

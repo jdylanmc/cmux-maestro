@@ -2154,7 +2154,7 @@ private struct TaskboardContent: View {
     var retainedOnly = false
     @Environment(\.sidebarDensity) private var density
 
-    private let groups: [(String, [CopilotWorkState])] = [
+    private let groups: [(String, [AgentWorkState])] = [
         ("Blocked", [.blocked]), ("Working", [.working]), ("Idle", [.idle]),
         ("Done / ended", [.completed, .failed, .cancelled]), ("Unknown", [.unknown]),
     ]
@@ -2274,7 +2274,7 @@ private struct TaskboardSessionRow: View {
 
 private struct AttentionSummary: View {
     let attention: [AgentAttention]
-    let state: CopilotWorkState
+    let state: AgentWorkState
     let degraded: Bool
 
     var body: some View {
@@ -2587,7 +2587,7 @@ private struct ExpandButton: View {
 }
 
 private struct WorkStateLabel: View {
-    let state: CopilotWorkState
+    let state: AgentWorkState
     var body: some View {
         let visual = SidebarPresentation.state(state)
         Text(visual.title)

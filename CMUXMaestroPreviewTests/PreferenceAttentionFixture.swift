@@ -45,6 +45,8 @@ struct PreferenceAttentionFixture {
                       ]))
             ], windowID: UUID(uuidString: "70000000-0000-0000-0000-000000000005")!
         )
-        return SidebarCopilotTree.project(snapshot, onto: SidebarTopology(hierarchy), now: now, history: history, attention: attention)
+        let topology = SidebarTopology(hierarchy)
+        let neutral = CopilotSnapshotAdapter.snapshot(snapshot, workspaceBySurface: topology.workspaceBySurface)
+        return SidebarCopilotTree.project(neutral, onto: topology, now: now, history: history, attention: attention)
     }
 }

@@ -1091,13 +1091,39 @@ The legacy shell-row alias remains checked even for non-shell tool names, keepin
 global tool-ID replay protection conservative across metadata/name differences.
 Both ordinary tool and actual shell starts have selective-alias regressions.
 
-The reusable neutral `AgentActivity` contract lives in `Domain/AgentSignals.swift`
-alongside evidence-bearing attention primitives, compiled into app, sidebar and
-tests, not the hook. Existing snapshot behavior is unchanged. New live model
-fields are optional for backward Codable compatibility. Reader identity,
-partial-read, corruption, freshness and replay-cap safeguards still apply;
-untrusted or unavailable evidence cannot fabricate an outcome or an action.
-Telemetry and the remaining backlog are not claimed by this feature.
+Live `SidebarCopilotPolling.Read` and projection consume the existing
+`Domain/AgentSessionSnapshot.swift` contract through the pure
+`CopilotSnapshotAdapter`. `CopilotSessionReader` still owns bounded provider
+parsing; only the caller's granted current host topology establishes a binding.
+Launch workspace/surface evidence is separate and cannot create current topology.
+Activity and attention reuse `Domain/AgentSignals.swift`; these shared types
+compile into app, sidebar and tests, not the hook.
+
+Schema version remains 1. Optional observation fields preserve process liveness,
+observation time, appearance, child kinds/models/outcome-event identities, issues
+and completeness. An absent completeness field means unknown, not complete.
+Legacy `state: done` retains its meaning. Idle, failed and cancelled use an
+explicit `stateDetail` with an unknown legacy state; contradictory combinations
+are invalid. Consumers resolve that pair once and keep process liveness separate.
+Unavailable/degraded model or activity values cannot become current evidence.
+
+An absent `childWorkLayout` retains v1's strictly validated nested hierarchy.
+`flatObservations` instead preserves bounded reader order and literal parent
+edges, including late/missing parents and cycles, without inventing ancestors.
+Its validator still rejects duplicate/empty identities, foreign session parents,
+nested entries, invalid availability and contradictory state/timing. Projection
+resolves these observed edges using the existing 256-node/12-depth limits and
+explicit omissions. Original v1 fixtures and a frozen v1 decoder are tested;
+old decoders ignore the additions and see unknown for the new state details.
+This is decoding compatibility, not a claim that an old complete-hierarchy
+validator understands flat observations.
+
+Reader identity, partial-read, corruption, freshness and replay-cap safeguards,
+history/attention actions and exact host navigation remain unchanged. No PID,
+process-start identity, raw provider payload, capability or control authority
+is added. Saved identity still does not imply resume; an observed child has no
+independent terminal. This literal #10 integration does not complete the broader
+#118 lifetime/control foundation or change observation-hook policy.
 
 ### Bounded retention and discovery
 

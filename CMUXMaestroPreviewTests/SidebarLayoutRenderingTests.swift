@@ -131,7 +131,7 @@ struct SidebarLayoutRenderingTests {
                   liveness: .unknown, state: .unknown, model: nil, children: [], observedAt: now)
         ]
         let copilot = SidebarCopilotPolling(
-            read: { _ in .init(generatedAt: now, sessions: observations, issues: [], isComplete: false) },
+            read: neutralRead { _ in .init(generatedAt: now, sessions: observations, issues: [], isComplete: false) },
             pause: { try await Task.sleep(for: .seconds(60)) },
             expiryPause: Self.suspendFrozenClock, now: { now }
         )
@@ -843,7 +843,7 @@ struct SidebarLayoutRenderingTests {
             pause: { try await Task.sleep(for: .seconds(60)) }
         )
         let copilot = SidebarCopilotPolling(
-            read: {
+            read: neutralRead {
                 _ in CopilotSnapshot(generatedAt: now, sessions: nestedNodes.map { node in
                     CopilotSessionObservation(
                         sessionID: node.copilotSessionId ?? sessionIDs[
@@ -971,7 +971,7 @@ struct SidebarLayoutRenderingTests {
                                                  lastEventAt: now) : nil)
         ], now: now)
         let polling = SidebarCopilotPolling(
-            read: { _ in snapshot }, pause: { try await Task.sleep(for: .seconds(60)) },
+            read: neutralRead { _ in snapshot }, pause: { try await Task.sleep(for: .seconds(60)) },
             expiryPause: Self.suspendFrozenClock, now: { now }
         )
         let original = fixtures.hierarchy()
