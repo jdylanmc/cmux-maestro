@@ -8,6 +8,14 @@ struct NeutralObservationValidationTests {
         case terminalExecuting, terminalInvalidActivity, childStateDetail
     }
 
+    enum InvalidCanonicalPeer: CaseIterable {
+        case none, emptyID, duplicateID, invalidMetadata
+    }
+
+    enum HistoryAction: CaseIterable {
+        case expire, offerDismissal, applyDismissal, acknowledge
+    }
+
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let eventID = UUID(uuidString: "10000000-1000-1000-1000-000000000010")!
@@ -140,6 +148,112 @@ struct NeutralObservationValidationTests {
         #expect(tree.availability == .partial && !tree.hasCompleteCounts)
     }
 
+    @Test(arguments: InvalidCanonicalPeer.allCases, [false, true])
+    func canonicalErrorsCannotWeakenConsistencyHistorySafety(
+        _ invalidPeer: InvalidCanonicalPeer, _ falselyLossless: Bool
+    ) async {
+        for action in HistoryAction.allCases {
+            let terminal = terminalForHistory(action)
+            let safe = child("safe")
+            let input = snapshot(
+                legacy: falselyLossless ? [] : [child("active"), safe],
+                observed: [terminal, safe] + invalidPeers(invalidPeer), lossless: falselyLossless
+            )
+            #expect(throws: AgentSessionSnapshotValidationError.self) { try input.validate() }
+            let assessment = input.assess(input.sessions[0], at: "sessions[0]")
+            #expect(assessment.invalidChildren.contains(.init("active")))
+            let history = historyFor(action)
+            let direct = SidebarCopilotTree.project(input, onto: fixtures.topology(), now: now, history: history)
+            let polled = await poll(input, history: history)
+            #expect(polled == direct)
+            for tree in [direct, polled] {
+                #expect(tree.availability == .partial && !tree.hasCompleteCounts)
+                #expect(tree.sessions.map(\.id) == [fixtures.sessionID, fixtures.otherSessionID])
+                #expect(tree.sessions.last?.state == .working && tree.sessions.last?.childrenComplete == true)
+                #expect(tree.sessions.first?.nodes.first { $0.id == "safe" }?.state == .working)
+                #expect(tree.sessions.first?.nodes.first { $0.id == "active" }?.attentionDegraded == true)
+                #expect(tree.hiddenHistoryCount == 0)
+                #expect(tree.dismissibleOutcomes.isEmpty && tree.acknowledgeableOutcomes.isEmpty)
+            }
+        }
+    }
+
+    @Test(arguments: HistoryAction.allCases)
+    func validConsistentEvidenceRetainsExistingHistoryAuthority(_ action: HistoryAction) async throws {
+        let children = [terminalForHistory(action), child("safe")]
+        let input = snapshot(legacy: children, observed: children, lossless: true)
+        try input.validate()
+        let history = historyFor(action)
+        let direct = SidebarCopilotTree.project(input, onto: fixtures.topology(), now: now, history: history)
+        let polled = await poll(input, history: history)
+        #expect(polled == direct)
+        #expect(direct.availability == .ready && direct.hasCompleteCounts)
+        #expect(direct.sessions.last?.state == .working && direct.sessions.last?.childrenComplete == true)
+        #expect(direct.sessions.first?.nodes.first { $0.id == "safe" }?.state == .working)
+        switch action {
+        case .expire, .applyDismissal:
+            #expect(direct.hiddenHistoryCount == 1)
+            #expect(direct.sessions.first?.nodes.map(\.id) == ["safe"])
+        case .offerDismissal:
+            #expect(direct.hiddenHistoryCount == 0)
+            #expect(direct.dismissibleOutcomes == [historyKey])
+        case .acknowledge:
+            #expect(direct.hiddenHistoryCount == 0)
+            #expect(direct.acknowledgeableOutcomes == [
+                .init(sessionID: fixtures.sessionID, ownerID: "active",
+                      evidence: .init(source: "copilot.events", eventID: eventID))
+            ])
+        }
+    }
+
+    private var historyKey: SidebarDismissedOutcome {
+        .init(sessionID: fixtures.sessionID, childID: "active", eventID: eventID)
+    }
+
+    private func historyFor(_ action: HistoryAction) -> SidebarHistorySettings {
+        switch action {
+        case .expire: .init()
+        case .offerDismissal, .acknowledge: .init(retention: .never)
+        case .applyDismissal: .init(retention: .never, dismissed: [historyKey])
+        }
+    }
+
+    private func terminalForHistory(_ action: HistoryAction) -> AgentChildWork {
+        child("active", state: .known(.done), terminal: true, attention: action == .acknowledge ? [
+            .init(kind: .turnFinished, evidence: .init(source: "copilot.events", eventID: eventID),
+                  occurredAt: now.addingTimeInterval(-60))
+        ] : nil)
+    }
+
+    private func invalidPeers(_ kind: InvalidCanonicalPeer) -> [AgentChildWork] {
+        switch kind {
+        case .none: []
+        case .emptyID: [child("")]
+        case .duplicateID: [child("noise"), child("noise")]
+        case .invalidMetadata: [
+            .init(id: .init("noise"), parent: .session(identity), title: .known("Noise"),
+                  state: .known(.working), activity: .unknown(), kind: .subagent,
+                  model: .known(.init(identifier: "")))
+        ]
+        }
+    }
+
+    private func poll(_ input: AgentSessionSnapshot, history: SidebarHistorySettings) async -> SidebarCopilotTree {
+        let now = now
+        let poller = SidebarCopilotPolling(
+            read: { _ in input }, pause: { try await sidebarFrozenExpiry(0) },
+            expiryPause: sidebarFrozenExpiry, now: { now }
+        )
+        poller.updateHistory(history)
+        poller.update(topology: fixtures.topology(), connected: true)
+        poller.setVisible(true)
+        await sidebarEventually { !poller.isReading && poller.tree.sessions.count == 2 }
+        let result = poller.tree
+        poller.setVisible(false)
+        await sidebarEventually { !poller.isReading }
+        return result
+    }
+
     private func assertSafe(_ tree: SidebarCopilotTree, kind: Malformation) {
         #expect(tree.sessions.map(\.id) == [fixtures.sessionID, fixtures.otherSessionID])
         #expect(tree.sessions.last?.state == .working && tree.sessions.last?.childrenComplete == true)
@@ -192,11 +306,12 @@ struct NeutralObservationValidationTests {
         _ id: String, parent: AgentChildWorkParent? = nil,
         state: SnapshotValue<AgentSessionState> = .known(.working), detail: AgentSessionStateDetail? = nil,
         activity: SnapshotValue<AgentActivity> = .unknown(), terminal: Bool = false,
-        children: [AgentChildWork] = []
+        children: [AgentChildWork] = [], attention: [AgentAttention]? = nil
     ) -> AgentChildWork {
         .init(id: .init(id), parent: parent ?? .session(identity), title: .known(id), state: state,
               activity: activity, children: children, stateDetail: detail, kind: .subagent,
-              terminalEvent: terminal ? .init(id: eventID, timestamp: now.addingTimeInterval(-60)) : nil)
+              terminalEvent: terminal ? .init(id: eventID, timestamp: now.addingTimeInterval(-60)) : nil,
+              attention: attention)
     }
 
     private func snapshot(

@@ -767,11 +767,20 @@ extension AgentSessionSnapshot {
         if session.childWorkObservation != nil, !legacy.isValid {
             result.invalidChildren.formUnion(evidence.children.map(\.id))
         }
-        if let observation = session.childWorkObservation, legacy.isValid, evidence.isValid {
-            let byID = Dictionary(uniqueKeysWithValues: evidence.children.map { ($0.id, $0) })
+        if let observation = session.childWorkObservation, legacy.isValid {
+            // Unrelated errors cannot waive consistency; only unique, valid
+            // entries may establish a match against the compatibility view.
+            let groups = Dictionary(grouping: evidence.children, by: \.id)
+            let byID = groups.compactMapValues { matches -> AgentChildWork? in
+                guard matches.count == 1, let child = matches.first,
+                      !evidence.invalidChildren.contains(child.id),
+                      !evidence.unresolvedParents.contains(child.id) else { return nil }
+                return child
+            }
             let consistent = result.check {
                 guard legacy.children.allSatisfy({ byID[$0.id] == $0.containing([]) }),
-                      !observation.legacyProjectionIsLossless || legacy.children.count == evidence.children.count else {
+                      !observation.legacyProjectionIsLossless
+                        || (evidence.isValid && legacy.children.count == observation.items.count) else {
                     throw AgentSessionSnapshotValidationError.inconsistentChildProjection(path: "\(path).childWork")
                 }
             }
