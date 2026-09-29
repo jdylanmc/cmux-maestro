@@ -1,0 +1,578 @@
+#!/usr/bin/env python3
+"""C7 diagnostic, exclusively on a clean GitHub-hosted macOS runner.
+
+Run with --hosted-only --evidence "$RUNNER_TEMP/stock-host-update-evidence".
+Setup seeds a version-bound *preexisting* enabled native selection, not onboarding.
+The acts are the frozen native-only local-preview update and rollback commands.
+No containing-app launch, Copilot installation, hooks, input, or production claim.
+Exit 0 requires both loaded generations and restoration; 1 is failure, 2 unavailable.
+All runtime evidence, including unsuccessful setup and cleanup, goes to the artifact.
+"""
+
+import argparse
+import ctypes
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import plistlib
+import pwd
+import re
+import signal
+import subprocess
+import sys
+import time
+import traceback
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parents[1]
+BASE = "6efa5427cfca4f0dfb5af927ec29ba5962e2cd88"
+STOCK_REVISION = "b685a275c2e411799857155e37264daf84f7e4d6"
+DMG_URL = "https://github.com/manaflow-ai/cmux/releases/download/v0.64.25/cmux-macos.dmg"
+DMG_SHA256 = "0afb2f8ff9bfef10f03e61ff12e65ce02dbca5c96cb9047118e13483ac5b08ad"
+EXT_ID = "com.jdylanmc.CMUXMaestroPreview.Extension"
+DOMAIN = "com.cmuxterm.app"
+SETUP_DEFAULTS = {
+    "extensions.beta.enabled": True,
+    "cmuxExtensionSidebar.providerId": "cmux.sidebar.extensions",
+    "cmuxExtensionSidebar.selectedExtensionBundleId": EXT_ID,
+    "socketControlMode": "cmuxOnly",
+    "SUEnableAutomaticChecks": False,
+    "SUAutomaticallyUpdate": False,
+}
+
+
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
+def load_preview():
+    spec = importlib.util.spec_from_file_location("native_preview", ROOT / "scripts/local-preview.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def sha256(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+class Probe:
+    def __init__(self, evidence):
+        self.evidence = evidence
+        self.work = Path(os.environ["RUNNER_TEMP"]).resolve() / "stock-host-update"
+        self.work_owned = False
+        self.home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        self.preview = load_preview()
+        self.ops = self.preview.MacOperations()
+        self.destination = self.home / "Applications/CMUX Maestro Host Proof.app"
+        self.source = self.preview.DEVELOPMENT_APP
+        self.stock = self.work / "cmux.app"
+        self.mount = self.work / "dmg-mount"
+        self.helper = self.work / "stock-host-observer"
+        self.observer = None
+        self.child = None
+        self.command_incomplete = False
+        self.host = None
+        self.host_launch_requested = False
+        self.defaults_owned = False
+        self.apps_owned = []
+        self.baseline = None
+        self.hashes = {}
+        self.last_sample = None
+        self.sequence = 0
+        self.report = {
+            "status": "unavailable", "phase": "setup", "base": BASE,
+            "stock": {"version": "0.64.25", "build": "106", "revision": STOCK_REVISION,
+                      "url": DMG_URL, "bytes": 225832896, "sha256": DMG_SHA256},
+            "scope": "native hosting only; neither combined installation nor hooks",
+            "setupIsNotAcceptance": True,
+            "checks": {}, "cleanup": [], "events": [],
+        }
+
+    def save(self):
+        (self.evidence / "result.json").write_text(json.dumps(self.report, indent=2) + "\n")
+
+    def event(self, kind, **details):
+        self.report["events"].append({"time": time.time(), "kind": kind, **details})
+        self.save()
+
+    def run(self, args, *, timeout=120, check=True):
+        args = list(map(str, args))
+        self.sequence += 1
+        stem = f"{self.sequence:03d}-{Path(args[0]).name}"
+        self.event("command", argv=args, log=stem, timeout=timeout)
+        with (self.evidence / f"{stem}.stdout").open("wb") as out, (
+            self.evidence / f"{stem}.stderr"
+        ).open("wb") as err:
+            try:
+                result = subprocess.run(args, cwd=ROOT, stdin=subprocess.DEVNULL,
+                                        stdout=out, stderr=err, timeout=timeout)
+            except (subprocess.TimeoutExpired, RuntimeError):
+                self.command_incomplete = True
+                self.event("command-incomplete", log=stem,
+                           reason="Descendant completion unknown; no cleanup mutation may race this command")
+                raise
+        output = (self.evidence / f"{stem}.stdout").read_bytes()
+        self.event("command-result", log=stem, returncode=result.returncode)
+        require(not check or result.returncode == 0, f"{args[0]} exited {result.returncode}; see {stem}")
+        return result.returncode, output
+
+    def process(self, pid):
+        before = self.ops.process_generation(pid, os.getuid())
+        code = self.ops.executable_code_hash(pid)
+        if before is None or code is None:
+            return None
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        library.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        library.proc_pidpath.restype = ctypes.c_int
+        buffer = ctypes.create_string_buffer(4096)
+        length = library.proc_pidpath(pid, buffer, len(buffer))
+        if self.ops.process_generation(pid, os.getuid()) != before:
+            return None
+        if self.ops.executable_code_hash(pid) != code:
+            return None
+        return {"generation": list(before), "cdhash": code,
+                "path": os.fsdecode(buffer.value) if length > 0 else None}
+
+    def processes(self):
+        result = subprocess.run(["/bin/ps", "-ax", "-o", "pid=", "-o", "uid=",
+                                 "-o", "ppid=", "-o", "tty="],
+                                capture_output=True, text=True, check=True, timeout=10)
+        rows = []
+        for line in result.stdout.splitlines():
+            pid, uid, parent, tty = line.split()
+            if int(uid) == os.getuid():
+                identity = self.process(int(pid))
+                if identity:
+                    rows.append({**identity, "ppid": int(parent), "tty": tty})
+        return rows
+
+    def executable_hashes(self, bundle):
+        info = plistlib.loads((bundle / "Contents/Info.plist").read_bytes())
+        binary = bundle / "Contents/MacOS" / info["CFBundleExecutable"]
+        hashes = set()
+        for cpu, subtype in self.preview.mach_o_architectures(binary):
+            result = subprocess.run(
+                ["/usr/bin/codesign", "-d", "--verbose=4", "--architecture",
+                 f"{cpu},{subtype}", str(binary)],
+                capture_output=True, text=True, check=True, timeout=30)
+            hashes.update(re.findall(r"^(?:CDHash|CandidateCDHash [a-z0-9]+)=([0-9a-f]{40})$",
+                                     result.stderr, re.MULTILINE))
+        require(hashes, f"No executable code-directory hashes: {binary}")
+        self.event("executable-identity", binary=str(binary), sha256=sha256(binary),
+                   cdhashes=sorted(hashes))
+        return hashes
+
+    def observer_rows(self):
+        require(self.observer is not None and self.observer.poll() is None, "Observer exited")
+        data = (self.evidence / "observer.jsonl").read_bytes()
+        # Ignore only a currently incomplete final write, never a malformed complete row.
+        rows = [json.loads(line) for line in data.split(b"\n")[:-1]]
+        require(not any(r["kind"] == "observer-error" for r in rows),
+                "Public identity observation unavailable; see observer.jsonl")
+        return rows
+
+    def sample(self):
+        rows = self.processes()
+        native_hashes = set().union(*self.hashes.values()) if self.hashes else set()
+        extensions = [r for r in rows if r["cdhash"] in native_hashes]
+        value = {"time": time.time(), "extensions": extensions}
+        if self.baseline:
+            require(self.process(self.host["generation"][0]) == self.host,
+                    "CMUX process generation or signed executable changed")
+            for original in self.baseline["shells"]:
+                require(self.process(original["generation"][0]) == original,
+                        "An existing idle terminal shell exited or changed generation")
+            observations = self.observer_rows()
+            samples = [r for r in observations if r["kind"] == "sample"]
+            require(samples and time.time() - samples[-1]["time"] < 5, "Observer heartbeat stale")
+            recent = [r for r in observations if r["time"] >= self.baseline["time"]]
+            for row in recent:
+                if row["kind"] == "activation":
+                    require(row["pid"] == self.baseline["frontmost"], "App activation changed during act")
+                elif row["kind"] == "sample":
+                    require(row["frontmost"] == self.baseline["frontmost"], "Frontmost app changed")
+                    require(row["hostPIDs"] == [self.host["generation"][0]], "Host identity count changed")
+                    require(row["visibleWindows"] == self.baseline["visibleWindows"],
+                            "CMUX window disappeared or changed")
+        if value["extensions"] != self.last_sample:
+            self.event("native-processes", **value)
+            self.last_sample = value["extensions"]
+        return extensions
+
+    def tree(self):
+        _, raw = self.run([self.stock / "Contents/Resources/bin/cmux", "--json", "tree", "--all"],
+                          timeout=15)
+        value = json.loads(raw)
+        require(isinstance(value, dict) and value.get("windows"), "No stock CMUX window tree")
+        # Ignore labels/working-directory metadata, not identity, layout, or selection.
+        keys = {"id", "type", "focused", "selected", "selected_in_pane", "tty",
+                "key", "visible", "selected_workspace_id", "selected_surface_id",
+                "surface_ids", "windows", "workspaces", "panes", "surfaces",
+                "pane_id", "index", "index_in_pane", "layout", "pane", "direction", "split", "children"}
+        def project(item):
+            if isinstance(item, dict):
+                return {k: project(v) for k, v in item.items() if k in keys}
+            if isinstance(item, list):
+                return [project(v) for v in item]
+            return item
+        result = project(value)
+        for window in result["windows"]:
+            require(window.get("id") and type(window.get("key")) is bool
+                    and type(window.get("visible")) is bool, "Invalid window identity/selection")
+            for workspace in window.get("workspaces", []):
+                require(workspace.get("id") and type(workspace.get("selected")) is bool,
+                        "Invalid workspace identity/selection")
+                for pane in workspace.get("panes", []):
+                    require(pane.get("id") and type(pane.get("focused")) is bool,
+                            "Invalid pane identity/selection")
+                    for surface in pane.get("surfaces", []):
+                        require(surface.get("id") and type(surface.get("focused")) is bool
+                                and type(surface.get("selected")) is bool, "Invalid surface identity/selection")
+        require(any(s.get("type") == "terminal" and s.get("tty")
+                    for w in result["windows"] for ws in w.get("workspaces", [])
+                    for p in ws.get("panes", []) for s in p.get("surfaces", [])),
+                "No synthetic terminal surface/TTY to preserve")
+        return result
+
+    def wait_loaded(self, variant, *, previous=None, timeout=120):
+        deadline = time.monotonic() + timeout
+        stable = None
+        since = time.monotonic()
+        while time.monotonic() < deadline:
+            rows = self.sample()
+            matches = [r for r in rows if r["cdhash"] in self.hashes[variant]]
+            if len(rows) == 1 and len(matches) == 1:
+                current = {k: matches[0][k] for k in ("generation", "cdhash", "path")}
+                require(current["path"] == str(self.extension_binary),
+                        "Loaded extension is not from the owned stable destination")
+                if previous:
+                    require(current["generation"] != previous["generation"],
+                            "Same PID/start generation survived replacement")
+                    require(self.ops.process_generation(previous["generation"][0], os.getuid())
+                            != tuple(previous["generation"]), "Prior generation is still live")
+                if current == stable:
+                    if time.monotonic() - since >= 5:
+                        self.event("loaded", variant=variant, identity=current)
+                        return current
+                else:
+                    stable, since = current, time.monotonic()
+            else:
+                stable, since = None, time.monotonic()
+            time.sleep(0.5)
+        raise RuntimeError(f"No unique, stable, dynamically verified {variant} extension generation")
+
+    def installer(self, name, *arguments, monitored=False):
+        args = [sys.executable, str(ROOT / "scripts/local-preview.py"), "--destination",
+                str(self.destination), name, *map(str, arguments)]
+        self.event("installer-start", argv=args)
+        with (self.evidence / f"installer-{name}.log").open("wb") as out:
+            self.child = subprocess.Popen(args, cwd=ROOT, stdin=subprocess.DEVNULL,
+                                          stdout=out, stderr=subprocess.STDOUT)
+            deadline = time.monotonic() + 420
+            defect = None
+            while self.child.poll() is None:
+                if monitored and defect is None:
+                    try:
+                        self.sample()
+                    except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+                        defect = str(error)
+                        self.event("continuity-failure", error=defect)
+                require(time.monotonic() < deadline,
+                        "Installer exceeded 420s; retained without signalling, runner teardown required")
+                time.sleep(0.5)
+            code = self.child.returncode
+            self.child = None
+        self.event("installer-end", operation=name, returncode=code, continuityError=defect)
+        require(code == 0 and defect is None, f"Native {name} failed; see installer-{name}.log")
+
+    def registration(self):
+        _, raw = self.run(["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID])
+        self.preview.metadata.verify_registration_output(
+            raw.decode(), self.destination / self.preview.EXTENSION)
+        records = self.preview.metadata.registration_records(raw.decode())
+        require(len(records) == 1, "Duplicate native extension registrations")
+
+    def setup(self):
+        self.work.mkdir(mode=0o700)
+        self.work_owned = True
+        self.report["head"] = self.run(["git", "rev-parse", "HEAD"])[1].decode().strip()
+        self.run(["git", "merge-base", "--is-ancestor", BASE, "HEAD"])
+        self.run(["/usr/bin/sw_vers"])
+        self.run(["/usr/bin/xcodebuild", "-version"])
+        require(not self.destination.exists() and not self.source.exists(), "Fixture output already exists")
+        for path in (self.home / "Applications" / self.preview.STATE_NAME,
+                     self.home / ".config/cmux", self.home / "Library/Application Support/cmux",
+                     self.home / "Library/Application Support/CMUXMaestroPreview",
+                     self.home / "Library/Preferences/com.cmuxterm.app.plist",
+                     Path("/Applications/cmux.app"), Path("/tmp/cmux.sock")):
+            require(not path.exists() and not path.is_symlink(), f"Profile is not clean: {path}")
+        code, domain = self.run(["/usr/bin/defaults", "export", DOMAIN, "-"], check=False)
+        require(code != 0 or not plistlib.loads(domain), "Existing CMUX defaults refused")
+        _, registrations = self.run(["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID])
+        require(not self.preview.metadata.registration_records(
+            registrations.decode(), allow_empty=True), "Existing Maestro extension refused")
+        require(not self.ops.app_paths(), "Existing Maestro app registration refused")
+        self.run(["/usr/bin/xcrun", "swiftc", "-parse-as-library",
+                  ROOT / "scripts/stock-host-observer.swift", "-o", self.helper], timeout=180)
+        with (self.evidence / "observer.jsonl").open("wb") as out, (
+            self.evidence / "observer.stderr"
+        ).open("wb") as err:
+            self.observer = subprocess.Popen([str(self.helper), "watch"], stdin=subprocess.DEVNULL,
+                                             stdout=out, stderr=err)
+        time.sleep(1)
+        observations = self.observer_rows()
+        require(observations and not any(r.get("hostPIDs") for r in observations),
+                "Preexisting CMUX host or unavailable desktop observation")
+        dmg = self.work / "cmux-macos.dmg"
+        self.run(["/usr/bin/curl", "--fail", "--location", "--silent", "--show-error",
+                  "--max-time", "300", "--output", dmg, DMG_URL], timeout=310)
+        require(dmg.stat().st_size == 225832896 and sha256(dmg) == DMG_SHA256,
+                "Official stock DMG size/digest mismatch")
+        self.run(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint",
+                  self.mount, dmg])
+        self.run(["/usr/bin/ditto", self.mount / "cmux.app", self.stock])
+        self.run(["/usr/bin/hdiutil", "detach", self.mount])
+        stock_info = plistlib.loads((self.stock / "Contents/Info.plist").read_bytes())
+        require(stock_info["CFBundleIdentifier"] == DOMAIN and
+                stock_info["CFBundleShortVersionString"] == "0.64.25" and
+                stock_info["CFBundleVersion"] == "106", "Stock bundle version mismatch")
+        self.run(["/usr/bin/codesign", "--verify", "--strict", "--deep", self.stock])
+        _, version = self.run([self.stock / "Contents/Resources/bin/cmux", "--version"])
+        require("b685a275c" in version.decode(), "Stock CLI source revision mismatch")
+        self.host_hashes = self.executable_hashes(self.stock)
+        self.apps_owned.append(self.source)
+        self.run([ROOT / "scripts/build-register.sh"], timeout=900)
+        self.hashes["A"] = self.executable_hashes(self.source / self.preview.EXTENSION)
+        candidate = self.work / "candidate-B.app"
+        self.apps_owned.append(candidate)
+        self.run(["/usr/bin/ditto", self.source, candidate])
+        # A real signed Info.plist variant changes the executable's CodeDirectory,
+        # not its permissions or product code. CFBundleVersion remains the checked build.
+        for bundle in (candidate / self.preview.EXTENSION, candidate):
+            info_path = bundle / "Contents/Info.plist"
+            info = plistlib.loads(info_path.read_bytes())
+            info["CFBundleShortVersionString"] = "0.0.1142"
+            info_path.write_bytes(plistlib.dumps(info))
+            self.run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none",
+                      "--preserve-metadata=identifier,entitlements,requirements,flags,runtime", bundle])
+        self.ops.verify(candidate, current=True)
+        self.hashes["B"] = self.executable_hashes(candidate / self.preview.EXTENSION)
+        require(self.hashes["A"].isdisjoint(self.hashes["B"]),
+                "Fixture extension signatures are identical; reload would be unproven")
+        self.candidate = candidate
+        self.installer("install", "--source", self.source, "--retire-development-registration")
+        self.registration()
+        extension = self.destination / self.preview.EXTENSION
+        executable = plistlib.loads((extension / "Contents/Info.plist").read_bytes())["CFBundleExecutable"]
+        self.extension_binary = extension / "Contents/MacOS" / executable
+        setup_plist = self.work / "setup-defaults.plist"
+        setup_plist.write_bytes(plistlib.dumps(SETUP_DEFAULTS))
+        self.defaults_owned = True
+        self.run(["/usr/bin/defaults", "import", DOMAIN, setup_plist])
+        self.event("setup-only-selection", defaults=SETUP_DEFAULTS,
+                   meaning="Preexisting enabled selection fixture; not first-time onboarding or production technique")
+        self.run(["/usr/bin/pluginkit", "-e", "use", "-i", EXT_ID])
+        self.host_launch_requested = True
+        self.run(["/usr/bin/open", "-g", self.stock])
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            hosts = [r for r in self.processes() if r["cdhash"] in self.host_hashes
+                     and r["path"] == str(self.stock / "Contents/MacOS" / stock_info["CFBundleExecutable"])]
+            if len(hosts) == 1:
+                self.host = {k: hosts[0][k] for k in ("generation", "cdhash", "path")}
+                break
+            time.sleep(0.5)
+        require(self.host, "Stock CMUX did not start")
+        self.initial = self.wait_loaded("A")
+        self.registration()
+        observations = self.observer_rows()
+        identities = [r for r in observations if r["kind"] == "identities"]
+        require(identities and EXT_ID in identities[-1]["ids"],
+                "Native identity was not enabled/observable; setup unavailable")
+        sample = [r for r in observations if r["kind"] == "sample"][-1]
+        require(sample["hostPIDs"] == [self.host["generation"][0]] and sample["visibleWindows"]
+                and sample["frontmost"] > 0, "Desktop/stock host window unavailable")
+        process_rows = self.processes()
+        descendants = {self.host["generation"][0]}
+        for _ in range(len(process_rows)):
+            added = {r["generation"][0] for r in process_rows if r["ppid"] in descendants}
+            if added <= descendants:
+                break
+            descendants |= added
+        shells = [{k: r[k] for k in ("generation", "cdhash", "path")} for r in process_rows
+                  if r["generation"][0] in descendants and r["tty"] != "??"
+                  and r["path"] in ("/bin/zsh", "/bin/bash", "/bin/sh")]
+        require(shells, "No existing stock terminal shell to preserve; no input will be injected")
+        self.baseline = {"time": time.time(), "frontmost": sample["frontmost"],
+                         "visibleWindows": sample["visibleWindows"], "shells": shells,
+                         "tree": self.tree()}
+        self.report["baseline"] = {"host": self.host, "extension": self.initial, **self.baseline}
+        self.report["checks"]["setup"] = "pass"
+        self.report["phase"] = "acceptance"
+        self.save()
+
+    def act(self, operation, previous, variant, *arguments):
+        start = time.time()
+        self.installer(operation, *arguments, monitored=True)
+        loaded = self.wait_loaded(variant, previous=previous)
+        self.registration()
+        require(self.tree() == self.baseline["tree"], "Window/workspace/pane/surface identity or selection changed")
+        _, raw = self.run(["/usr/bin/defaults", "export", DOMAIN, "-"])
+        current = plistlib.loads(raw)
+        require(all(current.get(k) == v for k, v in SETUP_DEFAULTS.items()), "Selection/config changed during act")
+        rows = [r for r in self.observer_rows() if r["kind"] == "identities" and r["time"] >= start]
+        missing = next((r["time"] for r in rows if EXT_ID not in r["ids"]), None)
+        require(missing is not None and any(r["time"] >= missing and EXT_ID in r["ids"] for r in rows),
+                "No observed native identity disappearance and reappearance")
+        self.report["checks"][operation] = {
+            "status": "pass", "old": previous, "new": loaded, "identityDisappearance": missing,
+            "hostAndShellGenerationsUnchanged": True, "treeUnchanged": True,
+            "focusAndVisibleWindowsUnchanged": True,
+        }
+        self.save()
+        return loaded
+
+    def cleanup(self):
+        def attempt(label, action):
+            try:
+                action()
+                self.report["cleanup"].append({"action": label, "status": "pass"})
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+                self.report["cleanup"].append({"action": label, "status": "failed", "error": str(error)})
+            self.save()
+
+        if self.command_incomplete or (self.child is not None and self.child.poll() is None):
+            self.report["cleanup"].append({
+                "status": "failed", "action": "retain after incomplete command/installer",
+                "pid": self.child.pid if self.child else None, "reason": "Runner disposal required",
+            })
+        else:
+            if self.host_launch_requested and self.host is None:
+                def recover_host_identity():
+                    hosts = [r for r in self.processes() if r["cdhash"] in self.host_hashes
+                             and r["path"] and Path(r["path"]).is_relative_to(self.stock)]
+                    require(len(hosts) <= 1, "Ambiguous stock host identity; no process signalled")
+                    if hosts:
+                        self.host = {k: hosts[0][k] for k in ("generation", "cdhash", "path")}
+                attempt("identify only run-launched stock host for cleanup", recover_host_identity)
+            if self.host and self.process(self.host["generation"][0]) == self.host:
+                def quit_host():
+                    self.run([self.helper, "quit", self.host["generation"][0], self.stock], timeout=15)
+                    deadline = time.monotonic() + 30
+                    while self.ops.process_generation(self.host["generation"][0], os.getuid()) == tuple(self.host["generation"]):
+                        require(time.monotonic() < deadline, "Normal quit not completed; no force termination")
+                        time.sleep(0.5)
+                attempt("normal exact-host quit AFTER acceptance (never evidence of reload)", quit_host)
+            if self.apps_owned:
+                def unregister_owned():
+                    installer = self.preview.Installer(self.home, self.destination)
+                    with installer.locked():
+                        apps = installer.protected_apps() + self.apps_owned
+                        for key in ("transaction", "garbage"):
+                            if installer.receipt[key]:
+                                apps.append(installer.slot(installer.receipt[key]["slot"]))
+                        for app in dict.fromkeys(apps):
+                            if app.exists():
+                                self.preview.safe_tree(app)
+                                installer.ops.unregister(app)
+                        require(not installer.receipt["transaction"] and not installer.receipt["garbage"],
+                                "Installer journal still pending; retained for diagnosis, not repaired")
+                    _, raw = self.run(["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID])
+                    require(not self.preview.metadata.registration_records(raw.decode(), allow_empty=True)
+                            and not self.ops.app_paths(), "Native registrations remain after cleanup")
+                    deadline = time.monotonic() + 30
+                    while any(r["cdhash"] in set().union(*self.hashes.values()) for r in self.processes()):
+                        require(time.monotonic() < deadline, "Native fixture still live; no extension signalled")
+                        time.sleep(0.5)
+                attempt("unregister exact receipt-owned slots and run-created sources; verify absence",
+                        unregister_owned)
+            if self.work_owned and self.stock.exists():
+                attempt("unregister exact downloaded stock app",
+                        lambda: self.run([self.preview.LSREGISTER, "-u", self.stock]))
+            if self.defaults_owned:
+                def remove_defaults():
+                    require(not self.host or self.ops.process_generation(
+                        self.host["generation"][0], os.getuid()) != tuple(self.host["generation"]),
+                        "Host remains live; defaults retained for runner disposal")
+                    self.run(["/usr/bin/defaults", "delete", DOMAIN])
+                    code, raw = self.run(["/usr/bin/defaults", "export", DOMAIN, "-"], check=False)
+                    require(code != 0 or not plistlib.loads(raw), "Run-created defaults remain")
+                attempt("remove only run-created CMUX defaults domain after host exit", remove_defaults)
+            if self.work_owned and self.mount.is_mount():
+                attempt("detach exact read-only DMG", lambda: self.run(["/usr/bin/hdiutil", "detach", self.mount]))
+        if self.observer and self.observer.poll() is None:
+            def stop_observer():
+                self.observer.terminate()
+                self.observer.wait(timeout=10)
+            attempt("stop exact owned read-only observer", stop_observer)
+        receipt = self.home / "Applications" / self.preview.STATE_NAME / "receipt.json"
+        if self.apps_owned and receipt.is_file():
+            (self.evidence / "final-receipt.json").write_bytes(receipt.read_bytes())
+        self.report["retainedForRunnerDisposal"] = [
+            str(self.work), str(self.source), str(self.destination),
+            str(self.home / "Applications" / self.preview.STATE_NAME),
+        ]
+        self.report["cleanupPolicy"] = (
+            "No recursive deletion, process-name kills, extension signals or forced host termination. "
+            "Run-created disk fixtures and synthetic profile state are disposed with the hosted VM."
+        )
+        self.save()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--hosted-only", action="store_true", required=True)
+    parser.add_argument("--evidence", type=Path, required=True)
+    args = parser.parse_args()
+    home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    guard = (sys.platform == "darwin" and os.getuid() != 0 and
+             os.environ.get("GITHUB_ACTIONS") == "true" and
+             os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted" and
+             os.environ.get("RUNNER_OS") == "macOS" and home == Path("/Users/runner") and
+             os.environ.get("GITHUB_RUN_ID", "").isdigit() and
+             Path(os.environ.get("GITHUB_WORKSPACE", "/")).resolve() == ROOT)
+    if not guard:
+        print("UNAVAILABLE: clean GitHub-hosted macOS runner required; no runtime effects.", file=sys.stderr)
+        return 2
+    temporary = Path(os.environ["RUNNER_TEMP"]).resolve()
+    evidence = args.evidence.absolute()
+    require(evidence == temporary / "stock-host-update-evidence" and not evidence.is_symlink(),
+            "Evidence must be the exact runner-temp artifact directory")
+    evidence.mkdir(mode=0o700, exist_ok=True)
+    probe = Probe(evidence)
+    probe.save()
+    def deadline(_signal, _frame):
+        raise RuntimeError("Overall 2100-second probe bound exceeded")
+    signal.signal(signal.SIGALRM, deadline)
+    signal.alarm(2100)
+    try:
+        probe.setup()
+        replacement = probe.act("update", probe.initial, "B", "--source", probe.candidate)
+        probe.act("rollback", replacement, "A")
+        probe.sample()
+        probe.report["status"] = "pass"
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        probe.report["status"] = "unavailable" if probe.report["phase"] == "setup" else "failed"
+        probe.report["error"] = str(error)
+        (evidence / "failure.txt").write_text(traceback.format_exc())
+    finally:
+        signal.alarm(0)
+        probe.report["acceptanceEnded"] = time.time()
+        probe.save()
+        probe.cleanup()
+        if any(row["status"] == "failed" for row in probe.report["cleanup"]):
+            if probe.report["status"] == "pass":
+                probe.report["status"] = "failed"
+            probe.report["cleanupIncomplete"] = True
+        probe.save()
+    print(json.dumps({"status": probe.report["status"], "evidence": str(evidence)}))
+    return {"pass": 0, "failed": 1, "unavailable": 2}[probe.report["status"]]
+
+
+if __name__ == "__main__":
+    sys.exit(main())

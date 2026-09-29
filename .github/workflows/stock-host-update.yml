@@ -1,0 +1,35 @@
+name: Stock native host update probe
+
+on:
+  push:
+    branches: [test/stock-host-114-68a24b]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-host:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Initialize failure evidence
+        run: |
+          mkdir -p "$RUNNER_TEMP/stock-host-update-evidence"
+          printf '%s\n' 'Runtime proof pending; setup failure is not a pass.' > "$RUNNER_TEMP/stock-host-update-evidence/started.txt"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Probe stock native hosting (not combined install or hooks)
+        timeout-minutes: 40
+        run: |
+          python3 scripts/test-stock-host-update.py --hosted-only --evidence "$RUNNER_TEMP/stock-host-update-evidence"
+      - name: Upload successful or failed native-host evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-native-host-update-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/stock-host-update-evidence/
+          if-no-files-found: error
+          retention-days: 14
