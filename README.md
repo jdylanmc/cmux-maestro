@@ -284,7 +284,12 @@ receipt is a turn-completion boundary.
 these phases. Inventory/probe errors remain unknown, not death. A confirmed
 missing surface can cancel an unchanged unclaimed lease; a concurrent runtime
 claim cannot be revoked by the stale observation. Status can reconcile that
-same boundary after a pending caller return. Cancelled/expired leases and
+same boundary after a pending caller return. Status captures process and host
+probes outside the global write lock, then applies only identity/lease-matched
+evidence under the lock. Launch receipts revalidate current ownership and the
+lease after all external probes, including successful or unavailable surface
+observations. Changed identities discard probe facts to `null`; retained facts
+keep their capture timestamp. Cancelled/expired leases and
 foreign surface/session/generation/token identities still refuse late execution.
 No duplicate spawn, focus change, terminal input or automatic process cleanup
 is attempted. Pending launches retain their credential and capacity slot.

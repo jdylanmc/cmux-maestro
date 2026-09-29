@@ -1565,10 +1565,22 @@ def process_observation(process):
     return None
 
 
-def startup_observation(node, surface=None):
-    """Private controller evidence, not provider readiness or model activity."""
-    supervisor = process_observation(node.get("supervisor"))
-    provider = process_observation(node.get("providerProcess"))
+def observation_matches(snapshot, current, identifier):
+    previous = snapshot["nodes"].get(identifier)
+    node = current["nodes"].get(identifier)
+    return (
+        previous is not None and node is not None
+        and all(node.get(key) == previous.get(key) for key in (
+            "runId", "parentId", "role", "workspaceId", "surfaceId", "tokenHash",
+            "copilotSessionId", "generation", "executionMode", "phase",
+            "supervisor", "providerProcess", "messaging", "runtimeNotStarted",
+        ))
+        and current["launches"].get(identifier) == snapshot["launches"].get(identifier)
+    )
+
+
+def startup_observation(node, surface=None, *, supervisor=None, provider=None, observed_at=None):
+    """Format captured evidence only; safe inside the state mutation boundary."""
     failed = node["phase"] in {
         "launch-failed", "startup-failed", "turn-failed",
         "process-disappeared", "terminal-disappeared", "resource-retired",
@@ -1590,7 +1602,7 @@ def startup_observation(node, surface=None):
         "messagingAvailability": "unknown" if node.get("messaging") else "unsupported",
         "workObservation": "reported-result" if node["phase"] in REPORT_PHASES.values()
             and node.get("verifiedBoundaryGeneration") == node["generation"] else "unavailable",
-        "observedAt": now(),
+        "observedAt": observed_at or now(),
     }
 
 
@@ -2150,6 +2162,9 @@ def launch_reserved_session(root, cmux, identifier, session_id, worker_token, wo
         state = read_state(root, wait=1)
         node = owned_node(state)
         present = cmux.surface_exists(workspace, surface)
+        supervisor = process_observation(node.get("supervisor"))
+        provider = process_observation(node.get("providerProcess"))
+        observed_at = now()
         if node["phase"] == "launching" and present is False:
             def disappeared(current):
                 current_node = owned_node(current)
@@ -2163,6 +2178,12 @@ def launch_reserved_session(root, cmux, identifier, session_id, worker_token, wo
             if cancelled:
                 remove_launch_credential(root, identifier)
                 raise SessionLaunchError("The exact launch surface disappeared before runtime claim.", surface)
+        current = read_state(root, wait=1)
+        node = owned_node(current)
+        if node["phase"] == "launching" and current["launches"].get(identifier) != state["launches"].get(identifier):
+            raise OrchestrationError("Launch observation lease changed.")
+        if not observation_matches(state, current, identifier):
+            present, supervisor, provider, observed_at = None, None, None, None
         if node["phase"] in {"launch-failed", "startup-failed", "terminal-disappeared"} or (
             node.get("executionMode") == "interactive"
             and node["phase"] in {"turn-failed", "process-disappeared"}
@@ -2172,7 +2193,9 @@ def launch_reserved_session(root, cmux, identifier, session_id, worker_token, wo
                 surface,
             )
         if node.get("supervisor") or time.monotonic() >= deadline:
-            observation = startup_observation(node, present)
+            observation = startup_observation(
+                node, present, supervisor=supervisor, provider=provider, observed_at=observed_at
+            )
             if observation["startup"] == "failed":
                 raise SessionLaunchError("Managed runtime processes exited during launch observation.", surface)
             return {
@@ -2954,28 +2977,27 @@ def command_status(args, root, cmux):
     targets = descendants(snapshot, actor)
     if args.worker_id:
         targets = [ensure_owned(snapshot, actor, args.worker_id)]
-    observations = {
-        node["id"]: (
-            cmux.surface_exists(node["workspaceId"], node["surfaceId"])
-            if node.get("surfaceId") else None,
-            process_matches(node) if has_managed_runtime(node) else True,
-        ) for node in targets
-    }
+    observations = {}
+    for node in targets:
+        surface = cmux.surface_exists(node["workspaceId"], node["surfaceId"]) if node.get("surfaceId") else None
+        process = process_matches(node) if has_managed_runtime(node) else True
+        exited = has_managed_runtime(node) and not process and worker_processes_exited(node)
+        if node.get("surfaceId") and surface is False and (process or exited):
+            surface = cmux.surface_exists(node["workspaceId"], node["surfaceId"])
+        supervisor = process_observation(node.get("supervisor"))
+        provider = process_observation(node.get("providerProcess"))
+        if (node.get("supervisor") and supervisor is not False
+                or node.get("providerProcess") and provider is not False):
+            exited = False
+        observations[node["id"]] = {
+            "surface": surface, "process": process, "exited": exited,
+            "supervisor": supervisor, "provider": provider,
+            "observedAt": now(),
+        }
     git_evidence = collect_git_evidence(
         snapshot, {actor["id"], *(node["id"] for node in targets)}
     )
     cancelled = []
-    identity_keys = (
-        "runId", "parentId", "role", "workspaceId", "surfaceId",
-        "copilotSessionId", "generation", "executionMode", "phase",
-        "supervisor", "providerProcess", "messaging",
-    )
-
-    def observed_surface(node):
-        previous = snapshot["nodes"].get(node["id"])
-        if previous is None or any(node.get(key) != previous.get(key) for key in identity_keys):
-            return None
-        return observations.get(node["id"], (None, None))[0]
 
     def refresh(state):
         current_actor = authorize(state, args.actor_id, args.token)
@@ -2983,14 +3005,12 @@ def command_status(args, root, cmux):
         current_targets = descendants(state, current_actor)
         if args.worker_id:
             current_targets = [ensure_owned(state, current_actor, args.worker_id)]
+        matched = {}
         for node in current_targets:
-            previous = snapshot["nodes"].get(node["id"])
-            if (
-                node["id"] not in observations or previous is None
-                or any(node.get(key) != previous.get(key) for key in identity_keys)
-            ):
+            if node["id"] not in observations or not observation_matches(snapshot, state, node["id"]):
                 continue
-            surface, process = observations[node["id"]]
+            observed = matched[node["id"]] = observations[node["id"]]
+            surface, process, exited = observed["surface"], observed["process"], observed["exited"]
             if node["id"] in snapshot["launches"] or node["id"] in state["launches"] or node["phase"] == "launching":
                 if (node["phase"] == "launching" and node.get("surfaceId") and surface is False
                         and state["launches"].get(node["id"]) == snapshot["launches"].get(node["id"])
@@ -2998,11 +3018,9 @@ def command_status(args, root, cmux):
                     record_launch_failure(state, node["id"], node["surfaceId"], phase="terminal-disappeared")
                     cancelled.append(node["id"])
                 continue
-            exited = has_managed_runtime(node) and not process and worker_processes_exited(node)
             if has_managed_runtime(node) and not process and not exited:
                 continue
-            if (node.get("surfaceId") and surface is False
-                    and cmux.surface_exists(node["workspaceId"], node["surfaceId"]) is False):
+            if node.get("surfaceId") and surface is False:
                 node["phase"], node["availability"], node["updatedAt"] = (
                     "terminal-disappeared", "unavailable", now()
                 )
@@ -3022,7 +3040,12 @@ def command_status(args, root, cmux):
             "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
             "sessionId": node["copilotSessionId"], "generation": node["generation"],
             "messaging": "unsupported",
-            **(startup_observation(node, observed_surface(node)) if has_managed_runtime(node) else {}),
+            **(startup_observation(
+                node, matched.get(node["id"], {}).get("surface"),
+                supervisor=matched.get(node["id"], {}).get("supervisor"),
+                provider=matched.get(node["id"], {}).get("provider"),
+                observed_at=matched.get(node["id"], {}).get("observedAt"),
+            ) if has_managed_runtime(node) else {}),
             "permissionMode": node.get(
                 "permissionMode", "yolo" if (node.get("deliveryProof") or {}).get("yolo") else "default"
             ),

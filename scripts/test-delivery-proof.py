@@ -773,15 +773,18 @@ class ProofTests(unittest.TestCase):
             ("generation", 0), ("copilotSessionId", str(uuid.uuid4())),
             ("supervisor", {"pid": 12344, "start": "old-start"}),
             ("providerProcess", {"pid": 12347, "start": "old-start"}),
-            ("surfaceId", str(uuid.uuid4())), ("phase", "launching"),
+            ("surfaceId", str(uuid.uuid4())), ("phase", "launching"), ("tokenHash", "old-token"),
         ):
             with self.subTest(field=field):
                 snapshot = copy.deepcopy(state)
                 snapshot["nodes"][self.node["id"]][field] = old
-                _, retire = self.status_interleaving(state, actor, snapshot, process_start=lambda _: None)
+                result, retire = self.status_interleaving(state, actor, snapshot, process_start=lambda _: None)
                 retire.assert_not_called()
                 self.assertEqual(self.node["phase"], "turn-running")
                 self.assertTrue(self.route_path().exists())
+                worker = next(item for item in result["workers"] if item["workerId"] == self.node["id"])
+                for key in ("surfacePresent", "supervisorRunning", "providerRunning"):
+                    self.assertIsNone(worker[key], (field, key))
         state["launches"][self.node["id"]] = {"runId": actor["runId"]}
         _, retire = self.status_interleaving(
             state, actor, copy.deepcopy(state), process_start=lambda _: None,
@@ -789,7 +792,7 @@ class ProofTests(unittest.TestCase):
         retire.assert_not_called()
         self.assertEqual(self.node["phase"], "turn-running")
 
-    def test_status_rechecks_exit_at_cleanup_boundary(self):
+    def test_status_rechecks_exit_before_identity_fenced_refresh(self):
         state, actor = self.lifecycle_state()
         # The first observation misses both processes; the boundary sees the provider live.
         starts = mock.Mock(side_effect=[None, None, None, "provider-start", None, "provider-start"])
@@ -797,6 +800,19 @@ class ProofTests(unittest.TestCase):
         retire.assert_not_called()
         self.assertEqual(self.node["phase"], "turn-running")
         self.assertTrue(self.route_path().exists())
+
+    def test_status_latest_unknown_process_probe_preserves_route(self):
+        state, actor = self.lifecycle_state()
+        result, retire = self.status_interleaving(
+            state, actor, copy.deepcopy(state), process_start=lambda _: None,
+            kill_error=[ProcessLookupError, ProcessLookupError, None, None],
+        )
+        retire.assert_not_called()
+        self.assertEqual(self.node["phase"], "turn-running")
+        self.assertTrue(self.route_path().exists())
+        worker = next(item for item in result["workers"] if item["workerId"] == self.node["id"])
+        self.assertIsNone(worker["supervisorRunning"])
+        self.assertIsNone(worker["providerRunning"])
 
     def test_status_unknown_exit_preserves_route_and_phase(self):
         state, actor = self.lifecycle_state()
@@ -1373,6 +1389,7 @@ class LifecycleFailureTests(unittest.TestCase):
 
     def test_passive_process_observation_distinguishes_missing_unknown_and_exit(self):
         observe = CONTROLLER["startup_observation"]
+        probe = CONTROLLER["process_observation"]
         for start, error, expected in (
             ("supervisor-start", None, True),
             ("replacement", None, False),
@@ -1383,7 +1400,16 @@ class LifecycleFailureTests(unittest.TestCase):
             with self.subTest(start=start, error=error), \
                     mock.patch.dict(observe.__globals__, {"process_start": lambda _: start}), \
                     mock.patch("os.kill", side_effect=error):
-                result = observe(self.worker)
+                supervisor = probe(self.worker["supervisor"])
+                provider = probe(self.worker["providerProcess"])
+                with mock.patch.dict(observe.__globals__, {
+                    "process_observation": mock.Mock(side_effect=AssertionError("formatter must not probe")),
+                }):
+                    result = observe(
+                        self.worker, supervisor=supervisor, provider=provider,
+                        observed_at="2000-01-01T00:00:00+00:00",
+                    )
+                self.assertEqual(result["observedAt"], "2000-01-01T00:00:00+00:00")
                 self.assertIs(result["supervisorRunning"], expected)
                 self.assertEqual(result["workObservation"], "unavailable")
                 if expected is False:
