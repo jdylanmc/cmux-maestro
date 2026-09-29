@@ -9,11 +9,31 @@ See the [behavioral parity matrix](docs/behavioral-parity.md) for regression
 evidence, live acceptance scope, intentional differences and remaining limits.
 
 Sidebar path labels use the real user's account home (`~` or `~/…`), including
-workspace/project paths, working directories, hover and pinned details.
+workspace/project paths, surface directories, hover and pinned details.
 Formatting normalizes separators and dot components lexically; it neither
 probes the filesystem nor resolves symlinks. Outside paths stay absolute,
 missing/denied states stay explicit, and ownership/navigation values are
 unchanged. If account-home resolution fails, the absolute label explains it.
+
+**Surface directory** means the directory reported by CMUX for that exact
+surface, not independently verified agent process or last-tool working
+directory. **Parent surface directory** is parent placement only, not a
+windowless child's own directory. Help and accessibility retain this source
+qualification and the absence of a report timestamp. A fresh session observation
+does not establish directory-report age; assigned/last-verified Git worktree
+labels are separate evidence, never directory fallbacks. Retained original
+sessions do not borrow their replacements' paths.
+
+At the pinned SDK/host revision `ae7fbce99f98c98df5ccf915e548dd080d33cfa8`,
+[`CmuxSidebarSurface.workingDirectory`](https://github.com/manaflow-ai/cmux/blob/ae7fbce99f98c98df5ccf915e548dd080d33cfa8/Packages/macOS/CmuxExtensionKit/Sources/CmuxExtensionKit/Sidebar/CMUXSidebarSurface.swift)
+is optional and filtered by `workspacePaths`.
+The [sidebar producer](https://github.com/manaflow-ai/cmux/blob/ae7fbce99f98c98df5ccf915e548dd080d33cfa8/Sources/ContentView.swift#L12736-L12748)
+uses `reportedPanelDirectory(panelId:)`, whose
+[implementation](https://github.com/manaflow-ai/cmux/blob/ae7fbce99f98c98df5ccf915e548dd080d33cfa8/Sources/Workspace%2BSidebarDirectories.swift#L48-L70)
+normalizes the panel report and applies remote trust gating. It does not use
+the separate `effectivePanelDirectory` local/requested-directory fallback.
+This is source-level provenance, not installed-host acceptance of #77 or
+runtime-directory collection.
 
 ## One-time setup
 

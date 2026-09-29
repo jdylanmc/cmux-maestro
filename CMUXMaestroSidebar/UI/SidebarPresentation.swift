@@ -36,11 +36,24 @@ struct SidebarDetailLine: Equatable, Identifiable {
     let title: String
     let value: String
     var copyableSessionID: UUID? = nil
+    var help: String? = nil
     var id: String { title }
 
     static func sessionID(_ id: UUID, isParent: Bool = false, canCopy: Bool = true) -> Self {
         .init(title: isParent ? "Parent session ID" : "Session ID", value: id.uuidString,
               copyableSessionID: canCopy ? id : nil)
+    }
+}
+
+extension SidebarSurfaceDirectory {
+    static func line(
+        _ directory: HierarchyAvailability<String?>, isParent: Bool = false, retained: Bool = false
+    ) -> SidebarDetailLine {
+        .init(
+            title: isParent ? parentTitle : title,
+            value: retained ? "Not current for this original session" : directory.pathDisplayText,
+            help: isParent ? parentHelp : help
+        )
     }
 }
 
@@ -485,7 +498,7 @@ enum SidebarPresentation {
            managedSession(for: node, in: tree, now: now)?.id == session.id {
             result.title = node.label
             result.visual = managedState(node, availability: availability, now: now, tree: tree)
-            let fields = Set(["Model", "Branch", "Worktree", "Git evidence", "Git changes", "Working directory", "Session ID"])
+            let fields = Set(["Model", "Branch", "Worktree", "Git evidence", "Git changes", SidebarSurfaceDirectory.title, "Session ID"])
             result.lines = managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { fields.contains($0.title) }
             result.gitChanges = node.currentGitChanges(at: now)
@@ -619,7 +632,7 @@ enum SidebarPresentation {
                 return .init(title: surface.title.isEmpty ? "Surface" : surface.title, lines: [
                     .init(title: "Type", value: surface.kind.title),
                     .init(title: "Surface ID", value: surface.id.uuidString),
-                    .init(title: "Working directory", value: surface.workingDirectory.pathDisplayText)
+                    SidebarSurfaceDirectory.line(surface.workingDirectory)
                 ])
             case .session(let id), .child(let id, _):
                 guard let session = tree.sessions.first(where: { $0.id == id }) else { return nil }
@@ -628,13 +641,16 @@ enum SidebarPresentation {
                 let retained = retainedSessionIDs(tree, managed: managed.nodes, now: now).contains(session.id)
                 let notice = retained ? "Work context. \(retainedFocusUnavailable)"
                     : current ? nil : "Session observation is stale. Last-known metadata is not live state."
-                let context = retained ? [] : paths(hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID))
                 if case .child(_, let childID) = selection {
                     guard let child = session.nodes.first(where: { $0.id == childID }) else { return nil }
+                    let context = retained ? [] : paths(
+                        hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID), isParent: true
+                    )
                     return .init(title: child.name, lines: nodeDetails(child, session: session) + [
                         .init(title: "Placement", value: "Observed child; native placement belongs to its parent session")
                     ] + context, notice: notice, isAgent: child.kind == .subagent)
                 }
+                let context = retained ? [] : paths(hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID))
                 return .init(title: "Copilot · \(session.shortID)", lines: sessionDetails(session) + context,
                              notice: notice, isAgent: true, otherActivity: session.secondaryActivity)
             }
@@ -963,11 +979,11 @@ enum SidebarPresentation {
         return nil
     }
 
-    static func paths(_ paths: HierarchyPathContext) -> [SidebarDetailLine] {
+    static func paths(_ paths: HierarchyPathContext, isParent: Bool = false) -> [SidebarDetailLine] {
         [
             .init(title: "Workspace path", value: paths.rootPath.pathDisplayText),
             .init(title: "Project path", value: paths.projectRootPath.pathDisplayText),
-            .init(title: "Working directory", value: paths.workingDirectory.pathDisplayText)
+            SidebarSurfaceDirectory.line(paths.workingDirectory, isParent: isParent)
         ]
     }
 
@@ -1019,7 +1035,7 @@ enum SidebarPresentation {
             .init(title: "Copilot observation", value: tree.summary),
             .init(title: "Session glyph", value: node.iconId ?? "Sidebar default"),
             .init(title: "Icon color", value: node.iconColor?.title ?? "Theme default"),
-            .init(title: "Working directory", value: retained ? "Not current for this original session" : paths.workingDirectory.pathDisplayText),
+            SidebarSurfaceDirectory.line(paths.workingDirectory, retained: retained),
             .init(title: "Role", value: node.role.capitalized)
         ]
         if node.role == "worker" {
