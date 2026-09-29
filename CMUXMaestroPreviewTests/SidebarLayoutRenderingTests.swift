@@ -250,6 +250,56 @@ struct SidebarLayoutRenderingTests {
         }
     }
 
+    @Test(arguments: [NSScroller.Style.overlay, .legacy])
+    func deepOutlineLateNativeStyleChangeInvalidatesSampledBaseline(style: NSScroller.Style) async throws {
+        let model = makeModel(fixtures: SidebarTreeFixtures(), longMetadata: true, deep: true)
+        let fixture = try SidebarPreferenceFixture()
+        defer { model.setVisible(false); fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.setDensity(.compact)
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let styleName = style == .overlay ? "overlay" : "legacy"
+        try await render(model: model, preferences: preferences, width: 280, height: 400,
+                         appearance: .light,
+                         destination: folder.appendingPathComponent("deep8-late-style-\(styleName)-control.png")) { host in
+            let title = try #require(nativeTitles(in: host)
+                .first { $0.accessibilityLabel()?.contains("Synthetic level 8") == true })
+            try await prepareDeepTitle(title, host: host)
+            let scroll = try #require(title.enclosingScrollView)
+            let document = try #require(scroll.documentView)
+            let preparedTitleWidth = title.bounds.width
+            let preparedViewportWidth = scroll.contentView.bounds.width
+            // Establish each control's starting geometry, not a promise that
+            // AppKit cannot subsequently update this per-view style.
+            scroll.scrollerStyle = style
+            scroll.tile()
+            await sidebarEventually {
+                host.layoutSubtreeIfNeeded()
+                return scroll.scrollerStyle == style
+                    && document.bounds.width == scroll.contentView.bounds.width
+                    && title.bounds.width - preparedTitleWidth
+                        == scroll.contentView.bounds.width - preparedViewportWidth
+            }
+            try #require(scroll.scrollerStyle == style)
+            let frame = title.frame
+            let viewport = scroll.contentView.bounds
+            let changedStyle: NSScroller.Style = style == .overlay ? .legacy : .overlay
+            scroll.scrollerStyle = changedStyle
+            try await Task.sleep(for: .milliseconds(20))
+            host.layoutSubtreeIfNeeded()
+            #expect(scroll.scrollerStyle == changedStyle)
+            #expect(style == .overlay
+                    ? scroll.contentView.bounds.width < viewport.width
+                    : scroll.contentView.bounds.width > viewport.width)
+            #expect(title.frame != frame, "Two equal preparation samples cannot rule out a later native style change")
+            #expect(title.frame.width - frame.width == scroll.contentView.bounds.width - viewport.width)
+            #expect(title.frame.height == frame.height)
+            print("V127 late native style from \(styleName): viewport \(viewport)->\(scroll.contentView.bounds), title \(frame)->\(title.frame)")
+        }
+    }
+
     private func prepareDeepTitle(_ title: SidebarTitleNativeButton, host: NSView) async throws {
         let scroll = try #require(title.enclosingScrollView)
         let document = try #require(scroll.documentView)

@@ -52,12 +52,26 @@ concurrency test remains the bounded dispatch-progress regression.
 ### Deep-outline fixture readiness
 
 Focus-layout fixtures bring the deepest title into the viewport and wait for
-native scroller/document geometry to settle before capturing their baseline.
+two equal native scroller/document geometry samples before capturing their baseline.
 A no-focus control reproduced the initial overlay-to-legacy scroller transition
-and its 17-point viewport change; the correction does not change global scroller
-preferences or production layout. Exact focus-frame equality and width/depth
-caps remain unchanged. No-focus and real-width-change controls verify that the
-baseline is not refreshed after the effect or used to hide later layout changes.
+and its 17-point viewport change. Sampling does not establish quiescence:
+[AppKit can subsequently update each scroll view's style and retile it](https://developer.apple.com/documentation/appkit/nsscroller/preferredscrollerstyle).
+An explicit `scrollerStyle` assignment is not a documented opt-out; a local
+startup probe also observed that assignment being overridden. The remaining
+fixture-isolation correction in [#127](https://github.com/jdylanmc/cmux-maestro/issues/127)
+is unresolved, and the trigger of its hosted failure is not established by the
+matching width delta.
+
+`deepOutlineLateNativeStyleChangeInvalidatesSampledBaseline` exercises both
+overlay-to-legacy and legacy-to-overlay transitions through the public setter,
+in run-owned offscreen fixtures without focus. It requires opposite viewport
+width directions, equal title/viewport width deltas and an unchanged title
+height; the original exact frame comparison rejects both changes. This control
+does not pin the style or restore geometry after baseline. Global scroller
+preferences and production layout remain unchanged, as do exact focus-frame
+equality, width/depth/height caps, the 20 ms effect interval, no-focus and real
+window-width-change controls. These controls are sensitivity evidence, not a
+claim that subsequent native updates are isolated.
 
 ## Capability matrix
 
