@@ -115,6 +115,8 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
     private var writtenSettings: CopilotSetupFileState?
     private var ownedRowsOverride: [CopilotSetupMetadata.Hook]?
     private var unrelatedRows: [CopilotSetupMetadata.Hook] = []
+    private var unrelatedPlugins: [CopilotSetupMetadata.Plugin] = []
+    private var suppliedVersion: String?
 
     init(_ fixture: ObserverFixture, installed: Bool = false) {
         self.fixture = fixture; self.installed = installed
@@ -125,9 +127,12 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
         self.invalidInstall = invalidInstall; self.stagingEnabled = stagingEnabled
         self.settingsEffect = settingsEffect
     }
-    func supplyMetadata(owned: [CopilotSetupMetadata.Hook]? = nil, unrelated: [CopilotSetupMetadata.Hook] = []) {
+    func supplyMetadata(owned: [CopilotSetupMetadata.Hook]? = nil, unrelated: [CopilotSetupMetadata.Hook] = [],
+                        plugins: [CopilotSetupMetadata.Plugin] = [], version: String? = nil) {
         ownedRowsOverride = owned
         unrelatedRows = unrelated
+        unrelatedPlugins = plugins
+        suppliedVersion = version
     }
     func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
         providerHomes.append(providerHome)
@@ -183,8 +188,8 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
             if let ownedRowsOverride, !staged, rows.contains(where: { $0.origin == "user" }) {
                 rows = ownedRowsOverride
             }
-            value = CopilotSetupMetadata(version: value.version, protocolVersion: value.protocolVersion,
-                                        hooks: rows + unrelatedRows, plugins: value.plugins)
+            value = CopilotSetupMetadata(version: suppliedVersion ?? value.version, protocolVersion: value.protocolVersion,
+                                        hooks: rows + unrelatedRows, plugins: value.plugins + unrelatedPlugins)
             return .value(value)
         } catch { return .failed(.unavailable) }
     }
@@ -712,6 +717,209 @@ struct CopilotObserverRegistrationTests {
         #expect(try Data(contentsOf: hooks) == before)
         try fixture.write(["version": 1, "hooks": CopilotPluginManifest.observerHooks(helper: fixture.helper)], to: hooks)
         #expect(throws: CopilotRegistrationConflict.self) { try fixture.registration.begin(.install, metadata: metadata) }
+    }
+
+    @Test(arguments: [false, true])
+    func unrelatedSymlinkDoesNotBlockCompleteOverlappingPluginInventory(legacy: Bool) async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        if legacy { try fixture.legacy() }
+        let directory = fixture.provider.appendingPathComponent("installed-plugins/_direct/maestro-cmux")
+        try fixture.write(["name": "maestro-cmux", "hooks": "hooks.json"], to: directory.appendingPathComponent("plugin.json"))
+        let hooks = directory.appendingPathComponent("hooks.json")
+        try fixture.write(["version": 1, "hooks": ["postToolUse": [["type": "command", "bash": ":"]]]], to: hooks)
+        let target = fixture.directory.appendingPathComponent("unrelated-target")
+        try fixture.write(["name": "xgang-harness", "hooks": "hooks.json"], to: target.appendingPathComponent("plugin.json"))
+        try fixture.write(["version": 1, "hooks": CopilotPluginManifest.observerHooks(helper: fixture.helper)],
+                          to: target.appendingPathComponent("hooks.json"))
+        let link = fixture.provider.appendingPathComponent("installed-plugins/_direct/gaming-microsoft--xgang-harness")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let targetFiles = ["plugin.json", "hooks.json"].map { target.appendingPathComponent($0) }
+        let saved = try targetFiles.map { try Data(contentsOf: $0) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: target.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path) }
+        let runner = ObserverSetupRunner(fixture, installed: legacy)
+        await runner.supplyMetadata(
+            unrelated: [.init(hookType: "postToolUse", origin: "plugin", source: "maestro-cmux", enabled: true, disableKey: "other-key")],
+            plugins: [
+                .init(name: "maestro-cmux", marketplace: "", enabled: true, directSourceId: "legacy-source"),
+                .init(name: "xgang-harness", marketplace: "", enabled: true, directSourceId: "unrelated-source"),
+            ], version: "1.0.89")
+        let setup = setup(fixture, runner: runner)
+        #expect(await perform(setup, fixture) == .installed)
+        #expect(await perform(setup, fixture) == .installed)
+        let movedHelper = fixture.directory.appendingPathComponent("Updated.app/CMUXMaestroCopilotHook")
+        let movedRegistration = CopilotObserverRegistration(home: fixture.home, root: fixture.root, helper: movedHelper,
+                                                            alternateHome: nil, processHome: fixture.home.path)
+        let update = CopilotSetup(files: ObserverSetupFiles(fixture: fixture), runner: runner,
+            bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier, registration: movedRegistration)
+        #expect(await update.perform(.install, selected: nil, path: "", root: fixture.root, helper: movedHelper,
+                                     controller: fixture.helper, skill: fixture.helper) == .installed)
+        #expect(movedRegistration.health() == .currentOnDisk)
+        #expect(await perform(setup, fixture, action: .uninstall) == .uninstalled)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == target.path)
+        #expect((try FileManager.default.attributesOfItem(atPath: target.path)[.posixPermissions] as? Int) == 0o000)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        #expect(try targetFiles.map { try Data(contentsOf: $0) } == saved)
+        #expect(try CopilotSetupJSON.object(Data(contentsOf: hooks))["version"] as? Int == 1)
+    }
+
+    private func overlappingMetadata(_ fixture: ObserverFixture, marketplace: String = "") throws -> CopilotSetupMetadata {
+        let group = marketplace.isEmpty ? "_direct" : marketplace
+        let directory = fixture.provider.appendingPathComponent("installed-plugins/\(group)/maestro-cmux")
+        try fixture.write(["name": "maestro-cmux", "hooks": "hooks.json"], to: directory.appendingPathComponent("plugin.json"))
+        try fixture.write(["version": 1, "hooks": ["postToolUse": [["type": "command", "bash": ":"]]]],
+                          to: directory.appendingPathComponent("hooks.json"))
+        let label = marketplace.isEmpty ? "maestro-cmux" : "maestro-cmux@\(marketplace)"
+        return CopilotSetupMetadata(version: "1.0.89", protocolVersion: 3,
+            hooks: [.init(hookType: "postToolUse", origin: "plugin", source: label, enabled: true, disableKey: "unrelated-key")],
+            plugins: [.init(name: "maestro-cmux", marketplace: marketplace, enabled: true,
+                            directSourceId: marketplace.isEmpty ? "source-one" : nil)])
+    }
+
+    @Test func unrelatedMarketplaceSymlinkIsNotAnInspectedSource() throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let metadata = try overlappingMetadata(fixture)
+        let target = fixture.directory.appendingPathComponent("unreadable-marketplace")
+        try fixture.write(["name": "hidden", "hooks": CopilotPluginManifest.observerHooks(helper: fixture.helper)],
+                          to: target.appendingPathComponent("plugin.json"))
+        let linkedGroup = fixture.provider.appendingPathComponent("installed-plugins/unrelated-marketplace")
+        try FileManager.default.createSymbolicLink(at: linkedGroup, withDestinationURL: target)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: target.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path) }
+        _ = try fixture.registration.begin(.install, metadata: metadata)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: linkedGroup.path) == target.path)
+        #expect((try FileManager.default.attributesOfItem(atPath: target.path)[.posixPermissions] as? Int) == 0o000)
+    }
+
+    @Test func relevantMarketplaceStillRequiresSafeCompleteUniqueIdentity() throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let metadata = try overlappingMetadata(fixture, marketplace: "community")
+        let group = fixture.provider.appendingPathComponent("installed-plugins/community")
+        let irrelevantTarget = fixture.directory.appendingPathComponent("unreadable-irrelevant")
+        try FileManager.default.createDirectory(at: irrelevantTarget, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: group.appendingPathComponent("unrelated-link"), withDestinationURL: irrelevantTarget)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: irrelevantTarget.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: irrelevantTarget.path) }
+        _ = try fixture.registration.begin(.install, metadata: metadata)
+        let duplicate = CopilotSetupMetadata(version: metadata.version, protocolVersion: metadata.protocolVersion,
+            hooks: metadata.hooks, plugins: metadata.plugins + metadata.plugins)
+        #expect(throws: CopilotRegistrationConflict.self) { try fixture.registration.begin(.install, metadata: duplicate) }
+        let saved = fixture.provider.appendingPathComponent("saved-community")
+        try FileManager.default.moveItem(at: group, to: saved)
+        try FileManager.default.createSymbolicLink(at: group, withDestinationURL: saved)
+        #expect(throws: CopilotRegistrationConflict.self) { try fixture.registration.begin(.install, metadata: metadata) }
+    }
+
+    @Test(arguments: [
+        "relevant-plugin-link", "relevant-group-link", "hook-link", "unreadable-hooks",
+        "missing-identity", "duplicate-identity", "duplicate-manifest", "missing-hooks", "missing-event",
+        "aliased-relevant-link", "hidden-observer-link",
+    ])
+    func overlappingInventoryRefusesUnresolvedUnsafeAndAmbiguousSources(scenario: String) throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        var metadata = try overlappingMetadata(fixture)
+        let group = fixture.provider.appendingPathComponent("installed-plugins/_direct")
+        let plugin = group.appendingPathComponent("maestro-cmux")
+        let target = fixture.directory.appendingPathComponent("link-target")
+        try fixture.write(["name": "maestro-cmux", "hooks": "hooks.json"], to: target.appendingPathComponent("plugin.json"))
+        try fixture.write(["version": 1, "hooks": CopilotPluginManifest.observerHooks(helper: fixture.helper)],
+                          to: target.appendingPathComponent("hooks.json"))
+        let targetBytes = try Data(contentsOf: target.appendingPathComponent("hooks.json"))
+        if scenario == "relevant-plugin-link" || scenario == "aliased-relevant-link" {
+            if scenario == "aliased-relevant-link" {
+                try FileManager.default.copyItem(at: plugin, to: group.appendingPathComponent("safe-alias"))
+            }
+            try FileManager.default.removeItem(at: plugin)
+            try FileManager.default.createSymbolicLink(at: plugin, withDestinationURL: target)
+        } else if scenario == "relevant-group-link" {
+            let saved = fixture.provider.appendingPathComponent("saved-direct")
+            try FileManager.default.moveItem(at: group, to: saved)
+            try FileManager.default.createSymbolicLink(at: group, withDestinationURL: target)
+        } else if scenario == "hook-link" {
+            try FileManager.default.removeItem(at: plugin.appendingPathComponent("hooks.json"))
+            try FileManager.default.createSymbolicLink(at: plugin.appendingPathComponent("hooks.json"),
+                                                       withDestinationURL: target.appendingPathComponent("hooks.json"))
+        } else if scenario == "unreadable-hooks" {
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: plugin.appendingPathComponent("hooks.json").path)
+        } else if scenario == "missing-identity" {
+            metadata = CopilotSetupMetadata(version: metadata.version, protocolVersion: 3, hooks: metadata.hooks, plugins: [])
+        } else if scenario == "duplicate-identity" {
+            metadata = CopilotSetupMetadata(version: metadata.version, protocolVersion: 3, hooks: metadata.hooks,
+                plugins: metadata.plugins + [.init(name: "maestro-cmux", marketplace: "", enabled: true, directSourceId: "source-two")])
+        } else if scenario == "duplicate-manifest" {
+            try FileManager.default.copyItem(at: plugin, to: group.appendingPathComponent("duplicate-alias"))
+        } else if scenario == "missing-hooks" {
+            try FileManager.default.removeItem(at: plugin.appendingPathComponent("hooks.json"))
+        } else if scenario == "missing-event" {
+            try fixture.write(["version": 1, "hooks": ["sessionStart": [["type": "command", "bash": ":"]]]],
+                              to: plugin.appendingPathComponent("hooks.json"))
+        } else {
+            let link = group.appendingPathComponent("gaming-microsoft--xgang-harness")
+            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+            metadata = CopilotSetupMetadata(version: metadata.version, protocolVersion: 3,
+                hooks: metadata.hooks + [.init(hookType: "postToolUse", origin: "plugin", source: "xgang-harness",
+                                               enabled: true, disableKey: "hidden-key")],
+                plugins: metadata.plugins + [.init(name: "xgang-harness", marketplace: "", enabled: true, directSourceId: "hidden-source")])
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: target.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path) }
+        #expect(throws: (any Error).self) { try fixture.registration.begin(.install, metadata: metadata) }
+        #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
+        #expect((try FileManager.default.attributesOfItem(atPath: target.path)[.posixPermissions] as? Int) == 0o000)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        #expect(try Data(contentsOf: target.appendingPathComponent("hooks.json")) == targetBytes)
+    }
+
+    @Test(arguments: ["directory-link", "new-duplicate", "changed-identity", "new-relevant-source"])
+    func overlappingInventoryRevalidatesAcrossDisabledStaging(change: String) throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let metadata = try overlappingMetadata(fixture)
+        let operation = try fixture.registration.begin(.install, metadata: metadata)
+        let group = fixture.provider.appendingPathComponent("installed-plugins/_direct")
+        let plugin = group.appendingPathComponent("maestro-cmux")
+        if change == "directory-link" {
+            let moved = fixture.directory.appendingPathComponent("moved-plugin")
+            try FileManager.default.moveItem(at: plugin, to: moved)
+            try FileManager.default.createSymbolicLink(at: plugin, withDestinationURL: moved)
+            #expect(throws: (any Error).self) { try operation.stage() }
+            #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
+            return
+        }
+        try operation.stage()
+        let staged = try fixture.metadata(installed: false)
+        var plugins = metadata.plugins
+        var hooks = metadata.hooks
+        if change == "new-duplicate" {
+            try FileManager.default.copyItem(at: plugin, to: group.appendingPathComponent("new-alias"))
+        } else if change == "changed-identity" {
+            plugins = [.init(name: "maestro-cmux", marketplace: "", enabled: true, directSourceId: "replaced-source")]
+        } else {
+            let target = fixture.directory.appendingPathComponent("hidden-target")
+            try fixture.write(["name": "hidden", "hooks": CopilotPluginManifest.observerHooks(helper: fixture.helper)],
+                              to: target.appendingPathComponent("plugin.json"))
+            try FileManager.default.createSymbolicLink(at: group.appendingPathComponent("hidden"), withDestinationURL: target)
+            plugins.append(.init(name: "hidden", marketplace: "", enabled: true, directSourceId: "hidden-source"))
+            hooks.append(.init(hookType: "postToolUse", origin: "plugin", source: "hidden", enabled: true, disableKey: "hidden-key"))
+        }
+        let changed = CopilotSetupMetadata(version: "1.0.89", protocolVersion: 3, hooks: hooks + staged.hooks, plugins: plugins)
+        #expect(throws: (any Error).self) { try operation.verifyStaging(changed) }
+        #expect(operation.phase == .staged)
+        #expect(try CopilotSetupJSON.bool(CopilotSetupJSON.object(Data(contentsOf: fixture.file))["disableAllHooks"]))
+        #expect(try CopilotSetupFileState.read(fixture.source.appendingPathComponent("plugin.json")).data == nil)
+    }
+
+    @Test func removalCannotIgnoreAnAddedOverlappingAlias() throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let metadata = try overlappingMetadata(fixture)
+        let operation = try fixture.registration.begin(.uninstall, metadata: metadata)
+        try operation.stage()
+        try operation.verifyStaging(metadata)
+        try operation.removeRegistration()
+        let group = fixture.provider.appendingPathComponent("installed-plugins/_direct")
+        try FileManager.default.copyItem(at: group.appendingPathComponent("maestro-cmux"),
+                                        to: group.appendingPathComponent("late-duplicate"))
+        #expect(throws: CopilotRegistrationConflict.self) { try operation.verifyRemoval(metadata) }
+        #expect(operation.phase == .registrationRemoved)
     }
 
     @Test func metadataProcessUsesSupervisorForSuccessTimeoutAndMalformedOutput() async throws {

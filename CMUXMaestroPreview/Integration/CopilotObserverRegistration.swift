@@ -424,45 +424,94 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         }
     }
 
-    private func otherPluginHooks(_ metadata: CopilotSetupMetadata) throws -> [CopilotSetupFileState] {
-        let sources = Set(metadata.hooks.filter {
+    fileprivate struct OtherPluginInventory: Equatable {
+        let identities: [CopilotSetupMetadata.Plugin]
+        let files: [CopilotSetupFileState]
+    }
+
+    private func otherPluginHooks(_ metadata: CopilotSetupMetadata) throws -> OtherPluginInventory {
+        let relevantHooks = metadata.hooks.filter {
             $0.origin == "plugin" && $0.source != CopilotPluginManifest.name
                 && CopilotPluginManifest.events.contains($0.hookType)
-        }.map(\.source))
-        guard !sources.isEmpty else { return [] }
+        }
+        let sources = Set(relevantHooks.map(\.source))
+        guard !sources.isEmpty else { return OtherPluginInventory(identities: [], files: []) }
+        func source(_ plugin: CopilotSetupMetadata.Plugin) -> String {
+            plugin.marketplace.isEmpty ? plugin.name : "\(plugin.name)@\(plugin.marketplace)"
+        }
+        let identities = try sources.sorted().map { label in
+            let matches = metadata.plugins.filter { source($0) == label }
+            guard matches.count == 1, let plugin = matches.first,
+                  !plugin.name.isEmpty,
+                  !plugin.marketplace.contains("/"), ![".", "..", "_direct"].contains(plugin.marketplace),
+                  !plugin.marketplace.utf8.contains(0) else {
+                throw CopilotRegistrationConflict("An overlapping hook source has missing or ambiguous provider identity.")
+            }
+            return plugin
+        }
+        let groups = Set(identities.map { $0.marketplace.isEmpty ? "_direct" : $0.marketplace })
         let pluginsRoot = providerHome.appendingPathComponent("installed-plugins")
         var found = Set<String>()
         var states: [CopilotSetupFileState] = []
-        func directories(_ url: URL) throws -> [String] {
+        func entries(_ url: URL) throws -> [(String, CopilotFileStamp)] {
             let fd = try CopilotFileAccess.openDirectory(url, owner: getuid())
             defer { close(fd) }
             _ = try HookFiles.metadata(fd, directory: true)
             let list = try CopilotFileAccess.names(at: fd, limit: 128)
             guard !list.limited else { throw CopilotFileError.tooLarge }
-            return try list.names.filter {
-                let entry = try CopilotFileAccess.statEntry(at: fd, name: $0)
-                guard entry.isDirectory || entry.isRegular else { throw CopilotFileError.unsafePath }
-                return entry.isDirectory
-            }
+            return try list.names.map { ($0, try CopilotFileAccess.statEntry(at: fd, name: $0)) }
+        }
+        func events(_ object: [String: Any]) -> Set<String> {
+            guard let hooks = object["hooks"] as? [String: Any] else { return [] }
+            let aliases = ["SessionStart": "sessionStart", "UserPromptSubmit": "userPromptSubmitted", "PostToolUse": "postToolUse"]
+            return Set(hooks.compactMap { name, value in
+                guard let actions = value as? [Any], !actions.isEmpty else { return nil }
+                return aliases[name] ?? name
+            })
+        }
+        let groupEntries = try entries(pluginsRoot)
+        guard groups.isSubset(of: Set(groupEntries.map(\.0))) else {
+            throw CopilotRegistrationConflict("An overlapping plugin's installation group is missing.")
         }
         var examined = 0
-        for marketplace in try directories(pluginsRoot) {
+        for (marketplace, groupEntry) in groupEntries where groups.contains(marketplace) {
+            guard groupEntry.isDirectory else {
+                throw CopilotRegistrationConflict("An overlapping plugin's installation group is not a safe directory.")
+            }
             let group = pluginsRoot.appendingPathComponent(marketplace)
-            for name in try directories(group) {
+            let groupNames = Set(identities.filter {
+                ($0.marketplace.isEmpty ? "_direct" : $0.marketplace) == marketplace
+            }.map(\.name))
+            for (name, entry) in try entries(group) {
                 examined += 1
                 guard examined <= 128 else { throw CopilotFileError.tooLarge }
+                if !entry.isDirectory {
+                    guard !groupNames.contains(name) else {
+                        throw CopilotRegistrationConflict("An overlapping plugin entry is not a safe directory.")
+                    }
+                    // A skipped link is not an inspected source. Complete, unique
+                    // metadata-to-manifest coverage is required below; never open
+                    // a target to guess its identity or declare it harmless.
+                    guard entry.isRegular || entry.mode & UInt16(S_IFMT) == UInt16(S_IFLNK) else {
+                        throw CopilotFileError.unsafePath
+                    }
+                    continue
+                }
                 let directory = group.appendingPathComponent(name)
                 let manifest = try CopilotSetupFileState.read(directory.appendingPathComponent("plugin.json"))
                 guard let data = manifest.data else { continue }
                 let object = try CopilotSetupJSON.object(data)
                 guard let pluginName = object["name"] as? String else { throw CopilotFileError.io }
-                let source = marketplace == "_direct" ? pluginName : "\(pluginName)@\(marketplace)"
-                guard sources.contains(source) else { continue }
-                found.insert(source)
+                let label = marketplace == "_direct" ? pluginName : "\(pluginName)@\(marketplace)"
+                guard sources.contains(label) else { continue }
+                guard found.insert(label).inserted else {
+                    throw CopilotRegistrationConflict("Multiple installed directories claim the same overlapping hook source.")
+                }
                 states.append(manifest)
                 if containsHelper(object) {
                     throw CopilotRegistrationConflict("Another installed plugin refers to the observer helper.")
                 }
+                var observedEvents = events(object)
                 let relative: [String]
                 if let hooks = object["hooks"] as? String {
                     guard ["hooks.json", "hooks/hooks.json"].contains(hooks) else {
@@ -473,16 +522,24 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                 for name in relative {
                     let state = try CopilotSetupFileState.read(directory.appendingPathComponent(name))
                     states.append(state)
-                    if let data = state.data, try containsHelper(CopilotSetupJSON.object(data)) {
-                        throw CopilotRegistrationConflict("Another installed plugin declares the observer helper. It was not changed.")
+                    if let data = state.data {
+                        let object = try CopilotSetupJSON.object(data)
+                        if containsHelper(object) {
+                            throw CopilotRegistrationConflict("Another installed plugin declares the observer helper. It was not changed.")
+                        }
+                        observedEvents.formUnion(events(object))
                     }
+                }
+                let expectedEvents = Set(relevantHooks.filter { $0.source == label }.map(\.hookType))
+                guard expectedEvents.isSubset(of: observedEvents) else {
+                    throw CopilotRegistrationConflict("An overlapping plugin's discovered hooks are missing from its inspected files.")
                 }
             }
         }
         guard found == sources else {
             throw CopilotRegistrationConflict("An overlapping hook source could not be verified within the provider's bounded installed-plugin directory.")
         }
-        return states
+        return OtherPluginInventory(identities: identities, files: states)
     }
 
     private func unrelatedDisabledKeys(_ metadata: CopilotSetupMetadata) -> Set<String> {
@@ -632,7 +689,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         let disabled: Bool
         private var settings: CopilotSetupFileState
         private let others: [CopilotSetupFileState]
-        private let otherPlugins: [CopilotSetupFileState]
+        private let otherPlugins: OtherPluginInventory
         private var owned: CopilotSetupFileState
         private var receipt: CopilotSetupFileState
         private var source: PluginFiles
@@ -654,7 +711,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                          settings: CopilotSetupFileState, others: [CopilotSetupFileState], owned: CopilotSetupFileState,
                          receipt: CopilotSetupFileState, source: PluginFiles, installed: PluginFiles,
                          helperRecord: CopilotSetupFileState, pluginWasInstalled: Bool,
-                         otherPlugins: [CopilotSetupFileState], pluginIdentity: String?,
+                         otherPlugins: OtherPluginInventory, pluginIdentity: String?,
                          isCancelled: @escaping @Sendable () -> Bool) {
             self.store = store; self.action = action; self.generation = generation; self.previous = previous
             self.disabled = disabled; self.settings = settings; self.others = others
@@ -685,7 +742,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             try owned.revalidate()
             try receipt.revalidate()
             try helperRecord.revalidate()
-            for file in otherPlugins { try file.revalidate() }
+            for file in otherPlugins.files { try file.revalidate() }
         }
 
         func stage() throws {
@@ -859,6 +916,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
 
         func verifyRemoval(_ metadata: CopilotSetupMetadata) throws {
             try revalidate()
+            guard try store.otherPluginHooks(metadata) == otherPlugins else { throw CopilotFileError.changed }
             guard metadata.supported,
                   !metadata.plugins.contains(where: { $0.name == CopilotPluginManifest.name }),
                   !metadata.hooks.contains(where: { store.isOwnedSource($0) || ($0.origin == "plugin" && $0.source == CopilotPluginManifest.name) })

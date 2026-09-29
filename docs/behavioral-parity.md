@@ -123,6 +123,14 @@ discovery, prepares and officially installs the hookless plugin, verifies its
 cached declarations and public metadata, then publishes the intended file.
 Foreign/modified registrations, unknown installed identities, overlapping
 observer sources and changing inputs refuse rather than being overwritten.
+Other-plugin inspection uses the complete provider-reported overlapping source
+set and requires one matching plugin identity plus one safe, unique manifest
+and its hook declarations for each source. Unrelated installation-directory
+symlinks are not followed or counted as inspected sources. A relevant linked
+entry/group, missing declaration, duplicate identity/manifest or incomplete
+source coverage still refuses. Source identities and inspected files are
+revalidated at staging, publication and removal; skipping an unrelated link
+does not waive those checks.
 A failed step reports the last completed phase; the next phase may have
 partially refreshed setup resources. Retry revalidates recorded generations
 and known partial preparation, preserving a retained disabled stage. It never
