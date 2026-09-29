@@ -62,6 +62,9 @@ final class ObserverFixture: Sendable {
 
     func metadata(installed: Bool) throws -> CopilotSetupMetadata {
         var hooks: [CopilotSetupMetadata.Hook] = []
+        let settingsObject = FileManager.default.fileExists(atPath: settings.path)
+            ? try JSONSerialization.jsonObject(with: Data(contentsOf: settings)) as? [String: Any] : nil
+        let disabledKeys = settingsObject?["disabledHooks"] as? [String] ?? []
         for (url, origin, source) in [
             (file, "user", "hooks/\(CopilotObserverRegistration.filename)"),
             (cache.appendingPathComponent("hooks.json"), "plugin", CopilotPluginManifest.name),
@@ -72,7 +75,8 @@ final class ObserverFixture: Sendable {
             let disabled = object["disableAllHooks"] as? Bool ?? false
             let events = (object["hooks"] as? [String: Any]) ?? [:]
             hooks += events.keys.map {
-                CopilotSetupMetadata.Hook(hookType: $0, origin: origin, source: source, enabled: !disabled,
+                CopilotSetupMetadata.Hook(hookType: $0, origin: origin, source: source,
+                                           enabled: !disabled && !disabledKeys.contains("provider-key-\($0)"),
                                            disableKey: disabled ? nil : "provider-key-\($0)")
             }
         }
@@ -109,6 +113,8 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
     var stagingEnabled = false
     var settingsEffect: String?
     private var writtenSettings: CopilotSetupFileState?
+    private var ownedRowsOverride: [CopilotSetupMetadata.Hook]?
+    private var unrelatedRows: [CopilotSetupMetadata.Hook] = []
 
     init(_ fixture: ObserverFixture, installed: Bool = false) {
         self.fixture = fixture; self.installed = installed
@@ -118,6 +124,10 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
         self.result = result; self.failingMetadataCall = failingMetadataCall
         self.invalidInstall = invalidInstall; self.stagingEnabled = stagingEnabled
         self.settingsEffect = settingsEffect
+    }
+    func supplyMetadata(owned: [CopilotSetupMetadata.Hook]? = nil, unrelated: [CopilotSetupMetadata.Hook] = []) {
+        ownedRowsOverride = owned
+        unrelatedRows = unrelated
     }
     func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
         providerHomes.append(providerHome)
@@ -168,6 +178,13 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
                     hooks: value.hooks.map { .init(hookType: $0.hookType, origin: $0.origin, source: $0.source,
                                                   enabled: true, disableKey: $0.disableKey) }, plugins: value.plugins)
             }
+            var rows = value.hooks
+            let staged = rows.contains { $0.origin == "user" && !$0.enabled && $0.disableKey == nil }
+            if let ownedRowsOverride, !staged, rows.contains(where: { $0.origin == "user" }) {
+                rows = ownedRowsOverride
+            }
+            value = CopilotSetupMetadata(version: value.version, protocolVersion: value.protocolVersion,
+                                        hooks: rows + unrelatedRows, plugins: value.plugins)
             return .value(value)
         } catch { return .failed(.unavailable) }
     }
@@ -357,7 +374,7 @@ struct CopilotObserverRegistrationTests {
             Issue.record("Expected explicit prepared-phase failure"); return
         }
         #expect(try Data(contentsOf: fixture.cache.appendingPathComponent("hooks.json")) == legacy)
-        #expect(fixture.registration.health() == .disabled)
+        #expect(fixture.registration.health() == .incomplete)
         await runner.configure()
         #expect(await perform(setup(fixture, runner: runner), fixture) == .installedDisabled)
     }
@@ -531,7 +548,7 @@ struct CopilotObserverRegistrationTests {
         let marker = fixture.provider.appendingPathComponent("session-state/retained/events.jsonl")
         try fixture.write(Data("existing-session-unchanged".utf8), to: marker)
         let before = try Data(contentsOf: fixture.file)
-        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installedDisableUnresolved)
         #expect(try Data(contentsOf: fixture.file) == before)
         #expect(try Data(contentsOf: fixture.settings) == settings)
         #expect(try Data(contentsOf: marker) == Data("existing-session-unchanged".utf8))
@@ -738,7 +755,8 @@ struct CopilotObserverRegistrationTests {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let server = fixture.directory.appendingPathComponent("metadata-waiter")
         let ready = fixture.directory.appendingPathComponent("metadata.pid")
-        let command = "#!/bin/sh\nprintf '%s' $$ > \(CopilotPluginManifest.shellQuoted(ready.path))\ntrap '' TERM\n/bin/cat >/dev/null\n"
+        let pending = fixture.directory.appendingPathComponent("metadata.pid.pending")
+        let command = "#!/bin/sh\nset -eu\nprintf '%s' $$ > \(CopilotPluginManifest.shellQuoted(pending.path))\n/bin/mv \(CopilotPluginManifest.shellQuoted(pending.path)) \(CopilotPluginManifest.shellQuoted(ready.path))\ntrap '' TERM\n/bin/cat >/dev/null\n"
         try fixture.write(Data(command.utf8), to: server)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: server.path)
         let clock = SetupDeadlineClock()
@@ -751,30 +769,82 @@ struct CopilotObserverRegistrationTests {
             return await runner.metadata(executable: server, path: "/usr/bin:/bin")
         }
         defer { task.cancel() }
-        let started = await clock.waitForStartup()
-        if !started {
-            let stopped = await task.value
-            Issue.record("Metadata did not spawn; result=\(stopped)")
-            return
+        do {
+            let started = await clock.waitForStartup()
+            if !started {
+                task.cancel()
+                let stopped = await task.value
+                Issue.record("Metadata did not spawn; result=\(stopped)")
+                return
+            }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while !FileManager.default.fileExists(atPath: ready.path), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let readyExists = FileManager.default.fileExists(atPath: ready.path)
+            if !readyExists {
+                task.cancel()
+                let stopped = await task.value
+                Issue.record("Metadata writer was not ready after spawn; result=\(stopped); sampled=\(clock.wasSampled)")
+            }
+            try #require(readyExists)
+            let pid = try #require(Int32(String(contentsOf: ready, encoding: .utf8)))
+            task.cancel()
+            guard case .failed(.cancelled) = await task.value else {
+                Issue.record("Expected metadata cancellation"); return
+            }
+            #expect(HookProcess.current(pid) == nil)
+            #expect(kill(pid, 0) == -1 && errno == ESRCH)
+        } catch {
+            task.cancel()
+            _ = await task.value
+            throw error
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func metadataPIDPublicationDoesNotExposeAnEmptyReadyMarker(atomic: Bool) async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let ready = fixture.directory.appendingPathComponent("ready.pid")
+        let pending = fixture.directory.appendingPathComponent("ready.pid.pending")
+        let opened = fixture.directory.appendingPathComponent("opened")
+        let process = Process()
+        let input = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        let target = atomic ? pending : ready
+        let publish = atomic ? "/bin/mv \(CopilotPluginManifest.shellQuoted(pending.path)) \(CopilotPluginManifest.shellQuoted(ready.path))" : ":"
+        process.arguments = ["-ec", """
+        exec 3> \(CopilotPluginManifest.shellQuoted(target.path))
+        printf opened > \(CopilotPluginManifest.shellQuoted(opened.path))
+        IFS= read -r gate
+        printf '%s' $$ >&3
+        exec 3>&-
+        \(publish)
+        """]
+        process.standardInput = input
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        defer {
+            try? input.fileHandleForWriting.close()
+            if process.isRunning { process.terminate() }
+            process.waitUntilExit()
         }
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-        while !FileManager.default.fileExists(atPath: ready.path), ContinuousClock.now < deadline {
+        while !FileManager.default.fileExists(atPath: opened.path), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        let readyExists = FileManager.default.fileExists(atPath: ready.path)
-        if !readyExists {
-            task.cancel()
-            let stopped = await task.value
-            Issue.record("Metadata writer was not ready after spawn; result=\(stopped); sampled=\(clock.wasSampled)")
+        try #require(FileManager.default.fileExists(atPath: opened.path))
+        #expect(FileManager.default.fileExists(atPath: ready.path) == !atomic)
+        #expect(try Data(contentsOf: target).isEmpty)
+        if !atomic {
+            #expect(try Int32(String(contentsOf: ready, encoding: .utf8)) == nil,
+                    "Negative control reproduces existence before PID publication.")
         }
-        try #require(readyExists)
-        let pid = try #require(Int32(String(contentsOf: ready, encoding: .utf8)))
-        task.cancel()
-        guard case .failed(.cancelled) = await task.value else {
-            Issue.record("Expected metadata cancellation"); return
-        }
-        #expect(HookProcess.current(pid) == nil)
-        #expect(kill(pid, 0) == -1 && errno == ESRCH)
+        try input.fileHandleForWriting.write(contentsOf: Data("publish\n".utf8))
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        #expect(try Int32(String(contentsOf: ready, encoding: .utf8)) == process.processIdentifier)
     }
 
     @Test func registrationErrorsHaveTheAppModuleIdentity() throws {
@@ -829,6 +899,175 @@ struct CopilotObserverRegistrationTests {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let operation = try fixture.registration.begin(.install, metadata: fixture.metadata(installed: false))
         #expect(throws: CMUXMaestroPreview.CopilotFileError.io) { try operation.pluginCommandSucceeded() }
+    }
+
+    @Test(arguments: ["staged", "modified-disabled", "missing-disabled", "completed-disabled"])
+    func durablePhaseAndPluginValidationPrecedeConfiguredDisable(scenario: String) async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        if scenario == "staged" {
+            let transaction = try fixture.registration.begin(.install, metadata: fixture.metadata(installed: false))
+            try transaction.stage()
+            #expect(fixture.registration.health() == .incomplete)
+            #expect(try CopilotSetupJSON.bool(CopilotSetupJSON.object(Data(contentsOf: fixture.file))["disableAllHooks"]))
+            return
+        }
+        try fixture.write(["disableAllHooks": true], to: fixture.settings)
+        let runner = ObserverSetupRunner(fixture)
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installedDisabled)
+        if scenario == "modified-disabled" {
+            try fixture.write(["version": 1, "hooks": [:], "foreign": true],
+                              to: fixture.cache.appendingPathComponent("hooks.json"))
+            #expect(fixture.registration.health() == .conflict)
+        } else if scenario == "missing-disabled" {
+            try FileManager.default.removeItem(at: fixture.cache.appendingPathComponent("hooks.json"))
+            try FileManager.default.removeItem(at: fixture.cache.appendingPathComponent("plugin.json"))
+            #expect(fixture.registration.health() == .incomplete)
+        } else {
+            #expect(fixture.registration.health() == .disabled)
+        }
+    }
+
+    private func independentOwnedRows(disabled: Set<String> = []) -> [CopilotSetupMetadata.Hook] {
+        [
+            ("sessionStart", "opaque-start"), ("userPromptSubmitted", "opaque-prompt"), ("postToolUse", "opaque-tool"),
+        ].map { event, key in
+            CopilotSetupMetadata.Hook(hookType: event, origin: "user",
+                source: "hooks/cmux-maestro-observer.json", enabled: !disabled.contains(key), disableKey: key)
+        }
+    }
+
+    @Test(arguments: ["all", "subset", "unrelated", "unknown"])
+    func ownedKeyIntentSurvivesExplicitSetupAndFreshStatus(scenario: String) async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        await runner.supplyMetadata(owned: independentOwnedRows())
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        let file = try Data(contentsOf: fixture.file)
+        let keys = scenario == "all" ? ["opaque-start", "opaque-prompt", "opaque-tool"]
+            : scenario == "subset" ? ["opaque-tool"] : [scenario == "unrelated" ? "other-key" : "unknown-key"]
+        try fixture.write(["disabledHooks": keys, "unrelatedSetting": ["preserve": true]], to: fixture.settings)
+        let settings = try Data(contentsOf: fixture.settings)
+        var unrelated: [CopilotSetupMetadata.Hook] = []
+        if scenario == "unrelated" {
+            try fixture.write(["version": 1, "hooks": ["sessionStart": [["type": "command", "bash": ":"]]]],
+                to: fixture.file.deletingLastPathComponent().appendingPathComponent("unrelated.json"))
+            unrelated = [.init(hookType: "sessionStart", origin: "user", source: "hooks/unrelated.json",
+                                enabled: false, disableKey: "other-key")]
+        }
+        await runner.supplyMetadata(owned: independentOwnedRows(disabled: Set(keys)), unrelated: unrelated)
+        let expectedResult: CopilotSetupResult = scenario == "all" ? .installedDisabled
+            : scenario == "subset" ? .installedPartiallyDisabled
+            : scenario == "unknown" ? .installedDisableUnresolved : .installed
+        #expect(await perform(setup(fixture, runner: runner), fixture) == expectedResult)
+        let expectedHealth: IntegrationRegistrationHealth = scenario == "all" ? .disabled
+            : scenario == "subset" ? .partiallyDisabled
+            : scenario == "unknown" ? .disableUnresolved : .currentOnDisk
+        #expect(fixture.registration.health() == expectedHealth)
+        #expect(try Data(contentsOf: fixture.settings) == settings)
+        #expect(try Data(contentsOf: fixture.file) == file)
+        if scenario == "subset" {
+            #expect(!expectedHealth.message.contains("All observer"))
+            #expect(expectedResult.message.contains("some observer"))
+        }
+    }
+
+    @Test(arguments: ["missing", "wrong-generation", "unknown-version", "missing-event"])
+    func unresolvedStoredKeyProvenanceIsNotReportedAsOrdinaryCurrent(scenario: String) async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        await runner.supplyMetadata(owned: independentOwnedRows())
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        try fixture.write(["disabledHooks": ["opaque-tool"]], to: fixture.settings)
+        let receipt = fixture.root.appendingPathComponent(CopilotObserverRegistration.receiptName)
+        var object = try CopilotSetupJSON.object(Data(contentsOf: receipt))
+        var evidence = try #require(object["keyEvidence"] as? [String: Any])
+        switch scenario {
+        case "missing": object.removeValue(forKey: "keyEvidence")
+        case "wrong-generation": evidence["generation"] = UUID().uuidString
+        case "unknown-version": evidence["version"] = "9.9.9"
+        default:
+            var events = try #require(evidence["events"] as? [String: String])
+            events.removeValue(forKey: "sessionStart")
+            evidence["events"] = events
+        }
+        if scenario != "missing" { object["keyEvidence"] = evidence }
+        try fixture.write(object, to: receipt)
+        #expect(fixture.registration.health() == .disableUnresolved)
+        let settings = try Data(contentsOf: fixture.settings)
+        await runner.supplyMetadata(owned: independentOwnedRows(disabled: ["opaque-tool"]))
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installedPartiallyDisabled)
+        #expect(fixture.registration.health() == .partiallyDisabled)
+        #expect(try Data(contentsOf: fixture.settings) == settings)
+    }
+
+    @Test func missingPublicKeysKeepDisableApplicabilityExplicitlyUnresolved() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        await runner.supplyMetadata(owned: independentOwnedRows())
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        try fixture.write(["disabledHooks": ["opaque-tool"]], to: fixture.settings)
+        let settings = try Data(contentsOf: fixture.settings)
+        let unknown = independentOwnedRows(disabled: ["opaque-tool"]).map {
+            CopilotSetupMetadata.Hook(hookType: $0.hookType, origin: $0.origin, source: $0.source,
+                                       enabled: $0.enabled, disableKey: nil)
+        }
+        await runner.supplyMetadata(owned: unknown)
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installedDisableUnresolved)
+        #expect(fixture.registration.health() == .disableUnresolved)
+        #expect(try Data(contentsOf: fixture.settings) == settings)
+    }
+
+    @Test(arguments: ["unaffected", "affected", "missing-key", "duplicate-event", "unknown-key", "blanket-unresolved"])
+    func migrationRequiresPositiveUnaffectedPriorKeys(scenario: String) throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        try fixture.legacy()
+        try fixture.write(["version": 1, "hooks": ["sessionStart": [["type": "command", "bash": ":"]]]],
+            to: fixture.file.deletingLastPathComponent().appendingPathComponent("unrelated.json"))
+        let configured = scenario == "affected" ? ["legacy-tool"] : scenario == "unknown-key" ? ["unresolved"] : ["unrelated"]
+        try fixture.write(["disabledHooks": configured], to: fixture.settings)
+        let known = try fixture.metadata(installed: true)
+        var own: [CopilotSetupMetadata.Hook] = [
+            ("sessionStart", "legacy-start"), ("userPromptSubmitted", "legacy-prompt"), ("postToolUse", "legacy-tool"),
+        ].map { event, key in
+            .init(hookType: event, origin: "plugin", source: "cmux-maestro-native",
+                  enabled: !configured.contains(key), disableKey: key)
+        }
+        if scenario == "missing-key" || scenario == "blanket-unresolved" {
+            own[0] = .init(hookType: "sessionStart", origin: "plugin", source: "cmux-maestro-native", enabled: false, disableKey: nil)
+        }
+        if scenario == "duplicate-event" { own.append(own[0]) }
+        if scenario == "blanket-unresolved" {
+            try fixture.write(["disableAllHooks": true, "disabledHooks": configured], to: fixture.settings)
+        }
+        let other = CopilotSetupMetadata.Hook(hookType: "sessionStart", origin: "user", source: "hooks/unrelated.json",
+                                             enabled: false, disableKey: "unrelated")
+        let metadata = CopilotSetupMetadata(version: "1.0.89", protocolVersion: 3, hooks: own + [other], plugins: known.plugins)
+        let before = try Data(contentsOf: fixture.settings)
+        if scenario == "unaffected" {
+            _ = try fixture.registration.begin(.install, metadata: metadata)
+        } else {
+            #expect(throws: CopilotRegistrationConflict.self) { try fixture.registration.begin(.install, metadata: metadata) }
+        }
+        #expect(try Data(contentsOf: fixture.settings) == before)
+        #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
+    }
+
+    @Test func commandLineCompletionClassifiesVerifiedDisableStatesAndRealFailures() {
+        for result: CopilotSetupResult in [.installed, .installedDisabled, .installedPartiallyDisabled, .installedDisableUnresolved] {
+            let completion = CopilotSetupCommandLine.completion(result)
+            #expect(completion.exitCode == 0)
+            #expect(completion.useStandardOutput)
+            #expect(completion.text == result.message + "\n")
+        }
+        for result: CopilotSetupResult in [.uninstalled, .conflict("test"), .incomplete(.staged, "test"),
+            .failed(9), .timedOut, .cancelled, .unavailable, .validationOnly] {
+            let completion = CopilotSetupCommandLine.completion(result)
+            #expect(completion.exitCode == 1)
+            #expect(!completion.useStandardOutput)
+        }
+        #expect(CopilotSetupCommandLine.usageCompletion.exitCode == 2)
+        #expect(!CopilotSetupCommandLine.usageCompletion.useStandardOutput)
+        #expect(CopilotSetupCommandLine.usageCompletion.text == CopilotSetupCommandLine.usage + "\n")
     }
 
     @Test func fileWorkLeavesTheCooperativeExecutorAndJoinsCancelledWriter() async throws {

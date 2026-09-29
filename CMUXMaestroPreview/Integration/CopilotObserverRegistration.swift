@@ -2,14 +2,16 @@ import Darwin
 import Foundation
 
 nonisolated enum IntegrationRegistrationHealth: String, Equatable, Sendable {
-    case missing, currentOnDisk, stale, disabled, incomplete, conflict, unavailable
+    case missing, currentOnDisk, stale, disabled, partiallyDisabled, disableUnresolved, incomplete, conflict, unavailable
 
     var message: String {
         switch self {
         case .missing: "Observer registration is missing."
         case .currentOnDisk: "Observer registration is current on disk. Loaded hooks and observation are not verified."
         case .stale: "Observer registration refers to a previous app location. Enable again to update it."
-        case .disabled: "Observer registration is configured disabled. Setup will preserve that choice."
+        case .disabled: "All observer events are configured disabled. Setup will preserve that choice."
+        case .partiallyDisabled: "Some observer events are configured disabled. Other events are not marked disabled; loaded behavior is not verified."
+        case .disableUnresolved: "Observer registration is current on disk, but applicability of configured disable keys is unresolved. Run explicit setup to verify metadata; keys are preserved."
         case .incomplete: "Observer setup is incomplete. Retry explicit setup after reviewing its last result."
         case .conflict: "Observer registration conflicts with modified, foreign, unsafe or unsupported configuration."
         case .unavailable: "Observer registration could not be inspected."
@@ -220,12 +222,52 @@ nonisolated struct CopilotObserverGeneration: Codable, Equatable {
     }
 }
 
+private nonisolated struct CopilotObserverKeyEvidence: Codable {
+    let generation: UUID
+    let version: String
+    let protocolVersion: Int
+    let events: [String: String]
+    let unrelatedDisabledKeys: [String]
+
+    static func validKey(_ key: String) -> Bool {
+        !key.isEmpty && key.utf8.count <= 256
+            && !key.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
+
+    static func keys(_ rows: [CopilotSetupMetadata.Hook]) -> [String: String]? {
+        guard rows.count == 3, Set(rows.map(\.hookType)) == Set(CopilotPluginManifest.events),
+              rows.allSatisfy({ row in
+                  guard let key = row.disableKey else { return false }
+                  return validKey(key)
+              }) else { return nil }
+        return Dictionary(uniqueKeysWithValues: rows.compactMap { row in
+            row.disableKey.map { (row.hookType, $0) }
+        })
+    }
+
+    func applies(to generation: CopilotObserverGeneration) -> Bool {
+        self.generation == generation.id
+            && CopilotSetupMetadata(version: version, protocolVersion: protocolVersion, hooks: [], plugins: []).supported
+            && Set(events.keys) == Set(CopilotPluginManifest.events)
+            && events.values.allSatisfy(Self.validKey)
+            && unrelatedDisabledKeys.count <= 128 && unrelatedDisabledKeys.allSatisfy(Self.validKey)
+    }
+
+    func health(disabledKeys: [String]) -> IntegrationRegistrationHealth {
+        let disabled = Set(disabledKeys)
+        guard disabled.isSubset(of: Set(events.values).union(unrelatedDisabledKeys)) else { return .disableUnresolved }
+        let count = events.values.filter { disabled.contains($0) }.count
+        return count == 3 ? .disabled : count > 0 ? .partiallyDisabled : .currentOnDisk
+    }
+}
+
 private nonisolated struct CopilotObserverReceipt: Codable {
     let schema: Int
     let desired: CopilotObserverGeneration
     let previous: CopilotObserverGeneration?
     let phase: String
     let pluginIdentity: String?
+    var keyEvidence: CopilotObserverKeyEvidence? = nil
 
     func encoded() throws -> Data {
         let value = try JSONEncoder().encode(self)
@@ -302,15 +344,18 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             let receipt = try CopilotObserverReceipt.decode(receiptData)
             let generation = try recognized(data, receipt: receipt)
             let settings = try readSettings()
-            if try CopilotSetupJSON.bool(CopilotSetupJSON.object(data)["disableAllHooks"])
-                || settings.globalDisabled { return .disabled }
-            if receipt.phase != "current" { return .incomplete }
             let helpers = [receipt.desired.helper, receipt.previous?.helper].compactMap { $0 }
-            let sourceKind = try kind(pluginFiles(at: plugin), helpers: helpers)
+            let sourceKind = try kind(pluginFiles(at: plugin), helpers: helpers, allowPartial: receipt.phase == "staged")
             let cachedKind = try kind(pluginFiles(at: cache), helpers: helpers)
+            if receipt.phase != "current" { return .incomplete }
             if sourceKind == .legacy || cachedKind == .legacy { return .conflict }
             if sourceKind == .missing || cachedKind == .missing { return .incomplete }
-            return generation.helper == helper.path ? .currentOnDisk : .stale
+            guard generation.helper == helper.path else { return .stale }
+            if try CopilotSetupJSON.bool(CopilotSetupJSON.object(data)["disableAllHooks"])
+                || settings.globalDisabled { return .disabled }
+            guard !settings.disabledKeys.isEmpty else { return .currentOnDisk }
+            guard let evidence = receipt.keyEvidence, evidence.applies(to: generation) else { return .disableUnresolved }
+            return evidence.health(disabledKeys: settings.disabledKeys)
         } catch is CopilotRegistrationConflict { return .conflict }
         catch CopilotFileError.unsafePath { return .conflict }
         catch CopilotFileError.changed { return .conflict }
@@ -440,6 +485,14 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         return states
     }
 
+    private func unrelatedDisabledKeys(_ metadata: CopilotSetupMetadata) -> Set<String> {
+        let keys = Set(metadata.hooks.filter {
+            !isOwnedSource($0) && !($0.origin == "plugin" && $0.source == CopilotPluginManifest.name)
+                && ["user", "plugin"].contains($0.origin) && !$0.enabled
+        }.compactMap(\.disableKey).filter(CopilotObserverKeyEvidence.validKey))
+        return Set(keys.sorted().prefix(128))
+    }
+
     func begin(_ action: CopilotSetupAction, metadata: CopilotSetupMetadata,
                isCancelled: @escaping @Sendable () -> Bool = { false }) throws -> Transaction {
         try validateHome()
@@ -498,8 +551,17 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         }
         let unchanged = prior?.helper == helper.path && installedKind != .legacy
         if action == .install, !settings.disabledKeys.isEmpty, !unchanged {
-            throw CopilotRegistrationConflict(
-                "Per-hook disable intent cannot be safely mapped: Copilot omits destination keys for disabled staging files. Legacy registration and settings were not changed.")
+            let priorRows = installedKind == .legacy ? pluginHooks
+                : prior == nil ? [] : metadata.hooks.filter { isOwnedSource($0) }
+            let keys = CopilotObserverKeyEvidence.keys(priorRows)
+            let unaffected = keys.map {
+                Set(settings.disabledKeys).isDisjoint(with: Set($0.values))
+                    && Set(settings.disabledKeys).isSubset(of: unrelatedDisabledKeys(metadata))
+            } ?? false
+            guard unaffected, priorRows.allSatisfy(\.enabled) else {
+                throw CopilotRegistrationConflict(
+                    "Affected per-hook disable intent cannot be safely mapped: Copilot omits destination keys for disabled staging files. Legacy registration and settings were not changed.")
+            }
         }
         let generation: CopilotObserverGeneration
         if let prior, prior.helper == helper.path { generation = prior }
@@ -583,6 +645,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         private var lock: Int32 = -1
         private var ownsLock = false
         private var pluginIdentity: String?
+        private(set) var registrationHealth: IntegrationRegistrationHealth = .currentOnDisk
         private let isCancelled: @Sendable () -> Bool
         private(set) var phase: IntegrationSetupPhase = .preflight
 
@@ -768,8 +831,23 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                   rows.allSatisfy({ $0.origin == "user" && (!disabled || !$0.enabled) }),
                   !metadata.hooks.contains(where: { $0.origin == "plugin" && $0.source == CopilotPluginManifest.name })
             else { throw CopilotRegistrationConflict("Published registration was not confirmed by provider discovery.") }
-            receipt = try receipt.replacing(with: CopilotObserverReceipt(
-                schema: 1, desired: generation, previous: nil, phase: "current", pluginIdentity: pluginIdentity).encoded())
+            let settingsInfo = try store.readSettings()
+            var evidence: CopilotObserverKeyEvidence?
+            if !disabled, let keys = CopilotObserverKeyEvidence.keys(rows),
+               rows.allSatisfy({ row in
+                   row.enabled == !settingsInfo.disabledKeys.contains(keys[row.hookType] ?? "")
+               }) {
+                evidence = CopilotObserverKeyEvidence(
+                    generation: generation.id, version: metadata.version, protocolVersion: metadata.protocolVersion,
+                    events: keys, unrelatedDisabledKeys: store.unrelatedDisabledKeys(metadata).sorted())
+            }
+            registrationHealth = disabled ? .disabled
+                : evidence?.health(disabledKeys: settingsInfo.disabledKeys)
+                    ?? (settingsInfo.disabledKeys.isEmpty && rows.allSatisfy(\.enabled) ? .currentOnDisk : .disableUnresolved)
+            var record = CopilotObserverReceipt(
+                schema: 1, desired: generation, previous: nil, phase: "current", pluginIdentity: pluginIdentity)
+            record.keyEvidence = evidence
+            receipt = try receipt.replacing(with: record.encoded())
         }
 
         func removeRegistration() throws {

@@ -21,6 +21,7 @@ nonisolated enum CopilotSetupAccess {
 nonisolated enum CopilotSetupResult: Equatable, Sendable {
     case installed, uninstalled, unavailable, failed(Int32), timedOut, cancelled, validationOnly
     case installedDisabled
+    case installedPartiallyDisabled, installedDisableUnresolved
     case conflict(String)
     case incomplete(IntegrationSetupPhase, String)
 
@@ -29,7 +30,11 @@ nonisolated enum CopilotSetupResult: Equatable, Sendable {
         case .installed:
             "The hookless native plugin and dedicated observer registration are verified on disk. Loaded hooks, observation and messaging readiness are not implied. Maestro did not restart or reload existing sessions."
         case .installedDisabled:
-            "The native plugin is installed and observer registration remains disabled on disk. Disable choices were preserved; no effective provider-wide suppression is claimed."
+            "The native plugin is installed; all observer events are configured disabled. Disable choices were preserved; loaded behavior and effective provider-wide suppression are not implied."
+        case .installedPartiallyDisabled:
+            "The native plugin is installed; some observer events are configured disabled. Other events are not marked disabled. Keys are preserved; loaded behavior is not verified."
+        case .installedDisableUnresolved:
+            "Registration is verified on disk, but applicability of configured disable keys is unresolved. No keys were changed; loaded behavior is not verified."
         case .uninstalled:
             "Owned observer registration and the native plugin are removed, and new messaging entry points are disabled. Existing sessions may retain cached hooks and adapters; close them normally."
         case .unavailable:
@@ -55,6 +60,25 @@ nonisolated enum CopilotSetupCommandLine {
     static let usage = "Usage: CMUX Maestro Preview --install-copilot-integration --copilot-executable /absolute/path/to/copilot"
 
     enum Failure: Error { case usage }
+
+    struct Completion: Equatable {
+        let exitCode: Int32
+        let useStandardOutput: Bool
+        let text: String
+    }
+
+    static func completion(_ result: CopilotSetupResult) -> Completion {
+        let success: Bool
+        switch result {
+        case .installed, .installedDisabled, .installedPartiallyDisabled, .installedDisableUnresolved: success = true
+        default: success = false
+        }
+        return Completion(exitCode: success ? 0 : 1, useStandardOutput: success, text: result.message + "\n")
+    }
+
+    static var usageCompletion: Completion {
+        Completion(exitCode: 2, useStandardOutput: false, text: usage + "\n")
+    }
 
     static func executable(arguments: [String]) throws -> URL? {
         guard arguments.contains(installFlag) else { return nil }
@@ -685,7 +709,12 @@ nonisolated struct CopilotSetup: Sendable {
             case .value(let value): try await CopilotSetupFileWork.run { try operation.verifyPublished(value) }
             case .failed(let failure): return .incomplete(operation.phase, Self.processFailure(failure).message)
             }
-            return operation.disabled ? .installedDisabled : .installed
+            switch operation.registrationHealth {
+            case .disabled: return .installedDisabled
+            case .partiallyDisabled: return .installedPartiallyDisabled
+            case .disableUnresolved: return .installedDisableUnresolved
+            default: return .installed
+            }
         } catch {
             let reason: String
             if let conflict = error as? CopilotRegistrationConflict { reason = conflict.message }

@@ -108,7 +108,12 @@ remain identical; unsafe or unexpected changes leave setup incomplete.
 **Disable preservation is conservative.** The provider omits destination keys
 for a file-disabled source. When a registration change would require mapping
 global `disabledHooks`, setup refuses before changing the legacy registration;
-it neither guesses hashes nor enables a duplicate to obtain keys. Already
+it neither guesses hashes nor enables a duplicate to obtain keys. A change may
+proceed with unrelated disables only when complete exact-owned prior metadata
+supplies every key, every owned event is enabled, and every configured key is
+positively identified as unrelated. Missing/ambiguous keys and affected disabled
+subsets still refuse; settings stay unchanged apart from the bounded official
+CLI normalization described above. Already
 current dedicated registrations retain their unchanged hook configuration and
 keys. A whole-file/global disable does not bypass the unresolved per-key gate:
 later re-enabling must not lose a disabled subset. Otherwise, explicit
@@ -118,6 +123,17 @@ explicitly change its disable flag before requesting activation again.
 No application settings writer or additive disable-key migration is implemented
 in this release. Acknowledging the CLI's bounded normalization does not grant
 permission to accept arbitrary concurrent settings edits.
+
+**Status retains disable detail.** A completed registration records bounded
+opaque provider keys tied to its exact generation and tested provider version.
+Check Registration remains file-only: it distinguishes all/some configured
+observer disables using that receipt, and reports unresolved applicability for
+unknown keys or stale/missing provenance. It never guesses that an unrelated key
+disables an observer or starts a metadata subprocess. Incomplete transaction or
+conflicting/missing plugin state takes precedence over ordinary disabled status.
+Verified setup with preserved all/subset disables is a successful CLI completion
+(stdout, exit 0), with its explicit disable message; actual failures remain
+nonzero and malformed command arguments retain usage exit 2.
 
 Failures identify the last completed phase, not blanket installation success.
 An interrupted transaction may retain a disabled owned file while the old

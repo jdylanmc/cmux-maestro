@@ -17,12 +17,14 @@ enum CMUXMaestroEntryPoint {
                     throw CopilotSetupCommandLine.Failure.usage
                 }
                 let result = await CopilotSetupCommandLine.install(selected: selected)
-                let output = result == .installed ? FileHandle.standardOutput : FileHandle.standardError
-                output.write(Data((result.message + "\n").utf8))
-                exit(result == .installed ? 0 : 1)
+                let completion = CopilotSetupCommandLine.completion(result)
+                let output = completion.useStandardOutput ? FileHandle.standardOutput : FileHandle.standardError
+                output.write(Data(completion.text.utf8))
+                exit(completion.exitCode)
             } catch {
-                FileHandle.standardError.write(Data((CopilotSetupCommandLine.usage + "\n").utf8))
-                exit(2)
+                let completion = CopilotSetupCommandLine.usageCompletion
+                FileHandle.standardError.write(Data(completion.text.utf8))
+                exit(completion.exitCode)
             }
         }
         dispatchMain()

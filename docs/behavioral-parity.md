@@ -58,6 +58,14 @@ plugin remains, without observer declarations. Generation/provenance checks,
 bounded descriptor-relative reads, conditional writes, a same-setup lock and
 phase-specific results distinguish missing, stale, disabled, conflicting,
 incomplete and current-on-disk registration.
+Persisted incomplete/conflicting plugin state takes precedence over disable
+classification. A completed receipt binds opaque provider-returned event keys
+to the exact registration generation/version, allowing fresh file-only status
+to distinguish all/subset disables. Unknown keys or missing/stale applicability
+evidence report unresolved, not ordinary current-on-disk. Check Registration
+starts no metadata process. The existing command-line installer treats verified
+enabled, all/subset-disabled and unresolved-applicability completions as success
+while retaining explicit messages; real errors and usage retain nonzero exits.
 
 The tested setup compatibility boundary is **Copilot CLI 1.0.88 and 1.0.89,
 SDK protocol 3**. Other version/protocol pairs refuse before registration changes.
@@ -82,6 +90,11 @@ official plugin settings normalization, real-core migration/install/update/
 removal, and related/unrelated-key refusal using disposable homes. It makes
 zero model calls and does not extend the earlier 1.0.88 event-execution,
 running-session reload or global-disable observations to 1.0.89.
+That initial conservative unrelated-key refusal is superseded only for the
+positively proven unaffected case: complete exact-owned prior keys, all owned
+events enabled, and every global disabled key resolved to an unrelated action.
+Affected subsets, missing keys and ambiguous metadata still refuse. No settings
+migrator, enabled duplicate preview or private key hash is introduced.
 
 The earlier 1.0.88 probes established these separate facts:
 
@@ -123,6 +136,10 @@ phases, retry, concurrent replacement, metadata and owned removal.
 The existing setup cleanup tests retain their original deadlines, negative
 controls and unrelated-process assertions. Complete CI, independent review and
 any later production/live acceptance remain separate candidate gates.
+Metadata cancellation fixtures publish the completed PID marker by same-folder
+rename, not file existence before `printf` finishes. A gate-controlled negative
+control demonstrates the old empty-marker window; the atomic case cannot expose
+it. Error/cancellation paths join the owned task before deleting its fixtures.
 
 ### Deep-outline fixture readiness
 
