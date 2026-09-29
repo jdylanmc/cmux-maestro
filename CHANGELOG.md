@@ -21,6 +21,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Preserve owned managed launches when bounded startup observation ends, report
+  acceptance separately from provider/work evidence, and retain uncertain
+  terminal resources without retries or guessed cleanup (#61).
 - Start setup-test fixture readiness after installer spawn rather than task
   enqueue, preserving timeout, cancellation and process-cleanup checks.
 - Wait for a visible, settled native viewport before measuring offscreen focus
