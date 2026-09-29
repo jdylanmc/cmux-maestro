@@ -42,6 +42,7 @@ class SyntheticMac(preview.MacOperations):
         self.wrong_extension = False
         self.wrong_app = False
         self.elections = {}
+        self.release_on_withdrawal = False
 
     def fail(self, point):
         error = self.failures.pop(point, None)
@@ -53,7 +54,10 @@ class SyntheticMac(preview.MacOperations):
 
     def assert_idle(self, *apps):
         if self.busy:
-            raise ValueError("Synthetic preview process is running; close only that process.")
+            raise preview.PreviewBusyError("Synthetic preview process is running; close only that process.")
+
+    def wait_idle(self, *apps):
+        self.assert_idle(*apps)
 
     def move(self, source, destination, *, exchange=False):
         self.fail("before-move")
@@ -108,6 +112,8 @@ class SyntheticMac(preview.MacOperations):
                 self.fail("after-register")
             elif command[1] == "-r":
                 self.extensions.discard((identifier, Path(command[-1]).resolve()))
+                if self.release_on_withdrawal:
+                    self.busy = False
             elif command[1:] == ["-m", "-A", "-D", "-vv", "-i", identifier]:
                 self.fail("query")
                 entries = sorted((key, path) for key, path in self.extensions if key == identifier)
@@ -602,14 +608,35 @@ class LocalPreviewTests(unittest.TestCase):
             self.operation("install", self.new, update=True)
         self.assertEqual(self.receipt()["current"]["version"], "3")
 
-    def test_identical_build_noop_and_wrong_command_are_refused(self):
+    def test_identical_build_is_verified_noop_and_install_upgrades_in_place(self):
         with self.assertRaises(ValueError):
             self.operation("install", self.old, update=True)
         self.operation("install", self.old)
-        for source, update in [(self.old, True), (self.new, False)]:
-            with self.assertRaises(ValueError):
-                self.operation("install", source, update=update)
+        before = self.receipt()
+        inode = self.app.stat().st_ino
+        self.ops.busy = True
+        for update in (False, True):
+            self.assertIn("Identical app verified", self.operation("install", self.old, update=update))
+            self.assertEqual(self.receipt(), before)
+            self.assertEqual(self.app.stat().st_ino, inode)
+        self.ops.busy = False
+        self.operation("install", self.new)
+        self.assertEqual((self.app / "payload").read_text(), "new")
+        self.assertEqual((self.previous() / "payload").read_text(), "old")
         self.assertIsNone(self.receipt()["transaction"])
+
+    def test_identical_build_does_not_hide_missing_registration_or_tampered_app(self):
+        self.operation("install", self.old)
+        before = self.receipt()
+        self.ops.unregister(self.app)
+        with self.assertRaisesRegex(ValueError, "LaunchServices"):
+            self.operation("install", self.old)
+        self.assertEqual(self.receipt(), before)
+        self.ops.register(self.app)
+        (self.app / "payload").write_text("tampered")
+        with self.assertRaisesRegex(ValueError, "integrity mismatch"):
+            self.operation("install", self.old)
+        self.assertEqual(self.receipt(), before)
 
     def test_wrong_ids_points_unsigned_and_arbitrary_signers_are_refused(self):
         mutations = [
@@ -987,6 +1014,48 @@ except subprocess.TimeoutExpired:
             self.operation("install", self.new, update=True)
         self.assertIsNone(self.receipt()["transaction"])
         self.assertEqual((self.app / "payload").read_text(), "old")
+        self.assertIn(self.app, self.ops.applications)
+        self.assertIn((metadata.BASE_ID + ".Extension", self.app / preview.EXTENSION), self.ops.extensions)
+
+    def test_update_automatically_withdraws_waits_and_registers_only_owned_app(self):
+        self.operation("install", self.old)
+        unrelated = self.fixture("other-owner")
+        self.ops.register(unrelated)
+        self.ops.commands.clear()
+        self.ops.busy = True
+        self.ops.release_on_withdrawal = True
+        with patch.object(self.ops, "wait_idle", wraps=self.ops.wait_idle) as wait:
+            self.operation("install", self.new)
+        wait.assert_called_once_with(self.app)
+        commands = self.ops.commands
+        remove = commands.index(["/usr/bin/pluginkit", "-r", str(self.app / preview.EXTENSION)])
+        add = commands.index(["/usr/bin/pluginkit", "-a", str(self.app / preview.EXTENSION)])
+        self.assertLess(remove, add)
+        self.assertEqual((self.app / "payload").read_text(), "new")
+        self.assertIn(unrelated, self.ops.applications)
+        self.assertIn((metadata.BASE_ID + ".Extension", unrelated / preview.EXTENSION), self.ops.extensions)
+        self.assertFalse(any(str(unrelated) in command and command[1] == "-u" for command in commands))
+        self.assertIsNone(self.receipt()["transaction"])
+
+    def test_release_wait_is_bounded_and_retries_only_positive_owned_process_evidence(self):
+        operations = preview.MacOperations()
+        busy = preview.PreviewBusyError("owned process still running")
+        with patch.object(operations, "assert_idle", side_effect=[busy, None]) as probe, \
+                patch.object(preview.time, "sleep") as sleep, \
+                patch.object(preview.time, "monotonic", side_effect=[0, 1]):
+            operations.wait_idle(self.app)
+            self.assertEqual(probe.call_count, 2)
+            sleep.assert_called_once_with(0.1)
+        with patch.object(operations, "assert_idle", side_effect=busy), \
+                patch.object(preview.time, "sleep") as sleep, \
+                patch.object(preview.time, "monotonic", side_effect=[0, 120]), \
+                self.assertRaises(preview.PreviewBusyError):
+            operations.wait_idle(self.app)
+        sleep.assert_not_called()
+        with patch.object(operations, "assert_idle", side_effect=ValueError("unverifiable process")), \
+                patch.object(preview.time, "sleep") as sleep, self.assertRaisesRegex(ValueError, "unverifiable"):
+            operations.wait_idle(self.app)
+        sleep.assert_not_called()
 
     def test_process_adapter_checks_exact_executable_ancestry_not_name_prefix(self):
         def lookup(pid, buffer, length):
@@ -1023,11 +1092,9 @@ except subprocess.TimeoutExpired:
         self.ops.failures["copy"] = OSError("synthetic ENOSPC")
         with self.assertRaises(OSError):
             self.operation("install", self.new, update=True)
-        self.assertEqual(self.receipt()["transaction"]["phase"], "copying")
+        self.assertIsNone(self.receipt()["transaction"])
         self.assertEqual((self.app / "payload").read_text(), "old")
-        with self.assertRaisesRegex(ValueError, "Pending"):
-            self.operation("install", self.latest, update=True)
-        self.operation("recover")
+        self.assertIn("Verified installed preview", self.operation("status"))
         self.assertIsNone(self.receipt()["transaction"])
         self.assertEqual(self.data.read_text(), "observation-data")
         self.assertEqual(self.legacy.read_text(), "not-installer-owned")
@@ -1075,19 +1142,76 @@ except subprocess.TimeoutExpired:
         self.assertIsNone(self.receipt()["transaction"])
         self.assertEqual((self.app / "payload").read_text(), "old")
 
-    def test_registration_failure_keeps_both_apps_and_explicit_revert_restores_old(self):
+    def test_registration_failure_automatically_restores_verified_old_app(self):
         self.operation("install", self.old)
+        before = self.receipt()
         for point in ("register", "after-register"):
             with self.subTest(point=point):
                 self.ops.failures[point] = OSError("synthetic registry failure")
                 with self.assertRaises(OSError):
                     self.operation("install", self.new, update=True)
-                self.assertEqual((self.app / "payload").read_text(), "new")
-                slot = self.app.parent / preview.STATE_NAME / self.receipt()["transaction"]["slot"]
-                self.assertEqual((slot / "payload").read_text(), "old")
-                self.operation("recover", restore_previous=True)
                 self.assertEqual((self.app / "payload").read_text(), "old")
+                self.assertEqual(self.receipt(), before)
+                self.assertIn("Verified installed preview", self.operation("status"))
+
+    def test_failed_first_install_restores_verified_absence(self):
+        for point in ("copy", "before-move", "after-move", "register", "after-register"):
+            with self.subTest(point=point):
+                self.ops.failures[point] = OSError("synthetic first-install failure")
+                with self.assertRaises(OSError):
+                    self.operation("install", self.old)
+                self.assertFalse(self.app.exists())
+                self.assertIsNone(self.receipt()["current"])
                 self.assertIsNone(self.receipt()["transaction"])
+                self.assertNotIn(self.app, self.ops.applications)
+                self.assertNotIn((metadata.BASE_ID + ".Extension", self.app / preview.EXTENSION), self.ops.extensions)
+                self.assertEqual(self.data.read_text(), "observation-data")
+
+    def test_failed_restoration_retains_journal_and_reports_both_failures(self):
+        self.operation("install", self.old)
+        self.ops.failures["register"] = OSError("new registration failed")
+        with patch.object(self.ops, "assert_idle", side_effect=[None, OSError("restore is busy")]):
+            with self.assertRaisesRegex(preview.InstallRestorationError, "new registration failed.*restore is busy"):
+                self.operation("install", self.new)
+        self.assertIsNotNone(self.receipt()["transaction"])
+        self.ops.failures.clear()
+        self.operation("recover", restore_previous=True)
+        self.assertEqual((self.app / "payload").read_text(), "old")
+
+    def test_new_install_recovers_interrupted_exchange_before_retrying(self):
+        self.operation("install", self.old)
+        self.ops.failures["after-move"] = Interrupted()
+        with self.assertRaises(Interrupted):
+            self.operation("install", self.new)
+        self.operation("install", self.latest)
+        self.assertEqual((self.app / "payload").read_text(), "latest")
+        self.assertEqual((self.previous() / "payload").read_text(), "old")
+        self.assertIsNone(self.receipt()["transaction"])
+
+    def test_incomplete_guardian_blocks_automatic_rollback_without_racing_it(self):
+        self.operation("install", self.old)
+        self.ops.failures["after-move"] = OSError("caller timed out")
+        marker = {"schema": 1, "state": "running", "token": "a" * 32, "supervisor": 9911, "group": 9912}
+        with patch.object(preview.command_worker, "read_marker", side_effect=[None, marker]):
+            with self.assertRaisesRegex(preview.InstallRestorationError, "supervisor has not proved completion"):
+                self.operation("install", self.new)
+        self.assertEqual((self.app / "payload").read_text(), "new")
+        self.assertEqual(self.receipt()["transaction"]["phase"], "ready")
+        self.operation("recover", restore_previous=True)
+        self.assertEqual((self.app / "payload").read_text(), "old")
+
+    def test_first_install_absence_restoration_resumes_after_its_own_interruption(self):
+        self.ops.failures["after-move"] = Interrupted()
+        with self.assertRaises(Interrupted):
+            self.operation("install", self.old)
+        self.ops.failures["after-move"] = Interrupted()
+        with self.assertRaises(Interrupted):
+            self.operation("recover", restore_previous=True)
+        self.assertFalse(self.app.exists())
+        self.assertEqual(self.receipt()["transaction"]["phase"], "reverting")
+        self.assertIn("prior app absence verified", self.operation("recover"))
+        self.assertFalse(self.app.exists())
+        self.assertIsNone(self.receipt()["transaction"])
 
     def test_exact_app_and_extension_registry_checks_not_exit_zero(self):
         for attribute in ("wrong_app", "wrong_extension"):
@@ -1095,11 +1219,10 @@ except subprocess.TimeoutExpired:
                 setattr(self.ops, attribute, True)
                 with self.assertRaises(ValueError):
                     self.operation("install", self.old)
-                self.assertTrue(self.app.exists())
-                self.assertIsNotNone(self.receipt()["transaction"])
+                self.assertFalse(self.app.exists())
+                self.assertIsNone(self.receipt()["transaction"])
                 setattr(self.ops, attribute, False)
                 self.operation("recover")
-                self.operation("uninstall", hooks_retired=True)
 
     def test_superseded_and_unknown_siblings_survive_complete_install_lifecycle(self):
         identifier = metadata.BASE_ID + ".Extension"
@@ -1162,9 +1285,10 @@ except subprocess.TimeoutExpired:
         with patch.object(preview.Installer, "save", fail_after_registration):
             with self.assertRaises(OSError):
                 self.operation("install", self.new, update=True)
-        self.assertEqual(self.receipt()["transaction"]["phase"], "ready")
+        self.assertIsNone(self.receipt()["transaction"])
+        self.assertEqual((self.app / "payload").read_text(), "old")
         self.operation("recover")
-        self.assertEqual((self.previous() / "payload").read_text(), "old")
+        self.assertIsNone(self.receipt()["previous"])
 
     def test_staged_copy_is_reverified_before_exchange(self):
         self.operation("install", self.old)
@@ -1335,6 +1459,28 @@ except subprocess.TimeoutExpired:
         self.operation("install", self.old)
         self.assertIn(self.old, self.ops.applications)
         self.assertFalse(any(command[:2] == [preview.LSREGISTER, "-u"] for command in self.ops.commands))
+
+    def test_failed_install_restores_exact_development_registration_state(self):
+        self.operation("install", self.old)
+        extension = (metadata.BASE_ID + ".Extension", self.new / preview.EXTENSION)
+        for application, plugin in ((False, False), (True, True), (True, False), (False, True)):
+            with self.subTest(application=application, extension=plugin), \
+                    patch.object(preview, "DEVELOPMENT_APP", self.new):
+                if application:
+                    self.ops.applications.add(self.new)
+                else:
+                    self.ops.applications.discard(self.new)
+                if plugin:
+                    self.ops.extensions.add(extension)
+                else:
+                    self.ops.extensions.discard(extension)
+                self.ops.failures["after-register"] = OSError("stable registration failed")
+                with self.assertRaises(OSError):
+                    self.operation("install", self.new, retire_source=True)
+                self.assertEqual(self.new in self.ops.applications, application)
+                self.assertEqual(extension in self.ops.extensions, plugin)
+                self.assertEqual((self.app / "payload").read_text(), "old")
+                self.assertIsNone(self.receipt()["transaction"])
 
     def test_atomic_primitive_refuses_existing_destination_on_first_install(self):
         source = self.root / "from"

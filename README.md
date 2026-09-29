@@ -113,6 +113,16 @@ It does not chmod an existing shared hooks directory.
 Historical plugin-hook reformatting also requires review: provider disable-key
 identity can depend on serialization, not just semantically equal JSON.
 
+Public plugin metadata retains live-marketplace, built-in and managed provenance.
+An overlapping live/built-in source, or a managed record that is not installed,
+cannot be verified from a same-name cached manifest and refuses before staging.
+`installedFrom` identifies a marketplace directory, not the selected plugin's
+directory. Ordinary unrelated cached plugins are not blanket-refused.
+**Known #114 blocker:** the cached direct-plugin audit still lacks authoritative
+selected-source binding. A noncanonical linked source plus a harmless same-name
+alias can evade that audit. Matching names/events or an opaque source ID do not
+resolve this defect; on-disk status is not proof of complete source inspection.
+
 For a recognized direct legacy installation, setup first records provenance
 and stages an **owned disabled** dedicated file, confirms disabled discovery,
 prepares the hookless plugin, runs the official plugin installer, verifies that
@@ -124,6 +134,12 @@ including when values are unchanged. After a successful command, setup accepts
 only an identical settings object or addition of an empty `enabledPlugins` map.
 All other values, including disable choices and unrelated preferences, must
 remain identical; unsafe or unexpected changes leave setup incomplete.
+If setup fails during disabled staging, before resource preparation or any
+plugin command starts, it restores and verifies the previous owned observer
+file and provenance (including prior absence and permissions). Cancellation
+waits for that bounded restoration. A changed owned file is never overwritten
+to force rollback. Later resource/plugin failures still report incomplete;
+they do not have verified whole-integration restoration.
 
 **Disable preservation is conservative.** The provider omits destination keys
 for a file-disabled source. When a registration change would require mapping
@@ -1440,6 +1456,12 @@ bundled helper no longer depend on a disposable Git worktree after installation.
 The Python 3 command uses the standard library and macOS `ditto`, `codesign`,
 LaunchServices and `pluginkit`; it does not install a service or dependency.
 
+**The combined alpha-install contract in #114 is not complete.** App replacement
+and Copilot setup remain separate transactions. Automatic registration
+withdrawal/re-registration is implemented, but actual stock-host native
+unload/reload is unverified. The app-only idempotence/restoration below does not
+establish an all-or-nothing app-plus-integration installation.
+
 From a trusted checkout, explicitly build the current ad-hoc-signed product,
 then install it:
 
@@ -1491,12 +1513,21 @@ not an automatic side effect of the preview update transaction.
 
 ### Update, rollback and status
 
-Close the containing installer app normally before replacing it. In CMUX,
-select the **Default** sidebar and allow preview/helper processes to finish;
-do not quit CMUX or terminate existing CLI sessions. The command refuses a
-replacement while a same-user process is executing from an affected preview
-app or backup. It reports the specific process ID when possible; it never signals a
-process. Keep these apps closed until the operation finishes.
+Updates journal and verify their candidate before automatically withdrawing
+only the receipt-owned app/extension registration. The installer verifies
+registration absence, then waits up to 120 seconds for positively identified
+preview executables to exit before replacing the app. It re-registers the stable
+app afterward. Selecting CMUX's Default sidebar is not an installer prerequisite;
+`cmux sidebar reload` is not used.
+
+A containing app, helper or extension that remains executing still blocks
+replacement. An unverifiable process fails immediately rather than being retried
+as an assumed preview process. The command reports the specific process ID when
+possible; it never signals a process, quits CMUX, restarts a CLI session, injects
+terminal input or changes focus. A failed update restores the old registration
+when safe. Registration and process checks do not prove that the stock host
+observed the disappearance and loaded the replacement; hosted native acceptance
+is still required.
 
 An unrelated application's updater can leave a live process whose old executable
 path has been deleted. For that specific missing-path condition, the installer
@@ -1508,39 +1539,44 @@ evidence or permission denial still blocks the update. No process is exempted
 by name or terminated. Mapped-library listings are not used as proof of the
 running executable's identity.
 
-macOS can retain an idle extension process even after Default is selected.
-Use **`prepare-update`** to retire only the receipt-owned preview registration
-before an update or rollback. This does not delete or replace app files, change
-plugin settings, or signal any process. It verifies the owned app first and
-refuses to report readiness if a preview/helper process remains. If preparation
-is interrupted or you decide not to update, **`recover`** restores the current
+The older **`prepare-update`** operation remains an optional explicit
+registration-withdrawal diagnostic, not a required step. Update and rollback
+perform withdrawal themselves. Preparation does not delete or replace app
+files, change plugin settings or signal any process. If preparation is
+interrupted or you decide not to update, **`recover`** restores the current
 registration. Until update/rollback/recovery completes, `status` can report the
-expected missing registration.
+expected missing registration; an identical no-op correctly requires that
+registration to be present.
 
 ```sh
 # After another explicit ./scripts/build-register.sh:
-python3 scripts/local-preview.py prepare-update
 python3 scripts/local-preview.py update \
   --source "$PWD/.build/adhoc/Build/Products/Debug/CMUX Maestro Preview.app" \
   --retire-development-registration
 python3 scripts/local-preview.py status
 
 # Explicitly exchange the current app with its verified previous version:
-python3 scripts/local-preview.py prepare-update
 python3 scripts/local-preview.py rollback
 
 # Cancel preparation without changing the installed build:
 python3 scripts/local-preview.py recover
 ```
 
-Then refresh integration in the stable containing app and select the Preview
-sidebar. If the host view loses its connection, select **Default → CMUX Maestro
-Preview** again. `cmux sidebar reload` is for interpreted sidebars, not native
-extensions. No operation here restarts CMUX or running CLI sessions.
+Copilot integration still requires its separate explicit setup action; this is
+an outstanding combined-install limitation, not the intended alpha workflow.
+The stock host's identity-disappearance/reappearance behavior motivates the
+automatic registration transition, but mocked registry tests do not establish
+real loaded-generation or focus-preservation acceptance.
 
 Updates may replace a changed development build with the same build number,
-but never silently downgrade. An identical artifact is refused as already
-installed. Rollback revalidates the previous app's **own** matching app/extension
+but never silently downgrade. `install` also upgrades an existing receipt-owned
+app in place; manual uninstall is not required. An identical artifact verifies
+the installed app and exact registration and succeeds without exchanging apps
+or changing the receipt/backups. It does not require idleness because no
+executable is replaced. Missing registration or altered app contents still
+refuse rather than masquerading as a verified no-op. Explicit development-source
+retirement still applies when requested.
+Rollback revalidates the previous app's **own** matching app/extension
 version, strict ad-hoc signatures, production identities and compatible
 entitlements. A previous preview with fewer approved read-only grants is
 allowed; missing sandbox, broader or unknown grants, unsigned components and
@@ -1584,26 +1620,36 @@ requires the current build number; this feature does not bump it.
   candidate/retiring version are retained. Rollback exchanges current and
   previous, so the rollback itself can be undone. Backups are not integration
   setup targets and their owned registrations are retired.
-- The receipt journals staging, replacement and removal. A copy, signature,
-  disk, registration or cleanup failure is **not success**, and a failure
-  after atomic replacement is **not an automatic rollback**. The new app may
-  already be at the destination; the old app remains in the journaled slot.
-  A later cleanup failure can leave the older retiring slot too. Further
-  update/rollback operations refuse until recovery finishes.
+- The receipt journals staging, replacement and removal. An install/update
+  failure attempts verified app restoration while its transaction is pending:
+  discard owned staging, or exchange the previous app back and restore its
+  registration. A failed first install restores verified app absence, not a
+  fictitious previous app. New journals also capture and restore the exact
+  application/extension registration of an explicitly retired development
+  source. Older journals without that evidence refuse to guess.
+- A surviving or unconfirmed command supervisor blocks restoration; the
+  installer never races a still-running mutator. A failed restoration reports
+  both errors and retains recoverable state. A completed app commit followed
+  by cleanup failure is not covered by this rollback; nor is separate Copilot
+  setup. Neither failure is installation success. No GUI reload is inferred
+  from restoring registrations.
 
 ```sh
 python3 scripts/local-preview.py status
 python3 scripts/local-preview.py recover
 
-# If a committed update cannot be registered, explicitly restore its old app:
+# Recover interrupted replacement by restoring its previous app (or absence):
 python3 scripts/local-preview.py recover --restore-previous
 ```
 
 Recovery cancels pre-commit staging, or infers a committed exchange from the
 verified app identities and finishes registration/backup bookkeeping. It can
 resume its own interrupted cleanup or rollback. If no transaction is pending,
-it verifies owned apps and refreshes the stable registration. First install has
-no older app to restore: recover it, then explicitly uninstall if desired.
+it verifies owned apps and refreshes the stable registration. A new explicit
+`install`/`update` first restores any interrupted install's prior app state
+before staging its requested artifact; it does not silently finish that
+interrupted install. Explicit `recover` retains the finish-forward option.
+`recover --restore-previous` restores absence after an interrupted first install.
 Ambiguous identities, replaced partial-cleanup directories, foreign backups,
 or corrupt receipts are refused rather than guessed or deleted. Preserve the
 receipt, apps and original checkout/source while a transaction is pending.

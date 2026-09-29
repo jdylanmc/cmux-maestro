@@ -19,6 +19,7 @@ import stat
 import struct
 import subprocess
 import sys
+import time
 import uuid
 
 sys.dont_write_bytecode = True
@@ -50,6 +51,14 @@ class ProcBSDInfo(ctypes.Structure):
         ("tpgid", ctypes.c_uint32), ("nice", ctypes.c_int32),
         ("start_seconds", ctypes.c_uint64), ("start_microseconds", ctypes.c_uint64),
     ]
+
+
+class InstallRestorationError(RuntimeError):
+    """An install failed and its prior app state could not be verified."""
+
+
+class PreviewBusyError(ValueError):
+    """A positively identified owned preview executable has not exited."""
 
 
 def mach_o_architectures(path):
@@ -336,11 +345,21 @@ class MacOperations:
                 raise ValueError(f"Cannot verify executable for live process {pid}; retry when it exits.")
             executable = Path(os.fsdecode(buffer.value)).resolve()
             if any(executable.is_relative_to(app) for app in apps):
-                raise ValueError(
-                    f"Preview executable is still running (PID {pid}). Close the containing app normally, "
-                    "select CMUX's Default sidebar, and wait for helper calls to finish. Retry when this "
-                    "specific preview process exits; do not restart CMUX or existing CLI sessions."
+                raise PreviewBusyError(
+                    f"Preview executable is still running (PID {pid}). Maestro release is not verified. "
+                    "No process was signalled; do not restart CMUX or existing CLI sessions."
                 )
+
+    def wait_idle(self, *apps):
+        deadline = time.monotonic() + 120
+        while True:
+            try:
+                self.assert_idle(*apps)
+                return
+            except PreviewBusyError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
 
     def app_paths(self):
         """Narrow LaunchServices query for this bundle ID, not a registry dump."""
@@ -413,6 +432,28 @@ class MacOperations:
         if app.resolve() in self.app_paths():
             self.run([LSREGISTER, "-u", str(app)])
         self.verify_registration(app, absent=True)
+
+    def registration_state(self, app):
+        result = self.run(
+            ["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", metadata.BASE_ID + ".Extension"],
+            text=True,
+        )
+        require(not result.stderr.strip(), "Extension registration query reported a diagnostic.")
+        records = metadata.registration_records(result.stdout, allow_empty=True)
+        return {
+            "application": app.resolve() in self.app_paths(),
+            "extension": any(record["id"] == metadata.BASE_ID + ".Extension"
+                             and Path(record["Path"]).resolve() == (app / EXTENSION).resolve()
+                             for record in records),
+        }
+
+    def restore_registration(self, app, state):
+        current = self.registration_state(app)
+        if state["application"] != current["application"]:
+            self.run([LSREGISTER, "-f" if state["application"] else "-u", str(app)])
+        if state["extension"] != current["extension"]:
+            self.run(["/usr/bin/pluginkit", "-a" if state["extension"] else "-r", str(app / EXTENSION)])
+        require(self.registration_state(app) == state, "Previous exact source registration was not restored.")
 
 
 class Installer:
@@ -515,7 +556,8 @@ class Installer:
                             "Invalid cleanup receipt.")
         transaction = self.receipt["transaction"]
         if transaction:
-            require(set(transaction) == {"kind", "phase", "slot", "before", "after", "source", "node"}
+            fields = {"kind", "phase", "slot", "before", "after", "source", "node"}
+            require(set(transaction) in (fields, fields | {"source_registration"})
                     and transaction["kind"] in ("install", "update", "rollback", "uninstall")
                     and transaction["phase"] in ("copying", "ready", "removing", "reverting", "discarding"),
                     "Invalid transaction receipt.")
@@ -524,6 +566,12 @@ class Installer:
                     identity(transaction[key])
             require(transaction["before"] == self.receipt["current"], "Transaction does not match current receipt.")
             require(transaction["source"] in (None, str(DEVELOPMENT_APP)), "Unrecognized source registration.")
+            source_registration = transaction.get("source_registration")
+            if source_registration is not None:
+                require(transaction["source"] and isinstance(source_registration, dict)
+                        and set(source_registration) == {"application", "extension"}
+                        and all(type(value) is bool for value in source_registration.values()),
+                        "Invalid source registration snapshot.")
             kind, phase = transaction["kind"], transaction["phase"]
             require(bool(transaction["before"]) == (kind != "install")
                     and bool(transaction["after"]) == (kind != "uninstall"),
@@ -531,7 +579,7 @@ class Installer:
             require((phase != "copying" or kind in ("install", "update"))
                     and (phase != "discarding" or kind in ("install", "update"))
                     and (phase != "removing" or kind == "uninstall")
-                    and (phase != "reverting" or kind in ("update", "rollback")),
+                    and (phase != "reverting" or kind in ("install", "update", "rollback")),
                     "Invalid transaction phase.")
             if kind == "rollback":
                 require(self.receipt["previous"] == {"slot": transaction["slot"],
@@ -608,32 +656,65 @@ class Installer:
         self.save()
 
     def idle(self):
+        self.ops.assert_idle(*self.protected_apps())
+
+    def protected_apps(self):
         apps = [self.destination]
         previous = self.receipt["previous"]
         if previous:
             apps.append(self.slot(previous["slot"]))
-        self.ops.assert_idle(*apps)
+        return apps
+
+    def quiesce(self):
+        if self.receipt["current"]:
+            self.match(self.destination, self.receipt["current"])
+            self.ops.unregister(self.destination)
+        self.ops.wait_idle(*self.protected_apps())
 
     def prepare_update(self):
         require(not self.receipt["transaction"] and not self.receipt["garbage"], "Run recover first.")
         require(self.receipt["current"], "No owned preview is installed.")
         self.check_stable()
-        # ExtensionKit may retain its idle process after Default is selected.
-        # Retiring only this owned registration lets macOS release that process.
-        self.ops.unregister(self.destination)
-        self.idle()
+        self.quiesce()
         self.match(self.destination, self.receipt["current"])
         return ("Preview registration retired; app files, backups and user data unchanged. "
-                "Run update or rollback, or recover to restore the current registration. "
-                "Keep CMUX on Default until the operation finishes.")
+                "Run update or rollback, or recover to restore the current registration.")
 
     def install(self, source, *, update=False, retire_source=False):
+        self.install_transaction = None
+        try:
+            pending = self.receipt["transaction"]
+            if pending and pending["kind"] in ("install", "update"):
+                self.recover(restore_previous=True)
+            return self.install_candidate(source, update=update, retire_source=retire_source)
+        except (ValueError, OSError, KeyError, TypeError, RuntimeError, KeyboardInterrupt,
+                subprocess.SubprocessError, plistlib.InvalidFileException) as failure:
+            if self.install_transaction is None:
+                raise
+            try:
+                # A timed-out guardian can still be mutating. Holding our copy
+                # of its flock is not evidence that its workers have stopped.
+                marker = command_worker.read_marker(self.ops.install_lock_fd)
+                require(marker is None or marker["state"] == "finished",
+                        "A command supervisor has not proved completion; automatic restoration is blocked.")
+                self.load()
+                if self.receipt["transaction"] and self.receipt["transaction"]["kind"] in ("install", "update"):
+                    self.recover(restore_previous=True)
+            except (ValueError, OSError, KeyError, TypeError, RuntimeError, KeyboardInterrupt,
+                    subprocess.SubprocessError, plistlib.InvalidFileException) as restoration:
+                raise InstallRestorationError(
+                    f"Install failed ({failure}); previous app state could not be restored and verified "
+                    f"({restoration}). Preserve the journal and run recover."
+                ) from failure
+            raise
+
+    def install_candidate(self, source, *, update=False, retire_source=False):
         require(not self.receipt["transaction"] and not self.receipt["garbage"]
                 and not (self.receipt["current"] is None and self.receipt["previous"]),
                 "Pending transaction/cleanup: run recover before another operation.")
         self.check_stable()
-        require(bool(self.receipt["current"]) == update,
-                "Use install for an empty owned destination; use update for an installed preview.")
+        require(not update or self.receipt["current"], "No installed preview to update.")
+        update = self.receipt["current"] is not None
         source = Path(source)
         safe_path(source, owner=True)
         require(source != self.destination and not source.is_relative_to(self.state),
@@ -645,11 +726,18 @@ class Installer:
         if old:
             version = lambda value: tuple(map(int, value.split("."))) + (0,) * (3 - len(value.split(".")))
             require(version(new["version"]) >= version(old["version"]), "Update cannot downgrade; use explicit rollback.")
-            require(new != old, "This exact build is already installed.")
-        self.idle()
+            if new == old:
+                self.ops.verify_registration(self.destination)
+                if retire_source:
+                    self.match(source, new)
+                    self.ops.unregister(source)
+                self.match(self.destination, old)
+                return "Identical app verified on disk and registered; no app replacement was needed."
         transaction = {"kind": "update" if update else "install", "phase": "copying",
                        "slot": "slot-" + uuid.uuid4().hex + ".app", "before": old, "after": new,
-                       "source": str(source) if retire_source else None, "node": None}
+                       "source": str(source) if retire_source else None, "node": None,
+                       "source_registration": self.ops.registration_state(source) if retire_source else None}
+        self.install_transaction = transaction["slot"]
         self.receipt["transaction"] = transaction
         self.save()
         candidate = self.slot(transaction["slot"])
@@ -669,7 +757,6 @@ class Installer:
         self.check_stable()
         previous = self.receipt["previous"]
         require(self.receipt["current"] and previous, "No verified previous preview is available.")
-        self.idle()
         self.receipt["transaction"] = {
             "kind": "rollback", "phase": "ready", "slot": previous["slot"],
             "before": self.receipt["current"], "after": previous["identity"], "source": None,
@@ -683,7 +770,9 @@ class Installer:
         candidate = self.slot(transaction["slot"])
         self.check_stable()
         self.match(candidate, transaction["after"])
-        self.idle()
+        # The ready journal makes withdrawal recoverable. Replacement never
+        # races a still-live owned executable.
+        self.quiesce()
         self.ops.move(candidate, self.destination, exchange=transaction["before"] is not None)
         self.finish_committed()
 
@@ -764,7 +853,8 @@ class Installer:
             return "Interrupted staging discarded. Installed app and previous version unchanged."
         if transaction["phase"] == "reverting":
             self.revert_committed()
-            return "Previous installed app restored and registered; interrupted replacement cancelled."
+            return ("Previous installed app restored and registered; interrupted replacement cancelled."
+                    if transaction["before"] else "Failed first install removed; prior app absence verified.")
         require(transaction["phase"] == "ready", "Unknown recovery phase.")
         actual = self.inspect(self.destination) if self.destination.exists() else None
         if actual == transaction["before"]:
@@ -782,17 +872,30 @@ class Installer:
             return "Pre-commit transaction cancelled; installed app unchanged."
         require(actual == transaction["after"], "Ambiguous destination; recovery refuses to guess.")
         if restore_previous:
-            require(transaction["before"], "First install has no previous app. Recover it before explicit uninstall.")
             transaction["phase"] = "reverting"
             self.save()
             self.revert_committed()
-            return "Previous installed app restored and registered; interrupted replacement cancelled."
+            return ("Previous installed app restored and registered; interrupted replacement cancelled."
+                    if transaction["before"] else "Failed first install removed; prior app absence verified.")
         self.finish_committed()
         return "Committed replacement verified and registered; previous version preserved."
 
     def revert_committed(self):
         transaction = self.receipt["transaction"]
         candidate = self.slot(transaction["slot"])
+        if transaction["before"] is None:
+            if self.destination.exists():
+                self.match(self.destination, transaction["after"])
+                self.ops.assert_idle(self.destination)
+                self.ops.unregister(self.destination)
+                self.ops.move(self.destination, candidate)
+            else:
+                self.match(candidate, transaction["after"])
+            self.ops.verify_registration(self.destination, absent=True)
+            self.restore_source_registration(transaction)
+            self.discard_staging()
+            require(not self.destination.exists(), "First-install absence was not restored.")
+            return
         actual = self.inspect(self.destination)
         if actual == transaction["after"]:
             self.match(candidate, transaction["before"])
@@ -806,6 +909,7 @@ class Installer:
         if previous:
             self.match(self.slot(previous["slot"]), previous["identity"])
         self.ops.register(self.destination)
+        self.restore_source_registration(transaction)
         if transaction["kind"] != "rollback":
             self.receipt["garbage"] = {"slot": transaction["slot"], "identity": transaction["after"],
                                        "deleting": False, "node": None}
@@ -813,6 +917,14 @@ class Installer:
         self.save()
         self.clean_garbage()
         self.ops.verify_registration(self.destination)
+
+    def restore_source_registration(self, transaction):
+        if transaction["source"]:
+            state = transaction.get("source_registration")
+            require(state is not None, "This older journal did not capture the source registration; restoration cannot guess.")
+            source = Path(transaction["source"])
+            self.match(source, transaction["after"])
+            self.ops.restore_registration(source, state)
 
     def uninstall(self, *, hooks_retired):
         require(hooks_retired, "Confirm cached native hooks are retired before removing their helper.")
@@ -869,7 +981,8 @@ class Installer:
     def status(self):
         if (self.receipt["transaction"] or self.receipt["garbage"]
                 or (self.receipt["current"] is None and self.receipt["previous"])):
-            return "Pending transaction/cleanup. Run recover; no further update or rollback is allowed yet."
+            return ("Pending transaction/cleanup. Install/update first restores a pending install's prior app state. "
+                    "Other pending operations require recover; rollback cannot overlap recovery.")
         self.check_stable()
         current = self.receipt["current"]
         if not current:
@@ -904,9 +1017,9 @@ def main():
         installer = Installer(home, args.destination)
         with installer.locked():
             if args.command in ("install", "update"):
-                installer.install(args.source, update=args.command == "update",
-                                  retire_source=args.retire_development_registration)
-                print("Verified local preview installed and registered; transaction complete.")
+                result = installer.install(args.source, update=args.command == "update",
+                                           retire_source=args.retire_development_registration)
+                print(result or "Verified local preview app installed and registered.")
                 print("Open the stable app and explicitly refresh Copilot integration there. Keep development "
                       "builds until old CLI sessions no longer cache their absolute helper paths.")
             elif args.command == "uninstall":
@@ -922,7 +1035,9 @@ def main():
     except (ValueError, OSError, KeyError, TypeError, RuntimeError, KeyboardInterrupt, subprocess.SubprocessError,
             plistlib.InvalidFileException) as error:
         print(f"Local preview operation incomplete: {error}\n"
-              "No success or automatic rollback is implied. Run status, then recover for any pending transaction. "
+              "No installation success is implied. Install attempts restore journaled app state when safe; "
+              "a completed app commit, cleanup failure or Copilot integration is not covered by that restoration. "
+              "Run status, then recover for any pending transaction. "
               "Do not delete receipt/lock/backup files or the development source.", file=sys.stderr)
         return 1
     return 0

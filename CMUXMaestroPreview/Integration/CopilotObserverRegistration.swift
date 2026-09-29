@@ -101,9 +101,11 @@ nonisolated struct CopilotSetupFileState: Equatable {
     }
 
     @discardableResult
-    func replacing(with bytes: Data?) throws -> Self {
+    func replacing(with bytes: Data?, permissions: UInt16? = nil) throws -> Self {
         try revalidate()
-        if bytes == data { return self }
+        let mode = permissions ?? stamp?.permissions ?? 0o600
+        guard mode & ~0o755 == 0, mode & 0o400 != 0 else { throw CopilotFileError.unsafePath }
+        if bytes == data && (bytes == nil || stamp?.permissions == mode) { return self }
         let parent = url.deletingLastPathComponent()
         if bytes != nil {
             let created = try HookFiles.directory(parent, create: true)
@@ -117,10 +119,11 @@ nonisolated struct CopilotSetupFileState: Equatable {
         let pending = ".maestro-pending-\(UUID().uuidString)"
         defer { unlinkat(directory, pending, 0) }
         if let bytes {
-            let fd = openat(directory, pending, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            let fd = openat(directory, pending, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(mode))
             guard fd >= 0 else { throw CopilotFileError.current() }
             defer { close(fd) }
             guard bytes.withUnsafeBytes({ Darwin.write(fd, $0.baseAddress, $0.count) }) == bytes.count,
+                  fchmod(fd, mode_t(mode)) == 0,
                   fsync(fd) == 0 else { throw CopilotFileError.io }
         }
         try revalidate()
@@ -447,6 +450,13 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                   !plugin.marketplace.utf8.contains(0) else {
                 throw CopilotRegistrationConflict("An overlapping hook source has missing or ambiguous provider identity.")
             }
+            // installedFrom identifies a marketplace, not this plugin's
+            // selected directory. Neither it nor built-in provenance permits
+            // substituting a same-name stale cache.
+            guard plugin.usesInstalledCache else {
+                throw CopilotRegistrationConflict(
+                    "An overlapping live, built-in or uninstalled managed plugin has no supported selected-source binding. Cached aliases cannot verify its hook actions.")
+            }
             return plugin
         }
         let groups = Set(identities.map { $0.marketplace.isEmpty ? "_direct" : $0.marketplace })
@@ -590,7 +600,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         }
         let installedKind: PluginKind = ownPlugins.isEmpty ? .missing : cachedKind
         guard ownPlugins.count <= 1,
-              ownPlugins.allSatisfy({ $0.marketplace.isEmpty && $0.directSourceId != nil }),
+              ownPlugins.allSatisfy({ $0.isUnmanagedDirectInstall && $0.directSourceId != nil }),
               (ownPlugins.isEmpty && (cachedKind == .missing || (sourceKind != .missing && helperRecord.data != nil)))
                 || (ownPlugins.count == 1 && installedKind != .missing && sourceKind != .missing)
         else { throw CopilotRegistrationConflict("The installed plugin is foreign, ambiguous or lacks the recognized direct-install files.") }
@@ -692,6 +702,8 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         private let otherPlugins: OtherPluginInventory
         private var owned: CopilotSetupFileState
         private var receipt: CopilotSetupFileState
+        private let originalOwned: CopilotSetupFileState
+        private let originalReceipt: CopilotSetupFileState
         private var source: PluginFiles
         private let installed: PluginFiles
         private var verifiedInstalled: PluginFiles?
@@ -699,6 +711,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         let pluginWasInstalled: Bool
         private var stagingVerified = false
         private var pluginCommandPending = false
+        private var resourcesPreparationStarted = false
         private var lock: Int32 = -1
         private var ownsLock = false
         private var pluginIdentity: String?
@@ -716,6 +729,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             self.store = store; self.action = action; self.generation = generation; self.previous = previous
             self.disabled = disabled; self.settings = settings; self.others = others
             self.owned = owned; self.receipt = receipt; self.source = source; self.installed = installed
+            self.originalOwned = owned; self.originalReceipt = receipt
             self.helperRecord = helperRecord; self.pluginWasInstalled = pluginWasInstalled
             self.otherPlugins = otherPlugins
             self.pluginIdentity = pluginIdentity
@@ -779,13 +793,35 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             let expected = action == .install || owned.data != nil ? 3 : 0
             guard metadata.supported, rows.count == expected,
                   plugins.count == (pluginWasInstalled ? 1 : 0),
-                  plugins.allSatisfy({ $0.marketplace.isEmpty && $0.directSourceId == pluginIdentity
+                  plugins.allSatisfy({ $0.isUnmanagedDirectInstall && $0.directSourceId == pluginIdentity
                       && (action == .uninstall || $0.enabled) }),
                   rows.allSatisfy({ $0.origin == "user" && !$0.enabled }),
                   expected == 0 || Set(rows.map(\.hookType)) == Set(CopilotPluginManifest.events) else {
                 throw CopilotRegistrationConflict("Copilot did not confirm the staged file is inactive; the legacy source was not changed.")
             }
             stagingVerified = true
+        }
+
+        func preparingResources() { resourcesPreparationStarted = true }
+
+        func restoreStaging() throws -> Bool {
+            guard !resourcesPreparationStarted, !pluginCommandPending,
+                  phase == .provenanceRecorded || phase == .staged else { return false }
+            try store.validateHome()
+            try owned.revalidate(); try receipt.revalidate()
+            try source.manifest.revalidate(); try source.hooks.revalidate()
+            try installed.manifest.revalidate(); try installed.hooks.revalidate()
+            guard try store.otherHooks() == others else { throw CopilotFileError.changed }
+            for file in otherPlugins.files { try file.revalidate() }
+            owned = try owned.replacing(with: originalOwned.data, permissions: originalOwned.stamp?.permissions)
+            receipt = try receipt.replacing(with: originalReceipt.data, permissions: originalReceipt.stamp?.permissions)
+            try owned.revalidate(); try receipt.revalidate()
+            guard owned.data == originalOwned.data, receipt.data == originalReceipt.data,
+                  owned.stamp?.permissions == originalOwned.stamp?.permissions,
+                  receipt.stamp?.permissions == originalReceipt.stamp?.permissions else {
+                throw CopilotFileError.changed
+            }
+            return true
         }
 
         func acceptPreparedResources() throws {
@@ -851,7 +887,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             guard try store.otherPluginHooks(metadata) == otherPlugins else { throw CopilotFileError.changed }
             guard metadata.supported else { throw CopilotFileError.io }
             let own = metadata.plugins.filter { $0.name == CopilotPluginManifest.name }
-            guard own.count == 1, own[0].marketplace.isEmpty, own[0].enabled, own[0].directSourceId != nil,
+            guard own.count == 1, own[0].isUnmanagedDirectInstall, own[0].enabled, own[0].directSourceId != nil,
                   pluginIdentity == nil || pluginIdentity == own[0].directSourceId,
                   !metadata.hooks.contains(where: { $0.origin == "plugin" && $0.source == CopilotPluginManifest.name })
             else { throw CopilotRegistrationConflict("The CLI did not verify a single hookless direct plugin. Dedicated hooks remain disabled.") }
@@ -882,7 +918,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             let rows = metadata.hooks.filter { store.isOwnedSource($0) }
             let plugins = metadata.plugins.filter { $0.name == CopilotPluginManifest.name }
             guard phase == .published, metadata.supported, rows.count == 3,
-                  plugins.count == 1, plugins[0].marketplace.isEmpty, plugins[0].enabled,
+                  plugins.count == 1, plugins[0].isUnmanagedDirectInstall, plugins[0].enabled,
                   plugins[0].directSourceId == pluginIdentity,
                   Set(rows.map(\.hookType)) == Set(CopilotPluginManifest.events),
                   rows.allSatisfy({ $0.origin == "user" && (!disabled || !$0.enabled) }),

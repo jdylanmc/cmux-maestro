@@ -15,6 +15,23 @@ nonisolated struct CopilotSetupMetadata: Equatable, Sendable {
         let marketplace: String
         let enabled: Bool
         let directSourceId: String?
+        let installedFrom: String?
+        let source: String?
+        let managed: Bool?
+        let managedDesiredEnabled: Bool?
+        let installed: Bool?
+
+        init(name: String, marketplace: String, enabled: Bool, directSourceId: String?,
+             installedFrom: String? = nil, source: String? = nil, managed: Bool? = nil,
+             managedDesiredEnabled: Bool? = nil, installed: Bool? = nil) {
+            self.name = name; self.marketplace = marketplace; self.enabled = enabled
+            self.directSourceId = directSourceId; self.installedFrom = installedFrom
+            self.source = source; self.managed = managed; self.managedDesiredEnabled = managedDesiredEnabled
+            self.installed = installed
+        }
+
+        var usesInstalledCache: Bool { installedFrom == nil && source == nil && installed != false }
+        var isUnmanagedDirectInstall: Bool { usesInstalledCache && marketplace.isEmpty && managed != true }
     }
 
     let version: String

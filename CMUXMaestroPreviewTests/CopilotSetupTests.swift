@@ -741,7 +741,9 @@ struct CopilotSetupTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
         let configuration = directory.appendingPathComponent("unrelated-settings.json")
         try Data("preserved".utf8).write(to: configuration)
-        let routes = repository.appendingPathComponent(".build/\(UUID().uuidString.prefix(5))")
+        var routeTemplate = Array("/private/tmp/maestro-setup-XXXXXX".utf8CString)
+        let routePath = try #require(mkdtemp(&routeTemplate))
+        let routes = URL(fileURLWithPath: String(cString: routePath), isDirectory: true)
         defer { try? FileManager.default.removeItem(at: routes) }
         let local = LocalCopilotSetupFiles(nativeExtensions: directory.appendingPathComponent("e"), messagingRoutes: routes)
         let controller = directory.appendingPathComponent("controller.py")
@@ -763,6 +765,15 @@ struct CopilotSetupTests {
             to: directory.appendingPathComponent("NerdFonts")
         )
         let integration = directory.appendingPathComponent("Copilot")
+        let oversized = LocalCopilotSetupFiles(
+            nativeExtensions: directory.appendingPathComponent("e"),
+            messagingRoutes: directory.appendingPathComponent(String(repeating: "r", count: 101)))
+        #expect(throws: (any Error).self) {
+            try oversized.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        }
+        #expect(!FileManager.default.fileExists(atPath: integration.path))
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("Orchestration").path))
+        #expect(!FileManager.default.fileExists(atPath: local.nativeExtensions.path))
         let plugin = try local.preparePlugin(
             root: integration, helper: executable, controller: controller, skill: skill
         )

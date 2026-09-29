@@ -198,6 +198,13 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         let glyphData = try glyphFiles.map { name, limit in
             (name, try boundedResource(glyphRoot.appendingPathComponent(name), maximum: limit))
         }
+        let skillData = try boundedResource(skill, maximum: 65_536)
+        let controllerData = try boundedResource(controller, maximum: 1_048_576)
+        let nativeRoot = nativeExtensions.appendingPathComponent("maestro", isDirectory: true)
+        let routes = messagingRoutes ?? nativeRoot.appendingPathComponent("r", isDirectory: true)
+        guard routes.appendingPathComponent(String(repeating: "0", count: 16) + ".sock").path.utf8.count <= 100 else {
+            throw HookFiles.Failure.unavailable
+        }
         let rootFD = try HookFiles.privateDirectory(root)
         defer { close(rootFD) }
         let plugin = root.appendingPathComponent("plugin", isDirectory: true)
@@ -211,7 +218,6 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
             plugin.appendingPathComponent("skills/cmux-maestro-orchestrate", isDirectory: true)
         )
         defer { close(orchestrationSkill) }
-        let skillData = try boundedResource(skill, maximum: 65_536)
         try HookFiles.atomicWrite(skillData, name: "SKILL.md", directory: orchestrationSkill)
         let iconSkillDirectory = try HookFiles.privateDirectory(
             plugin.appendingPathComponent("skills/maestro-icon", isDirectory: true)
@@ -238,19 +244,14 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
             try HookFiles.atomicWrite(data, name: name, directory: glyphDirectory)
         }
         try executableWrite(
-            boundedResource(controller, maximum: 1_048_576),
+            controllerData,
             name: "cmux-maestro-orchestrator", directory: bin
         )
         let extensions = try HookFiles.directory(nativeExtensions, create: true)
         defer { close(extensions) }
         _ = try HookFiles.metadata(extensions, directory: true)
-        let nativeRoot = nativeExtensions.appendingPathComponent("maestro", isDirectory: true)
         let nativeDirectory = try HookFiles.privateDirectory(nativeRoot)
         defer { close(nativeDirectory) }
-        let routes = messagingRoutes ?? nativeRoot.appendingPathComponent("r", isDirectory: true)
-        guard routes.appendingPathComponent(String(repeating: "0", count: 16) + ".sock").path.utf8.count <= 100 else {
-            throw HookFiles.Failure.unavailable
-        }
         let routeDirectory = try HookFiles.privateDirectory(routes)
         defer { close(routeDirectory) }
         try HookFiles.atomicWrite(adapterData, name: "adapter.mjs", directory: nativeDirectory)
@@ -380,6 +381,17 @@ nonisolated enum CopilotSetupFileWork {
             return value
         } onCancel: {
             cancellation.cancel()
+        }
+    }
+
+    static func restore<Value: Sendable>(_ operation: @escaping @Sendable () throws -> Value) async throws -> Value {
+        // Caller cancellation must not abandon a bounded restoration already
+        // needed by its completed writes. No provider process runs here.
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do { continuation.resume(returning: try operation()) }
+                catch { continuation.resume(throwing: error) }
+            }
         }
     }
 }
@@ -663,12 +675,13 @@ nonisolated struct CopilotSetup: Sendable {
             try await CopilotSetupFileWork.run { try operation.stage() }
             switch await runner.metadata(executable: executable, path: path, providerHome: registration.providerHome) {
             case .value(let value): try await CopilotSetupFileWork.run { try operation.verifyStaging(value) }
-            case .failed(let failure): return .incomplete(operation.phase, Self.processFailure(failure).message)
+            case .failed(let failure): return await Self.incomplete(operation, reason: Self.processFailure(failure).message)
             }
             let arguments: [String]
             switch action {
             case .install:
                 let plugin = try await CopilotSetupFileWork.run {
+                    operation.preparingResources()
                     let plugin = try self.files.preparePlugin(
                         root: root, helper: helper, controller: controller, skill: skill)
                     try operation.acceptPreparedResources()
@@ -721,9 +734,22 @@ nonisolated struct CopilotSetup: Sendable {
             else if error is CancellationError { reason = CopilotSetupResult.cancelled.message }
             else { reason = "A required file is unsafe, unreadable, malformed or changed during setup. No unverified rollback was attempted." }
             if let transaction, transaction.phase != .preflight {
-                return .incomplete(transaction.phase, reason)
+                return await Self.incomplete(transaction, reason: reason)
             }
             return error is CancellationError ? .cancelled : .conflict(reason)
+        }
+    }
+
+    private static func incomplete(_ operation: CopilotObserverRegistration.Transaction,
+                                   reason: String) async -> CopilotSetupResult {
+        do {
+            let restored = try await CopilotSetupFileWork.restore { try operation.restoreStaging() }
+            return .incomplete(operation.phase, reason + (restored
+                ? " Previous observer-file and provenance bytes, absence and permissions were restored and verified before any plugin/resource changes."
+                : " Previous integration state has not been restored."))
+        } catch {
+            return .incomplete(operation.phase,
+                reason + " Observer staging restoration failed verification; retain the incomplete state for recovery.")
         }
     }
 

@@ -124,18 +124,53 @@ cached declarations and public metadata, then publishes the intended file.
 Foreign/modified registrations, unknown installed identities, overlapping
 observer sources and changing inputs refuse rather than being overwritten.
 Other-plugin inspection uses the complete provider-reported overlapping source
-set and requires one matching plugin identity plus one safe, unique manifest
-and its hook declarations for each source. Unrelated installation-directory
+set and checks one matching plugin identity plus one safe, unique manifest
+and its hook declarations for each cached source. **This is not an authoritative
+selected-source binding:** the noncanonical linked-source/safe-alias
+counterexample remains unresolved for direct installs. No current-on-disk
+result should be treated as proof that this whole-source audit is correct.
+Public live, built-in and managed provenance is retained. Overlapping live or
+built-in sources and uninstalled managed records refuse before staging instead
+of accepting a stale cache; `installedFrom` is a marketplace directory, not
+the selected plugin directory. Ordinary unrelated cached plugins remain
+compatible. Unrelated installation-directory
 symlinks are not followed or counted as inspected sources. A relevant linked
 entry/group, missing declaration, duplicate identity/manifest or incomplete
 source coverage still refuses. Source identities and inspected files are
 revalidated at staging, publication and removal; skipping an unrelated link
 does not waive those checks.
-A failed step reports the last completed phase; the next phase may have
+A failure confined to provenance/disabled staging restores and verifies the
+previous owned file/provenance bytes, absence and permissions before returning,
+including on cancellation. Concurrent replacement refuses restoration rather
+than overwriting foreign bytes. All resource inputs and the unchanged socket
+path bound are checked before resource writes begin. The resource fixture uses
+an exclusive short disposable directory rather than depending on checkout
+path length; it also exercises the overlong-path refusal before effects.
+A later failed step reports the last completed phase; the next phase may have
 partially refreshed setup resources. Retry revalidates recorded generations
 and known partial preparation, preserving a retained disabled stage. It never
 rolls back blindly or changes existing sessions. Removing integration preserves
 global keys, unrelated hooks and live messaging route/session state.
+
+### App installer correction boundaries (#114)
+
+The focused Python suite covers ordinary `install` upgrades, exact registered
+identical no-ops (without app replacement, receipt changes or lost backups),
+automatic restoration after copy/exchange/registration failures, first-install
+absence, interrupted restoration, exact development-source registration
+restoration and refusal to race an unfinished command guardian. Existing
+ownership, integrity, process identity and partial-cleanup controls remain.
+Changed-app publication withdraws only the owned registration, waits at most
+120 seconds for positively identified preview processes to exit, and registers
+the replacement. Unknown process evidence still fails immediately. Tests cover
+ordered withdrawal/re-registration, unchanged unrelated registrations, bounded
+waiting and restoration when release fails; no signal, UI selection, host
+restart or script-sidebar reload is used.
+These tests use synthetic registries and real disposable filesystem exchanges;
+they do not prove stock-host unload/reload or a combined app/Copilot transaction.
+Copilot resource/plugin rollback, automatic integration during installation,
+native lifecycle proof and later installed fresh-session acceptance remain
+open. Hosted CI and independent review are separate gates.
 
 [CopilotObserverRegistrationTests](../CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift)
 cover isolated registration, migration, exact event/wrapper content, preserved
