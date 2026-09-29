@@ -16,7 +16,9 @@ Notable changes are recorded using Keep a Changelog categories.
   explicit setup, with verified migration/removal and truthful all/subset-disabled,
   unresolved or incomplete status. Unsafe ownership and affected unresolved disables refuse
   migration without changing the existing registration; existing sessions are
-  not restarted or reloaded (#114).
+  not restarted or reloaded. Preserve unrelated installed-plugin symlinks without
+  following them; overlapping hook sources still require complete, safe and
+  unambiguous inspection (#114).
 - Commit project-local skill files, references, helpers, and upstream notices
   alongside the lockfile so a checkout includes the reviewed skill set.
 - Standardize repository agents on upstream CMUX and refreshed personal skills,
