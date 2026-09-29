@@ -49,6 +49,31 @@ serialization, startup retry or larger readiness timeout. Startup observation
 has no added wall-time limit before the first sample; the existing dedicated
 concurrency test remains the bounded dispatch-progress regression.
 
+### Managed startup observation (#61)
+
+The controller Harness reproduces both a delayed runtime after caller timeout
+and a child whose exact attachment is delayed. The former previously revoked
+the lease and produced `Worker launch lease is no longer active`; the latter
+exited on its own attachment timer. These are controlled source mechanisms,
+not a reproduction or explanation of the historical native host trigger.
+The earlier provider-initialization explanation was retracted: supervisor
+identity is recorded **before** the provider is launched.
+
+Synthetic gates now prove pending launch acceptance without lease destruction,
+attachment serialization without a global-lock or busy-wait loop, exact
+late-claim refusal, caller disappearance, unknown inventory/process probes,
+surface loss and concurrent claim revalidation. Provider readiness is gated
+independently, including a provider that never becomes ready; synthetic
+`render_health: not_started` never drives lifecycle decisions. Pending and
+unknown resources continue consuming the eight-slot limit. A lost create reply
+is not guessed to mean no terminal exists. Native adapter tests preserve the
+pending receipt unchanged and do not retry.
+
+Fixtures are not installed workers, live provider readiness, visible native
+acceptance or evidence that the historical host delay is understood. Full
+delivery CI and independent review remain separate gates; live host/provider
+experiments require a separately authorized release.
+
 ### Deep-outline fixture readiness
 
 Focus-layout fixtures bring the deepest title into the viewport and wait for

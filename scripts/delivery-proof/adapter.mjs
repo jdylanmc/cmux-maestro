@@ -269,7 +269,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
   });
   if (managed) tools.push({
     name: "maestro_spawn",
-    description: "Launch one explicitly authorized visible Maestro child using this session's current Copilot account. No hidden fallback; launch acknowledgement is not readiness or task completion.",
+    description: "Launch one explicitly authorized visible Maestro child using this session's current Copilot account. An accepted launch may still have pending startup; inspect returned evidence without retrying. No hidden fallback; acceptance is not readiness or task completion.",
     parameters: {
       type: "object",
       properties: {

@@ -23,7 +23,7 @@ CONTROLLER = REPO / "scripts" / "cmux-maestro-orchestrator.py"
 CONTROLLER_API = runpy.run_path(str(CONTROLLER))
 
 FAKE_CMUX = r'''#!/usr/bin/env python3
-import fcntl, json, os, runpy, shlex, subprocess, sys, tempfile, uuid
+import fcntl, json, os, runpy, shlex, subprocess, sys, tempfile, time, uuid
 from pathlib import Path
 
 state_path = Path(os.environ["FAKE_CMUX_STATE"])
@@ -66,8 +66,10 @@ try:
     elif command == "list-panes":
         result = {"panes": [{"pane_id": state["pane"]}]}
     elif command == "rpc" and args[args.index("rpc") + 1] == "surface.list":
+        if state.get("inventoryUnavailable"):
+            raise SystemExit("synthetic host inventory unavailable")
         result = {"workspace_id": workspace, "surfaces": [
-            {"id": item} for item in state["surfaces"]
+            {"id": item, "render_health": "not_started"} for item in state["surfaces"]
         ]}
     elif command == "rpc":
         if args[args.index("rpc") + 1] != "surface.create":
@@ -101,6 +103,19 @@ try:
                 env["CMUX_MAESTRO_COPILOT"] = env["FAKE_RUNTIME_COPILOT_MISSING"]
             output = open(state_path.parent / ("runtime-" + surface + ".log"), "ab", buffering=0)
             terminal = os.open(env["FAKE_PTY_SLAVE"], os.O_RDWR) if env.get("FAKE_PTY_SLAVE") else None
+            if env.get("FAKE_RUNTIME_BARRIER"):
+                command_args = [sys.executable, "-c", """
+import os, sys, time
+from pathlib import Path
+marker = Path(os.environ["FAKE_RUNTIME_BARRIER"])
+marker.with_suffix(".ready").write_text("ready")
+deadline = time.monotonic() + 10
+while not marker.with_suffix(".release").exists():
+    if time.monotonic() >= deadline:
+        raise SystemExit("synthetic runtime barrier expired")
+    time.sleep(0.01)
+os.execv(sys.argv[1], sys.argv[1:])
+""", *command_args]
             process = subprocess.Popen(
                 command_args, stdin=terminal if terminal is not None else subprocess.DEVNULL,
                 stdout=terminal if terminal is not None else output,
@@ -155,6 +170,16 @@ try:
     temporary = state_path.with_suffix(".tmp")
     temporary.write_text(json.dumps(state))
     os.replace(temporary, state_path)
+    if creation is not None and "surface.create" in args and os.environ.get("FAKE_LOST_CREATE_REPLY"):
+        raise SystemExit("synthetic lost create reply")
+    if creation is not None and "surface.create" in args and os.environ.get("FAKE_CREATE_REPLY_BARRIER"):
+        marker = Path(os.environ["FAKE_CREATE_REPLY_BARRIER"])
+        marker.with_suffix(".ready").write_text("ready")
+        deadline = time.monotonic() + 10
+        while not marker.with_suffix(".release").exists():
+            if time.monotonic() >= deadline:
+                raise SystemExit("synthetic create reply barrier expired")
+            time.sleep(0.01)
     print(json.dumps(result))
 finally:
     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
@@ -179,6 +204,14 @@ record = {
 }
 with open(os.environ["FAKE_COPILOT_CALLS"], "a") as stream:
     stream.write(json.dumps(record) + "\n")
+if os.environ.get("FAKE_PROVIDER_BARRIER"):
+    marker = Path(os.environ["FAKE_PROVIDER_BARRIER"])
+    marker.with_suffix(".ready").write_text("ready")
+    deadline = time.monotonic() + 10
+    while not marker.with_suffix(".release").exists():
+        if time.monotonic() >= deadline:
+            raise SystemExit("synthetic provider barrier expired")
+        time.sleep(0.01)
 if "--interactive" in args:
     ready = Path(os.environ["FAKE_INTERACTIVE_READY"])
     received = Path(os.environ["FAKE_INTERACTIVE_INPUT"])
@@ -566,6 +599,29 @@ class OrchestratorTests(unittest.TestCase):
                         self.fail("A writer must not cross active readers.")
         with store_type(self.h.root) as writer:
             writer.write(writer.read())
+
+    def test_attachment_lock_is_private_noninheritable_and_rejects_unsafe_files(self):
+        identifier = str(uuid.uuid4())
+        ticket = self.h.root / "control" / f"launch-{identifier}.json"
+        ticket.write_text('{"synthetic":"attachment"}')
+        ticket.chmod(0o600)
+        with CONTROLLER_API["Store"](self.h.root, read_only=True) as store:
+            descriptor = store.launch_attachment(identifier)
+            try:
+                self.assertFalse(os.get_inheritable(descriptor))
+            finally:
+                os.close(descriptor)
+            ticket.chmod(0o644)
+            with self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+                store.launch_attachment(identifier)
+            ticket.unlink()
+            os.mkfifo(ticket, 0o600)
+            with self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+                store.launch_attachment(identifier)
+            ticket.unlink()
+            ticket.symlink_to(self.h.root / "control" / "state.json")
+            with self.assertRaises(OSError):
+                store.launch_attachment(identifier)
 
     def test_local_subscription_and_model_are_pinned_without_leaking_or_changing_git_auth(self):
         h = Harness(interactive=True)
@@ -1313,6 +1369,376 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][:2], ("rpc", "surface.create"))
         self.assertEqual(CONTROLLER_API["STARTUP_SECONDS"], 8)
+
+    def test_delayed_runtime_keeps_exact_lease_after_bounded_caller_return(self):
+        barrier = self.h.path / "runtime-barrier"
+        self.h.env.update({
+            "FAKE_RUNTIME_BARRIER": str(barrier),
+            "CMUX_MAESTRO_STARTUP_SECONDS": "0.05",
+        })
+        result = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Delayed runtime", "--cwd", str(REPO), "--task", "bounded",
+            check=False,
+        )
+        state = self.h.state()
+        worker = next(node for node in state["nodes"].values() if node["role"] == "worker")
+        try:
+            self.assertTrue(barrier.with_suffix(".ready").exists())
+            self.assertEqual(result["returncode"], 0, result["stderr"])
+            self.assertTrue(result["launchAccepted"])
+            self.assertEqual(result["startup"], "pending")
+            self.assertEqual(result["phase"], "launching")
+            self.assertEqual(result["initialTask"], "configured")
+            self.assertFalse(result["supervisorStarted"])
+            self.assertIsNone(result["providerRunning"])
+            self.assertEqual(result["workObservation"], "unavailable")
+            self.assertEqual(state["launches"][worker["id"]]["state"], "starting")
+            self.assertTrue((self.h.root / "control" / f"launch-{worker['id']}.json").exists())
+        finally:
+            barrier.with_suffix(".release").write_text("release")
+        completed = self.h.wait_node(worker["id"], lambda node: node["phase"] == "reported-completed")
+        self.assertEqual(completed["surfaceId"], result["surfaceId"])
+        self.assertEqual(completed["copilotSessionId"], result["sessionId"])
+        self.assertNotIn(worker["id"], self.h.state()["launches"])
+        self.assertEqual(len(self.h.calls()), 1)
+        self.assertEqual(self.h.cmux_data()["selected"], self.h.surface)
+
+    def test_delayed_attachment_does_not_expire_runtime(self):
+        barrier = self.h.path / "attach-barrier"
+        env = {**self.h.env, "CMUX_MAESTRO_TEST_ATTACH_BARRIER": str(barrier),
+               "CMUX_MAESTRO_STARTUP_SECONDS": "0.05"}
+        process = self.h.start(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Delayed attachment", "--cwd", str(REPO), "--task", "bounded",
+            env=env,
+        )
+        deadline = time.monotonic() + 5
+        while not barrier.with_suffix(".ready").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        try:
+            self.assertTrue(barrier.with_suffix(".ready").exists())
+            # The caller is held at the exact attach boundary beyond the child's
+            # old observation budget, independently of any provider readiness.
+            time.sleep(0.3)
+            self.assertEqual(self.h.calls(), [])
+        finally:
+            barrier.with_suffix(".release").write_text("release")
+        result = self.h.finish(process, check=False)
+        self.assertEqual(result["returncode"], 0, result["stderr"])
+        worker = self.h.wait_node(result["workerId"], lambda node: node["phase"] == "reported-completed")
+        self.assertEqual(worker["surfaceId"], result["surfaceId"])
+        self.assertEqual(len(self.h.calls()), 1)
+
+    def test_provider_readiness_is_independent_and_render_health_is_not_liveness(self):
+        h = Harness(interactive=True)
+        barrier = h.path / "provider-barrier"
+        h.env["FAKE_PROVIDER_BARRIER"] = str(barrier)
+        try:
+            receipt = h.spawn("Synthetic initial task")
+            node = h.wait_node(receipt["workerId"], lambda item: item.get("providerProcess"))
+            ready = Path(h.env["FAKE_INTERACTIVE_READY"])
+            self.assertFalse(ready.exists())
+            for _ in range(2):
+                status = h.run("status", "--actor-id", h.node, "--token", h.token,
+                               "--worker-id", node["id"])["workers"][0]
+                self.assertTrue(status["launchAccepted"])
+                self.assertTrue(status["supervisorStarted"])
+                self.assertTrue(status["providerRunning"])
+                self.assertTrue(status["surfacePresent"])
+                self.assertEqual(status["initialTask"], "submitted")
+                self.assertEqual(status["workObservation"], "unavailable")
+                self.assertNotIn("ready", status)
+                self.assertFalse(ready.exists())
+            self.assertEqual(len(h.calls()), 1)
+            argv = h.calls()[0]["args"]
+            self.assertEqual(argv[argv.index("--interactive") + 1], "Synthetic initial task")
+            barrier.with_suffix(".release").write_text("release")
+            deadline = time.monotonic() + 3
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(ready.exists())
+            status = h.run("status", "--actor-id", h.node, "--token", h.token,
+                           "--worker-id", node["id"])["workers"][0]
+            self.assertEqual(status["workObservation"], "unavailable")
+            self.assertEqual(h.cmux_data()["selected"], h.surface)
+            os.write(h.terminal_master, b"exit\n")
+            h.wait_node(node["id"], lambda item: item["phase"] == "process-disappeared")
+        finally:
+            barrier.with_suffix(".release").write_text("release")
+            h.close()
+
+    def test_late_create_reply_keeps_attachment_lease_without_duplicate_launch(self):
+        barrier = self.h.path / "create-reply"
+        env = {**self.h.env, "FAKE_CREATE_REPLY_BARRIER": str(barrier),
+               "CMUX_MAESTRO_STARTUP_SECONDS": "0.05"}
+        caller = self.h.start(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Late reply", "--cwd", str(REPO), "--task", "bounded", env=env,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            while not barrier.with_suffix(".ready").exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(barrier.with_suffix(".ready").exists())
+            time.sleep(0.3)
+            lease = next(iter(self.h.state()["launches"].values()))
+            self.assertEqual(lease["state"], "creating")
+            self.assertIsNone(lease["surfaceId"])
+            self.assertEqual(self.h.calls(), [])
+        finally:
+            barrier.with_suffix(".release").write_text("release")
+        receipt = self.h.finish(caller)
+        self.h.wait_node(receipt["workerId"], lambda node: node["phase"] == "reported-completed")
+        self.assertEqual(len(self.h.calls()), 1)
+        self.assertEqual(len(self.h.cmux_data()["surfaces"]), 2)
+
+    def test_pending_launch_surface_loss_fences_late_runtime(self):
+        barrier = self.h.path / "runtime-barrier"
+        self.h.env.update(FAKE_RUNTIME_BARRIER=str(barrier), CMUX_MAESTRO_STARTUP_SECONDS="0")
+        receipt = self.h.spawn()
+        self.h.remove_surface(receipt["surfaceId"])
+        status = self.h.run("status", "--actor-id", self.h.node, "--token", self.h.token,
+                            "--worker-id", receipt["workerId"])["workers"][0]
+        self.assertEqual(status["phase"], "terminal-disappeared")
+        self.assertEqual(status["startup"], "failed")
+        state = self.h.state()
+        self.assertEqual(state["launches"], {})
+        self.assertTrue(state["nodes"][receipt["workerId"]]["runtimeNotStarted"])
+        barrier.with_suffix(".release").write_text("release")
+        log = self.h.path / f"runtime-{receipt['surfaceId']}.log"
+        deadline = time.monotonic() + 3
+        while not log.read_text() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIn("error", log.read_text())
+        self.assertEqual(self.h.calls(), [])
+
+    def test_provider_that_never_becomes_ready_does_not_prove_work(self):
+        h = Harness(interactive=True)
+        barrier = h.path / "provider-barrier"
+        h.env["FAKE_PROVIDER_BARRIER"] = str(barrier)
+        provider = None
+        try:
+            receipt = h.spawn()
+            node = h.wait_node(receipt["workerId"], lambda item: item.get("providerProcess"))
+            provider = node["providerProcess"]["pid"]
+            status = h.run("status", "--actor-id", h.node, "--token", h.token,
+                           "--worker-id", node["id"])["workers"][0]
+            self.assertTrue(status["providerRunning"])
+            self.assertEqual(status["workObservation"], "unavailable")
+            self.assertFalse(Path(h.env["FAKE_INTERACTIVE_READY"]).exists())
+            os.kill(provider, signal.SIGTERM)
+            provider = None
+            h.wait_node(node["id"], lambda item: item["phase"] == "turn-failed")
+            status = h.run("status", "--actor-id", h.node, "--token", h.token,
+                           "--worker-id", node["id"])["workers"][0]
+            self.assertEqual(status["startup"], "failed")
+            self.assertFalse(status["providerRunning"])
+            self.assertEqual(status["workObservation"], "unavailable")
+            self.assertEqual(len(h.calls()), 1)
+        finally:
+            if provider is not None:
+                try:
+                    os.kill(provider, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            h.close()
+
+    def test_lost_create_reply_preserves_unknown_resource_and_refuses_retry_reclamation(self):
+        env = {**self.h.env, "FAKE_LOST_CREATE_REPLY": "1"}
+        failed = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Lost reply", "--cwd", str(REPO), "--task", "bounded",
+            env=env, check=False,
+        )
+        self.assertEqual(failed["returncode"], 2)
+        worker = next(node for node in self.h.state()["nodes"].values() if node["role"] == "worker")
+        self.assertEqual(worker["phase"], "launch-failed")
+        self.assertTrue(worker["surfaceUnknown"])
+        self.assertIsNone(worker["surfaceId"])
+        self.assertEqual(len(self.h.cmux_data()["surfaces"]), 2)
+        self.assertEqual(self.h.state()["launches"], {})
+        created = next(surface for surface in self.h.cmux_data()["surfaces"] if surface != self.h.surface)
+        log = self.h.path / f"runtime-{created}.log"
+        deadline = time.monotonic() + 3
+        while not log.read_text() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIn("error", log.read_text())
+        self.assertEqual(self.h.calls(), [])
+        other = self.h.spawn()
+        self.h.wait_node(other["workerId"], lambda node: node["availability"] == "idle")
+        self.assertEqual(self.h.state()["nodes"][worker["id"]]["phase"], "launch-failed")
+        archived = self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token, check=False)
+        self.assertEqual(archived["returncode"], 2)
+        self.assertIn("unresolved", archived["stderr"])
+
+    def test_unknown_host_inventory_preserves_pending_lease_and_capacity(self):
+        barrier = self.h.path / "runtime-barrier"
+        self.h.env.update(FAKE_RUNTIME_BARRIER=str(barrier), CMUX_MAESTRO_STARTUP_SECONDS="0")
+        receipt = self.h.spawn()
+        before = self.h.state()["launches"]
+        host = self.h.cmux_data()
+        host["inventoryUnavailable"] = True
+        self.h.cmux_state.write_text(json.dumps(host))
+        status = self.h.run("status", "--actor-id", self.h.node, "--token", self.h.token,
+                            "--worker-id", receipt["workerId"])["workers"][0]
+        self.assertEqual(status["startup"], "pending")
+        self.assertIsNone(status["surfacePresent"])
+        self.assertIsNone(status["providerRunning"])
+        self.assertEqual(self.h.state()["launches"], before)
+        rejected = self.h.run("spawn", "--actor-id", self.h.node, "--token", self.h.token,
+                             "--name", "No guessed reclamation", "--cwd", str(REPO),
+                             "--task", "bounded", check=False)
+        self.assertEqual(rejected["returncode"], 2)
+        self.assertEqual(set(self.h.cmux_data()["surfaces"]), set(host["surfaces"]))
+        barrier.with_suffix(".release").write_text("release")
+        self.h.wait_node(receipt["workerId"], lambda node: node["phase"] == "reported-completed")
+
+    def test_supervisor_claim_at_failed_observation_boundary_is_not_revoked(self):
+        barrier = self.h.path / "runtime-barrier"
+        self.h.env.update(FAKE_RUNTIME_BARRIER=str(barrier), CMUX_MAESTRO_STARTUP_SECONDS="0")
+        args = CONTROLLER_API["parser"]().parse_args([
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Concurrent claim", "--cwd", str(REPO), "--task", "bounded",
+        ])
+        with patch.dict(os.environ, self.h.env):
+            cmux = CONTROLLER_API["Cmux"]()
+            probe = cmux.surface_exists
+
+            def claimed_before_mutation(workspace, surface):
+                worker = next(node for node in self.h.state()["nodes"].values() if node["role"] == "worker")
+                barrier.with_suffix(".release").write_text("release")
+                self.h.wait_node(worker["id"], lambda node: node["phase"] == "reported-completed")
+                cmux.surface_exists = probe
+                return False
+
+            cmux.surface_exists = claimed_before_mutation
+            receipt = CONTROLLER_API["command_spawn"](args, self.h.root, cmux)
+        self.assertEqual(receipt["phase"], "reported-completed")
+        self.assertEqual(receipt["workObservation"], "reported-result")
+        self.assertNotIn("runtimeNotStarted", self.h.state()["nodes"][receipt["workerId"]])
+        self.assertEqual(len(self.h.calls()), 1)
+
+    def test_conflicting_surface_observation_does_not_extend_caller_budget(self):
+        barrier = self.h.path / "runtime-barrier"
+        self.h.env.update(FAKE_RUNTIME_BARRIER=str(barrier), CMUX_MAESTRO_STARTUP_SECONDS="0")
+        args = CONTROLLER_API["parser"]().parse_args([
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Changed observation", "--cwd", str(REPO), "--task", "bounded",
+        ])
+        probes = []
+        with patch.dict(os.environ, self.h.env):
+            cmux = CONTROLLER_API["Cmux"]()
+
+            def stale_observation(workspace, surface):
+                probes.append(surface)
+                self.assertEqual(len(probes), 1, "Observation conflict must not bypass the caller budget.")
+                def change(state):
+                    worker = next(node for node in state["nodes"].values() if node["role"] == "worker")
+                    worker["result"] = "Synthetic concurrent observation."
+                self.h.change_state(change)
+                return False
+
+            cmux.surface_exists = stale_observation
+            receipt = CONTROLLER_API["command_spawn"](args, self.h.root, cmux)
+        self.assertEqual(receipt["startup"], "pending")
+        self.assertIn(receipt["workerId"], self.h.state()["launches"])
+        barrier.with_suffix(".release").write_text("release")
+        self.h.wait_node(receipt["workerId"], lambda node: node["phase"] == "reported-completed")
+        self.assertEqual(len(self.h.calls()), 1)
+
+    def test_cancelled_expired_and_foreign_launches_refuse_late_execution(self):
+        for boundary in ("cancelled", "expired", "token", "surface", "session", "generation"):
+            with self.subTest(boundary=boundary):
+                barrier = self.h.path / f"runtime-{boundary}"
+                self.h.env.update(FAKE_RUNTIME_BARRIER=str(barrier), CMUX_MAESTRO_STARTUP_SECONDS="0")
+                receipt = self.h.spawn()
+                identifier = receipt["workerId"]
+
+                def invalidate(state):
+                    node = state["nodes"][identifier]
+                    if boundary in {"cancelled", "expired"}:
+                        CONTROLLER_API["record_launch_failure"](
+                            state, identifier, receipt["surfaceId"],
+                            phase="launch-failed" if boundary == "cancelled" else "startup-failed",
+                        )
+                    elif boundary == "token":
+                        node["tokenHash"] = CONTROLLER_API["token_hash"]("replacement")
+                    elif boundary == "surface":
+                        replacement = str(uuid.uuid4())
+                        node["surfaceId"] = replacement
+                        state["launches"][identifier]["surfaceId"] = replacement
+                    else:
+                        # New leases bind both dimensions; corruption must be
+                        # refused by the reader before runtime can claim.
+                        node["copilotSessionId" if boundary == "session" else "generation"] = (
+                            str(uuid.uuid4()) if boundary == "session" else 2
+                        )
+
+                if boundary in {"session", "generation"}:
+                    state = self.h.state()
+                    invalidate(state)
+                    with self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+                        CONTROLLER_API["validate_state"](state)
+                    self.h.change_state(lambda current: CONTROLLER_API["record_launch_failure"](current, identifier))
+                else:
+                    self.h.change_state(invalidate)
+                barrier.with_suffix(".release").write_text("release")
+                log = self.h.path / f"runtime-{receipt['surfaceId']}.log"
+                deadline = time.monotonic() + 3
+                while not log.read_text() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertIn("error", log.read_text())
+                self.assertEqual(self.h.calls(), [])
+
+    def test_pending_launches_hold_all_eight_resource_slots(self):
+        barrier = self.h.path / "runtime-barrier"
+        self.h.env.update(FAKE_RUNTIME_BARRIER=str(barrier), CMUX_MAESTRO_STARTUP_SECONDS="0")
+        receipts = [self.h.spawn(label=f"Pending {index}") for index in range(8)]
+        self.assertTrue(all(item["startup"] == "pending" for item in receipts))
+        self.assertEqual(len(self.h.state()["launches"]), 8)
+        before = set(self.h.cmux_data()["surfaces"])
+        rejected = self.h.run("spawn", "--actor-id", self.h.node, "--token", self.h.token,
+                             "--name", "Ninth", "--cwd", str(REPO), "--task", "bounded",
+                             check=False)
+        self.assertEqual(rejected["returncode"], 2)
+        self.assertIn("resource limit", rejected["stderr"])
+        self.assertEqual(set(self.h.cmux_data()["surfaces"]), before)
+        archived = self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token, check=False)
+        self.assertEqual(archived["returncode"], 2)
+        self.assertEqual(len(self.h.state()["launches"]), 8)
+        barrier.with_suffix(".release").write_text("release")
+        for receipt in receipts:
+            self.h.wait_node(receipt["workerId"], lambda node: node["phase"] == "reported-completed")
+        self.assertEqual(len(self.h.calls()), 8)
+
+    def test_caller_exit_during_attachment_unblocks_child_without_execution(self):
+        barrier = self.h.path / "attach-barrier"
+        env = {**self.h.env, "CMUX_MAESTRO_TEST_ATTACH_BARRIER": str(barrier)}
+        caller = self.h.start(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Caller disappears", "--cwd", str(REPO), "--task", "bounded", env=env,
+        )
+        try:
+            deadline = time.monotonic() + 5
+            while not barrier.with_suffix(".ready").exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(barrier.with_suffix(".ready").exists())
+            lease = next(iter(self.h.state()["launches"].values()))
+            caller.terminate()
+            self.h.finish(caller, check=False)
+            log = self.h.path / f"runtime-{lease['surfaceId']}.log"
+            deadline = time.monotonic() + 3
+            while not log.read_text() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertIn("not in the launch phase", log.read_text())
+            self.assertEqual(self.h.calls(), [])
+            self.assertEqual(self.h.state()["launches"][lease["workerId"]], lease)
+            self.assertIn(lease["surfaceId"], self.h.cmux_data()["surfaces"])
+        finally:
+            if caller.poll() is None:
+                caller.terminate()
+                caller.communicate(timeout=5)
 
     def test_archive_refuses_external_create_attach_gap_and_tracks_surface(self):
         barrier = self.h.path / "attach-barrier"

@@ -857,6 +857,13 @@ def validate_state(state):
             or mode != "interactive"
         ):
             raise OrchestrationError("Stored interactive process identity is invalid.")
+        supervisor = node.get("supervisor")
+        if supervisor is not None and (
+            not isinstance(supervisor, dict) or set(supervisor) != {"pid", "start"}
+            or type(supervisor["pid"]) is not int or supervisor["pid"] <= 0
+            or not isinstance(supervisor["start"], str) or not 1 <= len(supervisor["start"]) <= 100
+        ):
+            raise OrchestrationError("Stored supervisor process identity is invalid.")
         if node.get("iconId") is not None:
             if not isinstance(node["iconId"], str) or not re.fullmatch(r"[a-z0-9_-]{1,128}", node["iconId"]):
                 raise OrchestrationError("Stored session glyph name is invalid.")
@@ -926,6 +933,14 @@ def validate_state(state):
         validate_tool_policy(node.get("toolPolicy"))
         if not isinstance(node.get("archiving", False), bool):
             raise OrchestrationError("Stored archive state is invalid.")
+        if "launchAccepted" in node and (
+            node["launchAccepted"] is not True or not surface or not has_managed_runtime(node)
+        ):
+            raise OrchestrationError("Stored launch acceptance is invalid.")
+        if "surfaceUnknown" in node and (
+            node["surfaceUnknown"] is not True or surface or not has_managed_runtime(node)
+        ):
+            raise OrchestrationError("Stored unresolved surface evidence is invalid.")
         if "runtimeNotStarted" in node and (
             node["runtimeNotStarted"] is not True or not has_managed_runtime(node)
             or node.get("supervisor") or provider or identifier in state["launches"]
@@ -998,11 +1013,20 @@ def validate_state(state):
             or launch.get("state") not in {"creating", "attaching", "starting"}
         ):
             raise OrchestrationError("Launch transaction ownership is invalid.")
+        if ("sessionId" in launch or "generation" in launch) and (
+            launch.get("sessionId") != node["copilotSessionId"]
+            or type(launch.get("generation")) is not int
+            or launch["generation"] != node["generation"]
+        ):
+            raise OrchestrationError("Launch transaction session or generation changed.")
         parse_date(launch.get("createdAt"), "launch creation time")
         updated = parse_date(launch.get("updatedAt"), "launch update time")
         if updated > now_date() + datetime.timedelta(minutes=5):
             raise OrchestrationError("Launch transaction timestamp is invalid.")
         surface = launch.get("surfaceId")
+        if (launch["state"] in {"attaching", "starting"} and surface is None
+                or launch["state"] == "starting" and surface != node.get("surfaceId")):
+            raise OrchestrationError("Launch attachment identity is incomplete.")
         if surface is not None:
             canonical_uuid(surface, "launch surface ID")
             owner = next(
@@ -1158,6 +1182,18 @@ class Store:
             return token
         except (ValueError, KeyError, TypeError):
             raise OrchestrationError("Private launch credential is invalid.")
+
+    def launch_attachment(self, worker_id):
+        descriptor = os.open(
+            f"launch-{worker_id}.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=self.control_fd,
+        )
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or not 0 < info.st_size <= 4096):
+            os.close(descriptor)
+            raise OrchestrationError("Launch attachment file is not private.")
+        return descriptor
 
     @staticmethod
     def _normalize_candidate_state(state):
@@ -1364,10 +1400,9 @@ class Cmux:
 
     def surface_exists(self, workspace, surface):
         try:
-            self.validate_surface(workspace, surface)
-            return True
-        except OrchestrationError:
-            return False
+            return surface in self.workspace_surfaces(workspace)
+        except (OrchestrationError, OSError):
+            return None
 
     def find_pane(self, workspace, surface):
         panes = self.run("list-panes", "--workspace", workspace)
@@ -1515,29 +1550,57 @@ def process_matches(node):
                for process in (node.get("supervisor"), node.get("providerProcess")))
 
 
+def process_observation(process):
+    if not process:
+        return None
+    start = process_start(process["pid"])
+    if start is not None:
+        return start == process["start"]
+    try:
+        os.kill(process["pid"], 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return None
+
+
+def startup_observation(node, surface=None):
+    """Private controller evidence, not provider readiness or model activity."""
+    supervisor = process_observation(node.get("supervisor"))
+    provider = process_observation(node.get("providerProcess"))
+    failed = node["phase"] in {
+        "launch-failed", "startup-failed", "turn-failed",
+        "process-disappeared", "terminal-disappeared", "resource-retired",
+    } or (supervisor is False and (node.get("executionMode") != "interactive" or provider is False))
+    return {
+        "launchAccepted": node.get("launchAccepted"),
+        "startup": "failed" if failed else "supervisor-started"
+            if node.get("supervisor") else "pending",
+        "initialTask": "submitted" if node.get("providerProcess")
+            or node.get("verifiedBoundaryGeneration") == node["generation"] else "configured",
+        "supervisorStarted": bool(node.get("supervisor")),
+        "supervisorRunning": supervisor,
+        "providerStarted": bool(node.get("providerProcess")),
+        "providerRunning": provider,
+        "surfacePresent": surface,
+        "surfaceOwnership": "unresolved" if node.get("surfaceUnknown")
+            else "exact" if node.get("surfaceId") else "unassigned",
+        "messaging": "configured" if node.get("messaging") else "unsupported",
+        "messagingAvailability": "unknown" if node.get("messaging") else "unsupported",
+        "workObservation": "reported-result" if node["phase"] in REPORT_PHASES.values()
+            and node.get("verifiedBoundaryGeneration") == node["generation"] else "unavailable",
+        "observedAt": now(),
+    }
+
+
 def worker_processes_exited(node):
     processes = (node.get("supervisor"), node.get("providerProcess"))
     if node.get("runtimeNotStarted") is True and not any(processes):
         return True
     if not processes[0] or (node.get("executionMode") == "interactive" and not processes[1]):
         return False
-    for process in processes:
-        if not process:
-            continue
-        start = process_start(process["pid"])
-        if start == process["start"]:
-            return False
-        if start is None:
-            # A failed/timed-out ps probe is not proof of exit. Signal zero only
-            # checks existence; it neither delivers a signal nor controls a process.
-            try:
-                os.kill(process["pid"], 0)
-            except ProcessLookupError:
-                continue
-            except PermissionError:
-                return False
-            return False
-    return True
+    return all(process_observation(process) is False for process in processes if process)
 
 
 def legacy_supervisor_blocks(state, node):
@@ -1671,6 +1734,7 @@ def command_launch_coordinator(args, root, cmux):
         state["nodes"][node["id"]] = node
         state["launches"][node["id"]] = {
             "workerId": node["id"], "runId": node["runId"], "workspaceId": workspace,
+            "sessionId": node["copilotSessionId"], "generation": node["generation"],
             "surfaceId": None, "state": "creating",
             "createdAt": node["createdAt"], "updatedAt": node["updatedAt"],
         }
@@ -1749,7 +1813,7 @@ def reconcile_resources(state, snapshot, observations, retained_gone):
             ))
         ):
             continue
-        if not observed["surface"] and observed["exited"]:
+        if not observed["surface"] and observed["exited"] and not node.get("surfaceUnknown"):
             node["phase"], node["availability"], node["updatedAt"] = (
                 "resource-retired", "unavailable", now()
             )
@@ -1774,8 +1838,10 @@ def record_launch_failure(state, worker_id, surface=None, *, phase="launch-faile
         retained = any(
             item["surfaceId"] == surface for item in state["retainedResources"]
         )
-        if node is not None and (owner is None or owner["id"] == worker_id) and not retained:
+        if (node is not None and node.get("surfaceId") in (None, surface)
+                and (owner is None or owner["id"] == worker_id) and not retained):
             node["surfaceId"] = surface
+            node.pop("surfaceUnknown", None)
         elif owner is None and not retained and launch is not None:
             state["retainedResources"].append({
                 "runId": launch["runId"],
@@ -1976,6 +2042,7 @@ def command_spawn(args, root, cmux, *, native_identity=None):
         state["nodes"][identifier]["permissionMode"] = "yolo" if yolo else "default"
         state["launches"][identifier] = {
             "workerId": identifier, "runId": current["runId"],
+            "sessionId": session_id, "generation": 1,
             "workspaceId": current["workspaceId"], "surfaceId": None,
             "state": "creating", "createdAt": timestamp, "updatedAt": timestamp,
         }
@@ -1988,15 +2055,30 @@ def command_spawn(args, root, cmux, *, native_identity=None):
 
 def launch_reserved_session(root, cmux, identifier, session_id, worker_token, workspace, pane, cwd, label):
     surface = None
+    attachment = None
     try:
         def credential(store):
             store._atomic(store.control_fd, f"launch-{identifier}.json", json.dumps(
                 {"workerId": identifier, "token": worker_token}
             ).encode())
-        with_store(root, credential)
+            descriptor = store.launch_attachment(identifier)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                os.close(descriptor)
+                raise
+            return descriptor
+        attachment = with_store(root, credential)
         bootstrap = shlex.join([
             sys.executable, str(Path(__file__).resolve()), "runtime", "--worker-id", identifier
         ])
+        def creating(state):
+            node = authorize(state, identifier, worker_token)
+            if identifier not in state["launches"] or node["phase"] != "launching":
+                raise OrchestrationError("Launch creation lease is no longer current.")
+            # A lost create reply is not proof that the host created no terminal.
+            node["surfaceUnknown"] = True
+        mutate(root, creating)
         surface = cmux.create_surface(workspace, pane, str(cwd), command=bootstrap)
 
         def created(state):
@@ -2030,6 +2112,8 @@ def launch_reserved_session(root, cmux, identifier, session_id, worker_token, wo
             if any(item.get("surfaceId") == surface for item in state["nodes"].values()):
                 raise OrchestrationError("New worker surface already has an owner.")
             node["surfaceId"], node["paneId"], node["updatedAt"] = surface, confirmed_pane, now()
+            node.pop("surfaceUnknown", None)
+            node["launchAccepted"] = True
             launch["state"], launch["updatedAt"] = "starting", now()
         mutate(root, attach)
         cmux.rename(workspace, surface, label)
@@ -2046,36 +2130,58 @@ def launch_reserved_session(root, cmux, identifier, session_id, worker_token, wo
                 surface,
             ) from error
         raise
+    finally:
+        if attachment is not None:
+            # Release before observation, never while holding the global state lock.
+            # Process exit also releases this attachment-only synchronization.
+            os.close(attachment)
+    def owned_node(state):
+        node = authorize(state, identifier, worker_token)
+        if (node["copilotSessionId"], node["workspaceId"], node["surfaceId"], node["generation"]) != (
+            session_id, workspace, surface, 1,
+        ):
+            raise OrchestrationError("Launch observation ownership changed.")
+        if node["phase"] == "launching" and identifier not in state["launches"]:
+            raise OrchestrationError("Worker launch lease is no longer active.")
+        return node
+
     deadline = time.monotonic() + timeout("CMUX_MAESTRO_STARTUP_SECONDS", STARTUP_SECONDS)
-    while time.monotonic() < deadline:
+    while True:
         state = read_state(root, wait=1)
-        node = state["nodes"].get(identifier)
-        if node and node.get("supervisor") and node["phase"] != "launching":
-            if node.get("executionMode") == "interactive" and node["phase"] in {
-                "turn-failed", "process-disappeared", "terminal-disappeared",
-            }:
-                raise OrchestrationError(
-                    f"Managed session failed during startup ({node['phase']}); reconcile worker {identifier}."
-                )
+        node = owned_node(state)
+        present = cmux.surface_exists(workspace, surface)
+        if node["phase"] == "launching" and present is False:
+            def disappeared(current):
+                current_node = owned_node(current)
+                cancelled = False
+                if (current_node == node
+                        and current["launches"].get(identifier) == state["launches"].get(identifier)):
+                    record_launch_failure(current, identifier, surface, phase="terminal-disappeared")
+                    cancelled = True
+                return cancelled, json.loads(json.dumps(current_node))
+            cancelled, node = mutate(root, disappeared)
+            if cancelled:
+                remove_launch_credential(root, identifier)
+                raise SessionLaunchError("The exact launch surface disappeared before runtime claim.", surface)
+        if node["phase"] in {"launch-failed", "startup-failed", "terminal-disappeared"} or (
+            node.get("executionMode") == "interactive"
+            and node["phase"] in {"turn-failed", "process-disappeared"}
+        ):
+            raise SessionLaunchError(
+                f"Managed session failed during startup ({node['phase']}); reconcile worker {identifier}.",
+                surface,
+            )
+        if node.get("supervisor") or time.monotonic() >= deadline:
+            observation = startup_observation(node, present)
+            if observation["startup"] == "failed":
+                raise SessionLaunchError("Managed runtime processes exited during launch observation.", surface)
             return {
                 "workerId": identifier, "sessionId": session_id, "surfaceId": surface,
                 "workspaceId": workspace, "generation": 1,
                 "phase": node["phase"],
-                "supervisorStarted": True,
-                "providerStarted": bool(node.get("providerProcess")),
-                "messaging": "configured" if node.get("messaging") else "unsupported",
+                **observation,
             }
         time.sleep(0.05)
-
-    def startup_failed(state):
-        node = state["nodes"].get(identifier)
-        if node and node["phase"] == "launching":
-            record_launch_failure(state, identifier, surface, phase="startup-failed")
-    mutate(root, startup_failed, wait=1)
-    remove_launch_credential(root, identifier)
-    raise OrchestrationError(
-        f"Worker supervisor did not acknowledge startup within the bound. Reconcile worker {identifier}, surface {surface}."
-    )
 
 
 def assistant_text(event):
@@ -2548,19 +2654,13 @@ def command_runtime(args, root):
     start = process_start(pid)
     if not start:
         raise OrchestrationError("Cannot establish supervisor process identity.")
-    deadline = time.monotonic() + timeout("CMUX_MAESTRO_STARTUP_SECONDS", STARTUP_SECONDS)
-    while True:
-        state = read_state(root, wait=2)
-        node = state["nodes"].get(worker_id)
-        launch = state["launches"].get(worker_id)
-        if not node or node["phase"] != "launching" or not launch:
-            raise OrchestrationError("Worker launch lease is no longer active.")
-        if launch["state"] == "starting" and node.get("surfaceId"):
-            require_current_surface(node["workspaceId"], node["surfaceId"])
-            break
-        if time.monotonic() >= deadline:
-            raise OrchestrationError("Worker attachment did not finish within the startup bound.")
-        time.sleep(0.05)
+    attachment = with_store(root, lambda store: store.launch_attachment(worker_id), wait=2)
+    try:
+        # Wait for the bounded external create/attach transaction, not a model
+        # reply. Kernel blocking holds no global lock and adds no polling loop.
+        fcntl.flock(attachment, fcntl.LOCK_SH)
+    finally:
+        os.close(attachment)
     if args.token is None:
         args.token = with_store(root, lambda store: store.launch_token(worker_id), wait=2)
 
@@ -2574,6 +2674,7 @@ def command_runtime(args, root):
             or launch["surfaceId"] != node["surfaceId"]
         ):
             raise OrchestrationError("Worker runtime is not in the launch phase.")
+        require_current_surface(node["workspaceId"], node["surfaceId"])
         node["supervisor"] = {"pid": pid, "start": start}
         if node.get("executionMode") == "interactive":
             node["phase"], node["availability"] = "turn-running", "busy"
@@ -2856,13 +2957,25 @@ def command_status(args, root, cmux):
     observations = {
         node["id"]: (
             cmux.surface_exists(node["workspaceId"], node["surfaceId"])
-            if node.get("surfaceId") else False,
+            if node.get("surfaceId") else None,
             process_matches(node) if has_managed_runtime(node) else True,
         ) for node in targets
     }
     git_evidence = collect_git_evidence(
         snapshot, {actor["id"], *(node["id"] for node in targets)}
     )
+    cancelled = []
+    identity_keys = (
+        "runId", "parentId", "role", "workspaceId", "surfaceId",
+        "copilotSessionId", "generation", "executionMode", "phase",
+        "supervisor", "providerProcess", "messaging",
+    )
+
+    def observed_surface(node):
+        previous = snapshot["nodes"].get(node["id"])
+        if previous is None or any(node.get(key) != previous.get(key) for key in identity_keys):
+            return None
+        return observations.get(node["id"], (None, None))[0]
 
     def refresh(state):
         current_actor = authorize(state, args.actor_id, args.token)
@@ -2874,21 +2987,22 @@ def command_status(args, root, cmux):
             previous = snapshot["nodes"].get(node["id"])
             if (
                 node["id"] not in observations or previous is None
-                or any(node.get(key) != previous.get(key) for key in (
-                    "runId", "parentId", "role", "workspaceId", "surfaceId",
-                    "copilotSessionId", "generation", "executionMode", "phase",
-                    "supervisor", "providerProcess", "messaging",
-                ))
-                or node["id"] in snapshot["launches"] or node["id"] in state["launches"]
-                or node["phase"] == "launching"
+                or any(node.get(key) != previous.get(key) for key in identity_keys)
             ):
                 continue
             surface, process = observations[node["id"]]
+            if node["id"] in snapshot["launches"] or node["id"] in state["launches"] or node["phase"] == "launching":
+                if (node["phase"] == "launching" and node.get("surfaceId") and surface is False
+                        and state["launches"].get(node["id"]) == snapshot["launches"].get(node["id"])
+                        and node["id"] in state["launches"]):
+                    record_launch_failure(state, node["id"], node["surfaceId"], phase="terminal-disappeared")
+                    cancelled.append(node["id"])
+                continue
             exited = has_managed_runtime(node) and not process and worker_processes_exited(node)
             if has_managed_runtime(node) and not process and not exited:
                 continue
-            if (node.get("surfaceId") and not surface
-                    and not cmux.surface_exists(node["workspaceId"], node["surfaceId"])):
+            if (node.get("surfaceId") and surface is False
+                    and cmux.surface_exists(node["workspaceId"], node["surfaceId"]) is False):
                 node["phase"], node["availability"], node["updatedAt"] = (
                     "terminal-disappeared", "unavailable", now()
                 )
@@ -2907,15 +3021,18 @@ def command_status(args, root, cmux):
             "iconColor": node.get("iconColor"),
             "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
             "sessionId": node["copilotSessionId"], "generation": node["generation"],
-            "messaging": "configured" if node.get("messaging") and process_matches(node)
-                else "offline" if node.get("messaging") else "unsupported",
+            "messaging": "unsupported",
+            **(startup_observation(node, observed_surface(node)) if has_managed_runtime(node) else {}),
             "permissionMode": node.get(
                 "permissionMode", "yolo" if (node.get("deliveryProof") or {}).get("yolo") else "default"
             ),
             "phase": node["phase"], "availability": node["availability"],
             "result": node["result"],
         } for node in current_targets]}
-    return mutate(root, refresh)
+    result = mutate(root, refresh)
+    for identifier in cancelled:
+        remove_launch_credential(root, identifier)
+    return result
 
 
 def command_focus(args, root, cmux):
@@ -2968,6 +3085,8 @@ def command_archive(args, root, cmux):
             raise OrchestrationError(
                 "Run archive is pending because a worker launch is in progress; retry."
             )
+        if any(node["runId"] == run_id and node.get("surfaceUnknown") for node in state["nodes"].values()):
+            raise OrchestrationError("Run archive refuses an unresolved created surface.")
         if any(node["runId"] == run_id and node.get("executionMode") == "interactive"
                and not worker_processes_exited(node) for node in state["nodes"].values()):
             raise OrchestrationError("Close interactive sessions normally before archiving; live or uncertain processes will not be interrupted.")
@@ -2988,10 +3107,7 @@ def command_archive(args, root, cmux):
             node for node in state["nodes"].values()
             if node["runId"] == run_id and has_managed_runtime(node)
         ]
-        if all(
-            worker_processes_exited(node) if node.get("executionMode") == "interactive"
-            else not process_matches(node) for node in workers
-        ):
+        if all(worker_processes_exited(node) for node in workers):
             break
         time.sleep(0.05)
     else:
@@ -3007,10 +3123,8 @@ def command_archive(args, root, cmux):
         if (
             not nodes
             or any(launch["runId"] == run_id for launch in state["launches"].values())
-            or any(has_managed_runtime(node) and (
-                not worker_processes_exited(node) if node.get("executionMode") == "interactive"
-                else process_matches(node)
-            ) for node in nodes)
+            or any(node.get("surfaceUnknown") for node in nodes)
+            or any(has_managed_runtime(node) and not worker_processes_exited(node) for node in nodes)
         ):
             raise OrchestrationError("Run archive cannot finish while worker processes are live or uncertain.")
         state["archives"].append(archive_summary(state, run_id))
@@ -3065,7 +3179,7 @@ def command_recover(args, root, cmux):
         if has_managed_runtime(node) and (
             process_matches(node) or (
                 node.get("surfaceId")
-                and cmux.surface_exists(node["workspaceId"], node["surfaceId"])
+                and cmux.surface_exists(node["workspaceId"], node["surfaceId"]) is not False
             )
         ):
             raise OrchestrationError("Stale recovery refuses competing live worker ownership.")
@@ -3089,8 +3203,8 @@ def command_recover(args, root, cmux):
             raise OrchestrationError("Run ownership changed during recovery.")
         for node in current_nodes.values():
             if has_managed_runtime(node) and (
-                node["phase"] == "launching" or not worker_processes_exited(node)
-                or (node.get("surfaceId") and cmux.surface_exists(node["workspaceId"], node["surfaceId"]))
+                node["phase"] == "launching" or node.get("surfaceUnknown") or not worker_processes_exited(node)
+                or (node.get("surfaceId") and cmux.surface_exists(node["workspaceId"], node["surfaceId"]) is not False)
             ):
                 raise OrchestrationError("Stale recovery refuses live or uncertain worker ownership.")
         for node in current_nodes.values():

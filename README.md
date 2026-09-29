@@ -253,14 +253,44 @@ Because the host may rewrite that environment, the launch record also captures
 the validated absolute Copilot executable and caller search path privately.
 The supervisor uses those values for provider startup and invokes its own
 Python interpreter explicitly; it does not depend on interactive shell setup.
-The eight-second supervisor lease remains unchanged. A bounded one-time credential stays in the private control
-directory and is consumed only after exact workspace/surface attachment.
+The eight-second **caller observation budget** is unchanged, but its end does
+not revoke a current launch. An exact attached terminal can return
+`launchAccepted: true`, `startup: pending` while its runtime has not started.
+A one-time credential stays in the private control directory until claim or
+explicit failure. An attachment-only file lock on that existing ticket covers
+the external create/attach transaction. The child waits in the kernel, outside
+the global state lock, then rechecks the lease, token and exact current surface;
+it does not poll indefinitely or wait for a provider/model response. Caller
+exit releases the lock but cannot substitute for a committed attachment.
 The terminal command contains no token. Both supervisor and provider process
 anchors retain the existing resource bounds.
 
-Supervisor acknowledgement is not provider readiness or completed work.
-`providerStarted` means a provider identity was recorded; lifecycle
-`messaging: configured` does not prove adapter attachment or delivery.
+Launch receipts and private `status` distinguish the evidence below. This
+applies to interactive sessions and preserved legacy bounded workers; neither
+receipt is a turn-completion boundary.
+
+| Field | Evidence, not inference |
+| --- | --- |
+| `launchAccepted` | Exact native surface attached to the owned launch; `null` for older records without this fact. |
+| `startup` | `pending`, `supervisor-started`, or `failed` from a recorded failure/verified process exit; not model readiness. |
+| `initialTask` | `configured` in private state; `submitted` when a provider process identity or exact legacy result boundary establishes submission. Neither proves model consumption. |
+| `supervisorStarted` / `providerStarted` | Corresponding process identity recorded, not necessarily still running. A missing provider anchor is not proof it never started. |
+| `supervisorRunning` / `providerRunning` / `surfacePresent` | Current exact process/inventory observation: `true`, confirmed `false`, or unknown `null`. |
+| `messaging` / `messagingAvailability` | Wiring is `configured` or `unsupported`; configured availability remains `unknown` here. Native peer observation is separate. |
+| `workObservation` | `unavailable` without supported work evidence, or `reported-result` at a strict verified legacy result boundary. Interactive work still uses existing session-event observation, not this launch receipt. |
+| `surfaceOwnership` / `observedAt` | Exact, unassigned or unresolved ownership, and the controller observation timestamp. |
+
+`render_health`, quiet periods, terminal output and elapsed time prove none of
+these phases. Inventory/probe errors remain unknown, not death. A confirmed
+missing surface can cancel an unchanged unclaimed lease; a concurrent runtime
+claim cannot be revoked by the stale observation. Status can reconcile that
+same boundary after a pending caller return. Cancelled/expired leases and
+foreign surface/session/generation/token identities still refuse late execution.
+No duplicate spawn, focus change, terminal input or automatic process cleanup
+is attempted. Pending launches retain their credential and capacity slot.
+If a create reply is lost, an unidentified possibly-created terminal retains
+its slot and blocks archive/recovery; missing surface identity is not proof
+that no resource exists. Reconcile the original launch rather than retrying it.
 Verify exact surfaces, native tools, and returned evidence separately.
 Root callers must retain the private custody receipt even when startup returns
 `ok: false`; its control token remains private. The controller preserves bounded

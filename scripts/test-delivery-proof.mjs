@@ -317,6 +317,12 @@ test("native launch reads the invoking session account on each request, not task
   let tools;
   let login = "parent-a";
   const requests = [];
+  const receipt = {
+    ok: true, workerId: "synthetic-worker", launchAccepted: true, startup: "pending",
+    initialTask: "configured", supervisorStarted: false, providerStarted: false,
+    providerRunning: null, messaging: "configured", messagingAvailability: "unknown",
+    workObservation: "unavailable",
+  };
   const adapter = await start({
     root: f.root, peer: own.peer, managed: true, expected: own,
     joinSession: async options => {
@@ -330,7 +336,7 @@ test("native launch reads the invoking session account on each request, not task
     },
     launch: async request => {
       requests.push(request);
-      return { ok: true, workerId: "synthetic-worker", supervisorStarted: true };
+      return receipt;
     },
   });
   t.after(() => adapter.close());
@@ -345,7 +351,7 @@ test("native launch reads the invoking session account on each request, not task
     assert.equal(observed.sessionId, own.sessionId);
     assert.equal(JSON.stringify(observed).includes(own.capability), false);
     const result = await spawn(assignment, invocation);
-    assert.equal(JSON.parse(result).ok, true);
+    assert.deepEqual(JSON.parse(result), receipt);
     assert.equal(requests.at(-1).identity.login, next);
     assert.equal(result.includes(own.capability), false);
     assert.equal(result.includes(next), false);
