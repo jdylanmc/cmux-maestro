@@ -21,6 +21,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Qualify agent and child directories as CMUX surface or parent-surface reports,
+  with explicit source and report-age limits, preserving exact placement, path
+  permissions and home-relative display (#77).
 - Start setup-test fixture readiness after installer spawn rather than task
   enqueue, preserving timeout, cancellation and process-cleanup checks.
 - Wait for a visible, settled native viewport before measuring offscreen focus
