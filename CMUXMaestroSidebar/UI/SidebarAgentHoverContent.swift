@@ -20,7 +20,7 @@ enum SidebarAgentHoverContent {
             guard matches.count == 1, let node = matches.first,
                   topology.workspaceBySurface[node.surfaceId] == node.workspaceId else { return nil }
             let retained = SidebarPresentation.displacedManagedNodeIDs([node], observations: tree, now: now).contains(node.id)
-            let allowed = Set(["Context", "Focus", "Model", "Role", "Branch", "Worktree", "Last verified location", "Git evidence", "Git changes", "Working directory", "Session ID"])
+            let allowed = Set(["Context", "Focus", "Model", "Role", "Branch", "Worktree", "Last verified location", "Git evidence", "Git changes", SidebarSurfaceDirectory.title, "Session ID"])
             var lines = SidebarPresentation.managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { allowed.contains($0.title) }
             let current = availability == .ready || availability == .partial
@@ -57,9 +57,9 @@ enum SidebarAgentHoverContent {
             var lines = SidebarPresentation.nodeDetails(child, session: session).filter { allowed.contains($0.title) }
             lines += [
                 .init(title: "Placement", value: "Observed child; native placement belongs to its parent session"),
-                .init(title: "Parent working directory", value: retained ? "Not current for this original session" : hierarchy.pathContext(
+                SidebarSurfaceDirectory.line(hierarchy.pathContext(
                     workspaceID: session.workspaceID, surfaceID: session.surfaceID
-                ).workingDirectory.pathDisplayText)
+                ).workingDirectory, isParent: true, retained: retained)
             ]
             let notices = [retained ? SidebarPresentation.retainedFocusUnavailable : nil,
                 session.childrenComplete && !session.treeDegraded ? nil : "Child history is incomplete; missing work is not assumed finished."]

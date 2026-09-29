@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Testing
+@_spi(CmuxHostTransport) import CmuxExtensionKit
 
 @MainActor
 struct SidebarAgentHoverTests {
@@ -31,6 +32,236 @@ struct SidebarAgentHoverTests {
             managed: .init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: nodes),
             availability: availability, now: now
         )
+    }
+
+    private func directoryHierarchy(
+        _ directory: String?, granted: Bool = true, moved: Bool = false, sequence: UInt64 = 1
+    ) -> HierarchySnapshot {
+        let surface = CmuxSidebarSurface(
+            id: fixtures.surfaceA, title: "Same title", kind: .terminal, isFocused: true, workingDirectory: directory
+        )
+        let raw = CmuxSidebarSnapshot(
+            sequence: sequence, windowID: fixtures.windowID,
+            selectedWorkspaceID: moved ? fixtures.workspaceB : fixtures.workspaceA,
+            workspaces: [
+                .init(id: fixtures.workspaceA, title: "Same workspace", rootPath: "/synthetic/workspace",
+                      projectRootPath: "/synthetic/project", surfaces: moved ? [] : [surface]),
+                .init(id: fixtures.workspaceB, title: "Same workspace", rootPath: "/synthetic/moved",
+                      projectRootPath: "/synthetic/project", surfaces: (moved ? [surface] : []) + [
+                        .init(id: fixtures.surfaceB, title: "Same title", kind: .terminal,
+                              workingDirectory: "/synthetic/peer-only")
+                      ])
+            ]
+        )
+        let scopes: Set<CmuxExtensionScope> = granted
+            ? [.workspaceMetadata, .surfaceMetadata, .workspacePaths] : [.workspaceMetadata, .surfaceMetadata]
+        let model = SidebarConnectionModel()
+        model.update(context: .init(snapshot: raw.filtered(for: scopes), host: .init(performAction: { _, _ in
+            Issue.record("Directory projection must not navigate")
+        })))
+        return model.hierarchy
+    }
+
+    private func directoryNode(_ session: SidebarCopilotSession) -> SidebarOrchestrationNode {
+        .init(
+            id: fixtures.surfaceB, runId: fixtures.workspaceB, parentId: nil, role: "worker", label: "Same title",
+            workspaceId: session.workspaceID, surfaceId: session.surfaceID, generation: 2,
+            phase: "turn-running", availability: "busy", copilotSessionId: session.id,
+            executionMode: .interactive, worktreeLabel: "/synthetic/assigned-git-label", branchLabel: "assigned-branch",
+            gitEvidenceStatus: "verified", gitEvidenceAt: now, createdAt: now, updatedAt: now
+        )
+    }
+
+    @Test(arguments: [true, false], [nil, "", "relative/../reported", "/synthetic/reported"] as [String?])
+    func directoryConsumersKeepHostSourceAndPermissionDistinct(granted: Bool, directory: String?) throws {
+        let hierarchy = directoryHierarchy(directory, granted: granted)
+        var session = session()
+        session.nodes = [.init(id: "child", parentID: nil, depth: 0, kind: .subagent, name: "Child",
+                               state: .working, model: nil, ancestryUnresolved: false, hasChildren: false)]
+        let node = directoryNode(session)
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+        let managed = SidebarOrchestrationSnapshot(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node])
+        let paths = hierarchy.pathContext(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA)
+        var consumers: [(String, [SidebarDetailLine], Bool)] = [("paths", SidebarPresentation.paths(paths), false)]
+        for (name, target, parent) in [
+            ("session hover", SidebarAgentHoverTarget.session(session.id), false),
+            ("managed hover", .managed(node.id, generation: 2), false),
+            ("child hover", .child(sessionID: session.id, childID: "child"), true)
+        ] {
+            let hover = try #require(card(target, sessions: [session], hierarchy: hierarchy, nodes: [node]))
+            consumers.append((name, hover.lines, parent))
+        }
+        for (name, target, parent) in [
+            ("surface details", SidebarInspection.Target.unmanaged(.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA)), false),
+            ("session details", .unmanaged(.session(session.id)), false),
+            ("managed details", .managed(node), false),
+            ("child details", .unmanaged(.child(sessionID: session.id, childID: "child")), true)
+        ] {
+            let subject = try #require(SidebarPresentation.inspection(
+                for: target, hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
+            ))
+            let detail = try #require(SidebarPresentation.inspectorDetails(
+                for: subject, hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
+            ))
+            consumers.append((name, detail.lines, parent))
+        }
+        for (name, observations, nodes) in [
+            ("surface pinned", SidebarCopilotTree(availability: .ready, sessions: [], issues: [], generatedAt: now), SidebarOrchestrationSnapshot.empty),
+            ("session pinned", tree, .empty), ("managed pinned", tree, managed)
+        ] {
+            let pinned = SidebarPresentation.pinnedDetails(
+                hierarchy: hierarchy, connected: true, tree: observations, managed: nodes, availability: .ready, now: now
+            )
+            consumers.append((name, pinned.lines, false))
+        }
+        let sharedValue = directory.flatMap { $0.isEmpty ? nil : $0 } ?? "No path shared"
+        let expectedValue = granted ? sharedValue : "Path unavailable"
+        for (name, lines, parent) in consumers {
+            let fields = lines.filter { $0.title.lowercased().contains("directory") }
+            #expect(fields == [.init(
+                title: parent ? "Parent surface directory" : "Surface directory", value: expectedValue,
+                help: parent
+                    ? "Reported by CMUX for the parent surface; no report time supplied. Not an independently reported child directory."
+                    : "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory."
+            )], "\(name) must retain exactly its source-qualified directory field, including grant/nil state")
+            #expect(!lines.contains { $0.value == "/synthetic/peer-only" })
+        }
+        #expect(paths.workingDirectory == (granted ? .available(directory) : .unavailable))
+        #expect(paths.accessibilityDescription ==
+            "Workspace: \(granted ? "/synthetic/workspace" : "Path unavailable"). Project: \(granted ? "/synthetic/project" : "Path unavailable"). Surface directory: \(expectedValue). Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory.")
+        #expect(consumers.first { $0.0 == "managed hover" }?.1.contains(
+            .init(title: "Worktree", value: "/synthetic/assigned-git-label")
+        ) == true, "Assigned Git evidence stays separate, never used as the directory")
+    }
+
+    @Test func directoryUpdatesFollowExactMovedSurfaceWithoutReusingCapturedPlacement() throws {
+        let original = directoryHierarchy("/synthetic/original")
+        let updated = directoryHierarchy("/synthetic/updated", sequence: 2)
+        let moved = directoryHierarchy("/synthetic/moved-report", moved: true, sequence: 3)
+        let observed = fixtures.snapshot(sessions: [fixtures.session(now: now)], now: now)
+        let originalTree = SidebarCopilotTree.project(observed, onto: SidebarTopology(original), now: now)
+        let captured = try #require(SidebarPresentation.inspection(
+            for: .unmanaged(.session(fixtures.sessionID)), hierarchy: original, connected: true,
+            tree: originalTree, managed: .empty, availability: .ready, now: now
+        ))
+        for (hierarchy, expected) in [(original, "/synthetic/original"), (updated, "/synthetic/updated"), (moved, "/synthetic/moved-report")] {
+            let tree = SidebarCopilotTree.project(observed, onto: SidebarTopology(hierarchy), now: now)
+            let hover = try #require(card(.session(fixtures.sessionID), sessions: tree.sessions, hierarchy: hierarchy))
+            #expect(hover.lines.first { $0.title == "Surface directory" }?.value == expected)
+            #expect(!hover.lines.contains { $0.value == "/synthetic/peer-only" })
+            let detail = SidebarPresentation.inspectorDetails(
+                for: captured, hierarchy: hierarchy, connected: true, tree: tree, managed: .empty, availability: .ready, now: now
+            )
+            if hierarchy.sequence == 3 {
+                #expect(detail == nil, "An already-captured inspection cannot silently change workspace")
+                #expect(tree.sessions.first?.workspaceID == fixtures.workspaceB)
+                #expect(hierarchy.pathContext(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA) == .unavailable)
+            } else {
+                #expect(detail?.lines.first { $0.title == "Surface directory" }?.value == expected)
+            }
+            let pinned = SidebarPresentation.pinnedDetails(
+                hierarchy: hierarchy, connected: true, tree: tree, managed: .empty, availability: .ready, now: now
+            )
+            #expect(pinned.inspection?.sessionID == fixtures.sessionID)
+            #expect(pinned.lines.first { $0.title == "Surface directory" }?.value == expected)
+        }
+        #expect(card(.session(fixtures.sessionID), sessions: originalTree.sessions, hierarchy: .empty) == nil)
+    }
+
+    @Test func retainedOriginalNeverBorrowsReplacementDirectoryButNativeContextSurvives() throws {
+        let hierarchy = directoryHierarchy("/synthetic/replacement-report")
+        var old = session(liveness: .dead)
+        old.nodes = [.init(id: "child", parentID: nil, depth: 0, kind: .subagent, name: "Child",
+                          state: .blocked, model: nil, ancestryUnresolved: false, hasChildren: false)]
+        let replacement = session(id: fixtures.otherSessionID, name: "replacement-model")
+        let node = directoryNode(old)
+        let sessions = [old, replacement]
+        let tree = SidebarCopilotTree(availability: .ready, sessions: sessions, issues: [], generatedAt: now)
+        let managed = SidebarOrchestrationSnapshot(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node])
+        let oldHover = try #require(card(.session(old.id), sessions: sessions, hierarchy: hierarchy, nodes: [node]))
+        #expect(oldHover.category == "Session context" && oldHover.notice != nil)
+        #expect(!oldHover.lines.contains { $0.title.lowercased().contains("directory") || $0.value.contains("/synthetic/") })
+        for target in [SidebarAgentHoverTarget.managed(node.id, generation: 2), .child(sessionID: old.id, childID: "child")] {
+            let retained = try #require(card(target, sessions: sessions, hierarchy: hierarchy, nodes: [node]))
+            let field = try #require(retained.lines.first { $0.title.lowercased().contains("directory") })
+            #expect(field.value == "Not current for this original session")
+            #expect(field.help?.contains("Reported by CMUX") == true)
+            #expect(!retained.lines.contains { $0.value == "/synthetic/replacement-report" })
+        }
+        for target in [SidebarInspection.Target.unmanaged(.session(old.id)), .unmanaged(.child(sessionID: old.id, childID: "child")), .managed(node)] {
+            let subject = try #require(SidebarPresentation.inspection(
+                for: target, hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
+            ))
+            #expect(subject.surfaceID == nil)
+            let detail = try #require(SidebarPresentation.inspectorDetails(
+                for: subject, hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
+            ))
+            #expect(!detail.lines.contains { $0.value == "/synthetic/replacement-report" })
+        }
+        let pinned = SidebarPresentation.pinnedDetails(
+            hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
+        )
+        #expect(pinned.inspection?.sessionID == replacement.id)
+        #expect(pinned.lines.first { $0.title == "Surface directory" }?.value == "/synthetic/replacement-report")
+        #expect(pinned.lines.contains(.init(title: "Model", value: "replacement-model")))
+        #expect(card(.session(old.id), sessions: [replacement], hierarchy: hierarchy, nodes: [node]) == nil)
+    }
+
+    @Test func directoryRevocationRevalidatesOpenSubjectsWithoutCollapsingGrantedNil() throws {
+        let session = session()
+        let node = directoryNode(session)
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+        let managed = SidebarOrchestrationSnapshot(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node])
+        let initial = directoryHierarchy("/synthetic/before-revocation")
+        let subjects = try [
+            SidebarInspection.Target.unmanaged(.session(session.id)), .managed(node),
+            .unmanaged(.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA))
+        ].map { target in
+            try #require(SidebarPresentation.inspection(
+                for: target, hierarchy: initial, connected: true, tree: tree, managed: managed, availability: .ready, now: now
+            ))
+        }
+        for (hierarchy, expected) in [
+            (initial, "/synthetic/before-revocation"),
+            (directoryHierarchy("/synthetic/must-be-redacted", granted: false, sequence: 2), "Path unavailable"),
+            (directoryHierarchy(nil, sequence: 3), "No path shared")
+        ] {
+            for subject in subjects {
+                let details = try #require(SidebarPresentation.inspectorDetails(
+                    for: subject, hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
+                ))
+                #expect(details.lines.first { $0.title == "Surface directory" }?.value == expected)
+                #expect(!details.lines.contains { $0.value == "/synthetic/must-be-redacted" })
+            }
+            let hover = try #require(card(.session(session.id), sessions: [session], hierarchy: hierarchy))
+            #expect(hover.id == "session-\(session.id)")
+            #expect(hover.lines.first { $0.title == "Surface directory" }?.value == expected)
+            let pinned = SidebarPresentation.pinnedDetails(
+                hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
+            )
+            #expect(pinned.inspection?.sessionID == session.id)
+            #expect(pinned.lines.first { $0.title == "Surface directory" }?.value == expected)
+        }
+    }
+
+    @Test func endedAndStaleObservationsDoNotTurnHostContextIntoAgentCurrentDirectory() throws {
+        let hierarchy = directoryHierarchy("/synthetic/host-report")
+        let ended = session(liveness: .dead)
+        let hover = try #require(card(.session(ended.id), sessions: [ended], hierarchy: hierarchy))
+        #expect(hover.notice == "Live session ownership is not confirmed.")
+        #expect(hover.lines.first { $0.title == "Surface directory" } == .init(
+            title: "Surface directory", value: "/synthetic/host-report",
+            help: "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory."
+        ))
+        let node = directoryNode(ended)
+        let stale = try #require(card(.managed(node.id, generation: 2), sessions: [ended], hierarchy: hierarchy,
+                                     nodes: [node], availability: .stale))
+        #expect(stale.notice == "Managed observation is stale or unavailable. Last-known metadata is not live state.")
+        #expect(stale.lines.first { $0.title == "Surface directory" } == hover.lines.first { $0.title == "Surface directory" })
+        #expect(card(.managed(node.id, generation: 1), sessions: [ended], hierarchy: hierarchy, nodes: [node]) == nil)
+        let expired = try #require(card(.session(ended.id), sessions: [ended], hierarchy: hierarchy,
+                                       generatedAt: now.addingTimeInterval(-9)))
+        #expect(expired.lines.isEmpty)
     }
 
     @Test func sessionPreviewUsesItsExactSubjectAndDoesNotBorrowFromSameNamedPeers() throws {
