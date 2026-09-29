@@ -728,10 +728,10 @@ struct CopilotObserverRegistrationTests {
         let hooks = directory.appendingPathComponent("hooks.json")
         try fixture.write(["version": 1, "hooks": ["postToolUse": [["type": "command", "bash": ":"]]]], to: hooks)
         let target = fixture.directory.appendingPathComponent("unrelated-target")
-        try fixture.write(["name": "xgang-harness", "hooks": "hooks.json"], to: target.appendingPathComponent("plugin.json"))
+        try fixture.write(["name": "unrelated-harness", "hooks": "hooks.json"], to: target.appendingPathComponent("plugin.json"))
         try fixture.write(["version": 1, "hooks": CopilotPluginManifest.observerHooks(helper: fixture.helper)],
                           to: target.appendingPathComponent("hooks.json"))
-        let link = fixture.provider.appendingPathComponent("installed-plugins/_direct/gaming-microsoft--xgang-harness")
+        let link = fixture.provider.appendingPathComponent("installed-plugins/_direct/example-org--unrelated-harness")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
         let targetFiles = ["plugin.json", "hooks.json"].map { target.appendingPathComponent($0) }
         let saved = try targetFiles.map { try Data(contentsOf: $0) }
@@ -742,7 +742,7 @@ struct CopilotObserverRegistrationTests {
             unrelated: [.init(hookType: "postToolUse", origin: "plugin", source: "maestro-cmux", enabled: true, disableKey: "other-key")],
             plugins: [
                 .init(name: "maestro-cmux", marketplace: "", enabled: true, directSourceId: "legacy-source"),
-                .init(name: "xgang-harness", marketplace: "", enabled: true, directSourceId: "unrelated-source"),
+                .init(name: "unrelated-harness", marketplace: "", enabled: true, directSourceId: "unrelated-source"),
             ], version: "1.0.89")
         let setup = setup(fixture, runner: runner)
         #expect(await perform(setup, fixture) == .installed)
@@ -854,12 +854,12 @@ struct CopilotObserverRegistrationTests {
             try fixture.write(["version": 1, "hooks": ["sessionStart": [["type": "command", "bash": ":"]]]],
                               to: plugin.appendingPathComponent("hooks.json"))
         } else {
-            let link = group.appendingPathComponent("gaming-microsoft--xgang-harness")
+            let link = group.appendingPathComponent("example-org--unrelated-harness")
             try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
             metadata = CopilotSetupMetadata(version: metadata.version, protocolVersion: 3,
-                hooks: metadata.hooks + [.init(hookType: "postToolUse", origin: "plugin", source: "xgang-harness",
+                hooks: metadata.hooks + [.init(hookType: "postToolUse", origin: "plugin", source: "unrelated-harness",
                                                enabled: true, disableKey: "hidden-key")],
-                plugins: metadata.plugins + [.init(name: "xgang-harness", marketplace: "", enabled: true, directSourceId: "hidden-source")])
+                plugins: metadata.plugins + [.init(name: "unrelated-harness", marketplace: "", enabled: true, directSourceId: "hidden-source")])
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: target.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path) }
