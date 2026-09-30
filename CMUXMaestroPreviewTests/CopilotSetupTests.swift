@@ -12,6 +12,9 @@ private actor SetupRunnerSpy: CopilotSetupProcessRunner {
         return result
     }
     func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult { .failed(.unavailable) }
+    func plugin(executable: URL, operation: CopilotPluginOperation, path: String,
+                providerHome: URL?) async -> CopilotPluginOperationResult { .failed(.unavailable) }
+    func sourceIdentity(executable: URL, source: URL, path: String) async -> CopilotSourceIdentityResult { .failed(.unavailable) }
 }
 
 private struct SetupFileStub: CopilotSetupFileSystem {
@@ -120,6 +123,192 @@ final class SetupDeadlineClock: @unchecked Sendable {
     }
 }
 
+struct CopilotPluginExchangeTests {
+    @Test func disableUsesIdentityPrecheckOfficialAPIAndReadback() throws {
+        let exchange = try CopilotMetadataExchange(operation: .disable(identity: "owned-id"))
+        _ = try requests(exchange)
+        try send(exchange, id: 1, result: ["version": "1.0.89", "protocolVersion": 3])
+        #expect(try requests(exchange).contains("plugins.list"))
+        var plugin: [String: Any] = ["name": CopilotPluginManifest.name, "marketplace": "",
+                                     "enabled": true, "directSourceId": "owned-id"]
+        try send(exchange, id: 4, result: ["plugins": [plugin]])
+        #expect(try requests(exchange).contains("plugins.disable"))
+        #expect(exchange.pluginReceipt == nil)
+        try send(exchange, id: 5, result: NSNull())
+        #expect(try requests(exchange).contains("plugins.list"))
+        #expect(exchange.pluginReceipt == nil)
+        plugin["enabled"] = false
+        try send(exchange, id: 6, result: ["plugins": [plugin]])
+        #expect(exchange.pluginReceipt?.plugin?.enabled == false)
+        #expect(exchange.pluginReceipt?.plugin?.directSourceId == "owned-id")
+    }
+
+    @Test(arguments: ["unsupported-version", "wrong-source", "ignored-disable"])
+    func disableCannotClaimUnsupportedWrongSourceOrUnverifiedState(kind: String) throws {
+        let exchange = try CopilotMetadataExchange(operation: .disable(identity: "owned-id"))
+        _ = try requests(exchange)
+        if kind == "unsupported-version" {
+            #expect(throws: (any Error).self) { try send(exchange, id: 1, result: ["version": "1.0.88", "protocolVersion": 3]) }
+            #expect(try requests(exchange).isEmpty)
+            return
+        }
+        try send(exchange, id: 1, result: ["version": "1.0.89", "protocolVersion": 3])
+        _ = try requests(exchange)
+        let plugin: [String: Any] = ["name": CopilotPluginManifest.name, "marketplace": "", "enabled": true,
+                                     "directSourceId": kind == "wrong-source" ? "foreign-id" : "owned-id"]
+        if kind == "wrong-source" {
+            #expect(throws: (any Error).self) { try send(exchange, id: 4, result: ["plugins": [plugin]]) }
+            #expect(try requests(exchange).isEmpty)
+        } else {
+            try send(exchange, id: 4, result: ["plugins": [plugin]])
+            _ = try requests(exchange)
+            try send(exchange, id: 5, result: NSNull())
+            _ = try requests(exchange)
+            #expect(throws: (any Error).self) { try send(exchange, id: 6, result: ["plugins": [plugin]]) }
+        }
+        #expect(exchange.pluginReceipt == nil)
+    }
+
+    @Test func bootstrapUsesAnIsolatedHomeAndExactSourceThenCleansIt() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let capture = fixture.directory.appendingPathComponent("bootstrap-environment.json")
+        let executable = fixture.directory.appendingPathComponent("bootstrap-provider")
+        let script = """
+        #!/usr/bin/python3
+        import json, os, sys
+        methods = []
+        while True:
+            header = sys.stdin.buffer.readline()
+            if not header:
+                break
+            length = int(header.decode().split(": ", 1)[1])
+            assert sys.stdin.buffer.readline() == b"\\r\\n"
+            request = json.loads(sys.stdin.buffer.read(length))
+            methods.append(request["method"])
+            if request["method"] == "status.get":
+                result = {"version": "1.0.89", "protocolVersion": 3}
+            else:
+                assert request["method"] == "plugins.install"
+                with open(\(String(reflecting: capture.path)), "w") as output:
+                    json.dump({"source": request["params"]["source"], "methods": methods,
+                               "home": os.environ["HOME"], "providerHome": os.environ["COPILOT_HOME"],
+                               "cwd": os.getcwd(), "config": os.environ["XDG_CONFIG_HOME"],
+                               "credentialsPresent": any(k in os.environ for k in ["GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN"])}, output)
+                result = {"plugin": {"name": "cmux-maestro-native", "marketplace": "", "enabled": True,
+                                     "directSourceId": "actual-response-not-a-name-join"}}
+            body = json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}).encode()
+            sys.stdout.buffer.write(("Content-Length: %s\\r\\n\\r\\n" % len(body)).encode() + body)
+            sys.stdout.buffer.flush()
+        """
+        try fixture.write(Data(script.utf8), to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let result = await LocalCopilotSetupRunner().sourceIdentity(executable: executable, source: fixture.source, path: "/usr/bin:/bin")
+        guard case .value(let identity) = result else { Issue.record("Public bootstrap fixture must succeed: \(result)"); return }
+        #expect(identity.source == fixture.source.path)
+        #expect(identity.directSourceId == "actual-response-not-a-name-join")
+        let object = try CopilotSetupJSON.object(Data(contentsOf: capture))
+        let home = try #require(object["home"] as? String)
+        #expect(home.hasPrefix("/private/tmp/cmux-maestro-source-"))
+        #expect(object["providerHome"] as? String == home + "/.copilot")
+        #expect(object["cwd"] as? String == home)
+        #expect(object["config"] as? String == home)
+        #expect(object["credentialsPresent"] as? Bool == false)
+        #expect(object["methods"] as? [String] == ["status.get", "plugins.install"])
+        #expect(!FileManager.default.fileExists(atPath: home))
+    }
+
+    private func send(_ exchange: CopilotMetadataExchange, id: Int, result: Any) throws {
+        let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": id, "result": result])
+        let frame = Data("Content-Length: \(body.count)\r\n\r\n".utf8) + body
+        #expect(frame.withUnsafeBytes { Darwin.write(exchange.output[1], $0.baseAddress, $0.count) } == frame.count)
+        try exchange.poll()
+    }
+
+    private func requests(_ exchange: CopilotMetadataExchange) throws -> String {
+        #expect(fcntl(exchange.input[0], F_SETFL, O_NONBLOCK) == 0)
+        var bytes = [UInt8](repeating: 0, count: 16_384)
+        let count = Darwin.read(exchange.input[0], &bytes, bytes.count)
+        if count < 0, errno == EAGAIN { return "" }
+        return String(decoding: bytes.prefix(max(0, count)), as: UTF8.self)
+    }
+
+    private func installed(_ identity: String = "returned-opaque-identity") -> [String: Any] {
+        ["plugin": ["name": CopilotPluginManifest.name, "marketplace": "", "enabled": true,
+                    "directSourceId": identity], "deprecationWarning": "Untrusted provider wording"]
+    }
+
+    @Test func installUsesExactSourceAndProviderReceiptAfterVersionCheck() throws {
+        let source = URL(fileURLWithPath: "/owned/stable/plugin")
+        let exchange = try CopilotMetadataExchange(operation: .install(source: source, expectedIdentity: nil))
+        let initial = try requests(exchange)
+        #expect(initial.contains("status.get"))
+        #expect(!initial.contains("plugins.install"))
+        try send(exchange, id: 1, result: ["version": "1.0.89", "protocolVersion": 3])
+        let request = try requests(exchange).replacingOccurrences(of: "\\/", with: "/")
+        #expect(request.contains("plugins.install"))
+        #expect(request.contains(source.path))
+        #expect(!request.contains("disable"))
+        try send(exchange, id: 4, result: installed())
+        #expect(exchange.pluginReceipt?.plugin?.directSourceId == "returned-opaque-identity")
+        #expect(exchange.pluginReceipt?.directInstallDeprecated == true)
+        #expect(exchange.input[1] == -1)
+    }
+
+    @Test func uninstallUsesExactSourceIdentityAndAcceptsNullResult() throws {
+        let exchange = try CopilotMetadataExchange(operation: .uninstall(identity: "owned-opaque-id"))
+        _ = try requests(exchange)
+        try send(exchange, id: 1, result: ["version": "1.0.89", "protocolVersion": 3])
+        let request = try requests(exchange)
+        #expect(request.contains("plugins.uninstall"))
+        #expect(request.contains("directSourceId"))
+        #expect(request.contains("owned-opaque-id"))
+        try send(exchange, id: 4, result: NSNull())
+        #expect(exchange.pluginReceipt != nil)
+        #expect(exchange.pluginReceipt?.plugin == nil)
+    }
+
+    @Test(arguments: ["1.0.87", "1.0.90", "invalid"])
+    func unsupportedProviderNeverReceivesMutation(version: String) throws {
+        let exchange = try CopilotMetadataExchange(operation: .uninstall(identity: "owned-id"))
+        _ = try requests(exchange)
+        #expect(throws: (any Error).self) {
+            try send(exchange, id: 1, result: ["version": version, "protocolVersion": 3])
+        }
+        #expect(try requests(exchange).isEmpty)
+        #expect(exchange.pluginReceipt == nil)
+    }
+
+    @Test(arguments: ["different-id", "marketplace", "managed", "disabled", "missing-id", "foreign-name", "live-source"])
+    func installRejectsUnboundReceipt(kind: String) throws {
+        let exchange = try CopilotMetadataExchange(operation: .install(
+            source: URL(fileURLWithPath: "/owned/plugin"), expectedIdentity: "owned-id"))
+        try send(exchange, id: 1, result: ["version": "1.0.89", "protocolVersion": 3])
+        var plugin: [String: Any] = ["name": CopilotPluginManifest.name, "marketplace": "",
+                                     "enabled": true, "directSourceId": "owned-id"]
+        switch kind {
+        case "different-id": plugin["directSourceId"] = "unrelated-id"
+        case "marketplace": plugin["marketplace"] = "unrelated-marketplace"
+        case "managed": plugin["managed"] = true
+        case "disabled": plugin["enabled"] = false
+        case "missing-id": plugin.removeValue(forKey: "directSourceId")
+        case "foreign-name": plugin["name"] = "unrelated-plugin"
+        case "live-source": plugin["source"] = "/unrelated/plugin"
+        default: Issue.record("Unexpected fixture")
+        }
+        #expect(throws: (any Error).self) { try send(exchange, id: 4, result: ["plugin": plugin]) }
+        #expect(exchange.pluginReceipt == nil)
+    }
+
+    @Test func unsolicitedReceiptCannotCauseOrVerifyMutation() throws {
+        let exchange = try CopilotMetadataExchange(operation: .install(
+            source: URL(fileURLWithPath: "/owned/plugin"), expectedIdentity: nil))
+        _ = try requests(exchange)
+        #expect(throws: (any Error).self) { try send(exchange, id: 4, result: installed()) }
+        #expect(try requests(exchange).isEmpty)
+        #expect(exchange.pluginReceipt == nil)
+    }
+}
+
 struct CopilotSetupTests {
     private let root = URL(fileURLWithPath: "/synthetic/integration")
     private let helper = URL(fileURLWithPath: "/Applications/Maestro's App.app/Contents/Helpers/CMUXMaestroCopilotHook")
@@ -218,6 +407,32 @@ struct CopilotSetupTests {
                 try CopilotSetupCommandLine.executable(arguments: arguments)
             }
         }
+    }
+
+    @Test func coordinatedBridgeRequiresExactTransactionAndArguments() throws {
+        let id = UUID().uuidString.lowercased()
+        let args = [CopilotSetupCommandLine.bridgeFlag, "prepare", "--transaction", id,
+                    "--application", "/Users/example/Applications/Maestro.app"]
+        let request = try #require(try CopilotSetupCommandLine.bridge(arguments: args))
+        #expect(request.id.uuidString.lowercased() == id)
+        #expect(request.executable == nil)
+        #expect(!request.allowAbsent)
+        #expect(try CopilotSetupCommandLine.bridge(arguments: args + ["--copilot-executable", "/trusted/copilot"])?.executable?.path == "/trusted/copilot")
+        for bad in [
+            args + ["--allow-absent"],
+            args + ["--transaction", id],
+            [CopilotSetupCommandLine.bridgeFlag, "unknown"] + Array(args.dropFirst(2)),
+            Array(args.prefix(3)) + ["not-a-uuid"] + Array(args.dropFirst(4)),
+            Array(args.prefix(5)) + ["/Users/example/Applications/../Other.app"],
+        ] {
+            #expect(throws: CopilotSetupCommandLine.Failure.self) { try CopilotSetupCommandLine.bridge(arguments: bad) }
+        }
+    }
+
+    @Test func validationHostCannotEnterCoordinatedInstall() async {
+        let request = CopilotSetupCommandLine.Bridge(action: "prepare", id: UUID(),
+            application: URL(fileURLWithPath: "/Applications/NotAllowed.app"), executable: nil, allowAbsent: false)
+        #expect(await CopilotSetupCommandLine.coordinate(request).exitCode == 1)
     }
 
     @Test func commandLineSetupCannotInstallFromValidationHost() async {

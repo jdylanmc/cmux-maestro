@@ -2,18 +2,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+[[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted &&
+   "$HOME" == /Users/runner && "$ROOT" == "${GITHUB_WORKSPACE:-}" ]] || {
+    echo "Hosted fixture build only; no local publication." >&2
+    exit 2
+}
+export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 DERIVED_DATA="$ROOT/.build/adhoc"
 APP="$DERIVED_DATA/Build/Products/Debug/CMUX Maestro Preview.app"
-APPEX="$APP/Contents/Extensions/CMUX Maestro Preview Extension.appex"
-export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 
-if [[ $# -ne 0 ]]; then
-    if [[ $# -ne 2 || "${1:-}" != "--copilot-executable" || "${2:-}" != /* ]]; then
-        echo "Usage: build-register.sh [--copilot-executable /absolute/path/to/copilot]" >&2
-        exit 2
-    fi
-fi
-
+# The production build portion of build-register.sh, without its combined install.
 "$ROOT/scripts/fetch-sdk.sh"
 mkdir -p "$DERIVED_DATA"
 SETTINGS=(
@@ -27,29 +25,13 @@ SETTINGS=(
     CMUX_DISPLAY_NAME_SUFFIX=
     CMUX_SIDEBAR_EXTENSION_POINT_ID=com.cmuxterm.app.cmux.sidebar
 )
-
-# Xcode's application build can itself register with LaunchServices. Validate
-# the resolved production namespace before entering this explicit publication path.
 xcodebuild -project "$ROOT/CMUXMaestroPreview.xcodeproj" -alltargets \
     -configuration Debug -showBuildSettings -json "${SETTINGS[@]}" \
     > "$DERIVED_DATA/namespace-settings.json"
 python3 "$ROOT/scripts/verify-build-metadata.py" --mode production \
     --settings "$DERIVED_DATA/namespace-settings.json" \
     --source-entitlements "$ROOT/CMUXMaestroSidebar/CMUXMaestroSidebar.entitlements"
-
-xcodebuild \
-    -project "$ROOT/CMUXMaestroPreview.xcodeproj" \
-    -scheme CMUXMaestroPreview \
-    -configuration Debug \
-    -derivedDataPath "$DERIVED_DATA" \
-    "${SETTINGS[@]}" \
-    build
-
-if [[ ! -d "$APPEX" ]]; then
-    echo "Expected extension was not built: $APPEX" >&2
-    exit 1
-fi
-
+xcodebuild -project "$ROOT/CMUXMaestroPreview.xcodeproj" -scheme CMUXMaestroPreview \
+    -configuration Debug -derivedDataPath "$DERIVED_DATA" "${SETTINGS[@]}" build
 python3 "$ROOT/scripts/verify-build-metadata.py" --mode production --app "$APP"
-python3 "$ROOT/scripts/local-preview.py" install --source "$APP" \
-    --retire-development-registration "$@"
+echo "Verified signed production fixture built; no explicit install or registration performed."

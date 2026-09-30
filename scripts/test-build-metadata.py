@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import importlib.util
 import json
+import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -15,9 +17,469 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("metadata", ROOT / "scripts/verify-build-metadata.py")
 metadata = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(metadata)
+scope_spec = importlib.util.spec_from_file_location("integrated_scopes", ROOT / "scripts/run-integrated-test-scopes.py")
+scopes = importlib.util.module_from_spec(scope_spec)
+scope_spec.loader.exec_module(scopes)
+BENCHMARK_TEST = "CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()"
+BENCHMARK_FLAG = "CMUX_MAESTRO_READER_BENCHMARK"
+
+
+class IntegratedTestScopeTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = ROOT / ".build/metadata-tests" / str(uuid.uuid4())
+        self.directory.mkdir(parents=True)
+        self.commands = []
+
+    def tearDown(self):
+        shutil.rmtree(self.directory)
+
+    @staticmethod
+    def report(entries):
+        statuses = [status for _, status in entries]
+        summary = {"result": "Failed" if "Failed" in statuses else "Passed", "totalTestCount": len(entries),
+                   "passedTests": statuses.count("Passed"), "failedTests": statuses.count("Failed"),
+                   "skippedTests": statuses.count("Skipped"), "expectedFailures": statuses.count("Expected Failure")}
+        tests = {"testNodes": [{"nodeType": "Unit test bundle", "name": scopes.TARGET, "children": [
+            {"nodeType": "Test Case", "name": name.rsplit("/", 1)[-1],
+             "nodeIdentifier": name, "result": status} for name, status in entries
+        ]}]}
+        return summary, tests
+
+    def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0, benchmark_flag=None):
+        def runner(command, **kwargs):
+            self.commands.append(command)
+            if command[0] == "xcodebuild":
+                code = (isolated_exit if any(arg.startswith("-only-testing:") for arg in command)
+                        else remaining_exit if "test-without-building" in command else 0)
+                return subprocess.CompletedProcess(command, code)
+            scope = Path(command[command.index("--path") + 1]).stem
+            values = isolated if scope == "isolated" else remaining
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(values[0 if command[4] == "summary" else 1]))
+        with patch("builtins.print"), patch.dict(os.environ):
+            if benchmark_flag is None:
+                os.environ.pop(BENCHMARK_FLAG, None)
+            else:
+                os.environ[BENCHMARK_FLAG] = benchmark_flag
+            result = scopes.run(["xcodebuild", "-scheme", "CMUXMaestroPreview"], self.directory / "results", runner)
+        return result, json.loads((self.directory / "results/coverage.json").read_text())
+
+    def test_verified_one_test_then_full_complement_without_serialization(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                        self.report([("OtherSuite/first()", "Passed"), ("OtherSuite/second()", "Passed")]))
+        self.assertEqual(result, 0)
+        self.assertTrue(evidence["selectorVerifiedByHostedResult"])
+        self.assertEqual(evidence["isolatedCounts"]["totalTestCount"], 1)
+        self.assertEqual(evidence["remainingCounts"]["totalTestCount"], 2)
+        commands = [command for command in self.commands if command[0] == "xcodebuild"]
+        self.assertEqual(len(commands), 3)
+        self.assertIn("build-for-testing", commands[0])
+        self.assertIn("-only-testing:" + scopes.SELECTOR, commands[1])
+        self.assertIn("-skip-testing:" + scopes.SELECTOR, commands[2])
+        self.assertFalse(any("-parallel-testing-enabled" in command for command in commands))
+
+    def test_failed_isolated_regression_still_runs_complement_and_remains_red(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Failed")]),
+                                        self.report([("OtherSuite/test()", "Passed")]), isolated_exit=65)
+        self.assertEqual(result, 1)
+        self.assertTrue(evidence["selectorVerifiedByHostedResult"])
+        self.assertEqual(evidence["remainingCounts"]["passedTests"], 1)
+        self.assertFalse(evidence["passed"])
+
+    def test_zero_or_wrong_selection_never_excludes_or_counts_as_success(self):
+        for entries in ([], [("OtherSuite/notTheRegression()", "Passed")]):
+            with self.subTest(entries=entries):
+                result, evidence = self.execute(self.report(entries),
+                                                self.report([(scopes.TEST, "Passed"), ("OtherSuite/test()", "Passed")]))
+                self.assertEqual(result, 1)
+                self.assertFalse(evidence["selectorVerifiedByHostedResult"])
+                last = [command for command in self.commands if command[0] == "xcodebuild"][-1]
+                self.assertFalse(any(arg.startswith("-skip-testing") for arg in last))
+                self.assertTrue((self.directory / "results/full-fallback-summary.json").exists())
+                shutil.rmtree(self.directory / "results")
+
+    def test_unrelated_failure_is_not_hidden_by_isolated_success(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                        self.report([("ViewportSuite/staticFixture()", "Failed")]), remaining_exit=65)
+        self.assertEqual(result, 1)
+        self.assertEqual(evidence["remainingCounts"]["failedTests"], 1)
+        self.assertFalse(evidence["passed"])
+
+    def test_skipping_other_tests_or_repeating_the_regression_is_rejected(self):
+        for entries in ([("OtherSuite/test()", "Skipped")],
+                        [(scopes.TEST, "Passed"), ("OtherSuite/test()", "Passed")]):
+            with self.subTest(entries=entries):
+                result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]), self.report(entries))
+                self.assertEqual(result, 1)
+                self.assertIn("remainingValidationError", evidence)
+                shutil.rmtree(self.directory / "results")
+
+    def test_only_the_already_executed_regression_may_be_reported_as_excluded(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                        self.report([(scopes.TEST, "Skipped"), ("OtherSuite/test()", "Passed")]))
+        self.assertEqual(result, 0)
+        self.assertEqual(evidence["remainingCounts"]["skippedTests"], 1)
+        self.assertEqual(evidence["remainingCounts"]["passedTests"], 1)
+
+    def test_existing_optional_benchmark_skip_preserves_counts_and_attribution(self):
+        for excluded in (False, True):
+            with self.subTest(excluded=excluded):
+                if (self.directory / "results").exists():
+                    shutil.rmtree(self.directory / "results")
+                entries = [(BENCHMARK_TEST, "Skipped"), ("OtherSuite/test()", "Passed")]
+                if excluded:
+                    entries.append((scopes.TEST, "Skipped"))
+                remaining = self.report(entries)
+                remaining[1]["testNodes"][0]["children"][0]["details"] = "Synthetic recorded skip detail"
+                result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]), remaining)
+                self.assertEqual(result, 0)
+                counts = evidence["remainingCounts"]
+                self.assertEqual(counts["skippedTests"], 1 + int(excluded))
+                self.assertEqual(counts["executionCounts"]["skippedTests"], 1 + int(excluded))
+                self.assertEqual(counts["logicalCounts"]["totalTestCount"], len(entries))
+                self.assertEqual(evidence["combinedExecutedTestCount"], 2)
+                attributed = {item["identity"]: item for item in counts["skippedTestsByIdentity"]}
+                benchmark = attributed[scopes.TARGET + "/" + BENCHMARK_TEST]
+                self.assertEqual(benchmark["policyReason"], "existing-opt-in-benchmark-disabled")
+                self.assertEqual(benchmark["reportedDetails"], "Synthetic recorded skip detail")
+                if excluded:
+                    self.assertEqual(attributed[scopes.SELECTOR]["policyReason"], "verified-isolated-selector-exclusion")
+                self.assertEqual(evidence["optionalBenchmark"]["environmentValue"], None)
+                self.assertFalse(evidence["optionalBenchmark"]["enabled"])
+                shutil.rmtree(self.directory / "results")
+
+    def test_full_fallback_attributes_optional_skip_but_never_turns_green(self):
+        result, evidence = self.execute(self.report([("OtherSuite/wrongSelection()", "Passed")]),
+                                        self.report([(scopes.TEST, "Passed"), (BENCHMARK_TEST, "Skipped")]))
+        self.assertEqual(result, 1)
+        self.assertFalse(evidence["selectorVerifiedByHostedResult"])
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(evidence["remainingCounts"]["skippedTests"], 1)
+        self.assertEqual(evidence["remainingCounts"]["skippedTestsByIdentity"][0]["identity"],
+                         scopes.TARGET + "/" + BENCHMARK_TEST)
+        final = [command for command in self.commands if command[0] == "xcodebuild"][-1]
+        self.assertFalse(any(arg.startswith("-skip-testing:") for arg in final))
+
+    def test_benchmark_skip_permission_uses_exact_inherited_flag_without_setting_it(self):
+        for flag in (None, "", "0", "true", "1"):
+            with self.subTest(flag=flag):
+                if (self.directory / "results").exists():
+                    shutil.rmtree(self.directory / "results")
+                result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                    self.report([(BENCHMARK_TEST, "Skipped"), ("OtherSuite/test()", "Passed")]), benchmark_flag=flag)
+                self.assertEqual(result, 1 if flag == "1" else 0)
+                self.assertEqual(evidence["optionalBenchmark"]["environmentValue"], flag)
+                self.assertEqual(evidence["optionalBenchmark"]["enabled"], flag == "1")
+                if flag == "1":
+                    self.assertIn("remainingValidationError", evidence)
+                    self.assertFalse(evidence["passed"])
+                else:
+                    self.assertEqual(evidence["remainingCounts"]["skippedTests"], 1)
+                self.assertFalse(any(BENCHMARK_FLAG in arg for command in self.commands for arg in command))
+
+    def test_enabled_benchmark_runs_while_only_isolated_exclusion_is_attributed(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+            self.report([(BENCHMARK_TEST, "Passed"), (scopes.TEST, "Skipped"), ("OtherSuite/test()", "Passed")]),
+            benchmark_flag="1")
+        self.assertEqual(result, 0)
+        self.assertEqual(evidence["combinedExecutedTestCount"], 3)
+        self.assertEqual(evidence["remainingCounts"]["skippedTestsByIdentity"], [{
+            "identity": scopes.SELECTOR, "policyReason": "verified-isolated-selector-exclusion", "reportedDetails": None}])
+
+    def test_benchmark_skip_exception_requires_exact_identity_and_one_nonparameterized_record(self):
+        for identity in (BENCHMARK_TEST + "-other", "OtherSuite/" + BENCHMARK_TEST.split("/")[1],
+                         "OtherTarget/" + BENCHMARK_TEST):
+            with self.subTest(identity=identity), self.assertRaises(ValueError):
+                scopes.validate_remaining(*self.report([(identity, "Skipped"), ("OtherSuite/test()", "Passed")]),
+                                          benchmark_enabled=False)
+        for kind in ("Arguments", "Repetition"):
+            with self.subTest(kind=kind):
+                summary, tree = self.report([(BENCHMARK_TEST, "Skipped"), ("OtherSuite/test()", "Passed")])
+                tree["testNodes"][0]["children"][0]["children"] = [
+                    {"nodeType": kind, "name": "unexpected", "result": "Skipped"}]
+                with self.assertRaises(ValueError):
+                    scopes.validate_remaining(summary, tree, benchmark_enabled=False)
+        with self.assertRaises(ValueError):
+            scopes.validate_remaining(*self.report([(BENCHMARK_TEST, "Skipped"), (BENCHMARK_TEST, "Skipped"),
+                                                    ("OtherSuite/test()", "Passed")]), benchmark_enabled=False)
+
+    def test_optional_skip_does_not_replace_nonzero_executed_complement(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                        self.report([(BENCHMARK_TEST, "Skipped"), (scopes.TEST, "Skipped")]))
+        self.assertEqual(result, 1)
+        self.assertIn("remainingValidationError", evidence)
+        self.assertFalse(evidence["passed"])
+
+    def test_full_fallback_cannot_attribute_an_unverified_selector_or_new_skip(self):
+        for identity in (scopes.TEST, "OtherSuite/unexplainedSkip()"):
+            with self.subTest(identity=identity):
+                if (self.directory / "results").exists():
+                    shutil.rmtree(self.directory / "results")
+                result, evidence = self.execute(self.report([("OtherSuite/wrongSelection()", "Passed")]),
+                    self.report([(identity, "Skipped"), (BENCHMARK_TEST, "Skipped"), ("OtherSuite/test()", "Passed")]))
+                self.assertEqual(result, 1)
+                self.assertFalse(evidence["selectorVerifiedByHostedResult"])
+                self.assertIn("remainingValidationError", evidence)
+                self.assertFalse(evidence["passed"])
+
+    def test_hosted_optional_identity_is_still_opt_in_and_summaries_are_not_execution_trees(self):
+        fixture = json.loads((ROOT / "scripts/test-fixtures/xcresult-optional-benchmark-hosted.json").read_text())
+        benchmark = fixture["benchmark"]
+        self.assertEqual(benchmark["identity"], scopes.BENCHMARK_SELECTOR)
+        self.assertEqual(scopes.BENCHMARK_FLAG, BENCHMARK_FLAG)
+        declaration = benchmark["annotation"] + "\n    func " + BENCHMARK_TEST.split("/")[1] + " async throws"
+        self.assertIn(declaration, (ROOT / benchmark["source"]).read_text())
+        for run in fixture["runs"]:
+            with self.subTest(run=run["runId"]):
+                summary = run["summary"]
+                counts = scopes.counts(summary)
+                self.assertEqual(counts["totalTestCount"], 681)
+                self.assertEqual(counts["skippedTests"], 1)
+                device = summary["devicesAndConfigurations"][0]
+                executions = sum(device[key] for key in ("passedTests", "failedTests", "skippedTests", "expectedFailures"))
+                self.assertEqual(executions, 1174)
+                self.assertEqual(executions - counts["totalTestCount"], 650 - 157)
+                with self.assertRaises(ValueError):
+                    scopes.validate_remaining(summary, {"testNodes": []}, benchmark_enabled=False)
+
+    def test_selection_and_retry_overrides_cannot_reduce_full_coverage(self):
+        for option in ("-only-testing:Other", "-skip-testing:Other", "-retry-tests-on-failure",
+                       "-test-iterations", "-only-test-configuration", "-resultBundlePath", "-xctestrun"):
+            with self.subTest(option=option), self.assertRaises(ValueError):
+                scopes.validate_arguments(["xcodebuild", option])
+
+    def test_actual_xcresult_identifier_url_is_bound_to_expected_method(self):
+        summary, tree = self.report([(scopes.TEST, "Passed")])
+        node = tree["testNodes"][0]["children"][0]
+        node["nodeIdentifierURL"] = "test://com.apple.xcode/" + scopes.SELECTOR
+        self.assertEqual(scopes.validate_isolated(summary, tree)["totalTestCount"], 1)
+        node["nodeIdentifierURL"] += "-other"
+        with self.assertRaises(ValueError):
+            scopes.validate_isolated(summary, tree)
+
+    def test_malformed_or_contradictory_result_evidence_cannot_pass(self):
+        summary, tree = self.report([(scopes.TEST, "Passed")])
+        for invalid in ([], {}, {**summary, "totalTestCount": True}, {**summary, "totalTestCount": 0}):
+            with self.subTest(summary=invalid), self.assertRaises(ValueError):
+                scopes.validate_isolated(invalid, tree)
+        tree["testNodes"][0]["children"][0]["result"] = "Failed"
+        with self.assertRaises(ValueError):
+            scopes.validate_isolated(summary, tree)
+        remaining_summary, remaining_tree = self.report([("OtherSuite/test()", "Passed")])
+        remaining_tree["testNodes"][0]["children"][0]["result"] = "Failed"
+        with self.assertRaises(ValueError):
+            scopes.validate_remaining(remaining_summary, remaining_tree, benchmark_enabled=False)
+
+    def test_review_flat_summary_cannot_claim_unrepresented_executions(self):
+        remaining = self.report([("OtherSuite/onlyCase()", "Passed")])
+        remaining[0].update(totalTestCount=200, passedTests=200)
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]), remaining)
+        self.assertEqual(result, 1)
+        self.assertFalse(evidence["passed"])
+        self.assertNotIn("combinedExecutedTestCount", evidence)
+
+    def test_review_isolated_failed_then_passed_repetition_cannot_authorize_exclusion(self):
+        isolated = self.report([(scopes.TEST, "Passed")])
+        isolated[1]["testNodes"][0]["children"][0]["children"] = [
+            {"nodeType": "Repetition", "name": "Attempt 1", "children": [
+                {"nodeType": "Test Case Run", "name": "Run 1", "result": "Failed"}]},
+            {"nodeType": "Repetition", "name": "Attempt 2", "children": [
+                {"nodeType": "Test Case Run", "name": "Run 2", "result": "Passed"}]},
+        ]
+        result, evidence = self.execute(isolated, self.report([(scopes.TEST, "Passed"), ("OtherSuite/test()", "Passed")]))
+        self.assertEqual(result, 1)
+        self.assertFalse(evidence["passed"])
+        self.assertFalse(evidence["selectorVerifiedByHostedResult"])
+        final = [command for command in self.commands if command[0] == "xcodebuild"][-1]
+        self.assertFalse(any(arg.startswith("-skip-testing:") for arg in final))
+        self.assertTrue((self.directory / "results/full-fallback-summary.json").exists())
+
+    def test_review_status_distribution_must_match_the_tree(self):
+        remaining = self.report([("OtherSuite/one()", "Passed"), ("OtherSuite/two()", "Passed")])
+        remaining[0].update(passedTests=1, expectedFailures=1)
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]), remaining)
+        self.assertEqual(result, 1)
+        self.assertIn("remainingValidationError", evidence)
+        self.assertFalse(evidence["passed"])
+
+    def test_summary_overall_result_cannot_hide_a_failed_isolated_case(self):
+        isolated = self.report([(scopes.TEST, "Failed")])
+        isolated[0]["result"] = "Passed"
+        result, evidence = self.execute(isolated, self.report([(scopes.TEST, "Passed"), ("OtherSuite/test()", "Passed")]))
+        self.assertEqual(result, 1)
+        self.assertFalse(evidence["passed"])
+        self.assertFalse(evidence["selectorVerifiedByHostedResult"])
+        final = [command for command in self.commands if command[0] == "xcodebuild"][-1]
+        self.assertFalse(any(arg.startswith("-skip-testing:") for arg in final))
+
+    def test_failure_counts_must_reconcile_not_just_failure_presence(self):
+        remaining = self.report([("OtherSuite/one()", "Failed"), ("OtherSuite/two()", "Failed")])
+        remaining[0].update(failedTests=1, expectedFailures=1)
+        with self.assertRaisesRegex(ValueError, "logical counts/statuses"):
+            scopes.validate_remaining(*remaining, benchmark_enabled=False)
+
+    def test_actual_hosted_isolated_plan_target_path_is_normalized(self):
+        fixture = json.loads((ROOT / "scripts/test-fixtures/xcresult-isolated-hosted.json").read_text())
+        measured = scopes.validate_isolated(fixture["summary"], fixture["tests"])
+        self.assertEqual(measured["logicalCounts"]["totalTestCount"], 1)
+        self.assertEqual(measured["executionCounts"]["totalTestCount"], 1)
+        node = fixture["tests"]["testNodes"][0]["children"][0]["children"][0]["children"][0]
+        node["nodeIdentifierURL"] = node["nodeIdentifierURL"].replace("CMUXMaestroPreview/", "DifferentPlan/", 1)
+        with self.assertRaises(ValueError):
+            scopes.validate_isolated(fixture["summary"], fixture["tests"])
+
+    def test_parameterized_logical_and_execution_counts_are_distinct(self):
+        # Synthetic shape control, not a claim that this is the hosted parameter tree.
+        remaining = self.report([("OtherSuite/parameterized(value:)", "Passed")])
+        remaining[0]["devicesAndConfigurations"] = [
+            {"passedTests": 2, "failedTests": 0, "skippedTests": 0, "expectedFailures": 0}]
+        remaining[1]["testNodes"][0]["children"][0]["children"] = [
+            {"nodeType": "Arguments", "name": name, "result": "Passed", "children": [
+                {"nodeType": "Device", "name": "fixture device", "children": [
+                    {"nodeType": "Test Case Run", "name": "Run", "result": "Passed"}]}]}
+            for name in ("value=one", "value=two")]
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]), remaining)
+        self.assertEqual(result, 0)
+        self.assertEqual(evidence["remainingCounts"]["logicalCounts"]["totalTestCount"], 1)
+        self.assertEqual(evidence["remainingCounts"]["executionCounts"]["totalTestCount"], 2)
+        self.assertEqual(evidence["combinedExecutedTestCount"], 3)
+        remaining[0]["devicesAndConfigurations"][0]["passedTests"] = 200
+        with self.assertRaises(ValueError):
+            scopes.validate_remaining(*remaining, benchmark_enabled=False)
+        remaining[0]["devicesAndConfigurations"][0]["passedTests"] = 2
+        remaining[0].update(totalTestCount=2, passedTests=2)
+        with self.assertRaises(ValueError):
+            scopes.validate_remaining(*remaining, benchmark_enabled=False)
+
+    def test_hidden_or_duplicate_runs_and_parameterized_isolated_method_refuse(self):
+        for kind in ("duplicate-runs", "all-passed-repetitions", "hidden-run", "parameterized-isolated",
+                     "parent-run-status", "empty-device", "unknown-wrapper"):
+            with self.subTest(kind=kind):
+                isolated = self.report([(scopes.TEST, "Passed")])
+                run = {"nodeType": "Test Case Run", "name": "Run", "result": "Passed"}
+                if kind == "duplicate-runs":
+                    nested = [run, dict(run)]
+                elif kind == "all-passed-repetitions":
+                    nested = [{"nodeType": "Repetition", "name": f"Attempt {index}", "children": [dict(run)]}
+                              for index in (1, 2)]
+                elif kind == "hidden-run":
+                    nested = [{"nodeType": "Attachment", "name": "diagnostic", "children": [run]}]
+                elif kind == "parameterized-isolated":
+                    nested = [{"nodeType": "Arguments", "name": "unexpected=value", "children": [run]}]
+                elif kind == "empty-device":
+                    nested = [{"nodeType": "Device", "name": "empty", "result": "Passed"}]
+                elif kind == "unknown-wrapper":
+                    nested = [{"nodeType": "Unverified Wrapper", "name": "unknown", "children": [run]}]
+                else:
+                    nested = [{**run, "result": "Failed"}]
+                isolated[1]["testNodes"][0]["children"][0]["children"] = nested
+                with self.assertRaises(ValueError):
+                    scopes.validate_isolated(*isolated)
+
+    def test_parameter_execution_evidence_cannot_be_missing_repeated_or_contradictory(self):
+        for defect in ("missing-device-counts", "duplicate-argument", "duplicate-run", "status-mismatch",
+                       "skipped-argument", "mixed-runs", "invalid-device-count", "nested-arguments"):
+            with self.subTest(defect=defect):
+                summary, tree = self.report([("OtherSuite/parameterized(value:)", "Passed")])
+                summary["devicesAndConfigurations"] = [
+                    {"passedTests": 2, "failedTests": 0, "skippedTests": 0, "expectedFailures": 0}]
+                arguments = [
+                    {"nodeType": "Arguments", "name": name, "result": "Passed", "children": [
+                        {"nodeType": "Test Case Run", "name": "Run", "result": "Passed"}]}
+                    for name in ("one", "two")]
+                tree["testNodes"][0]["children"][0]["children"] = arguments
+                if defect == "missing-device-counts":
+                    del summary["devicesAndConfigurations"]
+                elif defect == "duplicate-argument":
+                    arguments[1]["name"] = "one"
+                elif defect == "duplicate-run":
+                    arguments[0]["children"].append(dict(arguments[0]["children"][0]))
+                elif defect == "status-mismatch":
+                    arguments[0]["children"][0]["result"] = "Failed"
+                elif defect == "skipped-argument":
+                    arguments[0]["result"] = arguments[0]["children"][0]["result"] = "Skipped"
+                    summary["devicesAndConfigurations"][0].update(passedTests=1, skippedTests=1)
+                elif defect == "mixed-runs":
+                    arguments.append({"nodeType": "Test Case Run", "name": "Run", "result": "Passed"})
+                elif defect == "invalid-device-count":
+                    summary["devicesAndConfigurations"][0]["failedTests"] = False
+                else:
+                    arguments[0]["children"] = [{"nodeType": "Arguments", "name": "nested", "result": "Passed"}]
+                with self.assertRaises(ValueError):
+                    scopes.validate_remaining(summary, tree, benchmark_enabled=False)
 
 
 class BuildMetadataTests(unittest.TestCase):
+    def test_ci_preserves_all_eleven_validation_commands_without_new_conditions(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertEqual(re.findall(r"^        run: (.+)$", workflow, re.MULTILINE), [
+            "python3 scripts/test-cmux-maestro-orchestrator.py",
+            "python3 scripts/test-delivery-proof.py",
+            "node --test scripts/test-delivery-proof.mjs",
+            "python3 scripts/test-build-metadata.py",
+            "python3 scripts/test-local-preview.py",
+            "./scripts/test-fetch-sdk-concurrency.sh",
+            "./scripts/build-unsigned.sh",
+            "./scripts/test.sh",
+            "./scripts/test-copilot-setup.sh",
+            "./scripts/test-copilot-hook.sh",
+            "./scripts/test-copilot-sandbox.sh",
+        ])
+        steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
+        run_steps = [step for step in steps if "\n        run:" in step]
+        self.assertEqual(len(run_steps), 11)
+        for step in run_steps:
+            self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
+        self.assertNotIn("continue-on-error", workflow)
+
+    def test_ci_always_uploads_json_evidence_and_retains_required_png_artifact(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
+        for title, name, path in (
+            ("Upload integrated test scope evidence", "integrated-test-scope-evidence",
+             ".build/tests/scoped-results/**/*.json"),
+            ("Upload synthetic sidebar layout renders", "sidebar-layout-offscreen",
+             ".build/layout-validation/offscreen/*.png"),
+        ):
+            with self.subTest(artifact=name):
+                actual = [step for step in steps if f"          name: {name}\n" in step]
+                self.assertEqual(actual, [
+                    f"      - name: {title}\n"
+                    "        if: always()\n"
+                    "        uses: actions/upload-artifact@v4\n"
+                    "        with:\n"
+                    f"          name: {name}\n"
+                    f"          path: {path}\n"
+                    "          include-hidden-files: true\n"
+                    "          if-no-files-found: error\n"
+                    "          retention-days: 14\n"
+                ])
+
+    def test_app_bridge_markers_are_wired_as_input_plist_in_both_configurations(self):
+        project = json.loads(subprocess.check_output([
+            "/usr/bin/plutil", "-convert", "json", "-o", "-",
+            str(ROOT / "CMUXMaestroPreview.xcodeproj/project.pbxproj"),
+        ]))
+        objects = project["objects"]
+        target_id, target = next((key, value) for key, value in objects.items()
+                                 if value.get("isa") == "PBXNativeTarget" and value.get("name") == "CMUXMaestroPreview")
+        configurations = objects[target["buildConfigurationList"]]["buildConfigurations"]
+        self.assertEqual({objects[key]["name"] for key in configurations}, {"Debug", "Release"})
+        for key in configurations:
+            with self.subTest(configuration=objects[key]["name"]):
+                settings = objects[key]["buildSettings"]
+                self.assertEqual(settings["GENERATE_INFOPLIST_FILE"], "YES")
+                self.assertEqual(settings["INFOPLIST_FILE"], "CMUXMaestroPreview/Info.plist")
+                source = metadata.plist(ROOT / settings["INFOPLIST_FILE"])
+                self.assertEqual(source["CMUXMaestroInstallBridge"], "copilot-install-v1")
+                self.assertEqual(source["CMUXMaestroAppLifecycleBridge"], "graceful-lifecycle-v1")
+                self.assertNotIn("CFBundleIdentifier", source)
+                self.assertNotIn("INFOPLIST_KEY_CMUXMaestroInstallBridge", settings)
+                self.assertNotIn("INFOPLIST_KEY_CMUXMaestroAppLifecycleBridge", settings)
+        group = next(objects[key] for key in target["fileSystemSynchronizedGroups"]
+                     if objects[key]["path"] == "CMUXMaestroPreview")
+        exclusions = [objects[key] for key in group["exceptions"] if objects[key]["target"] == target_id]
+        self.assertTrue(any("Info.plist" in item["membershipExceptions"] for item in exclusions))
+
     def test_production_preview_disables_profile_output_without_disabling_test_coverage(self):
         production = (ROOT / "scripts/build-register.sh").read_text()
         validation = (ROOT / "scripts/test.sh").read_text()
@@ -36,7 +498,8 @@ class BuildMetadataTests(unittest.TestCase):
     def fixture(self, mode):
         suffix, point = metadata.PROFILES[mode]
         self.parent = {"CFBundleIdentifier": metadata.BASE_ID + suffix, "CFBundlePackageType": "APPL",
-                       "CFBundleVersion": metadata.APP_BUILD_VERSION}
+                       "CFBundleVersion": metadata.APP_BUILD_VERSION, "CMUXMaestroInstallBridge": "copilot-install-v1",
+                       "CMUXMaestroAppLifecycleBridge": "graceful-lifecycle-v1"}
         self.child = {
             "CFBundleIdentifier": metadata.BASE_ID + suffix + ".Extension",
             "CFBundlePackageType": "XPC!",
@@ -59,6 +522,18 @@ class BuildMetadataTests(unittest.TestCase):
                 (self.app / "Contents/Resources" / name).unlink()
                 with self.assertRaisesRegex(ValueError, "messaging resource"):
                     metadata.verify_metadata(self.app, "tests")
+
+    def test_non_ui_bridge_is_required_for_new_artifacts_not_historical_receipts(self):
+        for mode in metadata.PROFILES:
+            for key in ("CMUXMaestroInstallBridge", "CMUXMaestroAppLifecycleBridge"):
+                with self.subTest(mode=mode, capability=key):
+                    self.fixture(mode)
+                    del self.parent[key]
+                    self.save()
+                    with self.assertRaisesRegex(ValueError, "bridge"):
+                        metadata.verify_metadata(self.app, mode)
+                    if mode == "production":
+                        metadata.verify_metadata(self.app, mode, require_bridge=False)
 
     def save(self):
         (self.app / "Contents/Info.plist").write_bytes(plistlib.dumps(self.parent))
@@ -182,8 +657,9 @@ class BuildMetadataTests(unittest.TestCase):
             self.assertNotIn("REGISTER_APP_WITH_LAUNCH_SERVICES", script)
         script = (ROOT / "scripts/build-register.sh").read_text()
         self.assertLess(script.index('--source-entitlements'), script.index('    build\n'))
-        self.assertLess(script.index('--mode production --app "$APP"'), script.index('pluginkit -a "$APPEX"'))
-        self.assertLess(script.index('pluginkit -a "$APPEX"'), script.index('--registration "$APPEX"'))
+        self.assertLess(script.index('--mode production --app "$APP"'), script.index('local-preview.py" install'))
+        self.assertIn('--retire-development-registration "$@"', script)
+        self.assertNotIn('pluginkit -a "$APPEX"', script)
 
     def registration_listing(self, *entries):
         return "".join(f"+    {identifier}(2)\n    Path = {path}\n" for identifier, path in entries) \

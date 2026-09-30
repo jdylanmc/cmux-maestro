@@ -169,6 +169,13 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		E11400000000000000000001 /* Exceptions for "CMUXMaestroPreview" folder in "CMUXMaestroPreview" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A3685BE82FCA3AEE00009F1B /* CMUXMaestroPreview */;
+		};
 		A3685C292FCA3B2500009F1B /* Exceptions for "CMUXMaestroSidebar" folder in "CMUXMaestroSidebar" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -186,6 +193,9 @@
 		};
 		A3685BEB2FCA3AEE00009F1B /* CMUXMaestroPreview */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				E11400000000000000000001 /* Exceptions for "CMUXMaestroPreview" folder in "CMUXMaestroPreview" target */,
+			);
 			path = CMUXMaestroPreview;
 			sourceTree = "<group>";
 		};
@@ -750,6 +760,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = CMUXMaestroPreview/Info.plist;
 				CMUX_DISPLAY_NAME_SUFFIX = "";
 				INFOPLIST_KEY_CFBundleDisplayName = "CMUX Maestro Preview$(CMUX_DISPLAY_NAME_SUFFIX)";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -787,6 +798,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = CMUXMaestroPreview/Info.plist;
 				CMUX_DISPLAY_NAME_SUFFIX = "";
 				INFOPLIST_KEY_CFBundleDisplayName = "CMUX Maestro Preview$(CMUX_DISPLAY_NAME_SUFFIX)";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";

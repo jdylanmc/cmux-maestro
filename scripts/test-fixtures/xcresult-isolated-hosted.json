@@ -1,0 +1,47 @@
+{
+  "provenance": "Relevant fields from parent-retained issue114-pr-ci-3e70ffb-failure.log. Device identifiers and timestamps omitted; hierarchy, identifiers and counts retained.",
+  "summary": {
+    "result": "Passed",
+    "totalTestCount": 1,
+    "passedTests": 1,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "expectedFailures": 0,
+    "devicesAndConfigurations": [
+      {"passedTests": 1, "failedTests": 0, "skippedTests": 0, "expectedFailures": 0}
+    ]
+  },
+  "tests": {
+    "testNodes": [
+      {
+        "nodeType": "Test Plan",
+        "name": "CMUXMaestroPreview",
+        "result": "Passed",
+        "children": [
+          {
+            "nodeType": "Unit test bundle",
+            "name": "CMUXMaestroPreviewTests",
+            "nodeIdentifierURL": "test://com.apple.xcode/CMUXMaestroPreview/CMUXMaestroPreviewTests",
+            "result": "Passed",
+            "children": [
+              {
+                "nodeType": "Test Suite",
+                "name": "CopilotSetupTests",
+                "result": "Passed",
+                "children": [
+                  {
+                    "nodeType": "Test Case",
+                    "name": "concurrentSupervisionDoesNotOccupyCooperativeExecutor()",
+                    "nodeIdentifier": "CopilotSetupTests/concurrentSupervisionDoesNotOccupyCooperativeExecutor()",
+                    "nodeIdentifierURL": "test://com.apple.xcode/CMUXMaestroPreview/CMUXMaestroPreviewTests/CopilotSetupTests/concurrentSupervisionDoesNotOccupyCooperativeExecutor()",
+                    "result": "Passed"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

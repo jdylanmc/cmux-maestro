@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""C7 diagnostic, exclusively on a clean GitHub-hosted macOS runner.
+"""Current combined-installer proof on a clean GitHub-hosted macOS runner.
 
 Run with --hosted-only --evidence "$RUNNER_TEMP/stock-host-update-evidence".
-Setup seeds a version-bound *preexisting* enabled native selection, not onboarding.
-The acts are the frozen native-only local-preview update and rollback commands.
-No containing-app launch, Copilot installation, hooks, input, or production claim.
-Exit 0 requires both loaded generations and restoration; 1 is failure, 2 unavailable.
+Setup establishes a working selection through genuine first-time public UI approval.
+Real CLI metadata/plugin operations only: no credentials, model calls or chat sessions.
+Failed-update compensation is combined recovery; manual rollback remains app-only.
+Exit 0 requires combined operations, native continuity and real compensation.
 All runtime evidence, including unsuccessful setup and cleanup, goes to the artifact.
 Register the verified stock point before discovery from the signed observer bundle.
 The observer declares no extension point and never launches or connects to Maestro.
@@ -23,20 +23,30 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import platform
 import pwd
 import re
+import selectors
 import shlex
+import shutil
 import signal
 import stat
 import subprocess
 import sys
 import time
+import tarfile
 import traceback
 import uuid
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-BASE = "6efa5427cfca4f0dfb5af927ec29ba5962e2cd88"
+BASE = "4cb0486246f0d7a269ad855b44b63588a6715f1a"
+FROZEN_PASS = {"product": "6efa5427cfca4f0dfb5af927ec29ba5962e2cd88",
+               "head": "738e11bcca3aba4239d9dc2c9f253902f51044b1", "run": "36712857606"}
+CLI_PACKAGES = {
+    "arm64": ("arm64", 92437023, "7dc3854cf21190f033d449f77c140bbb78d52018359c5eb05aa781b3c2a1301d"),
+    "x86_64": ("x64", 104193258, "f48484b330792861548ab5a47fdd9b485c03a613c563922e29991d700e6de2f4"),
+}
 STOCK_REVISION = "b685a275c2e411799857155e37264daf84f7e4d6"
 DMG_URL = "https://github.com/manaflow-ai/cmux/releases/download/v0.64.25/cmux-macos.dmg"
 DMG_SHA256 = "0afb2f8ff9bfef10f03e61ff12e65ce02dbca5c96cb9047118e13483ac5b08ad"
@@ -107,11 +117,16 @@ class Probe:
         self.last_sample = None
         self.last_registration = None
         self.sequence = 0
+        self.copilot = None
+        self.copilot_real = None
+        self.integration_states = {}
         self.report = {
             "status": "unavailable", "phase": "setup", "base": BASE,
             "stock": {"version": "0.64.25", "build": "106", "revision": STOCK_REVISION,
                       "url": DMG_URL, "bytes": 225832896, "sha256": DMG_SHA256},
-            "scope": "native hosting only; neither combined installation nor hooks",
+            "scope": "current combined install/repeat/update/failure compensation; no model sessions or loaded-hook claim",
+            "priorFrozenNativeCapability": FROZEN_PASS,
+            "manualRollback": {"exercised": False, "semantics": "documented app-only; not combined compensation"},
             "setupIsNotAcceptance": True,
             "observationContract": {
                 "registration": "independent exact pluginkit catalog turnover, not loaded proof",
@@ -120,6 +135,197 @@ class Probe:
             },
             "checks": {}, "cleanup": [], "events": [],
         }
+
+    def prepare_copilot(self):
+        found = shutil.which("copilot")
+        self.event("copilot-absence-check", configuredPathResult=found)
+        require(found is None, "Existing PATH Copilot refused; no CLI package was installed")
+        require(not (self.home / ".copilot").exists(), "Existing Copilot profile refused")
+        require(platform.machine() in CLI_PACKAGES, "No pinned official CLI package for this architecture")
+        arch, size, digest = CLI_PACKAGES[platform.machine()]
+        archive = self.work / "copilot-1.0.89.tar.gz"
+        url = f"https://github.com/github/copilot-cli/releases/download/v1.0.89/copilot-darwin-{arch}.tar.gz"
+        self.run(["/usr/bin/curl", "--fail", "--location", "--silent", "--show-error",
+                  "--max-time", "300", "--output", archive, url], timeout=310)
+        require(archive.stat().st_size == size and sha256(archive) == digest, "Official CLI archive integrity mismatch")
+        directory = self.work / "copilot-1.0.89"
+        directory.mkdir(mode=0o700)
+        with tarfile.open(archive) as package:
+            members = package.getmembers()
+            require(len(members) <= 4096 and sum(m.size for m in members) <= 1_073_741_824,
+                    "CLI package exceeds extraction bounds")
+            for member in members:
+                path = Path(member.name)
+                require(not path.is_absolute() and ".." not in path.parts
+                        and (member.isdir() or member.isfile()), "Unsafe CLI archive member")
+                target = directory / path
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True, mode=0o700)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    with package.extractfile(member) as source, target.open("xb") as output:
+                        shutil.copyfileobj(source, output)
+                    target.chmod(member.mode & 0o755)
+        self.copilot_real = directory / "copilot"
+        self.preview.safe_path(self.copilot_real, owner=True)
+        require(self.copilot_real.is_file() and os.access(self.copilot_real, os.X_OK), "Official CLI executable missing")
+        for key in ("GITHUB_TOKEN", "GH_TOKEN", "COPILOT_GITHUB_TOKEN"):
+            os.environ.pop(key, None)
+        gh = self.work / "empty-gh-config"
+        gh.mkdir(mode=0o700)
+        os.environ["GH_CONFIG_DIR"] = str(gh)
+        _, version = self.run([self.copilot_real, "--no-auto-update", "--no-auto-login", "--version"])
+        require(re.search(rb"(?<![\w.])1\.0\.89(?![\w.+-])", version), "CLI runtime version is not exactly 1.0.89")
+        self.report["copilot"] = {"version": version.decode().strip(), "url": url, "bytes": size,
+                                  "archiveSHA256": digest, "executableSHA256": sha256(self.copilot_real),
+                                  "credentialsSupplied": False, "sessionsCreated": 0, "modelCalls": 0}
+        self.save()
+
+    def provider_rpc(self, calls):
+        allowed = {"status.get", "hooks.discover", "plugins.list", "plugins.uninstall"}
+        require(all(method in allowed for method, _ in calls), "Non-metadata/provider-cleanup RPC refused")
+        process = subprocess.Popen([
+            str(self.copilot_real), "--no-auto-update", "--no-auto-login", "--headless", "--stdio",
+            "--disable-builtin-mcps", "--no-custom-instructions", "--no-remote", "--no-remote-export",
+            "--log-level", "error",
+        ], cwd=self.work, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.event("official-provider-read", pid=process.pid, methods=[m for m, _ in calls])
+        selector = selectors.DefaultSelector()
+        stdout, stderr, responses = bytearray(), bytearray(), {}
+        try:
+            for index, (method, params) in enumerate(calls, 1):
+                body = json.dumps({"jsonrpc": "2.0", "id": index, "method": method, "params": params}).encode()
+                process.stdin.write(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+            process.stdin.flush()
+            selector.register(process.stdout, selectors.EVENT_READ, "out")
+            selector.register(process.stderr, selectors.EVENT_READ, "err")
+            deadline = time.monotonic() + 40
+            received = 0
+            while selector.get_map():
+                require(time.monotonic() < deadline, "Official metadata completion unavailable")
+                for key, _ in selector.select(0.25):
+                    chunk = os.read(key.fileobj.fileno(), 8192)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    received += len(chunk)
+                    require(received <= 262_144, "Provider metadata exceeds bound")
+                    (stdout if key.data == "out" else stderr).extend(chunk)
+                while b"\r\n\r\n" in stdout:
+                    end = stdout.index(b"\r\n\r\n")
+                    match = re.fullmatch(rb"Content-Length: ([0-9]+)", bytes(stdout[:end]))
+                    require(end < 1024 and match is not None, "Invalid provider metadata framing")
+                    size = int(match[1])
+                    require(0 < size <= 262_144, "Invalid provider frame length")
+                    if len(stdout) < end + 4 + size:
+                        break
+                    message = json.loads(stdout[end + 4:end + 4 + size])
+                    del stdout[:end + 4 + size]
+                    require(isinstance(message, dict) and message.get("jsonrpc") == "2.0"
+                            and "error" not in message, "Provider RPC failed")
+                    if "id" in message:
+                        identity = message["id"]
+                        require(type(identity) is int and 1 <= identity <= len(calls)
+                                and identity not in responses and "result" in message, "Unexpected provider response")
+                        responses[identity] = message["result"]
+                    else:
+                        require(isinstance(message.get("method"), str), "Invalid provider notification")
+                if len(responses) == len(calls) and not process.stdin.closed:
+                    process.stdin.close()
+            require(len(responses) == len(calls) and not stdout, "Incomplete provider response stream")
+            process.wait(timeout=10)
+            require(process.returncode == 0 and not stderr.strip(), "Provider metadata process reported failure")
+            return [responses[i] for i in range(1, len(calls) + 1)]
+        finally:
+            (self.evidence / f"provider-read-{process.pid}.stderr").write_bytes(stderr)
+            selector.close()
+            if process.stdin and not process.stdin.closed:
+                process.stdin.close()
+            if process.poll() is None:
+                process.terminate()  # Exact owned, session-free metadata child only.
+                process.wait(timeout=10)
+            for stream in (process.stdout, process.stderr):
+                stream.close()
+
+    def integration_state(self, label, expected, *, compare_bytes=None):
+        status, hooks, plugins = self.provider_rpc([
+            ("status.get", {}), ("hooks.discover", {}), ("plugins.list", {})])
+        require(status.get("version") == "1.0.89" and status.get("protocolVersion") == 3,
+                "Unexpected official provider metadata version")
+        require(not hooks.get("errors") and not hooks.get("warnings"), "Provider discovery reported errors/warnings")
+        own = [p for p in plugins["plugins"] if p.get("name") == "cmux-maestro-native"]
+        require(len(own) == 1 and own[0].get("enabled") is True and own[0].get("directSourceId")
+                and own[0].get("marketplace") == "" and own[0].get("managed") is not True
+                and own[0].get("installed") is not False and own[0].get("installedFrom") is None
+                and own[0].get("source") is None,
+                "Owned real provider registration not uniquely enabled")
+        registration_root = self.home / "Library/Application Support/CMUXMaestroPreview/Copilot"
+        observer_receipt = json.loads((registration_root / "observer-registration.json").read_text())
+        require(observer_receipt.get("phase") == "current"
+                and observer_receipt.get("pluginIdentity") == own[0]["directSourceId"]
+                and observer_receipt.get("sourceIdentity", {}).get("source") == str(registration_root / "plugin")
+                and observer_receipt["sourceIdentity"].get("directSourceId") == own[0]["directSourceId"],
+                "Real provider identity is not bound to the owned installed source")
+        manifest_path = self.home / ".copilot/hooks/cmux-maestro-observer.json"
+        self.preview.safe_path(manifest_path, owner=True)
+        manifest = json.loads(manifest_path.read_text())
+        helper = self.destination / "Contents/Helpers/CMUXMaestroCopilotHook"
+        require(manifest["maestro"]["helper"] == str(helper)
+                and manifest["maestro"]["owner"] == "cmux-maestro-native"
+                and set(manifest["hooks"]) == {"sessionStart", "userPromptSubmitted", "postToolUse"}
+                and manifest.get("disableAllHooks") is False, "Owned hooks do not bind the stable helper")
+        quoted_helper = "'" + str(helper).replace("'", "'\\''") + "'"
+        command = "{ " + quoted_helper + " >/dev/null 2>&1 || :; } >/dev/null 2>&1; exit 0"
+        require(all(items == [{"type": "command", "bash": command, "timeoutSec": 2}]
+                    for items in manifest["hooks"].values()), "Owned observer commands differ from the stable helper")
+        rows = [h for h in hooks["hooks"] if h.get("origin") == "user"
+                and h.get("source") in ("hooks/cmux-maestro-observer.json", str(manifest_path))]
+        require(len(rows) == 3 and all(h.get("enabled") is True for h in rows)
+                and {h["hookType"] for h in rows} == set(manifest["hooks"])
+                and not any(h.get("origin") == "plugin" and h.get("source") == "cmux-maestro-native"
+                            for h in hooks["hooks"]), "Duplicate/missing real observer discovery")
+        adapter = self.home / ".copilot/extensions/maestro/adapter.mjs"
+        resources = {}
+        paths = [manifest_path]
+        for directory in (registration_root,
+                          self.home / "Library/Application Support/CMUXMaestroPreview/Orchestration/bin",
+                          self.home / ".copilot/extensions/maestro",
+                          self.home / ".copilot/installed-plugins/_direct/plugin"):
+            require(directory.is_dir(), f"Owned integration directory missing: {directory}")
+            paths += [p for p in directory.rglob("*") if not p.is_dir() or p.is_symlink()]
+        settings = self.home / ".copilot/settings.json"
+        if settings.exists():
+            paths.append(settings)
+        require(len(paths) <= 512, "Owned integration inventory exceeds bound")
+        for path in sorted(set(paths)):
+            self.preview.safe_path(path, owner=True)
+            info = path.lstat()
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid(), "Unsafe owned integration resource")
+            resources[str(path)] = {"sha256": sha256(path), "mode": stat.S_IMODE(info.st_mode),
+                                   "inode": info.st_ino, "mtimeNS": info.st_mtime_ns}
+        require(sha256(adapter) == sha256(expected / "Contents/Resources/adapter.mjs"),
+                f"{label}: installed integration adapter differs from current app resources")
+        receipt_path = self.home / "Applications" / self.preview.STATE_NAME / "receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        require(receipt["transaction"] is None and receipt["integration"] is None and receipt["garbage"] is None,
+                "Combined installer left pending bookkeeping")
+        checkpoint = self.home / "Library/Application Support/CMUXMaestroPreview/Orchestration/install-transaction.json"
+        require(not checkpoint.exists(), "Integration checkpoint remains after completed operation")
+        sessions = self.home / ".copilot/session-state"
+        require(not sessions.exists() or not any(sessions.iterdir()), "Unexpected Copilot session state was created")
+        value = {"provider": own[0], "hooks": rows, "resources": resources, "appReceipt": receipt,
+                 "installedAppSHA256": self.preview.digest(self.destination)}
+        if compare_bytes is not None:
+            require({p: (v["sha256"], v["mode"]) for p, v in resources.items()} ==
+                    {p: (v["sha256"], v["mode"]) for p, v in compare_bytes["resources"].items()}
+                    and own[0]["directSourceId"] == compare_bytes["provider"]["directSourceId"]
+                    and receipt == compare_bytes["appReceipt"]
+                    and value["installedAppSHA256"] == compare_bytes["installedAppSHA256"],
+                    "Prior app/integration/provider state was not restored")
+        self.integration_states[label] = value
+        (self.evidence / f"integration-{label}.json").write_text(json.dumps(value, indent=2) + "\n")
+        self.event("combined-state-verified", label=label, providerIdentity=own[0]["directSourceId"])
+        return value
 
     def save(self):
         (self.evidence / "result.json").write_text(json.dumps(self.report, indent=2) + "\n")
@@ -339,13 +545,13 @@ class Probe:
         return extensions
 
     def terminal_tree_snapshot(self):
-        phases = ("baseline", "update", "rollback")
+        phases = ("baseline", "repeat", "update", "compensation")
         require(self.tree_snapshot_count < len(phases), "Unexpected additional tree request")
         phase = phases[self.tree_snapshot_count]
         self.tree_snapshot_count += 1
         self.report["treeObservation"] = {
             "status": "unavailable", "phase": phase, "policy": "cmuxOnly",
-            "transport": "three fixed reads from the test-owned initial terminal command",
+            "transport": "four fixed reads from the test-owned initial terminal command",
         }
         (self.evidence / f"snapshot-request-{phase}").touch(exist_ok=False)
         self.event("tree-snapshot-request", phase=phase)
@@ -442,11 +648,12 @@ class Probe:
             time.sleep(0.5)
         raise RuntimeError(f"No unique, stable, dynamically verified {variant} extension generation")
 
-    def installer(self, name, *arguments, monitored=False):
+    def installer(self, name, *arguments, monitored=False, label=None, expect_failure=False):
+        label = label or name
         args = [sys.executable, str(ROOT / "scripts/local-preview.py"), "--destination",
                 str(self.destination), name, *map(str, arguments)]
         self.event("installer-start", argv=args)
-        with (self.evidence / f"installer-{name}.log").open("wb") as out:
+        with (self.evidence / f"installer-{label}.log").open("wb") as out:
             self.child = subprocess.Popen(args, cwd=ROOT, stdin=subprocess.DEVNULL,
                                           stdout=out, stderr=subprocess.STDOUT)
             deadline = time.monotonic() + 420
@@ -464,8 +671,10 @@ class Probe:
                 time.sleep(0.5)
             code = self.child.returncode
             self.child = None
-        self.event("installer-end", operation=name, returncode=code, continuityError=defect)
-        require(code == 0 and defect is None, f"Native {name} failed; see installer-{name}.log")
+        self.event("installer-end", operation=name, label=label, returncode=code, continuityError=defect)
+        require((code != 0 if expect_failure else code == 0) and defect is None,
+                f"Installer {label} had unexpected outcome; see installer-{label}.log")
+        return code
 
     def registration(self):
         _, raw = self.run(["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID])
@@ -637,6 +846,14 @@ class Probe:
         self.work_owned = True
         self.report["head"] = self.run(["git", "rev-parse", "HEAD"])[1].decode().strip()
         self.run(["git", "merge-base", "--is-ancestor", BASE, "HEAD"])
+        self.report["productSourceSHA256"] = {
+            name: sha256(ROOT / name) for name in (
+                "scripts/local-preview.py", "scripts/build-register.sh",
+                "CMUXMaestroPreview/Integration/CopilotSetup.swift",
+                "CMUXMaestroPreview/Integration/CopilotSetupMetadata.swift",
+                "CMUXMaestroPreview/Integration/CopilotObserverRegistration.swift",
+            )
+        }
         _, os_version = self.run(["/usr/bin/sw_vers"])
         # Query the exact Xcode path that build-register.sh hardcodes.
         build_tools = ["/usr/bin/env", "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer"]
@@ -654,6 +871,7 @@ class Probe:
                 "/Applications/Xcode.app must provide Swift 6.2+; native probe toolchain unavailable")
         require(not self.destination.exists() and not self.source.exists(), "Fixture output already exists")
         for path in (self.home / "Applications" / self.preview.STATE_NAME,
+                     self.home / ".copilot",
                      self.terminal_config.parent,
                      self.home / ".config/cmux", self.home / "Library/Application Support/cmux",
                      self.home / "Library/Application Support/com.cmuxterm.app",
@@ -668,6 +886,7 @@ class Probe:
             registrations.decode(), allow_empty=True), "Existing Maestro extension refused")
         require(not self.ops.app_paths(), "Existing Maestro app registration refused")
         self.fixture_profile_verified = True
+        self.prepare_copilot()
         dmg = self.work / "cmux-macos.dmg"
         self.run(["/usr/bin/curl", "--fail", "--location", "--silent", "--show-error",
                   "--max-time", "300", "--output", dmg, DMG_URL], timeout=310)
@@ -737,26 +956,50 @@ class Probe:
             require(time.monotonic() < deadline, "Observer context/desktop not ready")
             time.sleep(0.25)
         self.apps_owned.append(self.source)
-        self.run([ROOT / "scripts/build-register.sh"], timeout=900)
+        self.run(["/bin/bash", ROOT / "scripts/build-stock-host-fixture.sh"], timeout=900)
         self.hashes["A"] = self.executable_hashes(self.source / self.preview.EXTENSION)
-        candidate = self.work / "candidate-B.app"
-        self.apps_owned.append(candidate)
-        self.run(["/usr/bin/ditto", self.source, candidate])
-        # A real signed Info.plist variant changes the executable's CodeDirectory,
-        # not its permissions or product code. CFBundleVersion remains the checked build.
-        for bundle in (candidate / self.preview.EXTENSION, candidate):
-            info_path = bundle / "Contents/Info.plist"
-            info = plistlib.loads(info_path.read_bytes())
-            info["CFBundleShortVersionString"] = "0.0.1142"
-            info_path.write_bytes(plistlib.dumps(info))
-            self.run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none",
-                      "--preserve-metadata=identifier,entitlements,requirements,flags,runtime", bundle])
-        self.ops.verify(candidate, current=True)
-        self.hashes["B"] = self.executable_hashes(candidate / self.preview.EXTENSION)
-        require(self.hashes["A"].isdisjoint(self.hashes["B"]),
-                "Fixture extension signatures are identical; reload would be unproven")
-        self.candidate = candidate
-        self.installer("install", "--source", self.source, "--retire-development-registration")
+        self.candidates = {"A": self.source}
+        for variant, version in (("B", "0.0.1142"), ("C", "0.0.1143")):
+            candidate = self.work / f"candidate-{variant}.app"
+            self.candidates[variant] = candidate
+            self.apps_owned.append(candidate)
+            self.run(["/usr/bin/ditto", self.source, candidate])
+            adapter = candidate / "Contents/Resources/adapter.mjs"
+            with adapter.open("a") as stream:
+                stream.write(f"\n// Hosted signed fixture resource generation {variant}; behavior unchanged.\n")
+            for bundle in (candidate / self.preview.EXTENSION, candidate):
+                info_path = bundle / "Contents/Info.plist"
+                info = plistlib.loads(info_path.read_bytes())
+                info["CFBundleShortVersionString"] = version
+                info_path.write_bytes(plistlib.dumps(info))
+                self.run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none",
+                          "--preserve-metadata=identifier,entitlements,requirements,flags,runtime", bundle])
+            self.ops.verify(candidate, current=True)
+            self.hashes[variant] = self.executable_hashes(candidate / self.preview.EXTENSION)
+            require(all(self.hashes[variant].isdisjoint(h) for k, h in self.hashes.items() if k != variant),
+                    "Fixture executable signatures must differ")
+        c_extension = self.candidates["C"] / self.preview.EXTENSION
+        executable = plistlib.loads((c_extension / "Contents/Info.plist").read_bytes())["CFBundleExecutable"]
+        self.extension_binary = self.destination / self.preview.EXTENSION / "Contents/MacOS" / executable
+        self.fault_arm = self.work / "fail-late-provider-verification"
+        config = self.work / "provider-proxy.json"
+        config.write_text(json.dumps({
+            "uid": os.getuid(), "home": str(self.home), "executable": str(self.copilot_real),
+            "arm": str(self.fault_arm), "evidence": str(self.evidence / "actual-late-fault.json"),
+            "installedExtension": str(self.extension_binary),
+            "candidateExtensionSHA256": sha256(c_extension / "Contents/MacOS" / executable),
+            "installedAdapter": str(self.home / ".copilot/extensions/maestro/adapter.mjs"),
+            "candidateAdapterSHA256": sha256(self.candidates["C"] / "Contents/Resources/adapter.mjs"),
+        }))
+        node = shutil.which("node")
+        require(node is not None, "Node is required for the real-provider fault proxy")
+        self.copilot = self.work / "official-copilot"
+        self.copilot.write_text("#!/bin/sh\nexec " + shlex.join([
+            node, str(ROOT / "scripts/stock-host-provider-proxy.mjs"), str(config)]) + ' "$@"\n')
+        self.copilot.chmod(0o700)
+        self.installer("install", "--source", self.source, "--retire-development-registration",
+                       "--copilot-executable", self.copilot)
+        self.integration_state("first-install", self.source)
         self.registration()
         extension = self.destination / self.preview.EXTENSION
         executable = plistlib.loads((extension / "Contents/Info.plist").read_bytes())["CFBundleExecutable"]
@@ -820,6 +1063,8 @@ class Probe:
                          "tree": self.tree()}
         self.report["baseline"] = {"host": self.host, "extension": self.initial, **self.baseline}
         self.report["checks"]["setup"] = "pass"
+        self.report["checks"]["firstCombinedInstall"] = {"status": "pass", "provider": "official 1.0.89",
+                                                        "evidence": "integration-first-install.json"}
         self.report["phase"] = "acceptance"
         self.save()
 
@@ -850,6 +1095,58 @@ class Probe:
         self.save()
         self.diagnostics(f"after-{operation}")
         return loaded
+
+    def identical_repeat(self):
+        previous = self.initial
+        app_node = self.destination.stat().st_ino
+        app_digest = self.preview.digest(self.destination)
+        registration = self.registry_sample()
+        before = self.integration_state("before-repeat", self.candidates["A"])
+        self.installer("install", "--source", self.candidates["A"], "--copilot-executable", self.copilot,
+                       monitored=True, label="identical-repeat")
+        after = self.integration_state("identical-repeat", self.candidates["A"], compare_bytes=before)
+        require(after["resources"] == before["resources"] and self.destination.stat().st_ino == app_node
+                and self.preview.digest(self.destination) == app_digest
+                and self.process(previous["generation"][0]) == previous
+                and self.registry_sample() == registration and self.tree() == self.baseline["tree"],
+                "Identical repeat replaced app/resources/native process or changed registration/terminal")
+        self.sample()
+        self.report["checks"]["identicalRepeat"] = {"status": "pass", "native": previous,
+                                                   "appAndOwnedResourcesNotReplaced": True}
+        self.save()
+
+    def failed_update_compensation(self, previous):
+        before = self.integration_state("before-failed-update", self.candidates["B"])
+        before_digest = self.preview.digest(self.destination)
+        self.fault_arm.touch(mode=0o600, exist_ok=False)
+        start = time.time()
+        require(self.process(previous["generation"][0]) == previous,
+                "Preceding B generation must be live before the failing update")
+        self.installer("update", "--source", self.candidates["C"], "--copilot-executable", self.copilot,
+                       monitored=True, label="late-failure-compensation", expect_failure=True)
+        fault = self.evidence / "actual-late-fault.json"
+        require(fault.is_file() and Path(str(self.fault_arm) + ".consumed").is_file(),
+                "Expected real post-publication provider fault was not observed")
+        restored = self.wait_loaded("B", previous=previous)
+        self.registration()
+        self.registry_sample()
+        self.integration_state("after-compensation", self.candidates["B"], compare_bytes=before)
+        require(self.preview.digest(self.destination) == before_digest
+                and self.tree() == self.baseline["tree"], "Preceding app/terminal state was not restored")
+        _, raw = self.run(["/usr/bin/defaults", "export", DOMAIN, "-"])
+        current = plistlib.loads(raw)
+        require(all(current.get(k) == v for k, v in SETUP_DEFAULTS.items()), "Host setup changed during compensation")
+        registry = [r for r in self.report["events"] if r["kind"] == "native-registration" and r["time"] >= start]
+        require(any(not r["records"] for r in registry)
+                and self.registry_sample()["targetPresent"], "Compensation registration transition not observed")
+        self.sample()
+        self.report["checks"]["failedUpdateCompensation"] = {
+            "status": "pass", "fault": json.loads(fault.read_text()), "old": previous, "restored": restored,
+            "appIntegrationProviderStateRestored": True, "hostWorkerTreeFocusUnchanged": True,
+        }
+        self.save()
+        self.diagnostics("after-compensation")
+        return restored
 
     def diagnostics(self, label, *, request_snapshot=False):
         data = {"time": time.time(), "host": self.host,
@@ -907,6 +1204,13 @@ class Probe:
             row for line in (self.evidence / "observer.jsonl").read_bytes().split(b"\n")[:-1]
             if (row := json.loads(line))["kind"] in ("observer-context", "identities", "observer-error")
         ][-16:])
+        if self.copilot_real and self.copilot_real.exists():
+            collect("officialProviderMetadataNoSessions", lambda: self.provider_rpc([
+                ("status.get", {}), ("hooks.discover", {}), ("plugins.list", {})]))
+            checkpoint = self.home / "Library/Application Support/CMUXMaestroPreview/Orchestration/install-transaction.json"
+            if checkpoint.is_file():
+                collect("integrationCheckpointRetained", lambda: {
+                    "path": str(checkpoint), "bytes": checkpoint.stat().st_size, "sha256": sha256(checkpoint)})
         if (request_snapshot and self.host and self.tree_snapshot_count == 0
                 and (self.evidence / "snapshot-worker.pid").exists()
                 and not (self.evidence / "snapshot-worker.exit").exists()):
@@ -981,6 +1285,22 @@ class Probe:
                 "pid": self.child.pid if self.child else None, "reason": "Runner disposal required",
             })
         else:
+            if self.copilot_real and self.copilot_real.exists() and self.integration_states:
+                def retire_provider():
+                    receipt = json.loads((self.home / "Applications" / self.preview.STATE_NAME / "receipt.json").read_text())
+                    require(receipt["transaction"] is None and receipt["integration"] is None,
+                            "Pending combined transaction retained; provider cleanup must not mask it")
+                    _, plugins = self.provider_rpc([("status.get", {}), ("plugins.list", {})])
+                    own = [p for p in plugins["plugins"] if p.get("name") == "cmux-maestro-native"]
+                    known = {s["provider"]["directSourceId"] for s in self.integration_states.values()}
+                    require(len(own) == 1 and own[0].get("directSourceId") in known,
+                            "Cleanup refuses unknown provider identity")
+                    self.provider_rpc([("status.get", {}), ("plugins.uninstall", {
+                        "name": "cmux-maestro-native", "directSourceId": own[0]["directSourceId"]})])
+                    _, after = self.provider_rpc([("status.get", {}), ("plugins.list", {})])
+                    require(not any(p.get("name") == "cmux-maestro-native" for p in after["plugins"]),
+                            "Owned provider plugin still registered")
+                attempt("retire exact real provider identity AFTER acceptance", retire_provider)
             if self.terminal_config_contents is not None:
                 def stop_snapshots():
                     nonlocal cleanup_worker
@@ -1032,16 +1352,14 @@ class Probe:
                 def unregister_owned():
                     installer = self.preview.Installer(self.home, self.destination)
                     with installer.locked():
+                        require(not installer.receipt["transaction"] and not installer.receipt["garbage"]
+                                and not installer.receipt["integration"],
+                                "Pending combined journal retained; native cleanup must not mask it")
                         apps = installer.protected_apps() + self.apps_owned
-                        for key in ("transaction", "garbage"):
-                            if installer.receipt[key]:
-                                apps.append(installer.slot(installer.receipt[key]["slot"]))
                         for app in dict.fromkeys(apps):
                             if app.exists():
                                 self.preview.safe_tree(app)
                                 installer.ops.unregister(app)
-                        require(not installer.receipt["transaction"] and not installer.receipt["garbage"],
-                                "Installer journal still pending; retained for diagnosis, not repaired")
                     _, raw = self.run(["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID])
                     require(not self.preview.metadata.registration_records(raw.decode(), allow_empty=True)
                             and not self.ops.app_paths(), "Native registrations remain after cleanup")
@@ -1096,6 +1414,8 @@ class Probe:
         self.report["retainedForRunnerDisposal"] = [
             str(self.work), str(self.source), str(self.destination),
             str(self.home / "Applications" / self.preview.STATE_NAME),
+            str(self.home / ".copilot"),
+            str(self.home / "Library/Application Support/CMUXMaestroPreview"),
         ] + ([str(self.stock)] if self.stock_node is not None else [])
         self.report["cleanupPolicy"] = (
             "No recursive deletion, process-name kills, extension signals or forced host termination. "
@@ -1132,8 +1452,11 @@ def main():
     signal.alarm(2100)
     try:
         probe.setup()
-        replacement = probe.act("update", probe.initial, "B", "--source", probe.candidate)
-        probe.act("rollback", replacement, "A")
+        probe.identical_repeat()
+        replacement = probe.act("update", probe.initial, "B", "--source", probe.candidates["B"],
+                                "--copilot-executable", probe.copilot)
+        probe.integration_state("successful-update", probe.candidates["B"])
+        probe.failed_update_compensation(replacement)
         probe.sample()
         probe.report["status"] = "pass"
     except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:

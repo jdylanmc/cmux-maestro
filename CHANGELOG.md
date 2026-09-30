@@ -12,13 +12,14 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
-- Manage Copilot CLI 1.0.88 and 1.0.89 observers in a dedicated user-hook file through
-  explicit setup, with verified migration/removal and truthful all/subset-disabled,
-  unresolved or incomplete status. Unsafe ownership and affected unresolved disables refuse
-  migration without changing the existing registration; existing sessions are
-  not restarted or reloaded. Preserve unrelated installed-plugin symlinks without
-  following them; overlapping hook sources still require complete, safe and
-  unambiguous inspection (#114).
+- Coordinate updates to the recognized Maestro app and its Copilot CLI
+  1.0.88/1.0.89 integration, verify identical reinstalls, and recover prior owned
+  state after failed or interrupted publication. Bind ownership through public
+  provider results, restore supported disable choices before publication, and
+  preserve unrelated plugins. Gracefully restore the exact containing app
+  without activation; do not restart existing Copilot sessions. Registration
+  status describes owned state, not provider-wide uniqueness or loaded-session
+  behavior (#114).
 - Route live Copilot observations through the existing provider-neutral session
   snapshot, preserving lifecycle/liveness distinctions, partial ancestry,
   history and attention behavior. Retain v1 decoding and nested validation,

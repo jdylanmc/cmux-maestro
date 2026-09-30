@@ -37,16 +37,15 @@ runtime-directory collection.
 
 ## One-time setup
 
-1. Use the [local preview install](#install-a-stable-local-preview) below, or
-   open an already-installed build. Keep the app at its intended location
-   before enabling integration.
-2. Open **CMUX Maestro Preview**. Click **Enable Copilot Integration**, then
-   explicitly confirm **Install Native Plugin**. If the app's configured `PATH`
-   cannot find Copilot, use **Choose Copilot…** to select the trusted executable
-   you normally run. No shell startup files or machine-specific cache paths are
-   assumed.
-   For explicitly authorized button-free setup, the actual production app also
-   accepts:
+1. Use the [alpha installer](#install-a-stable-local-preview). Normal install
+   and update include Copilot automatically; a separate setup action is not
+   required. The installer uses its configured `PATH`, or an explicit trusted
+   `--copilot-executable /absolute/path/to/copilot`. It does not assume shell
+   startup files or machine-specific provider cache paths.
+2. The containing app retains **Enable Copilot Integration** and
+   **Choose Copilot…** for explicitly requested maintenance. These controls are
+   not normal-install prerequisites. The production app also retains the
+   equivalent standalone maintenance command:
 
    ```sh
    "$HOME/Applications/CMUX Maestro Preview.app/Contents/MacOS/CMUX Maestro Preview" \
@@ -58,16 +57,15 @@ runtime-directory collection.
    Normal app startup still performs no installation.
    Production preview builds disable coverage instrumentation so setup does not
    leave `default.profraw` in the caller's worktree; test coverage remains enabled.
-3. In CMUX's **Sidebar Extensions** browser, enable **CMUX Maestro Preview** and
-   select it as the active sidebar.
-4. Restart or resume already-running Copilot CLI sessions **once** to load the
-   newly installed plugin. Maestro never restarts them automatically. Launch
-   future sessions normally inside CMUX; their hooks record validated identity
-   and the sidebar renders the tree directly from durable events. Setup also
+3. If not already enabled, select **CMUX Maestro Preview** in CMUX's **Sidebar
+   Extensions** browser. Installation does not change host grants or selection.
+4. Leave existing Copilot chats running. New sessions load the installed
+   configuration; already-running sessions may retain cached hooks. Installation
+   neither restarts nor adopts them. Fresh-session acceptance is separate from
+   on-disk installation. Setup also
    installs the bundled `/cmux-maestro-native:cmux-maestro-orchestrate`
    and `/cmux-maestro-native:maestro-icon`
-   skills and local controller. This identity-hook restart guidance does **not**
-   adopt existing sessions into messaging. Only newly Maestro-spawned managed
+   skills and local controller. Only newly Maestro-spawned managed
    sessions get native messaging bindings automatically.
 5. For the optional messaging guide, open Maestro **Settings > CLI Integration**.
    Copy the global install command and run it yourself as described below.
@@ -100,35 +98,47 @@ advisory setup lock live under the existing application `Copilot/` support
 directory. The loader is inert without matching launcher/session/workspace/
 generation bindings. Existing
 `maestro-cmux`, other plugins, provider settings, and sidebar selection are
-never replaced automatically. Moving/replacing the native app requires enabling
-the integration again: Copilot caches local plugin contents, and generated hooks
-contain the **absolute current bundled helper path**.
+never replaced automatically. Normal app updates refresh owned integration
+through the coordinated installer. Generated hooks use the **stable installed
+helper path**, never a staging or backup location. Manual moves outside the
+receipt-owned destination remain unsupported by the app installer.
 
 Observer setup is version-bound to **Copilot CLI 1.0.88 and 1.0.89, protocol 3**.
 Other versions or protocols remain unsupported. A
 conflicting `HOME` or `COPILOT_HOME` is rejected; this does not broaden the
 reader beyond standard `~/.copilot`. Setup rejects unsafe, symlinked,
-hard-linked, modified or foreign registration and ambiguous duplicate sources.
+hard-linked, modified or foreign owned-target registration and ambiguous owned sources.
 It does not chmod an existing shared hooks directory.
 Historical plugin-hook reformatting also requires review: provider disable-key
 identity can depend on serialization, not just semantically equal JSON.
 
-Public plugin metadata retains live-marketplace, built-in and managed provenance.
-An overlapping live/built-in source, or a managed record that is not installed,
-cannot be verified from a same-name cached manifest and refuses before staging.
-`installedFrom` identifies a marketplace directory, not the selected plugin's
-directory. Ordinary unrelated cached plugins are not blanket-refused.
-**Known #114 blocker:** the cached direct-plugin audit still lacks authoritative
-selected-source binding. A noncanonical linked source plus a harmless same-name
-alias can evade that audit. Matching names/events or an opaque source ID do not
-resolve this defect; on-disk status is not proof of complete source inspection.
+Before changing an existing owned installation, setup submits its exact safe
+absolute source path to the public plugin-install RPC in a private disposable
+provider home. On the two supported versions, that source's returned identity
+is home-independent. It must match the real provider's selection and any prior
+receipt before real-home changes. Legacy/name-derived receipts cannot authorize
+their own adoption. The request path, provider version/protocol and returned
+identity are recorded together; subsequent install results and discovery must
+match. A fresh source is bound and recorded before its first real-home provider
+mutation. No private source-ID algorithm or guessed provider directory is used.
+
+Unrelated plugin identities and public hook rows are preserved, not audited
+through cache aliases or common event names. Live, built-in and opaque unowned
+plugins do not cause blanket refusal. The earlier linked-source/safe-cache-alias
+counterexample remains evidence that such an audit was false, not evidence of
+safe foreign actions. **An independent unowned plugin can still call the current
+or an older helper and cause extra executions/writes.** Setup neither certifies
+nor suppresses that behavior. Status describes the **owned registration** only.
+Unsafe owned paths, owned-name/source collisions and directly inspected
+user-file conflicts remain targeted refusals.
 
 For a recognized direct legacy installation, setup first records provenance
 and stages an **owned disabled** dedicated file, confirms disabled discovery,
 prepares the hookless plugin, runs the official plugin installer, verifies that
 the installed observer declarations are gone, and only then publishes the
-intended dedicated state. An enabled competing source is never staged.
-Maestro does not rewrite unrelated hooks, disable keys or global settings.
+intended dedicated state. Old and new owned observer sources are never enabled
+by this migration at the same time.
+Maestro does not rewrite unrelated hooks or disable keys.
 The official CLI does rewrite `settings.json` during plugin install/uninstall,
 including when values are unchanged. After a successful command, setup accepts
 only an identical settings object or addition of an empty `enabledPlugins` map.
@@ -143,9 +153,15 @@ before writing. A later resource-file write failure conditionally restores their
 previous bytes, absence and permissions, then restores observer staging when
 that restoration is verified. Unchanged resources retain their file identity.
 Preflight refusal is reported as no resource-file writes, not as a rollback.
-Unverifiable restoration, process interruption, or failures after preparation
-has completed still report incomplete; whole-integration restoration is not
-yet implemented.
+Standalone maintenance reports later incomplete phases conservatively. Normal
+alpha installation additionally uses a durable coordinated checkpoint: failure
+or pre-commit interruption restores the previous owned files and compensates
+the provider through official install/uninstall operations at the same stable
+owned source path. It then verifies public discovery before restoring the app.
+Rollback restores saved settings bytes only after verifying that current values
+still match the original settings or the documented empty-plugin-map
+normalization. Unexpected user changes block compensation rather than being
+overwritten.
 
 **Disable preservation is conservative.** The provider omits destination keys
 for a file-disabled source. When a registration change would require mapping
@@ -162,9 +178,9 @@ later re-enabling must not lose a disabled subset. Otherwise, explicit
 global/file `disableAllHooks` leaves the owned file disabled,
 including after the global flag is later cleared. Review the owned file and
 explicitly change its disable flag before requesting activation again.
-No application settings writer or additive disable-key migration is implemented
-in this release. Acknowledging the CLI's bounded normalization does not grant
-permission to accept arbitrary concurrent settings edits.
+There is no general settings editor or additive disable-key migration. The
+coordinated installer's guarded restoration is not permission to accept
+arbitrary concurrent settings edits.
 
 **Status retains disable detail.** A completed registration records bounded
 opaque provider keys tied to its exact generation and tested provider version.
@@ -1373,11 +1389,30 @@ continued history updates remain part of deployment acceptance.
 ./scripts/test.sh
 ```
 
-Focused history/preference checks (including two real child processes, coordinated
-writer contention, and automatic observation/projection convergence):
+`test.sh` is the full-coverage entrypoint. It builds once, runs the unchanged
+blocking-observer concurrency regression alone in the integrated host, verifies
+its exact identity/count from the hosted xcresult, then runs all other tests
+from that same build without suite serialization. Both scopes must pass.
+Results and count evidence are retained under `.build/tests/scoped-results/`.
+Selection/retry overrides are rejected by this full-coverage entrypoint.
+The existing `CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()`
+remains opt-in. Its exact skip is attributed only when
+`CMUX_MAESTRO_READER_BENCHMARK` is not `"1"`; when enabled, a skip fails coverage.
+No other optional-test exception is inferred.
+
+Focused history/preference diagnostics after building the validation products
+(not a full-suite pass):
 
 ```sh
-./scripts/test.sh -only-testing:CMUXMaestroPreviewTests/SidebarPreferencesTests \
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+  -project CMUXMaestroPreview.xcodeproj -scheme CMUXMaestroPreview \
+  -configuration Debug -derivedDataPath .build/tests \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+  CMUX_BUNDLE_ID_SUFFIX=.Validation.Tests \
+  'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) CMUX_VALIDATION' \
+  CMUX_SIDEBAR_EXTENSION_POINT_ID=com.jdylanmc.CMUXMaestroPreview.validation.tests.sidebar \
+  test-without-building \
+  -only-testing:CMUXMaestroPreviewTests/SidebarPreferencesTests \
   -only-testing:CMUXMaestroPreviewTests/SidebarHistoryTests \
   -only-testing:CMUXMaestroPreviewTests/SidebarHistoryPollingTests \
   -only-testing:CMUXMaestroPreviewTests/SidebarPreferenceCoordinationTests \
@@ -1462,25 +1497,30 @@ bundled helper no longer depend on a disposable Git worktree after installation.
 The Python 3 command uses the standard library and macOS `ditto`, `codesign`,
 LaunchServices and `pluginkit`; it does not install a service or dependency.
 
-**The combined alpha-install contract in #114 is not complete.** App replacement
-and Copilot setup remain separate transactions. Automatic registration
-withdrawal/re-registration is implemented, but actual stock-host native
-unload/reload is unverified. The app-only idempotence/restoration below does not
-establish an all-or-nothing app-plus-integration installation.
+The alpha installer coordinates the app and its owned Copilot integration as
+one journaled operation. **Issue #114 still requires resolution of the
+selected-source audit noted above, independent review, hosted CI and stock-host
+acceptance.** Registration withdrawal/re-registration is implemented; it is
+not proof of actual native loaded-generation behavior.
 
-From a trusted checkout, explicitly build the current ad-hoc-signed product,
-then install it:
+From a trusted checkout, explicitly build and install the ad-hoc-signed alpha:
 
 ```sh
 ./scripts/build-register.sh
+```
+
+To install an already-built, verified production artifact instead:
+
+```sh
 python3 scripts/local-preview.py install \
   --source "$PWD/.build/adhoc/Build/Products/Debug/CMUX Maestro Preview.app" \
   --retire-development-registration
 ```
 
-These are **two deliberate publication operations**, not validation commands.
-`build-register.sh` can register its source app during Xcode's build, and
-explicitly registers the source extension. There is no supported
+Both commands are **explicit publication actions**, not validation commands.
+`build-register.sh` invokes the same coordinated installer after validating the
+built product; it no longer separately publishes the development extension.
+Xcode can still register its source app during the build. There is no supported
 `REGISTER_APP_WITH_LAUNCH_SERVICES=NO` setting. The install command stages and
 verifies the signed copy, atomically installs it, then retires **only this
 checkout's known `.build/adhoc` registration** before registering the stable
@@ -1503,19 +1543,24 @@ The extension parser accepts pluginkit's documented election markers, including
 an exact match, and are never removed merely for appearing in the listing.
 This does not claim CMUX has selected or loaded the new extension.
 
-Open the **stable** app in Finder, use **Enable Copilot Integration**, and
-explicitly confirm **Install Native Plugin**. This consent flow must be
-repeated after a move, update or rollback: the native plugin embeds the
-helper's **absolute app path**, and Copilot caches plugin contents. The install
-script never edits `~/.copilot`, invokes its plugin CLI, or rewrites active
-sessions. Restart/resume existing CLI sessions **once, at a time you choose**,
-to load the refreshed plugin. Keep the old development app/worktree until
-sessions with its cached hooks have retired. Future normal CLI launches need
-no manual observer or session-start procedure.
-
-The explicit production-app `--install-copilot-integration` command documented
-above is the button-free equivalent. It is a separate authorized setup action,
-not an automatic side effect of the preview update transaction.
+Copilot setup is included. The installer invokes a production-only, non-UI
+bridge from its verified candidate, preserving the stable destination helper
+path. It checkpoints the prior owned state before replacement and keeps the
+app receipt/previous-generation retention pending until setup, public discovery
+and exact app registration have succeeded. No setup window, separate Enable
+action or chat restart is required. An explicit `--copilot-executable` option
+is accepted by both commands when the intended CLI is not on `PATH`.
+New source artifacts must advertise the signed `copilot-install-v1` and
+`graceful-lifecycle-v1` capabilities in their containing-app metadata.
+Both configurations merge these custom markers from
+`CMUXMaestroPreview/Info.plist`; Xcode still generates the namespace-specific
+bundle identifiers and versions. Arbitrary `INFOPLIST_KEY_*` build settings
+alone do not emit these custom keys.
+Older installed apps can still be
+upgraded or restored; an old source artifact lacking the bridge is rejected
+before launch, rather than risking its GUI interpreting an unknown argument.
+Completion reports configured all/subset disables or unresolved disable-key
+applicability separately from ordinary current-on-disk state.
 
 ### Update, rollback and status
 
@@ -1526,12 +1571,29 @@ preview executables to exit before replacing the app. It re-registers the stable
 app afterward. Selecting CMUX's Default sidebar is not an installer prerequisite;
 `cmux sidebar reload` is not used.
 
-A containing app, helper or extension that remains executing still blocks
-replacement. An unverifiable process fails immediately rather than being retried
-as an assumed preview process. The command reports the specific process ID when
-possible; it never signals a process, quits CMUX, restarts a CLI session, injects
-terminal input or changes focus. A failed update restores the old registration
-when safe. Registration and process checks do not prove that the stock host
+A running receipt-owned containing app is handled automatically: the installer
+journals its process generation, code identity and hidden state, then requests
+a normal quit through `NSRunningApplication.terminate()`. Exact bundle and
+executable paths, owner/start generation and running code identity must match;
+same-name apps, other copies, extensions and helpers are not quit targets.
+An accepted quit request is not exit proof: the existing kernel process guard
+must still observe release before replacement. Refusal or continued execution
+aborts safely, without force termination.
+
+If the containing app was running, successful update or failure recovery
+restores a verified instance of the appropriate app through `NSWorkspace` at
+the exact path. Launch disables activation, other-app hiding, version
+substitution, duplicate-instance creation, recent-item changes and optional
+system prompts. An already-running exact instance is reused without activation.
+Quarantined apps refuse background relaunch rather than risking Gatekeeper UI
+or changing quarantine/permission settings. An app that was previously closed
+stays closed, and an identical verified install does not quit or relaunch it.
+Relaunch intent/results are journaled for interrupted recovery.
+
+Helpers, extensions and unverifiable processes still block replacement;
+they are never force-killed. No operation quits CMUX, restarts a CLI session,
+injects terminal input or uses an activation/keystroke fallback.
+Registration and process checks do not prove that the stock host
 observed the disappearance and loaded the replacement; hosted native acceptance
 is still required.
 
@@ -1555,21 +1617,24 @@ expected missing registration; an identical no-op correctly requires that
 registration to be present.
 
 ```sh
-# After another explicit ./scripts/build-register.sh:
+# For a separately built production artifact:
 python3 scripts/local-preview.py update \
   --source "$PWD/.build/adhoc/Build/Products/Debug/CMUX Maestro Preview.app" \
   --retire-development-registration
 python3 scripts/local-preview.py status
 
-# Explicitly exchange the current app with its verified previous version:
+# Legacy app-only historical rollback (separate integration maintenance):
 python3 scripts/local-preview.py rollback
 
 # Cancel preparation without changing the installed build:
 python3 scripts/local-preview.py recover
 ```
 
-Copilot integration still requires its separate explicit setup action; this is
-an outstanding combined-install limitation, not the intended alpha workflow.
+Normal install/update refresh Copilot in the same transaction. The historical
+explicit `rollback` command retains its app-only compatibility behavior for
+older backups, including versions without the new bridge; it is distinct from
+automatic combined failure recovery and may require explicit integration
+maintenance afterward.
 The stock host's identity-disappearance/reappearance behavior motivates the
 automatic registration transition, but mocked registry tests do not establish
 real loaded-generation or focus-preservation acceptance.
@@ -1577,8 +1642,10 @@ real loaded-generation or focus-preservation acceptance.
 Updates may replace a changed development build with the same build number,
 but never silently downgrade. `install` also upgrades an existing receipt-owned
 app in place; manual uninstall is not required. An identical artifact verifies
-the installed app and exact registration and succeeds without exchanging apps
-or changing the receipt/backups. It does not require idleness because no
+the app, exact registration, owned integration resources and public provider
+state. A fully current repeat skips app/resource replacement and plugin mutation.
+If only integration needs repair, the same command performs a journaled
+integration refresh without exchanging the app. It does not require idleness because no
 executable is replaced. Missing registration or altered app contents still
 refuse rather than masquerading as a verified no-op. Explicit development-source
 retirement still applies when requested.
@@ -1596,16 +1663,21 @@ requires the current build number; this feature does not bump it.
   are `0600`, atomically written and synchronized. The persistent lock file is
   **not a stale lock** just because the caller has exited. A one-command
   Python supervisor retains the lock while a mutating `ditto`, `lsregister`
-  or `pluginkit` invocation runs, including after caller timeout or `SIGKILL`.
-  Tools do not inherit the lock descriptor: closing their descriptors cannot
-  release the supervisor's copy. The supervisor waits for the tool's private
-  foreground process group, not just its direct child's exit or pipe EOF.
+  or `pluginkit` invocation, or a non-UI integration bridge, runs, including
+  after caller timeout or `SIGKILL`.
+  The trusted integration bridge also inherits the descriptor solely to record
+  its nested provider groups; other tools and actual provider executables do
+  not receive it. Each provider starts behind an EOF-safe gate, and cannot
+  execute until its separately owned group is recorded and synchronized.
+  The supervisor waits for both the bridge group and every recorded provider
+  group, not merely direct-child exit or pipe EOF. Killing the bridge therefore
+  cannot permit restoration while its provider can still write.
   There is no installed daemon or persistent background observer.
 - A bounded marker in that same lock file records command progress. A gated
   launcher cannot execute the tool until its private process group is durably
   recorded. If the supervisor itself dies, a new lock owner still refuses
-  recovery while that recorded group exists—even if the direct child already
-  exited. Once the group is gone, normal recovery may resume; a launcher whose
+  recovery while any recorded bridge/provider group exists—even if their
+  original supervisors exited. Once all groups are gone, recovery may resume; a launcher whose
   group was never recorded cannot pass its gate. Corrupt/unverifiable markers
   fail closed. Never delete or truncate the lock to bypass this barrier.
 - The 120-second command timeout ends the caller's wait, **not** a surviving
@@ -1626,19 +1698,70 @@ requires the current build number; this feature does not bump it.
   candidate/retiring version are retained. Rollback exchanges current and
   previous, so the rollback itself can be undone. Backups are not integration
   setup targets and their owned registrations are retired.
-- The receipt journals staging, replacement and removal. An install/update
-  failure attempts verified app restoration while its transaction is pending:
-  discard owned staging, or exchange the previous app back and restore its
-  registration. A failed first install restores verified app absence, not a
-  fictitious previous app. New journals also capture and restore the exact
+- Before app replacement, a private `0600` checkpoint at
+  `~/Library/Application Support/CMUXMaestroPreview/Orchestration/install-transaction.json`
+  captures the fixed owned resource set, registration provenance, prior absence,
+  modes and public provider identities. It is outside every sidebar-readable
+  prefix; no sandbox grant is added. Its schema, exact paths, file bounds and
+  transaction identity are validated before recovery. Separate setup refuses
+  while the coordinated transaction is pending.
+- Every observer-receipt write records its exact permitted bytes, permissions
+  and independently established source provenance in the checkpoint before
+  publication. Recovery without a final `after` snapshot accepts only the
+  known prior image or those bounded exact intents, never desired-generation
+  equality alone. Edited plugin/source identities preserve their bytes and
+  pending journal. Durable-after and resource-only enrichment checks remain
+  strict; ambiguous older interrupted checkpoints are not guessed into authority.
+- The app receipt journals the companion transaction ID and its progress.
+  Pending failure recovery first verifies/restores integration, using official
+  `plugins.install` at the unchanged owned source path or `plugins.uninstall`
+  scoped by the returned `directSourceId` for prior absence, then restores the
+  old app and registration. The install RPC receipt binds that exact source;
+  later discovery must match it. Current settings
+  must still match the checkpoint's values or known CLI normalization; unrelated
+  changes are not overwritten. A failed first install restores verified absence,
+  not a fictitious previous app. New journals also capture and restore the exact
   application/extension registration of an explicitly retired development
   source. Older journals without that evidence refuse to guess.
+- Copilot 1.0.89 supports disabling direct plugins, but its install/update
+  operations re-enable them. Identical repeats and compatible external-resource
+  updates still skip provider mutation. Payload replacement instead records the
+  prior disabled state and mutation intent durably, keeps dedicated staging
+  inactive, then uses the official `plugins.disable` API and identity-checked
+  readback before publication or app commit. Recovery reapplies the same choice
+  before claiming restoration, including after an interruption between install
+  and disable. A disabled legacy observer migrates to a disabled dedicated file.
+  Native-plugin state remains separate from an already-configured dedicated
+  file's choice. Direct disable is not effective on 1.0.88 and is never claimed
+  as a supported restoration there.
+- Install and disable are separate provider operations, **not an atomic
+  provider primitive**: the plugin can temporarily report enabled, and a crash
+  can retain that state until recovery runs. Dedicated staging remains inactive
+  throughout this interval; no success or restored-state claim is emitted
+  without verification. New choices after verified apply, wrong source
+  identities and unrelated changes are not overwritten. Standalone maintenance
+  cannot replace a disabled native payload without the coordinated install
+  checkpoint.
+- The disposable-home source binding is recorded **before** real-home mutation,
+  so loss of the real install response is not a name-only recovery boundary.
+  Compensation independently bootstraps that same source again, checks current
+  selection and prior provenance, and targets exact identity. First-install
+  source files remain available until official removal succeeds, including
+  across interrupted compensation. Failed bootstrap or changed foreign
+  selection refuses further mutation and retains explicit recovery state.
 - A surviving or unconfirmed command supervisor blocks restoration; the
   installer never races a still-running mutator. A failed restoration reports
-  both errors and retains recoverable state. A completed app commit followed
-  by cleanup failure is not covered by this rollback; nor is separate Copilot
-  setup. Neither failure is installation success. No GUI reload is inferred
-  from restoring registrations.
+  both errors and retains recoverable state. The durable commit decision is
+  written only after both components are verified. An interruption after that
+  decision finishes checkpoint/backup bookkeeping rather than undoing an already
+  verified commit; cleanup errors remain explicit. No GUI reload or existing
+  chat behavior is inferred from restoring registrations.
+- A committed checkpoint awaiting cleanup blocks separate preparation,
+  historical rollback and uninstall until `recover` finishes bookkeeping.
+  Resuming a pending rollback re-verifies previously restored integration
+  before changing the app; a concurrent user change cannot be hidden behind a
+  saved `restored` phase. Malformed false-shaped checkpoint identities are
+  rejected, not interpreted as legacy app-only state.
 
 ```sh
 python3 scripts/local-preview.py status
@@ -1648,13 +1771,15 @@ python3 scripts/local-preview.py recover
 python3 scripts/local-preview.py recover --restore-previous
 ```
 
-Recovery cancels pre-commit staging, or infers a committed exchange from the
-verified app identities and finishes registration/backup bookkeeping. It can
+For coordinated installs with retained source authority, recovery restores both prior components whenever the
+app receipt still records a pending transaction, including after the app has
+already been exchanged. Older app-only journals retain their finish-forward
+recovery behavior. Recovery can
 resume its own interrupted cleanup or rollback. If no transaction is pending,
 it verifies owned apps and refreshes the stable registration. A new explicit
 `install`/`update` first restores any interrupted install's prior app state
 before staging its requested artifact; it does not silently finish that
-interrupted install. Explicit `recover` retains the finish-forward option.
+interrupted combined install.
 `recover --restore-previous` restores absence after an interrupted first install.
 Ambiguous identities, replaced partial-cleanup directories, foreign backups,
 or corrupt receipts are refused rather than guessed or deleted. Preserve the
@@ -1708,9 +1833,10 @@ or user runtime data. Controlled fixture processes deliberately close their
 descriptors, leave a delayed mutating descendant, and lose their caller or
 supervisor to `SIGKILL`; tests prove recovery/new installation stay blocked
 until those synthetic workers finish. No real app/session/tool is killed.
-CI retains all existing build/test commands and adds
-these transaction regressions. Live signed installation, consent refresh,
-host selection and visual verification remain separate operator gates.
+CI retains all existing build/test commands and adds these transaction
+regressions. Compiled non-UI bridge fixtures also exercise app-plus-integration
+publication and recovery across an actual installer-process exit. Live signed
+installation, host selection and visual verification remain separate gates.
 
 ## Build and register locally
 
@@ -1718,26 +1844,26 @@ host selection and visual verification remain separate operator gates.
 ./scripts/build-register.sh
 ```
 
-This explicit script builds with an ad hoc identity, registers the embedded
-extension with `pluginkit`, and verifies discovery of
-`com.jdylanmc.CMUXMaestroPreview.Extension`. It **does not install a Copilot
-plugin**, enable/select the sidebar, launch an observer, or modify a legacy
-integration. Plugin installation is a separate deliberate in-app consent step.
-It explicitly pins production IDs and the real CMUX point, verifies resolved
-settings and source sandbox grants before the build, and checks built IDs,
-point, strict signatures, and the extension's effective sandbox grants before
-its explicit `pluginkit` registration. Xcode's own app-registration task can
-also run inside this deliberately requested publication build.
-The post-registration check requires the production bundle ID and canonical
-`.appex` path in the registry listing; it does not prove the hosted UI loaded.
+This explicit script builds with an ad hoc identity, verifies the production
+namespace and signed profiles, then calls the coordinated alpha installer.
+It **does install owned Copilot integration** together with the stable app.
+It does not enable/select the sidebar, restart or adopt sessions, or modify
+unrelated integrations. Build-only and validation scripts remain separate.
+Xcode's own app-registration task can run during the requested production
+build; the installer retires only that explicitly identified development
+registration. Final registration checks require the production bundle ID and
+canonical stable `.appex` path, not merely command success. They do not prove
+the hosted UI loaded.
 
-### After replacing a local build
+### Historical local-build diagnostic
 
-An already-selected preview may retain a lost connection after replacement.
+An already-selected preview has historically retained a lost connection after replacement.
 An observed workaround: right-click CMUX's sidebar toggle, select the default
 sidebar, then reselect **CMUX Maestro Preview**. This recreated the host view
 and loaded the replacement extension without restarting CMUX or Copilot
 sessions in the observed case; it is not a universal fix or proof of an OS cause.
+This is not a prerequisite or fallback claimed by the coordinated installer;
+its automatic registration transition still needs stock-host acceptance.
 `cmux sidebar reload` applies to interpreted Swift sidebars, not native `.appex`
 extensions.
 

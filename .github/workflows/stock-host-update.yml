@@ -21,7 +21,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Probe stock native hosting (not combined install or hooks)
+      - name: Probe current combined installer and stock native continuity
         timeout-minutes: 40
         run: |
           python3 scripts/test-stock-host-update.py --hosted-only --evidence "$RUNNER_TEMP/stock-host-update-evidence"

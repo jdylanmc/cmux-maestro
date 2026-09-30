@@ -49,6 +49,53 @@ serialization, startup retry or larger readiness timeout. Startup observation
 has no added wall-time limit before the first sample; the existing dedicated
 concurrency test remains the bounded dispatch-progress regression.
 
+The hosted integrated runner now builds once, executes that **one unchanged
+test** alone in the integrated test host, and executes every remaining test
+from the same build in a second invocation. It does not serialize the remaining
+suite or alter either detached driver, any assertion, or the three-second
+bound. `xcresulttool` must report exactly one executed, correctly identified
+test before that selector may be excluded from the loaded invocation. Both
+scopes must pass with explicit nonzero, reconciled counts; unrelated skipped
+tests and a repeated concurrency test are errors. A selector/count extraction
+failure runs an unfiltered coverage fallback but **still fails** the command.
+There is no retry-until-pass path.
+
+The preexisting opt-in
+`CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()`
+is the only optional skipped identity: it remains disabled unless the inherited
+`CMUX_MAESTRO_READER_BENCHMARK` is exactly `"1"`. When enabled, its skip fails.
+The harness records that flag and exact skip attribution alongside the verified
+isolated-selector exclusion, without enabling the benchmark or rewriting
+reported counts/details. A skipped parameter, another identity, or an
+unverified selector exclusion is not permitted. Full fallback remains red even
+when the benchmark skip is correctly attributed.
+
+Result accounting distinguishes logical test cases from recorded executions.
+The top-level summary must match the tree's complete logical status vector;
+device/configuration counters must match normalized execution statuses.
+Parameterized argument groups are not equated blindly with logical parents,
+and parameterized evidence without its execution counters is rejected.
+Unrecognized execution shapes, contradictory parent/run results, hidden runs
+and repetition nodes cannot certify coverage. The known nonparameterized
+isolated method must have exactly one non-repeated execution.
+
+Each hosted invocation retains separate xcresults, raw summary/test JSON and
+`coverage.json` under `.build/tests/scoped-results/`. Raw test trees, summaries
+and reconciled counts also appear in the job log, so the parent verifies the
+actual hosted selector and parameter hierarchy rather than accepting a guessed
+selector or local standalone count. The inherited-MainActor negative remains sensitive because
+the test body and non-yielding observer are unchanged. Previous hosted
+concurrency reds and the separate native viewport-settlement failure remain
+recorded; only a necessary current-head hosted run can establish their state.
+
+CI always uploads every scoped-results JSON file as the separate
+`integrated-test-scope-evidence` artifact, retained for 14 days, including after
+test failure. Missing JSON fails that upload; it is not a success fallback.
+The required `sidebar-layout-offscreen` PNG artifact and all eleven validation
+commands remain unchanged. Full xcresult bundles are not included in this
+diagnostic artifact.
+All eleven workflow commands remain required.
+
 ### Dedicated observer registration (#114)
 
 Explicit setup now owns a dedicated version-1 user file for exactly
@@ -121,24 +168,26 @@ file; setup does not claim it repaired provider-wide enforcement.
 Migration stages only the exact owned **disabled** file, confirms disabled
 discovery, prepares and officially installs the hookless plugin, verifies its
 cached declarations and public metadata, then publishes the intended file.
-Foreign/modified registrations, unknown installed identities, overlapping
-observer sources and changing inputs refuse rather than being overwritten.
-Other-plugin inspection uses the complete provider-reported overlapping source
-set and checks one matching plugin identity plus one safe, unique manifest
-and its hook declarations for each cached source. **This is not an authoritative
-selected-source binding:** the noncanonical linked-source/safe-alias
-counterexample remains unresolved for direct installs. No current-on-disk
-result should be treated as proof that this whole-source audit is correct.
-Public live, built-in and managed provenance is retained. Overlapping live or
-built-in sources and uninstalled managed records refuse before staging instead
-of accepting a stale cache; `installedFrom` is a marketplace directory, not
-the selected plugin directory. Ordinary unrelated cached plugins remain
-compatible. Unrelated installation-directory
-symlinks are not followed or counted as inspected sources. A relevant linked
-entry/group, missing declaration, duplicate identity/manifest or incomplete
-source coverage still refuses. Source identities and inspected files are
-revalidated at staging, publication and removal; skipping an unrelated link
-does not waive those checks.
+Foreign/modified owned registrations, wrong selected owned identities, unsafe
+owned paths and changing inputs refuse rather than being overwritten.
+Exact-source identity is independently bootstrapped by public install into a
+disposable provider home, using the same absolute source path, not a copied
+path or private hash. The supported-version result must match current real-home
+selection and any old receipt before effects. A name-derived receipt is not
+authority; forged or foreign source provenance fails that independent check.
+Fresh-install authority is recorded before real-home provider mutation.
+
+The false foreign-cache audit has been removed. Public foreign identity/hook
+continuity is checked without reading their source/cache directories or
+claiming selected-source coverage. Unrelated same-event direct, marketplace,
+live, built-in and opaque records are preserved; an unsafe ancestor of the
+actual owned cache still refuses. The historical alias counterexamples are
+preserved as evidence against the old audit, while owned-name/source alias
+cases are mandatory pre-effect rejection tests. An unowned plugin may still
+invoke current/old helpers and cause extra executions or writes; this is
+neither prevented nor certified harmless. Status concerns owned registration,
+not provider-wide uniqueness. Existing directly inspected user-file conflicts,
+disable-key refusals and no-follow guards remain.
 A failure confined to provenance/disabled staging restores and verifies the
 previous owned file/provenance bytes, absence and permissions before returning,
 including on cancellation. Concurrent replacement refuses restoration rather
@@ -156,15 +205,15 @@ Real permission-denied late writes exercise reversal, with changed file stamps
 proving an earlier write actually occurred. Unsafe later targets refuse before
 earlier writes. Preflight/no-write, verified restoration and unverified
 restoration are separate outcomes; unrelated files and live routes remain
-untouched. This is in-process resource compensation, not crash recovery or
-reversal of a completed provider command.
+untouched. Standalone maintenance retains this in-process compensation. The
+normal alpha installer adds the durable coordinated boundary below.
 A later failed step reports the last completed phase; the next phase may have
 partially refreshed setup resources. Retry revalidates recorded generations
 and known partial preparation, preserving a retained disabled stage. It never
 rolls back blindly or changes existing sessions. Removing integration preserves
 global keys, unrelated hooks and live messaging route/session state.
 
-### App installer correction boundaries (#114)
+### Coordinated alpha installation (#114)
 
 The focused Python suite covers ordinary `install` upgrades, exact registered
 identical no-ops (without app replacement, receipt changes or lost backups),
@@ -176,13 +225,123 @@ Changed-app publication withdraws only the owned registration, waits at most
 120 seconds for positively identified preview processes to exit, and registers
 the replacement. Unknown process evidence still fails immediately. Tests cover
 ordered withdrawal/re-registration, unchanged unrelated registrations, bounded
-waiting and restoration when release fails; no signal, UI selection, host
-restart or script-sidebar reload is used.
-These tests use synthetic registries and real disposable filesystem exchanges;
-they do not prove stock-host unload/reload or a combined app/Copilot transaction.
-Crash-durable resource/provider rollback, automatic integration during installation,
-native lifecycle proof and later installed fresh-session acceptance remain
-open. Hosted CI and independent review are separate gates.
+waiting and restoration when release fails; no UI selection, host restart or
+script-sidebar reload is used.
+The normal containing app is no longer treated as an indefinitely busy
+extension. A changed-app update journals the exact running app's owner/start
+generation, executable and code identity, then requests only
+`NSRunningApplication.terminate()`. Refusal or failure to exit aborts without
+force termination. The prior running/hidden choice is restored with an exact
+URL `NSWorkspace` launch configured not to activate, hide other apps, substitute
+another installation, create a duplicate instance or prompt for optional UI.
+Quarantine refuses relaunch rather than bypassing system policy.
+
+Injected AppKit handles cover ownership mismatches, PID-generation changes,
+other app copies, helper/extension exclusion, refusal and idempotent restoration.
+A separate non-UI process fixture compares the public Security-framework code
+identity with the existing kernel-cached code hash. Installer tests cover
+quit/launch interruptions, failed restoration and rollback after a replacement
+app has started. These tests do not invoke real GUI quit/launch; the hosted
+stock-host proof must still establish real release/recreation and focus behavior.
+
+`build-register.sh` now hands its verified artifact to the same `install`
+entrypoint; it no longer separately registers the development extension.
+The installer calls a production-only, non-UI bridge with a transaction UUID
+and stable application path. It prepares an owned integration checkpoint before
+the app exchange, applies Copilot, verifies provider discovery and exact app
+registration, and only then commits current/previous app retention. An identical
+app also checks integration; a fully current repeat skips resource replacement
+and official plugin mutation.
+
+The durable integration checkpoint is private `0600` data in
+`Orchestration/install-transaction.json`, outside the sidebar's granted
+`Copilot/` and `Orchestration/observer/` prefixes. No permission is broadened.
+Recovery validates the schema, fixed file paths, original modes/absence,
+expected resource bytes and transaction UUID. It keeps observers inactive while
+compensating through official install/uninstall at the stable owned source,
+restores prior settings only across verified CLI normalization, and verifies
+the original public plugin/hook inventory before the app is restored.
+The fixed owned installed payload is verified too. If source and installed
+copies differed before an interrupted setup, compensation temporarily supplies
+the saved installed payload at that same source, verifies official replacement,
+then conditionally restores the original source bytes. Provider-private state
+and unrelated plugin directories are never rewritten.
+Unexpected concurrent content or disable changes refuse compensation rather
+than being overwritten. Failed compensation retains the checkpoint.
+
+Receipt publication now has a write-ahead exact-image boundary. Before a
+staged/current observer receipt can change, the checkpoint validates its
+current image and durably records the complete intended bytes/mode/source
+binding. Missing-`after` recovery cannot substitute generation equality for
+that authorization. Tests change plugin identity and source path/ID without
+changing the generation, and require preserved edited bytes/resources and
+journal with no compensating provider mutation. A real compiled-bridge exit
+after current-receipt publication but before the final snapshot still recovers.
+
+The existing finite command guardian also covers nested provider groups.
+Standalone provider processes retain their independent groups and original
+timeout/cancellation cleanup. Coordinated providers use the same grouping but
+wait behind a launcher gate until the trusted bridge synchronizes their group
+IDs into the inherited install-guard record; providers never inherit that
+descriptor or its environment. The guardian re-reads and drains the complete
+record after bridge exit. If it also dies, fresh recovery refuses while any
+recorded group survives. Actual compiled bridge/provider gates prove this for
+forward and compensation paths, with and without guardian death, preserving
+unrelated processes. The old observed late-write-after-restoration results
+are retained as red evidence, not relabeled as supported behavior.
+
+Plugin mutations use public sessionless RPCs, with the supported status checked
+before the mutation request. An install receipt supplies the exact owned
+`directSourceId`; later discovery must match. Removal and compensation target
+that identity, not just the manifest name. Even a receipt followed by a failing
+provider-process exit is retained for recovery. Independent bootstrap records
+the same source's identity before real-home mutation, so a lost production
+response can still be compensated without adopting a name-only list row.
+Recovery bootstraps again and checks current selection before effects; source
+files remain until exact-ID removal succeeds. Failed bootstrap and foreign
+identity drift do not grant compensation authority.
+
+The pinned [1.0.89 changelog](https://github.com/github/copilot-cli/blob/8dfa6009c4a04b3a22a5ca4a7c36a056edd718dd/changelog.md)
+supersedes the SDK comments claiming direct installs are always enabled.
+Disposable official-provider probes confirm direct disable/enable, zero
+discovered plugin hooks while disabled, and re-enabling on both install and
+update. The installer preserves a verified disabled native plugin without
+provider mutation for no-ops and compatible external-resource-only updates.
+For a required payload replacement it records original state and mutation
+intent before the official operation, keeps dedicated staging inactive, and
+requires official `plugins.disable` plus exact-source readback before
+publication/commit. The disable RPC is version-gated to 1.0.89 and checks the
+selected identity before its name-based mutation. Install/update success alone
+does not prove preservation. Disabled legacy observer migration also disables
+the dedicated file; an existing dedicated file retains its independent choice.
+
+Recovery handles a failed/lost disable response or process exit between the
+operations using the durable intent, independently re-established source
+authority and official disabled-state restoration. Exact prior cache/source and
+settings are verified before the app rollback completes. A prior payload that
+is already intact is not needlessly reinstalled. No private enablement key is
+guessed or edited. User re-enablement after verified apply and foreign identity
+drift refuse rather than being cleared. These are separate provider operations:
+the intermediate enabled state is real, not described as atomic suppression.
+Local tests cover that boundary without executing hooks or restarting sessions;
+actual stock-host and installed-session gates remain separate.
+
+The Python suite executes the compiled Swift bridge in separate processes over
+real disposable files, covering success, no-op, upgrade, late failure, first
+absence and an actual installer-process exit after apply. A fresh installer
+then recovers both generations from disk. These automated tests use a provider
+double and synthetic registries; they do not prove real stock-host reload.
+Another actual process-exit case stops between integration restoration and
+the app exchange: resumed recovery refuses a subsequent foreign edit, then
+completes after the fixture restores the verified input. Pending committed
+checkpoint cleanup blocks legacy maintenance mutations, and false-shaped
+receipt fields cannot bypass coordination.
+The Swift checkpoint suite separately covers stable-source compensation,
+disabled legacy restoration, repeated recovery, arbitrary-path refusal and
+concurrent-write controls. The focused test script's compile-only mode builds
+that non-UI fixture; its normal CI command still runs every existing test.
+Current eleven-command hosted CI, source-binding resolution, native lifecycle
+proof and later installed fresh-session acceptance remain separate gates.
 
 [CopilotObserverRegistrationTests](../CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift)
 cover isolated registration, migration, exact event/wrapper content, preserved
