@@ -245,24 +245,6 @@ quit/launch interruptions, failed restoration and rollback after a replacement
 app has started. These tests do not invoke real GUI quit/launch; the hosted
 stock-host proof must still establish real release/recreation and focus behavior.
 
-Owned garbage and staging retirement now finish before final exact registration
-of the retained app. The earlier verification registration remains: deleting
-the candidate before compensation releases its checkpoint or relaunches the old
-app would remove the required bridge, while deleting the previous backup before
-new-app verification would break restoration. Cleanup keeps its existing
-`deleting` or `discarding` journal until final registration verifies. Recovery
-after deletion needs no retired bridge, repeated deletion or app relaunch.
-First-install absence and identical-repeat paths add no registration.
-
-Focused tests inject a deterministic catalog invalidation at owned deletion and
-verify forward cleanup, failed-update compensation and pre-commit cancellation,
-plus failures and interruption before/after final publication. They preserve
-the prior app/integration/running state and unrelated registrations. This is an
-ordering and recoverability proof, not an emulation of macOS service timing.
-The observed hosted post-compensation registration loss still needs real
-post-return validation of this correction; the separate preserved same-ID
-sibling/native-host conflict is not solved or waived by it.
-
 `build-register.sh` now hands its verified artifact to the same `install`
 entrypoint; it no longer separately registers the development extension.
 The installer calls a production-only, non-UI bridge with a transaction UUID

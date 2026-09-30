@@ -801,7 +801,7 @@ class Installer:
     def clean_garbage(self):
         garbage = self.receipt["garbage"]
         if not garbage:
-            return False
+            return
         path = self.slot(garbage["slot"])
         require(path.exists() or garbage["deleting"], "Retiring backup disappeared before owned cleanup.")
         if path.exists():
@@ -816,12 +816,8 @@ class Installer:
             safe_tree(path, deleting=True)
             shutil.rmtree(path)
             sync_directory(self.state)
-        # Retiring a same-ID app may invalidate registration. Publish after
-        # its final deletion, retaining cleanup ownership until verification.
-        self.refresh_current_registration()
         self.receipt["garbage"] = None
         self.save()
-        return True
 
     def idle(self):
         self.ops.assert_idle(*self.protected_apps())
@@ -1138,7 +1134,6 @@ class Installer:
                 self.save()
             shutil.rmtree(candidate)
             sync_directory(self.state)
-        self.refresh_current_registration()
         self.receipt["transaction"] = None
         self.save()
 
@@ -1155,10 +1150,9 @@ class Installer:
             require(not restore_previous, "No pending replacement; use rollback for a completed update.")
             self.check_stable()
             self.release_committed_integration()
-            retired = self.clean_garbage()
+            self.clean_garbage()
             self.clean_removed_current()
-            if not retired:
-                self.refresh_current_registration()
+            self.refresh_current_registration()
             return "No pending transaction. Owned apps verified; installed preview registration refreshed if present."
         if transaction["kind"] == "uninstall":
             require(not restore_previous, "Removal is not a replacement to roll back; use recover to resume explicit removal.")
@@ -1183,6 +1177,7 @@ class Installer:
         if transaction["phase"] in ("copying", "discarding"):
             self.check_stable()
             self.discard_staging()
+            self.refresh_current_registration()
             return "Interrupted staging discarded. Installed app and previous version unchanged."
         if transaction["phase"] == "reverting":
             self.revert_committed()
