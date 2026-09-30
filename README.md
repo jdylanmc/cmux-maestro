@@ -1533,6 +1533,10 @@ action or chat restart is required. An explicit `--copilot-executable` option
 is accepted by both commands when the intended CLI is not on `PATH`.
 New source artifacts must advertise the signed `copilot-install-v1` and
 `graceful-lifecycle-v1` capabilities in their containing-app metadata.
+Both configurations merge these custom markers from
+`CMUXMaestroPreview/Info.plist`; Xcode still generates the namespace-specific
+bundle identifiers and versions. Arbitrary `INFOPLIST_KEY_*` build settings
+alone do not emit these custom keys.
 Older installed apps can still be
 upgraded or restored; an old source artifact lacking the bridge is rejected
 before launch, rather than risking its GUI interpreting an unknown argument.

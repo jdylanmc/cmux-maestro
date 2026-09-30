@@ -18,6 +18,32 @@ spec.loader.exec_module(metadata)
 
 
 class BuildMetadataTests(unittest.TestCase):
+    def test_app_bridge_markers_are_wired_as_input_plist_in_both_configurations(self):
+        project = json.loads(subprocess.check_output([
+            "/usr/bin/plutil", "-convert", "json", "-o", "-",
+            str(ROOT / "CMUXMaestroPreview.xcodeproj/project.pbxproj"),
+        ]))
+        objects = project["objects"]
+        target_id, target = next((key, value) for key, value in objects.items()
+                                 if value.get("isa") == "PBXNativeTarget" and value.get("name") == "CMUXMaestroPreview")
+        configurations = objects[target["buildConfigurationList"]]["buildConfigurations"]
+        self.assertEqual({objects[key]["name"] for key in configurations}, {"Debug", "Release"})
+        for key in configurations:
+            with self.subTest(configuration=objects[key]["name"]):
+                settings = objects[key]["buildSettings"]
+                self.assertEqual(settings["GENERATE_INFOPLIST_FILE"], "YES")
+                self.assertEqual(settings["INFOPLIST_FILE"], "CMUXMaestroPreview/Info.plist")
+                source = metadata.plist(ROOT / settings["INFOPLIST_FILE"])
+                self.assertEqual(source["CMUXMaestroInstallBridge"], "copilot-install-v1")
+                self.assertEqual(source["CMUXMaestroAppLifecycleBridge"], "graceful-lifecycle-v1")
+                self.assertNotIn("CFBundleIdentifier", source)
+                self.assertNotIn("INFOPLIST_KEY_CMUXMaestroInstallBridge", settings)
+                self.assertNotIn("INFOPLIST_KEY_CMUXMaestroAppLifecycleBridge", settings)
+        group = next(objects[key] for key in target["fileSystemSynchronizedGroups"]
+                     if objects[key]["path"] == "CMUXMaestroPreview")
+        exclusions = [objects[key] for key in group["exceptions"] if objects[key]["target"] == target_id]
+        self.assertTrue(any("Info.plist" in item["membershipExceptions"] for item in exclusions))
+
     def test_production_preview_disables_profile_output_without_disabling_test_coverage(self):
         production = (ROOT / "scripts/build-register.sh").read_text()
         validation = (ROOT / "scripts/test.sh").read_text()
@@ -62,14 +88,16 @@ class BuildMetadataTests(unittest.TestCase):
                     metadata.verify_metadata(self.app, "tests")
 
     def test_non_ui_bridge_is_required_for_new_artifacts_not_historical_receipts(self):
-        for key in ("CMUXMaestroInstallBridge", "CMUXMaestroAppLifecycleBridge"):
-            with self.subTest(capability=key):
-                self.fixture("production")
-                del self.parent[key]
-                self.save()
-                with self.assertRaisesRegex(ValueError, "bridge"):
-                    metadata.verify_metadata(self.app, "production")
-                metadata.verify_metadata(self.app, "production", require_bridge=False)
+        for mode in metadata.PROFILES:
+            for key in ("CMUXMaestroInstallBridge", "CMUXMaestroAppLifecycleBridge"):
+                with self.subTest(mode=mode, capability=key):
+                    self.fixture(mode)
+                    del self.parent[key]
+                    self.save()
+                    with self.assertRaisesRegex(ValueError, "bridge"):
+                        metadata.verify_metadata(self.app, mode)
+                    if mode == "production":
+                        metadata.verify_metadata(self.app, mode, require_bridge=False)
 
     def save(self):
         (self.app / "Contents/Info.plist").write_bytes(plistlib.dumps(self.parent))
