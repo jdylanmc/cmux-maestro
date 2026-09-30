@@ -1,4 +1,4 @@
-name: Stock native host legacy-sibling reproduction
+name: Stock native host fresh-DR and legacy-sibling probe
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Probe legacy siblings with current installer and stock native continuity
+      - name: Probe same-version fresh DR first, then legacy siblings
         timeout-minutes: 40
         run: |
           python3 scripts/test-stock-host-update.py --hosted-only --evidence "$RUNNER_TEMP/stock-host-update-evidence"

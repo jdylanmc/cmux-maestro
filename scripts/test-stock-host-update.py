@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Legacy-sibling reproduction on a clean GitHub-hosted macOS runner.
+"""Same-version/fresh-DR update, then conditional legacy-sibling reproduction.
 
 Run with --hosted-only --evidence "$RUNNER_TEMP/stock-host-update-evidence".
 Setup establishes a working selection through genuine first-time public UI approval.
-Then two exact signed copies of A remain registered alongside the stable app.
-Only the stable path must withdraw; sibling eligibility must remain unchanged.
+First prove fresh default ad-hoc requirements without sibling registrations.
+Only after that passes, preserve two exact signed B copies during a further update.
 Real CLI metadata/plugin operations only: no credentials, model calls or chat sessions.
 Failed-update compensation is combined recovery; manual rollback remains app-only.
 Exit 0 requires combined operations, native continuity and real compensation.
@@ -46,7 +46,9 @@ BASE = "c2b829edb90e2d22eb5582153fb8684853925d4d"
 FROZEN_PASS = {"product": "6efa5427cfca4f0dfb5af927ec29ba5962e2cd88",
                "head": "738e11bcca3aba4239d9dc2c9f253902f51044b1", "run": "36712857606"}
 CLEAN_COMBINED_PASS = {"product": BASE, "head": "b3de3aa475f7233c5a8d4fcfa2d525634aa2e741",
-                       "run": "36723431093"}
+                       "run": "36723431093",
+                       "limit": "version-bumped B/C with preserved requirements; not same-version/fresh-DR proof"}
+FIXTURE_MARKER = "CMUXMaestroHostProofGeneration"
 CLI_PACKAGES = {
     "arm64": ("arm64", 92437023, "7dc3854cf21190f033d449f77c140bbb78d52018359c5eb05aa781b3c2a1301d"),
     "x86_64": ("x64", 104193258, "f48484b330792861548ab5a47fdd9b485c03a613c563922e29991d700e6de2f4"),
@@ -120,6 +122,7 @@ class Probe:
         self.baseline = None
         self.worker = None
         self.hashes = {}
+        self.fixture_signing = {}
         self.last_sample = None
         self.last_registration = None
         self.sequence = 0
@@ -130,8 +133,11 @@ class Probe:
             "status": "unavailable", "phase": "setup", "base": BASE,
             "stock": {"version": "0.64.25", "build": "106", "revision": STOCK_REVISION,
                       "url": DMG_URL, "bytes": 225832896, "sha256": DMG_SHA256},
-            "scenario": "legacy-sibling reproduction",
-            "scope": "current combined sequence with two preserved eligible same-ID siblings; no model sessions or loaded-hook claim",
+            "scenario": "same-version fresh-DR first; legacy-sibling reproduction only after clean pass",
+            "currentScenario": "sameVersionFreshDR",
+            "scenarioResults": {"sameVersionFreshDR": {"status": "pending"},
+                                "legacySibling": {"status": "not-run", "reason": "clean scenario prerequisite"}},
+            "scope": "current combined same-version/fresh-DR sequence, then sibling update; no model sessions or loaded-hook claim",
             "priorFrozenNativeCapability": FROZEN_PASS,
             "priorCleanCombinedCapability": CLEAN_COMBINED_PASS,
             "stockHostSource": {
@@ -143,7 +149,7 @@ class Probe:
             "manualRollback": {"exercised": False, "semantics": "documented app-only; not combined compensation"},
             "setupIsNotAcceptance": True,
             "observationContract": {
-                "registration": "stable-path turnover while both exact sibling records remain eligible/elected; not loaded proof",
+                "registration": "stable-path turnover; zero siblings first, then two exact eligible/elected siblings; not loaded proof",
                 "loaded": "mandatory old-process exit and new extension executable PID/UID/start/CDHash",
                 "externalExtensionFoundation": "advisory separate-host context, not stock host visibility",
             },
@@ -495,6 +501,49 @@ class Probe:
                    cdhashes=sorted(hashes))
         return hashes
 
+    def record_fixture_signing(self, variant, app):
+        identities = {}
+        for role, bundle in (("app", app), ("extension", app / self.preview.EXTENSION)):
+            info = plistlib.loads((bundle / "Contents/Info.plist").read_bytes())
+            if variant == "A":
+                require(FIXTURE_MARKER not in info, "Fixture marker collides with production metadata")
+            else:
+                require(info.pop(FIXTURE_MARKER, None) == variant, "Missing signed fixture generation marker")
+            hashes = self.executable_hashes(bundle)
+            binary = bundle / "Contents/MacOS" / info["CFBundleExecutable"]
+            requirements = {}
+            for cpu, subtype in self.preview.mach_o_architectures(binary):
+                architecture = f"{cpu},{subtype}"
+                args = ["/usr/bin/codesign", "-d", "--verbose=4", "-r-",
+                        "--architecture", architecture, str(bundle)]
+                result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+                stem = f"signing-{variant}-{role}-{cpu}-{subtype}"
+                (self.evidence / f"{stem}.stdout").write_text(result.stdout)
+                (self.evidence / f"{stem}.stderr").write_text(result.stderr)
+                self.event("fixture-signing-inspection", argv=args, log=stem, returncode=result.returncode)
+                raw = result.stdout + "\n" + result.stderr
+                require(result.returncode == 0 and len(raw) <= 65_536 and "Signature=adhoc" in raw,
+                        "Fixture must have a verifiable ad-hoc signature")
+                matches = re.findall(r"^(?:#\s*)?designated => (.+)$", raw, re.MULTILINE)
+                require(len(matches) == 1 and re.fullmatch(
+                    r'cdhash H"[0-9a-f]{40}"(?: or cdhash H"[0-9a-f]{40}")*', matches[0]),
+                    "Expected default ad-hoc CDHash requirement; no identifier-only or custom requirement accepted")
+                bound = set(re.findall(r'cdhash H"([0-9a-f]{40})"', matches[0]))
+                require(bound and bound <= hashes, "Designated requirement does not bind this fixture executable")
+                requirements[architecture] = matches[0]
+            for previous in self.fixture_signing.values():
+                require(info == previous[role]["infoPlistWithoutFixtureMarker"],
+                        "Fixture changed version/build/toolchain or other production plist values")
+                require(hashes.isdisjoint(previous[role]["cdhashes"])
+                        and set(requirements.values()).isdisjoint(previous[role]["designatedRequirements"].values()),
+                        "Fixture did not regenerate a distinct executable CodeDirectory and default requirement")
+            identities[role] = {"infoPlistWithoutFixtureMarker": info, "cdhashes": sorted(hashes),
+                                "designatedRequirements": requirements, "executableSHA256": sha256(binary)}
+        self.fixture_signing[variant] = identities
+        self.hashes[variant] = set(identities["extension"]["cdhashes"])
+        self.report["fixtureSigning"] = self.fixture_signing
+        self.save()
+
     def observer_rows(self):
         require(self.observer is not None and self.observer.poll() is None, "Observer exited")
         data = (self.evidence / "observer.jsonl").read_bytes()
@@ -583,13 +632,13 @@ class Probe:
         return extensions
 
     def terminal_tree_snapshot(self):
-        phases = ("baseline", "repeat", "update", "compensation")
+        phases = ("baseline", "repeat", "update", "compensation", "sibling-update")
         require(self.tree_snapshot_count < len(phases), "Unexpected additional tree request")
         phase = phases[self.tree_snapshot_count]
         self.tree_snapshot_count += 1
         self.report["treeObservation"] = {
             "status": "unavailable", "phase": phase, "policy": "cmuxOnly",
-            "transport": "four fixed reads from the test-owned initial terminal command",
+            "transport": "five fixed reads from the test-owned initial terminal command",
         }
         (self.evidence / f"snapshot-request-{phase}").touch(exist_ok=False)
         self.event("tree-snapshot-request", phase=phase)
@@ -733,8 +782,8 @@ class Probe:
                     and self.preview.digest(app) == expected["sha256"],
                     "Run-owned signed sibling files changed")
 
-    def setup_legacy_siblings(self):
-        self.event("legacy-sibling-setup-start", stableA=self.initial,
+    def setup_legacy_siblings(self, previous):
+        self.event("legacy-sibling-setup-start", stableB=previous,
                    boundary="After genuine initial approval; no additional UI, defaults or host restart")
         digest = self.preview.digest(self.destination)
         for name in ("hardening", "visual49"):
@@ -747,8 +796,8 @@ class Probe:
             self.apps_owned.append(app)
             self.run(["/usr/bin/ditto", self.destination, app])
             self.ops.verify(app, current=True)
-            require(self.executable_hashes(app / self.preview.EXTENSION) == self.hashes["A"],
-                    "Sibling is not an exact signed A extension")
+            require(self.executable_hashes(app / self.preview.EXTENSION) == self.hashes["B"],
+                    "Sibling is not an exact signed B extension")
             self.verify_sibling_files()
             self.run([self.preview.LSREGISTER, "-f", app])
             self.run(["/usr/bin/pluginkit", "-a", app / self.preview.EXTENSION])
@@ -763,14 +812,14 @@ class Probe:
         self.sibling_records = {r["Path"]: r for r in state["records"] if r["Path"] in paths}
         require(len(self.sibling_records) == 2, "Both sibling registrations must actually be eligible")
         self.registration()
-        require(self.wait_loaded("A") == self.initial,
-                "Adding siblings displaced the original stable A; reproduction baseline unavailable")
+        require(self.wait_loaded("B") == previous,
+                "Adding siblings displaced restored stable B; reproduction baseline unavailable")
         self.verify_sibling_files()
         self.report["legacySiblingBaseline"] = {
-            "loadedStableA": self.initial, "registrations": state["records"],
+            "loadedStableB": previous, "registrations": state["records"],
             "files": {str(app): identity for app, identity in self.sibling_apps.items()},
             "eligibility": "public pluginkit -m -A -D -i exactID -p exactPoint, all '+'",
-            "limit": "Public matching is not stock-host-specific enumeration; only stable A is dynamically loaded.",
+            "limit": "Public matching is not stock-host-specific enumeration; only stable B is dynamically loaded.",
         }
         self.diagnostics("legacy-sibling-baseline")
         self.event("legacy-sibling-setup-complete")
@@ -1049,9 +1098,9 @@ class Probe:
             time.sleep(0.25)
         self.apps_owned.append(self.source)
         self.run(["/bin/bash", ROOT / "scripts/build-stock-host-fixture.sh"], timeout=900)
-        self.hashes["A"] = self.executable_hashes(self.source / self.preview.EXTENSION)
+        self.record_fixture_signing("A", self.source)
         self.candidates = {"A": self.source}
-        for variant, version in (("B", "0.0.1142"), ("C", "0.0.1143")):
+        for variant in ("B", "C"):
             candidate = self.work / f"candidate-{variant}.app"
             self.candidates[variant] = candidate
             self.apps_owned.append(candidate)
@@ -1062,14 +1111,12 @@ class Probe:
             for bundle in (candidate / self.preview.EXTENSION, candidate):
                 info_path = bundle / "Contents/Info.plist"
                 info = plistlib.loads(info_path.read_bytes())
-                info["CFBundleShortVersionString"] = version
+                info[FIXTURE_MARKER] = variant
                 info_path.write_bytes(plistlib.dumps(info))
                 self.run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none",
-                          "--preserve-metadata=identifier,entitlements,requirements,flags,runtime", bundle])
+                          "--preserve-metadata=identifier,entitlements,flags,runtime", bundle])
             self.ops.verify(candidate, current=True)
-            self.hashes[variant] = self.executable_hashes(candidate / self.preview.EXTENSION)
-            require(all(self.hashes[variant].isdisjoint(h) for k, h in self.hashes.items() if k != variant),
-                    "Fixture executable signatures must differ")
+            self.record_fixture_signing(variant, candidate)
         c_extension = self.candidates["C"] / self.preview.EXTENSION
         executable = plistlib.loads((c_extension / "Contents/Info.plist").read_bytes())["CFBundleExecutable"]
         self.extension_binary = self.destination / self.preview.EXTENSION / "Contents/MacOS" / executable
@@ -1156,17 +1203,17 @@ class Probe:
         self.report["baseline"] = {"host": self.host, "extension": self.initial, **self.baseline}
         self.report["checks"]["firstCombinedInstall"] = {"status": "pass", "provider": "official 1.0.89",
                                                         "evidence": "integration-first-install.json"}
-        self.setup_legacy_siblings()
         self.report["checks"]["setup"] = "pass"
         self.report["phase"] = "acceptance"
         self.save()
 
-    def act(self, operation, previous, variant, *arguments):
+    def act(self, operation, previous, variant, *arguments, label=None):
+        label = label or operation
         self.registry_sample()
         start = time.time()
         require(self.process(previous["generation"][0]) == previous,
                 "Expected old extension generation is not live at act start")
-        self.installer(operation, *arguments, monitored=True)
+        self.installer(operation, *arguments, monitored=True, label=label)
         loaded = self.wait_loaded(variant, previous=previous)
         self.registration()
         self.registry_sample()
@@ -1178,17 +1225,17 @@ class Probe:
                 if r["kind"] == "native-registration" and r["time"] >= start]
         missing = next((r["time"] for r in rows if not r["targetPresent"]), None)
         require(missing is not None and any(
-            r["time"] > missing and r["targetPresent"] and len(r["records"]) == 3 for r in rows
-        ), "No independently observed stable-path withdrawal/restoration with both siblings retained")
+            r["time"] > missing and r["targetPresent"] and len(r["records"]) == 1 + len(self.sibling_apps) for r in rows
+        ), "No independently observed stable-path withdrawal/restoration with expected sibling inventory")
         self.verify_sibling_files()
-        self.report["checks"][operation] = {
+        self.report["checks"][label] = {
             "status": "pass", "old": previous, "new": loaded, "registrationDisappearance": missing,
-            "registrationScope": "stable path only; both exact elected sibling records retained",
+            "registrationScope": "stable path only", "preservedSiblingCount": len(self.sibling_apps),
             "hostAndShellGenerationsUnchanged": True, "treeUnchanged": True,
             "focusAndVisibleWindowsUnchanged": True,
         }
         self.save()
-        self.diagnostics(f"after-{operation}")
+        self.diagnostics(f"after-{label}")
         return loaded
 
     def identical_repeat(self):
@@ -1239,7 +1286,7 @@ class Probe:
         self.sample()
         self.report["checks"]["failedUpdateCompensation"] = {
             "status": "pass", "fault": json.loads(fault.read_text()), "old": previous, "restored": restored,
-            "registrationScope": "stable path only; both exact elected sibling records retained",
+            "registrationScope": "stable path only", "preservedSiblingCount": len(self.sibling_apps),
             "appIntegrationProviderStateRestored": True, "hostWorkerTreeFocusUnchanged": True,
         }
         self.save()
@@ -1314,7 +1361,7 @@ class Probe:
             if checkpoint.is_file():
                 collect("integrationCheckpointRetained", lambda: {
                     "path": str(checkpoint), "bytes": checkpoint.stat().st_size, "sha256": sha256(checkpoint)})
-        if (request_snapshot and self.host and self.tree_snapshot_count < 4
+        if (request_snapshot and self.host and self.tree_snapshot_count < 5
                 and (self.evidence / "snapshot-worker.pid").exists()
                 and not (self.evidence / "snapshot-worker.exit").exists()):
             collect("diagnosticOnlyTerminalSnapshot", lambda: json.loads(self.terminal_tree_snapshot()))
@@ -1562,12 +1609,27 @@ def main():
         replacement = probe.act("update", probe.initial, "B", "--source", probe.candidates["B"],
                                 "--copilot-executable", probe.copilot)
         probe.integration_state("successful-update", probe.candidates["B"])
-        probe.failed_update_compensation(replacement)
+        restored = probe.failed_update_compensation(replacement)
+        probe.report["scenarioResults"]["sameVersionFreshDR"] = {"status": "pass", "siblingCount": 0}
+        probe.report["currentScenario"] = "legacySibling"
+        probe.report["scenarioResults"]["legacySibling"] = {"status": "setup"}
+        probe.save()
+        probe.setup_legacy_siblings(restored)
+        probe.report["scenarioResults"]["legacySibling"] = {"status": "update"}
+        probe.save()
+        probe.act("update", restored, "C", "--source", probe.candidates["C"],
+                  "--copilot-executable", probe.copilot, label="legacy-sibling-update")
+        probe.integration_state("legacy-sibling-update", probe.candidates["C"])
+        probe.report["scenarioResults"]["legacySibling"] = {"status": "pass", "siblingCount": 2}
         probe.sample()
         probe.report["status"] = "pass"
     except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
         probe.report["status"] = "unavailable" if probe.report["phase"] == "setup" else "failed"
         probe.report["error"] = str(error)
+        probe.report["scenarioResults"][probe.report["currentScenario"]] = {
+            "status": probe.report["status"], "error": str(error),
+            "approval": "No further approval attempted; inspect captured stock UI/logs for approval-required/refusal evidence.",
+        }
         (evidence / "failure.txt").write_text(traceback.format_exc())
     finally:
         signal.alarm(0)
