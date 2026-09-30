@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   native-host:
-    runs-on: macos-15
+    runs-on: macos-latest
     timeout-minutes: 45
     steps:
       - name: Initialize failure evidence

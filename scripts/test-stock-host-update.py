@@ -340,8 +340,21 @@ class Probe:
         self.work_owned = True
         self.report["head"] = self.run(["git", "rev-parse", "HEAD"])[1].decode().strip()
         self.run(["git", "merge-base", "--is-ancestor", BASE, "HEAD"])
-        self.run(["/usr/bin/sw_vers"])
-        self.run(["/usr/bin/xcodebuild", "-version"])
+        _, os_version = self.run(["/usr/bin/sw_vers"])
+        # Query the exact Xcode path that build-register.sh hardcodes.
+        build_tools = ["/usr/bin/env", "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer"]
+        _, xcode_version = self.run([*build_tools, "/usr/bin/xcodebuild", "-version"])
+        _, compiler = self.run([*build_tools, "/usr/bin/xcrun", "swiftc", "--version"])
+        self.report["environment"] = {
+            "os": os_version.decode().strip(),
+            "xcode": xcode_version.decode().strip(),
+            "swift": compiler.decode().strip(),
+            "developerDirectory": str(Path("/Applications/Xcode.app/Contents/Developer").resolve()),
+        }
+        self.save()
+        swift_version = re.search(r"\bSwift version (\d+)\.(\d+)\b", compiler.decode())
+        require(swift_version and tuple(map(int, swift_version.groups())) >= (6, 2),
+                "/Applications/Xcode.app must provide Swift 6.2+; native probe toolchain unavailable")
         require(not self.destination.exists() and not self.source.exists(), "Fixture output already exists")
         for path in (self.home / "Applications" / self.preview.STATE_NAME,
                      self.terminal_config.parent,
