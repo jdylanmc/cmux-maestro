@@ -27,10 +27,12 @@ import pwd
 import re
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 import time
 import traceback
+import uuid
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +53,8 @@ SETUP_DEFAULTS = {
     "SUAutomaticallyUpdate": False,
     "confirmQuit": "never",
     "warnBeforeQuitShortcut": False,
+    "cmuxWelcomeShown": True,
+    "cmux.sparkle.automaticChecksMigration.v2": True,
 }
 
 
@@ -82,7 +86,8 @@ class Probe:
         self.ops = self.preview.MacOperations()
         self.destination = self.home / "Applications/CMUX Maestro Host Proof.app"
         self.source = self.preview.DEVELOPMENT_APP
-        self.stock = self.work / "cmux.app"
+        self.stock = Path("/Applications/cmux.app")
+        self.stock_node = None
         self.mount = self.work / "dmg-mount"
         self.observer_app = self.work / "Stock Host Observer.app"
         self.helper = self.observer_app / "Contents/MacOS/stock-host-observer"
@@ -97,6 +102,7 @@ class Probe:
         self.tree_snapshot_count = 0
         self.apps_owned = []
         self.baseline = None
+        self.worker = None
         self.hashes = {}
         self.last_sample = None
         self.last_registration = None
@@ -143,22 +149,101 @@ class Probe:
         require(not check or result.returncode == 0, f"{args[0]} exited {result.returncode}; see {stem}")
         return result.returncode, output
 
-    def process(self, pid):
-        before = self.ops.process_generation(pid, os.getuid())
-        code = self.ops.executable_code_hash(pid)
-        if before is None or code is None:
-            return None
+    def process_path(self, pid):
         library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
         library.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
         library.proc_pidpath.restype = ctypes.c_int
         buffer = ctypes.create_string_buffer(4096)
         length = library.proc_pidpath(pid, buffer, len(buffer))
+        return os.fsdecode(buffer.value) if length > 0 else None
+
+    def process(self, pid):
+        before = self.ops.process_generation(pid, os.getuid())
+        code = self.ops.executable_code_hash(pid)
+        if before is None or code is None:
+            return None
+        path = self.process_path(pid)
         if self.ops.process_generation(pid, os.getuid()) != before:
             return None
         if self.ops.executable_code_hash(pid) != code:
             return None
         return {"generation": list(before), "cdhash": code,
-                "path": os.fsdecode(buffer.value) if length > 0 else None}
+                "path": path}
+
+    def kernel_info(self, pid):
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        library.proc_pidinfo.argtypes = [
+            ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+        library.proc_pidinfo.restype = ctypes.c_int
+        info = self.preview.ProcBSDInfo()
+        ctypes.set_errno(0)
+        length = library.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
+        require(length == ctypes.sizeof(info), f"Kernel PID {pid} info unavailable: errno {ctypes.get_errno()}")
+        return info
+
+    def worker_receipt(self):
+        path = self.evidence / "snapshot-worker.json"
+        self.preview.safe_path(path, owner=True)
+        info = path.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= 4096,
+                "Unsafe snapshot worker receipt")
+        receipt = json.loads(path.read_text())
+        require(isinstance(receipt, dict) and set(receipt) == {"pid", "tty", "workspace", "surface"}
+                and type(receipt["pid"]) is int and 1 < receipt["pid"] < 2**31,
+                "Invalid snapshot worker receipt")
+        for name in ("workspace", "surface"):
+            require(isinstance(receipt[name], str)
+                    and str(uuid.UUID(receipt[name])) == receipt[name].lower(), "Invalid worker surface identity")
+        require(isinstance(receipt["tty"], str)
+                and re.fullmatch(r"/dev/tty[a-zA-Z0-9]+", receipt["tty"]), "Worker has no concrete TTY")
+        return receipt
+
+    def worker_identity(self):
+        receipt = self.worker_receipt()
+        pid = receipt["pid"]
+        before = self.ops.process_generation(pid, os.getuid())
+        require(before is not None, "Worker PID/owner/start generation unavailable")
+        info = self.kernel_info(pid)
+        path = self.process_path(pid)
+        require(path == "/bin/zsh", "Worker executable is not the declared system shell")
+        device = Path(receipt["tty"]).lstat()
+        require(stat.S_ISCHR(device.st_mode) and info.tdev != 0xffffffff
+                and info.tdev == (device.st_rdev & 0xffffffff), "Worker receipt does not match its kernel TTY")
+        require(self.ops.process_generation(pid, os.getuid()) == before
+                and (info.pid, info.uid, info.start_seconds, info.start_microseconds) == before
+                and info.ruid == os.getuid() and self.kernel_info(pid).tdev == info.tdev
+                and self.process_path(pid) == path, "Worker changed during kernel identity observation")
+        return {**receipt, "generation": list(before), "path": path, "ttyDevice": info.tdev}
+
+    def worker_diagnostics(self):
+        receipt = self.worker_receipt()
+        pid = receipt["pid"]
+        info = self.kernel_info(pid)
+        ctypes.set_errno(0)
+        code_hash = self.ops.executable_code_hash(pid)
+        hash_errno = ctypes.get_errno()
+        chain = []
+        current = info
+        try:
+            for _ in range(128):
+                chain.append(current.pid)
+                if current.ppid <= 1 or (self.host and current.pid == self.host["generation"][0]):
+                    break
+                current = self.kernel_info(current.ppid)
+        except RuntimeError as error:
+            ancestry_error = str(error)
+        else:
+            ancestry_error = None
+        return {"receipt": receipt, "path": self.process_path(pid),
+                "kernel": {name: getattr(info, name) for name in
+                           ("pid", "ppid", "uid", "ruid", "flags", "status", "tdev",
+                            "start_seconds", "start_microseconds")},
+                "oldGenerationGate": self.ops.process_generation(pid, os.getuid()),
+                "codeHash": code_hash, "codeHashErrno": hash_errno,
+                "oldCompositeIdentity": self.process(pid), "parentChain": chain,
+                "ancestryError": ancestry_error,
+                "hostInChain": self.host["generation"][0] in chain if self.host else None,
+                "ancestryIsDiagnosticOnly": True}
 
     def processes(self):
         result = subprocess.run(["/bin/ps", "-ax", "-o", "pid=", "-o", "uid=",
@@ -234,9 +319,8 @@ class Probe:
         if self.baseline:
             require(self.process(self.host["generation"][0]) == self.host,
                     "CMUX process generation or signed executable changed")
-            for original in self.baseline["shells"]:
-                require(self.process(original["generation"][0]) == original,
-                        "An existing idle terminal shell exited or changed generation")
+            require(self.worker_identity() == self.baseline["worker"],
+                    "Fixture worker PID/owner/start/path/kernel TTY or surface identity changed")
             observations = self.observer_rows()
             samples = [r for r in observations if r["kind"] == "sample"]
             require(samples and time.time() - samples[-1]["time"] < 5, "Observer heartbeat stale")
@@ -297,21 +381,32 @@ class Probe:
             return item
         result = project(value)
         for window in result["windows"]:
-            require(window.get("id") and type(window.get("key")) is bool
+            require(isinstance(window.get("id"), str) and str(uuid.UUID(window["id"])) == window["id"].lower()
+                    and type(window.get("key")) is bool
                     and type(window.get("visible")) is bool, "Invalid window identity/selection")
             for workspace in window.get("workspaces", []):
-                require(workspace.get("id") and type(workspace.get("selected")) is bool,
+                require(isinstance(workspace.get("id"), str) and str(uuid.UUID(workspace["id"])) == workspace["id"].lower()
+                        and type(workspace.get("selected")) is bool,
                         "Invalid workspace identity/selection")
                 for pane in workspace.get("panes", []):
-                    require(pane.get("id") and type(pane.get("focused")) is bool,
+                    require(isinstance(pane.get("id"), str) and str(uuid.UUID(pane["id"])) == pane["id"].lower()
+                            and type(pane.get("focused")) is bool,
                             "Invalid pane identity/selection")
                     for surface in pane.get("surfaces", []):
-                        require(surface.get("id") and type(surface.get("focused")) is bool
+                        require(isinstance(surface.get("id"), str) and str(uuid.UUID(surface["id"])) == surface["id"].lower()
+                                and type(surface.get("focused")) is bool
                                 and type(surface.get("selected")) is bool, "Invalid surface identity/selection")
-        require(any(s.get("type") == "terminal" and s.get("tty")
-                    for w in result["windows"] for ws in w.get("workspaces", [])
-                    for p in ws.get("panes", []) for s in p.get("surfaces", [])),
-                "No synthetic terminal surface/TTY to preserve")
+        worker = self.worker_identity()
+        caller = value.get("caller", {})
+        require(caller.get("workspace_id", "").lower() == worker["workspace"].lower()
+                and caller.get("surface_id", "").lower() == worker["surface"].lower(),
+                "Read-only snapshot caller is not the verified fixture worker surface")
+        surfaces = [s for w in result["windows"] for ws in w["workspaces"]
+                    if ws["id"].lower() == worker["workspace"].lower()
+                    for p in ws["panes"] for s in p["surfaces"]
+                    if s["id"].lower() == worker["surface"].lower() and s.get("type") == "terminal"]
+        require(len(surfaces) == 1 and surfaces[0].get("tty") in (None, worker["tty"]),
+                "Fixture terminal UUID absent/duplicated or public TTY contradicts verified kernel TTY")
         self.report["treeObservation"]["status"] = "verified"
         self.save()
         return result
@@ -399,6 +494,7 @@ class Probe:
         for path in (self.home / "Applications" / self.preview.STATE_NAME,
                      self.terminal_config.parent,
                      self.home / ".config/cmux", self.home / "Library/Application Support/cmux",
+                     self.home / "Library/Application Support/com.cmuxterm.app",
                      self.home / "Library/Application Support/CMUXMaestroPreview",
                      self.home / "Library/Preferences/com.cmuxterm.app.plist",
                      Path("/Applications/cmux.app"), Path("/tmp/cmux.sock")):
@@ -417,6 +513,9 @@ class Probe:
                 "Official stock DMG size/digest mismatch")
         self.run(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint",
                   self.mount, dmg])
+        self.stock.mkdir(mode=0o755)
+        node = self.stock.lstat()
+        self.stock_node = (node.st_dev, node.st_ino, node.st_uid)
         self.run(["/usr/bin/ditto", self.mount / "cmux.app", self.stock])
         self.run(["/usr/bin/hdiutil", "detach", self.mount])
         stock_info = plistlib.loads((self.stock / "Contents/Info.plist").read_bytes())
@@ -537,23 +636,20 @@ class Probe:
         self.sample()
         self.initial = self.wait_loaded("A")
         self.registration()
+        deadline = time.monotonic() + 20
+        while not (self.evidence / "snapshot-worker.json").exists():
+            require(time.monotonic() < deadline, "No immutable fixture-worker receipt")
+            require(self.process(self.initial["generation"][0]) == self.initial,
+                    "Initial A generation exited before terminal baseline")
+            time.sleep(0.25)
+        self.worker = self.worker_identity()
+        self.event("verified-terminal-worker", identity=self.worker)
         observations = self.observer_rows()
         sample = [r for r in observations if r["kind"] == "sample"][-1]
         require(sample["hostPIDs"] == [self.host["generation"][0]] and sample["visibleWindows"]
                 and sample["frontmost"] > 0, "Desktop/stock host window unavailable")
-        process_rows = self.processes()
-        descendants = {self.host["generation"][0]}
-        for _ in range(len(process_rows)):
-            added = {r["generation"][0] for r in process_rows if r["ppid"] in descendants}
-            if added <= descendants:
-                break
-            descendants |= added
-        shells = [{k: r[k] for k in ("generation", "cdhash", "path")} for r in process_rows
-                  if r["generation"][0] in descendants and r["tty"] != "??"
-                  and r["path"] in ("/bin/zsh", "/bin/bash", "/bin/sh")]
-        require(shells, "No existing stock terminal shell to preserve; no input will be injected")
         self.baseline = {"time": time.time(), "frontmost": sample["frontmost"],
-                         "visibleWindows": sample["visibleWindows"], "shells": shells,
+                         "visibleWindows": sample["visibleWindows"], "worker": self.worker,
                          "tree": self.tree()}
         self.report["baseline"] = {"host": self.host, "extension": self.initial, **self.baseline}
         self.report["checks"]["setup"] = "pass"
@@ -563,6 +659,8 @@ class Probe:
     def act(self, operation, previous, variant, *arguments):
         self.registry_sample()
         start = time.time()
+        require(self.process(previous["generation"][0]) == previous,
+                "Expected old extension generation is not live at act start")
         self.installer(operation, *arguments, monitored=True)
         loaded = self.wait_loaded(variant, previous=previous)
         self.registration()
@@ -614,6 +712,8 @@ class Probe:
             return [r for r in rows if r["cdhash"] in hashes or r["generation"][0] in descendants]
 
         collect("kernelVerifiedNativeHostAndTerminalProcesses", processes)
+        collect("fixtureWorkerRawKernelAndOldFilterEvidence", self.worker_diagnostics)
+        collect("verifiedFixtureWorkerPidOwnerStartPathAndKernelTTY", self.worker_identity)
 
         def process_hints():
             result = subprocess.run(
@@ -674,6 +774,26 @@ class Probe:
         collect("scopedStockExtensionKitLogs", lambda: command(
             "log", ["/usr/bin/log", "show", "--last", "5m", "--style", "json",
                     "--info", "--debug", "--predicate", predicate]))
+        if self.host and self.process(self.host["generation"][0]) == self.host:
+            collect("stockWindowMetadata", lambda: command(
+                "stock-ui", [str(self.helper), "inspect", str(self.host["generation"][0]), str(self.stock)]))
+
+            def screenshots():
+                ui = json.loads((self.evidence / f"{label}-stock-ui.stdout").read_text())
+                require(ui["pid"] == self.host["generation"][0] and ui["bundlePath"] == str(self.stock),
+                        "UI metadata is not the exact owned stock host")
+                windows = [w for w in ui["windows"] if w["onscreen"] and w["layer"] == 0 and w["id"] > 0]
+                require(windows, "No visible owned stock window available for capture")
+                captured = []
+                for window in windows[:2]:
+                    image = self.evidence / f"{label}-window-{window['id']}.png"
+                    command(f"capture-{window['id']}",
+                            ["/usr/sbin/screencapture", "-x", "-l", str(window["id"]), str(image)])
+                    require(image.is_file() and image.stat().st_size > 0, "Window capture unavailable")
+                    captured.append(str(image))
+                return captured
+
+            collect("stockWindowScreenshotsNoPermissionPromptOrFocusChange", screenshots)
         self.event("diagnostics", label=label, path=str(path))
 
     def cleanup(self):
@@ -696,11 +816,12 @@ class Probe:
                     (self.evidence / "snapshot-stop").touch(exist_ok=False)
                     deadline = time.monotonic() + 15
                     while ((self.evidence / "snapshot-worker.pid").exists()
+                           and not (self.evidence / "snapshot-worker.parked").exists()
                            and not (self.evidence / "snapshot-worker.exit").exists()):
                         require(time.monotonic() < deadline,
-                                "Read-only snapshot command has not exited; no process signalled")
+                                "Read-only snapshot command has not parked; no process signalled")
                         time.sleep(0.25)
-                attempt("finish initial terminal observation AFTER acceptance", stop_snapshots)
+                attempt("park initial terminal observation AFTER acceptance without spawning a replacement", stop_snapshots)
             if self.host_launch_requested and self.host is None:
                 def recover_host_identity():
                     hosts = [r for r in self.processes() if r["cdhash"] in self.host_hashes
@@ -717,6 +838,22 @@ class Probe:
                         require(time.monotonic() < deadline, "Normal quit not completed; no force termination")
                         time.sleep(0.5)
                 attempt("normal exact-host quit AFTER acceptance (never evidence of reload)", quit_host)
+            if self.terminal_config_contents is not None:
+                def finish_snapshots():
+                    require(not self.host or self.ops.process_generation(
+                        self.host["generation"][0], os.getuid()) != tuple(self.host["generation"]),
+                        "Host still live; keep the original terminal parked for VM disposal")
+                    (self.evidence / "snapshot-exit").touch(exist_ok=False)
+                    deadline = time.monotonic() + 15
+                    while ((self.evidence / "snapshot-worker.pid").exists()
+                           and not (self.evidence / "snapshot-worker.exit").exists()):
+                        if self.worker and self.ops.process_generation(
+                            self.worker["pid"], os.getuid()
+                        ) != tuple(self.worker["generation"]):
+                            break
+                        require(time.monotonic() < deadline, "Snapshot worker exit not observed")
+                        time.sleep(0.25)
+                attempt("allow snapshot worker exit only after stock host exit", finish_snapshots)
             if self.apps_owned:
                 def unregister_owned():
                     installer = self.preview.Installer(self.home, self.destination)
@@ -740,9 +877,14 @@ class Probe:
                         time.sleep(0.5)
                 attempt("unregister exact receipt-owned slots and run-created sources; verify absence",
                         unregister_owned)
-            if self.work_owned and self.stock.exists():
-                attempt("unregister exact downloaded stock app",
-                        lambda: self.run([self.preview.LSREGISTER, "-u", self.stock]))
+            if self.stock_node is not None and self.stock.exists():
+                def unregister_stock():
+                    node = self.stock.lstat()
+                    require((node.st_dev, node.st_ino, node.st_uid) == self.stock_node
+                            and node.st_uid == os.getuid() and stat.S_ISDIR(node.st_mode),
+                            "Installed stock bundle ownership changed; do not touch it")
+                    self.run([self.preview.LSREGISTER, "-u", self.stock])
+                attempt("unregister exact run-created /Applications/cmux.app", unregister_stock)
             if self.defaults_owned:
                 def remove_defaults():
                     require(not self.host or self.ops.process_generation(
@@ -780,7 +922,7 @@ class Probe:
         self.report["retainedForRunnerDisposal"] = [
             str(self.work), str(self.source), str(self.destination),
             str(self.home / "Applications" / self.preview.STATE_NAME),
-        ]
+        ] + ([str(self.stock)] if self.stock_node is not None else [])
         self.report["cleanupPolicy"] = (
             "No recursive deletion, process-name kills, extension signals or forced host termination. "
             "Run-created disk fixtures and synthetic profile state are disposed with the hosted VM."
@@ -794,7 +936,7 @@ def main():
     parser.add_argument("--evidence", type=Path, required=True)
     args = parser.parse_args()
     home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-    guard = (sys.platform == "darwin" and os.getuid() != 0 and
+    guard = (sys.platform == "darwin" and os.getuid() != 0 and os.geteuid() == os.getuid() and
              os.environ.get("GITHUB_ACTIONS") == "true" and
              os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted" and
              os.environ.get("RUNNER_OS") == "macOS" and home == Path("/Users/runner") and

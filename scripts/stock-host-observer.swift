@@ -35,6 +35,29 @@ struct StockHostObserver {
             }
             return
         }
+        if args.count == 3, args[0] == "inspect", let pid = Int32(args[1]) {
+            guard let app = NSRunningApplication(processIdentifier: pid),
+                  app.bundleIdentifier == "com.cmuxterm.app",
+                  app.bundleURL?.standardizedFileURL.path == args[2] else {
+                throw NSError(domain: "ExactHostInspectionRefused", code: 1)
+            }
+            let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID)
+                as? [[String: Any]] ?? []
+            let owned = windows.filter {
+                Int32($0[kCGWindowOwnerPID as String] as? Int ?? -1) == pid
+            }.prefix(8).map { window -> [String: Any] in
+                [
+                    "id": window[kCGWindowNumber as String] as? Int ?? -1,
+                    "layer": window[kCGWindowLayer as String] as? Int ?? -1,
+                    "onscreen": window[kCGWindowIsOnscreen as String] as? Bool ?? false,
+                    "title": window[kCGWindowName as String] as? String ?? "(unavailable)",
+                    "bounds": window[kCGWindowBounds as String] as? [String: Any] ?? [:]
+                ]
+            }
+            emit(["kind": "stock-ui", "pid": pid, "bundlePath": args[2],
+                  "active": app.isActive, "hidden": app.isHidden, "windows": owned])
+            return
+        }
         guard args == ["watch"] else { throw NSError(domain: "Usage", code: 1) }
         guard let bundleIdentifier = Bundle.main.bundleIdentifier,
               bundleIdentifier == "com.jdylanmc.CMUXMaestroPreview.HostProofObserver",
