@@ -741,6 +741,7 @@ class Probe:
         label = label or name
         args = [sys.executable, str(ROOT / "scripts/local-preview.py"), "--destination",
                 str(self.destination), name, *map(str, arguments)]
+        self.report["activeInstaller"] = {"operation": name, "label": label, "started": time.time()}
         self.event("installer-start", argv=args)
         with (self.evidence / f"installer-{label}.log").open("wb") as out:
             self.child = subprocess.Popen(args, cwd=ROOT, stdin=subprocess.DEVNULL,
@@ -761,6 +762,7 @@ class Probe:
             code = self.child.returncode
             self.child = None
         self.event("installer-end", operation=name, label=label, returncode=code, continuityError=defect)
+        self.report["activeInstaller"]["returned"] = time.time()
         require((code != 0 if expect_failure else code == 0) and defect is None,
                 f"Installer {label} had unexpected outcome; see installer-{label}.log")
         return code
@@ -1272,6 +1274,7 @@ class Probe:
         fault = self.evidence / "actual-late-fault.json"
         require(fault.is_file() and Path(str(self.fault_arm) + ".consumed").is_file(),
                 "Expected real post-publication provider fault was not observed")
+        self.observe_compensation_settlement(previous, start)
         restored = self.wait_loaded("B", previous=previous)
         self.registration()
         self.registry_sample()
@@ -1294,6 +1297,96 @@ class Probe:
         self.save()
         self.diagnostics("after-compensation")
         return restored
+
+    def observe_compensation_settlement(self, previous, act_start):
+        returned = time.time()
+        observations = {"actStart": act_start, "installerReturn": self.report["activeInstaller"]["returned"],
+                        "observationStart": returned, "samples": [], "losses": [], "status": "observing"}
+        self.report["compensationSettlement"] = observations
+        recent = [e for e in self.report["events"] if e["time"] >= act_start]
+        catalogs = [e for e in recent if e["kind"] == "native-registration"]
+        seen_registration = bool(catalogs and catalogs[-1]["targetPresent"])
+        seen_native = any(p["generation"] != previous["generation"] and p["cdhash"] in self.hashes["B"]
+                          and p["path"] == str(self.extension_binary)
+                          for e in recent if e["kind"] == "native-processes" for p in e["extensions"])
+        clock = time.monotonic()
+        for index, offset in enumerate((0, 1, 2, 5, 10, 15)):
+            time.sleep(max(0, clock + offset - time.monotonic()))
+            sample = {"time": time.time(), "secondsAfterObservationStart": time.monotonic() - clock}
+            for name, extra in (("all", []), ("point", ["-p", POINT_ID])):
+                result = subprocess.run(
+                    ["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID, *extra],
+                    capture_output=True, text=True, timeout=5)
+                stem = f"compensation-settlement-{index}-{name}"
+                (self.evidence / f"{stem}.stdout").write_text(result.stdout[:65_536])
+                (self.evidence / f"{stem}.stderr").write_text(result.stderr[:4096])
+                require(result.returncode == 0 and not result.stderr.strip() and len(result.stdout) <= 65_536,
+                        "Compensation settlement registration query unavailable")
+                sample[name] = self.registration_catalog(result.stdout)
+            sample["native"] = self.sample()
+            sample["launchServicesAppPresent"] = self.destination.resolve() in self.ops.app_paths()
+            present = any(r["Path"] == str(self.destination / self.preview.EXTENSION) for r in sample["point"])
+            loaded = (len(sample["native"]) == 1 and sample["native"][0]["cdhash"] in self.hashes["B"]
+                      and sample["native"][0]["path"] == str(self.extension_binary)
+                      and sample["native"][0]["generation"] != previous["generation"])
+            sample.update(stableRegistrationPresent=present, restoredBLoaded=loaded)
+            if seen_registration and not present:
+                observations["losses"].append({"time": sample["time"], "kind": "stable-registration-disappeared"})
+            if seen_native and not loaded:
+                observations["losses"].append({"time": sample["time"], "kind": "restored-B-disappeared"})
+            seen_registration |= present
+            seen_native |= loaded
+            observations["samples"].append(sample)
+            self.save()
+        observations["status"] = "loss-observed" if observations["losses"] else "observed-no-loss-in-15s"
+        self.save()
+        try:
+            observations["logs"] = self.phase_native_logs("compensation-settlement", act_start)
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            observations["logs"] = {"status": "unavailable", "error": str(error)}
+        self.save()
+        require(not observations["losses"],
+                "Deferred compensated-B registration/process loss after installer return; see compensationSettlement")
+
+    def phase_native_logs(self, label, start=None):
+        end = time.time()
+        start = start if start is not None else self.report.get("activeInstaller", {}).get("started", end - 90)
+        host = f"processID == {self.host['generation'][0]}" if self.host else "FALSEPREDICATE"
+        predicate = (
+            f'(({host}) AND (eventMessage CONTAINS[c] "extension process" OR '
+            'eventMessage CONTAINS[c] "view service" OR eventMessage CONTAINS[c] "ViewBridge" OR '
+            'eventMessage CONTAINS[c] "connection interrupted" OR eventMessage CONTAINS[c] "invalidated")) OR '
+            '((subsystem BEGINSWITH[c] "com.apple.extension" OR subsystem BEGINSWITH[c] "com.apple.LaunchServices" OR '
+            'process == "pkd" OR process == "lsd" OR process == "extensionkitservice") AND '
+            '(eventMessage CONTAINS[c] "com.jdylanmc.CMUXMaestroPreview" OR '
+            'eventMessage CONTAINS[c] "CMUX Maestro"))'
+        )
+        args = ["/usr/bin/log", "show", "--start", f"@{int(start) - 1}", "--end", f"@{int(end) + 1}",
+                "--style", "ndjson", "--info", "--debug", "--predicate", predicate]
+        try:
+            result = subprocess.run(args, capture_output=True, timeout=15)
+            stdout, stderr, code = result.stdout, result.stderr, result.returncode
+        except subprocess.TimeoutExpired as error:
+            stdout, stderr, code = error.stdout or b"", error.stderr or b"", None
+        retained = stdout[-1_048_576:]
+        if len(stdout) > len(retained):
+            retained = retained.partition(b"\n")[2]
+        if retained and not retained.endswith(b"\n"):
+            retained = retained.rpartition(b"\n")[0]
+            if retained:
+                retained += b"\n"
+        (self.evidence / f"{label}-log.ndjson").write_bytes(retained)
+        (self.evidence / f"{label}-log.stderr").write_bytes(stderr[-65_536:])
+        metadata = {"argv": args, "startEpoch": start, "endEpoch": end, "returncode": code,
+                    "format": "ndjson", "stdoutBytes": len(stdout), "retainedBytes": len(retained),
+                    "truncated": len(stdout) != len(retained) or len(stderr) > 65_536,
+                    "retention": "newest complete lines only; truncation is not complete phase evidence"}
+        (self.evidence / f"{label}-log-metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+        require(code == 0, "Phase-scoped native log command failed or timed out; bounded evidence retained")
+        for line in retained.splitlines():
+            if line.strip():
+                require(isinstance(json.loads(line), dict), "Unexpected native log record")
+        return metadata
 
     def diagnostic_recovery_eligible(self):
         report = self.report
@@ -1495,17 +1588,6 @@ class Probe:
                 and (self.evidence / "snapshot-worker.pid").exists()
                 and not (self.evidence / "snapshot-worker.exit").exists()):
             collect("diagnosticOnlyTerminalSnapshot", lambda: json.loads(self.terminal_tree_snapshot()))
-        host = f"processID == {self.host['generation'][0]}" if self.host else "FALSEPREDICATE"
-        predicate = (
-            f'(({host}) AND (eventMessage CONTAINS[c] "extension" OR '
-            'eventMessage CONTAINS[c] "quit" OR eventMessage CONTAINS[c] "error" OR '
-            'eventMessage CONTAINS[c] "fail")) OR '
-            '((subsystem BEGINSWITH[c] "com.apple.extension" OR process == "pkd" OR '
-            'process == "extensionkitservice") AND '
-            f'(eventMessage CONTAINS[c] "{EXT_ID}" OR eventMessage CONTAINS[c] "{POINT_ID}" OR '
-            'eventMessage CONTAINS[c] "CMUX Maestro"))'
-        )
-
         def command(name, argv):
             try:
                 result = subprocess.run(argv, capture_output=True, timeout=15)
@@ -1525,9 +1607,7 @@ class Probe:
             "eligible-pluginkit", ["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID, "-p", POINT_ID]))
         collect("stockDefaults", lambda: command(
             "defaults", ["/usr/bin/defaults", "export", DOMAIN, "-"]))
-        collect("scopedStockExtensionKitLogs", lambda: command(
-            "log", ["/usr/bin/log", "show", "--last", "5m", "--style", "json",
-                    "--info", "--debug", "--predicate", predicate]))
+        collect("scopedStockExtensionKitLogs", lambda: self.phase_native_logs(label))
         if self.host and self.process(self.host["generation"][0]) == self.host:
             collect("stockWindowMetadata", lambda: command(
                 "stock-ui", [str(self.helper), "inspect", str(self.host["generation"][0]), str(self.stock)]))
