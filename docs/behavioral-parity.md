@@ -263,8 +263,15 @@ retired only after bridge work finishes. The durable `committed` boundary
 distinguishes release/retention cleanup from reversible failures.
 
 Native publication uses exact app/extension state: already-correct registration
-is verified, not force-registered again; an absent pair can be published, and a
-partial pair refuses. Restoration establishes the retained candidate's
+is verified, not force-registered again; an absent pair can be published.
+Verified transaction-owned app-present/extension-absent publication reuses the
+per-component registration primitive to add only the missing extension, with
+source/identity preflight and fresh pair/readback checks. A now-complete pair is
+left alone; a changed unsupported pair refuses. Extension-present/app-absent
+never authorizes a forced app registration while a native view may be hosted.
+Outside the transaction, partial ambiguity still refuses. Staging cleanup keeps
+its transaction until the restored registration verifies. These checks are not
+an atomic macOS service acknowledgment. Restoration establishes the retained candidate's
 registration absence before publishing the old app. No retirement mutation
 follows final publication. Tests cover repeated failure bounds, old apps lacking
 bridge capability, original running/hidden state, interrupted optional deletion,

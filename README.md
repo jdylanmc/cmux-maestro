@@ -1731,7 +1731,12 @@ requires the current build number; this feature does not bump it.
   release or relaunch remains pending rather than becoming healthy retirement.
 - Recovery verifies an already-correct exact registration without forcing
   `lsregister -f` again. An absent exact app/extension pair can be registered;
-  a partial/ambiguous pair is an error, not permission to repeat registration.
+  during verified transaction-owned publication, an app-present/extension-absent
+  pair is completed with only `pluginkit -a` for the exact extension. The app is
+  not registered again. The pair is rechecked before completion and read back
+  afterward. Extension-present/app-absent remains unsafe to force because the
+  extension may already be hosted; partial pairs outside transaction authority
+  also refuse. Errors include the exact observed pair rather than hiding it.
   A durable verified commit finishes release/retention; pre-commit failures
   still restore the previous working state. Explicit uninstall includes only
   receipt-owned retired storage under its existing consent and idle guards.

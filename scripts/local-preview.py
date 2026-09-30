@@ -510,12 +510,18 @@ class MacOperations:
         self.run(["/usr/bin/pluginkit", "-a", str(app / EXTENSION)])
         self.verify_registration(app)
 
-    def ensure_registration(self, app):
+    def ensure_registration(self, app, *, complete_owned_app=False):
         state = self.registration_state(app)
         if all(state.values()):
             self.verify_registration(app)
+        elif complete_owned_app and state == {"application": True, "extension": False}:
+            self.restore_registration(app, {"application": True, "extension": True}, expected_current=state)
+            self.verify_registration(app)
         else:
-            require(not any(state.values()), "Partial exact app/extension registration is ambiguous; no forced refresh.")
+            require(not any(state.values()),
+                    f"Partial exact registration at {app}: {json.dumps(state, sort_keys=True)}. "
+                    "App-only completion requires verified transaction ownership; an existing extension "
+                    "may already be hosted, so no forced LaunchServices refresh is permitted.")
             self.register(app)
 
     def preflight_native_siblings(self, allowed):
@@ -562,13 +568,18 @@ class MacOperations:
                              for record in records),
         }
 
-    def restore_registration(self, app, state):
+    def restore_registration(self, app, state, *, expected_current=None):
         current = self.registration_state(app)
+        if expected_current is not None:
+            require(current in (expected_current, state),
+                    f"Exact registration changed before completion at {app}: {json.dumps(current, sort_keys=True)}.")
         if state["application"] != current["application"]:
             self.run([LSREGISTER, "-f" if state["application"] else "-u", str(app)])
         if state["extension"] != current["extension"]:
             self.run(["/usr/bin/pluginkit", "-a" if state["extension"] else "-r", str(app / EXTENSION)])
-        require(self.registration_state(app) == state, "Previous exact source registration was not restored.")
+        observed = self.registration_state(app)
+        require(observed == state,
+                f"Exact registration did not reach the required state at {app}: {json.dumps(observed, sort_keys=True)}.")
 
     def integration(self, app, action, token, destination, *, selected=None, allow_absent=False):
         self.verify_bridge(app)
@@ -844,11 +855,17 @@ class Installer:
             self.ops.verify_registration(self.slot(retired["slot"]), absent=True)
 
     def preflight_native(self, source=None):
+        transaction = self.receipt["transaction"]
         allowed = {self.destination / EXTENSION} if self.receipt["current"] else set()
         for key in ("previous", "retired"):
             item = self.receipt[key]
             if item:
-                self.match(self.slot(item["slot"]), item["identity"])
+                identity = item["identity"]
+                if (key == "previous" and transaction and transaction["kind"] == "rollback"
+                        and item["slot"] == transaction["slot"]
+                        and self.inspect(self.destination) == transaction["after"]):
+                    identity = transaction["before"]
+                self.match(self.slot(item["slot"]), identity)
                 allowed.add(self.slot(item["slot"]) / EXTENSION)
         if source:
             require(Path(source) == DEVELOPMENT_APP, "Unrecognized development source.")
@@ -857,7 +874,6 @@ class Installer:
             else:
                 self.inspect(Path(source), current=True)
             allowed.add(Path(source) / EXTENSION)
-        transaction = self.receipt["transaction"]
         if transaction and transaction["phase"] not in ("copying", "discarding"):
             allowed.add(self.slot(transaction["slot"]) / EXTENSION)
             if self.destination.exists():
@@ -1210,7 +1226,7 @@ class Installer:
         if refresh and not transaction.get("application"):
             self.ops.verify_registration(self.destination)
         else:
-            self.ops.ensure_registration(self.destination)
+            self.publish_registration(transaction["after"])
         self.match(self.destination, transaction["after"])
         if integration:
             self.coordinate("verify")
@@ -1242,7 +1258,7 @@ class Installer:
         if transaction["source"]:
             self.match(Path(transaction["source"]), transaction["after"])
             self.ops.verify_registration(Path(transaction["source"]), absent=True)
-        self.ops.ensure_registration(self.destination)
+        self.publish_registration(transaction["after"])
         integration = transaction.get("integration")
         if integration and integration["state"] != "released":
             require(integration["state"] in ("verified", "releasing"), "Unverified integration commit.")
@@ -1277,15 +1293,24 @@ class Installer:
                 self.save()
             shutil.rmtree(candidate)
             sync_directory(self.state)
+        self.refresh_current_registration()
         self.receipt["transaction"] = None
         self.save()
+
+    def publish_registration(self, identity):
+        self.match(self.destination, identity)
+        transaction = self.receipt["transaction"]
+        if transaction:
+            require(identity in (transaction["before"], transaction["after"]),
+                    "Publication identity is not owned by this transaction.")
+        self.preflight_native(transaction["source"] if transaction else None)
+        self.ops.ensure_registration(self.destination, complete_owned_app=transaction is not None)
+        self.match(self.destination, identity)
 
     def refresh_current_registration(self):
         current = self.receipt["current"]
         if current:
-            self.match(self.destination, current)
-            self.ops.ensure_registration(self.destination)
-            self.match(self.destination, current)
+            self.publish_registration(current)
 
     def recover(self, *, restore_previous=False):
         transaction = self.receipt["transaction"]
@@ -1335,7 +1360,6 @@ class Installer:
         if transaction["phase"] in ("copying", "discarding"):
             self.check_stable()
             self.discard_staging()
-            self.refresh_current_registration()
             return "Interrupted staging discarded. Installed app and previous version unchanged."
         if transaction["phase"] == "reverting":
             self.revert_committed()
@@ -1377,7 +1401,6 @@ class Installer:
                     self.restore_source_registration(transaction)
                     self.release_restored_integration()
                     self.discard_staging()
-                    self.refresh_current_registration()
             return "Pre-commit transaction cancelled; installed app unchanged."
         require(actual == transaction["after"], "Ambiguous destination; recovery refuses to guess.")
         if restore_previous:

@@ -43,7 +43,7 @@ import uuid
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-BASE = "284aea494844fa00cb748545860eb263a7914116"
+BASE = "9075fe11b8b2f5302122df170196182c3f712b7b"
 FROZEN_PASS = {"product": "6efa5427cfca4f0dfb5af927ec29ba5962e2cd88",
                "head": "738e11bcca3aba4239d9dc2c9f253902f51044b1", "run": "36712857606"}
 CLEAN_COMBINED_PASS = {"product": "c2b829edb90e2d22eb5582153fb8684853925d4d",
@@ -1949,8 +1949,38 @@ class Probe:
                                 self.preview.safe_tree(app)
                                 installer.ops.unregister(app)
                     _, raw = self.run(["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID])
-                    require(not self.preview.metadata.registration_records(raw.decode(), allow_empty=True)
-                            and not self.ops.app_paths(), "Native registrations remain after cleanup")
+                    records = self.preview.metadata.registration_records(raw.decode(), allow_empty=True)
+                    app_paths = self.ops.app_paths()
+                    expected_paths = list(dict.fromkeys(apps))
+                    observation = {
+                        "time": time.time(), "pluginRecords": records,
+                        "launchServicesPaths": [str(path) for path in app_paths],
+                        "expectedOwnedPaths": [str(path) for path in expected_paths],
+                        "unrecognizedLaunchServicesPaths": [str(path) for path in app_paths if path not in expected_paths],
+                        "retainedOwnedArtifacts": {},
+                    }
+                    for app in expected_paths:
+                        try:
+                            self.preview.safe_tree(app)
+                            info = app.lstat()
+                            digest = self.preview.digest(app)
+                            variant = next((name for name, identity in self.candidate_identities.items()
+                                            if identity["sha256"] == digest), None)
+                            observation["retainedOwnedArtifacts"][str(app)] = {
+                                "status": "observed", "node": [info.st_dev, info.st_ino, info.st_uid],
+                                "sha256": digest, "verifiedFixture": variant,
+                                "signatureIdentity": self.fixture_signing.get(variant),
+                                "signatureBasis": ("previously verified fixture, attributed only by exact bundle SHA256 match"
+                                                   if variant else "no verified fixture match; signature not asserted"),
+                            }
+                        except (OSError, ValueError, RuntimeError) as error:
+                            observation["retainedOwnedArtifacts"][str(app)] = {"status": "unavailable", "error": str(error)}
+                    self.report["finalNativeRegistrationCleanup"] = observation
+                    (self.evidence / "cleanup-native-registrations.json").write_text(json.dumps(observation, indent=2) + "\n")
+                    self.save()
+                    require(not records and not app_paths,
+                            "Native registrations remain after cleanup: pluginRecords=" + json.dumps(records)
+                            + "; launchServicesPaths=" + json.dumps(observation["launchServicesPaths"]))
                     deadline = time.monotonic() + 30
                     while any(r["cdhash"] in set().union(*self.hashes.values()) for r in self.processes()):
                         require(time.monotonic() < deadline, "Native fixture still live; no extension signalled")
