@@ -9,6 +9,8 @@ Exit 0 requires both loaded generations and restoration; 1 is failure, 2 unavail
 All runtime evidence, including unsuccessful setup and cleanup, goes to the artifact.
 Register the verified stock point before discovery from the signed observer bundle.
 The observer declares no extension point and never launches or connects to Maestro.
+Tree snapshots originate from a declared runner-only initial terminal command,
+not the external controller, preserving stock cmuxOnly ancestry authorization.
 """
 
 import argparse
@@ -21,6 +23,7 @@ from pathlib import Path
 import plistlib
 import pwd
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -84,6 +87,9 @@ class Probe:
         self.host = None
         self.host_launch_requested = False
         self.defaults_owned = False
+        self.terminal_config = self.home / ".config/ghostty/config"
+        self.terminal_config_contents = None
+        self.tree_snapshot_count = 0
         self.apps_owned = []
         self.baseline = None
         self.hashes = {}
@@ -209,9 +215,34 @@ class Probe:
             self.last_sample = value["extensions"]
         return extensions
 
+    def terminal_tree_snapshot(self):
+        phases = ("baseline", "update", "rollback")
+        require(self.tree_snapshot_count < len(phases), "Unexpected additional tree request")
+        phase = phases[self.tree_snapshot_count]
+        self.tree_snapshot_count += 1
+        self.report["treeObservation"] = {
+            "status": "unavailable", "phase": phase, "policy": "cmuxOnly",
+            "transport": "three fixed reads from the test-owned initial terminal command",
+        }
+        (self.evidence / f"snapshot-request-{phase}").touch(exist_ok=False)
+        self.event("tree-snapshot-request", phase=phase)
+        completed = self.evidence / f"snapshot-{phase}.status"
+        deadline = time.monotonic() + 20
+        while not completed.exists():
+            require(not (self.evidence / "snapshot-worker.exit").exists(),
+                    "Initial terminal snapshot observer exited; tree observation unavailable")
+            require(time.monotonic() < deadline,
+                    "Initial terminal snapshot unavailable; no external socket-policy fallback")
+            self.sample()
+            time.sleep(0.25)
+        require(completed.read_text().strip() == "0",
+                f"Read-only terminal snapshot failed; see snapshot-{phase}.stderr")
+        output = self.evidence / f"snapshot-{phase}.json"
+        require(0 < output.stat().st_size <= 1_048_576, "Invalid tree snapshot size")
+        return output.read_bytes()
+
     def tree(self):
-        _, raw = self.run([self.stock / "Contents/Resources/bin/cmux", "--json", "tree", "--all"],
-                          timeout=15)
+        raw = self.terminal_tree_snapshot()
         value = json.loads(raw)
         require(isinstance(value, dict) and value.get("windows"), "No stock CMUX window tree")
         # Ignore labels/working-directory metadata, not identity, layout, or selection.
@@ -242,6 +273,8 @@ class Probe:
                     for w in result["windows"] for ws in w.get("workspaces", [])
                     for p in ws.get("panes", []) for s in p.get("surfaces", [])),
                 "No synthetic terminal surface/TTY to preserve")
+        self.report["treeObservation"]["status"] = "verified"
+        self.save()
         return result
 
     def wait_loaded(self, variant, *, previous=None, timeout=120):
@@ -311,6 +344,7 @@ class Probe:
         self.run(["/usr/bin/xcodebuild", "-version"])
         require(not self.destination.exists() and not self.source.exists(), "Fixture output already exists")
         for path in (self.home / "Applications" / self.preview.STATE_NAME,
+                     self.terminal_config.parent,
                      self.home / ".config/cmux", self.home / "Library/Application Support/cmux",
                      self.home / "Library/Application Support/CMUXMaestroPreview",
                      self.home / "Library/Preferences/com.cmuxterm.app.plist",
@@ -419,6 +453,20 @@ class Probe:
         self.event("setup-only-selection", defaults=SETUP_DEFAULTS,
                    meaning="Preexisting enabled selection fixture; not first-time onboarding or production technique")
         self.run(["/usr/bin/pluginkit", "-e", "use", "-i", EXT_ID])
+        # Stock preserves Ghostty's configured command. The CLI must originate in
+        # that terminal's process tree; an external CI caller fails cmuxOnly.
+        self.preview.safe_path(self.terminal_config, owner=True)
+        self.terminal_config.parent.mkdir(parents=True, mode=0o700)
+        command = ["/usr/bin/env", "GITHUB_ACTIONS=true", "RUNNER_ENVIRONMENT=github-hosted",
+                   f"RUNNER_TEMP={Path(os.environ['RUNNER_TEMP']).resolve()}",
+                   "/bin/zsh", "-f", str(ROOT / "scripts/stock-host-snapshots.zsh"),
+                   str(self.work), str(self.evidence)]
+        contents = "command = direct:" + shlex.join(command) + "\n"
+        with self.terminal_config.open("x") as config:
+            config.write(contents)
+        self.terminal_config_contents = contents
+        self.event("setup-only-terminal-command", command=command, config=str(self.terminal_config),
+                   purpose="fixed read-only snapshots; no typed input or socket policy change")
         self.host_launch_requested = True
         self.run(["/usr/bin/open", "-g", self.stock])
         deadline = time.monotonic() + 120
@@ -506,6 +554,16 @@ class Probe:
                 "pid": self.child.pid if self.child else None, "reason": "Runner disposal required",
             })
         else:
+            if self.terminal_config_contents is not None:
+                def stop_snapshots():
+                    (self.evidence / "snapshot-stop").touch(exist_ok=False)
+                    deadline = time.monotonic() + 15
+                    while ((self.evidence / "snapshot-worker.pid").exists()
+                           and not (self.evidence / "snapshot-worker.exit").exists()):
+                        require(time.monotonic() < deadline,
+                                "Read-only snapshot command has not exited; no process signalled")
+                        time.sleep(0.25)
+                attempt("finish initial terminal observation AFTER acceptance", stop_snapshots)
             if self.host_launch_requested and self.host is None:
                 def recover_host_identity():
                     hosts = [r for r in self.processes() if r["cdhash"] in self.host_hashes
@@ -557,6 +615,17 @@ class Probe:
                     code, raw = self.run(["/usr/bin/defaults", "export", DOMAIN, "-"], check=False)
                     require(code != 0 or not plistlib.loads(raw), "Run-created defaults remain")
                 attempt("remove only run-created CMUX defaults domain after host exit", remove_defaults)
+            if self.terminal_config_contents is not None:
+                def remove_terminal_config():
+                    require(not self.host or self.ops.process_generation(
+                        self.host["generation"][0], os.getuid()) != tuple(self.host["generation"]),
+                        "Host remains live; initial terminal config retained for runner disposal")
+                    self.preview.safe_path(self.terminal_config, owner=True)
+                    require(self.terminal_config.read_text() == self.terminal_config_contents,
+                            "Initial terminal config changed; retain instead of deleting")
+                    self.terminal_config.unlink()
+                    self.terminal_config.parent.rmdir()
+                attempt("remove exact run-created initial terminal config", remove_terminal_config)
             if self.work_owned and self.mount.is_mount():
                 attempt("detach exact read-only DMG", lambda: self.run(["/usr/bin/hdiutil", "detach", self.mount]))
         if self.observer and self.observer.poll() is None:
