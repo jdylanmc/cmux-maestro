@@ -1509,6 +1509,17 @@ acceptance.** Registration withdrawal/re-registration or earlier native-only
 proof does not establish the current combined artifact's loaded-generation
 behavior or live acceptance.
 
+Before native retirement, the installer queries the exact production extension
+identifier and public sidebar extension point. It reports eligible external
+same-ID paths instead of changing the app and discovering a blocked native
+reload afterward. Receipt-owned paths and this checkout's verified development
+source are recognized; the latter can be retired only with the existing explicit
+`--retire-development-registration` option. Ignored/superseded records are
+preserved; unknown or debugger-only election is reported as ambiguity. Other
+identifiers/extension points and unrelated Copilot plugins are outside this check.
+Historical external registrations need a separate ownership/consent decision,
+not adoption, a namespace sweep or a routine manual-uninstall step.
+
 From a trusted checkout, explicitly build and install the ad-hoc-signed alpha:
 
 ```sh
@@ -1700,17 +1711,30 @@ requires the current build number; this feature does not bump it.
   missing-app interval. First install uses exclusive rename. Unsupported
   filesystems fail closed; there is no non-atomic replacement fallback.
 - A completed update retains **one verified previous app** in an owned slot.
-  During a transaction/cleanup, at most the current, previous and one extra
-  candidate/retiring version are retained. Rollback exchanges current and
-  previous, so the rollback itself can be undone. Backups are not integration
-  setup targets and their owned registrations are retired.
-- Owned retirement finishes before a final exact-path registration of the
-  retained app. The existing cleanup/discard journal remains until that
-  registration verifies; interruption resumes finalization without the deleted
-  candidate bridge. Earlier registration and bridge work still precede cleanup
-  so verification failures can restore the app, integration and running state.
-  This is one ordered publication after cleanup, not a retry loop or proof that
-  asynchronous macOS registration services have settled.
+  It may also retain **one inactive retired app**, separate from that required
+  rollback generation. Preparation permits at most **four** managed bundles:
+  current, previous, retired and one staging candidate. Completion returns to
+  at most **three**: current, previous and retired. These are archival bounds,
+  not additional active installations or process permissions.
+- A healthy retired slot does not block a verified identical install or trigger
+  housekeeping. A changed candidate is staged and verified before reclaiming
+  the old retired slot. Reclamation is journaled and occurs only while the
+  owned native registration is withdrawn and relevant owned processes are
+  idle. Partial staging remains unverified node-owned cleanup, never a trusted
+  retired artifact.
+- Successful update retains the old previous generation as retired. Failed
+  update retains the verified failed candidate after restoring the original
+  current/previous generations. Its bridge remains available for compensation,
+  checkpoint release and non-activating relaunch even when the older app has
+  no bridge. All owned registration retirement precedes final publication;
+  no same-ID unregister, deletion or forced refresh follows it. A failed
+  release or relaunch remains pending rather than becoming healthy retirement.
+- Recovery verifies an already-correct exact registration without forcing
+  `lsregister -f` again. An absent exact app/extension pair can be registered;
+  a partial/ambiguous pair is an error, not permission to repeat registration.
+  A durable verified commit finishes release/retention; pre-commit failures
+  still restore the previous working state. Explicit uninstall includes only
+  receipt-owned retired storage under its existing consent and idle guards.
 - Before app replacement, a private `0600` checkpoint at
   `~/Library/Application Support/CMUXMaestroPreview/Orchestration/install-transaction.json`
   captures the fixed owned resource set, registration provenance, prior absence,

@@ -712,6 +712,16 @@ class BuildMetadataTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     metadata.verify_registration_output(output.replace(identifier, "com.example.Other"), self.extension)
 
+    def test_native_preflight_can_retain_election_without_changing_existing_parser_shape(self):
+        identifier = metadata.BASE_ID + ".Extension"
+        for prefix in ("", "+", "-", "!", "=", "?"):
+            output = f"{prefix} {identifier}(2)\n    Path = {self.extension}\n    SDK = {metadata.PRODUCTION_POINT}\n(1 plug-in)\n"
+            original = metadata.registration_records(output)[0]
+            retained = metadata.registration_records(output, include_election=True)[0]
+            self.assertNotIn("election", original)
+            self.assertEqual(retained, {**original, "election": prefix})
+            self.assertEqual(retained["SDK"], metadata.PRODUCTION_POINT)
+
     def test_unsupported_or_combined_election_prefixes_remain_invalid(self):
         output = self.registration_listing((metadata.BASE_ID + ".Extension", self.extension))
         for prefix in ("@", "*", "+=", "??", "!?"):

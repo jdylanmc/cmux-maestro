@@ -1,4 +1,4 @@
-name: Stock native host fresh-DR and legacy-sibling probe
+name: Stock native host bounded-retention probe
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Probe same-version fresh DR first, then legacy siblings
+      - name: Probe retained compensation, reclamation and sibling refusal
         timeout-minutes: 40
         run: |
           python3 scripts/test-stock-host-update.py --hosted-only --evidence "$RUNNER_TEMP/stock-host-update-evidence"

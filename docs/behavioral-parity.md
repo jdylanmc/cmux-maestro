@@ -245,23 +245,40 @@ quit/launch interruptions, failed restoration and rollback after a replacement
 app has started. These tests do not invoke real GUI quit/launch; the hosted
 stock-host proof must still establish real release/recreation and focus behavior.
 
-Owned garbage and staging retirement now finish before final exact registration
-of the retained app. The earlier verification registration remains: deleting
-the candidate before compensation releases its checkpoint or relaunches the old
-app would remove the required bridge, while deleting the previous backup before
-new-app verification would break restoration. Cleanup keeps its existing
-`deleting` or `discarding` journal until final registration verifies. Recovery
-after deletion needs no retired bridge, repeated deletion or app relaunch.
-First-install absence and identical-repeat paths add no registration.
+The receipt now distinguishes a healthy `retired` slot from unresolved
+`garbage` deletion. Older schema-1 receipts without `retired` remain readable.
+Slot aliases and more than four managed bundles during preparation (three after
+completion) are rejected. Current and previous remain the working/rollback
+generations; retired is disposable maintenance, not an extra active install.
+A verified no-op neither deletes retirement nor republishes registration.
 
-Focused tests inject a deterministic catalog invalidation at owned deletion and
-verify forward cleanup, failed-update compensation and pre-commit cancellation,
-plus failures and interruption before/after final publication. They preserve
-the prior app/integration/running state and unrelated registrations. This is an
-ordering and recoverability proof, not an emulation of macOS service timing.
-The observed hosted post-compensation registration loss still needs real
-post-return validation of this correction; the separate preserved same-ID
-sibling/native-host conflict is not solved or waived by it.
+For a changed install, the new bridge is staged and verified before the old
+retired slot is reclaimed. A `reclaiming` transaction journals exact
+digest/node-based cleanup while owned registrations are withdrawn and owned
+processes are idle. Failure restores the working app/integration and required
+previous backup; the new verified candidate can remain retired to complete old
+app relaunch and checkpoint release. Partially copied candidates retain the
+original unverified staging cleanup rules. At success, old previous becomes
+retired only after bridge work finishes. The durable `committed` boundary
+distinguishes release/retention cleanup from reversible failures.
+
+Native publication uses exact app/extension state: already-correct registration
+is verified, not force-registered again; an absent pair can be published, and a
+partial pair refuses. Restoration establishes the retained candidate's
+registration absence before publishing the old app. No retirement mutation
+follows final publication. Tests cover repeated failure bounds, old apps lacking
+bridge capability, original running/hidden state, interrupted optional deletion,
+release and receipt writes, alias/tamper/missing slots, first-install absence and
+explicit uninstall. These fixtures do not establish asynchronous service drain
+or that stock CMUX observed an identity disappearance.
+
+Exact production-ID/public-point sibling preflight precedes staging/provider
+effects on ordinary install and revalidates before native withdrawal. Only
+receipt-owned paths and an explicitly authorized, verified current-checkout
+development source may be retired. External eligible paths and unknown/debugger
+elections produce a concrete error without adoption; ignored/superseded records,
+other points/identifiers and unrelated provider hooks remain unchanged. The
+historical sibling-recovery proposal still needs separate production consent.
 
 `build-register.sh` now hands its verified artifact to the same `install`
 entrypoint; it no longer separately registers the development extension.

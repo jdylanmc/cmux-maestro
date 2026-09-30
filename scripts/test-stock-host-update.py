@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Same-version/fresh-DR update, then conditional legacy-sibling reproduction.
+"""Current bounded-retention install/compensation/reclaim and sibling-refusal proof.
 
 Run with --hosted-only --evidence "$RUNNER_TEMP/stock-host-update-evidence".
 Setup establishes a working selection through genuine first-time public UI approval.
-First prove fresh default ad-hoc requirements without sibling registrations.
-Only after that passes, preserve two exact signed B copies during a further update.
+Same-version/fresh-DR A/B/C/D; retain failed C, reclaim it before D publication.
+Only after that passes, require exact external siblings to refuse an update before effects.
 Real CLI metadata/plugin operations only: no credentials, model calls or chat sessions.
 Failed-update compensation is combined recovery; manual rollback remains app-only.
 Exit 0 requires combined operations, native continuity and real compensation.
-A separately reported registration-only rescue never changes failed acceptance.
+Historical registration rescue is not invoked for this pre-effect-refusal contract.
 All runtime evidence, including unsuccessful setup and cleanup, goes to the artifact.
 Register the verified stock point before discovery from the signed observer bundle.
 The observer declares no extension point and never launches or connects to Maestro.
@@ -43,7 +43,7 @@ import uuid
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-BASE = "bc9f5b73aacc6c9f2757167063c38aed42b699ef"
+BASE = "284aea494844fa00cb748545860eb263a7914116"
 FROZEN_PASS = {"product": "6efa5427cfca4f0dfb5af927ec29ba5962e2cd88",
                "head": "738e11bcca3aba4239d9dc2c9f253902f51044b1", "run": "36712857606"}
 CLEAN_COMBINED_PASS = {"product": "c2b829edb90e2d22eb5582153fb8684853925d4d",
@@ -131,16 +131,21 @@ class Probe:
         self.copilot = None
         self.copilot_real = None
         self.integration_states = {}
+        self.retention_states = {}
+        self.candidate_identities = {}
+        self.reclaim_watch = None
+        self.last_managed_sample = None
         self.report = {
             "status": "unavailable", "phase": "setup", "base": BASE,
             "stock": {"version": "0.64.25", "build": "106", "revision": STOCK_REVISION,
                       "url": DMG_URL, "bytes": 225832896, "sha256": DMG_SHA256},
-            "scenario": "same-version fresh-DR first; legacy-sibling reproduction only after clean pass",
-            "currentScenario": "sameVersionFreshDR",
-            "scenarioResults": {"sameVersionFreshDR": {"status": "pending"},
-                                "legacySibling": {"status": "not-run", "reason": "clean scenario prerequisite"}},
-            "diagnosticRecovery": {"status": "not-run", "changesAcceptance": False},
-            "scope": "current combined same-version/fresh-DR sequence, then sibling update; no model sessions or loaded-hook claim",
+            "scenario": "bounded retention/reclamation, then exact sibling preflight refusal",
+            "currentScenario": "boundedRetention",
+            "scenarioResults": {"boundedRetention": {"status": "pending"},
+                                "siblingRefusal": {"status": "not-run", "reason": "retention/reclaim prerequisite"}},
+            "diagnosticRecovery": {"status": "not-applicable", "changesAcceptance": False,
+                                   "reason": "Historical rescue unverified; current candidate must refuse before effects"},
+            "scope": "current combined A/B/failed-C/retained-C/D-reclaim/repeat-D/sibling-refusal; no model sessions or loaded-hook claim",
             "priorFrozenNativeCapability": FROZEN_PASS,
             "priorCleanCombinedCapability": CLEAN_COMBINED_PASS,
             "stockHostSource": {
@@ -271,7 +276,7 @@ class Probe:
             for stream in (process.stdout, process.stderr):
                 stream.close()
 
-    def integration_state(self, label, expected, *, compare_bytes=None):
+    def integration_state(self, label, expected, *, compare_bytes=None, new_retired=None):
         status, hooks, plugins = self.provider_rpc([
             ("status.get", {}), ("hooks.discover", {}), ("plugins.list", {})])
         require(status.get("version") == "1.0.89" and status.get("protocolVersion") == 3,
@@ -340,15 +345,142 @@ class Probe:
         value = {"provider": own[0], "hooks": rows, "resources": resources, "appReceipt": receipt,
                  "installedAppSHA256": self.preview.digest(self.destination)}
         if compare_bytes is not None:
+            expected_receipt = dict(compare_bytes["appReceipt"])
+            if new_retired is not None:
+                require(new_retired == "C" and expected == self.candidates["B"]
+                        and expected_receipt.get("retired") is None,
+                        "Only this failed-C retirement bookkeeping delta is authorized")
+                retained = self.retention_state("compensated-apps", "B", "A", "C")
+                require(retained["receipt"] == receipt, "Retirement changed during integration verification")
+                expected_receipt["retired"] = retained["receipt"]["retired"]
             require({p: (v["sha256"], v["mode"]) for p, v in resources.items()} ==
                     {p: (v["sha256"], v["mode"]) for p, v in compare_bytes["resources"].items()}
                     and own[0]["directSourceId"] == compare_bytes["provider"]["directSourceId"]
-                    and receipt == compare_bytes["appReceipt"]
+                    and receipt == expected_receipt
                     and value["installedAppSHA256"] == compare_bytes["installedAppSHA256"],
                     "Prior app/integration/provider state was not restored")
         self.integration_states[label] = value
         (self.evidence / f"integration-{label}.json").write_text(json.dumps(value, indent=2) + "\n")
         self.event("combined-state-verified", label=label, providerIdentity=own[0]["directSourceId"])
+        return value
+
+    def managed_nodes(self):
+        state = self.home / "Applications" / self.preview.STATE_NAME
+        paths = [self.destination] if self.destination.exists() else []
+        paths += [p for p in state.iterdir() if p.name.endswith(".app")] if state.exists() else []
+        nodes, raced = {}, False
+        for path in paths:
+            require(path == self.destination or re.fullmatch(r"slot-[0-9a-f]{32}\.app", path.name),
+                    "Unknown managed app artifact")
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                raced = True
+                continue
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid(),
+                    "Managed bundle path is not an owned directory")
+            nodes[str(path)] = [info.st_dev, info.st_ino, info.st_uid]
+        require(len(nodes) <= 4, "Observed managed app count exceeded four")
+        return {"nodes": nodes, "concurrentRemoval": raced}
+
+    def atomic_receipt(self):
+        path = self.home / "Applications" / self.preview.STATE_NAME / "receipt.json"
+        self.preview.safe_path(path, owner=True)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink in (0, 1)
+                    and stat.S_IMODE(info.st_mode) == 0o600 and info.st_size <= 32768,
+                    "Unsafe atomic receipt observation")
+            raw = stream.read(32769)
+        receipt = json.loads(raw)
+        require(set(receipt) == {"schema", "destination", "current", "previous", "retired",
+                                 "transaction", "garbage", "integration"}
+                and receipt["schema"] == 1 and receipt["destination"] == str(self.destination),
+                "Current-candidate receipt shape differs")
+        reader = self.preview.Installer(self.home, self.destination)
+        reader.receipt = receipt
+        for key in ("previous", "retired", "transaction", "garbage"):
+            if receipt[key]:
+                reader.slot(receipt[key]["slot"])
+        reader.validate_receipt()  # Structure only; load() also checks a concurrently changing directory.
+        return receipt
+
+    def observe_managed_slots(self, native, registry):
+        receipt = self.atomic_receipt()
+        inventory = self.managed_nodes()
+        changed = receipt != self.atomic_receipt()
+        snapshot = {"time": time.time(), **inventory, "receipt": receipt, "receiptChangedDuringSample": changed,
+                    "stableRegistered": registry["targetPresent"], "native": native}
+        comparable = {k: v for k, v in snapshot.items() if k != "time"}
+        if comparable != self.last_managed_sample:
+            self.event("managed-app-inventory", **snapshot)
+            self.last_managed_sample = comparable
+        watch = self.reclaim_watch
+        if watch is None or changed or inventory["concurrentRemoval"]:
+            return snapshot
+        count = len(inventory["nodes"])
+        watch["maxObserved"] = max(watch["maxObserved"], count)
+        transaction = receipt["transaction"]
+        if watch["retiredPath"] in inventory["nodes"]:
+            require(inventory["nodes"][watch["retiredPath"]][:2] == watch["retiredNode"],
+                    "Owned retired C directory identity changed before reclamation")
+        if count == 4 and watch["retiredPath"] in inventory["nodes"]:
+            require(transaction and transaction["after"] == self.candidate_identities["D"],
+                    "Four-bundle inventory lacks the exact D staging transaction")
+            watch["fourBundleWitness"] = snapshot
+        if not registry["targetPresent"]:
+            watch["withdrawalObserved"] = True
+        if watch["retiredPath"] not in inventory["nodes"] and watch.get("reclaimed") is None:
+            require(watch.get("fourBundleWitness") and not registry["targetPresent"] and not native
+                    and transaction and transaction["after"] == self.candidate_identities["D"]
+                    and transaction["phase"] in ("ready", "reclaiming"),
+                    "Retired C disappearance not observed under withdrawn, native-idle D preparation")
+            watch["reclaimed"] = snapshot
+        if watch.get("withdrawalObserved") and registry["targetPresent"]:
+            require(watch.get("reclaimed"), "D publication observed before exact C reclamation")
+            if "publishedNodes" not in watch:
+                watch["publishedNodes"] = inventory["nodes"]
+                watch["publicationObserved"] = snapshot["time"]
+            require(inventory["nodes"] == watch["publishedNodes"], "Managed app changed after D publication")
+        self.report["reclamationObservation"] = watch
+        self.save()
+        return snapshot
+
+    def retention_state(self, label, current, previous=None, retired=None):
+        reader = self.preview.Installer(self.home, self.destination)
+        reader.load()  # Only at completed-command boundaries, never while staging/removal is active.
+        receipt = reader.receipt
+        require(not receipt["transaction"] and not receipt["integration"] and not receipt["garbage"],
+                "Retention boundary has pending transaction/integration/garbage")
+        roles = {}
+        for role, variant in (("current", current), ("previous", previous), ("retired", retired)):
+            item = receipt[role]
+            if variant is None:
+                require(item is None, f"Unexpected {role} artifact")
+                continue
+            require(item is not None, f"Missing required {role} artifact")
+            identity = item if role == "current" else item["identity"]
+            path = self.destination if role == "current" else reader.slot(item["slot"])
+            require(identity == self.candidate_identities[variant], f"{role} does not identify signed fixture {variant}")
+            reader.match(path, identity)
+            self.ops.verify_registration(path, absent=role != "current")
+            files = {}
+            entries = [path, *path.rglob("*")]
+            require(len(entries) <= 16384, "Managed bundle file inventory exceeds bound")
+            for entry in entries:
+                info = entry.lstat()
+                files[str(entry.relative_to(path))] = [info.st_dev, info.st_ino, stat.S_IMODE(info.st_mode),
+                                                      info.st_size, info.st_mtime_ns]
+            roles[role] = {"variant": variant, "path": str(path), "identity": identity,
+                           "node": self.preview.directory_identity(path), "files": files}
+        inventory = self.managed_nodes()
+        require(not inventory["concurrentRemoval"] and len(inventory["nodes"]) <= 3
+                and set(inventory["nodes"]) == {r["path"] for r in roles.values()},
+                "Stable managed bundle inventory differs from exact current/previous/retired roles")
+        value = {"receipt": receipt, "roles": roles, "inventory": inventory}
+        self.retention_states[label] = value
+        (self.evidence / f"retention-{label}.json").write_text(json.dumps(value, indent=2) + "\n")
         return value
 
     def save(self):
@@ -568,6 +700,13 @@ class Probe:
         require(len(elections) == len(records), "Unexpected registration identifier/election output")
         allowed = {str(self.destination / self.preview.EXTENSION)}
         allowed.update(str(app / self.preview.EXTENSION) for app in self.sibling_apps)
+        receipt = self.atomic_receipt()
+        for key in ("previous", "retired", "transaction", "garbage"):
+            item = receipt[key]
+            if item:
+                identity = item["after"] if key == "transaction" else item["identity"]
+                require(identity in self.candidate_identities.values(), "Unknown candidate in owned registration slot")
+                allowed.add(str(self.home / "Applications" / self.preview.STATE_NAME / item["slot"] / self.preview.EXTENSION))
         for record, election in zip(records, elections):
             path = record["Path"]
             require(record["id"] == EXT_ID and path in allowed
@@ -635,13 +774,13 @@ class Probe:
         return extensions
 
     def terminal_tree_snapshot(self):
-        phases = ("baseline", "repeat", "update", "compensation", "sibling-update", "recovery")
+        phases = ("baseline", "repeat", "update", "compensation", "reclaim-update", "repeat-D", "sibling-refusal")
         require(self.tree_snapshot_count < len(phases), "Unexpected additional tree request")
         phase = phases[self.tree_snapshot_count]
         self.tree_snapshot_count += 1
         self.report["treeObservation"] = {
             "status": "unavailable", "phase": phase, "policy": "cmuxOnly",
-            "transport": "six fixed reads from the test-owned initial terminal command",
+            "transport": "seven fixed reads from the test-owned initial terminal command",
         }
         (self.evidence / f"snapshot-request-{phase}").touch(exist_ok=False)
         self.event("tree-snapshot-request", phase=phase)
@@ -752,8 +891,9 @@ class Probe:
             while self.child.poll() is None:
                 if monitored and defect is None:
                     try:
-                        self.sample()
-                        self.registry_sample()
+                        native = self.sample()
+                        registry = self.registry_sample()
+                        self.observe_managed_slots(native, registry)
                     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
                         defect = str(error)
                         self.event("continuity-failure", error=defect)
@@ -787,8 +927,8 @@ class Probe:
                     and self.preview.digest(app) == expected["sha256"],
                     "Run-owned signed sibling files changed")
 
-    def setup_legacy_siblings(self, previous):
-        self.event("legacy-sibling-setup-start", stableB=previous,
+    def setup_legacy_siblings(self, previous, variant="D"):
+        self.event("legacy-sibling-setup-start", stable=previous, variant=variant,
                    boundary="After genuine initial approval; no additional UI, defaults or host restart")
         digest = self.preview.digest(self.destination)
         for name in ("hardening", "visual49"):
@@ -801,8 +941,8 @@ class Probe:
             self.apps_owned.append(app)
             self.run(["/usr/bin/ditto", self.destination, app])
             self.ops.verify(app, current=True)
-            require(self.executable_hashes(app / self.preview.EXTENSION) == self.hashes["B"],
-                    "Sibling is not an exact signed B extension")
+            require(self.executable_hashes(app / self.preview.EXTENSION) == self.hashes[variant],
+                    f"Sibling is not an exact signed {variant} extension")
             self.verify_sibling_files()
             self.run([self.preview.LSREGISTER, "-f", app])
             self.run(["/usr/bin/pluginkit", "-a", app / self.preview.EXTENSION])
@@ -817,14 +957,14 @@ class Probe:
         self.sibling_records = {r["Path"]: r for r in state["records"] if r["Path"] in paths}
         require(len(self.sibling_records) == 2, "Both sibling registrations must actually be eligible")
         self.registration()
-        require(self.wait_loaded("B") == previous,
-                "Adding siblings displaced restored stable B; reproduction baseline unavailable")
+        require(self.wait_loaded(variant) == previous,
+                "Adding siblings displaced the current native generation; refusal baseline unavailable")
         self.verify_sibling_files()
         self.report["legacySiblingBaseline"] = {
-            "loadedStableB": previous, "registrations": state["records"],
+            "loadedStable": previous, "variant": variant, "registrations": state["records"],
             "files": {str(app): identity for app, identity in self.sibling_apps.items()},
             "eligibility": "public pluginkit -m -A -D -i exactID -p exactPoint, all '+'",
-            "limit": "Public matching is not stock-host-specific enumeration; only stable B is dynamically loaded.",
+            "limit": "Public matching is not stock-host-specific enumeration; only the stable extension is dynamically loaded.",
         }
         self.diagnostics("legacy-sibling-baseline")
         self.event("legacy-sibling-setup-complete")
@@ -1105,7 +1245,7 @@ class Probe:
         self.run(["/bin/bash", ROOT / "scripts/build-stock-host-fixture.sh"], timeout=900)
         self.record_fixture_signing("A", self.source)
         self.candidates = {"A": self.source}
-        for variant in ("B", "C"):
+        for variant in ("B", "C", "D"):
             candidate = self.work / f"candidate-{variant}.app"
             self.candidates[variant] = candidate
             self.apps_owned.append(candidate)
@@ -1122,6 +1262,11 @@ class Probe:
                           "--preserve-metadata=identifier,entitlements,flags,runtime", bundle])
             self.ops.verify(candidate, current=True)
             self.record_fixture_signing(variant, candidate)
+        self.candidate_identities = {
+            variant: {"sha256": self.preview.digest(app), "version": self.ops.verify(app, current=True)}
+            for variant, app in self.candidates.items()
+        }
+        self.report["candidateAppIdentities"] = self.candidate_identities
         c_extension = self.candidates["C"] / self.preview.EXTENSION
         executable = plistlib.loads((c_extension / "Contents/Info.plist").read_bytes())["CFBundleExecutable"]
         self.extension_binary = self.destination / self.preview.EXTENSION / "Contents/MacOS" / executable
@@ -1144,6 +1289,7 @@ class Probe:
         self.installer("install", "--source", self.source, "--retire-development-registration",
                        "--copilot-executable", self.copilot)
         self.integration_state("first-install", self.source)
+        self.retention_state("first-install", "A")
         self.registration()
         extension = self.destination / self.preview.EXTENSION
         executable = plistlib.loads((extension / "Contents/Info.plist").read_bytes())["CFBundleExecutable"]
@@ -1219,6 +1365,8 @@ class Probe:
         require(self.process(previous["generation"][0]) == previous,
                 "Expected old extension generation is not live at act start")
         self.installer(operation, *arguments, monitored=True, label=label)
+        if variant == "D":
+            self.observe_compensation_settlement(previous, start, variant="D", label="reclaim-settlement")
         loaded = self.wait_loaded(variant, previous=previous)
         self.registration()
         self.registry_sample()
@@ -1243,15 +1391,17 @@ class Probe:
         self.diagnostics(f"after-{label}")
         return loaded
 
-    def identical_repeat(self):
-        previous = self.initial
+    def identical_repeat(self, variant="A", previous=None, label="identical-repeat"):
+        previous = previous or self.initial
         app_node = self.destination.stat().st_ino
         app_digest = self.preview.digest(self.destination)
         registration = self.registry_sample()
-        before = self.integration_state("before-repeat", self.candidates["A"])
-        self.installer("install", "--source", self.candidates["A"], "--copilot-executable", self.copilot,
-                       monitored=True, label="identical-repeat")
-        after = self.integration_state("identical-repeat", self.candidates["A"], compare_bytes=before)
+        before = self.integration_state(f"before-{label}", self.candidates[variant])
+        roles = (variant, "B", "A") if variant == "D" else ("A", None, None)
+        retained = self.retention_state(f"before-{label}", *roles)
+        self.installer("install", "--source", self.candidates[variant], "--copilot-executable", self.copilot,
+                       monitored=True, label=label)
+        after = self.integration_state(label, self.candidates[variant], compare_bytes=before)
         require(after["resources"] == before["resources"] and self.destination.stat().st_ino == app_node
                 and self.preview.digest(self.destination) == app_digest
                 and self.process(previous["generation"][0]) == previous
@@ -1259,12 +1409,14 @@ class Probe:
                 "Identical repeat replaced app/resources/native process or changed registration/terminal")
         self.sample()
         self.verify_sibling_files()
-        self.report["checks"]["identicalRepeat"] = {"status": "pass", "native": previous,
+        require(self.retention_state(label, *roles) == retained, "Identical repeat changed owned retained files/inodes")
+        self.report["checks"][label] = {"status": "pass", "native": previous,
                                                    "appAndOwnedResourcesNotReplaced": True}
         self.save()
 
     def failed_update_compensation(self, previous):
         before = self.integration_state("before-failed-update", self.candidates["B"])
+        protected = self.retention_state("before-failed-update", "B", "A")
         before_digest = self.preview.digest(self.destination)
         self.fault_arm.touch(mode=0o600, exist_ok=False)
         start = time.time()
@@ -1279,7 +1431,10 @@ class Probe:
         restored = self.wait_loaded("B", previous=previous)
         self.registration()
         self.registry_sample()
-        self.integration_state("after-compensation", self.candidates["B"], compare_bytes=before)
+        self.integration_state("after-compensation", self.candidates["B"], compare_bytes=before, new_retired="C")
+        retained = self.retention_states["compensated-apps"]
+        require(all(retained["roles"][role] == protected["roles"][role] for role in ("current", "previous")),
+                "Failed update altered required working B or previous A files/inodes")
         require(self.preview.digest(self.destination) == before_digest
                 and self.tree() == self.baseline["tree"], "Preceding app/terminal state was not restored")
         _, raw = self.run(["/usr/bin/defaults", "export", DOMAIN, "-"])
@@ -1299,15 +1454,73 @@ class Probe:
         self.diagnostics("after-compensation")
         return restored
 
-    def observe_compensation_settlement(self, previous, act_start):
+    def reclaim_update(self, previous):
+        before = self.retention_state("before-D", "B", "A", "C")
+        retired = before["roles"]["retired"]
+        self.reclaim_watch = {"retiredPath": retired["path"], "retiredNode": retired["node"],
+                              "maxObserved": len(before["inventory"]["nodes"]), "withdrawalObserved": False}
+        loaded = self.act("update", previous, "D", "--source", self.candidates["D"],
+                          "--copilot-executable", self.copilot, label="reclaim-update")
+        require(self.process(loaded["generation"][0]) == loaded, "D changed during post-return settlement")
+        after = self.retention_state("after-D", "D", "B", "A")
+        require(self.reclaim_watch["maxObserved"] == 4 and self.reclaim_watch.get("reclaimed")
+                and self.reclaim_watch.get("publicationObserved") and not Path(retired["path"]).exists(),
+                "Bounded old-retired reclamation/publication proof unavailable")
+        for old_role, new_role in (("current", "previous"), ("previous", "retired")):
+            require(all(before["roles"][old_role][key] == after["roles"][new_role][key]
+                        for key in ("identity", "node", "files")), "D update changed required B/A retained contents")
+        self.integration_state("after-D", self.candidates["D"])
+        self.report["checks"]["retentionReclamation"] = {
+            "status": "pass", "maxObserved": 4, "stableCount": len(after["inventory"]["nodes"]),
+            "reclaimedC": retired["path"], "current": "D", "previous": "B", "retired": "A",
+        }
+        self.save()
+        return loaded
+
+    def sibling_preflight_refusal(self, previous):
+        before = self.integration_state("before-sibling-refusal", self.candidates["D"])
+        retained = self.retention_state("before-sibling-refusal", "D", "B", "A")
+        registration = self.registry_sample()
+        start = time.time()
+        self.installer("update", "--source", self.candidates["C"], "--copilot-executable", self.copilot,
+                       monitored=True, expect_failure=True, label="sibling-refusal")
+        text = (self.evidence / "installer-sibling-refusal.log").read_text()
+        prefix = "External same-ID native registrations require a separate ownership/consent decision: "
+        suffix = ". Preflight did not change these registrations."
+        expected_paths = sorted(str(app / self.preview.EXTENSION) for app in self.sibling_apps)
+        message = next((line for line in text.splitlines() if prefix in line and suffix in line), None)
+        require(message is not None, "Update did not return the exact native-sibling preflight diagnostic")
+        listed = message.split(prefix, 1)[1].split(suffix, 1)[0].split("; ")
+        require(sorted(listed) == [path + " (election +)" for path in expected_paths],
+                "Preflight diagnostic did not identify exactly both elected sibling paths")
+        after = self.integration_state("after-sibling-refusal", self.candidates["D"], compare_bytes=before)
+        require(after["resources"] == before["resources"]
+                and self.retention_state("after-sibling-refusal", "D", "B", "A") == retained
+                and self.registry_sample() == registration
+                and self.process(previous["generation"][0]) == previous
+                and self.tree() == self.baseline["tree"], "Refused update changed app/retained/integration/native/terminal state")
+        events = [e for e in self.report["events"] if e["time"] >= start]
+        require(not any(e["kind"] == "native-registration" for e in events)
+                and all(e["nodes"] == retained["inventory"]["nodes"] and e["receipt"] == retained["receipt"]
+                        for e in events if e["kind"] == "managed-app-inventory"),
+                "Preflight refusal had observed app/receipt/registration effects")
+        self.verify_sibling_files()
+        self.sample()
+        self.report["checks"]["siblingPreflightRefusal"] = {
+            "status": "pass", "diagnostic": message, "paths": expected_paths,
+            "originalNative": previous, "appReceiptRetainedResourcesRegistrationUnchanged": True,
+        }
+        self.save()
+
+    def observe_compensation_settlement(self, previous, act_start, *, variant="B", label="compensation-settlement"):
         returned = time.time()
         observations = {"actStart": act_start, "installerReturn": self.report["activeInstaller"]["returned"],
                         "observationStart": returned, "samples": [], "losses": [], "status": "observing"}
-        self.report["compensationSettlement"] = observations
+        self.report["compensationSettlement" if variant == "B" else "reclaimSettlement"] = observations
         recent = [e for e in self.report["events"] if e["time"] >= act_start]
         catalogs = [e for e in recent if e["kind"] == "native-registration"]
         seen_registration = bool(catalogs and catalogs[-1]["targetPresent"])
-        seen_native = any(p["generation"] != previous["generation"] and p["cdhash"] in self.hashes["B"]
+        seen_native = any(p["generation"] != previous["generation"] and p["cdhash"] in self.hashes[variant]
                           and p["path"] == str(self.extension_binary)
                           for e in recent if e["kind"] == "native-processes" for p in e["extensions"])
         clock = time.monotonic()
@@ -1318,7 +1531,7 @@ class Probe:
                 result = subprocess.run(
                     ["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID, *extra],
                     capture_output=True, text=True, timeout=5)
-                stem = f"compensation-settlement-{index}-{name}"
+                stem = f"{label}-{index}-{name}"
                 (self.evidence / f"{stem}.stdout").write_text(result.stdout[:65_536])
                 (self.evidence / f"{stem}.stderr").write_text(result.stderr[:4096])
                 require(result.returncode == 0 and not result.stderr.strip() and len(result.stdout) <= 65_536,
@@ -1327,27 +1540,34 @@ class Probe:
             sample["native"] = self.sample()
             sample["launchServicesAppPresent"] = self.destination.resolve() in self.ops.app_paths()
             present = any(r["Path"] == str(self.destination / self.preview.EXTENSION) for r in sample["point"])
-            loaded = (len(sample["native"]) == 1 and sample["native"][0]["cdhash"] in self.hashes["B"]
+            loaded = (len(sample["native"]) == 1 and sample["native"][0]["cdhash"] in self.hashes[variant]
                       and sample["native"][0]["path"] == str(self.extension_binary)
                       and sample["native"][0]["generation"] != previous["generation"])
-            sample.update(stableRegistrationPresent=present, restoredBLoaded=loaded)
+            sample.update(stableRegistrationPresent=present, restoredBLoaded=loaded if variant == "B" else None,
+                          expectedVariant=variant, expectedNativeLoaded=loaded)
             if seen_registration and not present:
                 observations["losses"].append({"time": sample["time"], "kind": "stable-registration-disappeared"})
             if seen_native and not loaded:
-                observations["losses"].append({"time": sample["time"], "kind": "restored-B-disappeared"})
+                observations["losses"].append({"time": sample["time"], "kind": f"expected-{variant}-disappeared"})
             seen_registration |= present
             seen_native |= loaded
             observations["samples"].append(sample)
+            managed = self.observe_managed_slots(sample["native"], {"targetPresent": present})
+            require(not managed["concurrentRemoval"] and not managed["receiptChangedDuringSample"],
+                    "Managed artifacts changed during completed-command settlement")
+            observations.setdefault("managedNodesAtReturn", managed["nodes"])
+            require(managed["nodes"] == observations["managedNodesAtReturn"],
+                    "Managed app/retired artifact changed after installer return")
             self.save()
         observations["status"] = "loss-observed" if observations["losses"] else "observed-no-loss-in-15s"
         self.save()
         try:
-            observations["logs"] = self.phase_native_logs("compensation-settlement", act_start)
+            observations["logs"] = self.phase_native_logs(label, act_start)
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
             observations["logs"] = {"status": "unavailable", "error": str(error)}
         self.save()
         require(not observations["losses"],
-                "Deferred compensated-B registration/process loss after installer return; see compensationSettlement")
+                f"Deferred {variant} registration/process loss after installer return; see {label}")
 
     def phase_native_logs(self, label, start=None):
         end = time.time()
@@ -1585,7 +1805,7 @@ class Probe:
             if checkpoint.is_file():
                 collect("integrationCheckpointRetained", lambda: {
                     "path": str(checkpoint), "bytes": checkpoint.stat().st_size, "sha256": sha256(checkpoint)})
-        if (request_snapshot and self.host and self.tree_snapshot_count < 6
+        if (request_snapshot and self.host and self.tree_snapshot_count < 7
                 and (self.evidence / "snapshot-worker.pid").exists()
                 and not (self.evidence / "snapshot-worker.exit").exists()):
             collect("diagnosticOnlyTerminalSnapshot", lambda: json.loads(self.terminal_tree_snapshot()))
@@ -1718,6 +1938,7 @@ class Probe:
                         require(not installer.receipt["transaction"] and not installer.receipt["garbage"]
                                 and not installer.receipt["integration"],
                                 "Pending combined journal retained; native cleanup must not mask it")
+                        installer.check_stable()
                         self.verify_sibling_files()
                         apps = installer.protected_apps() + self.apps_owned
                         for app in dict.fromkeys(apps):
@@ -1820,18 +2041,19 @@ def main():
         replacement = probe.act("update", probe.initial, "B", "--source", probe.candidates["B"],
                                 "--copilot-executable", probe.copilot)
         probe.integration_state("successful-update", probe.candidates["B"])
+        probe.retention_state("successful-update", "B", "A")
         restored = probe.failed_update_compensation(replacement)
-        probe.report["scenarioResults"]["sameVersionFreshDR"] = {"status": "pass", "siblingCount": 0}
-        probe.report["currentScenario"] = "legacySibling"
-        probe.report["scenarioResults"]["legacySibling"] = {"status": "setup"}
+        current = probe.reclaim_update(restored)
+        probe.identical_repeat("D", current, label="identical-repeat-D")
+        probe.report["scenarioResults"]["boundedRetention"] = {"status": "pass", "siblingCount": 0}
+        probe.report["currentScenario"] = "siblingRefusal"
+        probe.report["scenarioResults"]["siblingRefusal"] = {"status": "setup"}
         probe.save()
-        probe.setup_legacy_siblings(restored)
-        probe.report["scenarioResults"]["legacySibling"] = {"status": "update"}
+        probe.setup_legacy_siblings(current, "D")
+        probe.report["scenarioResults"]["siblingRefusal"] = {"status": "preflight-test"}
         probe.save()
-        probe.act("update", restored, "C", "--source", probe.candidates["C"],
-                  "--copilot-executable", probe.copilot, label="legacy-sibling-update")
-        probe.integration_state("legacy-sibling-update", probe.candidates["C"])
-        probe.report["scenarioResults"]["legacySibling"] = {"status": "pass", "siblingCount": 2}
+        probe.sibling_preflight_refusal(current)
+        probe.report["scenarioResults"]["siblingRefusal"] = {"status": "pass", "siblingCount": 2}
         probe.sample()
         probe.report["status"] = "pass"
     except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
@@ -1842,7 +2064,6 @@ def main():
             "approval": "No further approval attempted; inspect captured stock UI/logs for approval-required/refusal evidence.",
         }
         (evidence / "failure.txt").write_text(traceback.format_exc())
-        probe.diagnostic_recovery()
     finally:
         signal.alarm(0)
         probe.report["acceptanceEnded"] = time.time()
