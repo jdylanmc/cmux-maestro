@@ -321,6 +321,128 @@ with installer.locked():
         self.assertIsNone(self.receipt()["transaction"])
         self.assertFalse((self.data.parent.parent / "Orchestration/install-transaction.json").exists())
 
+    def test_committed_checkpoint_cleanup_blocks_legacy_mutations_until_recovery(self):
+        self.operation("install", self.old)
+        self.ops.failures["integration-release"] = OSError("checkpoint cleanup unavailable")
+        with self.assertRaisesRegex(OSError, "checkpoint cleanup unavailable"):
+            self.operation("install", self.new)
+        before = self.receipt()
+        owned = self.home / ".copilot/synthetic-owned-integration.json"
+        integration = owned.read_bytes()
+        self.assertIsNotNone(before["integration"])
+        self.assertIsNone(before["transaction"])
+        self.assertIn("checkpoint cleanup", self.operation("status"))
+        for action, kwargs in (("rollback", {}), ("prepare_update", {}), ("uninstall", {"hooks_retired": True})):
+            with self.subTest(action=action):
+                with self.assertRaisesRegex(ValueError, "recover"):
+                    self.operation(action, **kwargs)
+                self.assertEqual(self.receipt(), before)
+                self.assertEqual((self.app / "payload").read_text(), "new")
+                self.assertEqual(owned.read_bytes(), integration)
+        self.operation("recover")
+        self.assertIsNone(self.receipt()["integration"])
+        self.assertEqual((self.app / "payload").read_text(), "new")
+
+    def test_resumed_restoration_reverifies_integration_before_reverting_app(self):
+        self.operation("install", self.old)
+        self.ops.failures["integration-verify"] = OSError("late verification failed")
+        original_move = self.ops.move
+        moves = 0
+
+        def fail_first_revert(source, destination, *, exchange=False):
+            nonlocal moves
+            moves += 1
+            if moves == 2:
+                raise Interrupted()
+            return original_move(source, destination, exchange=exchange)
+
+        with patch.object(self.ops, "move", side_effect=fail_first_revert), self.assertRaises(Interrupted):
+            self.operation("install", self.new)
+        self.assertEqual(self.receipt()["transaction"]["integration"]["state"], "restored")
+        self.assertEqual((self.app / "payload").read_text(), "new")
+        integration = self.home / ".copilot/synthetic-owned-integration.json"
+        integration.write_text("foreign change after restoration")
+        before = self.receipt()
+        with self.assertRaisesRegex(ValueError, "Foreign integration"):
+            self.operation("recover")
+        self.assertEqual(self.receipt(), before)
+        self.assertEqual((self.app / "payload").read_text(), "new")
+        self.assertEqual(integration.read_text(), "foreign change after restoration")
+
+    def test_false_shaped_integration_receipts_do_not_bypass_recovery_guards(self):
+        self.operation("install", self.old)
+        receipt_path = self.app.parent / preview.STATE_NAME / "receipt.json"
+        stable = self.receipt()
+        for invalid in ("", False, 0, {}, []):
+            with self.subTest(committed=invalid):
+                changed = dict(stable, integration=invalid)
+                receipt_path.write_text(json.dumps(changed))
+                with self.assertRaises(ValueError):
+                    self.operation("status")
+        receipt_path.write_text(json.dumps(stable))
+        self.ops.failures["after-move"] = Interrupted()
+        with self.assertRaises(Interrupted):
+            self.operation("install", self.new)
+        pending = self.receipt()
+        for invalid in (None, "", False, 0, {}, []):
+            with self.subTest(pending=invalid):
+                changed = json.loads(json.dumps(pending))
+                changed["transaction"]["integration"] = invalid
+                receipt_path.write_text(json.dumps(changed))
+                with self.assertRaises(ValueError):
+                    self.operation("recover")
+                self.assertEqual((self.app / "payload").read_text(), "new")
+        receipt_path.write_text(json.dumps(pending))
+        self.operation("recover")
+        self.assertEqual((self.app / "payload").read_text(), "old")
+
+    def test_compiled_bridge_revalidates_after_actual_exit_between_component_restorations(self):
+        self.use_compiled_bridge()
+        self.operation("install", self.old)
+        before = self.integration_snapshot()
+        code = """
+import importlib.util, os, pathlib, sys
+spec = importlib.util.spec_from_file_location('install_tests', sys.argv[1])
+tests = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tests)
+home, source = map(pathlib.Path, sys.argv[2:])
+ops = tests.CompiledBridgeMac()
+app = home / 'Applications' / tests.preview.DEFAULT_NAME
+ops.applications.add(app)
+ops.extensions.add((tests.metadata.BASE_ID + '.Extension', app / tests.preview.EXTENSION))
+ops.failures['integration-verify'] = OSError('injected late failure')
+original = ops.move
+moves = 0
+def move(source, destination, *, exchange=False):
+    global moves
+    moves += 1
+    if moves == 2:
+        os._exit(92)
+    return original(source, destination, exchange=exchange)
+ops.move = move
+installer = tests.preview.Installer(home, operations=ops)
+with installer.locked():
+    installer.install(source)
+"""
+        child = subprocess.run([sys.executable, "-c", code, str(Path(__file__).resolve()), str(self.home), str(self.new)],
+                               capture_output=True, text=True, timeout=120)
+        self.assertEqual(child.returncode, 92, child.stderr)
+        self.assertEqual(self.receipt()["transaction"]["integration"]["state"], "restored")
+        self.assertEqual((self.app / "payload").read_text(), "new")
+        self.assertEqual(self.integration_snapshot(), before)
+        target = self.data.parent / "plugin/skills/cmux-maestro-orchestrate/SKILL.md"
+        original = target.read_bytes()
+        target.write_text("concurrent foreign content")
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.operation("recover")
+        self.assertEqual(target.read_text(), "concurrent foreign content")
+        self.assertEqual((self.app / "payload").read_text(), "new")
+        target.write_bytes(original)
+        self.operation("recover")
+        self.assertEqual((self.app / "payload").read_text(), "old")
+        self.assertEqual(self.integration_snapshot(), before)
+        self.assertIsNone(self.receipt()["transaction"])
+
     def test_deleted_executable_requires_positive_stable_code_identity_and_inventory(self):
         pid, uid = 43210, os.getuid()
         generation = (pid, uid, 100, 123)

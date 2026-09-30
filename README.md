@@ -1665,6 +1665,12 @@ requires the current build number; this feature does not bump it.
   decision finishes checkpoint/backup bookkeeping rather than undoing an already
   verified commit; cleanup errors remain explicit. No GUI reload or existing
   chat behavior is inferred from restoring registrations.
+- A committed checkpoint awaiting cleanup blocks separate preparation,
+  historical rollback and uninstall until `recover` finishes bookkeeping.
+  Resuming a pending rollback re-verifies previously restored integration
+  before changing the app; a concurrent user change cannot be hidden behind a
+  saved `restored` phase. Malformed false-shaped checkpoint identities are
+  rejected, not interpreted as legacy app-only state.
 
 ```sh
 python3 scripts/local-preview.py status

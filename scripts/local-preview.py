@@ -580,10 +580,11 @@ class Installer:
                     "Invalid app identity receipt.")
         if self.receipt["current"]:
             identity(self.receipt["current"])
-        if self.receipt["integration"]:
+        if self.receipt["integration"] is not None:
             require(self.receipt["current"] and isinstance(self.receipt["integration"], str)
                     and str(uuid.UUID(self.receipt["integration"])) == self.receipt["integration"],
                     "Invalid committed integration cleanup identity.")
+            require(self.receipt["transaction"] is None, "Committed integration cleanup cannot overlap a transaction.")
         for key in ("previous", "garbage"):
             item = self.receipt[key]
             if item:
@@ -605,14 +606,19 @@ class Installer:
                     identity(transaction[key])
             require(transaction["before"] == self.receipt["current"], "Transaction does not match current receipt.")
             integration = transaction.get("integration")
-            if integration:
+            if integration is not None:
                 require(isinstance(integration, dict) and set(integration) == {"id", "state", "unchanged"}
+                        and isinstance(integration["id"], str)
                         and str(uuid.UUID(integration["id"])) == integration["id"]
                         and integration["state"] in ("preparing", "prepared", "applying", "applied", "verified",
                                                      "restored", "releasing", "released")
                         and type(integration["unchanged"]) is bool
                         and transaction["kind"] in ("install", "update", "refresh"),
                         "Invalid coordinated integration receipt.")
+            elif "integration" in transaction:
+                require(transaction["kind"] in ("install", "update")
+                        and transaction["phase"] in ("copying", "discarding"),
+                        "An unprepared integration cannot advance past staging.")
             if transaction["kind"] == "refresh":
                 require(transaction["before"] == transaction["after"] and integration,
                         "Refresh must preserve the installed app identity.")
@@ -723,7 +729,8 @@ class Installer:
         self.ops.wait_idle(*self.protected_apps())
 
     def prepare_update(self):
-        require(not self.receipt["transaction"] and not self.receipt["garbage"], "Run recover first.")
+        require(not self.receipt["transaction"] and not self.receipt["garbage"]
+                and not self.receipt["integration"], "Run recover first.")
         require(self.receipt["current"], "No owned preview is installed.")
         self.check_stable()
         self.quiesce()
@@ -840,7 +847,7 @@ class Installer:
     def restore_integration(self):
         transaction = self.receipt["transaction"]
         integration = transaction.get("integration")
-        if not integration or integration["state"] in ("restored", "releasing", "released"):
+        if not integration or integration["state"] in ("releasing", "released"):
             return
         self.coordinate("restore", allow_absent=integration["state"] == "preparing")
         integration["state"] = "restored"
@@ -870,7 +877,8 @@ class Installer:
             self.save()
 
     def rollback(self):
-        require(not self.receipt["transaction"] and not self.receipt["garbage"], "Run recover first.")
+        require(not self.receipt["transaction"] and not self.receipt["garbage"]
+                and not self.receipt["integration"], "Run recover first.")
         self.check_stable()
         previous = self.receipt["previous"]
         require(self.receipt["current"] and previous, "No verified previous preview is available.")
@@ -1083,7 +1091,8 @@ class Installer:
 
     def uninstall(self, *, hooks_retired):
         require(hooks_retired, "Confirm cached native hooks are retired before removing their helper.")
-        require(not self.receipt["transaction"] and not self.receipt["garbage"], "Run recover first.")
+        require(not self.receipt["transaction"] and not self.receipt["garbage"]
+                and not self.receipt["integration"], "Run recover first.")
         self.check_stable()
         require(self.receipt["current"], "No owned preview is installed.")
         self.idle()

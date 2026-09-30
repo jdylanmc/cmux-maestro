@@ -208,6 +208,11 @@ real disposable files, covering success, no-op, upgrade, late failure, first
 absence and an actual installer-process exit after apply. A fresh installer
 then recovers both generations from disk. These automated tests use a provider
 double and synthetic registries; they do not prove real stock-host reload.
+Another actual process-exit case stops between integration restoration and
+the app exchange: resumed recovery refuses a subsequent foreign edit, then
+completes after the fixture restores the verified input. Pending committed
+checkpoint cleanup blocks legacy maintenance mutations, and false-shaped
+receipt fields cannot bypass coordination.
 The Swift checkpoint suite separately covers stable-source compensation,
 disabled legacy restoration, repeated recovery, arbitrary-path refusal and
 concurrent-write controls. The focused test script's compile-only mode builds
