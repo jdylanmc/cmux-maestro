@@ -1128,6 +1128,178 @@ with installer.locked():
         self.assertEqual((self.retired() / "payload").read_text(), "new")
         self.assertEqual(len(list((self.app.parent / preview.STATE_NAME).glob("slot-*.app"))), 2)
 
+    def test_owned_update_completes_app_only_registration_without_forcing_launchservices(self):
+        self.operation("install", self.old)
+        integration = self.ops.integration
+        observed = []
+
+        def apply_registers_app(app, action, *args, **kwargs):
+            result = integration(app, action, *args, **kwargs)
+            if action == "apply":
+                self.ops.applications.add(self.app)
+                observed.append(self.ops.registration_state(self.app))
+                self.ops.commands.clear()
+            return result
+
+        with patch.object(self.ops, "integration", side_effect=apply_registers_app):
+            self.operation("install", self.new)
+        self.assertEqual(observed, [{"application": True, "extension": False}])
+        self.assertEqual((self.app / "payload").read_text(), "new")
+        self.assertIsNone(self.receipt()["transaction"])
+        self.assertEqual([command for command in self.ops.commands if command[:2] == ["/usr/bin/pluginkit", "-a"]],
+                         [["/usr/bin/pluginkit", "-a", str(self.app / preview.EXTENSION)]])
+        self.assertFalse(any(command[:2] == [preview.LSREGISTER, "-f"] for command in self.ops.commands))
+
+    def test_registration_pair_matrix_keeps_existing_components_and_refuses_unsafe_pairs(self):
+        app = self.old
+        extension = (metadata.BASE_ID + ".Extension", app / preview.EXTENSION)
+        for application, plugin, owned in ((True, True, False), (False, False, False),
+                                           (True, False, True), (True, False, False), (False, True, True)):
+            with self.subTest(application=application, extension=plugin, transaction=owned):
+                self.ops.applications = {app} if application else set()
+                self.ops.extensions = {extension} if plugin else set()
+                self.ops.commands.clear()
+                refused = (application and not plugin and not owned) or (plugin and not application)
+                if refused:
+                    with self.assertRaisesRegex(ValueError, "Partial") as failure:
+                        self.ops.ensure_registration(app, complete_owned_app=owned)
+                    self.assertIn(json.dumps({"application": application, "extension": plugin}, sort_keys=True),
+                                  str(failure.exception))
+                else:
+                    self.ops.ensure_registration(app, complete_owned_app=owned)
+                    self.ops.verify_registration(app)
+                writes = [command for command in self.ops.commands
+                          if command[:2] in ([preview.LSREGISTER, "-f"], ["/usr/bin/pluginkit", "-a"])]
+                expected = [] if refused or (application and plugin) else (
+                    [["/usr/bin/pluginkit", "-a", str(app / preview.EXTENSION)]] if application else
+                    [[preview.LSREGISTER, "-f", str(app)],
+                     ["/usr/bin/pluginkit", "-a", str(app / preview.EXTENSION)]])
+                self.assertEqual(writes, expected)
+
+    def test_owned_app_only_completion_rechecks_pair_before_any_write(self):
+        app = self.old
+        extension = (metadata.BASE_ID + ".Extension", app / preview.EXTENSION)
+        original = self.ops.registration_state
+        for application, plugin in ((True, True), (False, True), (False, False)):
+            with self.subTest(application=application, extension=plugin):
+                self.ops.applications = {app}
+                self.ops.extensions = set()
+                self.ops.commands.clear()
+                reads = 0
+
+                def changed_pair(target):
+                    nonlocal reads
+                    reads += 1
+                    if reads == 2:
+                        self.ops.applications = {app} if application else set()
+                        self.ops.extensions = {extension} if plugin else set()
+                    return original(target)
+
+                with patch.object(self.ops, "registration_state", side_effect=changed_pair):
+                    if application and plugin:
+                        self.ops.ensure_registration(app, complete_owned_app=True)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "changed before completion"):
+                            self.ops.ensure_registration(app, complete_owned_app=True)
+                self.assertFalse(any(command[:2] in ([preview.LSREGISTER, "-f"], ["/usr/bin/pluginkit", "-a"])
+                                     for command in self.ops.commands))
+
+    def test_owned_app_only_completion_requires_exact_readback_not_exit_zero(self):
+        self.ops.applications.add(self.old)
+        original = self.ops.run
+
+        def incomplete_add(command, **kwargs):
+            if command[:2] == ["/usr/bin/pluginkit", "-a"]:
+                self.ops.commands.append(command)
+                return subprocess.CompletedProcess(command, 0, "", "")
+            return original(command, **kwargs)
+
+        with patch.object(self.ops, "run", side_effect=incomplete_add), \
+                self.assertRaisesRegex(ValueError, '"application": true, "extension": false'):
+            self.ops.ensure_registration(self.old, complete_owned_app=True)
+        self.assertFalse(any(command[:2] == [preview.LSREGISTER, "-f"] for command in self.ops.commands))
+
+    def test_owned_partial_restoration_adds_only_extension_and_preserves_retired_bridge(self):
+        self.operation("install", self.old)
+        before = (self.home / ".copilot/synthetic-owned-integration.json").read_bytes()
+        integration = self.ops.integration
+
+        def restore_registers_app(app, action, *args, **kwargs):
+            result = integration(app, action, *args, **kwargs)
+            if action == "restore":
+                self.ops.applications.add(self.app)
+                self.assertEqual(self.ops.registration_state(self.app), {"application": True, "extension": False})
+                self.ops.commands.clear()
+            return result
+
+        self.ops.failures["integration-verify"] = OSError("late candidate failure")
+        with patch.object(self.ops, "integration", side_effect=restore_registers_app), \
+                self.assertRaisesRegex(OSError, "late candidate failure"):
+            self.operation("install", self.new)
+        self.assertEqual((self.app / "payload").read_text(), "old")
+        self.assertEqual((self.retired() / "payload").read_text(), "new")
+        self.assertEqual((self.home / ".copilot/synthetic-owned-integration.json").read_bytes(), before)
+        self.assertIsNone(self.receipt()["transaction"])
+        self.assertFalse(any(command[:2] == [preview.LSREGISTER, "-f"] for command in self.ops.commands))
+        self.assertEqual([command for command in self.ops.commands if command[:2] == ["/usr/bin/pluginkit", "-a"]],
+                         [["/usr/bin/pluginkit", "-a", str(self.app / preview.EXTENSION)]])
+
+    def test_committed_recovery_completes_app_only_pair_once_without_republishing_app(self):
+        self.operation("install", self.old)
+        self.ops.failures["integration-release"] = Interrupted()
+        with self.assertRaises(Interrupted):
+            self.operation("install", self.new)
+        self.assertEqual(self.receipt()["transaction"]["phase"], "committed")
+        self.ops.extensions.discard((metadata.BASE_ID + ".Extension", self.app / preview.EXTENSION))
+        self.ops.commands.clear()
+        self.operation("recover")
+        self.operation("recover")
+        self.assertIsNone(self.receipt()["transaction"])
+        self.assertEqual((self.app / "payload").read_text(), "new")
+        self.assertEqual([command for command in self.ops.commands if command[:2] == ["/usr/bin/pluginkit", "-a"]],
+                         [["/usr/bin/pluginkit", "-a", str(self.app / preview.EXTENSION)]])
+        self.assertFalse(any(command[:2] == [preview.LSREGISTER, "-f"] for command in self.ops.commands))
+
+    def test_staging_cleanup_keeps_publication_authority_until_partial_readback_completes(self):
+        self.operation("install", self.old)
+        self.operation("install", self.new)
+        self.operation("install", self.latest)
+        before = self.receipt()
+
+        def failed_copy(source, destination):
+            (destination / "partial").write_text("not verified")
+            self.ops.extensions.discard((metadata.BASE_ID + ".Extension", self.app / preview.EXTENSION))
+            self.ops.commands.clear()
+            raise OSError("copy failed")
+
+        with patch.object(self.ops, "copy", side_effect=failed_copy), self.assertRaisesRegex(OSError, "copy failed"):
+            self.operation("install", self.fixture("fourth"))
+        self.assertEqual(self.receipt(), before)
+        self.assertEqual((self.retired() / "payload").read_text(), "old")
+        self.assertEqual([command for command in self.ops.commands if command[:2] == ["/usr/bin/pluginkit", "-a"]],
+                         [["/usr/bin/pluginkit", "-a", str(self.app / preview.EXTENSION)]])
+        self.assertFalse(any(command[:2] == [preview.LSREGISTER, "-f"] for command in self.ops.commands))
+
+    def test_publication_rechecks_owned_app_identity_after_apply_before_completing_partial_pair(self):
+        self.operation("install", self.old)
+        integration = self.ops.integration
+
+        def changed_app(app, action, *args, **kwargs):
+            result = integration(app, action, *args, **kwargs)
+            if action == "apply":
+                self.ops.applications.add(self.app)
+                (self.app / "payload").write_text("foreign mutation")
+                self.ops.commands.clear()
+            return result
+
+        with patch.object(self.ops, "integration", side_effect=changed_app), \
+                self.assertRaises(preview.InstallRestorationError):
+            self.operation("install", self.new)
+        self.assertIsNotNone(self.receipt()["transaction"])
+        self.assertEqual((self.app / "payload").read_text(), "foreign mutation")
+        self.assertFalse(any(command[:2] in ([preview.LSREGISTER, "-f"], ["/usr/bin/pluginkit", "-a"])
+                             for command in self.ops.commands))
+
     def test_stage_failure_preserves_existing_retired_bridge_and_running_app(self):
         self.operation("install", self.old)
         self.operation("install", self.new)
