@@ -2054,6 +2054,155 @@ except subprocess.TimeoutExpired:
             self.operation("recover")
         self.assertIsNone(self.receipt()["garbage"])
 
+    def test_final_registration_follows_retirement_with_cleanup_still_journaled(self):
+        for scenario in ("forward", "compensation", "precommit"):
+            with self.subTest(scenario=scenario):
+                case = LocalPreviewTests()
+                case.setUp()
+                try:
+                    case.assert_final_registration_after_retirement(scenario)
+                finally:
+                    case.tearDown()
+                    case.doCleanups()
+
+    def assert_final_registration_after_retirement(self, scenario, *, publication_failure=None, after_publication=False):
+        self.operation("install", self.old)
+        self.operation("install", self.new)
+        before = self.receipt()
+        integration_before = (self.home / ".copilot/synthetic-owned-integration.json").read_bytes()
+        running = self.start_containing_app(hidden=True) if scenario != "forward" else None
+        unrelated = self.fixture("unrelated-registration")
+        self.ops.register(unrelated)
+        self.ops.integration_calls.clear()
+        self.ops.application_calls.clear()
+        if scenario == "compensation":
+            self.ops.failures["integration-after-apply"] = OSError("injected candidate failure")
+        elif scenario == "precommit":
+            self.ops.failures["before-move"] = OSError("injected precommit failure")
+        remove, register = preview.shutil.rmtree, self.ops.register
+        retired = []
+        published = []
+
+        def retirement(path):
+            self.assertTrue(self.ops.integration_calls)
+            self.assertEqual(self.ops.integration_calls[-1][0], "release")
+            if running:
+                self.assertEqual(self.ops.application_calls[-1][0], "launch")
+            remove(path)
+            retired.append(path)
+            # A deterministic retirement invalidation model, not a macOS timing proof.
+            self.ops.applications.discard(self.app)
+            self.ops.extensions.discard((metadata.BASE_ID + ".Extension", self.app / preview.EXTENSION))
+
+        def publication(app):
+            if app == self.app and retired:
+                receipt = self.receipt()
+                if scenario == "precommit":
+                    self.assertEqual(receipt["transaction"]["phase"], "discarding")
+                    self.assertEqual(receipt["transaction"]["integration"]["state"], "released")
+                else:
+                    self.assertIsNone(receipt["transaction"])
+                    self.assertIsNone(receipt["integration"])
+                    self.assertTrue(receipt["garbage"]["deleting"])
+                self.assertFalse(retired[-1].exists())
+                published.append(app)
+                if publication_failure:
+                    if after_publication:
+                        register(app)
+                    raise publication_failure
+            return register(app)
+
+        with patch.object(preview.shutil, "rmtree", side_effect=retirement), \
+                patch.object(self.ops, "register", side_effect=publication):
+            if publication_failure:
+                error_type = (preview.InstallRestorationError
+                              if isinstance(publication_failure, Exception) and scenario != "forward"
+                              else type(publication_failure))
+                with self.assertRaises(error_type):
+                    self.operation("install", self.latest)
+            elif scenario == "forward":
+                self.operation("install", self.latest)
+            else:
+                with self.assertRaisesRegex(OSError, "injected"):
+                    self.operation("install", self.latest)
+        self.assertEqual(published, [self.app])
+        self.assertEqual(len(retired), 1)
+        expected = "latest" if scenario == "forward" else "new"
+        self.assertEqual((self.app / "payload").read_text(), expected)
+        self.assertEqual((self.previous() / "payload").read_text(), "new" if scenario == "forward" else "old")
+        self.assertIn(unrelated, self.ops.applications)
+        self.assertIn((metadata.BASE_ID + ".Extension", unrelated / preview.EXTENSION), self.ops.extensions)
+        self.assertTrue(unrelated.exists())
+        if scenario != "forward":
+            self.assertEqual((self.home / ".copilot/synthetic-owned-integration.json").read_bytes(), integration_before)
+        restored_running = self.ops.running_application
+        if running:
+            self.assertIsNotNone(restored_running)
+            self.assertTrue(restored_running["hidden"])
+        if publication_failure:
+            receipt = self.receipt()
+            if scenario == "precommit":
+                self.assertEqual(receipt["transaction"]["phase"], "discarding")
+            else:
+                self.assertTrue(receipt["garbage"]["deleting"])
+            self.ops.integration_calls.clear()
+            self.ops.application_calls.clear()
+            with patch.object(preview.shutil, "rmtree", side_effect=AssertionError("Retired files deleted again")), \
+                    patch.object(self.ops, "register", wraps=self.ops.register) as recovered_publication:
+                self.operation("recover")
+            recovered_publication.assert_called_once_with(self.app)
+            self.assertEqual(self.ops.integration_calls, [])
+            self.assertEqual(self.ops.application_calls, [])
+            self.assertEqual(self.ops.running_application, restored_running)
+        self.assertIsNone(self.receipt()["garbage"])
+        self.assertIsNone(self.receipt()["transaction"])
+        self.assertIn(self.app, self.ops.applications)
+        self.assertIn((metadata.BASE_ID + ".Extension", self.app / preview.EXTENSION), self.ops.extensions)
+        if scenario != "forward":
+            self.assertEqual(self.receipt(), before)
+
+    def test_interrupted_post_retirement_publication_recovers_without_retired_bridge(self):
+        for scenario in ("forward", "compensation", "precommit"):
+            for after in (False, True):
+                with self.subTest(scenario=scenario, after_publication=after):
+                    case = LocalPreviewTests()
+                    case.setUp()
+                    try:
+                        case.assert_final_registration_after_retirement(
+                            scenario, publication_failure=Interrupted(), after_publication=after)
+                    finally:
+                        case.tearDown()
+                        case.doCleanups()
+
+    def test_failed_post_retirement_publication_retains_recoverable_cleanup(self):
+        for scenario in ("forward", "compensation", "precommit"):
+            with self.subTest(scenario=scenario):
+                case = LocalPreviewTests()
+                case.setUp()
+                try:
+                    case.assert_final_registration_after_retirement(
+                        scenario, publication_failure=OSError("final exact registration failed"))
+                finally:
+                    case.tearDown()
+                    case.doCleanups()
+
+    def test_registration_finalization_does_not_republish_noop_or_absent_install(self):
+        with patch.object(self.ops, "register", wraps=self.ops.register) as publication:
+            self.operation("install", self.old)
+            publication.assert_called_once_with(self.app)
+            publication.reset_mock()
+            self.operation("install", self.old)
+            publication.assert_not_called()
+        self.operation("uninstall", hooks_retired=True)
+        self.ops.failures["integration-after-apply"] = OSError("first install failed")
+        with patch.object(self.ops, "register", wraps=self.ops.register) as publication:
+            with self.assertRaises(OSError):
+                self.operation("install", self.new)
+            publication.assert_not_called()
+        self.assertFalse(self.app.exists())
+        self.assertIsNone(self.receipt()["transaction"])
+        self.assertIsNone(self.receipt()["garbage"])
+
     def test_replaced_cleanup_slot_is_refused_after_interrupted_deletion(self):
         self.operation("install", self.old)
         self.operation("install", self.new, update=True)
