@@ -433,6 +433,8 @@ class Probe:
             watch["withdrawalObserved"] = True
         if watch["retiredPath"] not in inventory["nodes"] and watch.get("reclaimed") is None:
             require(watch.get("fourBundleWitness") and not registry["targetPresent"] and not native
+                    and self.ops.process_generation(watch["oldNativeGeneration"][0], os.getuid())
+                    != tuple(watch["oldNativeGeneration"])
                     and transaction and transaction["after"] == self.candidate_identities["D"]
                     and transaction["phase"] in ("ready", "reclaiming"),
                     "Retired C disappearance not observed under withdrawn, native-idle D preparation")
@@ -1458,6 +1460,7 @@ class Probe:
         before = self.retention_state("before-D", "B", "A", "C")
         retired = before["roles"]["retired"]
         self.reclaim_watch = {"retiredPath": retired["path"], "retiredNode": retired["node"],
+                              "oldNativeGeneration": previous["generation"],
                               "maxObserved": len(before["inventory"]["nodes"]), "withdrawalObserved": False}
         loaded = self.act("update", previous, "D", "--source", self.candidates["D"],
                           "--copilot-executable", self.copilot, label="reclaim-update")
