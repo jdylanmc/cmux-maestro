@@ -129,6 +129,7 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
     var stagingEnabled = false
     var cancelDuringStaging = false
     var settingsEffect: String?
+    var afterMutationResult: CopilotProcessResult?
     private var writtenSettings: CopilotSetupFileState?
     private var ownedRowsOverride: [CopilotSetupMetadata.Hook]?
     private var unrelatedRows: [CopilotSetupMetadata.Hook] = []
@@ -140,11 +141,12 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
     }
     func configure(result: CopilotProcessResult = .exited(0), failingMetadataCall: Int? = nil,
                    invalidInstall: Bool = false, stagingEnabled: Bool = false, settingsEffect: String? = nil,
-                   cancelDuringStaging: Bool = false) {
+                   cancelDuringStaging: Bool = false, afterMutationResult: CopilotProcessResult? = nil) {
         self.result = result; self.failingMetadataCall = failingMetadataCall
         self.invalidInstall = invalidInstall; self.stagingEnabled = stagingEnabled
         self.settingsEffect = settingsEffect
         self.cancelDuringStaging = cancelDuringStaging
+        self.afterMutationResult = afterMutationResult
     }
     func supplyMetadata(owned: [CopilotSetupMetadata.Hook]? = nil, unrelated: [CopilotSetupMetadata.Hook] = [],
                         plugins: [CopilotSetupMetadata.Plugin] = [], version: String? = nil) {
@@ -158,12 +160,23 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
         calls.append([executable.path] + arguments)
         guard result == .exited(0) else { return result }
         do {
-            if arguments.contains("uninstall") { installed = false }
+            if arguments.contains("uninstall") {
+                installed = false
+                if FileManager.default.fileExists(atPath: fixture.cache.path) {
+                    try FileManager.default.removeItem(at: fixture.cache)
+                }
+            }
             else {
                 installed = true
-                for name in ["plugin.json", "hooks.json"] {
-                    let data = try Data(contentsOf: fixture.source.appendingPathComponent(name))
-                    try fixture.write(data, to: fixture.cache.appendingPathComponent(name))
+                for name in ["plugin.json", "hooks.json", "skills/cmux-maestro-orchestrate/SKILL.md",
+                             "skills/maestro-icon/SKILL.md", "skills/maestro/SKILL.md"] {
+                    let source = fixture.source.appendingPathComponent(name)
+                    let target = fixture.cache.appendingPathComponent(name)
+                    if FileManager.default.fileExists(atPath: source.path) {
+                        try fixture.write(Data(contentsOf: source), to: target)
+                    } else if FileManager.default.fileExists(atPath: target.path) {
+                        try FileManager.default.removeItem(at: target)
+                    }
                 }
                 if invalidInstall { try fixture.write(["version": 2, "hooks": [:]], to: fixture.cache.appendingPathComponent("hooks.json")) }
             }
@@ -187,6 +200,10 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
                 try data.write(to: fixture.settings, options: .atomic)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fixture.settings.path)
                 writtenSettings = try CopilotSetupFileState.read(fixture.settings)
+            }
+            if let failure = afterMutationResult {
+                afterMutationResult = nil
+                return failure
             }
             return result
         } catch { return .unavailable }
@@ -219,6 +236,370 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
 
     func settingsUnchangedSinceCLI() throws -> Bool {
         try CopilotSetupFileState.read(fixture.settings) == writtenSettings
+    }
+}
+
+private actor CheckpointProcessProvider: CopilotSetupProcessRunner {
+    let home: URL
+    let root: URL
+    var provider: URL { home.appendingPathComponent(".copilot") }
+    var cache: URL { provider.appendingPathComponent("installed-plugins/_direct/plugin") }
+    var marker: URL { provider.appendingPathComponent(".fixture-provider-installed") }
+
+    init(home: URL, root: URL) { self.home = home; self.root = root }
+
+    func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
+        do {
+            if arguments.contains("uninstall") {
+                if FileManager.default.fileExists(atPath: cache.path) { try FileManager.default.removeItem(at: cache) }
+                if FileManager.default.fileExists(atPath: marker.path) { try FileManager.default.removeItem(at: marker) }
+            } else {
+                guard arguments.last == root.appendingPathComponent("plugin").path else { return .exited(3) }
+                for name in ["plugin.json", "hooks.json", "skills/cmux-maestro-orchestrate/SKILL.md",
+                             "skills/maestro-icon/SKILL.md", "skills/maestro/SKILL.md"] {
+                    let source = root.appendingPathComponent("plugin/\(name)")
+                    let target = cache.appendingPathComponent(name)
+                    if FileManager.default.fileExists(atPath: source.path) {
+                        let directory = try HookFiles.directory(target.deletingLastPathComponent(), create: true)
+                        defer { close(directory) }
+                        try HookFiles.atomicWrite(Data(contentsOf: source), name: target.lastPathComponent, directory: directory)
+                    } else if FileManager.default.fileExists(atPath: target.path) {
+                        try FileManager.default.removeItem(at: target)
+                    }
+                }
+                try Data("installed".utf8).write(to: marker)
+            }
+            return .exited(0)
+        } catch { return .exited(9) }
+    }
+
+    func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult {
+        do {
+            let installed = FileManager.default.fileExists(atPath: marker.path)
+            let settingsURL = provider.appendingPathComponent("settings.json")
+            let settings = FileManager.default.fileExists(atPath: settingsURL.path)
+                ? try CopilotSetupJSON.object(Data(contentsOf: settingsURL)) : [:]
+            let keys = settings["disabledHooks"] as? [String] ?? []
+            let global = settings["disableAllHooks"] as? Bool ?? false
+            var hooks: [CopilotSetupMetadata.Hook] = []
+            for (url, origin, source) in [
+                (provider.appendingPathComponent("hooks/cmux-maestro-observer.json"), "user", "hooks/cmux-maestro-observer.json"),
+                (cache.appendingPathComponent("hooks.json"), "plugin", CopilotPluginManifest.name),
+            ] {
+                if origin == "plugin" && !installed { continue }
+                guard FileManager.default.fileExists(atPath: url.path) else { continue }
+                let value = try CopilotSetupJSON.object(Data(contentsOf: url))
+                let disabled = value["disableAllHooks"] as? Bool ?? false
+                for event in (value["hooks"] as? [String: Any] ?? [:]).keys {
+                    let key = "fixture-key-\(event)"
+                    hooks.append(.init(hookType: event, origin: origin, source: source,
+                        enabled: !disabled && !global && !keys.contains(key), disableKey: disabled ? nil : key))
+                }
+            }
+            return .value(.init(version: "1.0.89", protocolVersion: 3, hooks: hooks,
+                plugins: installed ? [.init(name: CopilotPluginManifest.name, marketplace: "", enabled: true,
+                                           directSourceId: "fixture-stable-source")] : []))
+        } catch { return .failed(.unavailable) }
+    }
+}
+
+nonisolated enum CopilotInstallBridgeProcessFixture {
+    static func run(_ arguments: [String]) async -> Int32 {
+        do {
+            guard let request = try CopilotSetupCommandLine.bridge(arguments: arguments) else { return 2 }
+            let home = request.application.deletingLastPathComponent().deletingLastPathComponent()
+            let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            guard home.path.hasPrefix(repository.path + "/.build/local-preview-tests/") else {
+                return 2
+            }
+            let homeFD = try CopilotFileAccess.openDirectory(home, owner: getuid())
+            close(homeFD)
+            let marker = try CopilotSetupJSON.object(Data(contentsOf: home.appendingPathComponent(".bridge-fixture.json")))
+            guard marker["owner"] as? String == "local-preview-tests", let routePath = marker["routes"] as? String,
+                  routePath.hasPrefix("/private/tmp/maestro-combined-") else { return 2 }
+            let bundle = URL(fileURLWithPath: CommandLine.arguments[0])
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            let resources = bundle.appendingPathComponent("Contents/Resources")
+            let root = home.appendingPathComponent("Library/Application Support/CMUXMaestroPreview/Copilot")
+            let executable = home.appendingPathComponent("fixture-copilot")
+            if !FileManager.default.fileExists(atPath: executable.path) {
+                try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
+                try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+            }
+            let runner: any CopilotSetupProcessRunner
+            let selected: URL
+            if marker["provider"] as? String == "isolated-official" {
+                guard let requested = request.executable,
+                      requested.path.hasPrefix(home.path + "/") else { return 2 }
+                runner = LocalCopilotSetupRunner()
+                selected = requested
+            } else {
+                runner = CheckpointProcessProvider(home: home, root: root)
+                selected = executable
+            }
+            let checkpoint = CopilotInstallCheckpoint(id: request.id, home: home, root: root,
+                application: request.application, bundle: bundle,
+                controller: resources.appendingPathComponent("cmux-maestro-orchestrator.py"),
+                skill: resources.appendingPathComponent("SKILL.md"), selected: selected, path: "/usr/bin:/bin",
+                runner: runner,
+                messagingRoutes: URL(fileURLWithPath: routePath))
+            let unchanged = try await checkpoint.perform(request.action, allowAbsent: request.allowAbsent)
+            let health = try await checkpoint.registrationStatus()
+            let data = try JSONSerialization.data(withJSONObject: [
+                "schema": 1, "action": request.action, "transaction": request.id.uuidString.lowercased(),
+                "unchanged": unchanged, "registration": health.rawValue,
+            ], options: [.sortedKeys])
+            FileHandle.standardOutput.write(data + Data("\n".utf8))
+            return 0
+        } catch {
+            FileHandle.standardError.write(Data("Fixture bridge failed: \(error)\n".utf8))
+            return 1
+        }
+    }
+}
+
+final class InstallCheckpointFixture: @unchecked Sendable {
+    let fixture: ObserverFixture
+    let bundle: URL
+    let application: URL
+    let routes: URL
+    let runner: ObserverSetupRunner
+    let id = UUID()
+    var resources: URL { bundle.appendingPathComponent("Contents/Resources") }
+    var helper: URL { application.appendingPathComponent("Contents/Helpers/CMUXMaestroCopilotHook") }
+
+    init(legacy: Bool = false, disabled: Bool = false) throws {
+        fixture = try ObserverFixture()
+        bundle = fixture.directory.appendingPathComponent("Candidate.app")
+        application = fixture.home.appendingPathComponent("Applications/Maestro.app")
+        var template = Array("/private/tmp/maestro-checkpoint-XXXXXX".utf8CString)
+        routes = URL(fileURLWithPath: String(cString: try #require(mkdtemp(&template))))
+        runner = ObserverSetupRunner(fixture, installed: legacy)
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        for target in [bundle.appendingPathComponent("Contents/Helpers/CMUXMaestroCopilotHook"), helper] {
+            try fixture.write(Data("#!/bin/sh\nexit 0\n".utf8), to: target)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
+        }
+        try fixture.write(Data("#!/usr/bin/env python3\n".utf8), to: resources.appendingPathComponent("controller.py"))
+        try fixture.write(Data("---\nname: cmux-maestro-orchestrate\n---\n".utf8), to: resources.appendingPathComponent("SKILL.md"))
+        try fixture.write(Data("---\nname: maestro-icon\n---\n".utf8), to: resources.appendingPathComponent("maestro-icon/SKILL.md"))
+        for name in ["adapter.mjs", "extension.mjs"] {
+            try FileManager.default.copyItem(at: repository.appendingPathComponent("scripts/delivery-proof/\(name)"),
+                                             to: resources.appendingPathComponent(name))
+        }
+        try FileManager.default.copyItem(at: repository.appendingPathComponent("Resources/NerdFonts"),
+                                         to: resources.appendingPathComponent("NerdFonts"))
+        if legacy { try fixture.legacy(helper: helper, disabled: disabled) }
+    }
+
+    func checkpoint(id: UUID? = nil) -> CopilotInstallCheckpoint {
+        CopilotInstallCheckpoint(id: id ?? self.id, home: fixture.home, root: fixture.root,
+            application: application, bundle: bundle, controller: resources.appendingPathComponent("controller.py"),
+            skill: resources.appendingPathComponent("SKILL.md"), selected: fixture.helper, path: "/usr/bin:/bin",
+            runner: runner, messagingRoutes: routes)
+    }
+
+    func record() throws -> CopilotInstallCheckpoint.Record {
+        try JSONDecoder().decode(CopilotInstallCheckpoint.Record.self,
+            from: Data(contentsOf: CopilotInstallCheckpoint.location(root: fixture.root)))
+    }
+
+    func verifyRestored(_ original: CopilotInstallCheckpoint.Record) throws {
+        for entry in original.entries {
+            let state = try CopilotSetupFileState.read(URL(fileURLWithPath: entry.path), maximum: entry.maximum)
+            #expect(entry.before.matches(state), "Restoration must match each recorded owned file")
+        }
+        #expect(original.settings.matches(try CopilotSetupFileState.read(fixture.settings)))
+        #expect(try record().phase == "restored")
+    }
+
+    func clean() throws {
+        try FileManager.default.removeItem(at: routes)
+        try fixture.clean()
+    }
+}
+
+struct CopilotInstallCheckpointTests {
+    @Test func checkpointRemainsOutsideAllSidebarReadableSupportPrefixes() throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        let checkpoint = CopilotInstallCheckpoint.location(root: value.fixture.root)
+        #expect(!checkpoint.path.hasPrefix(value.fixture.root.path + "/"))
+        #expect(!checkpoint.path.hasPrefix(value.fixture.root.deletingLastPathComponent().appendingPathComponent("Orchestration/observer").path + "/"))
+        #expect(checkpoint.deletingLastPathComponent().lastPathComponent == "Orchestration")
+    }
+
+    @Test func combinedCheckpointSuccessAndIdenticalNoopUseStableSource() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        #expect(try await value.checkpoint().perform("prepare") == false)
+        #expect(throws: CopilotRegistrationConflict.self) { try value.fixture.registration.validateLocal() }
+        #expect(try await value.checkpoint().perform("apply") == false)
+        _ = try await value.checkpoint().perform("verify")
+        let installed = try value.record()
+        let stamps = try installed.entries.map {
+            try CopilotSetupFileState.read(URL(fileURLWithPath: $0.path), maximum: $0.maximum).stamp
+        }
+        _ = try await value.checkpoint().perform("finish")
+        #expect(try value.record().phase == "committed")
+        _ = try await value.checkpoint().perform("release")
+        let repeated = UUID()
+        let before = await value.runner.calls.count
+        #expect(try await value.checkpoint(id: repeated).perform("prepare"))
+        #expect(try await value.checkpoint(id: repeated).perform("apply"))
+        _ = try await value.checkpoint(id: repeated).perform("verify")
+        #expect(await value.runner.calls.count == before)
+        #expect(try installed.entries.map {
+            try CopilotSetupFileState.read(URL(fileURLWithPath: $0.path), maximum: $0.maximum).stamp
+        } == stamps)
+        _ = try await value.checkpoint(id: repeated).perform("finish")
+        _ = try await value.checkpoint(id: repeated).perform("release")
+        #expect(await value.runner.calls.allSatisfy { $0.last == value.fixture.source.path })
+    }
+
+    @Test(arguments: [false, true])
+    func lateProviderFailureRestoresExactPriorStateFromFreshCheckpoint(legacy: Bool) async throws {
+        let value = try InstallCheckpointFixture(legacy: legacy); defer { try? value.clean() }
+        try value.fixture.write(["unrelated": "keep", "disableAllHooks": false], to: value.fixture.settings)
+        _ = try await value.checkpoint().perform("prepare")
+        let before = try value.record()
+        await value.runner.configure(settingsEffect: "normalize", afterMutationResult: .exited(9))
+        do {
+            _ = try await value.checkpoint().perform("apply")
+            Issue.record("Partial official plugin failure must fail the combined operation")
+        } catch is CopilotRegistrationConflict {}
+        #expect(try value.record().phase == "applying")
+        #expect(await value.runner.installed)
+        _ = try await value.checkpoint().perform("restore")
+        try value.verifyRestored(before)
+        #expect(await value.runner.installed == legacy)
+        _ = try await value.checkpoint().perform("release")
+    }
+
+    @Test func interruptionAfterPublicationRestoresLegacyDisableAndUnrelatedState() async throws {
+        let value = try InstallCheckpointFixture(legacy: true, disabled: true); defer { try? value.clean() }
+        try value.fixture.write(["unrelated": "preserve"], to: value.fixture.settings)
+        _ = try await value.checkpoint().perform("prepare")
+        let before = try value.record()
+        await value.runner.configure(failingMetadataCall: 6)
+        do {
+            _ = try await value.checkpoint().perform("apply")
+            Issue.record("Late discovery failure must retain a recoverable checkpoint")
+        } catch is CopilotRegistrationConflict {}
+        #expect(try value.record().phase == "applying")
+        await value.runner.configure(result: .exited(7))
+        do {
+            _ = try await value.checkpoint().perform("restore")
+            Issue.record("Failed official compensation must remain pending")
+        } catch is CopilotRegistrationConflict {}
+        #expect(try value.record().phase == "restoring")
+        await value.runner.configure()
+        _ = try await value.checkpoint().perform("restore")
+        try value.verifyRestored(before)
+        #expect(try CopilotSetupJSON.bool(CopilotSetupJSON.object(
+            Data(contentsOf: value.fixture.cache.appendingPathComponent("hooks.json")))["disableAllHooks"]))
+        _ = try await value.checkpoint().perform("release")
+    }
+
+    @Test func foreignOwnedFileAndWrongTransactionRefuseWithoutOverwrite() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        _ = try await value.checkpoint().perform("prepare")
+        do {
+            _ = try await value.checkpoint(id: UUID()).perform("restore")
+            Issue.record("A different transaction cannot restore this checkpoint")
+        } catch {}
+        let target = value.fixture.root.appendingPathComponent("plugin/skills/cmux-maestro-orchestrate/SKILL.md")
+        try value.fixture.write(Data("foreign concurrent change".utf8), to: target)
+        let before = try CopilotSetupFileState.read(target)
+        do {
+            _ = try await value.checkpoint().perform("restore")
+            Issue.record("Concurrent foreign content must not be overwritten")
+        } catch {}
+        #expect(try CopilotSetupFileState.read(target) == before)
+        #expect(await value.runner.calls.isEmpty)
+    }
+
+    @Test func changedDisableAfterVerifiedApplyIsPreservedRatherThanRolledBackBlindly() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        _ = try await value.checkpoint().perform("prepare")
+        _ = try await value.checkpoint().perform("apply")
+        var object = try CopilotSetupJSON.object(Data(contentsOf: value.fixture.file))
+        object["disableAllHooks"] = true
+        try value.fixture.write(object, to: value.fixture.file)
+        let before = try CopilotSetupFileState.read(value.fixture.file)
+        let calls = await value.runner.calls.count
+        do {
+            _ = try await value.checkpoint().perform("restore")
+            Issue.record("A concurrent explicit disable must not be cleared by compensation")
+        } catch {}
+        #expect(try CopilotSetupFileState.read(value.fixture.file) == before)
+        #expect(await value.runner.calls.count == calls)
+    }
+
+    @Test func checkpointCannotRedirectRestorationOutsideFixedOwnedFiles() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        _ = try await value.checkpoint().perform("prepare")
+        let journal = CopilotInstallCheckpoint.location(root: value.fixture.root)
+        var object = try CopilotSetupJSON.object(Data(contentsOf: journal))
+        var entries = try #require(object["entries"] as? [[String: Any]])
+        let foreign = value.fixture.directory.appendingPathComponent("foreign.txt")
+        try value.fixture.write(Data("preserve".utf8), to: foreign)
+        entries[0]["path"] = foreign.path
+        object["entries"] = entries
+        try value.fixture.write(object, to: journal)
+        let calls = await value.runner.metadataCalls
+        do {
+            _ = try await value.checkpoint().perform("restore")
+            Issue.record("A journal must not grant arbitrary file-write authority")
+        } catch {}
+        #expect(try Data(contentsOf: foreign) == Data("preserve".utf8))
+        #expect(await value.runner.metadataCalls == calls)
+    }
+
+    @Test func alreadyRestoredPrePluginFailureDoesNotRequireWritingReadOnlyHookDirectory() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        _ = try await value.checkpoint().perform("prepare")
+        let before = try value.record()
+        let hooks = value.fixture.file.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: hooks, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: hooks.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: hooks.path) }
+        do {
+            _ = try await value.checkpoint().perform("apply")
+            Issue.record("Read-only hooks must reject publication")
+        } catch is CopilotRegistrationConflict {}
+        _ = try await value.checkpoint().perform("restore")
+        try value.verifyRestored(before)
+        #expect(await value.runner.calls.isEmpty)
+        #expect((try FileManager.default.attributesOfItem(atPath: hooks.path)[.posixPermissions] as? Int) == 0o500)
+        _ = try await value.checkpoint().perform("release")
+    }
+
+    @Test func compensationRestoresDistinctPriorSourceAndInstalledPayloadThroughStableSource() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        _ = try await value.checkpoint().perform("prepare")
+        _ = try await value.checkpoint().perform("apply")
+        _ = try await value.checkpoint().perform("finish")
+        _ = try await value.checkpoint().perform("release")
+        let relative = "skills/cmux-maestro-orchestrate/SKILL.md"
+        let source = value.fixture.source.appendingPathComponent(relative)
+        let cache = value.fixture.cache.appendingPathComponent(relative)
+        let installedBefore = try Data(contentsOf: cache)
+        let sourceBefore = Data("staged but not installed".utf8)
+        try value.fixture.write(sourceBefore, to: source)
+        let id = UUID()
+        _ = try await value.checkpoint(id: id).perform("prepare")
+        let before = try value.record()
+        await value.runner.configure(afterMutationResult: .exited(9))
+        do {
+            _ = try await value.checkpoint(id: id).perform("apply")
+            Issue.record("Partial provider failure must be reported")
+        } catch is CopilotRegistrationConflict {}
+        _ = try await value.checkpoint(id: id).perform("restore")
+        try value.verifyRestored(before)
+        #expect(try Data(contentsOf: source) == sourceBefore)
+        #expect(try Data(contentsOf: cache) == installedBefore)
+        #expect(await value.runner.calls.allSatisfy { $0.last == value.fixture.source.path })
+        _ = try await value.checkpoint(id: id).perform("release")
     }
 }
 

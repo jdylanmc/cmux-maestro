@@ -12,6 +12,7 @@ import signal
 import subprocess
 import struct
 import sys
+import tempfile
 import time
 from types import SimpleNamespace
 import unittest
@@ -43,6 +44,64 @@ class SyntheticMac(preview.MacOperations):
         self.wrong_app = False
         self.elections = {}
         self.release_on_withdrawal = False
+        self.integration_calls = []
+
+    def integration(self, app, action, token, destination, *, selected=None, allow_absent=False):
+        self.integration_health = "currentOnDisk"
+        self.integration_calls.append((action, token, app))
+        self.fail("integration-" + action)
+        root = destination.parent.parent / ".copilot"
+        installed = root / "synthetic-owned-integration.json"
+        journal = root / "synthetic-install-checkpoint.json"
+        record = json.loads(journal.read_text()) if journal.exists() else None
+        if record:
+            assert record["id"] == token
+        if action == "prepare":
+            assert record is None or record["phase"] == "prepared"
+            if record is None:
+                before = installed.read_text() if installed.exists() else None
+                desired = json.dumps({"build": (app / "payload").read_text(), "helper": str(destination / "Contents/Helpers/CMUXMaestroCopilotHook")})
+                record = {"id": token, "before": before, "desired": desired,
+                          "unchanged": before == desired, "phase": "prepared"}
+                journal.write_text(json.dumps(record))
+            return record["unchanged"]
+        if record is None:
+            assert allow_absent and action in ("restore", "release")
+            return True
+        if action == "apply":
+            record["phase"] = "applying"
+            journal.write_text(json.dumps(record))
+            if not record["unchanged"]:
+                installed.write_text(record["desired"])
+            self.fail("integration-after-apply")
+            record["phase"] = "applied"
+        elif action == "verify":
+            assert record["phase"] in ("applied", "committed")
+            assert installed.read_text() == record["desired"]
+        elif action == "restore":
+            current = installed.read_text() if installed.exists() else None
+            if current not in (record["before"], record["desired"]):
+                raise ValueError("Foreign integration changes refused")
+            record["phase"] = "restoring"
+            journal.write_text(json.dumps(record))
+            if record["before"] is None:
+                installed.unlink(missing_ok=True)
+            else:
+                installed.write_text(record["before"])
+            self.fail("integration-after-restore")
+            record["phase"] = "restored"
+        elif action == "finish":
+            assert record["phase"] in ("applied", "committed", "restored")
+            if record["phase"] != "restored":
+                record["phase"] = "committed"
+        elif action == "release":
+            assert record["phase"] in ("committed", "restored")
+            journal.unlink()
+            return True
+        else:
+            raise AssertionError(action)
+        journal.write_text(json.dumps(record))
+        return record["unchanged"]
 
     def fail(self, point):
         error = self.failures.pop(point, None)
@@ -129,7 +188,139 @@ class SyntheticMac(preview.MacOperations):
         return subprocess.CompletedProcess(command, 0, stdout, stderr)
 
 
+class CompiledBridgeMac(SyntheticMac):
+    crash_after_action = None
+
+    def integration(self, app, action, token, destination, *, selected=None, allow_absent=False):
+        self.integration_calls.append((action, token, app))
+        self.fail("integration-" + action)
+        result = preview.MacOperations.integration(
+            self, app, action, token, destination, selected=selected, allow_absent=allow_absent)
+        self.fail("integration-after-" + action)
+        if self.crash_after_action == action:
+            os._exit(91)
+        return result
+
+
 class LocalPreviewTests(unittest.TestCase):
+    compiled_bridge_ready = False
+    compiled_bridge_failure = None
+
+    def use_compiled_bridge(self):
+        if not LocalPreviewTests.compiled_bridge_ready:
+            if LocalPreviewTests.compiled_bridge_failure is not None:
+                self.fail(LocalPreviewTests.compiled_bridge_failure)
+            built = subprocess.run([str(ROOT / "scripts/test-copilot-setup.sh"), "--compile-only"],
+                                   capture_output=True, text=True, timeout=180)
+            if built.returncode:
+                LocalPreviewTests.compiled_bridge_failure = built.stdout + built.stderr
+                self.fail(LocalPreviewTests.compiled_bridge_failure)
+            LocalPreviewTests.compiled_bridge_ready = True
+        self.ops = CompiledBridgeMac()
+        routes = Path(tempfile.mkdtemp(prefix="maestro-combined-", dir="/private/tmp"))
+        self.addCleanup(shutil.rmtree, routes)
+        (self.home / ".bridge-fixture.json").write_text(json.dumps({"owner": "local-preview-tests", "routes": str(routes)}))
+        for app in (self.old, self.new, self.latest):
+            resources = app / "Contents/Resources"
+            shutil.copy2(ROOT / ".build/setup-tests/setup-tests", app / "Contents/MacOS/Preview")
+            shutil.copytree(ROOT / "Resources/NerdFonts", resources / "NerdFonts")
+            (resources / "maestro-icon").mkdir()
+            (resources / "maestro-icon/SKILL.md").write_text("---\nname: maestro-icon\n---\n")
+            (resources / "cmux-maestro-orchestrator.py").write_text("#!/usr/bin/env python3\n# " + app.stem + "\n")
+
+    def integration_snapshot(self):
+        paths = [
+            self.home / "Library/Application Support/CMUXMaestroPreview/Copilot",
+            self.home / "Library/Application Support/CMUXMaestroPreview/Orchestration/bin",
+            self.home / ".copilot/hooks",
+            self.home / ".copilot/extensions/maestro",
+            self.home / ".copilot/installed-plugins",
+        ]
+        return {
+            str(path.relative_to(self.home)): (path.read_bytes(), path.stat().st_mode & 0o777)
+            for root in paths if root.exists() for path in root.rglob("*")
+            if path.is_file() and path.name not in (".observer-setup.lock", ".install-setup.lock", "install-transaction.json")
+        }
+
+    def test_compiled_bridge_combines_install_noop_and_upgrade_without_separate_setup(self):
+        self.use_compiled_bridge()
+        self.operation("install", self.old)
+        before = self.integration_snapshot()
+        app_inode = self.app.stat().st_ino
+        receipt = self.receipt()
+        self.assertIn("no replacements", self.operation("install", self.old))
+        self.assertEqual(self.integration_snapshot(), before)
+        self.assertEqual(self.app.stat().st_ino, app_inode)
+        self.assertEqual(self.receipt(), receipt)
+        installed_info = self.app / "Contents/Info.plist"
+        old_info = plistlib.loads(installed_info.read_bytes())
+        del old_info["CMUXMaestroInstallBridge"]
+        installed_info.write_bytes(plistlib.dumps(old_info))
+        historical = self.receipt()
+        historical["current"]["sha256"] = preview.digest(self.app)
+        (self.app.parent / preview.STATE_NAME / "receipt.json").write_text(json.dumps(historical))
+        self.operation("install", self.new)
+        self.assertEqual((self.app / "payload").read_text(), "new")
+        self.assertEqual((self.previous() / "payload").read_text(), "old")
+        self.assertNotEqual(self.integration_snapshot(), before)
+        self.assertIsNone(self.receipt()["transaction"])
+        self.assertIsNone(self.receipt()["integration"])
+        self.assertFalse((self.data.parent.parent / "Orchestration/install-transaction.json").exists())
+        self.assertEqual(self.data.read_text(), "observation-data")
+
+    def test_compiled_bridge_late_failure_restores_first_absence_then_previous_generation(self):
+        self.use_compiled_bridge()
+        before = self.integration_snapshot()
+        self.ops.failures["integration-after-apply"] = OSError("failure after real Swift publication")
+        with self.assertRaises(OSError):
+            self.operation("install", self.old)
+        self.assertFalse(self.app.exists())
+        self.assertEqual(self.integration_snapshot(), before)
+        self.operation("install", self.old)
+        before = self.integration_snapshot()
+        settings = self.home / ".copilot/settings.json"
+        settings.write_text(json.dumps({"disableAllHooks": True, "unrelated": "preserve"}))
+        settings.chmod(0o600)
+        settings_before = settings.read_bytes()
+        self.ops.failures["integration-verify"] = OSError("late combined verification failure")
+        with self.assertRaises(OSError):
+            self.operation("install", self.new)
+        self.assertEqual((self.app / "payload").read_text(), "old")
+        self.assertEqual(self.integration_snapshot(), before)
+        self.assertEqual(settings.read_bytes(), settings_before)
+        self.assertIsNone(self.receipt()["transaction"])
+
+    def test_compiled_bridge_actual_parent_exit_recovers_both_generations_from_disk(self):
+        self.use_compiled_bridge()
+        self.operation("install", self.old)
+        before = self.integration_snapshot()
+        code = """
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location('install_tests', sys.argv[1])
+tests = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tests)
+home, source = map(pathlib.Path, sys.argv[2:])
+ops = tests.CompiledBridgeMac()
+app = home / 'Applications' / tests.preview.DEFAULT_NAME
+ops.applications.add(app)
+ops.extensions.add((tests.metadata.BASE_ID + '.Extension', app / tests.preview.EXTENSION))
+ops.crash_after_action = 'apply'
+installer = tests.preview.Installer(home, operations=ops)
+with installer.locked():
+    installer.install(source)
+"""
+        child = subprocess.run([sys.executable, "-c", code, str(Path(__file__).resolve()), str(self.home), str(self.new)],
+                               capture_output=True, text=True, timeout=120)
+        self.assertEqual(child.returncode, 91, child.stderr)
+        self.assertEqual((self.app / "payload").read_text(), "new")
+        self.assertEqual(self.receipt()["transaction"]["integration"]["state"], "applying")
+        self.assertEqual(json.loads((self.data.parent.parent / "Orchestration/install-transaction.json").read_text())["phase"], "applied")
+        self.operation("recover")
+        self.assertEqual((self.app / "payload").read_text(), "old")
+        self.assertEqual(self.integration_snapshot(), before)
+        self.assertIsNone(self.receipt()["transaction"])
+        self.assertFalse((self.data.parent.parent / "Orchestration/install-transaction.json").exists())
+
     def test_deleted_executable_requires_positive_stable_code_identity_and_inventory(self):
         pid, uid = 43210, os.getuid()
         generation = (pid, uid, 100, 123)
@@ -343,7 +534,8 @@ class LocalPreviewTests(unittest.TestCase):
             (resources / "adapter.mjs").write_text("// synthetic adapter\n")
             (resources / "extension.mjs").write_text("// synthetic loader\n")
         parent = {"CFBundleIdentifier": metadata.BASE_ID, "CFBundlePackageType": "APPL",
-                  "CFBundleVersion": version, "CFBundleExecutable": "Preview"}
+                  "CFBundleVersion": version, "CFBundleExecutable": "Preview",
+                  "CMUXMaestroInstallBridge": "copilot-install-v1"}
         child = {"CFBundleIdentifier": metadata.BASE_ID + ".Extension", "CFBundlePackageType": "XPC!",
                  "CFBundleVersion": version, "CFBundleExecutable": "Sidebar",
                  "EXAppExtensionAttributes": {"EXExtensionPointIdentifier": metadata.PRODUCTION_POINT}}
@@ -616,7 +808,7 @@ class LocalPreviewTests(unittest.TestCase):
         inode = self.app.stat().st_ino
         self.ops.busy = True
         for update in (False, True):
-            self.assertIn("Identical app verified", self.operation("install", self.old, update=update))
+            self.assertIn("Identical app and Copilot integration verified", self.operation("install", self.old, update=update))
             self.assertEqual(self.receipt(), before)
             self.assertEqual(self.app.stat().st_ino, inode)
         self.ops.busy = False
@@ -637,6 +829,16 @@ class LocalPreviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "integrity mismatch"):
             self.operation("install", self.old)
         self.assertEqual(self.receipt(), before)
+
+    def test_pre_bridge_source_is_refused_without_launch_or_staging(self):
+        for value in (None, True, "unsupported"):
+            with self.subTest(value=value):
+                self.change_plist(self.old, False, "CMUXMaestroInstallBridge", value if value is not None else "")
+                with self.assertRaisesRegex(ValueError, "non-UI install bridge"):
+                    self.operation("install", self.old)
+                self.assertFalse(self.app.exists())
+                self.assertIsNone(self.receipt()["transaction"])
+                self.assertEqual(self.ops.integration_calls, [])
 
     def test_wrong_ids_points_unsigned_and_arbitrary_signers_are_refused(self):
         mutations = [
@@ -1107,12 +1309,12 @@ except subprocess.TimeoutExpired:
                 self.ops.failures[point] = Interrupted()
                 with self.assertRaises(Interrupted):
                     self.operation("install", self.old)
-                committed = self.app.exists()
                 self.operation("recover")
-                self.assertEqual(self.app.exists(), committed)
+                self.assertFalse(self.app.exists())
+                self.assertFalse((self.home / ".copilot/synthetic-owned-integration.json").exists())
                 self.assertIsNone(self.receipt()["transaction"])
 
-    def test_interrupted_update_before_commit_is_cancelled_after_commit_is_finished(self):
+    def test_interrupted_combined_update_restores_before_and_after_exchange(self):
         self.operation("install", self.old)
         for point in ("before-move", "after-move"):
             with self.subTest(point=point):
@@ -1120,8 +1322,9 @@ except subprocess.TimeoutExpired:
                 with self.assertRaises(Interrupted):
                     self.operation("install", self.new, update=True)
                 self.operation("recover")
-                expected = "old" if point == "before-move" else "new"
-                self.assertEqual((self.app / "payload").read_text(), expected)
+                self.assertEqual((self.app / "payload").read_text(), "old")
+                self.assertIsNone(self.receipt()["previous"])
+        self.operation("install", self.new, update=True)
         self.assertEqual((self.previous() / "payload").read_text(), "old")
 
     def test_interrupted_precommit_discard_is_resumable(self):
@@ -1240,6 +1443,8 @@ except subprocess.TimeoutExpired:
         with self.assertRaises(Interrupted):
             self.operation("install", self.new, update=True)
         self.operation("recover")
+        self.assertEqual((self.app / "payload").read_text(), "old")
+        self.operation("install", self.new, update=True)
         self.operation("rollback")
         self.operation("uninstall", hooks_retired=True)
         self.assertEqual(self.ops.extensions, siblings | {unrelated})

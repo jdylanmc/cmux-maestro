@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import CryptoKit
 
 nonisolated enum IntegrationRegistrationHealth: String, Equatable, Sendable {
     case missing, currentOnDisk, stale, disabled, partiallyDisabled, disableUnresolved, incomplete, conflict, unavailable
@@ -43,7 +44,7 @@ nonisolated struct CopilotRegistrationConflict: Error, Equatable {
 
 // Snapshots protect named files, not just an already-open inode. Shared provider
 // directories are never chmodded. Every mutation checks the named parent again.
-nonisolated struct CopilotSetupFileState: Equatable {
+nonisolated struct CopilotSetupFileState: Equatable, Sendable {
     let url: URL
     let data: Data?
     let stamp: CopilotFileStamp?
@@ -295,12 +296,14 @@ nonisolated final class CopilotObserverRegistration: Sendable {
     let helper: URL
     private let alternateHome: String?
     private let processHome: String?
+    private let installTransaction: UUID?
+    private let installGeneration: CopilotObserverGeneration?
 
     var providerHome: URL { home.appendingPathComponent(".copilot", isDirectory: true) }
     var file: URL { providerHome.appendingPathComponent("hooks/\(Self.filename)") }
-    private var receiptFile: URL { root.appendingPathComponent(Self.receiptName) }
-    private var plugin: URL { root.appendingPathComponent("plugin") }
-    private var cache: URL { providerHome.appendingPathComponent("installed-plugins/_direct/plugin") }
+    var receiptFile: URL { root.appendingPathComponent(Self.receiptName) }
+    var plugin: URL { root.appendingPathComponent("plugin") }
+    var cache: URL { providerHome.appendingPathComponent("installed-plugins/_direct/plugin") }
 
     private func isOwnedSource(_ hook: CopilotSetupMetadata.Hook) -> Bool {
         // Tested host-only discovery uses a provider-home-relative label;
@@ -311,15 +314,26 @@ nonisolated final class CopilotObserverRegistration: Sendable {
     }
 
     init(home: URL, root: URL, helper: URL, alternateHome: String? = ProcessInfo.processInfo.environment["COPILOT_HOME"],
-         processHome: String? = ProcessInfo.processInfo.environment["HOME"]) {
+         processHome: String? = ProcessInfo.processInfo.environment["HOME"],
+         installTransaction: UUID? = nil, installGeneration: CopilotObserverGeneration? = nil) {
         self.home = home
         self.root = root
         self.helper = helper
         self.alternateHome = alternateHome
         self.processHome = processHome
+        self.installTransaction = installTransaction
+        self.installGeneration = installGeneration
     }
 
     func validateHome() throws {
+        let checkpoint = try CopilotSetupFileState.read(
+            CopilotInstallCheckpoint.location(root: root), maximum: CopilotInstallCheckpoint.maximum)
+        if let data = checkpoint.data {
+            guard let installTransaction,
+                  try JSONDecoder().decode(CopilotInstallCheckpoint.Record.self, from: data).id == installTransaction else {
+                throw CopilotRegistrationConflict("A coordinated app installation is pending; recover that installation before separate setup.")
+            }
+        }
         for (value, expected) in [(alternateHome, providerHome), (processHome, home)] {
             if let value {
                 guard value.hasPrefix("/"),
@@ -336,6 +350,52 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                 _ = try HookFiles.metadata(fd, directory: true)
             } catch CopilotFileError.missing { continue }
         }
+    }
+
+    func installationGuard(_ metadata: CopilotSetupMetadata) throws -> String {
+        let inventory = try otherPluginHooks(metadata)
+        let files = try otherHooks() + inventory.files
+        let values = files.map { file -> [String: Any] in
+            ["path": file.url.path, "data": file.data?.base64EncodedString() ?? "",
+             "permissions": Int(file.stamp?.permissions ?? 0)]
+        }
+        let bytes = try CopilotSetupJSON.data(["files": values])
+        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func recognizesInstallReceipt(_ data: Data, generation: CopilotObserverGeneration) throws -> Bool {
+        try CopilotObserverReceipt.decode(data).desired == generation
+    }
+
+    func installReceiptIdentity(_ data: Data, generation: CopilotObserverGeneration) throws -> String? {
+        let receipt = try CopilotObserverReceipt.decode(data)
+        guard receipt.desired == generation else { throw CopilotFileError.changed }
+        return receipt.pluginIdentity
+    }
+
+    func verifyCompensatablePlugin(_ metadata: CopilotSetupMetadata, identity: String?,
+                                   helpers: [String], previousManifest: Data?, previousHooks: Data?) throws -> Bool {
+        guard metadata.supported else { throw CopilotFileError.io }
+        let own = metadata.plugins.filter { $0.name == CopilotPluginManifest.name }
+        guard own.count <= 1, own.allSatisfy({ $0.isUnmanagedDirectInstall && $0.directSourceId != nil
+            && (identity == nil || $0.directSourceId == identity) }) else {
+            throw CopilotRegistrationConflict("Plugin identity changed outside the owned installation; compensation refuses to overwrite it.")
+        }
+        if !own.isEmpty {
+            let current = try pluginFiles(at: cache)
+            if previousManifest == nil || previousHooks == nil
+                || current.manifest.data != previousManifest || current.hooks.data != previousHooks {
+                let value = try kind(current, helpers: helpers)
+                guard value == .hookless || value == .legacy else { throw CopilotFileError.unsafePath }
+            }
+        }
+        return !own.isEmpty
+    }
+
+    func verifyCurrent(_ metadata: CopilotSetupMetadata) throws -> Bool {
+        guard [.currentOnDisk, .disabled, .partiallyDisabled, .disableUnresolved].contains(health()) else { return false }
+        let operation = try begin(.install, metadata: metadata)
+        return try operation.verifyAlreadyCurrent(metadata)
     }
 
     func health() -> IntegrationRegistrationHealth {
@@ -376,6 +436,14 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             guard let receipt else { throw CopilotRegistrationConflict("The observer filename has no owned provenance.") }
             _ = try recognized(data, receipt: receipt)
         }
+    }
+
+    func validateMetadataPaths() throws {
+        try validateHome()
+        _ = try readSettings()
+        _ = try otherHooks()
+        _ = try CopilotSetupFileState.read(file)
+        _ = try CopilotSetupFileState.read(receiptFile)
     }
 
     private func recognized(_ data: Data, receipt: CopilotObserverReceipt) throws -> CopilotObserverGeneration {
@@ -633,7 +701,8 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         }
         let generation: CopilotObserverGeneration
         if let prior, prior.helper == helper.path { generation = prior }
-        else { generation = CopilotObserverGeneration(id: UUID(), helper: helper.path) }
+        else { generation = installGeneration ?? CopilotObserverGeneration(id: UUID(), helper: helper.path) }
+        guard generation.helper == helper.path else { throw CopilotFileError.changed }
         _ = try generation.manifest(disabled: true)
         let disabled = settings.globalDisabled || fileDisabled
             || (sourceKind == .legacy && source.disabled) || (installedKind == .legacy && installed.disabled)
@@ -747,6 +816,12 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         func revalidate() throws {
             try revalidateOtherInputs()
             try settings.revalidate()
+        }
+
+        func verifyCheckpointInputs() throws {
+            try revalidate()
+            try source.manifest.revalidate(); try source.hooks.revalidate()
+            try installed.manifest.revalidate(); try installed.hooks.revalidate()
         }
 
         private func revalidateOtherInputs() throws {
@@ -920,7 +995,20 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             phase = .published
         }
 
-        func verifyPublished(_ metadata: CopilotSetupMetadata) throws {
+        func verifyAlreadyCurrent(_ metadata: CopilotSetupMetadata) throws -> Bool {
+            guard phase == .preflight,
+                  try store.kind(source, helpers: [generation.helper]) == .hookless,
+                  try store.kind(installed, helpers: [generation.helper]) == .hookless,
+                  let data = receipt.data,
+                  try CopilotObserverReceipt.decode(data).phase == "current" else { return false }
+            verifiedInstalled = installed
+            phase = .published
+            defer { phase = .preflight }
+            try verifyPublished(metadata, persist: false)
+            return true
+        }
+
+        func verifyPublished(_ metadata: CopilotSetupMetadata, persist: Bool = true) throws {
             try revalidate()
             guard let verifiedInstalled else { throw CopilotFileError.io }
             try verifiedInstalled.manifest.revalidate(); try verifiedInstalled.hooks.revalidate()
@@ -951,7 +1039,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             var record = CopilotObserverReceipt(
                 schema: 1, desired: generation, previous: nil, phase: "current", pluginIdentity: pluginIdentity)
             record.keyEvidence = evidence
-            receipt = try receipt.replacing(with: record.encoded())
+            if persist { receipt = try receipt.replacing(with: record.encoded()) }
         }
 
         func removeRegistration() throws {

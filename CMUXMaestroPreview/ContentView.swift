@@ -30,9 +30,9 @@ struct ContentView: View {
             Label("CMUX Maestro Preview", systemImage: "sidebar.left")
                 .font(.title2.weight(.semibold))
 
-            Text("One-time Copilot integration")
+            Text("Copilot integration maintenance")
                 .font(.headline)
-            Text("The native sidebar reads validated session and orchestration metadata locally. Terminal-backed control stays outside the sandboxed extension; the sidebar can only observe and use CMUX's typed Focus action.")
+            Text("The alpha installer configures Copilot automatically. These explicit controls repair or remove integration. The native sidebar reads validated metadata locally; terminal-backed control stays outside the sandboxed extension.")
                 .foregroundStyle(.secondary)
 
             HStack {
@@ -43,7 +43,7 @@ struct ContentView: View {
                     .disabled(busy)
             }
 
-            Text("Enable installs the hookless cmux-maestro-native lifecycle and icon plugin, ~/.copilot/hooks/cmux-maestro-observer.json, the local controller and the loader under ~/.copilot/extensions/maestro. Private observer-registration.json provenance and .observer-setup.lock live in the app's Copilot support directory. The loader is inert outside newly Maestro-launched participating sessions. Maestro does not write global settings; the official CLI may normalize its plugin settings. Choose only a Copilot executable you trust.")
+            Text("Enable installs the hookless cmux-maestro-native lifecycle and icon plugin, ~/.copilot/hooks/cmux-maestro-observer.json, the local controller and the loader under ~/.copilot/extensions/maestro. Private observer-registration.json provenance and .observer-setup.lock live in the app's Copilot support directory. The loader is inert outside newly Maestro-launched participating sessions. Settings values and disable choices are preserved; coordinated rollback can restore verified prior settings bytes after CLI normalization. Choose only a Copilot executable you trust.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -80,7 +80,7 @@ struct ContentView: View {
             }
             Text("Next: choose an initial coordinator account and explicit model in Agent launch settings, then use Maestro’s launch-coordinator entry. Managed children inherit their invoking session’s account. Existing conversations are not adopted. Messaging preserves focus and human input and does not guarantee delivery; the sidebar is optional.")
                 .font(.callout)
-            Text("Keep this app at its installed location. If you move or replace it, enable the integration again to refresh the bundled helper path. Uses the standard ~/.copilot/session-state location only.")
+            Text("Keep this app at its installed location and use the alpha installer for updates. A pending coordinated installation must be recovered before separate maintenance. Uses the standard ~/.copilot/session-state location only.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

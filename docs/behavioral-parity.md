@@ -156,15 +156,15 @@ Real permission-denied late writes exercise reversal, with changed file stamps
 proving an earlier write actually occurred. Unsafe later targets refuse before
 earlier writes. Preflight/no-write, verified restoration and unverified
 restoration are separate outcomes; unrelated files and live routes remain
-untouched. This is in-process resource compensation, not crash recovery or
-reversal of a completed provider command.
+untouched. Standalone maintenance retains this in-process compensation. The
+normal alpha installer adds the durable coordinated boundary below.
 A later failed step reports the last completed phase; the next phase may have
 partially refreshed setup resources. Retry revalidates recorded generations
 and known partial preparation, preserving a retained disabled stage. It never
 rolls back blindly or changes existing sessions. Removing integration preserves
 global keys, unrelated hooks and live messaging route/session state.
 
-### App installer correction boundaries (#114)
+### Coordinated alpha installation (#114)
 
 The focused Python suite covers ordinary `install` upgrades, exact registered
 identical no-ops (without app replacement, receipt changes or lost backups),
@@ -178,11 +178,42 @@ the replacement. Unknown process evidence still fails immediately. Tests cover
 ordered withdrawal/re-registration, unchanged unrelated registrations, bounded
 waiting and restoration when release fails; no signal, UI selection, host
 restart or script-sidebar reload is used.
-These tests use synthetic registries and real disposable filesystem exchanges;
-they do not prove stock-host unload/reload or a combined app/Copilot transaction.
-Crash-durable resource/provider rollback, automatic integration during installation,
-native lifecycle proof and later installed fresh-session acceptance remain
-open. Hosted CI and independent review are separate gates.
+`build-register.sh` now hands its verified artifact to the same `install`
+entrypoint; it no longer separately registers the development extension.
+The installer calls a production-only, non-UI bridge with a transaction UUID
+and stable application path. It prepares an owned integration checkpoint before
+the app exchange, applies Copilot, verifies provider discovery and exact app
+registration, and only then commits current/previous app retention. An identical
+app also checks integration; a fully current repeat skips resource replacement
+and official plugin mutation.
+
+The durable integration checkpoint is private `0600` data in
+`Orchestration/install-transaction.json`, outside the sidebar's granted
+`Copilot/` and `Orchestration/observer/` prefixes. No permission is broadened.
+Recovery validates the schema, fixed file paths, original modes/absence,
+expected resource bytes and transaction UUID. It keeps observers inactive while
+compensating through official install/uninstall at the stable owned source,
+restores prior settings only across verified CLI normalization, and verifies
+the original public plugin/hook inventory before the app is restored.
+The fixed owned installed payload is verified too. If source and installed
+copies differed before an interrupted setup, compensation temporarily supplies
+the saved installed payload at that same source, verifies official replacement,
+then conditionally restores the original source bytes. Provider-private state
+and unrelated plugin directories are never rewritten.
+Unexpected concurrent content or disable changes refuse compensation rather
+than being overwritten. Failed compensation retains the checkpoint.
+
+The Python suite executes the compiled Swift bridge in separate processes over
+real disposable files, covering success, no-op, upgrade, late failure, first
+absence and an actual installer-process exit after apply. A fresh installer
+then recovers both generations from disk. These automated tests use a provider
+double and synthetic registries; they do not prove real stock-host reload.
+The Swift checkpoint suite separately covers stable-source compensation,
+disabled legacy restoration, repeated recovery, arbitrary-path refusal and
+concurrent-write controls. The focused test script's compile-only mode builds
+that non-UI fixture; its normal CI command still runs every existing test.
+Current eleven-command hosted CI, source-binding resolution, native lifecycle
+proof and later installed fresh-session acceptance remain separate gates.
 
 [CopilotObserverRegistrationTests](../CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift)
 cover isolated registration, migration, exact event/wrapper content, preserved

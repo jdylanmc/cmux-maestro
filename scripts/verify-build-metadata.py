@@ -103,7 +103,7 @@ def verify_messaging_resources(app):
                 f"Bundled messaging resource {name} is missing or oversized.")
 
 
-def verify_metadata(app, mode, *, expected_build=APP_BUILD_VERSION, require_orchestration=True):
+def verify_metadata(app, mode, *, expected_build=APP_BUILD_VERSION, require_orchestration=True, require_bridge=True):
     suffix, point = PROFILES[mode]
     app = Path(app)
     extension = app / "Contents/Extensions/CMUX Maestro Preview Extension.appex"
@@ -117,6 +117,9 @@ def verify_metadata(app, mode, *, expected_build=APP_BUILD_VERSION, require_orch
             "Sidebar extension point does not match its build namespace.")
     require(parent.get("CFBundlePackageType") == "APPL", "Containing product is not an application.")
     require(child.get("CFBundlePackageType") == "XPC!", "Sidebar product is not an extension.")
+    if require_bridge:
+        require(parent.get("CMUXMaestroInstallBridge") == "copilot-install-v1",
+                "Containing app lacks the supported non-UI install bridge.")
     version = parent.get("CFBundleVersion", "")
     require(isinstance(version, str) and re.fullmatch(r"[1-9][0-9]*(?:\.[0-9]+){0,2}", version)
             and child.get("CFBundleVersion") == version,
@@ -147,7 +150,7 @@ def verify_local_preview(app, *, current=True, runner=subprocess.run):
     """
     extension, child = verify_metadata(
         app, "production", expected_build=APP_BUILD_VERSION if current else None,
-        require_orchestration=current,
+        require_orchestration=current, require_bridge=current,
     )
     app = Path(app)
     helper = app / "Contents/Helpers/CMUXMaestroCopilotHook"

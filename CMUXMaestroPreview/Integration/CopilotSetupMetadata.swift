@@ -1,8 +1,8 @@
 import Darwin
 import Foundation
 
-nonisolated struct CopilotSetupMetadata: Equatable, Sendable {
-    struct Hook: Decodable, Equatable, Sendable {
+nonisolated struct CopilotSetupMetadata: Codable, Equatable, Sendable {
+    struct Hook: Codable, Equatable, Sendable {
         let hookType: String
         let origin: String
         let source: String
@@ -10,7 +10,7 @@ nonisolated struct CopilotSetupMetadata: Equatable, Sendable {
         let disableKey: String?
     }
 
-    struct Plugin: Decodable, Equatable, Sendable {
+    struct Plugin: Codable, Equatable, Sendable {
         let name: String
         let marketplace: String
         let enabled: Bool

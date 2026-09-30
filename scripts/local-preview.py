@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""User-owned local preview transactions. No build, plugin install, or host control."""
+"""User-owned alpha app and Copilot installation transactions. No build or session control."""
 
 import argparse
 from contextlib import contextmanager
@@ -199,6 +199,7 @@ def atomic_rename(source, destination, *, exchange=False):
 
 class MacOperations:
     install_lock_fd = None
+    integration_health = None
 
     def run(self, command, **kwargs):
         kwargs.setdefault("check", True)
@@ -455,9 +456,39 @@ class MacOperations:
             self.run(["/usr/bin/pluginkit", "-a" if state["extension"] else "-r", str(app / EXTENSION)])
         require(self.registration_state(app) == state, "Previous exact source registration was not restored.")
 
+    def integration(self, app, action, token, destination, *, selected=None, allow_absent=False):
+        self.verify_bridge(app)
+        executable = plistlib.loads((app / "Contents/Info.plist").read_bytes()).get("CFBundleExecutable")
+        require(isinstance(executable, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,100}", executable),
+                "Invalid containing-app executable.")
+        command = [str(app / "Contents/MacOS" / executable), "--coordinate-copilot-install", action,
+                   "--transaction", token, "--application", str(destination)]
+        if selected:
+            command += ["--copilot-executable", str(selected)]
+        if allow_absent:
+            command.append("--allow-absent")
+        require(self.install_lock_fd is not None, "Integration changes require the active app install lock.")
+        result = command_worker.run(self.install_lock_fd, command, timeout=120, text=True)
+        require(not result.stderr.strip() and len(result.stdout.encode()) <= 4096, "Unexpected integration bridge output.")
+        response = json.loads(result.stdout)
+        require(isinstance(response, dict) and set(response) == {"schema", "action", "transaction", "unchanged", "registration"}
+                and type(response["schema"]) is int and response["schema"] == 1 and response["action"] == action
+                and response["transaction"] == token and type(response["unchanged"]) is bool,
+                "Integration bridge did not verify this exact transaction.")
+        require(response["registration"] in ("missing", "currentOnDisk", "stale", "disabled", "partiallyDisabled",
+                                            "disableUnresolved", "incomplete", "conflict", "unavailable"),
+                "Unrecognized observer registration status.")
+        self.integration_health = response["registration"]
+        return response["unchanged"]
+
+    def verify_bridge(self, app):
+        info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+        require(info.get("CMUXMaestroInstallBridge") == "copilot-install-v1",
+                "Source has no verified non-UI install bridge. Rebuild the current alpha; the old app was not launched.")
+
 
 class Installer:
-    def __init__(self, home, destination=None, operations=None):
+    def __init__(self, home, destination=None, operations=None, copilot_executable=None):
         require(os.getuid() != 0 and os.geteuid() == os.getuid(), "Run as your normal user, never root/sudo.")
         self.home = Path(home)
         safe_path(self.home, owner=True)
@@ -471,6 +502,8 @@ class Installer:
         self.state = self.applications / STATE_NAME
         self.ops = operations if operations is not None else MacOperations()
         self.receipt = None
+        self.copilot_executable = copilot_executable
+        self.verified_registration = None
 
     @contextmanager
     def locked(self):
@@ -514,7 +547,7 @@ class Installer:
                     "Unrecognized install state; no app or backup will be adopted.")
             require(not self.destination.exists(), "Existing app has no ownership receipt; refusing to overwrite.")
             self.receipt = {"schema": 1, "destination": str(self.destination), "current": None,
-                            "previous": None, "transaction": None, "garbage": None}
+                            "previous": None, "transaction": None, "garbage": None, "integration": None}
             self.save()
         else:
             safe_path(path, owner=True)
@@ -522,10 +555,12 @@ class Installer:
             require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= 32768
                     and stat.S_IMODE(info.st_mode) == 0o600, "Unsafe install receipt.")
             self.receipt = json.loads(path.read_text())
+            fields = {"schema", "destination", "current", "previous", "transaction", "garbage"}
             require(isinstance(self.receipt, dict)
-                    and set(self.receipt) == {"schema", "destination", "current", "previous", "transaction", "garbage"}
+                    and set(self.receipt) in (fields, fields | {"integration"})
                     and self.receipt["schema"] == 1 and self.receipt["destination"] == str(self.destination),
                     "Foreign or incompatible install receipt/destination.")
+            self.receipt.setdefault("integration", None)
         allowed = {"lock", "receipt.json", "receipt.next"}
         for key in ("previous", "transaction", "garbage"):
             item = self.receipt[key]
@@ -545,6 +580,10 @@ class Installer:
                     "Invalid app identity receipt.")
         if self.receipt["current"]:
             identity(self.receipt["current"])
+        if self.receipt["integration"]:
+            require(self.receipt["current"] and isinstance(self.receipt["integration"], str)
+                    and str(uuid.UUID(self.receipt["integration"])) == self.receipt["integration"],
+                    "Invalid committed integration cleanup identity.")
         for key in ("previous", "garbage"):
             item = self.receipt[key]
             if item:
@@ -557,14 +596,26 @@ class Installer:
         transaction = self.receipt["transaction"]
         if transaction:
             fields = {"kind", "phase", "slot", "before", "after", "source", "node"}
-            require(set(transaction) in (fields, fields | {"source_registration"})
-                    and transaction["kind"] in ("install", "update", "rollback", "uninstall")
+            require(fields <= set(transaction) <= fields | {"source_registration", "integration"}
+                    and transaction["kind"] in ("install", "update", "refresh", "rollback", "uninstall")
                     and transaction["phase"] in ("copying", "ready", "removing", "reverting", "discarding"),
                     "Invalid transaction receipt.")
             for key in ("before", "after"):
                 if transaction[key]:
                     identity(transaction[key])
             require(transaction["before"] == self.receipt["current"], "Transaction does not match current receipt.")
+            integration = transaction.get("integration")
+            if integration:
+                require(isinstance(integration, dict) and set(integration) == {"id", "state", "unchanged"}
+                        and str(uuid.UUID(integration["id"])) == integration["id"]
+                        and integration["state"] in ("preparing", "prepared", "applying", "applied", "verified",
+                                                     "restored", "releasing", "released")
+                        and type(integration["unchanged"]) is bool
+                        and transaction["kind"] in ("install", "update", "refresh"),
+                        "Invalid coordinated integration receipt.")
+            if transaction["kind"] == "refresh":
+                require(transaction["before"] == transaction["after"] and integration,
+                        "Refresh must preserve the installed app identity.")
             require(transaction["source"] in (None, str(DEVELOPMENT_APP)), "Unrecognized source registration.")
             source_registration = transaction.get("source_registration")
             if source_registration is not None:
@@ -579,7 +630,7 @@ class Installer:
             require((phase != "copying" or kind in ("install", "update"))
                     and (phase != "discarding" or kind in ("install", "update"))
                     and (phase != "removing" or kind == "uninstall")
-                    and (phase != "reverting" or kind in ("install", "update", "rollback")),
+                    and (phase != "reverting" or kind in ("install", "update", "rollback", "refresh")),
                     "Invalid transaction phase.")
             if kind == "rollback":
                 require(self.receipt["previous"] == {"slot": transaction["slot"],
@@ -683,8 +734,9 @@ class Installer:
     def install(self, source, *, update=False, retire_source=False):
         self.install_transaction = None
         try:
+            self.release_committed_integration()
             pending = self.receipt["transaction"]
-            if pending and pending["kind"] in ("install", "update"):
+            if pending and pending["kind"] in ("install", "update", "refresh"):
                 self.recover(restore_previous=True)
             return self.install_candidate(source, update=update, retire_source=retire_source)
         except (ValueError, OSError, KeyError, TypeError, RuntimeError, KeyboardInterrupt,
@@ -698,7 +750,7 @@ class Installer:
                 require(marker is None or marker["state"] == "finished",
                         "A command supervisor has not proved completion; automatic restoration is blocked.")
                 self.load()
-                if self.receipt["transaction"] and self.receipt["transaction"]["kind"] in ("install", "update"):
+                if self.receipt["transaction"] and self.receipt["transaction"]["kind"] in ("install", "update", "refresh"):
                     self.recover(restore_previous=True)
             except (ValueError, OSError, KeyError, TypeError, RuntimeError, KeyboardInterrupt,
                     subprocess.SubprocessError, plistlib.InvalidFileException) as restoration:
@@ -722,35 +774,100 @@ class Installer:
         if retire_source:
             require(source == DEVELOPMENT_APP, "Only this checkout's known .build/adhoc app may be deregistered.")
         new = self.inspect(source, current=True)
+        self.ops.verify_bridge(source)
         old = self.receipt["current"]
+        identical = old == new
         if old:
             version = lambda value: tuple(map(int, value.split("."))) + (0,) * (3 - len(value.split(".")))
             require(version(new["version"]) >= version(old["version"]), "Update cannot downgrade; use explicit rollback.")
             if new == old:
                 self.ops.verify_registration(self.destination)
-                if retire_source:
-                    self.match(source, new)
-                    self.ops.unregister(source)
-                self.match(self.destination, old)
-                return "Identical app verified on disk and registered; no app replacement was needed."
-        transaction = {"kind": "update" if update else "install", "phase": "copying",
+        transaction = {"kind": "refresh" if identical else "update" if update else "install",
+                       "phase": "ready" if identical else "copying",
                        "slot": "slot-" + uuid.uuid4().hex + ".app", "before": old, "after": new,
                        "source": str(source) if retire_source else None, "node": None,
-                       "source_registration": self.ops.registration_state(source) if retire_source else None}
+                       "source_registration": self.ops.registration_state(source) if retire_source else None,
+                       "integration": None}
+        if identical:
+            transaction["integration"] = {"id": str(uuid.uuid4()), "state": "preparing", "unchanged": False}
         self.install_transaction = transaction["slot"]
         self.receipt["transaction"] = transaction
         self.save()
-        candidate = self.slot(transaction["slot"])
-        require(not candidate.exists(), "Candidate slot already exists.")
-        candidate.mkdir(mode=0o700)
-        transaction["node"] = directory_identity(candidate)
+        if not identical:
+            candidate = self.slot(transaction["slot"])
+            require(not candidate.exists(), "Candidate slot already exists.")
+            candidate.mkdir(mode=0o700)
+            transaction["node"] = directory_identity(candidate)
+            self.save()
+            self.ops.copy(source, candidate)
+            require(self.inspect(candidate, current=True) == new, "Staged app differs from verified source.")
+            self.ops.sync(candidate)
+            transaction["phase"] = "ready"
+            transaction["integration"] = {"id": str(uuid.uuid4()), "state": "preparing", "unchanged": False}
         self.save()
-        self.ops.copy(source, candidate)
-        require(self.inspect(candidate, current=True) == new, "Staged app differs from verified source.")
-        self.ops.sync(candidate)
-        transaction["phase"] = "ready"
+        transaction["integration"]["unchanged"] = self.coordinate("prepare")
+        transaction["integration"]["state"] = "prepared"
         self.save()
+        if identical:
+            self.finish_committed()
+            return ("Identical app and Copilot integration verified; no replacements were needed."
+                    if transaction["integration"]["unchanged"] else
+                    "Identical app retained; owned Copilot integration installed and verified.") + self.registration_message()
         self.commit()
+        return "Verified alpha app and owned Copilot integration installed and registered." + self.registration_message()
+
+    def registration_message(self):
+        descriptions = {
+            "currentOnDisk": "current on disk",
+            "disabled": "all observer events configured disabled",
+            "partiallyDisabled": "some observer events configured disabled",
+            "disableUnresolved": "disable-key applicability unresolved; choices preserved",
+        }
+        require(self.verified_registration in descriptions, "No verified observer registration result.")
+        return " At verification: " + descriptions[self.verified_registration] + "."
+
+    def coordinate(self, action, *, allow_absent=False):
+        transaction = self.receipt["transaction"]
+        require(transaction and transaction.get("integration"), "No coordinated integration transaction.")
+        app = self.destination
+        if transaction["kind"] != "refresh" and (
+                not app.exists() or self.inspect(app) != transaction["after"]):
+            app = self.slot(transaction["slot"])
+        self.match(app, transaction["after"])
+        return self.ops.integration(app, action, transaction["integration"]["id"], self.destination,
+                                    selected=self.copilot_executable, allow_absent=allow_absent)
+
+    def restore_integration(self):
+        transaction = self.receipt["transaction"]
+        integration = transaction.get("integration")
+        if not integration or integration["state"] in ("restored", "releasing", "released"):
+            return
+        self.coordinate("restore", allow_absent=integration["state"] == "preparing")
+        integration["state"] = "restored"
+        self.save()
+
+    def release_restored_integration(self):
+        integration = self.receipt["transaction"].get("integration")
+        if not integration or integration["state"] == "released":
+            return
+        require(integration["state"] in ("restored", "releasing"), "Integration has not been restored.")
+        if integration["state"] == "restored":
+            # A failed prepare may never have created its checkpoint.
+            integration["state"] = "releasing"
+            self.save()
+        self.coordinate("release", allow_absent=True)
+        integration["state"] = "released"
+        self.save()
+
+    def release_committed_integration(self):
+        token = self.receipt["integration"]
+        if token:
+            require(not self.receipt["transaction"], "Cannot retire committed integration during another transaction.")
+            self.match(self.destination, self.receipt["current"])
+            self.ops.integration(self.destination, "release", token, self.destination,
+                                 selected=self.copilot_executable, allow_absent=True)
+            self.receipt["integration"] = None
+            self.save()
 
     def rollback(self):
         require(not self.receipt["transaction"] and not self.receipt["garbage"], "Run recover first.")
@@ -780,10 +897,11 @@ class Installer:
         transaction = self.receipt["transaction"]
         slot = self.slot(transaction["slot"])
         self.match(self.destination, transaction["after"])
-        if transaction["before"]:
+        refresh = transaction["kind"] == "refresh"
+        if transaction["before"] and not refresh:
             self.match(slot, transaction["before"])
             self.ops.unregister(slot)
-        else:
+        elif not refresh:
             require(not slot.exists(), "Unexpected first-install backup.")
         previous = self.receipt["previous"]
         if previous and transaction["kind"] != "rollback":
@@ -792,16 +910,36 @@ class Installer:
             source = Path(transaction["source"])
             self.match(source, transaction["after"])
             self.ops.unregister(source)
-        self.ops.register(self.destination)
+        integration = transaction.get("integration")
+        if integration:
+            integration["state"] = "applying"
+            self.save()
+            self.coordinate("apply")
+            integration["state"] = "applied"
+            self.save()
+        if refresh:
+            self.ops.verify_registration(self.destination)
+        else:
+            self.ops.register(self.destination)
         self.match(self.destination, transaction["after"])
+        if integration:
+            self.coordinate("verify")
+            self.coordinate("finish")
+            self.verified_registration = self.ops.integration_health
+            self.registration_message()
+            integration["state"] = "verified"
+            self.save()
         self.receipt["current"] = transaction["after"]
-        self.receipt["previous"] = (
+        self.receipt["previous"] = previous if refresh else (
             {"slot": transaction["slot"], "identity": transaction["before"]} if transaction["before"] else None
         )
-        if previous and transaction["kind"] != "rollback":
+        if previous and transaction["kind"] != "rollback" and not refresh:
             self.receipt["garbage"] = {**previous, "deleting": False, "node": None}
         self.receipt["transaction"] = None
+        if integration:
+            self.receipt["integration"] = integration["id"]
         self.save()
+        self.release_committed_integration()
         self.clean_garbage()
         self.ops.verify_registration(self.destination)
 
@@ -837,6 +975,7 @@ class Installer:
         if not transaction:
             require(not restore_previous, "No pending replacement; use rollback for a completed update.")
             self.check_stable()
+            self.release_committed_integration()
             self.clean_garbage()
             self.clean_removed_current()
             self.refresh_current_registration()
@@ -845,6 +984,19 @@ class Installer:
             require(not restore_previous, "Removal is not a replacement to roll back; use recover to resume explicit removal.")
             self.finish_uninstall()
             return "Removal recovered. User data and plugin settings retained."
+        if transaction.get("integration"):
+            actual = self.inspect(self.destination) if self.destination.exists() else None
+            require(actual in (transaction["before"], transaction["after"]),
+                    "Ambiguous destination; recovery refuses to guess.")
+            self.restore_integration()
+            restore_previous = True
+            if transaction["kind"] == "refresh":
+                self.match(self.destination, transaction["before"])
+                self.restore_source_registration(transaction)
+                self.release_restored_integration()
+                self.receipt["transaction"] = None
+                self.save()
+                return "Previous app and owned integration restored; identical-app refresh cancelled."
         slot = self.slot(transaction["slot"])
         if transaction["phase"] in ("copying", "discarding"):
             self.check_stable()
@@ -867,6 +1019,7 @@ class Installer:
                 self.receipt["transaction"] = None
                 self.save()
             else:
+                self.release_restored_integration()
                 self.discard_staging()
             self.refresh_current_registration()
             return "Pre-commit transaction cancelled; installed app unchanged."
@@ -893,6 +1046,7 @@ class Installer:
                 self.match(candidate, transaction["after"])
             self.ops.verify_registration(self.destination, absent=True)
             self.restore_source_registration(transaction)
+            self.release_restored_integration()
             self.discard_staging()
             require(not self.destination.exists(), "First-install absence was not restored.")
             return
@@ -910,6 +1064,7 @@ class Installer:
             self.match(self.slot(previous["slot"]), previous["identity"])
         self.ops.register(self.destination)
         self.restore_source_registration(transaction)
+        self.release_restored_integration()
         if transaction["kind"] != "rollback":
             self.receipt["garbage"] = {"slot": transaction["slot"], "identity": transaction["after"],
                                        "deleting": False, "node": None}
@@ -979,6 +1134,10 @@ class Installer:
             self.clean_garbage()
 
     def status(self):
+        if self.receipt["integration"] and not self.receipt["transaction"]:
+            self.check_stable()
+            self.ops.verify_registration(self.destination)
+            return "App and Copilot transaction committed; checkpoint cleanup is pending. Run recover to finish owned bookkeeping."
         if (self.receipt["transaction"] or self.receipt["garbage"]
                 or (self.receipt["current"] is None and self.receipt["previous"])):
             return ("Pending transaction/cleanup. Install/update first restores a pending install's prior app state. "
@@ -1000,6 +1159,8 @@ def main():
     for name in ("install", "update"):
         command = commands.add_parser(name)
         command.add_argument("--source", type=Path, required=True)
+        command.add_argument("--copilot-executable", type=Path,
+                             help="Trusted Copilot executable; defaults to the installer's PATH")
         command.add_argument("--retire-development-registration", action="store_true",
                              help="Unregister only this checkout's verified .build/adhoc source, not its files")
     for name in ("rollback", "status"):
@@ -1014,14 +1175,13 @@ def main():
     args = parser.parse_args()
     try:
         home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-        installer = Installer(home, args.destination)
+        installer = Installer(home, args.destination, copilot_executable=getattr(args, "copilot_executable", None))
         with installer.locked():
             if args.command in ("install", "update"):
                 result = installer.install(args.source, update=args.command == "update",
                                            retire_source=args.retire_development_registration)
-                print(result or "Verified local preview app installed and registered.")
-                print("Open the stable app and explicitly refresh Copilot integration there. Keep development "
-                      "builds until old CLI sessions no longer cache their absolute helper paths.")
+                print(result or "Verified alpha app and owned Copilot integration installed and registered.")
+                print("Existing CMUX and Copilot sessions were not restarted or adopted; loaded behavior is not implied.")
             elif args.command == "uninstall":
                 installer.uninstall(hooks_retired=args.cached_hooks_retired)
                 print("Owned preview apps/registrations removed. User data, settings and other plugins retained.")
@@ -1035,8 +1195,8 @@ def main():
     except (ValueError, OSError, KeyError, TypeError, RuntimeError, KeyboardInterrupt, subprocess.SubprocessError,
             plistlib.InvalidFileException) as error:
         print(f"Local preview operation incomplete: {error}\n"
-              "No installation success is implied. Install attempts restore journaled app state when safe; "
-              "a completed app commit, cleanup failure or Copilot integration is not covered by that restoration. "
+              "No unverified installation or rollback success is implied. Pending combined installs restore "
+              "owned integration and app state when safe. A durable verified commit finishes cleanup instead. "
               "Run status, then recover for any pending transaction. "
               "Do not delete receipt/lock/backup files or the development source.", file=sys.stderr)
         return 1

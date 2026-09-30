@@ -220,6 +220,32 @@ struct CopilotSetupTests {
         }
     }
 
+    @Test func coordinatedBridgeRequiresExactTransactionAndArguments() throws {
+        let id = UUID().uuidString.lowercased()
+        let args = [CopilotSetupCommandLine.bridgeFlag, "prepare", "--transaction", id,
+                    "--application", "/Users/example/Applications/Maestro.app"]
+        let request = try #require(try CopilotSetupCommandLine.bridge(arguments: args))
+        #expect(request.id.uuidString.lowercased() == id)
+        #expect(request.executable == nil)
+        #expect(!request.allowAbsent)
+        #expect(try CopilotSetupCommandLine.bridge(arguments: args + ["--copilot-executable", "/trusted/copilot"])?.executable?.path == "/trusted/copilot")
+        for bad in [
+            args + ["--allow-absent"],
+            args + ["--transaction", id],
+            [CopilotSetupCommandLine.bridgeFlag, "unknown"] + Array(args.dropFirst(2)),
+            Array(args.prefix(3)) + ["not-a-uuid"] + Array(args.dropFirst(4)),
+            Array(args.prefix(5)) + ["/Users/example/Applications/../Other.app"],
+        ] {
+            #expect(throws: CopilotSetupCommandLine.Failure.self) { try CopilotSetupCommandLine.bridge(arguments: bad) }
+        }
+    }
+
+    @Test func validationHostCannotEnterCoordinatedInstall() async {
+        let request = CopilotSetupCommandLine.Bridge(action: "prepare", id: UUID(),
+            application: URL(fileURLWithPath: "/Applications/NotAllowed.app"), executable: nil, allowAbsent: false)
+        #expect(await CopilotSetupCommandLine.coordinate(request).exitCode == 1)
+    }
+
     @Test func commandLineSetupCannotInstallFromValidationHost() async {
         #expect(!CopilotSetupAccess.currentAppAllowsChanges)
         #expect(await CopilotSetupCommandLine.install(

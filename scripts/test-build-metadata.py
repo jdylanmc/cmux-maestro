@@ -36,7 +36,7 @@ class BuildMetadataTests(unittest.TestCase):
     def fixture(self, mode):
         suffix, point = metadata.PROFILES[mode]
         self.parent = {"CFBundleIdentifier": metadata.BASE_ID + suffix, "CFBundlePackageType": "APPL",
-                       "CFBundleVersion": metadata.APP_BUILD_VERSION}
+                       "CFBundleVersion": metadata.APP_BUILD_VERSION, "CMUXMaestroInstallBridge": "copilot-install-v1"}
         self.child = {
             "CFBundleIdentifier": metadata.BASE_ID + suffix + ".Extension",
             "CFBundlePackageType": "XPC!",
@@ -59,6 +59,14 @@ class BuildMetadataTests(unittest.TestCase):
                 (self.app / "Contents/Resources" / name).unlink()
                 with self.assertRaisesRegex(ValueError, "messaging resource"):
                     metadata.verify_metadata(self.app, "tests")
+
+    def test_non_ui_bridge_is_required_for_new_artifacts_not_historical_receipts(self):
+        self.fixture("production")
+        del self.parent["CMUXMaestroInstallBridge"]
+        self.save()
+        with self.assertRaisesRegex(ValueError, "non-UI install bridge"):
+            metadata.verify_metadata(self.app, "production")
+        metadata.verify_metadata(self.app, "production", require_bridge=False)
 
     def save(self):
         (self.app / "Contents/Info.plist").write_bytes(plistlib.dumps(self.parent))
@@ -182,8 +190,9 @@ class BuildMetadataTests(unittest.TestCase):
             self.assertNotIn("REGISTER_APP_WITH_LAUNCH_SERVICES", script)
         script = (ROOT / "scripts/build-register.sh").read_text()
         self.assertLess(script.index('--source-entitlements'), script.index('    build\n'))
-        self.assertLess(script.index('--mode production --app "$APP"'), script.index('pluginkit -a "$APPEX"'))
-        self.assertLess(script.index('pluginkit -a "$APPEX"'), script.index('--registration "$APPEX"'))
+        self.assertLess(script.index('--mode production --app "$APP"'), script.index('local-preview.py" install'))
+        self.assertIn('--retire-development-registration "$@"', script)
+        self.assertNotIn('pluginkit -a "$APPEX"', script)
 
     def registration_listing(self, *entries):
         return "".join(f"+    {identifier}(2)\n    Path = {path}\n" for identifier, path in entries) \
