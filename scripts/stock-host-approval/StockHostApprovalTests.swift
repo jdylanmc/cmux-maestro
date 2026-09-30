@@ -220,7 +220,9 @@ final class StockHostApprovalTests: XCTestCase {
             try save("return-to-original-terminal-setup-only")
             terminal.firstMatch.click()
             func hasExactText(_ value: String) -> Bool {
-                app.staticTexts.allElementsBoundByIndex.contains { textValues($0).contains(value) }
+                let exact = NSPredicate(format: "label == %@ OR value == %@ OR identifier == %@",
+                                        value, value, value)
+                return app.descendants(matching: .any).matching(exact).firstMatch.exists
             }
             guard wait(15, { !hasExactText("An installed sidebar extension needs approval before CMUX can use it.") }) else {
                 throw SetupFailure.unavailable("Stock still reports first-time approval required")
