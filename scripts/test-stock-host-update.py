@@ -175,7 +175,8 @@ class Probe:
         gh.mkdir(mode=0o700)
         os.environ["GH_CONFIG_DIR"] = str(gh)
         _, version = self.run([self.copilot_real, "--no-auto-update", "--no-auto-login", "--version"])
-        require(re.search(rb"(?<![\w.])1\.0\.89(?![\w.+-])", version), "CLI runtime version is not exactly 1.0.89")
+        require(version.splitlines()[:1] == [b"GitHub Copilot CLI 1.0.89."],
+                "CLI runtime version is not exactly 1.0.89")
         self.report["copilot"] = {"version": version.decode().strip(), "url": url, "bytes": size,
                                   "archiveSHA256": digest, "executableSHA256": sha256(self.copilot_real),
                                   "credentialsSupplied": False, "sessionsCreated": 0, "modelCalls": 0}
