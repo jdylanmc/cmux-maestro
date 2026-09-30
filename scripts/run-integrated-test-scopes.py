@@ -237,6 +237,11 @@ def validate_isolated(summary, tests):
 def validate_remaining(summary, tests, *, benchmark_enabled, isolated_excluded=True):
     selected = cases(tests)
     measured = reconcile(summary, selected)
+    if benchmark_enabled:
+        benchmark = [case for case in selected if case.identity == BENCHMARK_SELECTOR]
+        require(len(benchmark) == 1 and benchmark[0].status == "Passed" and not benchmark[0].parameterized
+                and benchmark[0].executions == ((None, "Passed"),),
+                "Enabled reader benchmark must be present as exactly one nonparameterized passed execution.")
     if isolated_excluded:
         excluded = [case.status for case in selected if case.identity == SELECTOR]
         require(not excluded or excluded == ["Skipped"],

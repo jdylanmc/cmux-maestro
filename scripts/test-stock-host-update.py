@@ -40,7 +40,7 @@ import uuid
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-BASE = "4cb0486246f0d7a269ad855b44b63588a6715f1a"
+BASE = "c2b829edb90e2d22eb5582153fb8684853925d4d"
 FROZEN_PASS = {"product": "6efa5427cfca4f0dfb5af927ec29ba5962e2cd88",
                "head": "738e11bcca3aba4239d9dc2c9f253902f51044b1", "run": "36712857606"}
 CLI_PACKAGES = {

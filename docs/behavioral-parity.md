@@ -63,7 +63,8 @@ There is no retry-until-pass path.
 The preexisting opt-in
 `CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()`
 is the only optional skipped identity: it remains disabled unless the inherited
-`CMUX_MAESTRO_READER_BENCHMARK` is exactly `"1"`. When enabled, its skip fails.
+`CMUX_MAESTRO_READER_BENCHMARK` is exactly `"1"`. When enabled, its exact identity
+must have one nonparameterized passed execution; absence or a skip fails.
 The harness records that flag and exact skip attribution alongside the verified
 isolated-selector exclusion, without enabling the benchmark or rewriting
 reported counts/details. A skipped parameter, another identity, or an
