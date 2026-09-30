@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib.util
 import json
+import os
 from pathlib import Path
 import plistlib
 import re
@@ -19,6 +20,8 @@ spec.loader.exec_module(metadata)
 scope_spec = importlib.util.spec_from_file_location("integrated_scopes", ROOT / "scripts/run-integrated-test-scopes.py")
 scopes = importlib.util.module_from_spec(scope_spec)
 scope_spec.loader.exec_module(scopes)
+BENCHMARK_TEST = "CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()"
+BENCHMARK_FLAG = "CMUX_MAESTRO_READER_BENCHMARK"
 
 
 class IntegratedTestScopeTests(unittest.TestCase):
@@ -42,7 +45,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
         ]}]}
         return summary, tests
 
-    def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0):
+    def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0, benchmark_flag=None):
         def runner(command, **kwargs):
             self.commands.append(command)
             if command[0] == "xcodebuild":
@@ -52,7 +55,11 @@ class IntegratedTestScopeTests(unittest.TestCase):
             scope = Path(command[command.index("--path") + 1]).stem
             values = isolated if scope == "isolated" else remaining
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(values[0 if command[4] == "summary" else 1]))
-        with patch("builtins.print"):
+        with patch("builtins.print"), patch.dict(os.environ):
+            if benchmark_flag is None:
+                os.environ.pop(BENCHMARK_FLAG, None)
+            else:
+                os.environ[BENCHMARK_FLAG] = benchmark_flag
             result = scopes.run(["xcodebuild", "-scheme", "CMUXMaestroPreview"], self.directory / "results", runner)
         return result, json.loads((self.directory / "results/coverage.json").read_text())
 
@@ -113,6 +120,127 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertEqual(evidence["remainingCounts"]["skippedTests"], 1)
         self.assertEqual(evidence["remainingCounts"]["passedTests"], 1)
 
+    def test_existing_optional_benchmark_skip_preserves_counts_and_attribution(self):
+        for excluded in (False, True):
+            with self.subTest(excluded=excluded):
+                if (self.directory / "results").exists():
+                    shutil.rmtree(self.directory / "results")
+                entries = [(BENCHMARK_TEST, "Skipped"), ("OtherSuite/test()", "Passed")]
+                if excluded:
+                    entries.append((scopes.TEST, "Skipped"))
+                remaining = self.report(entries)
+                remaining[1]["testNodes"][0]["children"][0]["details"] = "Synthetic recorded skip detail"
+                result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]), remaining)
+                self.assertEqual(result, 0)
+                counts = evidence["remainingCounts"]
+                self.assertEqual(counts["skippedTests"], 1 + int(excluded))
+                self.assertEqual(counts["executionCounts"]["skippedTests"], 1 + int(excluded))
+                self.assertEqual(counts["logicalCounts"]["totalTestCount"], len(entries))
+                self.assertEqual(evidence["combinedExecutedTestCount"], 2)
+                attributed = {item["identity"]: item for item in counts["skippedTestsByIdentity"]}
+                benchmark = attributed[scopes.TARGET + "/" + BENCHMARK_TEST]
+                self.assertEqual(benchmark["policyReason"], "existing-opt-in-benchmark-disabled")
+                self.assertEqual(benchmark["reportedDetails"], "Synthetic recorded skip detail")
+                if excluded:
+                    self.assertEqual(attributed[scopes.SELECTOR]["policyReason"], "verified-isolated-selector-exclusion")
+                self.assertEqual(evidence["optionalBenchmark"]["environmentValue"], None)
+                self.assertFalse(evidence["optionalBenchmark"]["enabled"])
+                shutil.rmtree(self.directory / "results")
+
+    def test_full_fallback_attributes_optional_skip_but_never_turns_green(self):
+        result, evidence = self.execute(self.report([("OtherSuite/wrongSelection()", "Passed")]),
+                                        self.report([(scopes.TEST, "Passed"), (BENCHMARK_TEST, "Skipped")]))
+        self.assertEqual(result, 1)
+        self.assertFalse(evidence["selectorVerifiedByHostedResult"])
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(evidence["remainingCounts"]["skippedTests"], 1)
+        self.assertEqual(evidence["remainingCounts"]["skippedTestsByIdentity"][0]["identity"],
+                         scopes.TARGET + "/" + BENCHMARK_TEST)
+        final = [command for command in self.commands if command[0] == "xcodebuild"][-1]
+        self.assertFalse(any(arg.startswith("-skip-testing:") for arg in final))
+
+    def test_benchmark_skip_permission_uses_exact_inherited_flag_without_setting_it(self):
+        for flag in (None, "", "0", "true", "1"):
+            with self.subTest(flag=flag):
+                if (self.directory / "results").exists():
+                    shutil.rmtree(self.directory / "results")
+                result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                    self.report([(BENCHMARK_TEST, "Skipped"), ("OtherSuite/test()", "Passed")]), benchmark_flag=flag)
+                self.assertEqual(result, 1 if flag == "1" else 0)
+                self.assertEqual(evidence["optionalBenchmark"]["environmentValue"], flag)
+                self.assertEqual(evidence["optionalBenchmark"]["enabled"], flag == "1")
+                if flag == "1":
+                    self.assertIn("remainingValidationError", evidence)
+                    self.assertFalse(evidence["passed"])
+                else:
+                    self.assertEqual(evidence["remainingCounts"]["skippedTests"], 1)
+                self.assertFalse(any(BENCHMARK_FLAG in arg for command in self.commands for arg in command))
+
+    def test_enabled_benchmark_runs_while_only_isolated_exclusion_is_attributed(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+            self.report([(BENCHMARK_TEST, "Passed"), (scopes.TEST, "Skipped"), ("OtherSuite/test()", "Passed")]),
+            benchmark_flag="1")
+        self.assertEqual(result, 0)
+        self.assertEqual(evidence["combinedExecutedTestCount"], 3)
+        self.assertEqual(evidence["remainingCounts"]["skippedTestsByIdentity"], [{
+            "identity": scopes.SELECTOR, "policyReason": "verified-isolated-selector-exclusion", "reportedDetails": None}])
+
+    def test_benchmark_skip_exception_requires_exact_identity_and_one_nonparameterized_record(self):
+        for identity in (BENCHMARK_TEST + "-other", "OtherSuite/" + BENCHMARK_TEST.split("/")[1],
+                         "OtherTarget/" + BENCHMARK_TEST):
+            with self.subTest(identity=identity), self.assertRaises(ValueError):
+                scopes.validate_remaining(*self.report([(identity, "Skipped"), ("OtherSuite/test()", "Passed")]),
+                                          benchmark_enabled=False)
+        for kind in ("Arguments", "Repetition"):
+            with self.subTest(kind=kind):
+                summary, tree = self.report([(BENCHMARK_TEST, "Skipped"), ("OtherSuite/test()", "Passed")])
+                tree["testNodes"][0]["children"][0]["children"] = [
+                    {"nodeType": kind, "name": "unexpected", "result": "Skipped"}]
+                with self.assertRaises(ValueError):
+                    scopes.validate_remaining(summary, tree, benchmark_enabled=False)
+        with self.assertRaises(ValueError):
+            scopes.validate_remaining(*self.report([(BENCHMARK_TEST, "Skipped"), (BENCHMARK_TEST, "Skipped"),
+                                                    ("OtherSuite/test()", "Passed")]), benchmark_enabled=False)
+
+    def test_optional_skip_does_not_replace_nonzero_executed_complement(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                        self.report([(BENCHMARK_TEST, "Skipped"), (scopes.TEST, "Skipped")]))
+        self.assertEqual(result, 1)
+        self.assertIn("remainingValidationError", evidence)
+        self.assertFalse(evidence["passed"])
+
+    def test_full_fallback_cannot_attribute_an_unverified_selector_or_new_skip(self):
+        for identity in (scopes.TEST, "OtherSuite/unexplainedSkip()"):
+            with self.subTest(identity=identity):
+                if (self.directory / "results").exists():
+                    shutil.rmtree(self.directory / "results")
+                result, evidence = self.execute(self.report([("OtherSuite/wrongSelection()", "Passed")]),
+                    self.report([(identity, "Skipped"), (BENCHMARK_TEST, "Skipped"), ("OtherSuite/test()", "Passed")]))
+                self.assertEqual(result, 1)
+                self.assertFalse(evidence["selectorVerifiedByHostedResult"])
+                self.assertIn("remainingValidationError", evidence)
+                self.assertFalse(evidence["passed"])
+
+    def test_hosted_optional_identity_is_still_opt_in_and_summaries_are_not_execution_trees(self):
+        fixture = json.loads((ROOT / "scripts/test-fixtures/xcresult-optional-benchmark-hosted.json").read_text())
+        benchmark = fixture["benchmark"]
+        self.assertEqual(benchmark["identity"], scopes.BENCHMARK_SELECTOR)
+        self.assertEqual(scopes.BENCHMARK_FLAG, BENCHMARK_FLAG)
+        declaration = benchmark["annotation"] + "\n    func " + BENCHMARK_TEST.split("/")[1] + " async throws"
+        self.assertIn(declaration, (ROOT / benchmark["source"]).read_text())
+        for run in fixture["runs"]:
+            with self.subTest(run=run["runId"]):
+                summary = run["summary"]
+                counts = scopes.counts(summary)
+                self.assertEqual(counts["totalTestCount"], 681)
+                self.assertEqual(counts["skippedTests"], 1)
+                device = summary["devicesAndConfigurations"][0]
+                executions = sum(device[key] for key in ("passedTests", "failedTests", "skippedTests", "expectedFailures"))
+                self.assertEqual(executions, 1174)
+                self.assertEqual(executions - counts["totalTestCount"], 650 - 157)
+                with self.assertRaises(ValueError):
+                    scopes.validate_remaining(summary, {"testNodes": []}, benchmark_enabled=False)
+
     def test_selection_and_retry_overrides_cannot_reduce_full_coverage(self):
         for option in ("-only-testing:Other", "-skip-testing:Other", "-retry-tests-on-failure",
                        "-test-iterations", "-only-test-configuration", "-resultBundlePath", "-xctestrun"):
@@ -139,7 +267,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
         remaining_summary, remaining_tree = self.report([("OtherSuite/test()", "Passed")])
         remaining_tree["testNodes"][0]["children"][0]["result"] = "Failed"
         with self.assertRaises(ValueError):
-            scopes.validate_remaining(remaining_summary, remaining_tree)
+            scopes.validate_remaining(remaining_summary, remaining_tree, benchmark_enabled=False)
 
     def test_review_flat_summary_cannot_claim_unrepresented_executions(self):
         remaining = self.report([("OtherSuite/onlyCase()", "Passed")])
@@ -187,7 +315,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
         remaining = self.report([("OtherSuite/one()", "Failed"), ("OtherSuite/two()", "Failed")])
         remaining[0].update(failedTests=1, expectedFailures=1)
         with self.assertRaisesRegex(ValueError, "logical counts/statuses"):
-            scopes.validate_remaining(*remaining)
+            scopes.validate_remaining(*remaining, benchmark_enabled=False)
 
     def test_actual_hosted_isolated_plan_target_path_is_normalized(self):
         fixture = json.loads((ROOT / "scripts/test-fixtures/xcresult-isolated-hosted.json").read_text())
@@ -216,11 +344,11 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertEqual(evidence["combinedExecutedTestCount"], 3)
         remaining[0]["devicesAndConfigurations"][0]["passedTests"] = 200
         with self.assertRaises(ValueError):
-            scopes.validate_remaining(*remaining)
+            scopes.validate_remaining(*remaining, benchmark_enabled=False)
         remaining[0]["devicesAndConfigurations"][0]["passedTests"] = 2
         remaining[0].update(totalTestCount=2, passedTests=2)
         with self.assertRaises(ValueError):
-            scopes.validate_remaining(*remaining)
+            scopes.validate_remaining(*remaining, benchmark_enabled=False)
 
     def test_hidden_or_duplicate_runs_and_parameterized_isolated_method_refuse(self):
         for kind in ("duplicate-runs", "all-passed-repetitions", "hidden-run", "parameterized-isolated",
@@ -277,7 +405,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
                 else:
                     arguments[0]["children"] = [{"nodeType": "Arguments", "name": "nested", "result": "Passed"}]
                 with self.assertRaises(ValueError):
-                    scopes.validate_remaining(summary, tree)
+                    scopes.validate_remaining(summary, tree, benchmark_enabled=False)
 
 
 class BuildMetadataTests(unittest.TestCase):

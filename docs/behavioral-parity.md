@@ -60,6 +60,16 @@ tests and a repeated concurrency test are errors. A selector/count extraction
 failure runs an unfiltered coverage fallback but **still fails** the command.
 There is no retry-until-pass path.
 
+The preexisting opt-in
+`CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()`
+is the only optional skipped identity: it remains disabled unless the inherited
+`CMUX_MAESTRO_READER_BENCHMARK` is exactly `"1"`. When enabled, its skip fails.
+The harness records that flag and exact skip attribution alongside the verified
+isolated-selector exclusion, without enabling the benchmark or rewriting
+reported counts/details. A skipped parameter, another identity, or an
+unverified selector exclusion is not permitted. Full fallback remains red even
+when the benchmark skip is correctly attributed.
+
 Result accounting distinguishes logical test cases from recorded executions.
 The top-level summary must match the tree's complete logical status vector;
 device/configuration counters must match normalized execution statuses.

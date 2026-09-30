@@ -1395,6 +1395,10 @@ its exact identity/count from the hosted xcresult, then runs all other tests
 from that same build without suite serialization. Both scopes must pass.
 Results and count evidence are retained under `.build/tests/scoped-results/`.
 Selection/retry overrides are rejected by this full-coverage entrypoint.
+The existing `CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()`
+remains opt-in. Its exact skip is attributed only when
+`CMUX_MAESTRO_READER_BENCHMARK` is not `"1"`; when enabled, a skip fails coverage.
+No other optional-test exception is inferred.
 
 Focused history/preference diagnostics after building the validation products
 (not a full-suite pass):

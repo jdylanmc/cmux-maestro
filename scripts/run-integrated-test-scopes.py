@@ -4,15 +4,19 @@ import argparse
 from collections import Counter
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import uuid
+from typing import Optional
 from urllib.parse import unquote, urlparse
 
 TARGET = "CMUXMaestroPreviewTests"
 TEST = "CopilotSetupTests/concurrentSupervisionDoesNotOccupyCooperativeExecutor()"
 SELECTOR = TARGET + "/" + TEST
+BENCHMARK_SELECTOR = TARGET + "/CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()"
+BENCHMARK_FLAG = "CMUX_MAESTRO_READER_BENCHMARK"
 SCHEMA = "0.1.0"
 STATUSES = ("Passed", "Failed", "Skipped", "Expected Failure")
 STRUCTURE = ("Device", "Test Plan Configuration")
@@ -25,6 +29,7 @@ class Case:
     status: str
     executions: tuple
     parameterized: bool
+    reported_details: Optional[str] = None
 
 
 def require(condition, message):
@@ -158,7 +163,9 @@ def cases(document):
                 identity = identifier if identifier.startswith(bundle + "/") else bundle + "/" + identifier
             require(node.get("result") in STATUSES, "Missing logical test result.")
             executions, parameterized = execution_records(node)
-            result.append(Case(identity, node["result"], executions, parameterized))
+            details = node.get("details")
+            require(details is None or isinstance(details, str), "Invalid reported test details.")
+            result.append(Case(identity, node["result"], executions, parameterized, details))
             return
         require(node.get("nodeType") in ("Test Plan", "Unit test bundle", "UI test bundle", "Test Suite") + STRUCTURE,
                 "Execution node appeared outside a logical test.")
@@ -227,18 +234,32 @@ def validate_isolated(summary, tests):
     return measured
 
 
-def validate_remaining(summary, tests):
+def validate_remaining(summary, tests, *, benchmark_enabled, isolated_excluded=True):
     selected = cases(tests)
     measured = reconcile(summary, selected)
-    excluded = [case.status for case in selected if case.identity == SELECTOR]
-    require(not excluded or excluded == ["Skipped"],
-            "The isolated regression ran again in the loaded scope.")
-    remaining = [case for case in selected if case.identity != SELECTOR]
-    require(remaining and all(status in ("Passed", "Failed", "Expected Failure")
-                             for case in remaining for _, status in case.executions),
-            "Another integrated test was skipped or did not execute.")
-    require(measured["executionCounts"]["skippedTests"] == len(excluded), "Unattributed skipped integrated tests.")
-    return measured
+    if isolated_excluded:
+        excluded = [case.status for case in selected if case.identity == SELECTOR]
+        require(not excluded or excluded == ["Skipped"],
+                "The isolated regression ran again in the loaded scope.")
+    attributed = []
+    for case in selected:
+        if not any(status == "Skipped" for _, status in case.executions):
+            continue
+        require(case.status == "Skipped" and not case.parameterized and len(case.executions) == 1,
+                "A skipped parameter or repeated invocation cannot use a whole-test exclusion.")
+        if case.identity == SELECTOR and isolated_excluded:
+            reason = "verified-isolated-selector-exclusion"
+        elif case.identity == BENCHMARK_SELECTOR and not benchmark_enabled:
+            reason = "existing-opt-in-benchmark-disabled"
+        else:
+            raise ValueError(f"Unattributed or enabled skipped integrated test: {case.identity}")
+        attributed.append({"identity": case.identity, "policyReason": reason,
+                           "reportedDetails": case.reported_details})
+    remaining = [case for case in selected if not isolated_excluded or case.identity != SELECTOR]
+    require(any(status != "Skipped" for case in remaining for _, status in case.executions),
+            "The remaining integrated scope has no executed tests.")
+    require(measured["executionCounts"]["skippedTests"] == len(attributed), "Unattributed skipped integrated tests.")
+    return {**measured, "skippedTestsByIdentity": attributed}
 
 
 def validate_arguments(command):
@@ -272,8 +293,12 @@ def read_result(bundle, directory, scope, runner):
 def run(command, directory, runner=subprocess.run):
     validate_arguments(command)
     directory.mkdir(parents=True, exist_ok=False)
+    benchmark_flag = os.environ.get(BENCHMARK_FLAG)
+    benchmark_enabled = benchmark_flag == "1"
     evidence = {"candidateSelector": SELECTOR, "selectorVerifiedByHostedResult": False,
-                "testBodyOrDeadlineChanged": False, "wholeSuiteSerialized": False}
+                "testBodyOrDeadlineChanged": False, "wholeSuiteSerialized": False,
+                "optionalBenchmark": {"identity": BENCHMARK_SELECTOR, "environmentVariable": BENCHMARK_FLAG,
+                                      "environmentValue": benchmark_flag, "enabled": benchmark_enabled}}
     evidence_path = directory / "coverage.json"
 
     def save():
@@ -311,8 +336,8 @@ def run(command, directory, runner=subprocess.run):
         remaining_summary, tests = read_result(remaining_bundle, directory, scope, runner)
         print("Remaining hosted summary: " + json.dumps(remaining_summary), flush=True)
         print("Remaining hosted test tree: " + json.dumps(tests), flush=True)
-        evidence["remainingCounts"] = (validate_remaining(remaining_summary, tests)
-                                       if selection else reconcile(remaining_summary, cases(tests)))
+        evidence["remainingCounts"] = validate_remaining(
+            remaining_summary, tests, benchmark_enabled=benchmark_enabled, isolated_excluded=bool(selection))
     except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         evidence["remainingValidationError"] = str(error)
     success = (evidence["selectorVerifiedByHostedResult"] and not isolated.returncode and not remaining.returncode
