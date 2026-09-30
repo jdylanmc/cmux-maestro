@@ -1,5 +1,31 @@
 import Foundation
 
+extension AgentChildWork {
+    // The neutral child contract carries a literal session/child parent.
+    var isInternalTask: Bool { SidebarInternalTaskPolicy.isInternalTask(kind: kind, parent: parent) }
+}
+
+enum SidebarInternalTaskPolicy {
+    static func isInternalTask(kind: AgentWorkKind?, parent: AgentChildWorkParent?) -> Bool {
+        guard kind == .subagent, let parent else { return false }
+        switch parent {
+        case .session(let identity):
+            return identity.providerID == CopilotSnapshotAdapter.providerID && UUID(uuidString: identity.sessionID) != nil
+        case .child(let id):
+            return !id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    static func isRelevant(state: AgentWorkState, revealIdle: Bool, dismissed: Bool) -> Bool {
+        switch state {
+        case .working, .queued, .blocked: true
+        case .completed, .failed: !dismissed
+        case .idle: revealIdle
+        case .unknown, .cancelled: false
+        }
+    }
+}
+
 enum SidebarCopilotAvailability: Equatable {
     case waiting, loading, ready, partial, unavailable, hidden, disconnected
 }
@@ -20,14 +46,22 @@ struct SidebarCopilotNode: Identifiable, Equatable {
     var attention: [AgentAttention] = []
     var attentionDegraded = false
     var activity: AgentActivity? = nil
+    var stateDetail: AgentSessionStateDetail? = nil
+    var observedParent: AgentChildWorkParent? = nil
+
+    var isInternalTask: Bool { SidebarInternalTaskPolicy.isInternalTask(kind: kind, parent: observedParent) }
 
     func dismissibleOutcome(sessionID: UUID) -> SidebarDismissedOutcome? {
+        if isInternalTask {
+            guard [.completed, .failed].contains(state), !hasChildren, !ancestryUnresolved else { return nil }
+        }
         guard state.isTerminal, !historyAncestor, !attentionDegraded, attention.isEmpty, let terminalEvent else { return nil }
         let key = SidebarDismissedOutcome(sessionID: sessionID, childID: id, eventID: terminalEvent.id)
         return key.isValid ? key : nil
     }
 
     func dismissibleFailure(sessionID: UUID) -> SidebarDismissedOutcome? {
+        if isInternalTask { return dismissibleOutcome(sessionID: sessionID) }
         guard state == .failed, !historyAncestor, !attentionDegraded,
               !attention.contains(where: { $0.kind.isBlocking }), let terminalEvent else { return nil }
         let key = SidebarDismissedOutcome(sessionID: sessionID, childID: id, eventID: terminalEvent.id)
@@ -55,6 +89,7 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     var attention: [AgentAttention] = []
     var attentionDegraded = false
     var activity: AgentActivity? = nil
+    var internalTaskCountsIncomplete = false
 
     var knownRunningChildren: Int { nodes.filter { $0.state == .working }.count }
     var retainedHistoryCount: Int { nodes.filter { $0.state.isTerminal && !$0.historyAncestor }.count }
@@ -97,7 +132,7 @@ struct SidebarCopilotTree: Equatable {
 
     var hasCompleteCounts: Bool {
         availability == .ready && sessions.allSatisfy {
-            $0.childrenComplete && $0.nodes.allSatisfy { $0.state != .unknown }
+            $0.childrenComplete && !$0.internalTaskCountsIncomplete && $0.nodes.allSatisfy { $0.state != .unknown }
         }
     }
 
@@ -169,7 +204,8 @@ struct SidebarCopilotTree: Equatable {
         onto topology: SidebarTopology,
         now: Date,
         history: SidebarHistorySettings = SidebarHistorySettings(),
-        attention: SidebarAttentionSettings = SidebarAttentionSettings()
+        attention: SidebarAttentionSettings = SidebarAttentionSettings(),
+        revealingIdleTasksIn: Set<UUID> = []
     ) -> SidebarCopilotTree {
         guard topology.canReadSessions else { return .waiting }
         guard SnapshotSchemaVersion.supported.contains(snapshot.schemaVersion),
@@ -226,7 +262,17 @@ struct SidebarCopilotTree: Equatable {
                 // Even malformed attention protects a row until evidence recovers.
                 guard childAttention[child.id.rawValue]?.values.isEmpty == true,
                       childAttention[child.id.rawValue]?.degraded == false else { continue }
-                if history.isDismissed(sessionID: sessionID, child: child) {
+                if child.isInternalTask {
+                    let state = trustworthyState(
+                        assessment.invalidStates.contains(child.id) ? .unknown : child.workState, liveness: liveness
+                    )
+                    if !SidebarInternalTaskPolicy.isRelevant(
+                        state: state, revealIdle: revealingIdleTasksIn.contains(workspaceID),
+                        dismissed: history.isDismissed(sessionID: sessionID, child: child)
+                    ) {
+                        hidden.insert(child.id.rawValue)
+                    }
+                } else if history.isDismissed(sessionID: sessionID, child: child) {
                     hidden.insert(child.id.rawValue)
                 } else if let deadline = history.deadline(for: child, observedAt: observedAt, now: now) {
                     if deadline <= now {
@@ -275,8 +321,12 @@ struct SidebarCopilotTree: Equatable {
                 omittedChildrenCount: tree.omitted + assessment.omittedChildren,
                 omittedActiveChildrenCount: tree.omittedActive,
                 hasUncountedChildren: assessment.hasUncountedChildren,
-                hiddenHistoryCount: hidden.count,
-                attention: sessionAttention.values, attentionDegraded: sessionAttention.degraded, activity: sessionActivity.value
+                hiddenHistoryCount: validated.filter { hidden.contains($0.id.rawValue) && $0.workState.isTerminal }.count,
+                attention: sessionAttention.values, attentionDegraded: sessionAttention.degraded, activity: sessionActivity.value,
+                internalTaskCountsIncomplete: validated.contains {
+                    $0.isInternalTask && (trustworthyState($0.workState, liveness: liveness) == .unknown
+                        || assessment.invalidChildren.contains($0.id))
+                }
             ))
         }
         return SidebarCopilotTree(
@@ -377,7 +427,8 @@ struct SidebarCopilotTree: Equatable {
             let nodeIndex = nodes.count
             nodes.append(SidebarCopilotNode(
                 id: child.id.rawValue, parentID: parentID, depth: depth, kind: child.kind ?? .unknown,
-                name: displayMetadata(child.title.knownValue) ?? (child.kind ?? .unknown).rawValue.capitalized,
+                name: displayMetadata(child.title.knownValue, limit: child.isInternalTask ? 512 : 100)
+                    ?? (child.kind ?? .unknown).rawValue.capitalized,
                 state: trustworthyState(invalidStates.contains(child.id) ? .unknown : child.workState, liveness: liveness),
                 model: displayMetadata(child.model?.knownValue?.identifier),
                 ancestryUnresolved: unresolved,
@@ -385,7 +436,8 @@ struct SidebarCopilotTree: Equatable {
                 terminalEvent: child.terminalEvent,
                 terminalTimestamp: SidebarHistorySettings.knownTimestamp(child.terminalEvent, observedAt: observedAt, now: now),
                 historyAncestor: historyAncestors.contains(child.id.rawValue),
-                attention: signals?.values ?? [], attentionDegraded: signals?.degraded ?? false, activity: activity.value
+                attention: signals?.values ?? [], attentionDegraded: signals?.degraded ?? false, activity: activity.value,
+                stateDetail: child.stateDetail, observedParent: child.parent
             ))
             guard depth < maximumDepth else {
                 if !descendants.isEmpty { degraded = true }
@@ -406,14 +458,14 @@ struct SidebarCopilotTree: Equatable {
         return (nodes, degraded, omitted, omittedActive)
     }
 
-    private static func displayMetadata(_ value: String?) -> String? {
+    private static func displayMetadata(_ value: String?, limit: Int = 100) -> String? {
         guard let value else { return nil }
         let cleaned = value.unicodeScalars.filter {
             !CharacterSet.controlCharacters.contains($0)
                 && !CharacterSet(charactersIn: "\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}").contains($0)
         }
         let text = String(String.UnicodeScalarView(cleaned)).trimmingCharacters(in: .whitespaces)
-        return text.isEmpty ? nil : String(text.prefix(100))
+        return text.isEmpty ? nil : String(text.prefix(limit))
     }
 
     private static func signals(

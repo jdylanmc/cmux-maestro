@@ -183,7 +183,7 @@ struct SidebarHistoryPollingTests {
 
     private func snapshot(at date: Date, issues: [CopilotIssue] = []) -> CopilotSnapshot {
         let completed = CopilotChildWork(
-            id: "ended", parentID: nil, kind: .subagent, name: "Ended", state: .completed, model: nil,
+            id: "ended", parentID: nil, kind: .skill, name: "Ended", state: .completed, model: nil,
             terminalEvent: .init(id: UUID(uuidString: "40000000-0000-0000-0000-000000000004")!,
                                  timestamp: initial.addingTimeInterval(-10))
         )

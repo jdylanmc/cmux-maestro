@@ -566,6 +566,49 @@ extension View {
     func sidebarNameHover() -> some View { modifier(SidebarNameHoverModifier()) }
 }
 
+@MainActor
+final class SidebarLocalFocus {
+    private let controls = NSHashTable<SidebarTitleNativeButton>.weakObjects()
+    private var nextOrder = 0
+
+    func register(_ control: SidebarTitleNativeButton, id: String) {
+        if !controls.contains(control) {
+            control.localFocusOrder = nextOrder
+            nextOrder += 1
+        }
+        control.localFocusID = id
+        controls.add(control)
+    }
+
+    @discardableResult
+    func restore(surfaceID: UUID, workspaceID: UUID, ownerVisible: Bool, workspaceVisible: Bool) -> Bool {
+        let candidates = controls.allObjects.filter {
+            $0.window != nil && !$0.isHiddenOrHasHiddenAncestor && $0.superview != nil
+                && $0.bounds.width > 0 && $0.bounds.height > 0
+        }.sorted { $0.localFocusOrder < $1.localFocusOrder }
+        let targets = (ownerVisible ? ["surface:\(surfaceID)"] : [])
+            + (workspaceVisible ? ["workspace:\(workspaceID)"] : []) + ["taskboard"]
+        for id in targets {
+            guard let control = candidates.first(where: { $0.localFocusID == id }), let window = control.window else { continue }
+            control.scrollToVisible(control.bounds)
+            // Local first responder only. Never press a title or activate a host tab/window.
+            if window.makeFirstResponder(control) { return true }
+        }
+        return false
+    }
+}
+
+private struct SidebarLocalFocusKey: EnvironmentKey {
+    static let defaultValue: SidebarLocalFocus? = nil
+}
+
+extension EnvironmentValues {
+    var sidebarLocalFocus: SidebarLocalFocus? {
+        get { self[SidebarLocalFocusKey.self] }
+        set { self[SidebarLocalFocusKey.self] = newValue }
+    }
+}
+
 /// The title is one native keyboard target; entering its preview never presses it.
 final class SidebarTitleNativeButton: NSButton {
     let hosting = NSHostingView(rootView: AnyView(EmptyView()))
@@ -574,6 +617,8 @@ final class SidebarTitleNativeButton: NSButton {
     var preview = SidebarPreviewInteraction()
     var showActions: (() -> Void)?
     var focusChanged: (Bool) -> Void = { _ in }
+    var localFocusID: String?
+    var localFocusOrder = 0
     private var returningFromPreview = false
 
     override init(frame frameRect: NSRect) {
@@ -649,10 +694,12 @@ struct SidebarTitleButton<Label: View>: NSViewRepresentable {
     let label: String
     let hint: String
     var value = ""
+    var localFocusID: String? = nil
     let action: () -> Void
     @ViewBuilder var content: Label
     @Environment(\.sidebarPreviewInteraction) private var preview
     @Environment(\.sidebarRowMenu) private var rowMenu
+    @Environment(\.sidebarLocalFocus) private var localFocus
 
     func makeNSView(context: Context) -> SidebarTitleNativeButton { SidebarTitleNativeButton() }
     func updateNSView(_ button: SidebarTitleNativeButton, context: Context) {
@@ -667,6 +714,8 @@ struct SidebarTitleButton<Label: View>: NSViewRepresentable {
         button.setAccessibilityValue(value)
         button.setAccessibilityHelp(preview.available ? "\(hint). Tab enters preview controls, then continues past this title. Escape or Shift-Tab returns; the next Tab continues onward. Shift-F10 opens actions." : hint)
         button.toolTip = hint
+        button.localFocusID = localFocusID
+        if let localFocusID { localFocus?.register(button, id: localFocusID) }
         _ = button.measure(width: button.bounds.width > 0 ? button.bounds.width : nil)
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: SidebarTitleNativeButton, context: Context) -> CGSize? {

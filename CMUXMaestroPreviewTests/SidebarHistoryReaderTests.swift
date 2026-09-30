@@ -30,7 +30,7 @@ struct SidebarHistoryReaderTests {
         )
         if expired { clock.advance(15) }
         let hidden = try await reader.read(surfaceIDs: [fixture.surface])
-        #expect(try project(hidden, fixture: fixture, history: history).hiddenHistoryCount == 1)
+        #expect(try project(hidden, fixture: fixture, history: history).hiddenHistoryCount == (expired ? 0 : 1))
         let start = try attentionEvent("tool.execution_start", agent: "worker", data: [
             "toolCallId": "fresh-owner-31", "toolName": toolName, "model": "unproven-model"
         ], timestamp: clock.read().addingTimeInterval(3600).ISO8601Format())
@@ -42,7 +42,9 @@ struct SidebarHistoryReaderTests {
         #expect(child.state == .unknown && child.terminalEvent == nil)
         #expect(child.model == "known-model" && child.activity == nil)
         let exposed = try project(uncertain, fixture: fixture, history: history)
-        #expect(exposed.sessions.first?.nodes.first?.id == "worker")
+        #expect(exposed.sessions.first?.nodes.isEmpty == true)
+        #expect(exposed.sessions.first?.internalTaskCountsIncomplete == true)
+        #expect(!exposed.hasCompleteCounts)
         #expect(exposed.hiddenHistoryCount == 0 && exposed.knownRunningChildren == 0)
         #expect(exposed.nextHistoryExpiry == nil)
 
@@ -144,7 +146,10 @@ struct SidebarHistoryReaderTests {
         ])
         let outstanding = try project(ended, fixture: fixture, history: history)
         #expect(outstanding.sessions.first?.nodes.first { $0.id == "worker" }?.attention.map(\.kind) == [.aborted])
-        #expect(outstanding.hiddenHistoryCount == (ended.sessions.first?.children.count ?? 1) - 1)
+        #expect(outstanding.hiddenHistoryCount == 0, "Internal outcomes no longer expire")
+        #expect(outstanding.nextHistoryExpiry == nil)
+        #expect(outstanding.sessions.first?.nodes.filter { $0.state == .completed }.count
+                == ended.sessions.first?.children.filter { $0.state == .completed }.count)
         preferences.acknowledge(oldRootKeys, in: outstanding)
         #expect(preferences.attention.acknowledged.isEmpty)
         preferences.acknowledge(outstanding.acknowledgeableOutcomes, in: outstanding)

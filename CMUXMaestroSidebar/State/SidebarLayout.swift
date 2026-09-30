@@ -21,7 +21,7 @@ nonisolated enum SidebarDensity: String, Codable, CaseIterable, Identifiable, Se
 }
 
 nonisolated struct SidebarExpansionID: Hashable, Codable, Sendable {
-    enum Kind: String, Codable, Sendable { case workspace, surface, session, child, managed }
+    enum Kind: String, Codable, Sendable { case workspace, surface, session, child, managed, internalTasks }
     let kind: Kind
     let id: UUID
     var provider: String? = nil
@@ -36,17 +36,21 @@ nonisolated struct SidebarExpansionID: Hashable, Codable, Sendable {
         .init(kind: .child, id: sessionID, provider: provider, childID: childID)
     }
     static func managed(_ id: UUID) -> Self { .init(kind: .managed, id: id) }
+    static func internalTasks(sessionID: UUID, parentID: String? = nil) -> Self {
+        .init(kind: .internalTasks, id: sessionID, provider: "copilot", childID: parentID)
+    }
 
     var isValid: Bool {
         switch kind {
         case .workspace, .surface, .managed:
             return provider == nil && childID == nil
-        case .session, .child:
+        case .session, .child, .internalTasks:
             guard let provider, !provider.isEmpty, provider.utf8.count <= 64,
                   provider.utf8.allSatisfy({ (97...122).contains($0) || (48...57).contains($0) || $0 == 45 }) else {
                 return false
             }
             if kind == .session { return childID == nil }
+            if kind == .internalTasks && childID == nil { return true }
             guard let childID, !childID.isEmpty, childID.utf8.count <= 512 else { return false }
             return !childID.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
         }
@@ -60,14 +64,27 @@ nonisolated struct SidebarLayoutSettings: Codable, Equatable, Sendable {
     // Nil/absent means the original density. Expanded rows never need stored entries.
     var densityOverride: SidebarDensity? = nil
     private(set) var collapsed: [SidebarExpansionID] = []
+    private(set) var idleTaskWorkspaces: [UUID]? = nil
 
     var density: SidebarDensity { densityOverride ?? .compact }
     var isValid: Bool {
-        version == 1 && collapsed.count <= Self.maximumOverrides
+        version == 1 && collapsed.count + (idleTaskWorkspaces?.count ?? 0) <= Self.maximumOverrides
             && collapsed.allSatisfy(\.isValid) && Set(collapsed).count == collapsed.count
+            && Set(idleTaskWorkspaces ?? []).count == (idleTaskWorkspaces?.count ?? 0)
     }
 
     func isExpanded(_ id: SidebarExpansionID) -> Bool { !collapsed.contains(id) }
+    var revealingIdleTasksIn: Set<UUID> { Set(idleTaskWorkspaces ?? []) }
+
+    mutating func setIdleTasksVisible(_ visible: Bool, in workspaceID: UUID) throws {
+        var workspaces = idleTaskWorkspaces ?? []
+        workspaces.removeAll { $0 == workspaceID }
+        if visible { workspaces.append(workspaceID) }
+        guard workspaces.count + collapsed.count <= Self.maximumOverrides else {
+            throw SidebarPreferenceRejection(notice: "Layout storage is full. Reset unused layout choices and retry.")
+        }
+        idleTaskWorkspaces = workspaces.isEmpty ? nil : workspaces
+    }
 
     mutating func setDensity(_ value: SidebarDensity) {
         densityOverride = value == .compact ? nil : value
@@ -78,8 +95,9 @@ nonisolated struct SidebarLayoutSettings: Codable, Equatable, Sendable {
         collapsed.removeAll { $0 == id }
         if !expanded { collapsed.append(id) }
         // Eviction can only reveal more work; never prune from a window's topology.
-        if collapsed.count > Self.maximumOverrides {
-            collapsed.removeFirst(collapsed.count - Self.maximumOverrides)
+        let maximumCollapsed = Self.maximumOverrides - (idleTaskWorkspaces?.count ?? 0)
+        if collapsed.count > maximumCollapsed {
+            collapsed.removeFirst(collapsed.count - maximumCollapsed)
         }
     }
 }
@@ -87,6 +105,7 @@ nonisolated struct SidebarLayoutSettings: Codable, Equatable, Sendable {
 nonisolated enum SidebarLayoutChange: Sendable {
     case density(SidebarDensity)
     case expansion(SidebarExpansionID, Bool)
+    case idleTasks(UUID, Bool)
     case expandAll
     case reset
 
@@ -104,6 +123,7 @@ nonisolated enum SidebarLayoutChange: Sendable {
         switch self {
         case .density(let density): value.setDensity(density)
         case .expansion(let id, let expanded): value.setExpanded(expanded, for: id)
+        case .idleTasks(let workspace, let visible): try value.setIdleTasksVisible(visible, in: workspace)
         case .expandAll:
             for id in value.collapsed { value.setExpanded(true, for: id) }
         case .reset: break

@@ -239,6 +239,7 @@ struct SidebarVisibleWork {
             var result = session
             let byID = Dictionary(uniqueKeysWithValues: session.nodes.map { ($0.id, $0) })
             var retained = Set(session.nodes.filter { node in
+                if node.isInternalTask { return true } // Already filtered by the shared task policy.
                 if node.attentionDegraded || node.attention.contains(where: { $0.kind.isBlocking || $0.kind == .error }) { return true }
                 if [.completed, .cancelled].contains(node.state) { return false }
                 return true
@@ -256,7 +257,7 @@ struct SidebarVisibleWork {
             }
             let protected = session.attentionDegraded || session.attention.contains(where: { $0.kind.isBlocking || $0.kind == .error })
                 || result.nodes.contains {
-                    $0.state == .failed || $0.state == .blocked || $0.attentionDegraded
+                    $0.isInternalTask || $0.state == .failed || $0.state == .blocked || $0.attentionDegraded
                         || $0.attention.contains(where: { $0.kind.isBlocking })
                 }
             if session.liveness == .dead && !protected && !contextSessions.contains(session.id) { return nil }
@@ -270,7 +271,7 @@ struct SidebarVisibleWork {
                     && ($0.hasBlockingEvidence || $0.attention.contains(where: { $0.kind == .error })
                         || ($0.liveness == .alive && ($0.state == .working
                             || (node.copilotSessionId != nil && node.copilotSessionId != $0.id)))
-                        || $0.nodes.contains(where: { $0.kind == .subagent && !$0.state.isTerminal }))
+                        || $0.nodes.contains(where: { $0.isInternalTask || ($0.kind == .subagent && !$0.state.isTerminal) }))
             }) { return true }
             if ["reported-completed", "process-disappeared", "terminal-disappeared", "resource-retired"].contains(node.phase) {
                 return false
@@ -301,7 +302,7 @@ private extension SidebarCopilotSession {
         treeDegraded || attentionDegraded || omittedChildrenCount > 0 || omittedActiveChildrenCount > 0
             || [.blocked, .failed].contains(state) || attention.contains { $0.kind.isBlocking || $0.kind == .error }
             || nodes.contains {
-                !$0.state.isTerminal || $0.state == .failed || $0.attentionDegraded
+                $0.isInternalTask || !$0.state.isTerminal || $0.state == .failed || $0.attentionDegraded
                     || $0.attention.contains { $0.kind.isBlocking || $0.kind == .error }
             }
     }
@@ -405,7 +406,7 @@ enum SidebarPresentation {
 
     static func sessionStatus(_ session: SidebarCopilotSession) -> String {
         let state = statusDescription(sessionState(session), needsInput: needsInput(session.attention))
-        return session.childrenComplete && !session.treeDegraded ? state
+        return session.childrenComplete && !session.treeDegraded && !session.internalTaskCountsIncomplete ? state
             : "\(state). Child history incomplete; missing work is not assumed finished"
     }
 
@@ -425,7 +426,21 @@ enum SidebarPresentation {
         guard session.liveness == .alive else {
             return process(session.liveness).titled("Last reported: \(state(node.state).title). \(process(session.liveness).title)")
         }
+
         return state(node.state)
+    }
+
+    static func internalTaskState(_ node: SidebarCopilotNode) -> SidebarVisual {
+        switch node.state {
+        case .working: .init(title: "Working", symbol: "circle.dotted", tone: .green)
+        case .completed: .init(title: "Finished", symbol: "checkmark", tone: .neutral)
+        case .failed: .init(title: "Failed", symbol: "xmark.circle", tone: .red)
+        case .blocked: .init(title: "Blocked", symbol: "pause", tone: .red)
+        case .queued: .init(title: "Queued", symbol: "clock", tone: .neutral)
+        case .idle: .init(title: "Idle", symbol: "circle", tone: .neutral)
+        case .unknown: .init(title: "Unknown", symbol: "questionmark.circle", tone: .neutral)
+        case .cancelled: .init(title: "Cancelled", symbol: "slash.circle", tone: .neutral)
+        }
     }
 
     static func focusInteraction(from old: HierarchySnapshot, to new: HierarchySnapshot) -> SidebarSeenTarget? {
@@ -894,7 +909,7 @@ enum SidebarPresentation {
                 counts[state, default: 0] += 1
                 if state == .unknown { incomplete = true }
             }
-            for node in session.nodes where node.kind == .subagent {
+            for node in session.nodes where node.kind == .subagent && !node.isInternalTask {
                 let state = observedSummaryState(node.state)
                 counts[state, default: 0] += 1
                 if state == .unknown { incomplete = true }

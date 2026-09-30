@@ -51,7 +51,7 @@ struct SidebarPinnedDetailsTests {
             return .init(generatedAt: now, sessions: [
                 .init(sessionID: sessionID, surfaceID: surfaceID, launchWorkspaceID: launchWorkspaceID,
                       liveness: .alive, state: .working, model: nil, children: [
-                        .init(id: "moving-child", parentID: nil, kind: .subagent, name: "Moving child",
+                        .init(id: "moving-child", parentID: nil, kind: .skill, name: "Moving child",
                               state: .working, model: nil, attention: [attention])
                       ], observedAt: now, attention: [attention])
             ], issues: [], isComplete: true)

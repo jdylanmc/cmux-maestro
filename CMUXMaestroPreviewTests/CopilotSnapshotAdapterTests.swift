@@ -32,7 +32,8 @@ struct CopilotSnapshotAdapterTests {
         let tree = SidebarCopilotTree.project(snapshot, onto: fixtures.topology(), now: now)
         let expected = liveness == .alive || state.isTerminal ? state.rawValue : "unknown"
         #expect(tree.sessions.first?.state.rawValue == expected)
-        #expect(tree.sessions.first?.nodes.first?.state.rawValue == expected)
+        let visible = expected != "unknown" && expected != "idle" && expected != "cancelled"
+        #expect(tree.sessions.first?.nodes.first?.state.rawValue == (visible ? expected : nil))
         #expect(tree.knownRunningChildren == (liveness == .alive && state == .working ? 1 : 0))
         #expect(tree.hasCompleteCounts == (liveness == .alive && state != .unknown))
         #expect(try AgentSessionSnapshotJSONCodec.decode(AgentSessionSnapshotJSONCodec.encode(snapshot)) == snapshot)
@@ -83,7 +84,8 @@ struct CopilotSnapshotAdapterTests {
         #expect(item.childWork.first?.children.first?.id.rawValue == "child")
         #expect(!snapshot.isComplete)
         let tree = SidebarCopilotTree.project(snapshot, onto: fixtures.topology(moved: true), now: now,
-                                              history: .init(retention: .never))
+                                              history: .init(retention: .never),
+                                              revealingIdleTasksIn: [fixtures.workspaceB])
         let session = try #require(tree.sessions.first)
         #expect(session.nodes.prefix(3).map(\.id) == ["parent", "child", "shell"])
         #expect(session.nodes.prefix(3).map(\.depth) == [0, 1, 2])

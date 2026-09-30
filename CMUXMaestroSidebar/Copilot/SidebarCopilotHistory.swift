@@ -55,7 +55,7 @@ nonisolated struct SidebarHistorySettings: Codable, Equatable, Sendable {
     }
 
     func deadline(for child: AgentChildWork, observedAt: Date, now: Date) -> Date? {
-        guard child.workState.isTerminal, child.workState != .failed, let duration = retention.duration,
+        guard !child.isInternalTask, child.workState.isTerminal, child.workState != .failed, let duration = retention.duration,
               let timestamp = Self.knownTimestamp(child.terminalEvent, observedAt: observedAt, now: now) else {
             return nil
         }

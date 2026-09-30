@@ -133,7 +133,7 @@ struct SidebarCopilotTreeTests {
         )
         #expect(deadTree.sessions.first?.liveness == .dead)
         #expect(deadTree.sessions.first?.state == .unknown)
-        #expect(deadTree.sessions.first?.nodes.map(\.state) == [.unknown, .failed, .cancelled])
+        #expect(deadTree.sessions.first?.nodes.map(\.state) == [.failed])
         #expect(deadTree.knownRunningChildren == 0)
         #expect(!deadTree.hasCompleteCounts)
 
@@ -165,7 +165,7 @@ struct SidebarCopilotTreeTests {
         }
         let tree = SidebarCopilotTree.project(
             fixtures.snapshot(sessions: [fixtures.session(children: children, now: now)], now: now),
-            onto: fixtures.topology(), now: now
+            onto: fixtures.topology(), now: now, revealingIdleTasksIn: [fixtures.workspaceA]
         )
         let session = try #require(tree.sessions.first)
         #expect(session.nodes.prefix(4).map(\.id) == ["root", "one", "grandchild", "two"])
@@ -187,7 +187,7 @@ struct SidebarCopilotTreeTests {
         let children = (0..<1000).map { fixtures.child("child-\($0)") }
         let tree = SidebarCopilotTree.project(
             fixtures.snapshot(sessions: [fixtures.session(children: children, now: now)], now: now),
-            onto: fixtures.topology(), now: now
+            onto: fixtures.topology(), now: now, revealingIdleTasksIn: [fixtures.workspaceA]
         )
         #expect(tree.sessions.first?.nodes.count == SidebarCopilotTree.maximumNodes)
         #expect(tree.sessions.first?.treeDegraded == true)

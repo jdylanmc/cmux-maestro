@@ -19,6 +19,7 @@ enum SidebarCountText {
 }
 
 struct SidebarBranchSummary: Equatable {
+    var taskCount = 0
     var running = 0
     var blocked = 0
     var attention = 0
@@ -27,6 +28,7 @@ struct SidebarBranchSummary: Equatable {
 
     init(nodes: [SidebarCopilotNode]) {
         for node in nodes {
+            if node.isInternalTask { taskCount += 1 }
             if node.state == .working { running += 1 }
             if node.state == .blocked || node.attention.contains(where: { $0.kind.isBlocking }) { blocked += 1 }
             if !node.attention.isEmpty || node.attentionDegraded { attention += 1 }
@@ -84,7 +86,71 @@ struct SidebarChildRow: Identifiable, Equatable {
     var id: String { node.id }
 }
 
+struct SidebarChildSection: Identifiable {
+    let rows: [SidebarChildRow]
+    let taskDisclosure: SidebarExpansionID?
+    var id: String { rows[0].id }
+}
+
 extension SidebarCopilotSession {
+    func taskSections(layout: SidebarLayoutSettings) -> [SidebarChildSection] {
+        let byID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        var ancestry: Set<String> = []
+        for node in nodes where node.isInternalTask {
+            var parent = node.parentID
+            while let id = parent, ancestry.insert(id).inserted { parent = byID[id]?.parentID }
+        }
+        return childSections(layout: layout, taskboard: true).filter {
+            $0.taskDisclosure != nil || $0.rows.contains { ancestry.contains($0.id) }
+        }
+    }
+
+    // Keep literal ancestry and provider order. A task section includes its
+    // nested activity, but never another independently bound terminal/session.
+    func childSections(layout: SidebarLayoutSettings, taskboard: Bool = false) -> [SidebarChildSection] {
+        let rows = taskboard ? childRows(layout: layout) : outlineChildRows(layout: layout)
+        var result: [SidebarChildSection] = []
+        var index = 0
+        while index < rows.count {
+            let first = rows[index]
+            guard first.node.isInternalTask else {
+                result.append(.init(rows: [first], taskDisclosure: nil))
+                index += 1
+                continue
+            }
+            var end = index + 1
+            while end < rows.count {
+                let next = rows[end].node
+                if next.depth > first.node.depth
+                    || (next.isInternalTask && next.parentID == first.node.parentID && next.depth == first.node.depth) {
+                    end += 1
+                } else { break }
+            }
+            result.append(.init(rows: Array(rows[index..<end]),
+                                taskDisclosure: .internalTasks(sessionID: id, parentID: first.node.parentID)))
+            index = end
+        }
+        return result
+    }
+
+    func taskSummary(for section: SidebarChildSection) -> SidebarBranchSummary {
+        let roots = Set(section.rows.map(\.id))
+        let descendants = nodes.filter { node in
+            if roots.contains(node.id) { return true }
+            var parent = node.parentID
+            var visited: Set<String> = []
+            while let id = parent, visited.insert(id).inserted {
+                if roots.contains(id) { return true }
+                parent = nodes.first(where: { $0.id == id })?.parentID
+            }
+            return false
+        }
+        var summary = SidebarBranchSummary(nodes: descendants.filter(\.isInternalTask))
+        summary.incomplete = summary.incomplete || !childrenComplete || internalTaskCountsIncomplete || treeDegraded
+        summary.omittedActive = omittedActiveChildrenCount
+        return summary
+    }
+
     var foldedShellIDs: Set<String> {
         guard liveness == .alive else { return [] }
         let knownIDs = Set(nodes.map(\.id))
@@ -154,6 +220,7 @@ extension SidebarCopilotSession {
             var summary = SidebarBranchSummary(nodes: descendants)
             // Display-capped descendants cannot be attributed safely to a particular branch.
             summary.incomplete = summary.incomplete || !childrenComplete
+                || internalTaskCountsIncomplete
             return SidebarChildRow(
                 node: node, expansionID: .child(node.id, sessionID: id), expanded: expanded,
                 collapsedSummary: !expanded && node.hasChildren ? summary : nil
