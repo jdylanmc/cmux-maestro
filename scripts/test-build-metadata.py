@@ -36,7 +36,8 @@ class BuildMetadataTests(unittest.TestCase):
     def fixture(self, mode):
         suffix, point = metadata.PROFILES[mode]
         self.parent = {"CFBundleIdentifier": metadata.BASE_ID + suffix, "CFBundlePackageType": "APPL",
-                       "CFBundleVersion": metadata.APP_BUILD_VERSION, "CMUXMaestroInstallBridge": "copilot-install-v1"}
+                       "CFBundleVersion": metadata.APP_BUILD_VERSION, "CMUXMaestroInstallBridge": "copilot-install-v1",
+                       "CMUXMaestroAppLifecycleBridge": "graceful-lifecycle-v1"}
         self.child = {
             "CFBundleIdentifier": metadata.BASE_ID + suffix + ".Extension",
             "CFBundlePackageType": "XPC!",
@@ -61,12 +62,14 @@ class BuildMetadataTests(unittest.TestCase):
                     metadata.verify_metadata(self.app, "tests")
 
     def test_non_ui_bridge_is_required_for_new_artifacts_not_historical_receipts(self):
-        self.fixture("production")
-        del self.parent["CMUXMaestroInstallBridge"]
-        self.save()
-        with self.assertRaisesRegex(ValueError, "non-UI install bridge"):
-            metadata.verify_metadata(self.app, "production")
-        metadata.verify_metadata(self.app, "production", require_bridge=False)
+        for key in ("CMUXMaestroInstallBridge", "CMUXMaestroAppLifecycleBridge"):
+            with self.subTest(capability=key):
+                self.fixture("production")
+                del self.parent[key]
+                self.save()
+                with self.assertRaisesRegex(ValueError, "bridge"):
+                    metadata.verify_metadata(self.app, "production")
+                metadata.verify_metadata(self.app, "production", require_bridge=False)
 
     def save(self):
         (self.app / "Contents/Info.plist").write_bytes(plistlib.dumps(self.parent))

@@ -753,6 +753,7 @@
 				CMUX_DISPLAY_NAME_SUFFIX = "";
 				INFOPLIST_KEY_CFBundleDisplayName = "CMUX Maestro Preview$(CMUX_DISPLAY_NAME_SUFFIX)";
 				INFOPLIST_KEY_CMUXMaestroInstallBridge = "copilot-install-v1";
+				INFOPLIST_KEY_CMUXMaestroAppLifecycleBridge = "graceful-lifecycle-v1";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -791,6 +792,7 @@
 				CMUX_DISPLAY_NAME_SUFFIX = "";
 				INFOPLIST_KEY_CFBundleDisplayName = "CMUX Maestro Preview$(CMUX_DISPLAY_NAME_SUFFIX)";
 				INFOPLIST_KEY_CMUXMaestroInstallBridge = "copilot-install-v1";
+				INFOPLIST_KEY_CMUXMaestroAppLifecycleBridge = "graceful-lifecycle-v1";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

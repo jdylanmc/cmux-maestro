@@ -120,6 +120,8 @@ def verify_metadata(app, mode, *, expected_build=APP_BUILD_VERSION, require_orch
     if require_bridge:
         require(parent.get("CMUXMaestroInstallBridge") == "copilot-install-v1",
                 "Containing app lacks the supported non-UI install bridge.")
+        require(parent.get("CMUXMaestroAppLifecycleBridge") == "graceful-lifecycle-v1",
+                "Containing app lacks the supported graceful lifecycle bridge.")
     version = parent.get("CFBundleVersion", "")
     require(isinstance(version, str) and re.fullmatch(r"[1-9][0-9]*(?:\.[0-9]+){0,2}", version)
             and child.get("CFBundleVersion") == version,

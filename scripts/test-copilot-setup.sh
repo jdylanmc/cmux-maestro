@@ -25,6 +25,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feat
     "$ROOT/CMUXMaestroPreview/Integration/CopilotSetup.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/CopilotSetupMetadata.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/CopilotObserverRegistration.swift" \
+    "$ROOT/CMUXMaestroPreview/Integration/MaestroAppLifecycle.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/WorkerLaunchSettings.swift" \
     -emit-module-path "$OUTPUT/CMUXMaestroPreview.swiftmodule" \
     -Xlinker -install_name -Xlinker "$OUTPUT/libCMUXMaestroPreview.dylib" \
@@ -37,6 +38,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feat
     "$ROOT/CMUXMaestroPreviewTests/CopilotHookTests.swift" \
     "$ROOT/CMUXMaestroPreviewTests/CopilotSetupTests.swift" \
     "$ROOT/CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift" \
+    "$ROOT/CMUXMaestroPreviewTests/MaestroAppLifecycleTests.swift" \
     "$ROOT/CMUXMaestroPreviewTests/SidebarAppKitTestScope.swift" \
     "$ROOT/CMUXMaestroPreviewTests/WorkerLaunchSettingsTests.swift" \
     "$ROOT/scripts/CopilotSetupTestMain.swift" -o "$OUTPUT/setup-tests"

@@ -176,8 +176,25 @@ Changed-app publication withdraws only the owned registration, waits at most
 120 seconds for positively identified preview processes to exit, and registers
 the replacement. Unknown process evidence still fails immediately. Tests cover
 ordered withdrawal/re-registration, unchanged unrelated registrations, bounded
-waiting and restoration when release fails; no signal, UI selection, host
-restart or script-sidebar reload is used.
+waiting and restoration when release fails; no UI selection, host restart or
+script-sidebar reload is used.
+The normal containing app is no longer treated as an indefinitely busy
+extension. A changed-app update journals the exact running app's owner/start
+generation, executable and code identity, then requests only
+`NSRunningApplication.terminate()`. Refusal or failure to exit aborts without
+force termination. The prior running/hidden choice is restored with an exact
+URL `NSWorkspace` launch configured not to activate, hide other apps, substitute
+another installation, create a duplicate instance or prompt for optional UI.
+Quarantine refuses relaunch rather than bypassing system policy.
+
+Injected AppKit handles cover ownership mismatches, PID-generation changes,
+other app copies, helper/extension exclusion, refusal and idempotent restoration.
+A separate non-UI process fixture compares the public Security-framework code
+identity with the existing kernel-cached code hash. Installer tests cover
+quit/launch interruptions, failed restoration and rollback after a replacement
+app has started. These tests do not invoke real GUI quit/launch; the hosted
+stock-host proof must still establish real release/recreation and focus behavior.
+
 `build-register.sh` now hands its verified artifact to the same `install`
 entrypoint; it no longer separately registers the development extension.
 The installer calls a production-only, non-UI bridge with a transaction UUID

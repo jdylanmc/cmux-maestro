@@ -1520,8 +1520,9 @@ app receipt/previous-generation retention pending until setup, public discovery
 and exact app registration have succeeded. No setup window, separate Enable
 action or chat restart is required. An explicit `--copilot-executable` option
 is accepted by both commands when the intended CLI is not on `PATH`.
-New source artifacts must advertise the signed `copilot-install-v1` bridge
-capability in their containing-app metadata. Older installed apps can still be
+New source artifacts must advertise the signed `copilot-install-v1` and
+`graceful-lifecycle-v1` capabilities in their containing-app metadata.
+Older installed apps can still be
 upgraded or restored; an old source artifact lacking the bridge is rejected
 before launch, rather than risking its GUI interpreting an unknown argument.
 Completion reports configured all/subset disables or unresolved disable-key
@@ -1536,12 +1537,29 @@ preview executables to exit before replacing the app. It re-registers the stable
 app afterward. Selecting CMUX's Default sidebar is not an installer prerequisite;
 `cmux sidebar reload` is not used.
 
-A containing app, helper or extension that remains executing still blocks
-replacement. An unverifiable process fails immediately rather than being retried
-as an assumed preview process. The command reports the specific process ID when
-possible; it never signals a process, quits CMUX, restarts a CLI session, injects
-terminal input or changes focus. A failed update restores the old registration
-when safe. Registration and process checks do not prove that the stock host
+A running receipt-owned containing app is handled automatically: the installer
+journals its process generation, code identity and hidden state, then requests
+a normal quit through `NSRunningApplication.terminate()`. Exact bundle and
+executable paths, owner/start generation and running code identity must match;
+same-name apps, other copies, extensions and helpers are not quit targets.
+An accepted quit request is not exit proof: the existing kernel process guard
+must still observe release before replacement. Refusal or continued execution
+aborts safely, without force termination.
+
+If the containing app was running, successful update or failure recovery
+restores a verified instance of the appropriate app through `NSWorkspace` at
+the exact path. Launch disables activation, other-app hiding, version
+substitution, duplicate-instance creation, recent-item changes and optional
+system prompts. An already-running exact instance is reused without activation.
+Quarantined apps refuse background relaunch rather than risking Gatekeeper UI
+or changing quarantine/permission settings. An app that was previously closed
+stays closed, and an identical verified install does not quit or relaunch it.
+Relaunch intent/results are journaled for interrupted recovery.
+
+Helpers, extensions and unverifiable processes still block replacement;
+they are never force-killed. No operation quits CMUX, restarts a CLI session,
+injects terminal input or uses an activation/keystroke fallback.
+Registration and process checks do not prove that the stock host
 observed the disappearance and loaded the replacement; hosted native acceptance
 is still required.
 

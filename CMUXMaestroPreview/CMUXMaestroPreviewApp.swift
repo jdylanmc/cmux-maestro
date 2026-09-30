@@ -8,12 +8,19 @@ enum CMUXMaestroEntryPoint {
     static func main() {
         let arguments = Array(ProcessInfo.processInfo.arguments.dropFirst())
         guard arguments.contains(CopilotSetupCommandLine.installFlag)
-            || arguments.contains(CopilotSetupCommandLine.bridgeFlag) else {
+            || arguments.contains(CopilotSetupCommandLine.bridgeFlag)
+            || arguments.contains(MaestroAppLifecycleCommandLine.flag) else {
             CMUXMaestroPreviewApp.main()
             return
         }
         Task { @MainActor in
             do {
+                if let request = try MaestroAppLifecycleCommandLine.request(arguments) {
+                    let completion = await MaestroAppLifecycleCommandLine.perform(request)
+                    let output = completion.useStandardOutput ? FileHandle.standardOutput : FileHandle.standardError
+                    output.write(Data(completion.text.utf8))
+                    exit(completion.exitCode)
+                }
                 if let request = try CopilotSetupCommandLine.bridge(arguments: arguments) {
                     let completion = await CopilotSetupCommandLine.coordinate(request)
                     let output = completion.useStandardOutput ? FileHandle.standardOutput : FileHandle.standardError

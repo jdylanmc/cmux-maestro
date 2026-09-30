@@ -9,6 +9,7 @@ from pathlib import Path
 import plistlib
 import shutil
 import signal
+import select
 import subprocess
 import struct
 import sys
@@ -45,6 +46,40 @@ class SyntheticMac(preview.MacOperations):
         self.elections = {}
         self.release_on_withdrawal = False
         self.integration_calls = []
+        self.application_calls = []
+        self.running_application = None
+        self.quit_refused = False
+        self.quit_stays_running = False
+        self.next_application_pid = 42001
+
+    def application_lifecycle(self, bridge, action, app, *, expected=None, hidden=False):
+        self.application_calls.append((action, app, hidden))
+        self.fail("application-" + action)
+        if action == "inspect":
+            return self.running_application
+        if action == "quit":
+            if self.running_application is None:
+                return None
+            if self.running_application["process"] != expected["process"]:
+                raise ValueError("Containing-app generation changed")
+            if self.quit_refused:
+                raise ValueError("Containing app refused graceful quit")
+            if not self.quit_stays_running:
+                self.running_application = None
+            self.fail("application-after-quit")
+            return expected
+        if action == "launch":
+            if self.running_application is None:
+                self.next_application_pid += 1
+                self.running_application = {
+                    "process": {"pid": self.next_application_pid, "uid": os.getuid(),
+                                "startSeconds": self.next_application_pid, "startMicroseconds": 1,
+                                "codeHash": "a" * 40, "executable": str(self.main_executable(app))},
+                    "hidden": hidden,
+                }
+            self.fail("application-after-launch")
+            return self.running_application
+        raise AssertionError(action)
 
     def integration(self, app, action, token, destination, *, selected=None, allow_absent=False):
         self.integration_health = "currentOnDisk"
@@ -112,7 +147,8 @@ class SyntheticMac(preview.MacOperations):
         return list(self.applications)
 
     def assert_idle(self, *apps):
-        if self.busy:
+        if self.busy or (self.running_application is not None and any(
+                Path(self.running_application["process"]["executable"]).is_relative_to(app) for app in apps)):
             raise preview.PreviewBusyError("Synthetic preview process is running; close only that process.")
 
     def wait_idle(self, *apps):
@@ -443,6 +479,143 @@ with installer.locked():
         self.assertEqual(self.integration_snapshot(), before)
         self.assertIsNone(self.receipt()["transaction"])
 
+    def start_containing_app(self, *, hidden=False):
+        state = self.ops.application_lifecycle(self.app, "launch", self.app, hidden=hidden)
+        self.ops.application_calls.clear()
+        return state
+
+    def test_running_containing_app_is_gracefully_replaced_and_relaunched_without_activation(self):
+        self.operation("install", self.old)
+        before = self.start_containing_app(hidden=True)
+        self.operation("install", self.new)
+        self.assertEqual((self.app / "payload").read_text(), "new")
+        self.assertNotEqual(self.ops.running_application["process"]["pid"], before["process"]["pid"])
+        self.assertTrue(self.ops.running_application["hidden"])
+        self.assertEqual([row[0] for row in self.ops.application_calls], ["inspect", "quit", "launch"])
+        self.assertEqual(self.ops.application_calls[-1], ("launch", self.app, True))
+        self.assertIsNone(self.receipt()["transaction"])
+
+    def test_public_running_code_identity_matches_kernel_hash_for_owned_non_ui_fixture(self):
+        self.use_compiled_bridge()
+        executable = ROOT / ".build/setup-tests/setup-tests"
+        process = subprocess.Popen([str(executable), "--maestro-process-proof-fixture"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   start_new_session=True)
+        try:
+            ready, _, _ = select.select([process.stdout], [], [], 10)
+            self.assertTrue(ready, "Non-UI process identity fixture did not become ready")
+            value = json.loads(process.stdout.readline())
+            self.assertIsNone(process.poll())
+            operations = preview.MacOperations()
+            self.assertEqual(value["pid"], process.pid)
+            self.assertEqual(value["executable"], str(executable))
+            self.assertEqual(operations.executable_code_hash(process.pid), value["codeHash"])
+            self.assertEqual(operations.process_generation(process.pid, os.getuid()),
+                             (value["pid"], value["uid"], value["startSeconds"], value["startMicroseconds"]))
+            self.assertIn(value["codeHash"], operations.code_hashes(executable))
+        finally:
+            stdout, stderr = process.communicate(b"G", timeout=10)
+        self.assertEqual((process.returncode, stdout, stderr), (0, b"", b""))
+
+    def test_lifecycle_bridge_uses_only_main_executable_hashes_and_guarded_commands(self):
+        operations = preview.MacOperations()
+        operations.install_lock_fd = 123
+        response = {"schema": 1, "action": "inspect", "application": str(self.old), "process": None}
+        with patch.object(operations, "code_hashes", return_value={"a" * 40}) as hashes, \
+                patch.object(operations, "protected_code_hashes", side_effect=AssertionError("Bundle-wide identity is not app identity")), \
+                patch.object(preview.command_worker, "run", return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps(response), "")) as run:
+            self.assertIsNone(operations.application_lifecycle(self.new, "inspect", self.old))
+        hashes.assert_called_once_with(self.old / "Contents/MacOS/Preview")
+        self.assertEqual(run.call_args.args[0], 123)
+        self.assertEqual(run.call_args.args[1][:4], [
+            str(self.new / "Contents/MacOS/Preview"), "--coordinate-maestro-app", "inspect", "--application",
+        ])
+        self.assertTrue(run.call_args.kwargs["text"])
+        self.assertEqual(run.call_args.kwargs["timeout"], 120)
+
+    def test_identical_install_does_not_quit_or_reopen_running_containing_app(self):
+        self.operation("install", self.old)
+        before = self.start_containing_app()
+        self.operation("install", self.old)
+        self.assertEqual(self.ops.running_application, before)
+        self.assertEqual(self.ops.application_calls, [])
+
+    def test_quit_refusal_or_non_exit_restores_registration_without_force_or_duplicate_launch(self):
+        for refusal in (True, False):
+            with self.subTest(refusal=refusal):
+                if not self.app.exists():
+                    self.operation("install", self.old)
+                before = self.start_containing_app()
+                self.ops.quit_refused = refusal
+                self.ops.quit_stays_running = not refusal
+                receipt = self.receipt()
+                next_pid = self.ops.next_application_pid
+                with self.assertRaises(ValueError):
+                    self.operation("install", self.new)
+                self.assertEqual((self.app / "payload").read_text(), "old")
+                self.assertEqual(self.receipt(), receipt)
+                self.assertEqual(self.ops.running_application, before)
+                self.assertEqual(self.ops.next_application_pid, next_pid)
+                self.assertIn(self.app, self.ops.applications)
+                self.ops.quit_refused = False
+                self.ops.quit_stays_running = False
+
+    def test_late_update_failure_restores_previous_running_app_and_hidden_choice(self):
+        self.operation("install", self.old)
+        before = self.start_containing_app(hidden=True)
+        self.ops.failures["integration-verify"] = OSError("late update failure")
+        with self.assertRaisesRegex(OSError, "late update failure"):
+            self.operation("install", self.new)
+        self.assertEqual((self.app / "payload").read_text(), "old")
+        self.assertIsNotNone(self.ops.running_application)
+        self.assertNotEqual(self.ops.running_application["process"]["pid"], before["process"]["pid"])
+        self.assertTrue(self.ops.running_application["hidden"])
+        self.assertIsNone(self.receipt()["transaction"])
+
+    def test_failure_after_relaunch_gracefully_retires_new_app_before_restoring_old_running_state(self):
+        self.operation("install", self.old)
+        before = self.start_containing_app()
+        self.ops.failures["application-after-launch"] = OSError("launch completion failed")
+        with self.assertRaisesRegex(OSError, "launch completion failed"):
+            self.operation("install", self.new)
+        self.assertEqual((self.app / "payload").read_text(), "old")
+        self.assertIsNotNone(self.ops.running_application)
+        self.assertNotEqual(self.ops.running_application["process"]["pid"], before["process"]["pid"])
+        self.assertEqual([row[0] for row in self.ops.application_calls].count("quit"), 2)
+        self.assertIsNone(self.receipt()["transaction"])
+
+    def test_failed_running_state_restoration_remains_journaled_and_recovers(self):
+        self.operation("install", self.old)
+        self.start_containing_app(hidden=True)
+        self.ops.failures["integration-verify"] = OSError("update failed")
+        self.ops.failures["application-launch"] = OSError("restore launch refused")
+        with self.assertRaisesRegex(preview.InstallRestorationError, "restore launch refused"):
+            self.operation("install", self.new)
+        self.assertEqual((self.app / "payload").read_text(), "old")
+        self.assertEqual(self.receipt()["transaction"]["application"]["phase"], "restoring")
+        self.assertIsNone(self.ops.running_application)
+        self.operation("recover")
+        self.assertTrue(self.ops.running_application["hidden"])
+        self.assertEqual((self.app / "payload").read_text(), "old")
+        self.assertIsNone(self.receipt()["transaction"])
+
+    def test_interrupted_quit_or_relaunch_recovers_prior_running_state_from_receipt(self):
+        for point in ("application-after-quit", "application-after-launch"):
+            with self.subTest(point=point):
+                if not self.app.exists():
+                    self.operation("install", self.old)
+                self.start_containing_app(hidden=True)
+                self.ops.failures[point] = Interrupted()
+                with self.assertRaises(Interrupted):
+                    self.operation("install", self.new)
+                phase = self.receipt()["transaction"]["application"]["phase"]
+                self.assertEqual(phase, "quitting" if point.endswith("quit") else "launching")
+                self.operation("recover")
+                self.assertEqual((self.app / "payload").read_text(), "old")
+                self.assertTrue(self.ops.running_application["hidden"])
+                self.assertIsNone(self.receipt()["transaction"])
+
     def test_deleted_executable_requires_positive_stable_code_identity_and_inventory(self):
         pid, uid = 43210, os.getuid()
         generation = (pid, uid, 100, 123)
@@ -657,7 +830,8 @@ with installer.locked():
             (resources / "extension.mjs").write_text("// synthetic loader\n")
         parent = {"CFBundleIdentifier": metadata.BASE_ID, "CFBundlePackageType": "APPL",
                   "CFBundleVersion": version, "CFBundleExecutable": "Preview",
-                  "CMUXMaestroInstallBridge": "copilot-install-v1"}
+                  "CMUXMaestroInstallBridge": "copilot-install-v1",
+                  "CMUXMaestroAppLifecycleBridge": "graceful-lifecycle-v1"}
         child = {"CFBundleIdentifier": metadata.BASE_ID + ".Extension", "CFBundlePackageType": "XPC!",
                  "CFBundleVersion": version, "CFBundleExecutable": "Sidebar",
                  "EXAppExtensionAttributes": {"EXExtensionPointIdentifier": metadata.PRODUCTION_POINT}}
