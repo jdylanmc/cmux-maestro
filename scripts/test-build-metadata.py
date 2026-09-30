@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -280,6 +281,51 @@ class IntegratedTestScopeTests(unittest.TestCase):
 
 
 class BuildMetadataTests(unittest.TestCase):
+    def test_ci_preserves_all_eleven_validation_commands_without_new_conditions(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertEqual(re.findall(r"^        run: (.+)$", workflow, re.MULTILINE), [
+            "python3 scripts/test-cmux-maestro-orchestrator.py",
+            "python3 scripts/test-delivery-proof.py",
+            "node --test scripts/test-delivery-proof.mjs",
+            "python3 scripts/test-build-metadata.py",
+            "python3 scripts/test-local-preview.py",
+            "./scripts/test-fetch-sdk-concurrency.sh",
+            "./scripts/build-unsigned.sh",
+            "./scripts/test.sh",
+            "./scripts/test-copilot-setup.sh",
+            "./scripts/test-copilot-hook.sh",
+            "./scripts/test-copilot-sandbox.sh",
+        ])
+        steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
+        run_steps = [step for step in steps if "\n        run:" in step]
+        self.assertEqual(len(run_steps), 11)
+        for step in run_steps:
+            self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
+        self.assertNotIn("continue-on-error", workflow)
+
+    def test_ci_always_uploads_json_evidence_and_retains_required_png_artifact(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
+        for title, name, path in (
+            ("Upload integrated test scope evidence", "integrated-test-scope-evidence",
+             ".build/tests/scoped-results/**/*.json"),
+            ("Upload synthetic sidebar layout renders", "sidebar-layout-offscreen",
+             ".build/layout-validation/offscreen/*.png"),
+        ):
+            with self.subTest(artifact=name):
+                actual = [step for step in steps if f"          name: {name}\n" in step]
+                self.assertEqual(actual, [
+                    f"      - name: {title}\n"
+                    "        if: always()\n"
+                    "        uses: actions/upload-artifact@v4\n"
+                    "        with:\n"
+                    f"          name: {name}\n"
+                    f"          path: {path}\n"
+                    "          include-hidden-files: true\n"
+                    "          if-no-files-found: error\n"
+                    "          retention-days: 14\n"
+                ])
+
     def test_app_bridge_markers_are_wired_as_input_plist_in_both_configurations(self):
         project = json.loads(subprocess.check_output([
             "/usr/bin/plutil", "-convert", "json", "-o", "-",

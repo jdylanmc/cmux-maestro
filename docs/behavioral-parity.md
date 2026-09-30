@@ -77,6 +77,13 @@ selector or local standalone count. The inherited-MainActor negative remains sen
 the test body and non-yielding observer are unchanged. Previous hosted
 concurrency reds and the separate native viewport-settlement failure remain
 recorded; only a necessary current-head hosted run can establish their state.
+
+CI always uploads every scoped-results JSON file as the separate
+`integrated-test-scope-evidence` artifact, retained for 14 days, including after
+test failure. Missing JSON fails that upload; it is not a success fallback.
+The required `sidebar-layout-offscreen` PNG artifact and all eleven validation
+commands remain unchanged. Full xcresult bundles are not included in this
+diagnostic artifact.
 All eleven workflow commands remain required.
 
 ### Dedicated observer registration (#114)
