@@ -1,16 +1,19 @@
 import AppKit
+import Darwin
 import XCTest
 
 // Initial hosted fixture consent only. Never invoked during acceptance or restoration.
 final class StockHostApprovalTests: XCTestCase {
     private struct Context: Decodable {
+        let schema: Int
         let runID: String
+        let nonce: String
+        let runnerUID: UInt32
         let hostPID: Int32
         let hostPath: String
         let extensionID: String
         let labels: [String]
         let terminalTitle: String
-        let evidence: String
     }
 
     private enum SetupFailure: Error {
@@ -23,56 +26,68 @@ final class StockHostApprovalTests: XCTestCase {
         executionTimeAllowance = 90
         let env = ProcessInfo.processInfo.environment
         let home = NSHomeDirectory()
-        let contextPath = env["PROBE_APPROVAL_CONTEXT"]
-        let hasContext = contextPath?.isEmpty == false
+        let expectedTestBundle = "com.jdylanmc.CMUXMaestroPreview.HostApprovalTests"
+        let expectedRunnerBundle = expectedTestBundle + ".xctrunner"
+        let expectedContainer = "/Users/runner/Library/Containers/\(expectedRunnerBundle)/Data"
+        let account = getpwuid(getuid())
+        let accountUID = account?.pointee.pw_uid
+        let accountName = account.map { String(cString: $0.pointee.pw_name) }
+        let accountHome = account.map { String(cString: $0.pointee.pw_dir) }
+        let actualRunnerBundle = Bundle.main.bundleIdentifier
+        let actualTestBundle = Bundle(for: StockHostApprovalTests.self).bundleIdentifier
+        let contextData = env["PROBE_APPROVAL_CONTEXT_JSON"].map { Data($0.utf8) }
+        let hasContext = contextData.map { !$0.isEmpty && $0.count <= 8192 } == true
         let hasRunID = env["GITHUB_RUN_ID"]?.isEmpty == false
         var failedGuards: [String] = []
-        if home != "/Users/runner" { failedGuards.append("home") }
+        if getuid() == 0 || getuid() != geteuid() { failedGuards.append("nonRootUID") }
+        if accountUID != getuid() || accountName != "runner" || accountHome != "/Users/runner" {
+            failedGuards.append("runnerAccount")
+        }
+        if actualRunnerBundle != expectedRunnerBundle { failedGuards.append("runnerBundle") }
+        if actualTestBundle != expectedTestBundle { failedGuards.append("testBundle") }
+        if home != expectedContainer { failedGuards.append("exactRunnerContainer") }
         if env["GITHUB_ACTIONS"] != "true" { failedGuards.append("GITHUB_ACTIONS") }
         if env["RUNNER_ENVIRONMENT"] != "github-hosted" { failedGuards.append("RUNNER_ENVIRONMENT") }
-        if !hasContext { failedGuards.append("PROBE_APPROVAL_CONTEXT") }
+        if !hasContext { failedGuards.append("boundedContextJSON") }
         if !hasRunID { failedGuards.append("GITHUB_RUN_ID") }
-        let fixturePath = contextPath.flatMap { path -> String? in
-            guard path.hasPrefix("/Users/runner/"),
-                  path.hasSuffix("/stock-host-update/ui-approval-context.json"),
-                  URL(fileURLWithPath: path).standardizedFileURL.path == path else { return nil }
-            return String(path.prefix(1024))
-        }
-        if hasContext && fixturePath == nil { failedGuards.append("contextPathShape") }
         let diagnostic: [String: Any] = [
             "kind": "hosted-approval-guard", "actualHome": String(home.prefix(1024)),
-            "homeMatches": home == "/Users/runner",
+            "uid": getuid(), "euid": geteuid(),
+            "accountName": String((accountName ?? "(unavailable)").prefix(256)),
+            "accountHome": String((accountHome ?? "(unavailable)").prefix(1024)),
+            "runnerBundle": String((actualRunnerBundle ?? "(unavailable)").prefix(256)),
+            "testBundle": String((actualTestBundle ?? "(unavailable)").prefix(256)),
+            "containerMatches": home == expectedContainer,
             "githubActionsPresent": env["GITHUB_ACTIONS"] != nil,
             "githubActionsMatches": env["GITHUB_ACTIONS"] == "true",
             "runnerEnvironmentPresent": env["RUNNER_ENVIRONMENT"] != nil,
             "runnerEnvironmentMatches": env["RUNNER_ENVIRONMENT"] == "github-hosted",
-            "contextPathPresent": hasContext, "runIDPresent": hasRunID,
-            "contextPath": fixturePath ?? "(missing or invalid fixture path)",
-            "contextFileReadable": home == "/Users/runner"
-                && fixturePath.map { FileManager.default.isReadableFile(atPath: $0) } == true,
+            "boundedContextPresent": hasContext, "contextBytes": contextData?.count ?? 0,
+            "runIDPresent": hasRunID,
             "failedGuards": failedGuards
         ]
         let diagnosticData = try JSONSerialization.data(withJSONObject: diagnostic, options: [.sortedKeys])
         FileHandle.standardOutput.write(Data("PROBE_APPROVAL_GUARD ".utf8) + diagnosticData + Data("\n".utf8))
         let attachment = XCTAttachment(data: diagnosticData, uniformTypeIdentifier: "public.json")
-        attachment.name = "hosted-approval-guard"
+        attachment.name = "approval-guard"
         attachment.lifetime = .keepAlways
         add(attachment)
-        guard failedGuards.isEmpty, let path = contextPath else {
+        guard failedGuards.isEmpty, let contextData else {
             throw SetupFailure.unavailable("Hosted-only UI setup guard failed: \(failedGuards.joined(separator: ", "))")
         }
-        let context = try JSONDecoder().decode(Context.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
-        guard context.runID == env["GITHUB_RUN_ID"],
+        let context = try JSONDecoder().decode(Context.self, from: contextData)
+        guard context.schema == 1, context.runID == env["GITHUB_RUN_ID"],
+              context.runnerUID == getuid(), UUID(uuidString: context.nonce) != nil,
+              context.hostPID > 1,
               context.hostPath == "/Applications/cmux.app",
               context.extensionID == "com.jdylanmc.CMUXMaestroPreview.Extension",
-              !context.labels.isEmpty,
-              context.evidence == URL(fileURLWithPath: path).deletingLastPathComponent()
-                .deletingLastPathComponent().appendingPathComponent("stock-host-update-evidence").path else {
+              !context.labels.isEmpty, context.labels.count <= 8,
+              context.labels.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 256 }),
+              context.terminalTitle == "/usr/bin/env" else {
             throw SetupFailure.unavailable("Wrong fixture scope")
         }
-        let output = URL(fileURLWithPath: context.evidence)
-        let resultPath = output.appendingPathComponent("approval-result.json")
         var result: [String: Any] = [
+            "schema": 1, "nonce": context.nonce, "runnerUID": context.runnerUID,
             "scope": "first-time public UI fixture consent, not installer or update capability",
             "runID": context.runID, "hostPID": context.hostPID, "extensionID": context.extensionID,
             "status": "started", "stage": "verify-existing-stock"
@@ -80,8 +95,11 @@ final class StockHostApprovalTests: XCTestCase {
         func save(_ stage: String) throws {
             result["stage"] = stage
             result["time"] = Date().timeIntervalSince1970
-            try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
-                .write(to: resultPath, options: .atomic)
+            let data = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+            attachment.name = "approval-result-\(stage)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
         }
         func verifyHost() throws {
             guard let host = NSRunningApplication(processIdentifier: context.hostPID),
@@ -96,12 +114,13 @@ final class StockHostApprovalTests: XCTestCase {
         func capture(_ stage: String) throws {
             try save(stage)
             let hierarchy = String(app.debugDescription.prefix(262_144))
-            try hierarchy.write(to: output.appendingPathComponent("approval-\(stage).txt"),
-                                atomically: true, encoding: .utf8)
+            let description = XCTAttachment(string: hierarchy)
+            description.name = "approval-hierarchy-\(stage)"
+            description.lifetime = .keepAlways
+            add(description)
             let image = app.screenshot()
-            try image.pngRepresentation.write(to: output.appendingPathComponent("approval-\(stage).png"))
             let attachment = XCTAttachment(screenshot: image)
-            attachment.name = stage
+            attachment.name = "approval-screenshot-\(stage)"
             attachment.lifetime = .keepAlways
             add(attachment)
         }

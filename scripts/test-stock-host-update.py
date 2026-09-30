@@ -474,6 +474,64 @@ class Probe:
         records = self.preview.metadata.registration_records(raw.decode())
         require(len(records) == 1, "Duplicate native extension registrations")
 
+    def approval_attachment_result(self, directory, nonce):
+        require(directory == self.evidence / "approval-attachments", "Unexpected approval export directory")
+
+        def read(name, limit):
+            require(isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,160}", name),
+                    "Unsafe exported attachment filename")
+            path = directory / name
+            self.preview.safe_path(path, owner=True)
+            info = path.lstat()
+            require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= limit,
+                    "Unsafe or oversized approval attachment")
+            return path.read_bytes()
+
+        manifest = json.loads(read("manifest.json", 262_144))
+        require(isinstance(manifest, list) and len(manifest) == 1 and isinstance(manifest[0], dict)
+                and manifest[0].get("testIdentifier") == "StockHostApprovalTests/testApproveOwnedNativeFixture()",
+                "Approval export is not the single selected test")
+        attachments = manifest[0].get("attachments")
+        require(isinstance(attachments, list) and 0 < len(attachments) <= 64,
+                "Missing or excessive approval attachments")
+        completed, failed, total = [], [], 0
+        for attachment in attachments:
+            require(isinstance(attachment, dict), "Invalid approval attachment manifest entry")
+            name = attachment.get("exportedFileName")
+            title = attachment.get("suggestedHumanReadableName")
+            require(isinstance(title, str) and title.startswith("approval-") and len(title) <= 512,
+                    "Unexpected approval attachment name")
+            suffix = Path(name).suffix if isinstance(name, str) else ""
+            limits = {".json": 16_384, ".txt": 1_048_576, ".png": 16_777_216}
+            require(suffix in limits and title.endswith(suffix), "Unexpected approval attachment type")
+            data = read(name, limits[suffix])
+            total += len(data)
+            require(total <= 33_554_432, "Approval evidence exceeds its aggregate bound")
+            if title.startswith("approval-result-") and suffix == ".json":
+                result = json.loads(data)
+                require(isinstance(result, dict) and result.get("schema") == 1
+                        and result.get("runID") == os.environ["GITHUB_RUN_ID"]
+                        and result.get("nonce") == nonce and result.get("runnerUID") == os.getuid()
+                        and result.get("hostPID") == self.host["generation"][0]
+                        and result.get("extensionID") == EXT_ID, "Approval result belongs to another context")
+                stage = result.get("stage")
+                require(isinstance(stage, str) and re.fullmatch(r"[a-z][a-z-]{0,63}", stage)
+                        and title.startswith(f"approval-result-{stage}_"),
+                        "Approval result stage does not match its attachment")
+                if result.get("stage") == "setup-ui-complete":
+                    completed.append(result)
+                elif result.get("stage") == "setup-ui-failed":
+                    failed.append(result)
+        require(len(completed) <= 1 and len(failed) <= 1 and not (completed and failed),
+                "Ambiguous/repeated approval result")
+        result = completed[0] if completed else failed[0] if failed else None
+        if result is not None:
+            path = self.evidence / "approval-result.json"
+            with path.open("x") as stream:
+                json.dump(result, stream, indent=2)
+        self.event("approval-attachments-validated", directory=str(directory), count=len(attachments))
+        return result
+
     def approve_fixture(self):
         require(self.report["phase"] == "setup" and self.baseline is None,
                 "UI approval is forbidden after fixture setup")
@@ -487,12 +545,14 @@ class Probe:
                 "Public UI approval requires exactly the owned fixture at this extension point")
         labels = {records[0][key] for key in ("Display Name", "Short Name", "Parent Name")
                   if key in records[0]}
-        context = self.work / "ui-approval-context.json"
-        context.write_text(json.dumps({
-            "runID": os.environ["GITHUB_RUN_ID"], "hostPID": self.host["generation"][0],
+        nonce = str(uuid.uuid4())
+        context = json.dumps({
+            "schema": 1, "runID": os.environ["GITHUB_RUN_ID"], "nonce": nonce,
+            "runnerUID": os.getuid(), "hostPID": self.host["generation"][0],
             "hostPath": str(self.stock), "extensionID": EXT_ID, "labels": sorted(labels),
-            "terminalTitle": "/usr/bin/env", "evidence": str(self.evidence),
-        }))
+            "terminalTitle": "/usr/bin/env",
+        }, separators=(",", ":"))
+        require(len(context.encode()) <= 8192, "UI context exceeds its small nonsecret transport bound")
         project = ROOT / "scripts/stock-host-approval/StockHostApproval.xcodeproj"
         derived = self.work / "approval-build"
         toolchain = ["/usr/bin/env", "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer"]
@@ -520,7 +580,7 @@ class Probe:
         target.setdefault("DependentProductPaths", []).append(str(self.stock))
         runner_context = {
             "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
-            "GITHUB_RUN_ID": os.environ["GITHUB_RUN_ID"], "PROBE_APPROVAL_CONTEXT": str(context),
+            "GITHUB_RUN_ID": os.environ["GITHUB_RUN_ID"], "PROBE_APPROVAL_CONTEXT_JSON": context,
         }
         target["SystemAttachmentLifetime"] = "keepAlways"
         target["UserAttachmentLifetime"] = "keepAlways"
@@ -534,8 +594,16 @@ class Probe:
             "-only-testing:StockHostApprovalTests/StockHostApprovalTests/testApproveOwnedNativeFixture",
             "-resultBundlePath", self.evidence / "native-approval.xcresult",
         ], timeout=180, check=False)
-        result_file = self.evidence / "approval-result.json"
-        ui_result = json.loads(result_file.read_text()) if result_file.is_file() else None
+        exported = self.evidence / "approval-attachments"
+        exported.mkdir(mode=0o700)
+        export_code, _ = self.run([
+            *toolchain, "/usr/bin/xcrun", "xcresulttool", "export", "attachments",
+            "--test-id", "StockHostApprovalTests/testApproveOwnedNativeFixture()",
+            "--filter", "approval-*", "--path", self.evidence / "native-approval.xcresult",
+            "--output-path", exported,
+        ], timeout=30, check=False)
+        require(export_code == 0, "XCTest evidence export unavailable; no approval result may be inferred")
+        ui_result = self.approval_attachment_result(exported, nonce)
         self.report["uiApproval"] = {
             "status": "unavailable",
             "xcodebuildExit": code, "result": ui_result,
