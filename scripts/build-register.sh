@@ -7,6 +7,13 @@ APP="$DERIVED_DATA/Build/Products/Debug/CMUX Maestro Preview.app"
 APPEX="$APP/Contents/Extensions/CMUX Maestro Preview Extension.appex"
 export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 
+if [[ $# -ne 0 ]]; then
+    if [[ $# -ne 2 || "${1:-}" != "--copilot-executable" || "${2:-}" != /* ]]; then
+        echo "Usage: build-register.sh [--copilot-executable /absolute/path/to/copilot]" >&2
+        exit 2
+    fi
+fi
+
 "$ROOT/scripts/fetch-sdk.sh"
 mkdir -p "$DERIVED_DATA"
 SETTINGS=(
@@ -44,5 +51,5 @@ if [[ ! -d "$APPEX" ]]; then
 fi
 
 python3 "$ROOT/scripts/verify-build-metadata.py" --mode production --app "$APP"
-pluginkit -a "$APPEX"
-python3 "$ROOT/scripts/verify-build-metadata.py" --mode production --registration "$APPEX"
+python3 "$ROOT/scripts/local-preview.py" install --source "$APP" \
+    --retire-development-registration "$@"

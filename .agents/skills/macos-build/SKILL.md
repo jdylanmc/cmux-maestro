@@ -34,25 +34,32 @@ without code signing and writes derived data beneath `.build/unsigned`.
 Run this after code or test changes. It builds and executes the focused Swift
 test target with derived data beneath `.build/tests`.
 
-## Local Extension Registration
+## Explicit Alpha Installation
 
 ```bash
 ./scripts/build-register.sh
 ```
 
-Run only when registration or host discovery must be verified. It performs an
-ad hoc signed build, registers the extension with `pluginkit`, and confirms
-that the extension identifier is discoverable.
+Run only with explicit, current installation authority. It performs an ad hoc
+signed build and invokes the coordinated stable-app/Copilot installer, including
+official provider plugin operations. It is not a validation-only registration
+probe and must not run incidentally after code changes.
 
 ## Validation Selection
 
 - Compile-only request: run `./scripts/build-unsigned.sh`.
 - Implementation change: run `./scripts/build-unsigned.sh` and
   `./scripts/test.sh`.
-- Extension registration, manifest, signing, or host-discovery change: also run
-  `./scripts/build-register.sh`.
-- Continuous Integration (CI) request: follow the repository workflow and the
-  dedicated CI skill rather than substituting a local partial check.
+- Extension registration, manifest, signing, or host-discovery change: validate
+  through the authorized test venue; run `./scripts/build-register.sh` only
+  with a separate installation grant.
+- Continuous Integration (CI) request: execute the authoritative commands from
+  `.github/workflows/ci.yml`; do not substitute a local partial check.
+
+Honor caller restrictions on GUI/native-host testing. Focused non-UI checks
+include `python3 scripts/test-local-preview.py` and
+`./scripts/test-copilot-setup.sh`; they do not waive hosted CI or prove stock-host
+loaded behavior.
 
 Do not run the build and test scripts concurrently. Both may fetch or inspect
 the same pinned SDK state, and sequential output is easier to attribute.

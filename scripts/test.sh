@@ -23,13 +23,13 @@ xcodebuild -project "$ROOT/CMUXMaestroPreview.xcodeproj" -alltargets \
 python3 "$ROOT/scripts/verify-build-metadata.py" --mode tests \
     --settings "$DERIVED_DATA/namespace-settings.json"
 
-xcodebuild \
+python3 "$ROOT/scripts/run-integrated-test-scopes.py" \
+    --results-root "$DERIVED_DATA/scoped-results" -- xcodebuild \
     -project "$ROOT/CMUXMaestroPreview.xcodeproj" \
     -scheme CMUXMaestroPreview \
     -configuration Debug \
     -derivedDataPath "$DERIVED_DATA" \
-    "${SETTINGS[@]}" \
-    test "$@"
+    "${SETTINGS[@]}" "$@"
 
 python3 "$ROOT/scripts/verify-build-metadata.py" --mode tests \
     --app "$DERIVED_DATA/Build/Products/Debug/CMUX Maestro Preview.app"
