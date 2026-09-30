@@ -11,6 +11,8 @@ Register the verified stock point before discovery from the signed observer bund
 The observer declares no extension point and never launches or connects to Maestro.
 Tree snapshots originate from a declared runner-only initial terminal command,
 not the external controller, preserving stock cmuxOnly ancestry authorization.
+Public pluginkit queries observe registration turnover, never loaded code.
+External ExtensionFoundation enumeration is advisory for its separate host app.
 """
 
 import argparse
@@ -47,6 +49,8 @@ SETUP_DEFAULTS = {
     "socketControlMode": "cmuxOnly",
     "SUEnableAutomaticChecks": False,
     "SUAutomaticallyUpdate": False,
+    "confirmQuit": "never",
+    "warnBeforeQuitShortcut": False,
 }
 
 
@@ -72,6 +76,7 @@ class Probe:
         self.evidence = evidence
         self.work = Path(os.environ["RUNNER_TEMP"]).resolve() / "stock-host-update"
         self.work_owned = False
+        self.fixture_profile_verified = False
         self.home = Path(pwd.getpwuid(os.getuid()).pw_dir)
         self.preview = load_preview()
         self.ops = self.preview.MacOperations()
@@ -94,6 +99,7 @@ class Probe:
         self.baseline = None
         self.hashes = {}
         self.last_sample = None
+        self.last_registration = None
         self.sequence = 0
         self.report = {
             "status": "unavailable", "phase": "setup", "base": BASE,
@@ -101,6 +107,11 @@ class Probe:
                       "url": DMG_URL, "bytes": 225832896, "sha256": DMG_SHA256},
             "scope": "native hosting only; neither combined installation nor hooks",
             "setupIsNotAcceptance": True,
+            "observationContract": {
+                "registration": "independent exact pluginkit catalog turnover, not loaded proof",
+                "loaded": "mandatory old-process exit and new extension executable PID/UID/start/CDHash",
+                "externalExtensionFoundation": "advisory separate-host context, not stock host visibility",
+            },
             "checks": {}, "cleanup": [], "events": [],
         }
 
@@ -183,9 +194,37 @@ class Probe:
         data = (self.evidence / "observer.jsonl").read_bytes()
         # Ignore only a currently incomplete final write, never a malformed complete row.
         rows = [json.loads(line) for line in data.split(b"\n")[:-1]]
-        require(not any(r["kind"] == "observer-error" for r in rows),
-                "Public identity observation unavailable; see observer.jsonl")
+        identities = [r for r in rows if r["kind"] == "identities"]
+        self.report["externalIdentityObservation"] = {
+            "status": "advisory; stock-host visibility not established",
+            "observerBundle": OBSERVER_ID,
+            "lastEvent": identities[-1] if identities else None,
+            "errors": [r for r in rows if r["kind"] == "observer-error"][-8:],
+        }
         return rows
+
+    def registry_sample(self):
+        result = subprocess.run(
+            ["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID],
+            capture_output=True, text=True, timeout=5)
+        valid = result.returncode == 0 and not result.stderr.strip() and len(result.stdout) <= 65_536
+        if not valid:
+            self.event("registration-observation-error", returncode=result.returncode,
+                       stdout=result.stdout[:4096], stderr=result.stderr[:4096])
+        require(valid, "Exact registration observation unavailable")
+        records = self.preview.metadata.registration_records(result.stdout, allow_empty=True)
+        require(all(r["id"] == EXT_ID for r in records), "Unexpected registration identifier")
+        state = {
+            "records": records,
+            "targetPresent": any(Path(r["Path"]).resolve() ==
+                                 (self.destination / self.preview.EXTENSION).resolve() for r in records),
+            "electionLines": [line.strip() for line in result.stdout.splitlines()
+                              if EXT_ID + "(" in line or line.strip().endswith(EXT_ID)],
+        }
+        if state != self.last_registration:
+            self.event("native-registration", **state, raw=result.stdout)
+            self.last_registration = state
+        return state
 
     def sample(self):
         rows = self.processes()
@@ -317,7 +356,8 @@ class Probe:
                 if monitored and defect is None:
                     try:
                         self.sample()
-                    except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+                        self.registry_sample()
+                    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
                         defect = str(error)
                         self.event("continuity-failure", error=defect)
                 require(time.monotonic() < deadline,
@@ -369,6 +409,7 @@ class Probe:
         require(not self.preview.metadata.registration_records(
             registrations.decode(), allow_empty=True), "Existing Maestro extension refused")
         require(not self.ops.app_paths(), "Existing Maestro app registration refused")
+        self.fixture_profile_verified = True
         dmg = self.work / "cmux-macos.dmg"
         self.run(["/usr/bin/curl", "--fail", "--location", "--silent", "--show-error",
                   "--max-time", "300", "--output", dmg, DMG_URL], timeout=310)
@@ -466,6 +507,7 @@ class Probe:
         self.event("setup-only-selection", defaults=SETUP_DEFAULTS,
                    meaning="Preexisting enabled selection fixture; not first-time onboarding or production technique")
         self.run(["/usr/bin/pluginkit", "-e", "use", "-i", EXT_ID])
+        self.registry_sample()
         # Stock preserves Ghostty's configured command. The CLI must originate in
         # that terminal's process tree; an external CI caller fails cmuxOnly.
         self.preview.safe_path(self.terminal_config, owner=True)
@@ -491,24 +533,11 @@ class Probe:
                 break
             time.sleep(0.5)
         require(self.host, "Stock CMUX did not start")
-        # A quiet sequence is not an observed empty registry. Require the actual fixture.
-        deadline = time.monotonic() + 120
-        while True:
-            observations = self.observer_rows()
-            identities = [r for r in observations if r["kind"] == "identities"]
-            if identities and EXT_ID in identities[-1]["ids"]:
-                self.event("observer-fixture-ready", extension=EXT_ID,
-                           identityEventTime=identities[-1]["time"], destination=str(self.destination))
-                break
-            require(time.monotonic() < deadline,
-                    "Registered/enabled fixture identity not observed; native discovery unavailable")
-            time.sleep(0.25)
+        self.event("stock-host-started", identity=self.host)
+        self.sample()
         self.initial = self.wait_loaded("A")
         self.registration()
         observations = self.observer_rows()
-        identities = [r for r in observations if r["kind"] == "identities"]
-        require(identities and EXT_ID in identities[-1]["ids"],
-                "Native identity was not enabled/observable; setup unavailable")
         sample = [r for r in observations if r["kind"] == "sample"][-1]
         require(sample["hostPIDs"] == [self.host["generation"][0]] and sample["visibleWindows"]
                 and sample["frontmost"] > 0, "Desktop/stock host window unavailable")
@@ -532,25 +561,120 @@ class Probe:
         self.save()
 
     def act(self, operation, previous, variant, *arguments):
+        self.registry_sample()
         start = time.time()
         self.installer(operation, *arguments, monitored=True)
         loaded = self.wait_loaded(variant, previous=previous)
         self.registration()
+        self.registry_sample()
         require(self.tree() == self.baseline["tree"], "Window/workspace/pane/surface identity or selection changed")
         _, raw = self.run(["/usr/bin/defaults", "export", DOMAIN, "-"])
         current = plistlib.loads(raw)
         require(all(current.get(k) == v for k, v in SETUP_DEFAULTS.items()), "Selection/config changed during act")
-        rows = [r for r in self.observer_rows() if r["kind"] == "identities" and r["time"] >= start]
-        missing = next((r["time"] for r in rows if EXT_ID not in r["ids"]), None)
-        require(missing is not None and any(r["time"] >= missing and EXT_ID in r["ids"] for r in rows),
-                "No observed native identity disappearance and reappearance")
+        rows = [r for r in self.report["events"]
+                if r["kind"] == "native-registration" and r["time"] >= start]
+        missing = next((r["time"] for r in rows if not r["records"]), None)
+        require(missing is not None and any(
+            r["time"] > missing and r["targetPresent"] and len(r["records"]) == 1 for r in rows
+        ), "No independently observed exact registration withdrawal and restoration")
         self.report["checks"][operation] = {
-            "status": "pass", "old": previous, "new": loaded, "identityDisappearance": missing,
+            "status": "pass", "old": previous, "new": loaded, "registrationDisappearance": missing,
             "hostAndShellGenerationsUnchanged": True, "treeUnchanged": True,
             "focusAndVisibleWindowsUnchanged": True,
         }
         self.save()
         return loaded
+
+    def diagnostics(self, label, *, request_snapshot=False):
+        data = {"time": time.time(), "host": self.host,
+                "candidateExtensionHashes": {k: sorted(v) for k, v in self.hashes.items()},
+                "externalIdentityObservation": self.report.get("externalIdentityObservation")}
+        path = self.evidence / f"diagnostics-{label}.json"
+        if not self.fixture_profile_verified:
+            data["status"] = "not collected: clean fixture profile was not verified"
+            path.write_text(json.dumps(data, indent=2) + "\n")
+            return
+
+        def collect(name, action):
+            try:
+                data[name] = {"status": "captured", "value": action()}
+            except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError) as error:
+                data[name] = {"status": "unavailable", "error": str(error)}
+            path.write_text(json.dumps(data, indent=2) + "\n")
+
+        def processes():
+            rows = self.processes()
+            descendants = {self.host["generation"][0]} if self.host else set()
+            for _ in range(128):
+                added = {r["generation"][0] for r in rows if r["ppid"] in descendants}
+                if added <= descendants:
+                    break
+                descendants |= added
+            hashes = set().union(*self.hashes.values()) if self.hashes else set()
+            return [r for r in rows if r["cdhash"] in hashes or r["generation"][0] in descendants]
+
+        collect("kernelVerifiedNativeHostAndTerminalProcesses", processes)
+
+        def process_hints():
+            result = subprocess.run(
+                ["/bin/ps", "-ax", "-o", "pid=", "-o", "uid=", "-o", "ppid=", "-o", "comm="],
+                capture_output=True, text=True, check=True, timeout=10)
+            hints = []
+            for line in result.stdout.splitlines():
+                pid, uid, parent, executable = line.split(None, 3)
+                if int(uid) == os.getuid() and "CMUX Maestro" in executable:
+                    hints.append({"pid": int(pid), "uid": int(uid), "ppid": int(parent),
+                                  "displayedExecutable": executable,
+                                  "kernelIdentity": self.process(int(pid))})
+            return {"notLoadedProof": True, "hints": hints, "stderr": result.stderr[:4096]}
+
+        collect("diagnosticOnlyProcessHintsIncludingUnverifiableIdentities", process_hints)
+        for name in ("snapshot-worker.pid", "snapshot-worker.exit"):
+            collect(name, lambda name=name: (self.evidence / name).read_text()[:4096]
+                    if (self.evidence / name).exists() else "not present")
+        collect("observerTail", lambda: [
+            json.loads(line) for line in (self.evidence / "observer.jsonl").read_bytes().split(b"\n")[:-1]
+        ][-12:])
+        collect("externalIdentityEvents", lambda: [
+            row for line in (self.evidence / "observer.jsonl").read_bytes().split(b"\n")[:-1]
+            if (row := json.loads(line))["kind"] in ("observer-context", "identities", "observer-error")
+        ][-16:])
+        if (request_snapshot and self.host and self.tree_snapshot_count == 0
+                and (self.evidence / "snapshot-worker.pid").exists()
+                and not (self.evidence / "snapshot-worker.exit").exists()):
+            collect("diagnosticOnlyTerminalSnapshot", lambda: json.loads(self.terminal_tree_snapshot()))
+        host = f"processID == {self.host['generation'][0]}" if self.host else "FALSEPREDICATE"
+        predicate = (
+            f'(({host}) AND (eventMessage CONTAINS[c] "extension" OR '
+            'eventMessage CONTAINS[c] "quit" OR eventMessage CONTAINS[c] "error" OR '
+            'eventMessage CONTAINS[c] "fail")) OR '
+            '((subsystem BEGINSWITH[c] "com.apple.extension" OR process == "pkd" OR '
+            'process == "extensionkitservice") AND '
+            f'(eventMessage CONTAINS[c] "{EXT_ID}" OR eventMessage CONTAINS[c] "{POINT_ID}" OR '
+            'eventMessage CONTAINS[c] "CMUX Maestro"))'
+        )
+
+        def command(name, argv):
+            try:
+                result = subprocess.run(argv, capture_output=True, timeout=15)
+            except subprocess.TimeoutExpired as error:
+                (self.evidence / f"{label}-{name}.stdout").write_bytes((error.stdout or b"")[:1_048_576])
+                (self.evidence / f"{label}-{name}.stderr").write_bytes((error.stderr or b"")[:65_536])
+                raise
+            (self.evidence / f"{label}-{name}.stdout").write_bytes(result.stdout[:1_048_576])
+            (self.evidence / f"{label}-{name}.stderr").write_bytes(result.stderr[:65_536])
+            require(result.returncode == 0, f"Diagnostic command exited {result.returncode}")
+            return {"argv": argv, "stdoutBytes": len(result.stdout), "stderrBytes": len(result.stderr),
+                    "truncated": len(result.stdout) > 1_048_576 or len(result.stderr) > 65_536}
+
+        collect("exactPluginElectionAndRegistration", lambda: command(
+            "pluginkit", ["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID]))
+        collect("stockDefaults", lambda: command(
+            "defaults", ["/usr/bin/defaults", "export", DOMAIN, "-"]))
+        collect("scopedStockExtensionKitLogs", lambda: command(
+            "log", ["/usr/bin/log", "show", "--last", "5m", "--style", "json",
+                    "--info", "--debug", "--predicate", predicate]))
+        self.event("diagnostics", label=label, path=str(path))
 
     def cleanup(self):
         def attempt(label, action):
@@ -704,11 +828,14 @@ def main():
         signal.alarm(0)
         probe.report["acceptanceEnded"] = time.time()
         probe.save()
+        if probe.report["status"] != "pass":
+            probe.diagnostics("before-cleanup", request_snapshot=True)
         probe.cleanup()
         if any(row["status"] == "failed" for row in probe.report["cleanup"]):
             if probe.report["status"] == "pass":
                 probe.report["status"] = "failed"
             probe.report["cleanupIncomplete"] = True
+            probe.diagnostics("after-cleanup")
         probe.save()
     print(json.dumps({"status": probe.report["status"], "evidence": str(evidence)}))
     return {"pass": 0, "failed": 1, "unavailable": 2}[probe.report["status"]]
