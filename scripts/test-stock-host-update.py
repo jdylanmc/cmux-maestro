@@ -144,7 +144,7 @@ class Probe:
             "scenarioResults": {"boundedRetention": {"status": "pending"},
                                 "siblingRefusal": {"status": "not-run", "reason": "retention/reclaim prerequisite"}},
             "diagnosticRecovery": {"status": "not-applicable", "changesAcceptance": False,
-                                   "reason": "Historical rescue unverified; current candidate must refuse before effects"},
+                                   "reason": "Historical rescue is not invoked; current candidate must refuse before effects"},
             "scope": "current combined A/B/failed-C/retained-C/D-reclaim/repeat-D/sibling-refusal; no model sessions or loaded-hook claim",
             "priorFrozenNativeCapability": FROZEN_PASS,
             "priorCleanCombinedCapability": CLEAN_COMBINED_PASS,
