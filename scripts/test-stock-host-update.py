@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Current combined-installer proof on a clean GitHub-hosted macOS runner.
+"""Legacy-sibling reproduction on a clean GitHub-hosted macOS runner.
 
 Run with --hosted-only --evidence "$RUNNER_TEMP/stock-host-update-evidence".
 Setup establishes a working selection through genuine first-time public UI approval.
+Then two exact signed copies of A remain registered alongside the stable app.
+Only the stable path must withdraw; sibling eligibility must remain unchanged.
 Real CLI metadata/plugin operations only: no credentials, model calls or chat sessions.
 Failed-update compensation is combined recovery; manual rollback remains app-only.
 Exit 0 requires combined operations, native continuity and real compensation.
@@ -43,6 +45,8 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE = "c2b829edb90e2d22eb5582153fb8684853925d4d"
 FROZEN_PASS = {"product": "6efa5427cfca4f0dfb5af927ec29ba5962e2cd88",
                "head": "738e11bcca3aba4239d9dc2c9f253902f51044b1", "run": "36712857606"}
+CLEAN_COMBINED_PASS = {"product": BASE, "head": "b3de3aa475f7233c5a8d4fcfa2d525634aa2e741",
+                       "run": "36723431093"}
 CLI_PACKAGES = {
     "arm64": ("arm64", 92437023, "7dc3854cf21190f033d449f77c140bbb78d52018359c5eb05aa781b3c2a1301d"),
     "x86_64": ("x64", 104193258, "f48484b330792861548ab5a47fdd9b485c03a613c563922e29991d700e6de2f4"),
@@ -111,6 +115,8 @@ class Probe:
         self.terminal_config_contents = None
         self.tree_snapshot_count = 0
         self.apps_owned = []
+        self.sibling_apps = {}
+        self.sibling_records = {}
         self.baseline = None
         self.worker = None
         self.hashes = {}
@@ -124,12 +130,20 @@ class Probe:
             "status": "unavailable", "phase": "setup", "base": BASE,
             "stock": {"version": "0.64.25", "build": "106", "revision": STOCK_REVISION,
                       "url": DMG_URL, "bytes": 225832896, "sha256": DMG_SHA256},
-            "scope": "current combined install/repeat/update/failure compensation; no model sessions or loaded-hook claim",
+            "scenario": "legacy-sibling reproduction",
+            "scope": "current combined sequence with two preserved eligible same-ID siblings; no model sessions or loaded-hook claim",
             "priorFrozenNativeCapability": FROZEN_PASS,
+            "priorCleanCombinedCapability": CLEAN_COMBINED_PASS,
+            "stockHostSource": {
+                "path": "Sources/CMUXInstalledExtensionSidebarHostView.swift",
+                "gitBlob": "fd1f6ee840a7e9195852f6a473e3538f23090fbb",
+                "revision": STOCK_REVISION,
+                "hypothesis": "Same-ID siblings may prevent the disappearance that recreates stock's native identity.",
+            },
             "manualRollback": {"exercised": False, "semantics": "documented app-only; not combined compensation"},
             "setupIsNotAcceptance": True,
             "observationContract": {
-                "registration": "independent exact pluginkit catalog turnover, not loaded proof",
+                "registration": "stable-path turnover while both exact sibling records remain eligible/elected; not loaded proof",
                 "loaded": "mandatory old-process exit and new extension executable PID/UID/start/CDHash",
                 "externalExtensionFoundation": "advisory separate-host context, not stock host visibility",
             },
@@ -495,17 +509,36 @@ class Probe:
         }
         return rows
 
+    def registration_catalog(self, raw):
+        records = self.preview.metadata.registration_records(raw, allow_empty=True)
+        elections = re.findall(r"^\s*([+\-!=?]?)\s*" + re.escape(EXT_ID) + r"(?:\([^\r\n]*\))?\s*$",
+                               raw, re.MULTILINE)
+        require(len(elections) == len(records), "Unexpected registration identifier/election output")
+        allowed = {str(self.destination / self.preview.EXTENSION)}
+        allowed.update(str(app / self.preview.EXTENSION) for app in self.sibling_apps)
+        for record, election in zip(records, elections):
+            path = record["Path"]
+            require(record["id"] == EXT_ID and path in allowed
+                    and str(Path(path).resolve()) == path
+                    and record.get("SDK") == POINT_ID and record.get("Platform") == "macOS"
+                    and record.get("Parent Bundle") == str(Path(path).parents[2])
+                    and str(uuid.UUID(record.get("UUID", ""))) == record["UUID"].lower(),
+                    "Unexpected path/point/parent/platform/UUID in eligible registration")
+            record["election"] = election
+        require(len({r["Path"] for r in records}) == len(records)
+                and len({r["UUID"] for r in records}) == len(records), "Duplicate registration path/UUID")
+        return sorted(records, key=lambda r: r["Path"])
+
     def registry_sample(self):
         result = subprocess.run(
-            ["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID],
+            ["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID, "-p", POINT_ID],
             capture_output=True, text=True, timeout=5)
         valid = result.returncode == 0 and not result.stderr.strip() and len(result.stdout) <= 65_536
         if not valid:
             self.event("registration-observation-error", returncode=result.returncode,
                        stdout=result.stdout[:4096], stderr=result.stderr[:4096])
         require(valid, "Exact registration observation unavailable")
-        records = self.preview.metadata.registration_records(result.stdout, allow_empty=True)
-        require(all(r["id"] == EXT_ID for r in records), "Unexpected registration identifier")
+        records = self.registration_catalog(result.stdout)
         state = {
             "records": records,
             "targetPresent": any(Path(r["Path"]).resolve() ==
@@ -516,9 +549,13 @@ class Probe:
         if state != self.last_registration:
             self.event("native-registration", **state, raw=result.stdout)
             self.last_registration = state
+        require(all(record in records for record in self.sibling_records.values()),
+                "A preserved sibling registration/election changed or disappeared")
         return state
 
     def sample(self):
+        if self.sibling_records:
+            self.registry_sample()
         rows = self.processes()
         native_hashes = set().union(*self.hashes.values()) if self.hashes else set()
         extensions = [r for r in rows if r["cdhash"] in native_hashes]
@@ -681,8 +718,62 @@ class Probe:
         _, raw = self.run(["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID])
         self.preview.metadata.verify_registration_output(
             raw.decode(), self.destination / self.preview.EXTENSION)
-        records = self.preview.metadata.registration_records(raw.decode())
-        require(len(records) == 1, "Duplicate native extension registrations")
+        records = self.registration_catalog(raw.decode())
+        require(len(records) == 1 + len(self.sibling_apps)
+                and all(record in records for record in self.sibling_records.values()),
+                "Exact stable/sibling native registration inventory changed")
+        require(self.registry_sample()["records"] == records,
+                "Registered paths are not all eligible for the public sidebar point")
+
+    def verify_sibling_files(self):
+        for app, expected in self.sibling_apps.items():
+            self.preview.safe_tree(app)
+            info = app.lstat()
+            require([info.st_dev, info.st_ino, info.st_uid] == expected["node"]
+                    and self.preview.digest(app) == expected["sha256"],
+                    "Run-owned signed sibling files changed")
+
+    def setup_legacy_siblings(self):
+        self.event("legacy-sibling-setup-start", stableA=self.initial,
+                   boundary="After genuine initial approval; no additional UI, defaults or host restart")
+        digest = self.preview.digest(self.destination)
+        for name in ("hardening", "visual49"):
+            app = self.work / "legacy-siblings" / name / ".build/adhoc/Build/Products/Debug/CMUX Maestro Preview.app"
+            require(not app.exists() and not app.is_symlink(), "Sibling fixture path already exists")
+            app.parent.mkdir(parents=True, mode=0o700)
+            app.mkdir(mode=0o700)
+            info = app.lstat()
+            self.sibling_apps[app] = {"node": [info.st_dev, info.st_ino, info.st_uid], "sha256": digest}
+            self.apps_owned.append(app)
+            self.run(["/usr/bin/ditto", self.destination, app])
+            self.ops.verify(app, current=True)
+            require(self.executable_hashes(app / self.preview.EXTENSION) == self.hashes["A"],
+                    "Sibling is not an exact signed A extension")
+            self.verify_sibling_files()
+            self.run([self.preview.LSREGISTER, "-f", app])
+            self.run(["/usr/bin/pluginkit", "-a", app / self.preview.EXTENSION])
+            self.ops.verify_registration(app)
+        # -D returns all eligible physical instances; '+' is election, not host approval.
+        # pluginkit(8) explicitly excludes host-specific restrictions from its match.
+        state = self.registry_sample()
+        require(len(state["records"]) == 3 and state["targetPresent"]
+                and all(r["election"] == "+" for r in state["records"]),
+                "Three elected public-point-eligible records unavailable; no approval/election fallback")
+        paths = {str(app / self.preview.EXTENSION) for app in self.sibling_apps}
+        self.sibling_records = {r["Path"]: r for r in state["records"] if r["Path"] in paths}
+        require(len(self.sibling_records) == 2, "Both sibling registrations must actually be eligible")
+        self.registration()
+        require(self.wait_loaded("A") == self.initial,
+                "Adding siblings displaced the original stable A; reproduction baseline unavailable")
+        self.verify_sibling_files()
+        self.report["legacySiblingBaseline"] = {
+            "loadedStableA": self.initial, "registrations": state["records"],
+            "files": {str(app): identity for app, identity in self.sibling_apps.items()},
+            "eligibility": "public pluginkit -m -A -D -i exactID -p exactPoint, all '+'",
+            "limit": "Public matching is not stock-host-specific enumeration; only stable A is dynamically loaded.",
+        }
+        self.diagnostics("legacy-sibling-baseline")
+        self.event("legacy-sibling-setup-complete")
 
     def approval_attachment_result(self, directory, nonce):
         require(directory == self.evidence / "approval-attachments", "Unexpected approval export directory")
@@ -1063,9 +1154,10 @@ class Probe:
                          "visibleWindows": sample["visibleWindows"], "worker": self.worker,
                          "tree": self.tree()}
         self.report["baseline"] = {"host": self.host, "extension": self.initial, **self.baseline}
-        self.report["checks"]["setup"] = "pass"
         self.report["checks"]["firstCombinedInstall"] = {"status": "pass", "provider": "official 1.0.89",
                                                         "evidence": "integration-first-install.json"}
+        self.setup_legacy_siblings()
+        self.report["checks"]["setup"] = "pass"
         self.report["phase"] = "acceptance"
         self.save()
 
@@ -1084,12 +1176,14 @@ class Probe:
         require(all(current.get(k) == v for k, v in SETUP_DEFAULTS.items()), "Selection/config changed during act")
         rows = [r for r in self.report["events"]
                 if r["kind"] == "native-registration" and r["time"] >= start]
-        missing = next((r["time"] for r in rows if not r["records"]), None)
+        missing = next((r["time"] for r in rows if not r["targetPresent"]), None)
         require(missing is not None and any(
-            r["time"] > missing and r["targetPresent"] and len(r["records"]) == 1 for r in rows
-        ), "No independently observed exact registration withdrawal and restoration")
+            r["time"] > missing and r["targetPresent"] and len(r["records"]) == 3 for r in rows
+        ), "No independently observed stable-path withdrawal/restoration with both siblings retained")
+        self.verify_sibling_files()
         self.report["checks"][operation] = {
             "status": "pass", "old": previous, "new": loaded, "registrationDisappearance": missing,
+            "registrationScope": "stable path only; both exact elected sibling records retained",
             "hostAndShellGenerationsUnchanged": True, "treeUnchanged": True,
             "focusAndVisibleWindowsUnchanged": True,
         }
@@ -1112,6 +1206,7 @@ class Probe:
                 and self.registry_sample() == registration and self.tree() == self.baseline["tree"],
                 "Identical repeat replaced app/resources/native process or changed registration/terminal")
         self.sample()
+        self.verify_sibling_files()
         self.report["checks"]["identicalRepeat"] = {"status": "pass", "native": previous,
                                                    "appAndOwnedResourcesNotReplaced": True}
         self.save()
@@ -1138,11 +1233,13 @@ class Probe:
         current = plistlib.loads(raw)
         require(all(current.get(k) == v for k, v in SETUP_DEFAULTS.items()), "Host setup changed during compensation")
         registry = [r for r in self.report["events"] if r["kind"] == "native-registration" and r["time"] >= start]
-        require(any(not r["records"] for r in registry)
+        require(any(not r["targetPresent"] for r in registry)
                 and self.registry_sample()["targetPresent"], "Compensation registration transition not observed")
+        self.verify_sibling_files()
         self.sample()
         self.report["checks"]["failedUpdateCompensation"] = {
             "status": "pass", "fault": json.loads(fault.read_text()), "old": previous, "restored": restored,
+            "registrationScope": "stable path only; both exact elected sibling records retained",
             "appIntegrationProviderStateRestored": True, "hostWorkerTreeFocusUnchanged": True,
         }
         self.save()
@@ -1153,6 +1250,10 @@ class Probe:
         data = {"time": time.time(), "host": self.host,
                 "candidateExtensionHashes": {k: sorted(v) for k, v in self.hashes.items()},
                 "externalIdentityObservation": self.report.get("externalIdentityObservation")}
+        data["legacySiblings"] = {
+            "files": {str(app): identity for app, identity in self.sibling_apps.items()},
+            "expectedEligibleRecords": self.sibling_records,
+        }
         path = self.evidence / f"diagnostics-{label}.json"
         if not self.fixture_profile_verified:
             data["status"] = "not collected: clean fixture profile was not verified"
@@ -1180,6 +1281,7 @@ class Probe:
         collect("kernelVerifiedNativeHostAndTerminalProcesses", processes)
         collect("fixtureWorkerRawKernelAndOldFilterEvidence", self.worker_diagnostics)
         collect("verifiedFixtureWorkerPidOwnerStartPathAndKernelTTY", self.worker_identity)
+        collect("preservedSiblingFiles", self.verify_sibling_files)
 
         def process_hints():
             result = subprocess.run(
@@ -1212,7 +1314,7 @@ class Probe:
             if checkpoint.is_file():
                 collect("integrationCheckpointRetained", lambda: {
                     "path": str(checkpoint), "bytes": checkpoint.stat().st_size, "sha256": sha256(checkpoint)})
-        if (request_snapshot and self.host and self.tree_snapshot_count == 0
+        if (request_snapshot and self.host and self.tree_snapshot_count < 4
                 and (self.evidence / "snapshot-worker.pid").exists()
                 and not (self.evidence / "snapshot-worker.exit").exists()):
             collect("diagnosticOnlyTerminalSnapshot", lambda: json.loads(self.terminal_tree_snapshot()))
@@ -1242,6 +1344,8 @@ class Probe:
 
         collect("exactPluginElectionAndRegistration", lambda: command(
             "pluginkit", ["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID]))
+        collect("publicPointEligibleInstancesNotHostSpecific", lambda: command(
+            "eligible-pluginkit", ["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", EXT_ID, "-p", POINT_ID]))
         collect("stockDefaults", lambda: command(
             "defaults", ["/usr/bin/defaults", "export", DOMAIN, "-"]))
         collect("scopedStockExtensionKitLogs", lambda: command(
@@ -1356,6 +1460,7 @@ class Probe:
                         require(not installer.receipt["transaction"] and not installer.receipt["garbage"]
                                 and not installer.receipt["integration"],
                                 "Pending combined journal retained; native cleanup must not mask it")
+                        self.verify_sibling_files()
                         apps = installer.protected_apps() + self.apps_owned
                         for app in dict.fromkeys(apps):
                             if app.exists():
