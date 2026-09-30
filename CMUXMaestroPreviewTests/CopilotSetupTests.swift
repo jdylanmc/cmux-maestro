@@ -14,6 +14,7 @@ private actor SetupRunnerSpy: CopilotSetupProcessRunner {
     func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult { .failed(.unavailable) }
     func plugin(executable: URL, operation: CopilotPluginOperation, path: String,
                 providerHome: URL?) async -> CopilotPluginOperationResult { .failed(.unavailable) }
+    func sourceIdentity(executable: URL, source: URL, path: String) async -> CopilotSourceIdentityResult { .failed(.unavailable) }
 }
 
 private struct SetupFileStub: CopilotSetupFileSystem {
@@ -123,6 +124,54 @@ final class SetupDeadlineClock: @unchecked Sendable {
 }
 
 struct CopilotPluginExchangeTests {
+    @Test func bootstrapUsesAnIsolatedHomeAndExactSourceThenCleansIt() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let capture = fixture.directory.appendingPathComponent("bootstrap-environment.json")
+        let executable = fixture.directory.appendingPathComponent("bootstrap-provider")
+        let script = """
+        #!/usr/bin/python3
+        import json, os, sys
+        methods = []
+        while True:
+            header = sys.stdin.buffer.readline()
+            if not header:
+                break
+            length = int(header.decode().split(": ", 1)[1])
+            assert sys.stdin.buffer.readline() == b"\\r\\n"
+            request = json.loads(sys.stdin.buffer.read(length))
+            methods.append(request["method"])
+            if request["method"] == "status.get":
+                result = {"version": "1.0.89", "protocolVersion": 3}
+            else:
+                assert request["method"] == "plugins.install"
+                with open(\(String(reflecting: capture.path)), "w") as output:
+                    json.dump({"source": request["params"]["source"], "methods": methods,
+                               "home": os.environ["HOME"], "providerHome": os.environ["COPILOT_HOME"],
+                               "cwd": os.getcwd(), "config": os.environ["XDG_CONFIG_HOME"],
+                               "credentialsPresent": any(k in os.environ for k in ["GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN"])}, output)
+                result = {"plugin": {"name": "cmux-maestro-native", "marketplace": "", "enabled": True,
+                                     "directSourceId": "actual-response-not-a-name-join"}}
+            body = json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}).encode()
+            sys.stdout.buffer.write(("Content-Length: %s\\r\\n\\r\\n" % len(body)).encode() + body)
+            sys.stdout.buffer.flush()
+        """
+        try fixture.write(Data(script.utf8), to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let result = await LocalCopilotSetupRunner().sourceIdentity(executable: executable, source: fixture.source, path: "/usr/bin:/bin")
+        guard case .value(let identity) = result else { Issue.record("Public bootstrap fixture must succeed: \(result)"); return }
+        #expect(identity.source == fixture.source.path)
+        #expect(identity.directSourceId == "actual-response-not-a-name-join")
+        let object = try CopilotSetupJSON.object(Data(contentsOf: capture))
+        let home = try #require(object["home"] as? String)
+        #expect(home.hasPrefix("/private/tmp/cmux-maestro-source-"))
+        #expect(object["providerHome"] as? String == home + "/.copilot")
+        #expect(object["cwd"] as? String == home)
+        #expect(object["config"] as? String == home)
+        #expect(object["credentialsPresent"] as? Bool == false)
+        #expect(object["methods"] as? [String] == ["status.get", "plugins.install"])
+        #expect(!FileManager.default.fileExists(atPath: home))
+    }
+
     private func send(_ exchange: CopilotMetadataExchange, id: Int, result: Any) throws {
         let body = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": id, "result": result])
         let frame = Data("Content-Length: \(body.count)\r\n\r\n".utf8) + body

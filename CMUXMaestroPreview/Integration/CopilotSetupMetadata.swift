@@ -62,6 +62,25 @@ nonisolated enum CopilotPluginOperationResult: Sendable {
     case failed(CopilotProcessResult, receipt: CopilotPluginReceipt? = nil)
 }
 
+nonisolated struct CopilotSourceIdentity: Codable, Equatable, Sendable {
+    let source: String
+    let version: String
+    let protocolVersion: Int
+    let directSourceId: String
+
+    var valid: Bool {
+        source.hasPrefix("/") && source == URL(fileURLWithPath: source).standardizedFileURL.path
+            && !source.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+            && CopilotSetupMetadata(version: version, protocolVersion: protocolVersion, hooks: [], plugins: []).supported
+            && CopilotMetadataExchange.validIdentity(directSourceId)
+    }
+}
+
+nonisolated enum CopilotSourceIdentityResult: Sendable {
+    case value(CopilotSourceIdentity)
+    case failed(CopilotProcessResult, retainedHome: URL? = nil)
+}
+
 // A bounded client of public metadata and explicit plugin-operation RPCs. It never
 // connects to an existing server, creates a session or sends a prompt.
 nonisolated final class CopilotMetadataExchange: @unchecked Sendable {
@@ -75,6 +94,7 @@ nonisolated final class CopilotMetadataExchange: @unchecked Sendable {
     private let operation: CopilotPluginOperation?
     private var operationSent = false
     private(set) var pluginReceipt: CopilotPluginReceipt?
+    private(set) var providerVersion: String?
 
     init(operation: CopilotPluginOperation? = nil) throws {
         self.operation = operation
@@ -199,6 +219,7 @@ nonisolated final class CopilotMetadataExchange: @unchecked Sendable {
         let status = try JSONDecoder().decode(Status.self, from: statusData)
         guard CopilotSetupMetadata(version: status.version, protocolVersion: status.protocolVersion,
                                    hooks: [], plugins: []).supported else { throw CopilotFileError.io }
+        providerVersion = status.version
         if !operationSent {
             let method: String
             let params: [String: Any]

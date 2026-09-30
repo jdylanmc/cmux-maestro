@@ -999,7 +999,7 @@ class Installer:
         }
         require(self.verified_registration in descriptions, "No verified observer registration result.")
         require(self.verified_native_plugin in ("enabled", "disabled"), "No verified native plugin result.")
-        return (" At verification: " + descriptions[self.verified_registration]
+        return (" At verification (owned registration): " + descriptions[self.verified_registration]
                 + ". Native plugin configured " + self.verified_native_plugin + ".")
 
     def coordinate(self, action, *, allow_absent=False):

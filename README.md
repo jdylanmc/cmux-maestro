@@ -107,26 +107,37 @@ Observer setup is version-bound to **Copilot CLI 1.0.88 and 1.0.89, protocol 3**
 Other versions or protocols remain unsupported. A
 conflicting `HOME` or `COPILOT_HOME` is rejected; this does not broaden the
 reader beyond standard `~/.copilot`. Setup rejects unsafe, symlinked,
-hard-linked, modified or foreign registration and ambiguous duplicate sources.
+hard-linked, modified or foreign owned-target registration and ambiguous owned sources.
 It does not chmod an existing shared hooks directory.
 Historical plugin-hook reformatting also requires review: provider disable-key
 identity can depend on serialization, not just semantically equal JSON.
 
-Public plugin metadata retains live-marketplace, built-in and managed provenance.
-An overlapping live/built-in source, or a managed record that is not installed,
-cannot be verified from a same-name cached manifest and refuses before staging.
-`installedFrom` identifies a marketplace directory, not the selected plugin's
-directory. Ordinary unrelated cached plugins are not blanket-refused.
-**Known #114 blocker:** the cached direct-plugin audit still lacks authoritative
-selected-source binding. A noncanonical linked source plus a harmless same-name
-alias can evade that audit. Matching names/events or an opaque source ID do not
-resolve this defect; on-disk status is not proof of complete source inspection.
+Before changing an existing owned installation, setup submits its exact safe
+absolute source path to the public plugin-install RPC in a private disposable
+provider home. On the two supported versions, that source's returned identity
+is home-independent. It must match the real provider's selection and any prior
+receipt before real-home changes. Legacy/name-derived receipts cannot authorize
+their own adoption. The request path, provider version/protocol and returned
+identity are recorded together; subsequent install results and discovery must
+match. A fresh source is bound and recorded before its first real-home provider
+mutation. No private source-ID algorithm or guessed provider directory is used.
+
+Unrelated plugin identities and public hook rows are preserved, not audited
+through cache aliases or common event names. Live, built-in and opaque unowned
+plugins do not cause blanket refusal. The earlier linked-source/safe-cache-alias
+counterexample remains evidence that such an audit was false, not evidence of
+safe foreign actions. **An independent unowned plugin can still call the current
+or an older helper and cause extra executions/writes.** Setup neither certifies
+nor suppresses that behavior. Status describes the **owned registration** only.
+Unsafe owned paths, owned-name/source collisions and directly inspected
+user-file conflicts remain targeted refusals.
 
 For a recognized direct legacy installation, setup first records provenance
 and stages an **owned disabled** dedicated file, confirms disabled discovery,
 prepares the hookless plugin, runs the official plugin installer, verifies that
 the installed observer declarations are gone, and only then publishes the
-intended dedicated state. An enabled competing source is never staged.
+intended dedicated state. Old and new owned observer sources are never enabled
+by this migration at the same time.
 Maestro does not rewrite unrelated hooks or disable keys.
 The official CLI does rewrite `settings.json` during plugin install/uninstall,
 including when values are unchanged. After a successful command, setup accepts
@@ -1686,12 +1697,13 @@ requires the current build number; this feature does not bump it.
   clearing that choice or inventing a preserve-disabled option. Native-plugin
   status is reported separately from dedicated observer-hook status. This
   unsupported disabled-payload update is not claimed as a completed upgrade.
-- A first-install interruption after the provider mutates but before its
-  source-identity receipt is retained cannot be safely compensated by name.
-  Recovery preserves the journal and reports that boundary; it does not delete
-  a same-name plugin based only on listing metadata. Existing bound sources and
-  failures after receipt persistence use identity-checked compensation. This
-  lost-receipt window remains an all-or-nothing recovery limitation.
+- The disposable-home source binding is recorded **before** real-home mutation,
+  so loss of the real install response is not a name-only recovery boundary.
+  Compensation independently bootstraps that same source again, checks current
+  selection and prior provenance, and targets exact identity. First-install
+  source files remain available until official removal succeeds, including
+  across interrupted compensation. Failed bootstrap or changed foreign
+  selection refuses further mutation and retains explicit recovery state.
 - A surviving or unconfirmed command supervisor blocks restoration; the
   installer never races a still-running mutator. A failed restoration reports
   both errors and retains recoverable state. The durable commit decision is

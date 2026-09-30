@@ -121,24 +121,26 @@ file; setup does not claim it repaired provider-wide enforcement.
 Migration stages only the exact owned **disabled** file, confirms disabled
 discovery, prepares and officially installs the hookless plugin, verifies its
 cached declarations and public metadata, then publishes the intended file.
-Foreign/modified registrations, unknown installed identities, overlapping
-observer sources and changing inputs refuse rather than being overwritten.
-Other-plugin inspection uses the complete provider-reported overlapping source
-set and checks one matching plugin identity plus one safe, unique manifest
-and its hook declarations for each cached source. **This is not an authoritative
-selected-source binding:** the noncanonical linked-source/safe-alias
-counterexample remains unresolved for direct installs. No current-on-disk
-result should be treated as proof that this whole-source audit is correct.
-Public live, built-in and managed provenance is retained. Overlapping live or
-built-in sources and uninstalled managed records refuse before staging instead
-of accepting a stale cache; `installedFrom` is a marketplace directory, not
-the selected plugin directory. Ordinary unrelated cached plugins remain
-compatible. Unrelated installation-directory
-symlinks are not followed or counted as inspected sources. A relevant linked
-entry/group, missing declaration, duplicate identity/manifest or incomplete
-source coverage still refuses. Source identities and inspected files are
-revalidated at staging, publication and removal; skipping an unrelated link
-does not waive those checks.
+Foreign/modified owned registrations, wrong selected owned identities, unsafe
+owned paths and changing inputs refuse rather than being overwritten.
+Exact-source identity is independently bootstrapped by public install into a
+disposable provider home, using the same absolute source path, not a copied
+path or private hash. The supported-version result must match current real-home
+selection and any old receipt before effects. A name-derived receipt is not
+authority; forged or foreign source provenance fails that independent check.
+Fresh-install authority is recorded before real-home provider mutation.
+
+The false foreign-cache audit has been removed. Public foreign identity/hook
+continuity is checked without reading their source/cache directories or
+claiming selected-source coverage. Unrelated same-event direct, marketplace,
+live, built-in and opaque records are preserved; an unsafe ancestor of the
+actual owned cache still refuses. The historical alias counterexamples are
+preserved as evidence against the old audit, while owned-name/source alias
+cases are mandatory pre-effect rejection tests. An unowned plugin may still
+invoke current/old helpers and cause extra executions or writes; this is
+neither prevented nor certified harmless. Status concerns owned registration,
+not provider-wide uniqueness. Existing directly inspected user-file conflicts,
+disable-key refusals and no-follow guards remain.
 A failure confined to provenance/disabled staging restores and verifies the
 previous owned file/provenance bytes, absence and permissions before returning,
 including on cancellation. Concurrent replacement refuses restoration rather
@@ -224,9 +226,12 @@ Plugin mutations use public sessionless RPCs, with the supported status checked
 before the mutation request. An install receipt supplies the exact owned
 `directSourceId`; later discovery must match. Removal and compensation target
 that identity, not just the manifest name. Even a receipt followed by a failing
-provider-process exit is retained for recovery. A first-install mutation whose
-receipt is lost before persistence remains a concrete recovery limitation:
-same-name discovery is not promoted into uninstall authority.
+provider-process exit is retained for recovery. Independent bootstrap records
+the same source's identity before real-home mutation, so a lost production
+response can still be compensated without adopting a name-only list row.
+Recovery bootstraps again and checks current selection before effects; source
+files remain until exact-ID removal succeeds. Failed bootstrap and foreign
+identity drift do not grant compensation authority.
 
 The pinned [1.0.89 changelog](https://github.com/github/copilot-cli/blob/8dfa6009c4a04b3a22a5ca4a7c36a056edd718dd/changelog.md)
 supersedes the SDK comments claiming direct installs are always enabled.

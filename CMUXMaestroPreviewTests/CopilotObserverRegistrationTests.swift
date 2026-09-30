@@ -35,6 +35,14 @@ final class ObserverFixture: Sendable {
 
     func clean() throws { try FileManager.default.removeItem(at: directory) }
 
+    func begin(_ action: CopilotSetupAction, metadata: CopilotSetupMetadata,
+               isCancelled: @escaping @Sendable () -> Bool = { false }) throws -> CopilotObserverRegistration.Transaction {
+        let operation = try registration.begin(action, metadata: metadata, isCancelled: isCancelled)
+        try operation.bindSource(.init(source: source.path, version: metadata.version, protocolVersion: 3,
+                                       directSourceId: "opaque-provider-source"))
+        return operation
+    }
+
     func write(_ object: [String: Any], to url: URL) throws {
         try write(CopilotSetupJSON.data(object), to: url)
     }
@@ -134,6 +142,11 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
     private var nativeEnabled = true
     private var loseReceipt = false
     private var receiptIdentity = "opaque-provider-source"
+    var bootstrapCalls: [URL] = []
+    var bootstrapFailure = false
+    var selectedIdentity = "opaque-provider-source"
+    private var changeDuringBootstrap: String?
+    private var changeReceiptAtMetadataCall: Int?
     private var writtenSettings: CopilotSetupFileState?
     private var ownedRowsOverride: [CopilotSetupMetadata.Hook]?
     private var unrelatedRows: [CopilotSetupMetadata.Hook] = []
@@ -165,6 +178,25 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
         self.loseReceipt = loseReceipt
         self.receiptIdentity = receiptIdentity
     }
+    func sourceIdentity(executable: URL, source: URL, path: String) async -> CopilotSourceIdentityResult {
+        bootstrapCalls.append(source)
+        if bootstrapFailure { return .failed(.unavailable) }
+        if changeDuringBootstrap == "selection" { selectedIdentity = "foreign-source" }
+        if changeDuringBootstrap == "source" || changeDuringBootstrap == "receipt" {
+            do {
+                try fixture.write(["modified": true], to: changeDuringBootstrap == "source"
+                    ? source.appendingPathComponent("hooks.json") : fixture.registration.receiptFile)
+            } catch { return .failed(.unavailable) }
+        }
+        return .value(.init(source: source.path, version: suppliedVersion ?? (nativeEnabled ? "1.0.88" : "1.0.89"),
+                            protocolVersion: 3, directSourceId: "opaque-provider-source"))
+    }
+    func configureSource(identity: String = "opaque-provider-source", fail: Bool = false, change: String? = nil) {
+        selectedIdentity = identity
+        bootstrapFailure = fail
+        changeDuringBootstrap = change
+    }
+    func changeReceipt(onMetadataCall call: Int) { changeReceiptAtMetadataCall = call }
     func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
         providerHomes.append(providerHome)
         calls.append([executable.path] + arguments)
@@ -228,7 +260,15 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
         }
         if metadataCalls == failingMetadataCall { return .failed(.unavailable) }
         do {
+            if metadataCalls == changeReceiptAtMetadataCall {
+                var receipt = try CopilotSetupJSON.object(Data(contentsOf: fixture.registration.receiptFile))
+                receipt["previous"] = receipt["desired"]
+                try fixture.write(receipt, to: fixture.registration.receiptFile)
+            }
             var value = try fixture.metadata(installed: installed, enabled: nativeEnabled)
+            value = .init(version: value.version, protocolVersion: value.protocolVersion, hooks: value.hooks,
+                plugins: value.plugins.map { .init(name: $0.name, marketplace: $0.marketplace, enabled: $0.enabled,
+                                                   directSourceId: selectedIdentity) })
             if stagingEnabled, metadataCalls == 2 {
                 value = CopilotSetupMetadata(version: value.version, protocolVersion: value.protocolVersion,
                     hooks: value.hooks.map { .init(hookType: $0.hookType, origin: $0.origin, source: $0.source,
@@ -281,6 +321,10 @@ private actor CheckpointProcessProvider: CopilotSetupProcessRunner {
     var marker: URL { provider.appendingPathComponent(".fixture-provider-installed") }
 
     init(home: URL, root: URL) { self.home = home; self.root = root }
+
+    func sourceIdentity(executable: URL, source: URL, path: String) async -> CopilotSourceIdentityResult {
+        .value(.init(source: source.path, version: "1.0.89", protocolVersion: 3, directSourceId: "fixture-stable-source"))
+    }
 
     func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
         do {
@@ -473,6 +517,69 @@ final class InstallCheckpointFixture: @unchecked Sendable {
 }
 
 struct CopilotInstallCheckpointTests {
+    @Test func disabledProvenanceRefreshAndRecoveryPreserveForeignReceiptChanges() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        await value.runner.supplyMetadata(version: "1.0.89")
+        for action in ["prepare", "apply", "finish", "release"] {
+            _ = try await value.checkpoint().perform(action)
+        }
+        let receipt = value.fixture.registration.receiptFile
+        var object = try CopilotSetupJSON.object(Data(contentsOf: receipt))
+        object.removeValue(forKey: "sourceIdentity")
+        try value.fixture.write(object, to: receipt)
+        await value.runner.nativePlugin(enabled: false)
+        let id = UUID()
+        _ = try await value.checkpoint(id: id).perform("prepare")
+        await value.runner.changeReceipt(onMetadataCall: await value.runner.metadataCalls + 2)
+        let calls = await value.runner.pluginOperations
+        do {
+            _ = try await value.checkpoint(id: id).perform("apply")
+            Issue.record("Do not enrich a receipt changed after preparation")
+        } catch {}
+        let changed = try CopilotSetupFileState.read(receipt)
+        #expect(try CopilotSetupJSON.object(changed.data ?? Data())["previous"] != nil)
+        do {
+            _ = try await value.checkpoint(id: id).perform("restore")
+            Issue.record("Do not erase a foreign receipt change during compensation")
+        } catch {}
+        try changed.revalidate()
+        #expect(await value.runner.pluginOperations == calls)
+        #expect(try value.record().phase == "applying")
+    }
+
+    @Test(arguments: ["name-derived", "previous-version"])
+    func disabledCurrentReceiptIsBootstrappedWithoutReenabling(kind: String) async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        await value.runner.supplyMetadata(version: "1.0.89")
+        for action in ["prepare", "apply", "finish", "release"] {
+            _ = try await value.checkpoint().perform(action)
+        }
+        let receipt = value.fixture.registration.receiptFile
+        var object = try CopilotSetupJSON.object(Data(contentsOf: receipt))
+        if kind == "name-derived" {
+            object.removeValue(forKey: "sourceIdentity")
+        } else {
+            var binding = try #require(object["sourceIdentity"] as? [String: Any])
+            binding["version"] = "1.0.88"
+            object["sourceIdentity"] = binding
+        }
+        try value.fixture.write(object, to: receipt)
+        await value.runner.nativePlugin(enabled: false)
+        let beforeCalls = await value.runner.pluginOperations
+        let hooks = try CopilotSetupFileState.read(value.fixture.file)
+        let id = UUID()
+        #expect(try await value.checkpoint(id: id).perform("prepare") == false)
+        _ = try await value.checkpoint(id: id).perform("apply")
+        _ = try await value.checkpoint(id: id).perform("verify")
+        #expect(await value.runner.pluginOperations == beforeCalls)
+        try hooks.revalidate()
+        let updated = try #require(CopilotSetupJSON.object(Data(contentsOf: receipt))["sourceIdentity"] as? [String: Any])
+        #expect(updated["directSourceId"] as? String == "opaque-provider-source")
+        #expect(updated["version"] as? String == "1.0.89")
+        _ = try await value.checkpoint(id: id).perform("finish")
+        _ = try await value.checkpoint(id: id).perform("release")
+    }
+
     @Test(arguments: [false, true])
     func disabledNativePluginPreservesChoiceWithoutProviderMutation(resourceUpdate: Bool) async throws {
         let value = try InstallCheckpointFixture(); defer { try? value.clean() }
@@ -538,7 +645,7 @@ struct CopilotInstallCheckpointTests {
         #expect(try CopilotSetupFileState.read(CopilotInstallCheckpoint.location(root: value.fixture.root)).data == nil)
     }
 
-    @Test func lostFirstInstallReceiptCannotAuthorizeSameNameCompensation() async throws {
+    @Test func bootstrapAuthorizesRecoveryWhenMutationResponseIsLost() async throws {
         let value = try InstallCheckpointFixture(); defer { try? value.clean() }
         _ = try await value.checkpoint().perform("prepare")
         await value.runner.nativePlugin(loseReceipt: true)
@@ -549,16 +656,11 @@ struct CopilotInstallCheckpointTests {
         } catch is CopilotRegistrationConflict {}
         #expect(await value.runner.installed)
         let beforeCalls = await value.runner.pluginOperations
-        let before = try value.record()
-        do {
-            _ = try await value.checkpoint().perform("restore")
-            Issue.record("Name-only discovery cannot authorize deleting an unbound source")
-        } catch let error as CopilotRegistrationConflict {
-            #expect(error.message.contains("No authoritative install receipt"))
-        }
-        #expect(await value.runner.pluginOperations == beforeCalls)
-        #expect(try value.record().phase == before.phase)
-        #expect(before.phase == "applying")
+        _ = try await value.checkpoint().perform("restore")
+        #expect(await value.runner.pluginOperations == beforeCalls + ["uninstall:opaque-provider-source"])
+        #expect(try value.record().phase == "restored")
+        #expect(await value.runner.installed == false)
+        #expect(try CopilotSetupFileState.read(value.fixture.file).data == nil)
     }
 
     @Test func receiptIdentityMustMatchSubsequentDiscovery() async throws {
@@ -572,12 +674,9 @@ struct CopilotInstallCheckpointTests {
         #expect(try value.record().phase == "applying")
         let hooks = try CopilotSetupJSON.object(Data(contentsOf: value.fixture.file))
         #expect(try CopilotSetupJSON.bool(hooks["disableAllHooks"]))
-        let beforeCalls = await value.runner.pluginOperations
-        do {
-            _ = try await value.checkpoint().perform("restore")
-            Issue.record("Identity-mismatched compensation must refuse")
-        } catch is CopilotRegistrationConflict {}
-        #expect(await value.runner.pluginOperations == beforeCalls)
+        _ = try await value.checkpoint().perform("restore")
+        #expect(try value.record().phase == "restored")
+        #expect(await value.runner.installed == false)
     }
 
     @Test func nativeDisableAfterApplyCannotBeClearedByCompensation() async throws {
@@ -653,7 +752,7 @@ struct CopilotInstallCheckpointTests {
         try value.fixture.write(["unrelated": "preserve"], to: value.fixture.settings)
         _ = try await value.checkpoint().perform("prepare")
         let before = try value.record()
-        await value.runner.configure(failingMetadataCall: 6)
+        await value.runner.configure(failingMetadataCall: 9)
         do {
             _ = try await value.checkpoint().perform("apply")
             Issue.record("Late discovery failure must retain a recoverable checkpoint")
@@ -778,6 +877,82 @@ struct CopilotInstallCheckpointTests {
 }
 
 struct CopilotObserverRegistrationTests {
+    @Test func forgedReceiptPathCannotBorrowACorrectProviderIdentity() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        try fixture.legacy()
+        try fixture.write([
+            "schema": 1, "desired": ["id": UUID().uuidString, "helper": fixture.helper.path],
+            "phase": "staged", "pluginIdentity": "opaque-provider-source",
+            "sourceIdentity": ["source": "/foreign/plugin", "version": "1.0.88",
+                               "protocolVersion": 3, "directSourceId": "opaque-provider-source"],
+        ], to: fixture.registration.receiptFile)
+        let receipt = try CopilotSetupFileState.read(fixture.registration.receiptFile)
+        let runner = ObserverSetupRunner(fixture, installed: true)
+        let result = await perform(setup(fixture, runner: runner), fixture)
+        guard case .conflict = result else { Issue.record("Foreign receipt path must refuse before effects"); return }
+        #expect(await runner.calls.isEmpty)
+        #expect(await runner.bootstrapCalls == [fixture.source])
+        #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
+        try receipt.revalidate()
+    }
+
+    @Test(arguments: ["absent", "name-derived", "forged-binding"], ["plain", "noncanonical-link", "safe-alias"])
+    func wrongOwnedNameSourceIsRejectedBeforeEffects(receiptKind: String, alias: String) async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        try fixture.legacy()
+        let foreign = fixture.directory.appendingPathComponent("foreign-source")
+        try fixture.write(["name": CopilotPluginManifest.name, "hooks": "hooks.json"],
+                          to: foreign.appendingPathComponent("plugin.json"))
+        try fixture.write(["version": 1, "hooks": CopilotPluginManifest.observerHooks(helper: fixture.helper)],
+                          to: foreign.appendingPathComponent("hooks.json"))
+        if alias != "plain" {
+            try FileManager.default.createSymbolicLink(
+                at: fixture.cache.deletingLastPathComponent().appendingPathComponent("noncanonical-owned-alias"),
+                withDestinationURL: foreign)
+        }
+        if alias == "safe-alias" {
+            try FileManager.default.copyItem(at: fixture.cache,
+                to: fixture.cache.deletingLastPathComponent().appendingPathComponent("safe-owned-name"))
+        }
+        if receiptKind != "absent" {
+            var value: [String: Any] = [
+                "schema": 1, "desired": ["id": UUID().uuidString, "helper": fixture.helper.path],
+                "phase": "staged", "pluginIdentity": "foreign-source",
+            ]
+            if receiptKind == "forged-binding" {
+                value["sourceIdentity"] = ["source": fixture.source.path, "version": "1.0.88",
+                                          "protocolVersion": 3, "directSourceId": "foreign-source"]
+            }
+            try fixture.write(value, to: fixture.registration.receiptFile)
+        }
+        let paths = [fixture.file, fixture.registration.receiptFile, fixture.settings, fixture.helperRecord,
+                     fixture.source.appendingPathComponent("plugin.json"), fixture.source.appendingPathComponent("hooks.json"),
+                     fixture.cache.appendingPathComponent("plugin.json"), fixture.cache.appendingPathComponent("hooks.json"),
+                     foreign.appendingPathComponent("plugin.json"), foreign.appendingPathComponent("hooks.json")]
+        let before = try paths.map { try CopilotSetupFileState.read($0) }
+        let runner = ObserverSetupRunner(fixture, installed: true)
+        await runner.configureSource(identity: "foreign-source")
+        let result = await perform(setup(fixture, runner: runner), fixture)
+        guard case .conflict = result else { Issue.record("Owned collision must be pre-effect conflict: \(result)"); return }
+        #expect(await runner.calls.isEmpty)
+        #expect(await runner.bootstrapCalls == [fixture.source])
+        for state in before { try state.revalidate() }
+    }
+
+    @Test(arguments: ["failure", "selection", "source", "receipt"])
+    func bootstrapFailureOrDriftCannotAuthorizeProductionMutation(change: String) async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        try fixture.legacy()
+        let installed = try CopilotSetupFileState.read(fixture.cache.appendingPathComponent("hooks.json"))
+        let runner = ObserverSetupRunner(fixture, installed: true)
+        await runner.configureSource(fail: change == "failure", change: change)
+        let result = await perform(setup(fixture, runner: runner), fixture)
+        guard case .conflict = result else { Issue.record("Bootstrap failure must precede effects: \(result)"); return }
+        #expect(await runner.calls.isEmpty)
+        #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
+        try installed.revalidate()
+    }
+
     func setup(_ fixture: ObserverFixture, runner: ObserverSetupRunner,
                files: ObserverSetupFiles? = nil) -> CopilotSetup {
         CopilotSetup(files: files ?? ObserverSetupFiles(fixture: fixture), runner: runner,
@@ -801,7 +976,7 @@ struct CopilotObserverRegistrationTests {
         #expect(try CopilotSetupJSON.bool(object["disableAllHooks"]) == false)
         let plugin = try CopilotSetupJSON.object(Data(contentsOf: fixture.cache.appendingPathComponent("hooks.json")))
         #expect((plugin["hooks"] as? [String: Any])?.isEmpty == true)
-        #expect(await runner.metadataCalls == 4)
+        #expect(await runner.metadataCalls == 5)
         #expect(await runner.providerHomes.allSatisfy { $0?.path == fixture.provider.path })
     }
 
@@ -962,7 +1137,7 @@ struct CopilotObserverRegistrationTests {
         #expect(await perform(setup(fixture, runner: runner), fixture) == .installedDisabled)
     }
 
-    @Test(arguments: [1, 2, 3, 4])
+    @Test(arguments: [1, 2, 3, 4, 5])
     func metadataFailuresNeverMasqueradeAsSuccess(call: Int) async throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let runner = ObserverSetupRunner(fixture)
@@ -992,7 +1167,7 @@ struct CopilotObserverRegistrationTests {
         let receiptURL = fixture.root.appendingPathComponent(CopilotObserverRegistration.receiptName)
         let receipt = try CopilotSetupFileState.read(receiptURL)
         let calls = await runner.calls.count
-        await runner.configure(failingMetadataCall: await runner.metadataCalls + 2)
+        await runner.configure(failingMetadataCall: await runner.metadataCalls + 3)
         let result = await perform(setup(fixture, runner: runner), fixture)
         #expect(result.message.contains("restored and verified"))
         #expect(await runner.calls.count == calls)
@@ -1004,7 +1179,7 @@ struct CopilotObserverRegistrationTests {
 
     @Test func stagingRestorationRefusesConcurrentOwnedFileReplacement() throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
-        let operation = try fixture.registration.begin(.install, metadata: fixture.metadata(installed: false))
+        let operation = try fixture.begin(.install, metadata: fixture.metadata(installed: false))
         try operation.stage()
         try fixture.write(["foreign": "preserve"], to: fixture.file)
         let foreign = try CopilotSetupFileState.read(fixture.file)
@@ -1070,7 +1245,7 @@ struct CopilotObserverRegistrationTests {
     @Test func changedFilesInvalidateTransactionAndUninstallOnlyRemovesOwnedRegistration() async throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let metadata = try fixture.metadata(installed: false)
-        let operation = try fixture.registration.begin(.install, metadata: metadata)
+        let operation = try fixture.begin(.install, metadata: metadata)
         try fixture.write(["disableAllHooks": true], to: fixture.settings)
         #expect(throws: CMUXMaestroPreview.CopilotFileError.changed) { try operation.stage() }
         #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
@@ -1164,7 +1339,7 @@ struct CopilotObserverRegistrationTests {
 
     @Test func changedCacheAfterVerificationPreventsActivation() throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
-        let operation = try fixture.registration.begin(.install, metadata: fixture.metadata(installed: false))
+        let operation = try fixture.begin(.install, metadata: fixture.metadata(installed: false))
         try operation.stage()
         try operation.verifyStaging(fixture.metadata(installed: false))
         try fixture.write(["helper": fixture.helper.path], to: fixture.helperRecord)
@@ -1225,7 +1400,7 @@ struct CopilotObserverRegistrationTests {
             CopilotSetupMetadata(version: "1.0.88", protocolVersion: 3, hooks: known.hooks,
                 plugins: [.init(name: CopilotPluginManifest.name, marketplace: "foreign", enabled: true, directSourceId: nil)]),
         ] {
-            #expect(throws: CopilotRegistrationConflict.self) { try fixture.registration.begin(.install, metadata: metadata) }
+            #expect(throws: CopilotRegistrationConflict.self) { try fixture.begin(.install, metadata: metadata) }
         }
         #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
     }
@@ -1305,7 +1480,7 @@ struct CopilotObserverRegistrationTests {
         let changed = CopilotSetupMetadata(version: known.version, protocolVersion: known.protocolVersion,
             hooks: known.hooks, plugins: [.init(name: CopilotPluginManifest.name, marketplace: "",
                                                enabled: true, directSourceId: "different-provider-identity")])
-        #expect(throws: CopilotRegistrationConflict.self) { try fixture.registration.begin(.install, metadata: changed) }
+        #expect(throws: CopilotRegistrationConflict.self) { try fixture.begin(.install, metadata: changed) }
     }
 
     @Test func stagingWriteFailureReportsProvenanceRatherThanClaimingDisabledFile() async throws {
@@ -1328,9 +1503,9 @@ struct CopilotObserverRegistrationTests {
 
     @Test func simultaneousExplicitSetupCannotShareTheMutationLease() throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
-        let first = try fixture.registration.begin(.install, metadata: fixture.metadata(installed: false))
+        let first = try fixture.begin(.install, metadata: fixture.metadata(installed: false))
         try first.stage()
-        let second = try fixture.registration.begin(.install, metadata: fixture.metadata(installed: false))
+        let second = try fixture.begin(.install, metadata: fixture.metadata(installed: false))
         #expect(throws: CopilotRegistrationConflict.self) { try second.stage() }
         try first.revalidate()
         #expect(first.phase == .staged)
@@ -1340,7 +1515,7 @@ struct CopilotObserverRegistrationTests {
     @Test(arguments: ["host-relative", "absolute", "parent-component", "foreign-origin"])
     func providerSourceLabelsAreMatchedOnlyToTheExactOwnedFile(kind: String) throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
-        let operation = try fixture.registration.begin(.install, metadata: fixture.metadata(installed: false))
+        let operation = try fixture.begin(.install, metadata: fixture.metadata(installed: false))
         try operation.stage()
         let observed = try fixture.metadata(installed: false)
         let hooks = observed.hooks.map { hook in
@@ -1358,7 +1533,7 @@ struct CopilotObserverRegistrationTests {
         }
     }
 
-    @Test func unrelatedPluginHooksSurviveAndForeignObserverPluginRefuses() throws {
+    @Test func unownedHelperCallingPluginIsPreservedWithoutSafetyCertification() throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let directory = fixture.provider.appendingPathComponent("installed-plugins/community/other")
         try fixture.write(["name": "other", "hooks": "hooks.json"], to: directory.appendingPathComponent("plugin.json"))
@@ -1368,14 +1543,17 @@ struct CopilotObserverRegistrationTests {
             hooks: [.init(hookType: "postToolUse", origin: "plugin", source: "other@community", enabled: true, disableKey: "opaque")],
             plugins: [.init(name: "other", marketplace: "community", enabled: true, directSourceId: nil)])
         let before = try Data(contentsOf: hooks)
-        _ = try fixture.registration.begin(.install, metadata: metadata)
+        _ = try fixture.begin(.install, metadata: metadata)
         #expect(try Data(contentsOf: hooks) == before)
         try fixture.write(["version": 1, "hooks": CopilotPluginManifest.observerHooks(helper: fixture.helper)], to: hooks)
-        #expect(throws: CopilotRegistrationConflict.self) { try fixture.registration.begin(.install, metadata: metadata) }
+        let external = try CopilotSetupFileState.read(hooks)
+        #expect(try fixture.begin(.install, metadata: metadata).pluginWasInstalled == false)
+        try external.revalidate()
+        #expect(IntegrationRegistrationHealth.currentOnDisk.message.contains("Unrelated helper callers"))
     }
 
     @Test(arguments: [false, true])
-    func unrelatedSymlinkDoesNotBlockCompleteOverlappingPluginInventory(legacy: Bool) async throws {
+    func unrelatedHelperCallingLinkIsPreservedAcrossOwnedLifecycle(legacy: Bool) async throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         if legacy { try fixture.legacy() }
         let directory = fixture.provider.appendingPathComponent("installed-plugins/_direct/maestro-cmux")
@@ -1432,7 +1610,7 @@ struct CopilotObserverRegistrationTests {
     }
 
     @Test(arguments: ["live", "builtin", "not-installed"])
-    func providerProvenanceCannotBeSubstitutedWithSafeStaleCache(kind: String) throws {
+    func unownedProviderProvenanceIsNotInferredFromSafeStaleCache(kind: String) throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let metadata = try overlappingMetadata(fixture, marketplace: "community")
         let hidden = fixture.directory.appendingPathComponent("active-marketplace")
@@ -1450,7 +1628,8 @@ struct CopilotObserverRegistrationTests {
         let before = try CopilotSetupFileState.read(cached)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: hidden.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: hidden.path) }
-        #expect(throws: CopilotRegistrationConflict.self) { try fixture.registration.begin(.install, metadata: selected) }
+        let operation = try fixture.begin(.install, metadata: selected)
+        #expect(!operation.pluginWasInstalled)
         #expect(try CopilotSetupFileState.read(cached) == before)
         #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
         #expect((try FileManager.default.attributesOfItem(atPath: hidden.path)[.posixPermissions] as? Int) == 0o000)
@@ -1459,7 +1638,7 @@ struct CopilotObserverRegistrationTests {
     @Test func providerProvenanceChangeInvalidatesAnAlreadyStagedInventory() throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let original = try overlappingMetadata(fixture, marketplace: "community")
-        let operation = try fixture.registration.begin(.install, metadata: original)
+        let operation = try fixture.begin(.install, metadata: original)
         try operation.stage()
         let staged = try fixture.metadata(installed: false)
         let changed = CopilotSetupMetadata(version: "1.0.89", protocolVersion: 3,
@@ -1502,7 +1681,7 @@ struct CopilotObserverRegistrationTests {
         let before = try CopilotSetupFileState.read(fixture.cache.appendingPathComponent("hooks.json"))
         let value = CopilotSetupMetadata(version: "1.0.89", protocolVersion: 3,
                                         hooks: known.hooks, plugins: [plugin])
-        #expect(throws: CopilotRegistrationConflict.self) { try fixture.registration.begin(.install, metadata: value) }
+        #expect(throws: CopilotRegistrationConflict.self) { try fixture.begin(.install, metadata: value) }
         #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
         #expect(try CopilotSetupFileState.read(before.url) == before)
     }
@@ -1517,12 +1696,12 @@ struct CopilotObserverRegistrationTests {
         try FileManager.default.createSymbolicLink(at: linkedGroup, withDestinationURL: target)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: target.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path) }
-        _ = try fixture.registration.begin(.install, metadata: metadata)
+        _ = try fixture.begin(.install, metadata: metadata)
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: linkedGroup.path) == target.path)
         #expect((try FileManager.default.attributesOfItem(atPath: target.path)[.posixPermissions] as? Int) == 0o000)
     }
 
-    @Test func relevantMarketplaceStillRequiresSafeCompleteUniqueIdentity() throws {
+    @Test func foreignMarketplaceCacheAliasesDoNotGrantOwnedAuthority() throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let metadata = try overlappingMetadata(fixture, marketplace: "community")
         let group = fixture.provider.appendingPathComponent("installed-plugins/community")
@@ -1531,14 +1710,14 @@ struct CopilotObserverRegistrationTests {
         try FileManager.default.createSymbolicLink(at: group.appendingPathComponent("unrelated-link"), withDestinationURL: irrelevantTarget)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: irrelevantTarget.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: irrelevantTarget.path) }
-        _ = try fixture.registration.begin(.install, metadata: metadata)
+        _ = try fixture.begin(.install, metadata: metadata)
         let duplicate = CopilotSetupMetadata(version: metadata.version, protocolVersion: metadata.protocolVersion,
             hooks: metadata.hooks, plugins: metadata.plugins + metadata.plugins)
-        #expect(throws: CopilotRegistrationConflict.self) { try fixture.registration.begin(.install, metadata: duplicate) }
+        #expect(try fixture.begin(.install, metadata: duplicate).pluginWasInstalled == false)
         let saved = fixture.provider.appendingPathComponent("saved-community")
         try FileManager.default.moveItem(at: group, to: saved)
         try FileManager.default.createSymbolicLink(at: group, withDestinationURL: saved)
-        #expect(throws: CopilotRegistrationConflict.self) { try fixture.registration.begin(.install, metadata: metadata) }
+        #expect(try fixture.begin(.install, metadata: metadata).pluginWasInstalled == false)
     }
 
     @Test(arguments: [
@@ -1546,7 +1725,7 @@ struct CopilotObserverRegistrationTests {
         "missing-identity", "duplicate-identity", "duplicate-manifest", "missing-hooks", "missing-event",
         "aliased-relevant-link", "hidden-observer-link",
     ])
-    func overlappingInventoryRefusesUnresolvedUnsafeAndAmbiguousSources(scenario: String) throws {
+    func unownedCacheOpacityDoesNotCertifyOrSuppressExternalHelperCalls(scenario: String) throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         var metadata = try overlappingMetadata(fixture)
         let group = fixture.provider.appendingPathComponent("installed-plugins/_direct")
@@ -1594,7 +1773,12 @@ struct CopilotObserverRegistrationTests {
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: target.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path) }
-        #expect(throws: (any Error).self) { try fixture.registration.begin(.install, metadata: metadata) }
+        if scenario == "relevant-group-link" {
+            // This group is also an ancestor of the exact OWNED cache.
+            #expect(throws: (any Error).self) { try fixture.begin(.install, metadata: metadata) }
+        } else {
+            #expect(try fixture.begin(.install, metadata: metadata).pluginWasInstalled == false)
+        }
         #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
         #expect((try FileManager.default.attributesOfItem(atPath: target.path)[.posixPermissions] as? Int) == 0o000)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: target.path)
@@ -1602,18 +1786,18 @@ struct CopilotObserverRegistrationTests {
     }
 
     @Test(arguments: ["directory-link", "new-duplicate", "changed-identity", "new-relevant-source"])
-    func overlappingInventoryRevalidatesAcrossDisabledStaging(change: String) throws {
+    func foreignPublicInventoryNotCacheAliasesIsRevalidatedDuringStaging(change: String) throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let metadata = try overlappingMetadata(fixture)
-        let operation = try fixture.registration.begin(.install, metadata: metadata)
+        let operation = try fixture.begin(.install, metadata: metadata)
         let group = fixture.provider.appendingPathComponent("installed-plugins/_direct")
         let plugin = group.appendingPathComponent("maestro-cmux")
         if change == "directory-link" {
             let moved = fixture.directory.appendingPathComponent("moved-plugin")
             try FileManager.default.moveItem(at: plugin, to: moved)
             try FileManager.default.createSymbolicLink(at: plugin, withDestinationURL: moved)
-            #expect(throws: (any Error).self) { try operation.stage() }
-            #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
+            try operation.stage()
+            #expect(operation.phase == .staged)
             return
         }
         try operation.stage()
@@ -1633,24 +1817,29 @@ struct CopilotObserverRegistrationTests {
             hooks.append(.init(hookType: "postToolUse", origin: "plugin", source: "hidden", enabled: true, disableKey: "hidden-key"))
         }
         let changed = CopilotSetupMetadata(version: "1.0.89", protocolVersion: 3, hooks: hooks + staged.hooks, plugins: plugins)
-        #expect(throws: (any Error).self) { try operation.verifyStaging(changed) }
+        if change == "new-duplicate" {
+            try operation.verifyStaging(changed)
+        } else {
+            #expect(throws: (any Error).self) { try operation.verifyStaging(changed) }
+        }
         #expect(operation.phase == .staged)
         #expect(try CopilotSetupJSON.bool(CopilotSetupJSON.object(Data(contentsOf: fixture.file))["disableAllHooks"]))
         #expect(try CopilotSetupFileState.read(fixture.source.appendingPathComponent("plugin.json")).data == nil)
     }
 
-    @Test func removalCannotIgnoreAnAddedOverlappingAlias() throws {
+    @Test func ownedRemovalDoesNotAdoptOrDeleteAForeignCacheAlias() throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let metadata = try overlappingMetadata(fixture)
-        let operation = try fixture.registration.begin(.uninstall, metadata: metadata)
+        let operation = try fixture.begin(.uninstall, metadata: metadata)
         try operation.stage()
         try operation.verifyStaging(metadata)
         try operation.removeRegistration()
         let group = fixture.provider.appendingPathComponent("installed-plugins/_direct")
         try FileManager.default.copyItem(at: group.appendingPathComponent("maestro-cmux"),
                                         to: group.appendingPathComponent("late-duplicate"))
-        #expect(throws: CopilotRegistrationConflict.self) { try operation.verifyRemoval(metadata) }
-        #expect(operation.phase == .registrationRemoved)
+        try operation.verifyRemoval(metadata)
+        #expect(operation.phase == .pluginRemoved)
+        #expect(FileManager.default.fileExists(atPath: group.appendingPathComponent("late-duplicate/plugin.json").path))
     }
 
     @Test func metadataProcessUsesSupervisorForSuccessTimeoutAndMalformedOutput() async throws {
@@ -1836,7 +2025,7 @@ struct CopilotObserverRegistrationTests {
 
     @Test func CLISettingsReconciliationRequiresTheExplicitCommandBoundary() throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
-        let operation = try fixture.registration.begin(.install, metadata: fixture.metadata(installed: false))
+        let operation = try fixture.begin(.install, metadata: fixture.metadata(installed: false))
         #expect(throws: CMUXMaestroPreview.CopilotFileError.io) { try operation.pluginCommandSucceeded() }
     }
 
@@ -1844,7 +2033,7 @@ struct CopilotObserverRegistrationTests {
     func durablePhaseAndPluginValidationPrecedeConfiguredDisable(scenario: String) async throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         if scenario == "staged" {
-            let transaction = try fixture.registration.begin(.install, metadata: fixture.metadata(installed: false))
+            let transaction = try fixture.begin(.install, metadata: fixture.metadata(installed: false))
             try transaction.stage()
             #expect(fixture.registration.health() == .incomplete)
             #expect(try CopilotSetupJSON.bool(CopilotSetupJSON.object(Data(contentsOf: fixture.file))["disableAllHooks"]))
@@ -1906,7 +2095,7 @@ struct CopilotObserverRegistrationTests {
         #expect(try Data(contentsOf: fixture.file) == file)
         if scenario == "subset" {
             #expect(!expectedHealth.message.contains("All observer"))
-            #expect(expectedResult.message.contains("some observer"))
+            #expect(expectedResult.message.contains("some owned observer"))
         }
     }
 
@@ -1983,9 +2172,9 @@ struct CopilotObserverRegistrationTests {
         let metadata = CopilotSetupMetadata(version: "1.0.89", protocolVersion: 3, hooks: own + [other], plugins: known.plugins)
         let before = try Data(contentsOf: fixture.settings)
         if scenario == "unaffected" {
-            _ = try fixture.registration.begin(.install, metadata: metadata)
+            _ = try fixture.begin(.install, metadata: metadata)
         } else {
-            #expect(throws: CopilotRegistrationConflict.self) { try fixture.registration.begin(.install, metadata: metadata) }
+            #expect(throws: CopilotRegistrationConflict.self) { try fixture.begin(.install, metadata: metadata) }
         }
         #expect(try Data(contentsOf: fixture.settings) == before)
         #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
