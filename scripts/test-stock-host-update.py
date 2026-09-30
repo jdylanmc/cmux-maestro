@@ -494,13 +494,21 @@ class Probe:
         attachments = manifest[0].get("attachments")
         require(isinstance(attachments, list) and 0 < len(attachments) <= 64,
                 "Missing or excessive approval attachments")
-        completed, failed, total = [], [], 0
+        completed, failed, total, approval_count, diagnostic_count = [], [], 0, 0, 0
         for attachment in attachments:
             require(isinstance(attachment, dict), "Invalid approval attachment manifest entry")
             name = attachment.get("exportedFileName")
             title = attachment.get("suggestedHumanReadableName")
-            require(isinstance(title, str) and title.startswith("approval-") and len(title) <= 512,
-                    "Unexpected approval attachment name")
+            if not isinstance(title, str) or not title.startswith("approval-"):
+                diagnostic_count += 1
+                self.event("xctest-system-attachment-metadata", diagnosticOnly=True, fileOpened=False,
+                           suggestedName=title[:512] if isinstance(title, str) else "(non-string)",
+                           exportedFileName=name[:256] if isinstance(name, str) else "(non-string)",
+                           associatedWithFailure=attachment.get("isAssociatedWithFailure")
+                           if type(attachment.get("isAssociatedWithFailure")) is bool else None)
+                continue
+            approval_count += 1
+            require(len(title) <= 512, "Oversized approval attachment name")
             suffix = Path(name).suffix if isinstance(name, str) else ""
             limits = {".json": 16_384, ".txt": 1_048_576, ".png": 16_777_216}
             require(suffix in limits and title.endswith(suffix), "Unexpected approval attachment type")
@@ -529,7 +537,8 @@ class Probe:
             path = self.evidence / "approval-result.json"
             with path.open("x") as stream:
                 json.dump(result, stream, indent=2)
-        self.event("approval-attachments-validated", directory=str(directory), count=len(attachments))
+        self.event("approval-attachments-validated", directory=str(directory), approvalCount=approval_count,
+                   diagnosticOnlyCount=diagnostic_count)
         return result
 
     def approve_fixture(self):

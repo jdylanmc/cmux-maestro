@@ -150,26 +150,37 @@ final class StockHostApprovalTests: XCTestCase {
             try save("open-stock-extension-browser")
             manage.firstMatch.click()
             let labels = Set(context.labels)
-            func controls() -> [XCUIElement] {
-                let toggles = app.checkBoxes.allElementsBoundByIndex + app.switches.allElementsBoundByIndex
-                let direct = toggles.filter { labels.contains($0.label) || labels.contains($0.identifier) }
-                if !direct.isEmpty { return direct }
-                let rows = app.tableRows.allElementsBoundByIndex.filter { row in
-                    row.staticTexts.allElementsBoundByIndex.contains { labels.contains($0.label) }
+            func textValues(_ element: XCUIElement) -> [String] {
+                [element.label, element.identifier] + ((element.value as? String).map { [$0] } ?? [])
+            }
+            func controls() -> [(toggle: XCUIElement, fixtureText: String)] {
+                let rows = app.groups.allElementsBoundByIndex + app.tableRows.allElementsBoundByIndex
+                return rows.compactMap { row -> (toggle: XCUIElement, fixtureText: String)? in
+                    let names = row.children(matching: .staticText).allElementsBoundByIndex.compactMap {
+                        textValues($0).first(where: { labels.contains($0) })
+                    }
+                    let toggles = row.children(matching: .checkBox).allElementsBoundByIndex
+                        + row.children(matching: .switch).allElementsBoundByIndex
+                    guard names.count == 1, toggles.count == 1 else { return nil }
+                    return (toggles[0], names[0])
                 }
-                guard rows.count == 1 else { return [] }
-                return rows[0].checkBoxes.allElementsBoundByIndex + rows[0].switches.allElementsBoundByIndex
             }
             guard wait(15, { controls().count == 1 }) else {
                 try capture("unavailable-browser")
                 throw SetupFailure.unavailable("No unique public approval toggle for the registered fixture")
             }
             try capture("browser")
-            let toggle = controls()[0]
+            let associated = controls()
+            guard associated.count == 1 else {
+                throw SetupFailure.unavailable("Fixture row/toggle association changed or is ambiguous")
+            }
+            let toggle = associated[0].toggle
             guard toggle.isHittable, let before = state(toggle), before == 0 || before == 1 else {
                 throw SetupFailure.unavailable("Fixture approval toggle has unknown state")
             }
-            result["control"] = ["label": toggle.label, "identifier": toggle.identifier, "before": before]
+            result["control"] = ["label": toggle.label, "identifier": toggle.identifier, "before": before,
+                                 "fixtureText": associated[0].fixtureText,
+                                 "association": "single toggle beside exact direct-child text in row Group"]
             try save("approve-only-owned-fixture")
             if before == 0 { toggle.click() }
             // Only a stock-owned, explicitly named fixture confirmation may be accepted.
@@ -180,7 +191,7 @@ final class StockHostApprovalTests: XCTestCase {
                 let dialogs = (app.alerts.allElementsBoundByIndex + app.dialogs.allElementsBoundByIndex)
                     .filter { alert in
                         alert.staticTexts.allElementsBoundByIndex.contains { text in
-                            labels.contains(where: { text.label.contains($0) })
+                            textValues(text).contains { value in labels.contains(where: { value.contains($0) }) }
                         }
                     }
                 if dialogs.count == 1 && !confirmationHandled {
@@ -208,13 +219,13 @@ final class StockHostApprovalTests: XCTestCase {
             }
             try save("return-to-original-terminal-setup-only")
             terminal.firstMatch.click()
-            let approvalRequired = app.staticTexts[
-                "An installed sidebar extension needs approval before CMUX can use it."
-            ]
-            guard wait(15, { !approvalRequired.exists }) else {
+            func hasExactText(_ value: String) -> Bool {
+                app.staticTexts.allElementsBoundByIndex.contains { textValues($0).contains(value) }
+            }
+            guard wait(15, { !hasExactText("An installed sidebar extension needs approval before CMUX can use it.") }) else {
                 throw SetupFailure.unavailable("Stock still reports first-time approval required")
             }
-            guard !app.staticTexts["Extension Blocked"].exists else {
+            guard !hasExactText("Extension Blocked") else {
                 throw SetupFailure.unavailable("Approval changed, but stock reports a blocked extension")
             }
             try verifyHost()
