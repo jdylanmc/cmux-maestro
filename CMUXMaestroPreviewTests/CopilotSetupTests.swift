@@ -124,6 +124,51 @@ final class SetupDeadlineClock: @unchecked Sendable {
 }
 
 struct CopilotPluginExchangeTests {
+    @Test func disableUsesIdentityPrecheckOfficialAPIAndReadback() throws {
+        let exchange = try CopilotMetadataExchange(operation: .disable(identity: "owned-id"))
+        _ = try requests(exchange)
+        try send(exchange, id: 1, result: ["version": "1.0.89", "protocolVersion": 3])
+        #expect(try requests(exchange).contains("plugins.list"))
+        var plugin: [String: Any] = ["name": CopilotPluginManifest.name, "marketplace": "",
+                                     "enabled": true, "directSourceId": "owned-id"]
+        try send(exchange, id: 4, result: ["plugins": [plugin]])
+        #expect(try requests(exchange).contains("plugins.disable"))
+        #expect(exchange.pluginReceipt == nil)
+        try send(exchange, id: 5, result: NSNull())
+        #expect(try requests(exchange).contains("plugins.list"))
+        #expect(exchange.pluginReceipt == nil)
+        plugin["enabled"] = false
+        try send(exchange, id: 6, result: ["plugins": [plugin]])
+        #expect(exchange.pluginReceipt?.plugin?.enabled == false)
+        #expect(exchange.pluginReceipt?.plugin?.directSourceId == "owned-id")
+    }
+
+    @Test(arguments: ["unsupported-version", "wrong-source", "ignored-disable"])
+    func disableCannotClaimUnsupportedWrongSourceOrUnverifiedState(kind: String) throws {
+        let exchange = try CopilotMetadataExchange(operation: .disable(identity: "owned-id"))
+        _ = try requests(exchange)
+        if kind == "unsupported-version" {
+            #expect(throws: (any Error).self) { try send(exchange, id: 1, result: ["version": "1.0.88", "protocolVersion": 3]) }
+            #expect(try requests(exchange).isEmpty)
+            return
+        }
+        try send(exchange, id: 1, result: ["version": "1.0.89", "protocolVersion": 3])
+        _ = try requests(exchange)
+        let plugin: [String: Any] = ["name": CopilotPluginManifest.name, "marketplace": "", "enabled": true,
+                                     "directSourceId": kind == "wrong-source" ? "foreign-id" : "owned-id"]
+        if kind == "wrong-source" {
+            #expect(throws: (any Error).self) { try send(exchange, id: 4, result: ["plugins": [plugin]]) }
+            #expect(try requests(exchange).isEmpty)
+        } else {
+            try send(exchange, id: 4, result: ["plugins": [plugin]])
+            _ = try requests(exchange)
+            try send(exchange, id: 5, result: NSNull())
+            _ = try requests(exchange)
+            #expect(throws: (any Error).self) { try send(exchange, id: 6, result: ["plugins": [plugin]]) }
+        }
+        #expect(exchange.pluginReceipt == nil)
+    }
+
     @Test func bootstrapUsesAnIsolatedHomeAndExactSourceThenCleansIt() async throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let capture = fixture.directory.appendingPathComponent("bootstrap-environment.json")

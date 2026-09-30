@@ -147,6 +147,8 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
     var selectedIdentity = "opaque-provider-source"
     private var changeDuringBootstrap: String?
     private var changeReceiptAtMetadataCall: Int?
+    private var disableFailure = false
+    var installedWithInactiveObserver: [Bool] = []
     private var writtenSettings: CopilotSetupFileState?
     private var ownedRowsOverride: [CopilotSetupMetadata.Hook]?
     private var unrelatedRows: [CopilotSetupMetadata.Hook] = []
@@ -197,6 +199,7 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
         changeDuringBootstrap = change
     }
     func changeReceipt(onMetadataCall call: Int) { changeReceiptAtMetadataCall = call }
+    func failDisabling(_ value: Bool) { disableFailure = value }
     func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
         providerHomes.append(providerHome)
         calls.append([executable.path] + arguments)
@@ -296,11 +299,20 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
         case .install(let source, let identity):
             guard identity == nil || identity == "opaque-provider-source" else { return .failed(.unavailable) }
             pluginOperations.append("install:\(source.path)")
+            let staged = try? CopilotSetupJSON.object(Data(contentsOf: fixture.file))
+            installedWithInactiveObserver.append(staged?["disableAllHooks"] as? Bool == true)
             arguments = ["--no-auto-update", "plugin", "install", source.path]
         case .uninstall(let identity):
             guard identity == "opaque-provider-source" else { return .failed(.unavailable) }
             pluginOperations.append("uninstall:\(identity)")
             arguments = ["--no-auto-update", "plugin", "uninstall", CopilotPluginManifest.name]
+        case .disable(let identity):
+            guard installed, identity == selectedIdentity else { return .failed(.unavailable) }
+            pluginOperations.append("disable:\(identity)")
+            guard !disableFailure else { return .failed(.exited(9)) }
+            nativeEnabled = false
+            return .value(.init(plugin: .init(name: CopilotPluginManifest.name, marketplace: "", enabled: false,
+                                              directSourceId: identity), directInstallDeprecated: false))
         }
         let respondsBeforeFailure = afterMutationResult != nil
         let result = await run(executable: executable, arguments: arguments, path: path, providerHome: providerHome)
@@ -313,6 +325,32 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
         return .value(receipt)
     }
 }
+private struct CheckpointOfficialProvider: CopilotSetupProcessRunner {
+    let home: URL
+    private let runner = LocalCopilotSetupRunner()
+
+    func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
+        await runner.run(executable: executable, arguments: arguments, path: path, providerHome: providerHome)
+    }
+    func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult {
+        await runner.metadata(executable: executable, path: path, providerHome: providerHome)
+    }
+    func sourceIdentity(executable: URL, source: URL, path: String) async -> CopilotSourceIdentityResult {
+        await runner.sourceIdentity(executable: executable, source: source, path: path)
+    }
+    func plugin(executable: URL, operation: CopilotPluginOperation, path: String,
+                providerHome: URL?) async -> CopilotPluginOperationResult {
+        let result = await runner.plugin(executable: executable, operation: operation, path: path, providerHome: providerHome)
+        let marker = home.appendingPathComponent(".fixture-crash-after-official-install")
+        if case .install = operation, case .value = result, FileManager.default.fileExists(atPath: marker.path) {
+            do { try FileManager.default.removeItem(at: marker) }
+            catch { return .failed(.unavailable) }
+            Darwin._exit(92)
+        }
+        return result
+    }
+}
+
 private actor CheckpointProcessProvider: CopilotSetupProcessRunner {
     let home: URL
     let root: URL
@@ -362,6 +400,8 @@ private actor CheckpointProcessProvider: CopilotSetupProcessRunner {
         case .uninstall(let identity):
             guard identity == "fixture-stable-source" else { return .failed(.unavailable) }
             arguments = ["--no-auto-update", "plugin", "uninstall", CopilotPluginManifest.name]
+        case .disable:
+            return .failed(.unavailable)
         }
         let result = await run(executable: executable, arguments: arguments, path: path, providerHome: providerHome)
         guard result == .exited(0) else { return .failed(result) }
@@ -428,7 +468,7 @@ nonisolated enum CopilotInstallBridgeProcessFixture {
             if marker["provider"] as? String == "isolated-official" {
                 guard let requested = request.executable,
                       requested.path.hasPrefix(home.path + "/") else { return 2 }
-                runner = LocalCopilotSetupRunner()
+                runner = CheckpointOfficialProvider(home: home)
                 selected = requested
             } else {
                 runner = CheckpointProcessProvider(home: home, root: root)
@@ -517,6 +557,35 @@ final class InstallCheckpointFixture: @unchecked Sendable {
 }
 
 struct CopilotInstallCheckpointTests {
+    @Test(arguments: ["reenabled-after-verification", "foreign-source-during-recovery"])
+    func disabledRestorationDoesNotOverwriteNewChoiceOrForeignSource(change: String) async throws {
+        let value = try InstallCheckpointFixture(legacy: true); defer { try? value.clean() }
+        await value.runner.supplyMetadata(version: "1.0.89")
+        await value.runner.nativePlugin(enabled: false)
+        _ = try await value.checkpoint().perform("prepare")
+        if change == "foreign-source-during-recovery" { await value.runner.failDisabling(true) }
+        do { _ = try await value.checkpoint().perform("apply") }
+        catch {
+            #expect(change == "foreign-source-during-recovery")
+        }
+        if change == "reenabled-after-verification" {
+            #expect(try value.record().phase == "applied")
+            await value.runner.nativePlugin(enabled: true)
+        } else {
+            #expect(try value.record().phase == "applying")
+            await value.runner.configureSource(identity: "foreign-source")
+            await value.runner.failDisabling(false)
+        }
+        let calls = await value.runner.pluginOperations
+        let receipt = try CopilotSetupFileState.read(value.fixture.registration.receiptFile)
+        do {
+            _ = try await value.checkpoint().perform("restore")
+            Issue.record("New choice or foreign source must not be disabled or overwritten")
+        } catch is CopilotRegistrationConflict {}
+        #expect(await value.runner.pluginOperations == calls)
+        try receipt.revalidate()
+    }
+
     @Test func interruptedFirstInstallRemovalRetainsSourceUntilAbsenceIsVerified() async throws {
         let value = try InstallCheckpointFixture(); defer { try? value.clean() }
         _ = try await value.checkpoint().perform("prepare")
@@ -641,8 +710,8 @@ struct CopilotInstallCheckpointTests {
         _ = try await value.checkpoint(id: id).perform("release")
     }
 
-    @Test(arguments: [false, true])
-    func disabledNativePayloadReplacementRefusesBeforeWrites(legacy: Bool) async throws {
+    @Test(arguments: [false, true], ["success", "late-failure", "disable-failure", "install-failure"])
+    func disabledPayloadReplacementAndRestorationReapplyOfficialChoice(legacy: Bool, outcome: String) async throws {
         let value = try InstallCheckpointFixture(legacy: legacy); defer { try? value.clean() }
         await value.runner.supplyMetadata(version: "1.0.89")
         if !legacy {
@@ -653,21 +722,42 @@ struct CopilotInstallCheckpointTests {
                                     to: value.resources.appendingPathComponent("maestro-icon/SKILL.md"))
         }
         await value.runner.nativePlugin(enabled: false)
-        let beforeCalls = await value.runner.pluginOperations
-        let before = try [value.fixture.file, value.fixture.settings,
-                          value.fixture.source.appendingPathComponent("hooks.json"),
-                          value.fixture.cache.appendingPathComponent("hooks.json")].map {
-            try CopilotSetupFileState.read($0)
+        let id = UUID()
+        _ = try await value.checkpoint(id: id).perform("prepare")
+        let before = try value.record()
+        #expect(!before.resourceOnly)
+        if outcome == "disable-failure" { await value.runner.failDisabling(true) }
+        if outcome == "install-failure" { await value.runner.configure(afterMutationResult: .exited(9)) }
+        if outcome.hasPrefix("late") || outcome == "success" {
+            _ = try await value.checkpoint(id: id).perform("apply")
+        } else {
+            do {
+                _ = try await value.checkpoint(id: id).perform("apply")
+                Issue.record("Provider/install disable failure must not yield installation success")
+            } catch is CopilotRegistrationConflict {}
+            #expect(try value.record().phase == "applying")
+            #expect(try value.record().providerMutationStarted == true)
+            #expect(try CopilotSetupJSON.bool(CopilotSetupJSON.object(Data(contentsOf: value.fixture.file))["disableAllHooks"]))
         }
-        do {
-            _ = try await value.checkpoint(id: UUID()).perform("prepare")
-            Issue.record("A disabled payload needing provider replacement must refuse before app or integration changes")
-        } catch let error as CopilotRegistrationConflict {
-            #expect(error.message.contains("re-enables"))
+        await value.runner.failDisabling(false)
+        if outcome == "success" {
+            _ = try await value.checkpoint(id: id).perform("verify")
+            if legacy {
+                #expect(try CopilotSetupJSON.bool(CopilotSetupJSON.object(Data(contentsOf: value.fixture.file))["disableAllHooks"]))
+            }
+            _ = try await value.checkpoint(id: id).perform("finish")
+        } else {
+            _ = try await value.checkpoint(id: id).perform("restore")
+            try value.verifyRestored(before)
         }
-        #expect(await value.runner.pluginOperations == beforeCalls)
-        for state in before { try state.revalidate() }
-        #expect(try CopilotSetupFileState.read(CopilotInstallCheckpoint.location(root: value.fixture.root)).data == nil)
+        guard case .value(let metadata) = await value.runner.metadata(executable: value.fixture.helper, path: "",
+                                                                     providerHome: value.fixture.provider) else {
+            Issue.record("Restored disabled state must be discoverable"); return
+        }
+        #expect(metadata.plugins.first(where: { $0.name == CopilotPluginManifest.name })?.enabled == false)
+        #expect(await value.runner.installedWithInactiveObserver.allSatisfy { $0 })
+        #expect(await value.runner.pluginOperations.contains("disable:opaque-provider-source"))
+        _ = try await value.checkpoint(id: id).perform("release")
     }
 
     @Test func bootstrapAuthorizesRecoveryWhenMutationResponseIsLost() async throws {

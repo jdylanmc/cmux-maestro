@@ -632,6 +632,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         _ = try generation.manifest(disabled: true)
         let disabled = settings.globalDisabled || fileDisabled
             || (sourceKind == .legacy && source.disabled) || (installedKind == .legacy && installed.disabled)
+            || (installedKind == .legacy && !pluginEnabled)
         let previous = receipt?.previous ?? prior ?? (installedKind == .legacy
             ? CopilotObserverGeneration(id: UUID(), helper: previousHelper) : nil)
         return Transaction(store: self, action: action, generation: generation, previous: previous,
@@ -810,8 +811,8 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         }
 
         func stage() throws {
-            guard action != .install || pluginEnabled else {
-                throw CopilotRegistrationConflict("The native plugin is explicitly disabled. This provider re-enables direct plugins during install/update; setup will not clear that choice.")
+            guard action != .install || pluginEnabled || store.installTransaction != nil else {
+                throw CopilotRegistrationConflict("Updating a disabled native plugin requires the coordinated app installer and its durable disabled-state checkpoint.")
             }
             guard (!pluginWasInstalled && pluginIdentity == nil) || sourceIdentity != nil else {
                 throw CopilotRegistrationConflict("The existing native plugin needs public exact-source bootstrap before any setup changes.")

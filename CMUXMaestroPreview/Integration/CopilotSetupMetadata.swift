@@ -50,6 +50,7 @@ nonisolated enum CopilotMetadataResult: Sendable {
 nonisolated enum CopilotPluginOperation: Sendable {
     case install(source: URL, expectedIdentity: String?)
     case uninstall(identity: String)
+    case disable(identity: String)
 }
 
 nonisolated struct CopilotPluginReceipt: Sendable {
@@ -93,6 +94,8 @@ nonisolated final class CopilotMetadataExchange: @unchecked Sendable {
     private(set) var snapshot: CopilotSetupMetadata?
     private let operation: CopilotPluginOperation?
     private var operationSent = false
+    private var disableSent = false
+    private var disableReadbackSent = false
     private(set) var pluginReceipt: CopilotPluginReceipt?
     private(set) var providerVersion: String?
 
@@ -176,8 +179,9 @@ nonisolated final class CopilotMetadataExchange: @unchecked Sendable {
             guard message["jsonrpc"] as? String == "2.0", message["error"] == nil
             else { throw CopilotFileError.io }
             if let id = message["id"] as? Int {
-                guard (operation == nil ? (1...3).contains(id) : [1, 4].contains(id)),
+                guard (operation == nil ? (1...3).contains(id) : [1, 4, 5, 6].contains(id)),
                       operation == nil || id != 4 || operationSent,
+                      id != 5 || disableSent, id != 6 || disableReadbackSent,
                       responses[id] == nil, let result = message["result"] else {
                     throw CopilotFileError.io
                 }
@@ -232,14 +236,12 @@ nonisolated final class CopilotMetadataExchange: @unchecked Sendable {
                 guard Self.validIdentity(identity) else { throw CopilotFileError.unsafePath }
                 method = "plugins.uninstall"
                 params = ["name": CopilotPluginManifest.name, "directSourceId": identity]
+            case .disable(let identity):
+                guard status.version == "1.0.89", Self.validIdentity(identity) else { throw CopilotFileError.unsafePath }
+                method = "plugins.list"
+                params = [:]
             }
-            let body = try JSONSerialization.data(withJSONObject: [
-                "jsonrpc": "2.0", "id": 4, "method": method, "params": params,
-            ])
-            let request = Data("Content-Length: \(body.count)\r\n\r\n".utf8) + body
-            guard request.count < 8192,
-                  request.withUnsafeBytes({ Darwin.write(input[1], $0.baseAddress, $0.count) }) == request.count
-            else { throw CopilotFileError.io }
+            try send(id: 4, method: method, params: params)
             operationSent = true
         }
         guard let result = responses[4], pluginReceipt == nil else { return }
@@ -258,8 +260,48 @@ nonisolated final class CopilotMetadataExchange: @unchecked Sendable {
             let value = try JSONSerialization.jsonObject(with: result, options: [.fragmentsAllowed])
             guard value is NSNull || (value as? [String: Any])?.isEmpty == true else { throw CopilotFileError.io }
             pluginReceipt = CopilotPluginReceipt(plugin: nil, directInstallDeprecated: false)
+        case .disable(let identity):
+            let before = try selectedPlugin(result, identity: identity)
+            if !before.enabled {
+                pluginReceipt = .init(plugin: before, directInstallDeprecated: false)
+            } else {
+                if !disableSent {
+                    try send(id: 5, method: "plugins.disable", params: ["names": [CopilotPluginManifest.name]])
+                    disableSent = true
+                }
+                guard let disabled = responses[5] else { return }
+                let value = try JSONSerialization.jsonObject(with: disabled, options: [.fragmentsAllowed])
+                guard value is NSNull || (value as? [String: Any])?.isEmpty == true else { throw CopilotFileError.io }
+                if !disableReadbackSent {
+                    try send(id: 6, method: "plugins.list", params: [:])
+                    disableReadbackSent = true
+                }
+                guard let data = responses[6] else { return }
+                let after = try selectedPlugin(data, identity: identity)
+                guard !after.enabled else { throw CopilotFileError.changed }
+                pluginReceipt = .init(plugin: after, directInstallDeprecated: false)
+            }
         }
         closeFD(&input[1])
+    }
+
+    private func selectedPlugin(_ data: Data, identity: String) throws -> CopilotSetupMetadata.Plugin {
+        struct Plugins: Decodable { let plugins: [CopilotSetupMetadata.Plugin] }
+        let values = try JSONDecoder().decode(Plugins.self, from: data).plugins
+        let own = values.filter { $0.name == CopilotPluginManifest.name }
+        guard values.count <= 128, own.count == 1, own[0].isUnmanagedDirectInstall,
+              own[0].directSourceId == identity else { throw CopilotFileError.changed }
+        return own[0]
+    }
+
+    private func send(id: Int, method: String, params: [String: Any]) throws {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "jsonrpc": "2.0", "id": id, "method": method, "params": params,
+        ])
+        let request = Data("Content-Length: \(body.count)\r\n\r\n".utf8) + body
+        guard request.count < 8192,
+              request.withUnsafeBytes({ Darwin.write(input[1], $0.baseAddress, $0.count) }) == request.count
+        else { throw CopilotFileError.io }
     }
 
     static func validIdentity(_ identity: String) -> Bool {

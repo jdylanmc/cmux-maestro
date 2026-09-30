@@ -238,11 +238,25 @@ supersedes the SDK comments claiming direct installs are always enabled.
 Disposable official-provider probes confirm direct disable/enable, zero
 discovered plugin hooks while disabled, and re-enabling on both install and
 update. The installer preserves a verified disabled native plugin without
-provider mutation for no-ops and app/external-resource-only updates. A disabled
-native payload requiring replacement refuses before app replacement; the
-provider exposes no tested preserve-disabled install option. Dedicated observer
-disable status remains independent. Tests cover both supported preservation
-paths, exact restoration and the explicit unsupported-payload boundary.
+provider mutation for no-ops and compatible external-resource-only updates.
+For a required payload replacement it records original state and mutation
+intent before the official operation, keeps dedicated staging inactive, and
+requires official `plugins.disable` plus exact-source readback before
+publication/commit. The disable RPC is version-gated to 1.0.89 and checks the
+selected identity before its name-based mutation. Install/update success alone
+does not prove preservation. Disabled legacy observer migration also disables
+the dedicated file; an existing dedicated file retains its independent choice.
+
+Recovery handles a failed/lost disable response or process exit between the
+operations using the durable intent, independently re-established source
+authority and official disabled-state restoration. Exact prior cache/source and
+settings are verified before the app rollback completes. A prior payload that
+is already intact is not needlessly reinstalled. No private enablement key is
+guessed or edited. User re-enablement after verified apply and foreign identity
+drift refuse rather than being cleared. These are separate provider operations:
+the intermediate enabled state is real, not described as atomic suppression.
+Local tests cover that boundary without executing hooks or restarting sessions;
+actual stock-host and installed-session gates remain separate.
 
 The Python suite executes the compiled Swift bridge in separate processes over
 real disposable files, covering success, no-op, upgrade, late failure, first
