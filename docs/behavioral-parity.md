@@ -49,6 +49,27 @@ serialization, startup retry or larger readiness timeout. Startup observation
 has no added wall-time limit before the first sample; the existing dedicated
 concurrency test remains the bounded dispatch-progress regression.
 
+The hosted integrated runner now builds once, executes that **one unchanged
+test** alone in the integrated test host, and executes every remaining test
+from the same build in a second invocation. It does not serialize the remaining
+suite or alter either detached driver, any assertion, or the three-second
+bound. `xcresulttool` must report exactly one executed, correctly identified
+test before that selector may be excluded from the loaded invocation. Both
+scopes must pass with explicit nonzero, reconciled counts; unrelated skipped
+tests and a repeated concurrency test are errors. A selector/count extraction
+failure runs an unfiltered coverage fallback but **still fails** the command.
+There is no retry-until-pass path.
+
+Each hosted invocation retains separate xcresults, raw summary/test JSON and
+`coverage.json` under `.build/tests/scoped-results/`. The isolated raw result
+and both scope counts also appear in the job log, so the parent verifies the
+actual hosted selector rather than accepting a guessed selector or local
+standalone count. The inherited-MainActor negative remains sensitive because
+the test body and non-yielding observer are unchanged. Previous hosted
+concurrency reds and the separate native viewport-settlement failure remain
+recorded; only a necessary current-head hosted run can establish their state.
+All eleven workflow commands remain required.
+
 ### Dedicated observer registration (#114)
 
 Explicit setup now owns a dedicated version-1 user file for exactly

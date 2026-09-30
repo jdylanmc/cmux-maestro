@@ -1389,11 +1389,26 @@ continued history updates remain part of deployment acceptance.
 ./scripts/test.sh
 ```
 
-Focused history/preference checks (including two real child processes, coordinated
-writer contention, and automatic observation/projection convergence):
+`test.sh` is the full-coverage entrypoint. It builds once, runs the unchanged
+blocking-observer concurrency regression alone in the integrated host, verifies
+its exact identity/count from the hosted xcresult, then runs all other tests
+from that same build without suite serialization. Both scopes must pass.
+Results and count evidence are retained under `.build/tests/scoped-results/`.
+Selection/retry overrides are rejected by this full-coverage entrypoint.
+
+Focused history/preference diagnostics after building the validation products
+(not a full-suite pass):
 
 ```sh
-./scripts/test.sh -only-testing:CMUXMaestroPreviewTests/SidebarPreferencesTests \
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+  -project CMUXMaestroPreview.xcodeproj -scheme CMUXMaestroPreview \
+  -configuration Debug -derivedDataPath .build/tests \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+  CMUX_BUNDLE_ID_SUFFIX=.Validation.Tests \
+  'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) CMUX_VALIDATION' \
+  CMUX_SIDEBAR_EXTENSION_POINT_ID=com.jdylanmc.CMUXMaestroPreview.validation.tests.sidebar \
+  test-without-building \
+  -only-testing:CMUXMaestroPreviewTests/SidebarPreferencesTests \
   -only-testing:CMUXMaestroPreviewTests/SidebarHistoryTests \
   -only-testing:CMUXMaestroPreviewTests/SidebarHistoryPollingTests \
   -only-testing:CMUXMaestroPreviewTests/SidebarPreferenceCoordinationTests \

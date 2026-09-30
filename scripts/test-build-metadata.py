@@ -15,6 +15,130 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("metadata", ROOT / "scripts/verify-build-metadata.py")
 metadata = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(metadata)
+scope_spec = importlib.util.spec_from_file_location("integrated_scopes", ROOT / "scripts/run-integrated-test-scopes.py")
+scopes = importlib.util.module_from_spec(scope_spec)
+scope_spec.loader.exec_module(scopes)
+
+
+class IntegratedTestScopeTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = ROOT / ".build/metadata-tests" / str(uuid.uuid4())
+        self.directory.mkdir(parents=True)
+        self.commands = []
+
+    def tearDown(self):
+        shutil.rmtree(self.directory)
+
+    @staticmethod
+    def report(entries):
+        statuses = [status for _, status in entries]
+        summary = {"result": "Failed" if "Failed" in statuses else "Passed", "totalTestCount": len(entries),
+                   "passedTests": statuses.count("Passed"), "failedTests": statuses.count("Failed"),
+                   "skippedTests": statuses.count("Skipped"), "expectedFailures": statuses.count("Expected Failure")}
+        tests = {"testNodes": [{"nodeType": "Unit test bundle", "name": scopes.TARGET, "children": [
+            {"nodeType": "Test Case", "name": name.rsplit("/", 1)[-1],
+             "nodeIdentifier": name, "result": status} for name, status in entries
+        ]}]}
+        return summary, tests
+
+    def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0):
+        def runner(command, **kwargs):
+            self.commands.append(command)
+            if command[0] == "xcodebuild":
+                code = (isolated_exit if any(arg.startswith("-only-testing:") for arg in command)
+                        else remaining_exit if "test-without-building" in command else 0)
+                return subprocess.CompletedProcess(command, code)
+            scope = Path(command[command.index("--path") + 1]).stem
+            values = isolated if scope == "isolated" else remaining
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(values[0 if command[4] == "summary" else 1]))
+        with patch("builtins.print"):
+            result = scopes.run(["xcodebuild", "-scheme", "CMUXMaestroPreview"], self.directory / "results", runner)
+        return result, json.loads((self.directory / "results/coverage.json").read_text())
+
+    def test_verified_one_test_then_full_complement_without_serialization(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                        self.report([("OtherSuite/first()", "Passed"), ("OtherSuite/second()", "Passed")]))
+        self.assertEqual(result, 0)
+        self.assertTrue(evidence["selectorVerifiedByHostedResult"])
+        self.assertEqual(evidence["isolatedCounts"]["totalTestCount"], 1)
+        self.assertEqual(evidence["remainingCounts"]["totalTestCount"], 2)
+        commands = [command for command in self.commands if command[0] == "xcodebuild"]
+        self.assertEqual(len(commands), 3)
+        self.assertIn("build-for-testing", commands[0])
+        self.assertIn("-only-testing:" + scopes.SELECTOR, commands[1])
+        self.assertIn("-skip-testing:" + scopes.SELECTOR, commands[2])
+        self.assertFalse(any("-parallel-testing-enabled" in command for command in commands))
+
+    def test_failed_isolated_regression_still_runs_complement_and_remains_red(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Failed")]),
+                                        self.report([("OtherSuite/test()", "Passed")]), isolated_exit=65)
+        self.assertEqual(result, 1)
+        self.assertTrue(evidence["selectorVerifiedByHostedResult"])
+        self.assertEqual(evidence["remainingCounts"]["passedTests"], 1)
+        self.assertFalse(evidence["passed"])
+
+    def test_zero_or_wrong_selection_never_excludes_or_counts_as_success(self):
+        for entries in ([], [("OtherSuite/notTheRegression()", "Passed")]):
+            with self.subTest(entries=entries):
+                result, evidence = self.execute(self.report(entries),
+                                                self.report([(scopes.TEST, "Passed"), ("OtherSuite/test()", "Passed")]))
+                self.assertEqual(result, 1)
+                self.assertFalse(evidence["selectorVerifiedByHostedResult"])
+                last = [command for command in self.commands if command[0] == "xcodebuild"][-1]
+                self.assertFalse(any(arg.startswith("-skip-testing") for arg in last))
+                self.assertTrue((self.directory / "results/full-fallback-summary.json").exists())
+                shutil.rmtree(self.directory / "results")
+
+    def test_unrelated_failure_is_not_hidden_by_isolated_success(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                        self.report([("ViewportSuite/staticFixture()", "Failed")]), remaining_exit=65)
+        self.assertEqual(result, 1)
+        self.assertEqual(evidence["remainingCounts"]["failedTests"], 1)
+        self.assertFalse(evidence["passed"])
+
+    def test_skipping_other_tests_or_repeating_the_regression_is_rejected(self):
+        for entries in ([("OtherSuite/test()", "Skipped")],
+                        [(scopes.TEST, "Passed"), ("OtherSuite/test()", "Passed")]):
+            with self.subTest(entries=entries):
+                result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]), self.report(entries))
+                self.assertEqual(result, 1)
+                self.assertIn("remainingValidationError", evidence)
+                shutil.rmtree(self.directory / "results")
+
+    def test_only_the_already_executed_regression_may_be_reported_as_excluded(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                        self.report([(scopes.TEST, "Skipped"), ("OtherSuite/test()", "Passed")]))
+        self.assertEqual(result, 0)
+        self.assertEqual(evidence["remainingCounts"]["skippedTests"], 1)
+        self.assertEqual(evidence["remainingCounts"]["passedTests"], 1)
+
+    def test_selection_and_retry_overrides_cannot_reduce_full_coverage(self):
+        for option in ("-only-testing:Other", "-skip-testing:Other", "-retry-tests-on-failure",
+                       "-test-iterations", "-only-test-configuration", "-resultBundlePath", "-xctestrun"):
+            with self.subTest(option=option), self.assertRaises(ValueError):
+                scopes.validate_arguments(["xcodebuild", option])
+
+    def test_actual_xcresult_identifier_url_is_bound_to_expected_method(self):
+        summary, tree = self.report([(scopes.TEST, "Passed")])
+        node = tree["testNodes"][0]["children"][0]
+        node["nodeIdentifierURL"] = "test://com.apple.xcode/" + scopes.SELECTOR
+        self.assertEqual(scopes.validate_isolated(summary, tree)["totalTestCount"], 1)
+        node["nodeIdentifierURL"] += "-other"
+        with self.assertRaises(ValueError):
+            scopes.validate_isolated(summary, tree)
+
+    def test_malformed_or_contradictory_result_evidence_cannot_pass(self):
+        summary, tree = self.report([(scopes.TEST, "Passed")])
+        for invalid in ([], {}, {**summary, "totalTestCount": True}, {**summary, "totalTestCount": 0}):
+            with self.subTest(summary=invalid), self.assertRaises(ValueError):
+                scopes.validate_isolated(invalid, tree)
+        tree["testNodes"][0]["children"][0]["result"] = "Failed"
+        with self.assertRaises(ValueError):
+            scopes.validate_isolated(summary, tree)
+        remaining_summary, remaining_tree = self.report([("OtherSuite/test()", "Passed")])
+        remaining_tree["testNodes"][0]["children"][0]["result"] = "Failed"
+        with self.assertRaises(ValueError):
+            scopes.validate_remaining(remaining_summary, remaining_tree)
 
 
 class BuildMetadataTests(unittest.TestCase):
