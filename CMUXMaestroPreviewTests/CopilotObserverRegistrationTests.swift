@@ -581,6 +581,45 @@ final class InstallCheckpointFixture: @unchecked Sendable {
 }
 
 struct CopilotInstallCheckpointTests {
+    @Test(arguments: [false, true])
+    func deletedExistingReceiptIsNotAnAuthorizedNilPlaceholder(durableAfter: Bool) async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        for action in ["prepare", "apply", "finish", "release"] {
+            _ = try await value.checkpoint().perform(action)
+        }
+        try value.fixture.write(Data("#!/usr/bin/env python3\n# updated fixture\n".utf8),
+                                to: value.resources.appendingPathComponent("controller.py"))
+        let id = UUID()
+        _ = try await value.checkpoint(id: id).perform("prepare")
+        _ = try await value.checkpoint(id: id).perform("apply")
+        let journal = CopilotInstallCheckpoint.location(root: value.fixture.root)
+        if !durableAfter {
+            var saved = try CopilotSetupJSON.object(Data(contentsOf: journal))
+            saved["phase"] = "applying"
+            saved.removeValue(forKey: "after")
+            try value.fixture.write(saved, to: journal)
+        }
+        let saved = try value.record()
+        let receipt = value.fixture.registration.receiptFile
+        let entry = try #require(saved.entries.first(where: { $0.path == receipt.path }))
+        #expect(entry.before.data != nil)
+        #expect(try #require(saved.receiptIntents).allSatisfy { $0.data != nil })
+        try FileManager.default.removeItem(at: receipt)
+        let resources = try saved.entries.map {
+            try CopilotSetupFileState.read(URL(fileURLWithPath: $0.path), maximum: $0.maximum)
+        }
+        let pending = try CopilotSetupFileState.read(journal, maximum: CopilotInstallCheckpoint.maximum)
+        let calls = await value.runner.pluginOperations
+        do {
+            _ = try await value.checkpoint(id: id).perform("restore")
+            Issue.record("Receipt absence must not match the generic desired:nil placeholder")
+        } catch {}
+        #expect(!FileManager.default.fileExists(atPath: receipt.path))
+        for resource in resources { try resource.revalidate() }
+        try pending.revalidate()
+        #expect(await value.runner.pluginOperations == calls)
+    }
+
     @Test(arguments: [false, true], ["pluginIdentity", "source-path", "source-id"])
     func editedReceiptProvenanceIsPreservedWithOrWithoutAfterSnapshot(durableAfter: Bool, field: String) async throws {
         let value = try InstallCheckpointFixture(); defer { try? value.clean() }

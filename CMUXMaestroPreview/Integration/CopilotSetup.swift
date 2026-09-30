@@ -959,8 +959,12 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
                record.cache[cacheIndex].matches(state) { continue }
             if entry.path == registration.file.path, record.after == nil || record.phase == "restoring", let data = state.data,
                try record.generation.recognizes(data) { continue }
-            if entry.path == registration.receiptFile.path, record.after == nil,
-               record.receiptIntents?.contains(where: { $0.matches(state) }) == true { continue }
+            if entry.path == registration.receiptFile.path {
+                guard record.after == nil, record.receiptIntents?.contains(where: { $0.matches(state) }) == true else {
+                    throw CopilotRegistrationConflict("Observer receipt changed outside every authorized image; recovery preserves the change.")
+                }
+                continue
+            }
             guard state.data == entry.desired,
                   state.stamp?.permissions == (entry.desired == nil ? nil : entry.permissions)
             else { throw CopilotRegistrationConflict("An owned resource changed outside the recorded installation; restoration refuses to overwrite it.") }
