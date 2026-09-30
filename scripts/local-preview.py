@@ -558,7 +558,7 @@ class MacOperations:
         result = command_worker.run(self.install_lock_fd, command, timeout=120, text=True)
         require(not result.stderr.strip() and len(result.stdout.encode()) <= 4096, "Unexpected integration bridge output.")
         response = json.loads(result.stdout)
-        require(isinstance(response, dict) and set(response) == {"schema", "action", "transaction", "unchanged", "registration"}
+        require(isinstance(response, dict) and set(response) == {"schema", "action", "transaction", "unchanged", "registration", "nativePlugin"}
                 and type(response["schema"]) is int and response["schema"] == 1 and response["action"] == action
                 and response["transaction"] == token and type(response["unchanged"]) is bool,
                 "Integration bridge did not verify this exact transaction.")
@@ -566,6 +566,9 @@ class MacOperations:
                                             "disableUnresolved", "incomplete", "conflict", "unavailable"),
                 "Unrecognized observer registration status.")
         self.integration_health = response["registration"]
+        require(response["nativePlugin"] in ("enabled", "disabled", "absent", "unverified"),
+                "Unrecognized native plugin status.")
+        self.native_plugin_status = response["nativePlugin"]
         return response["unchanged"]
 
     def verify_bridge(self, app):
@@ -591,6 +594,7 @@ class Installer:
         self.receipt = None
         self.copilot_executable = copilot_executable
         self.verified_registration = None
+        self.verified_native_plugin = None
 
     @contextmanager
     def locked(self):
@@ -994,7 +998,9 @@ class Installer:
             "disableUnresolved": "disable-key applicability unresolved; choices preserved",
         }
         require(self.verified_registration in descriptions, "No verified observer registration result.")
-        return " At verification: " + descriptions[self.verified_registration] + "."
+        require(self.verified_native_plugin in ("enabled", "disabled"), "No verified native plugin result.")
+        return (" At verification: " + descriptions[self.verified_registration]
+                + ". Native plugin configured " + self.verified_native_plugin + ".")
 
     def coordinate(self, action, *, allow_absent=False):
         transaction = self.receipt["transaction"]
@@ -1092,6 +1098,7 @@ class Installer:
             self.coordinate("verify")
             self.coordinate("finish")
             self.verified_registration = self.ops.integration_health
+            self.verified_native_plugin = self.ops.native_plugin_status
             self.registration_message()
             integration["state"] = "verified"
             self.save()

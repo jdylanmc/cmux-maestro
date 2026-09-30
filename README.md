@@ -1669,13 +1669,29 @@ requires the current build number; this feature does not bump it.
   while the coordinated transaction is pending.
 - The app receipt journals the companion transaction ID and its progress.
   Pending failure recovery first verifies/restores integration, using official
-  plugin install at the unchanged owned source path or official uninstall for
-  prior absence, then restores the old app and registration. Current settings
+  `plugins.install` at the unchanged owned source path or `plugins.uninstall`
+  scoped by the returned `directSourceId` for prior absence, then restores the
+  old app and registration. The install RPC receipt binds that exact source;
+  later discovery must match it. Current settings
   must still match the checkpoint's values or known CLI normalization; unrelated
   changes are not overwritten. A failed first install restores verified absence,
   not a fictitious previous app. New journals also capture and restore the exact
   application/extension registration of an explicitly retired development
   source. Older journals without that evidence refuse to guess.
+- Copilot 1.0.89 supports disabling direct plugins, but its install/update
+  operations re-enable them. A verified current disabled native plugin remains
+  disabled: identical repeats and app/external-resource-only updates skip
+  provider mutation. If its native payload needs replacement (including legacy
+  migration), preparation refuses **before app replacement** rather than
+  clearing that choice or inventing a preserve-disabled option. Native-plugin
+  status is reported separately from dedicated observer-hook status. This
+  unsupported disabled-payload update is not claimed as a completed upgrade.
+- A first-install interruption after the provider mutates but before its
+  source-identity receipt is retained cannot be safely compensated by name.
+  Recovery preserves the journal and reports that boundary; it does not delete
+  a same-name plugin based only on listing metadata. Existing bound sources and
+  failures after receipt persistence use identity-checked compensation. This
+  lost-receipt window remains an all-or-nothing recovery limitation.
 - A surviving or unconfirmed command supervisor blocks restoration; the
   installer never races a still-running mutator. A failed restoration reports
   both errors and retains recoverable state. The durable commit decision is
@@ -1698,7 +1714,7 @@ python3 scripts/local-preview.py recover
 python3 scripts/local-preview.py recover --restore-previous
 ```
 
-For coordinated installs, recovery restores both prior components whenever the
+For coordinated installs with retained source authority, recovery restores both prior components whenever the
 app receipt still records a pending transaction, including after the app has
 already been exchanged. Older app-only journals retain their finish-forward
 recovery behavior. Recovery can

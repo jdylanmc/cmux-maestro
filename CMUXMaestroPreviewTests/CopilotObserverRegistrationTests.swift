@@ -60,7 +60,7 @@ final class ObserverFixture: Sendable {
         }
     }
 
-    func metadata(installed: Bool) throws -> CopilotSetupMetadata {
+    func metadata(installed: Bool, enabled: Bool = true) throws -> CopilotSetupMetadata {
         var hooks: [CopilotSetupMetadata.Hook] = []
         let settingsObject = FileManager.default.fileExists(atPath: settings.path)
             ? try JSONSerialization.jsonObject(with: Data(contentsOf: settings)) as? [String: Any] : nil
@@ -69,7 +69,7 @@ final class ObserverFixture: Sendable {
             (file, "user", "hooks/\(CopilotObserverRegistration.filename)"),
             (cache.appendingPathComponent("hooks.json"), "plugin", CopilotPluginManifest.name),
         ] {
-            if origin == "plugin", !installed { continue }
+            if origin == "plugin", !installed || !enabled { continue }
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             let object = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
             let disabled = object["disableAllHooks"] as? Bool ?? false
@@ -80,8 +80,8 @@ final class ObserverFixture: Sendable {
                                            disableKey: disabled ? nil : "provider-key-\($0)")
             }
         }
-        return CopilotSetupMetadata(version: "1.0.88", protocolVersion: 3, hooks: hooks,
-            plugins: installed ? [.init(name: CopilotPluginManifest.name, marketplace: "", enabled: true,
+        return CopilotSetupMetadata(version: enabled ? "1.0.88" : "1.0.89", protocolVersion: 3, hooks: hooks,
+            plugins: installed ? [.init(name: CopilotPluginManifest.name, marketplace: "", enabled: enabled,
                                        directSourceId: "opaque-provider-source")] : [])
     }
 }
@@ -130,6 +130,10 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
     var cancelDuringStaging = false
     var settingsEffect: String?
     var afterMutationResult: CopilotProcessResult?
+    var pluginOperations: [String] = []
+    private var nativeEnabled = true
+    private var loseReceipt = false
+    private var receiptIdentity = "opaque-provider-source"
     private var writtenSettings: CopilotSetupFileState?
     private var ownedRowsOverride: [CopilotSetupMetadata.Hook]?
     private var unrelatedRows: [CopilotSetupMetadata.Hook] = []
@@ -155,6 +159,12 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
         unrelatedPlugins = plugins
         suppliedVersion = version
     }
+    func nativePlugin(enabled: Bool = true, loseReceipt: Bool = false,
+                      receiptIdentity: String = "opaque-provider-source") {
+        nativeEnabled = enabled
+        self.loseReceipt = loseReceipt
+        self.receiptIdentity = receiptIdentity
+    }
     func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
         providerHomes.append(providerHome)
         calls.append([executable.path] + arguments)
@@ -168,6 +178,7 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
             }
             else {
                 installed = true
+                nativeEnabled = true
                 for name in ["plugin.json", "hooks.json", "skills/cmux-maestro-orchestrate/SKILL.md",
                              "skills/maestro-icon/SKILL.md", "skills/maestro/SKILL.md"] {
                     let source = fixture.source.appendingPathComponent(name)
@@ -217,7 +228,7 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
         }
         if metadataCalls == failingMetadataCall { return .failed(.unavailable) }
         do {
-            var value = try fixture.metadata(installed: installed)
+            var value = try fixture.metadata(installed: installed, enabled: nativeEnabled)
             if stagingEnabled, metadataCalls == 2 {
                 value = CopilotSetupMetadata(version: value.version, protocolVersion: value.protocolVersion,
                     hooks: value.hooks.map { .init(hookType: $0.hookType, origin: $0.origin, source: $0.source,
@@ -237,8 +248,31 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
     func settingsUnchangedSinceCLI() throws -> Bool {
         try CopilotSetupFileState.read(fixture.settings) == writtenSettings
     }
-}
 
+    func plugin(executable: URL, operation: CopilotPluginOperation, path: String,
+                providerHome: URL?) async -> CopilotPluginOperationResult {
+        let arguments: [String]
+        switch operation {
+        case .install(let source, let identity):
+            guard identity == nil || identity == "opaque-provider-source" else { return .failed(.unavailable) }
+            pluginOperations.append("install:\(source.path)")
+            arguments = ["--no-auto-update", "plugin", "install", source.path]
+        case .uninstall(let identity):
+            guard identity == "opaque-provider-source" else { return .failed(.unavailable) }
+            pluginOperations.append("uninstall:\(identity)")
+            arguments = ["--no-auto-update", "plugin", "uninstall", CopilotPluginManifest.name]
+        }
+        let respondsBeforeFailure = afterMutationResult != nil
+        let result = await run(executable: executable, arguments: arguments, path: path, providerHome: providerHome)
+        let value = installed ? CopilotSetupMetadata.Plugin(name: CopilotPluginManifest.name, marketplace: "",
+            enabled: nativeEnabled, directSourceId: receiptIdentity) : nil
+        let receipt = CopilotPluginReceipt(plugin: value, directInstallDeprecated: installed)
+        guard result == .exited(0) else {
+            return .failed(result, receipt: respondsBeforeFailure && !loseReceipt ? receipt : nil)
+        }
+        return .value(receipt)
+    }
+}
 private actor CheckpointProcessProvider: CopilotSetupProcessRunner {
     let home: URL
     let root: URL
@@ -266,11 +300,30 @@ private actor CheckpointProcessProvider: CopilotSetupProcessRunner {
                     } else if FileManager.default.fileExists(atPath: target.path) {
                         try FileManager.default.removeItem(at: target)
                     }
+
                 }
                 try Data("installed".utf8).write(to: marker)
             }
             return .exited(0)
         } catch { return .exited(9) }
+    }
+
+    func plugin(executable: URL, operation: CopilotPluginOperation, path: String,
+                providerHome: URL?) async -> CopilotPluginOperationResult {
+        let arguments: [String]
+        switch operation {
+        case .install(let source, let identity):
+            guard identity == nil || identity == "fixture-stable-source" else { return .failed(.unavailable) }
+            arguments = ["--no-auto-update", "plugin", "install", source.path]
+        case .uninstall(let identity):
+            guard identity == "fixture-stable-source" else { return .failed(.unavailable) }
+            arguments = ["--no-auto-update", "plugin", "uninstall", CopilotPluginManifest.name]
+        }
+        let result = await run(executable: executable, arguments: arguments, path: path, providerHome: providerHome)
+        guard result == .exited(0) else { return .failed(result) }
+        let installed = FileManager.default.fileExists(atPath: marker.path)
+        return .value(.init(plugin: installed ? .init(name: CopilotPluginManifest.name, marketplace: "",
+            enabled: true, directSourceId: "fixture-stable-source") : nil, directInstallDeprecated: installed))
     }
 
     func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult {
@@ -347,7 +400,7 @@ nonisolated enum CopilotInstallBridgeProcessFixture {
             let health = try await checkpoint.registrationStatus()
             let data = try JSONSerialization.data(withJSONObject: [
                 "schema": 1, "action": request.action, "transaction": request.id.uuidString.lowercased(),
-                "unchanged": unchanged, "registration": health.rawValue,
+                "unchanged": unchanged, "registration": health.rawValue, "nativePlugin": checkpoint.nativePluginStatus,
             ], options: [.sortedKeys])
             FileHandle.standardOutput.write(data + Data("\n".utf8))
             return 0
@@ -420,6 +473,127 @@ final class InstallCheckpointFixture: @unchecked Sendable {
 }
 
 struct CopilotInstallCheckpointTests {
+    @Test(arguments: [false, true])
+    func disabledNativePluginPreservesChoiceWithoutProviderMutation(resourceUpdate: Bool) async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        await value.runner.supplyMetadata(version: "1.0.89")
+        for action in ["prepare", "apply", "finish", "release"] {
+            _ = try await value.checkpoint().perform(action)
+        }
+        await value.runner.nativePlugin(enabled: false)
+        let beforeCalls = await value.runner.pluginOperations
+        let oldController = value.fixture.root.deletingLastPathComponent()
+            .appendingPathComponent("Orchestration/bin/cmux-maestro-orchestrator")
+        let beforeController = try CopilotSetupFileState.read(oldController)
+        let observer = try CopilotSetupFileState.read(value.fixture.file)
+        if resourceUpdate {
+            try value.fixture.write(Data("#!/usr/bin/env python3\n# replacement fixture\n".utf8),
+                                    to: value.resources.appendingPathComponent("controller.py"))
+        }
+        let id = UUID()
+        #expect(try await value.checkpoint(id: id).perform("prepare") == !resourceUpdate)
+        let before = try value.record()
+        #expect(try await value.checkpoint(id: id).perform("apply") == !resourceUpdate)
+        _ = try await value.checkpoint(id: id).perform("verify")
+        #expect(await value.runner.pluginOperations == beforeCalls)
+        #expect(try CopilotSetupFileState.read(value.fixture.file) == observer)
+        if resourceUpdate {
+            #expect(try CopilotSetupFileState.read(oldController).data != beforeController.data)
+            _ = try await value.checkpoint(id: id).perform("restore")
+            try value.verifyRestored(before)
+            #expect(try CopilotSetupFileState.read(oldController).data == beforeController.data)
+        } else {
+            _ = try await value.checkpoint(id: id).perform("finish")
+        }
+        #expect(await value.runner.pluginOperations == beforeCalls)
+        _ = try await value.checkpoint(id: id).perform("release")
+    }
+
+    @Test(arguments: [false, true])
+    func disabledNativePayloadReplacementRefusesBeforeWrites(legacy: Bool) async throws {
+        let value = try InstallCheckpointFixture(legacy: legacy); defer { try? value.clean() }
+        await value.runner.supplyMetadata(version: "1.0.89")
+        if !legacy {
+            for action in ["prepare", "apply", "finish", "release"] {
+                _ = try await value.checkpoint().perform(action)
+            }
+            try value.fixture.write(Data("---\nname: maestro-icon\n---\nChanged fixture\n".utf8),
+                                    to: value.resources.appendingPathComponent("maestro-icon/SKILL.md"))
+        }
+        await value.runner.nativePlugin(enabled: false)
+        let beforeCalls = await value.runner.pluginOperations
+        let before = try [value.fixture.file, value.fixture.settings,
+                          value.fixture.source.appendingPathComponent("hooks.json"),
+                          value.fixture.cache.appendingPathComponent("hooks.json")].map {
+            try CopilotSetupFileState.read($0)
+        }
+        do {
+            _ = try await value.checkpoint(id: UUID()).perform("prepare")
+            Issue.record("A disabled payload needing provider replacement must refuse before app or integration changes")
+        } catch let error as CopilotRegistrationConflict {
+            #expect(error.message.contains("re-enables"))
+        }
+        #expect(await value.runner.pluginOperations == beforeCalls)
+        for state in before { try state.revalidate() }
+        #expect(try CopilotSetupFileState.read(CopilotInstallCheckpoint.location(root: value.fixture.root)).data == nil)
+    }
+
+    @Test func lostFirstInstallReceiptCannotAuthorizeSameNameCompensation() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        _ = try await value.checkpoint().perform("prepare")
+        await value.runner.nativePlugin(loseReceipt: true)
+        await value.runner.configure(afterMutationResult: .exited(9))
+        do {
+            _ = try await value.checkpoint().perform("apply")
+            Issue.record("A lost provider receipt must fail installation")
+        } catch is CopilotRegistrationConflict {}
+        #expect(await value.runner.installed)
+        let beforeCalls = await value.runner.pluginOperations
+        let before = try value.record()
+        do {
+            _ = try await value.checkpoint().perform("restore")
+            Issue.record("Name-only discovery cannot authorize deleting an unbound source")
+        } catch let error as CopilotRegistrationConflict {
+            #expect(error.message.contains("No authoritative install receipt"))
+        }
+        #expect(await value.runner.pluginOperations == beforeCalls)
+        #expect(try value.record().phase == before.phase)
+        #expect(before.phase == "applying")
+    }
+
+    @Test func receiptIdentityMustMatchSubsequentDiscovery() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        _ = try await value.checkpoint().perform("prepare")
+        await value.runner.nativePlugin(receiptIdentity: "different-provider-source")
+        do {
+            _ = try await value.checkpoint().perform("apply")
+            Issue.record("A different same-name source cannot satisfy the public install receipt")
+        } catch is CopilotRegistrationConflict {}
+        #expect(try value.record().phase == "applying")
+        let hooks = try CopilotSetupJSON.object(Data(contentsOf: value.fixture.file))
+        #expect(try CopilotSetupJSON.bool(hooks["disableAllHooks"]))
+        let beforeCalls = await value.runner.pluginOperations
+        do {
+            _ = try await value.checkpoint().perform("restore")
+            Issue.record("Identity-mismatched compensation must refuse")
+        } catch is CopilotRegistrationConflict {}
+        #expect(await value.runner.pluginOperations == beforeCalls)
+    }
+
+    @Test func nativeDisableAfterApplyCannotBeClearedByCompensation() async throws {
+        let value = try InstallCheckpointFixture(legacy: true); defer { try? value.clean() }
+        await value.runner.supplyMetadata(version: "1.0.89")
+        _ = try await value.checkpoint().perform("prepare")
+        _ = try await value.checkpoint().perform("apply")
+        await value.runner.nativePlugin(enabled: false)
+        let beforeCalls = await value.runner.pluginOperations
+        do {
+            _ = try await value.checkpoint().perform("restore")
+            Issue.record("A newer explicit disabled choice must survive compensation")
+        } catch is CopilotRegistrationConflict {}
+        #expect(await value.runner.pluginOperations == beforeCalls)
+    }
+
     @Test func checkpointRemainsOutsideAllSidebarReadableSupportPrefixes() throws {
         let value = try InstallCheckpointFixture(); defer { try? value.clean() }
         let checkpoint = CopilotInstallCheckpoint.location(root: value.fixture.root)

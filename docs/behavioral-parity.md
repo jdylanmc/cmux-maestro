@@ -220,6 +220,25 @@ and unrelated plugin directories are never rewritten.
 Unexpected concurrent content or disable changes refuse compensation rather
 than being overwritten. Failed compensation retains the checkpoint.
 
+Plugin mutations use public sessionless RPCs, with the supported status checked
+before the mutation request. An install receipt supplies the exact owned
+`directSourceId`; later discovery must match. Removal and compensation target
+that identity, not just the manifest name. Even a receipt followed by a failing
+provider-process exit is retained for recovery. A first-install mutation whose
+receipt is lost before persistence remains a concrete recovery limitation:
+same-name discovery is not promoted into uninstall authority.
+
+The pinned [1.0.89 changelog](https://github.com/github/copilot-cli/blob/8dfa6009c4a04b3a22a5ca4a7c36a056edd718dd/changelog.md)
+supersedes the SDK comments claiming direct installs are always enabled.
+Disposable official-provider probes confirm direct disable/enable, zero
+discovered plugin hooks while disabled, and re-enabling on both install and
+update. The installer preserves a verified disabled native plugin without
+provider mutation for no-ops and app/external-resource-only updates. A disabled
+native payload requiring replacement refuses before app replacement; the
+provider exposes no tested preserve-disabled install option. Dedicated observer
+disable status remains independent. Tests cover both supported preservation
+paths, exact restoration and the explicit unsupported-payload boundary.
+
 The Python suite executes the compiled Swift bridge in separate processes over
 real disposable files, covering success, no-op, upgrade, late failure, first
 absence and an actual installer-process exit after apply. A fresh installer

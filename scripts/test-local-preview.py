@@ -83,6 +83,7 @@ class SyntheticMac(preview.MacOperations):
 
     def integration(self, app, action, token, destination, *, selected=None, allow_absent=False):
         self.integration_health = "currentOnDisk"
+        self.native_plugin_status = "enabled"
         self.integration_calls.append((action, token, app))
         self.fail("integration-" + action)
         root = destination.parent.parent / ".copilot"

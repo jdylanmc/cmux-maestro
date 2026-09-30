@@ -377,8 +377,11 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                                    helpers: [String], previousManifest: Data?, previousHooks: Data?) throws -> Bool {
         guard metadata.supported else { throw CopilotFileError.io }
         let own = metadata.plugins.filter { $0.name == CopilotPluginManifest.name }
-        guard own.count <= 1, own.allSatisfy({ $0.isUnmanagedDirectInstall && $0.directSourceId != nil
-            && (identity == nil || $0.directSourceId == identity) }) else {
+        guard own.isEmpty || identity != nil else {
+            throw CopilotRegistrationConflict("No authoritative install receipt was retained; compensation cannot target a same-name plugin.")
+        }
+        guard own.count <= 1, own.allSatisfy({ $0.isUnmanagedDirectInstall && identity != nil
+            && $0.directSourceId == identity }) else {
             throw CopilotRegistrationConflict("Plugin identity changed outside the owned installation; compensation refuses to overwrite it.")
         }
         if !own.isEmpty {
@@ -674,12 +677,14 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                 || (ownPlugins.count == 1 && installedKind != .missing && sourceKind != .missing)
         else { throw CopilotRegistrationConflict("The installed plugin is foreign, ambiguous or lacks the recognized direct-install files.") }
         let pluginHooks = metadata.hooks.filter { $0.origin == "plugin" && $0.source == CopilotPluginManifest.name }
-        guard Set(pluginHooks.map(\.hookType)) == (installedKind == .legacy ? Set(CopilotPluginManifest.events) : []),
-              pluginHooks.count == (installedKind == .legacy ? 3 : 0) else {
+        let pluginEnabled = ownPlugins.first?.enabled ?? true
+        let legacyDiscovered = installedKind == .legacy && pluginEnabled
+        guard Set(pluginHooks.map(\.hookType)) == (legacyDiscovered ? Set(CopilotPluginManifest.events) : []),
+              pluginHooks.count == (legacyDiscovered ? 3 : 0) else {
             throw CopilotRegistrationConflict("Provider discovery disagrees with the recognized installed plugin declarations.")
         }
-        if action == .install, ownPlugins.first?.enabled == false {
-            throw CopilotRegistrationConflict("The installed plugin is disabled. Setup will not re-enable it.")
+        if !pluginEnabled, metadata.version != "1.0.89" {
+            throw CopilotRegistrationConflict("Disabled direct-plugin behavior has not been verified for this provider version.")
         }
         let fileDisabled = try owned.data.map { try CopilotSetupJSON.bool(CopilotSetupJSON.object($0)["disableAllHooks"]) } ?? false
         if owned.data != nil, !fileDisabled, installedKind == .legacy {
@@ -712,6 +717,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                            disabled: disabled, settings: settings.file, others: others, owned: owned,
                            receipt: receiptState, source: source, installed: installed,
                            helperRecord: helperRecord, pluginWasInstalled: !ownPlugins.isEmpty,
+                           pluginEnabled: pluginEnabled,
                            otherPlugins: otherPlugins, pluginIdentity: receipt?.pluginIdentity ?? ownPlugins.first?.directSourceId,
                            isCancelled: isCancelled)
     }
@@ -779,12 +785,14 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         private var verifiedInstalled: PluginFiles?
         private var helperRecord: CopilotSetupFileState
         let pluginWasInstalled: Bool
+        let pluginEnabled: Bool
         private var stagingVerified = false
         private var pluginCommandPending = false
         private var resourcesPreparationStarted = false
         private var lock: Int32 = -1
         private var ownsLock = false
         private var pluginIdentity: String?
+        var expectedPluginIdentity: String? { pluginIdentity }
         private(set) var registrationHealth: IntegrationRegistrationHealth = .currentOnDisk
         private let isCancelled: @Sendable () -> Bool
         private(set) var phase: IntegrationSetupPhase = .preflight
@@ -794,6 +802,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                          settings: CopilotSetupFileState, others: [CopilotSetupFileState], owned: CopilotSetupFileState,
                          receipt: CopilotSetupFileState, source: PluginFiles, installed: PluginFiles,
                          helperRecord: CopilotSetupFileState, pluginWasInstalled: Bool,
+                         pluginEnabled: Bool,
                          otherPlugins: OtherPluginInventory, pluginIdentity: String?,
                          isCancelled: @escaping @Sendable () -> Bool) {
             self.store = store; self.action = action; self.generation = generation; self.previous = previous
@@ -801,6 +810,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             self.owned = owned; self.receipt = receipt; self.source = source; self.installed = installed
             self.originalOwned = owned; self.originalReceipt = receipt
             self.helperRecord = helperRecord; self.pluginWasInstalled = pluginWasInstalled
+            self.pluginEnabled = pluginEnabled
             self.otherPlugins = otherPlugins
             self.pluginIdentity = pluginIdentity
             self.isCancelled = isCancelled
@@ -836,6 +846,9 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         }
 
         func stage() throws {
+            guard action != .install || pluginEnabled else {
+                throw CopilotRegistrationConflict("The native plugin is explicitly disabled. This provider re-enables direct plugins during install/update; setup will not clear that choice.")
+            }
             try revalidate()
             try source.manifest.revalidate(); try source.hooks.revalidate()
             try installed.manifest.revalidate(); try installed.hooks.revalidate()
@@ -870,7 +883,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             guard metadata.supported, rows.count == expected,
                   plugins.count == (pluginWasInstalled ? 1 : 0),
                   plugins.allSatisfy({ $0.isUnmanagedDirectInstall && $0.directSourceId == pluginIdentity
-                      && (action == .uninstall || $0.enabled) }),
+                      && $0.enabled == pluginEnabled }),
                   rows.allSatisfy({ $0.origin == "user" && !$0.enabled }),
                   expected == 0 || Set(rows.map(\.hookType)) == Set(CopilotPluginManifest.events) else {
                 throw CopilotRegistrationConflict("Copilot did not confirm the staged file is inactive; the legacy source was not changed.")
@@ -968,12 +981,30 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             try revalidate()
         }
 
+        func acceptPluginReceipt(_ value: CopilotPluginReceipt) throws {
+            try revalidate()
+            if action == .uninstall {
+                guard value.plugin == nil else { throw CopilotFileError.changed }
+                return
+            }
+            guard let plugin = value.plugin, plugin.name == CopilotPluginManifest.name,
+                  plugin.isUnmanagedDirectInstall, plugin.enabled, let identity = plugin.directSourceId,
+                  CopilotMetadataExchange.validIdentity(identity),
+                  pluginIdentity == nil || pluginIdentity == identity else {
+                throw CopilotRegistrationConflict("The public install receipt did not bind the exact owned source identity.")
+            }
+            pluginIdentity = identity
+            let record = CopilotObserverReceipt(schema: 1, desired: generation, previous: previous,
+                phase: "staged", pluginIdentity: identity)
+            receipt = try receipt.replacing(with: record.encoded())
+        }
+
         func verifyPlugin(_ metadata: CopilotSetupMetadata) throws {
             try revalidate()
             guard try store.otherPluginHooks(metadata) == otherPlugins else { throw CopilotFileError.changed }
             guard metadata.supported else { throw CopilotFileError.io }
             let own = metadata.plugins.filter { $0.name == CopilotPluginManifest.name }
-            guard own.count == 1, own[0].isUnmanagedDirectInstall, own[0].enabled, own[0].directSourceId != nil,
+            guard own.count == 1, own[0].isUnmanagedDirectInstall, own[0].enabled == pluginEnabled, own[0].directSourceId != nil,
                   pluginIdentity == nil || pluginIdentity == own[0].directSourceId,
                   !metadata.hooks.contains(where: { $0.origin == "plugin" && $0.source == CopilotPluginManifest.name })
             else { throw CopilotRegistrationConflict("The CLI did not verify a single hookless direct plugin. Dedicated hooks remain disabled.") }
@@ -1017,7 +1048,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             let rows = metadata.hooks.filter { store.isOwnedSource($0) }
             let plugins = metadata.plugins.filter { $0.name == CopilotPluginManifest.name }
             guard phase == .published, metadata.supported, rows.count == 3,
-                  plugins.count == 1, plugins[0].isUnmanagedDirectInstall, plugins[0].enabled,
+                  plugins.count == 1, plugins[0].isUnmanagedDirectInstall, plugins[0].enabled == pluginEnabled,
                   plugins[0].directSourceId == pluginIdentity,
                   Set(rows.map(\.hookType)) == Set(CopilotPluginManifest.events),
                   rows.allSatisfy({ $0.origin == "user" && (!disabled || !$0.enabled) }),
