@@ -1,0 +1,64 @@
+// !$*UTF8*$!
+{
+    archiveVersion = 1;
+    classes = {};
+    objectVersion = 56;
+    objects = {
+        A00000000000000000000001 = {
+            isa = PBXProject;
+            attributes = { LastUpgradeCheck = 1660; };
+            buildConfigurationList = A00000000000000000000009;
+            compatibilityVersion = "Xcode 14.0";
+            developmentRegion = en;
+            knownRegions = (en, Base);
+            mainGroup = A00000000000000000000002;
+            productRefGroup = A00000000000000000000003;
+            projectDirPath = "";
+            projectRoot = "";
+            targets = (A00000000000000000000004);
+        };
+        A00000000000000000000002 = { isa = PBXGroup; children = (A00000000000000000000005, A00000000000000000000003); sourceTree = "<group>"; };
+        A00000000000000000000003 = { isa = PBXGroup; children = (A00000000000000000000006); name = Products; sourceTree = "<group>"; };
+        A00000000000000000000004 = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = A0000000000000000000000A;
+            buildPhases = (A00000000000000000000007, A00000000000000000000008);
+            buildRules = ();
+            dependencies = ();
+            name = StockHostApprovalTests;
+            productName = StockHostApprovalTests;
+            productReference = A00000000000000000000006;
+            productType = "com.apple.product-type.bundle.ui-testing";
+        };
+        A00000000000000000000005 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockHostApprovalTests.swift; sourceTree = "<group>"; };
+        A00000000000000000000006 = { isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = StockHostApprovalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+        A00000000000000000000007 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A0000000000000000000000B); runOnlyForDeploymentPostprocessing = 0; };
+        A00000000000000000000008 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+        A00000000000000000000009 = { isa = XCConfigurationList; buildConfigurations = (A0000000000000000000000C); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+        A0000000000000000000000A = { isa = XCConfigurationList; buildConfigurations = (A0000000000000000000000D); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+        A0000000000000000000000B = { isa = PBXBuildFile; fileRef = A00000000000000000000005; };
+        A0000000000000000000000C = {
+            isa = XCBuildConfiguration;
+            buildSettings = { SDKROOT = macosx; MACOSX_DEPLOYMENT_TARGET = 14.0; SWIFT_VERSION = 5.0; };
+            name = Debug;
+        };
+        A0000000000000000000000D = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = Manual;
+                CODE_SIGN_IDENTITY = "-";
+                CODE_SIGNING_ALLOWED = YES;
+                DEVELOPMENT_TEAM = "";
+                GENERATE_INFOPLIST_FILE = YES;
+                PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview.HostApprovalTests;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                ONLY_ACTIVE_ARCH = YES;
+                ENABLE_APP_SANDBOX = NO;
+                ENABLE_TESTING_SEARCH_PATHS = YES;
+                LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
+            };
+            name = Debug;
+        };
+    };
+    rootObject = A00000000000000000000001;
+}

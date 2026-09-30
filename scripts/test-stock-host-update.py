@@ -398,9 +398,13 @@ class Probe:
                                 and type(surface.get("selected")) is bool, "Invalid surface identity/selection")
         worker = self.worker_identity()
         caller = value.get("caller", {})
+        active = value.get("active", {})
         require(caller.get("workspace_id", "").lower() == worker["workspace"].lower()
                 and caller.get("surface_id", "").lower() == worker["surface"].lower(),
                 "Read-only snapshot caller is not the verified fixture worker surface")
+        require(active.get("workspace_id", "").lower() == worker["workspace"].lower()
+                and active.get("surface_id", "").lower() == worker["surface"].lower(),
+                "Fixture setup did not return to the declared terminal before acceptance")
         surfaces = [s for w in result["windows"] for ws in w["workspaces"]
                     if ws["id"].lower() == worker["workspace"].lower()
                     for p in ws["panes"] for s in p["surfaces"]
@@ -469,6 +473,86 @@ class Probe:
             raw.decode(), self.destination / self.preview.EXTENSION)
         records = self.preview.metadata.registration_records(raw.decode())
         require(len(records) == 1, "Duplicate native extension registrations")
+
+    def approve_fixture(self):
+        require(self.report["phase"] == "setup" and self.baseline is None,
+                "UI approval is forbidden after fixture setup")
+        self.report["uiApproval"] = {"status": "unavailable", "scope": "initial hosted fixture only"}
+        self.event("ui-approval-setup-start")
+        self.worker = self.worker_identity()
+        _, raw = self.run(["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-p", POINT_ID])
+        records = self.preview.metadata.registration_records(raw.decode())
+        require(len(records) == 1 and records[0]["id"] == EXT_ID
+                and Path(records[0]["Path"]).resolve() == (self.destination / self.preview.EXTENSION).resolve(),
+                "Public UI approval requires exactly the owned fixture at this extension point")
+        labels = {records[0][key] for key in ("Display Name", "Short Name", "Parent Name")
+                  if key in records[0]}
+        context = self.work / "ui-approval-context.json"
+        context.write_text(json.dumps({
+            "runID": os.environ["GITHUB_RUN_ID"], "hostPID": self.host["generation"][0],
+            "hostPath": str(self.stock), "extensionID": EXT_ID, "labels": sorted(labels),
+            "terminalTitle": "/usr/bin/env", "evidence": str(self.evidence),
+        }))
+        project = ROOT / "scripts/stock-host-approval/StockHostApproval.xcodeproj"
+        derived = self.work / "approval-build"
+        xcode = ["/usr/bin/env", "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer",
+                 "/usr/bin/xcodebuild"]
+        code, _ = self.run([
+            *xcode, "-project", project, "-scheme", "StockHostApproval", "-configuration", "Debug",
+            "-derivedDataPath", derived, "-destination", "platform=macOS",
+            "CODE_SIGN_IDENTITY=-", "DEVELOPMENT_TEAM=", "build-for-testing",
+        ], timeout=240, check=False)
+        self.report["uiApproval"]["harnessBuildExit"] = code
+        self.save()
+        require(code == 0, "Public-approval XCTest harness build failed; not a native reload result")
+        runs = list((derived / "Build/Products").glob("*.xctestrun"))
+        require(len(runs) == 1, "Missing or ambiguous generated XCTest run configuration")
+        config = plistlib.loads(runs[0].read_bytes())
+        if "TestConfigurations" in config:
+            targets = [target for item in config["TestConfigurations"] for target in item["TestTargets"]]
+        else:
+            targets = [config["StockHostApprovalTests"]] if "StockHostApprovalTests" in config else []
+        require(len(targets) == 1 and "TestBundlePath" in targets[0] and "TestHostPath" in targets[0],
+                "Unexpected XCTest UI target configuration")
+        target = targets[0]
+        # xcodebuild.xctestrun(5) documents external UI target paths and runner environment.
+        target["UITargetAppPath"] = str(self.stock)
+        target.setdefault("DependentProductPaths", []).append(str(self.stock))
+        target.setdefault("EnvironmentVariables", {}).update({
+            "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+            "GITHUB_RUN_ID": os.environ["GITHUB_RUN_ID"], "PROBE_APPROVAL_CONTEXT": str(context),
+        })
+        target["SystemAttachmentLifetime"] = "keepAlways"
+        target["UserAttachmentLifetime"] = "keepAlways"
+        configured = runs[0].with_name("StockHostApproval-configured.xctestrun")
+        configured.write_bytes(plistlib.dumps(config))
+        code, _ = self.run([
+            *xcode, "test-without-building", "-xctestrun", configured, "-destination", "platform=macOS",
+            "-parallel-testing-enabled", "NO", "-test-timeouts-enabled", "YES",
+            "-maximum-test-execution-time-allowance", "90",
+            "-only-testing:StockHostApprovalTests/StockHostApprovalTests/testApproveOwnedNativeFixture",
+            "-resultBundlePath", self.evidence / "native-approval.xcresult",
+        ], timeout=180, check=False)
+        result_file = self.evidence / "approval-result.json"
+        ui_result = json.loads(result_file.read_text()) if result_file.is_file() else None
+        self.report["uiApproval"] = {
+            "status": "unavailable",
+            "xcodebuildExit": code, "result": ui_result,
+            "scope": "first-time public UI fixture consent only; never repeated for update/rollback",
+        }
+        self.save()
+        require(code == 0 and ui_result is not None
+                and ui_result.get("status") == "enabled-via-public-ui"
+                and ui_result.get("runID") == os.environ["GITHUB_RUN_ID"]
+                and ui_result.get("hostPID") == self.host["generation"][0]
+                and ui_result.get("extensionID") == EXT_ID and ui_result.get("after") == 1,
+                "Public native-approval UI setup unavailable/failed; inspect approval result, XCTest logs and xcresult")
+        require(self.process(self.host["generation"][0]) == self.host
+                and self.worker_identity() == self.worker,
+                "UI setup did not preserve the declared stock host and original terminal")
+        self.report["uiApproval"]["status"] = "completed; kernel-loaded baseline still required"
+        self.report["uiInteractionEnded"] = time.time()
+        self.event("ui-approval-setup-complete", result=ui_result)
 
     def setup(self):
         self.work.mkdir(mode=0o700)
@@ -634,6 +718,11 @@ class Probe:
         require(self.host, "Stock CMUX did not start")
         self.event("stock-host-started", identity=self.host)
         self.sample()
+        deadline = time.monotonic() + 20
+        while not (self.evidence / "snapshot-worker.json").exists():
+            require(time.monotonic() < deadline, "No original terminal available for public UI setup")
+            time.sleep(0.25)
+        self.approve_fixture()
         self.initial = self.wait_loaded("A")
         self.registration()
         deadline = time.monotonic() + 20
@@ -681,6 +770,7 @@ class Probe:
             "focusAndVisibleWindowsUnchanged": True,
         }
         self.save()
+        self.diagnostics(f"after-{operation}")
         return loaded
 
     def diagnostics(self, label, *, request_snapshot=False):
@@ -797,6 +887,8 @@ class Probe:
         self.event("diagnostics", label=label, path=str(path))
 
     def cleanup(self):
+        cleanup_worker = self.worker
+
         def attempt(label, action):
             try:
                 action()
@@ -813,6 +905,10 @@ class Probe:
         else:
             if self.terminal_config_contents is not None:
                 def stop_snapshots():
+                    nonlocal cleanup_worker
+                    if cleanup_worker is None and (self.evidence / "snapshot-worker.json").exists():
+                        cleanup_worker = self.worker_identity()
+                        self.event("cleanup-worker-identity", identity=cleanup_worker)
                     (self.evidence / "snapshot-stop").touch(exist_ok=False)
                     deadline = time.monotonic() + 15
                     while ((self.evidence / "snapshot-worker.pid").exists()
@@ -847,9 +943,9 @@ class Probe:
                     deadline = time.monotonic() + 15
                     while ((self.evidence / "snapshot-worker.pid").exists()
                            and not (self.evidence / "snapshot-worker.exit").exists()):
-                        if self.worker and self.ops.process_generation(
-                            self.worker["pid"], os.getuid()
-                        ) != tuple(self.worker["generation"]):
+                        if cleanup_worker and self.ops.process_generation(
+                            cleanup_worker["pid"], os.getuid()
+                        ) != tuple(cleanup_worker["generation"]):
                             break
                         require(time.monotonic() < deadline, "Snapshot worker exit not observed")
                         time.sleep(0.25)
