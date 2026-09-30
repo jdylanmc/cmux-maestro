@@ -17,9 +17,10 @@ Notable changes are recorded using Keep a Changelog categories.
   state after failed or interrupted publication. Bind ownership through public
   provider results, restore supported disable choices before publication, and
   preserve unrelated plugins. Gracefully restore the exact containing app
-  without activation; do not restart existing Copilot sessions. Registration
-  status describes owned state, not provider-wide uniqueness or loaded-session
-  behavior (#114).
+  without activation; do not restart existing Copilot sessions. Retain one
+  inactive app for recovery, and report conflicting native registrations before
+  changing the installed app. Registration status describes owned state, not
+  provider-wide uniqueness or loaded-session behavior (#114).
 - Route live Copilot observations through the existing provider-neutral session
   snapshot, preserving lifecycle/liveness distinctions, partial ancestry,
   history and attention behavior. Retain v1 decoding and nested validation,
