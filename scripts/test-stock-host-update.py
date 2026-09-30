@@ -495,10 +495,9 @@ class Probe:
         }))
         project = ROOT / "scripts/stock-host-approval/StockHostApproval.xcodeproj"
         derived = self.work / "approval-build"
-        xcode = ["/usr/bin/env", "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer",
-                 "/usr/bin/xcodebuild"]
+        toolchain = ["/usr/bin/env", "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer"]
         code, _ = self.run([
-            *xcode, "-project", project, "-scheme", "StockHostApproval", "-configuration", "Debug",
+            *toolchain, "/usr/bin/xcodebuild", "-project", project, "-scheme", "StockHostApproval", "-configuration", "Debug",
             "-derivedDataPath", derived, "-destination", "platform=macOS",
             "CODE_SIGN_IDENTITY=-", "DEVELOPMENT_TEAM=", "build-for-testing",
         ], timeout=240, check=False)
@@ -515,19 +514,21 @@ class Probe:
         require(len(targets) == 1 and "TestBundlePath" in targets[0] and "TestHostPath" in targets[0],
                 "Unexpected XCTest UI target configuration")
         target = targets[0]
-        # xcodebuild.xctestrun(5) documents external UI target paths and runner environment.
+        # Keep generated testing environment intact; xcodebuild(1) explicitly forwards
+        # TEST_RUNNER_<VAR> to runner processes with the prefix stripped.
         target["UITargetAppPath"] = str(self.stock)
         target.setdefault("DependentProductPaths", []).append(str(self.stock))
-        target.setdefault("EnvironmentVariables", {}).update({
+        runner_context = {
             "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
             "GITHUB_RUN_ID": os.environ["GITHUB_RUN_ID"], "PROBE_APPROVAL_CONTEXT": str(context),
-        })
+        }
         target["SystemAttachmentLifetime"] = "keepAlways"
         target["UserAttachmentLifetime"] = "keepAlways"
         configured = runs[0].with_name("StockHostApproval-configured.xctestrun")
         configured.write_bytes(plistlib.dumps(config))
         code, _ = self.run([
-            *xcode, "test-without-building", "-xctestrun", configured, "-destination", "platform=macOS",
+            *toolchain, *[f"TEST_RUNNER_{key}={value}" for key, value in runner_context.items()],
+            "/usr/bin/xcodebuild", "test-without-building", "-xctestrun", configured, "-destination", "platform=macOS",
             "-parallel-testing-enabled", "NO", "-test-timeouts-enabled", "YES",
             "-maximum-test-execution-time-allowance", "90",
             "-only-testing:StockHostApprovalTests/StockHostApprovalTests/testApproveOwnedNativeFixture",
