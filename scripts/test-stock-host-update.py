@@ -8,6 +8,7 @@ Only after that passes, preserve two exact signed B copies during a further upda
 Real CLI metadata/plugin operations only: no credentials, model calls or chat sessions.
 Failed-update compensation is combined recovery; manual rollback remains app-only.
 Exit 0 requires combined operations, native continuity and real compensation.
+A separately reported registration-only rescue never changes failed acceptance.
 All runtime evidence, including unsuccessful setup and cleanup, goes to the artifact.
 Register the verified stock point before discovery from the signed observer bundle.
 The observer declares no extension point and never launches or connects to Maestro.
@@ -137,6 +138,7 @@ class Probe:
             "currentScenario": "sameVersionFreshDR",
             "scenarioResults": {"sameVersionFreshDR": {"status": "pending"},
                                 "legacySibling": {"status": "not-run", "reason": "clean scenario prerequisite"}},
+            "diagnosticRecovery": {"status": "not-run", "changesAcceptance": False},
             "scope": "current combined same-version/fresh-DR sequence, then sibling update; no model sessions or loaded-hook claim",
             "priorFrozenNativeCapability": FROZEN_PASS,
             "priorCleanCombinedCapability": CLEAN_COMBINED_PASS,
@@ -632,13 +634,13 @@ class Probe:
         return extensions
 
     def terminal_tree_snapshot(self):
-        phases = ("baseline", "repeat", "update", "compensation", "sibling-update")
+        phases = ("baseline", "repeat", "update", "compensation", "sibling-update", "recovery")
         require(self.tree_snapshot_count < len(phases), "Unexpected additional tree request")
         phase = phases[self.tree_snapshot_count]
         self.tree_snapshot_count += 1
         self.report["treeObservation"] = {
             "status": "unavailable", "phase": phase, "policy": "cmuxOnly",
-            "transport": "five fixed reads from the test-owned initial terminal command",
+            "transport": "six fixed reads from the test-owned initial terminal command",
         }
         (self.evidence / f"snapshot-request-{phase}").touch(exist_ok=False)
         self.event("tree-snapshot-request", phase=phase)
@@ -1293,6 +1295,134 @@ class Probe:
         self.diagnostics("after-compensation")
         return restored
 
+    def diagnostic_recovery_eligible(self):
+        report = self.report
+        if (report["status"] != "failed" or report["currentScenario"] != "legacySibling"
+                or report["error"] != "No unique, stable, dynamically verified C extension generation"
+                or report["scenarioResults"]["sameVersionFreshDR"].get("status") != "pass"
+                or report["diagnosticRecovery"]["status"] != "not-run"):
+            return False
+        starts = [e for e in report["events"] if e["kind"] == "legacy-sibling-setup-complete"]
+        ends = [e for e in report["events"] if e["kind"] == "installer-end"]
+        if not starts or not ends:
+            return False
+        end = ends[-1]
+        if (end["label"] != "legacy-sibling-update" or end["operation"] != "update"
+                or end["returncode"] != 0 or end["continuityError"] is not None):
+            return False
+        events = [e for e in report["events"] if e["time"] >= starts[-1]["time"]]
+        registry = [e for e in events if e["kind"] == "native-registration"]
+        absent = next((e["time"] for e in registry if not e["targetPresent"] and len(e["records"]) == 2), None)
+        native = [e for e in events if e["kind"] == "native-processes"]
+        old = report["legacySiblingBaseline"]["loadedStableB"]
+        return (not any(e["kind"] == "continuity-failure" for e in events)
+                and absent is not None and any(e["time"] > absent and e["targetPresent"]
+                                               and len(e["records"]) == 3 for e in registry)
+                and any(not e["extensions"] for e in native)
+                and all(all(all(process[k] == old[k] for k in ("generation", "cdhash", "path"))
+                                for process in e["extensions"]) for e in native))
+
+    def diagnostic_recovery(self):
+        if not self.diagnostic_recovery_eligible():
+            self.report["diagnosticRecovery"] = {
+                "status": "not-eligible", "changesAcceptance": False,
+                "reason": "Requires successful sibling installer, observed 2->3 transition, old exit/no new native, and no other failure",
+            }
+            self.save()
+            return
+        original_end = time.time()
+        self.report["originalAcceptanceEnded"] = original_end
+        with (self.evidence / "original-failure-result.json").open("x") as output:
+            json.dump(self.report, output, indent=2)
+        recovery = {"status": "preflight", "changesAcceptance": False, "started": original_end,
+                    "removedRegistrations": []}
+        self.report["diagnosticRecovery"] = recovery
+        try:
+            self.diagnostics("original-failure")
+            require(not self.command_incomplete and self.child is None
+                    and self.tree_snapshot_count == 4, "Incomplete command or unexpected snapshot phase; rescue refused")
+            expected = {self.work / "legacy-siblings" / name /
+                        ".build/adhoc/Build/Products/Debug/CMUX Maestro Preview.app"
+                        for name in ("hardening", "visual49")}
+            require(set(self.sibling_apps) == expected and len(self.sibling_records) == 2,
+                    "Rescue accepts only the two exact run-created sibling fixtures")
+            require(self.sample() == [], "A native generation is now live; rescue refused")
+            old = self.report["legacySiblingBaseline"]["loadedStableB"]
+            require(self.ops.process_generation(old["generation"][0], os.getuid()) != tuple(old["generation"]),
+                    "Old B generation remains live; rescue refused")
+            require(self.tree() == self.baseline["tree"], "Original failed-state terminal continuity changed")
+            self.verify_sibling_files()
+            state = self.registry_sample()
+            require(state["targetPresent"] and len(state["records"]) == 3
+                    and all(r["election"] == "+" for r in state["records"]),
+                    "Stuck-state exact elected catalog changed")
+            before = self.integration_state("before-diagnostic-recovery", self.candidates["C"])
+            installer = self.preview.Installer(self.home, self.destination)
+            with installer.locked():
+                require(not installer.receipt["transaction"] and not installer.receipt["integration"]
+                        and not installer.receipt["garbage"] and installer.receipt["current"],
+                        "Pending journal or missing installed C; rescue refused")
+                installer.check_stable()
+                require(self.preview.digest(self.destination) == self.preview.digest(self.candidates["C"]),
+                        "Installed app is not the verified candidate C")
+                protected = {str(app): {"sha256": self.preview.digest(app), "node": self.preview.directory_identity(app)}
+                             for app in installer.protected_apps()}
+                installer.ops.assert_idle(*installer.protected_apps(), *expected)
+                require(self.registry_sample() == state and self.sample() == [], "Stuck state changed before rescue")
+                recovery["status"] = "retiring-exact-sibling-registrations"
+                recovery["beforeCatalog"] = state
+                recovery["protectedApps"] = protected
+                self.save()
+                for app in sorted(expected):
+                    self.verify_sibling_files()
+                    self.registry_sample()
+                    installer.ops.assert_idle(app)
+                    try:
+                        installer.ops.unregister(app)
+                    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+                        self.command_incomplete = True
+                        marker = self.preview.command_worker.read_marker(installer.ops.install_lock_fd)
+                        self.command_incomplete = marker is not None and marker["state"] != "finished"
+                        raise
+                    self.sibling_records.pop(str(app / self.preview.EXTENSION))
+                    recovery["removedRegistrations"].append(str(app))
+                    self.event("diagnostic-sibling-registration-retired", app=str(app), filesPreserved=True)
+            state = self.registry_sample()
+            require(state["targetPresent"] and len(state["records"]) == 1,
+                    "Exact sibling registrations did not remain absent; no retry or filesystem workaround")
+            recovery["status"] = "prepare-update"
+            self.save()
+            self.installer("prepare-update", monitored=True, label="diagnostic-prepare-update")
+            require(self.registry_sample()["records"] == [], "Stable registration withdrawal not observed")
+            recovery["status"] = "recover"
+            self.save()
+            self.installer("recover", monitored=True, label="diagnostic-recover")
+            loaded = self.wait_loaded("C", previous=old)
+            state = self.registry_sample()
+            require(state["targetPresent"] and len(state["records"]) == 1
+                    and state["records"][0]["election"] == "+", "Recovery lacks one elected stable registration")
+            self.ops.verify_registration(self.destination)
+            require(self.tree() == self.baseline["tree"], "Recovery changed original terminal state")
+            self.verify_sibling_files()
+            after = self.integration_state("after-diagnostic-recovery", self.candidates["C"], compare_bytes=before)
+            require(after["resources"] == before["resources"], "Registration-only rescue replaced integration resources")
+            require(all(self.preview.digest(Path(app)) == identity["sha256"]
+                        and self.preview.directory_identity(Path(app)) == identity["node"]
+                        for app, identity in protected.items()), "Registration-only rescue changed app/backup files")
+            _, raw = self.run(["/usr/bin/defaults", "export", DOMAIN, "-"])
+            require(all(plistlib.loads(raw).get(k) == v for k, v in SETUP_DEFAULTS.items()),
+                    "Host selection/config changed during diagnostic recovery")
+            self.sample()
+            recovery.update(status="pass", loadedC=loaded, catalog=state,
+                            filesAndIntegrationUnchanged=True, hostWorkerTreeFocusUnchanged=True)
+            self.diagnostics("after-diagnostic-recovery")
+        except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
+            recovery.update(status="failed-or-unavailable", error=str(error))
+            (self.evidence / "diagnostic-recovery-failure.txt").write_text(traceback.format_exc())
+        finally:
+            recovery["ended"] = time.time()
+            self.save()
+
     def diagnostics(self, label, *, request_snapshot=False):
         data = {"time": time.time(), "host": self.host,
                 "candidateExtensionHashes": {k: sorted(v) for k, v in self.hashes.items()},
@@ -1361,7 +1491,7 @@ class Probe:
             if checkpoint.is_file():
                 collect("integrationCheckpointRetained", lambda: {
                     "path": str(checkpoint), "bytes": checkpoint.stat().st_size, "sha256": sha256(checkpoint)})
-        if (request_snapshot and self.host and self.tree_snapshot_count < 5
+        if (request_snapshot and self.host and self.tree_snapshot_count < 6
                 and (self.evidence / "snapshot-worker.pid").exists()
                 and not (self.evidence / "snapshot-worker.exit").exists()):
             collect("diagnosticOnlyTerminalSnapshot", lambda: json.loads(self.terminal_tree_snapshot()))
@@ -1631,6 +1761,7 @@ def main():
             "approval": "No further approval attempted; inspect captured stock UI/logs for approval-required/refusal evidence.",
         }
         (evidence / "failure.txt").write_text(traceback.format_exc())
+        probe.diagnostic_recovery()
     finally:
         signal.alarm(0)
         probe.report["acceptanceEnded"] = time.time()

@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Runner-only initial terminal command. Five fixed reads, never arbitrary commands.
+# Runner-only initial terminal command. Six fixed reads, never arbitrary commands.
 set -eu
 umask 077
 [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted &&
@@ -42,7 +42,7 @@ wait_for() {
     [[ ! -e "$evidence/snapshot-stop" ]] || park_until_host_quits
 }
 
-for phase in baseline repeat update compensation sibling-update; do
+for phase in baseline repeat update compensation sibling-update recovery; do
     wait_for "$evidence/snapshot-request-$phase"
     if CMUXTERM_CLI_RESPONSE_TIMEOUT_SEC=10 "$cli" --id-format both --json tree --all \
         > "$evidence/snapshot-$phase.json" 2> "$evidence/snapshot-$phase.stderr"; then
