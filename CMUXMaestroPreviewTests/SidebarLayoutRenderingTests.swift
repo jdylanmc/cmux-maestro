@@ -969,10 +969,11 @@ struct SidebarLayoutRenderingTests {
                 parentId: resolvedParent,
                 role: role, label: labels[index],
                 workspaceId: secondWorkspace ? fixtures.workspaceB : workspace,
-                surfaceId: surface, generation: role == "coordinator" ? 0 : 1,
+                surfaceId: surface, generation: 1,
                 phase: phases[index],
                 availability: role == "coordinator" ? "active" : index == 1 ? "busy" : "idle",
-                copilotSessionId: role == "worker" ? sessionIDs[index] : nil,
+                copilotSessionId: sessionIDs[index],
+                executionMode: role == "coordinator" ? .interactive : nil,
                 worktreeLabel: secondWorkspace ? "release-worktree" : index == 0
                     ? "cmux-maestro-hierarchy-first" : "worker-\(index)",
                 branchLabel: secondWorkspace ? "release/next" : index == 2

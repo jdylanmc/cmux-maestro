@@ -581,14 +581,17 @@ final class SidebarLocalFocus {
     }
 
     @discardableResult
-    func restore(surfaceID: UUID, workspaceID: UUID, ownerVisible: Bool, workspaceVisible: Bool) -> Bool {
+    func restore(
+        surfaceID: UUID, workspaceID: UUID, ownerVisible: Bool, workspaceVisible: Bool, sessionID: UUID? = nil
+    ) -> Bool {
         let candidates = controls.allObjects.filter {
             $0.window != nil && !$0.isHiddenOrHasHiddenAncestor && $0.superview != nil
                 && $0.bounds.width > 0 && $0.bounds.height > 0
         }.sorted { $0.localFocusOrder < $1.localFocusOrder }
-        let targets = (ownerVisible ? ["surface:\(surfaceID)"] : [])
+        let targets = sessionID.map { ["session:\($0)"] } ?? []
+        let fallbacks = (ownerVisible ? ["surface:\(surfaceID)"] : [])
             + (workspaceVisible ? ["workspace:\(workspaceID)"] : []) + ["taskboard"]
-        for id in targets {
+        for id in targets + fallbacks {
             guard let control = candidates.first(where: { $0.localFocusID == id }), let window = control.window else { continue }
             control.scrollToVisible(control.bounds)
             // Local first responder only. Never press a title or activate a host tab/window.

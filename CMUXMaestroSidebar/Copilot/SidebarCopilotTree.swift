@@ -48,12 +48,14 @@ struct SidebarCopilotNode: Identifiable, Equatable {
     var activity: AgentActivity? = nil
     var stateDetail: AgentSessionStateDetail? = nil
     var observedParent: AgentChildWorkParent? = nil
+    var outcomeHasProtectedDescendants: Bool? = nil
 
     var isInternalTask: Bool { SidebarInternalTaskPolicy.isInternalTask(kind: kind, parent: observedParent) }
 
     func dismissibleOutcome(sessionID: UUID) -> SidebarDismissedOutcome? {
         if isInternalTask {
-            guard [.completed, .failed].contains(state), !hasChildren, !ancestryUnresolved else { return nil }
+            guard [.completed, .failed].contains(state),
+                  !(outcomeHasProtectedDescendants ?? hasChildren), !ancestryUnresolved else { return nil }
         }
         guard state.isTerminal, !historyAncestor, !attentionDegraded, attention.isEmpty, let terminalEvent else { return nil }
         let key = SidebarDismissedOutcome(sessionID: sessionID, childID: id, eventID: terminalEvent.id)
@@ -294,12 +296,36 @@ struct SidebarCopilotTree: Equatable {
             }
             // Filter history before display caps; retain structural ancestry for
             // every surviving state, including idle and unknown, not just running work.
-            let tree = childTree(
+            var tree = childTree(
                 validated.filter { retained.contains($0.id.rawValue) }, liveness: liveness,
                 historyAncestors: hidden.intersection(retained), observedAt: observedAt, now: now,
                 attention: childAttention, invalidStates: assessment.invalidStates,
                 unresolvedParents: assessment.unresolvedParents
             )
+            // Capture outcome eligibility before either display projection removes
+            // harmless legacy history or recomputes disclosure-only hasChildren.
+            let uncertainDescendants = !snapshot.isComplete || assessment.hasUncountedChildren
+                || tree.omitted > 0 || assessment.omittedChildren > 0
+            var protectedAncestors: Set<String> = []
+            for child in validated {
+                let state = trustworthyState(
+                    assessment.invalidStates.contains(child.id) ? .unknown : child.workState, liveness: liveness
+                )
+                let signals = childAttention[child.id.rawValue]
+                let protectsParent = child.isInternalTask
+                    ? !hidden.contains(child.id.rawValue) || state == .unknown
+                    : ![.completed, .cancelled].contains(state)
+                guard protectsParent || signals?.values.isEmpty == false || signals?.degraded == true
+                    || assessment.unresolvedParents.contains(child.id) else { continue }
+                var parent = child.parentID
+                while let id = parent, protectedAncestors.insert(id).inserted {
+                    parent = byID[id]?.parentID
+                }
+            }
+            for index in tree.nodes.indices where tree.nodes[index].isInternalTask {
+                tree.nodes[index].outcomeHasProtectedDescendants =
+                    uncertainDescendants || protectedAncestors.contains(tree.nodes[index].id)
+            }
             let degraded = tree.degraded || validated.count != children.count
                 || sessionAttention.degraded || sessionActivity.degraded
                 || observation.state.isDegraded || observation.activity.isDegraded || observation.model.isDegraded

@@ -43,7 +43,8 @@ struct SidebarBranchSummary: Equatable {
             if session.state == .working { running += 1 }
             if session.state == .blocked || session.attention.contains(where: { $0.kind.isBlocking }) { blocked += 1 }
             if !session.attention.isEmpty || session.attentionDegraded { attention += 1 }
-            incomplete = incomplete || !session.childrenComplete || session.state == .unknown || session.attentionDegraded
+            incomplete = incomplete || !session.childrenComplete || session.state == .unknown
+                || session.attentionDegraded || session.internalTaskCountsIncomplete
             omittedActive += session.omittedActiveChildrenCount
         }
     }
@@ -93,7 +94,13 @@ struct SidebarChildSection: Identifiable {
 }
 
 extension SidebarCopilotSession {
+    var taskboardActivity: [SidebarCopilotNode] { nodes.filter { !$0.isInternalTask } }
+
     func taskSections(layout: SidebarLayoutSettings) -> [SidebarChildSection] {
+        var layout = layout
+        for node in nodes where !node.isInternalTask {
+            layout.setExpanded(true, for: .child(node.id, sessionID: id))
+        }
         let byID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
         var ancestry: Set<String> = []
         for node in nodes where node.isInternalTask {
@@ -145,7 +152,7 @@ extension SidebarCopilotSession {
             }
             return false
         }
-        var summary = SidebarBranchSummary(nodes: descendants.filter(\.isInternalTask))
+        var summary = SidebarBranchSummary(nodes: descendants)
         summary.incomplete = summary.incomplete || !childrenComplete || internalTaskCountsIncomplete || treeDegraded
         summary.omittedActive = omittedActiveChildrenCount
         return summary

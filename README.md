@@ -826,6 +826,8 @@ Collapse never dismisses or acknowledges work and never changes retention.
 Taskboard still shows retained non-task activity regardless of tree collapse.
 Internal-task groups and task-child disclosure share exact provider/session/task
 identities across both views and reloads, independently of actual child-agent tabs.
+Non-task Taskboard activity remains state-grouped even when a managed owner or
+internal-task group is collapsed; coalescing a heading does not remove that activity.
 
 Density overrides, collapsed identities and workspace-local idle-task reveal
 choices are stored in a versioned
@@ -994,6 +996,10 @@ actions. Its full observed name and state remain in accessibility and tooltips.
 Working alone animates green; Reduce Motion keeps a static working arc.
 Completion, failure, blocked, queued, idle, unknown and cancellation use distinct
 state shapes. Bounded left indentation preserves a common status edge.
+Managed-owner and provider-task depth share one bounded indentation budget.
+Suppressing a duplicate native surface row is not session ownership: unmatched
+observations on that surface keep a separately identified session-context heading,
+never the current managed chat's task parentage.
 
 Idle, unknown and cancelled tasks hide by state. A workspace's eye reveals
 **idle tasks only**, independently of other workspaces and **Show ended agents**.
@@ -1001,11 +1007,15 @@ Finished and failed task outcomes have **no retention clock**: they remain until
 their exact session/task/terminal-event outcome is dismissed. Outstanding
 attention, degraded evidence and necessary ancestry stay protected.
 New work, a new result or new attention can return. Dismissal revalidates current,
-fresh evidence and cannot hide a replacement outcome or a task with descendants.
+fresh evidence and cannot hide a replacement outcome or bypass active, failed,
+uncertain, attention-bearing or relevant internal descendants. Harmless completed
+non-task activity does not block reviewing the parent outcome; when legacy history
+is shown, the dismissed parent's ancestry can remain without restoring that outcome.
 After individual dismissal, keyboard focus returns to a visible local owner,
 workspace or Taskboard control without selecting or activating a native tab.
-Collapsed groups report observed working, blocked and attention counts, with
-explicit incomplete/omitted evidence rather than inferred totals.
+Task quantities count only internal tasks. Branch working, blocked and attention
+totals include related non-task descendants; owner summaries preserve uncertainty
+from state-filtered unknown tasks. Incomplete/omitted evidence is explicit.
 
 Real terminal-backed child agents keep their real tab identities. Neither task
 visibility nor the workspace eye filters real tabs from native Hierarchy,

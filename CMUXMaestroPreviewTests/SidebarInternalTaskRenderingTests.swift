@@ -7,6 +7,282 @@ import Testing
 @Suite(SidebarAppKitTestScope())
 struct SidebarInternalTaskRenderingTests {
     @Test(arguments: SidebarMode.allCases)
+    func review001HistoricalTasksKeepTheirOwnSessionHeading(_ mode: SidebarMode) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.selectedMode = mode
+        let data = SidebarTreeFixtures()
+        let now = Date()
+        func result(_ event: UUID) -> CopilotChildWork {
+            .init(id: "same-task", parentID: nil, kind: .subagent, name: "Identical task label",
+                  state: .completed, model: nil, terminalEvent: .init(id: event, timestamp: now))
+        }
+        let model = makeModel(data, children: [result(UUID())], now: now, managed: true, additional: [
+            data.session(id: data.otherSessionID, liveness: .dead, children: [
+                result(UUID()),
+                .init(id: "remaining", parentID: nil, kind: .subagent, name: "Another historical outcome",
+                      state: .completed, model: nil, terminalEvent: .init(id: UUID(), timestamp: now))
+            ], now: now)
+        ])
+        defer { model.setVisible(false) }
+        let mounted = mount(model, preferences, width: 350)
+        defer { mounted.window.contentView = nil; mounted.window.close() }
+        await sidebarEventually {
+            names(mounted.host).count == 3
+                && buttons(mounted.host).contains { $0.accessibilityLabel() == "Inspect context session 20000000" }
+        }
+        mounted.host.layoutSubtreeIfNeeded()
+        let controls = buttons(mounted.host)
+        let owner = try #require(controls.first { $0.accessibilityLabel() == "Focus Managed owner" })
+        let context = try #require(controls.first { $0.accessibilityLabel() == "Inspect context session 20000000" })
+        let currentTask = try #require(names(mounted.host).first { $0.identifier?.rawValue == "\(data.sessionID):same-task" })
+        let historicalTask = try #require(names(mounted.host).first { $0.identifier?.rawValue == "\(data.otherSessionID):same-task" })
+        func frame(_ view: NSView) -> CGRect { mounted.host.convert(view.bounds, from: view) }
+        #expect(frame(currentTask).minY > frame(owner).maxY)
+        #expect(frame(context).minY > frame(currentTask).maxY)
+        #expect(frame(historicalTask).minY > frame(context).maxY)
+        #expect(controls.filter { $0.localFocusID?.hasPrefix("task-dismiss:") == true }.count == 3)
+        #expect(model.copilot.tree.dismissibleOutcomes.count == 3)
+        #expect(SidebarTopology(model.hierarchy).workspaceBySurface.count == 2)
+        #expect(model.navigation.status == .idle)
+        try capture(mounted.host, name: "review1-exact-session-context-\(mode.rawValue)")
+        let dismiss = try #require(controls.first { $0.localFocusID == "task-dismiss:\(data.otherSessionID):same-task" })
+        dismiss.performClick(nil)
+        await sidebarEventually {
+            names(mounted.host).count == 2
+                && (mounted.window.firstResponder as? SidebarTitleNativeButton)?.localFocusID == "session:\(data.otherSessionID)"
+        }
+        #expect(preferences.history.dismissed.count == 1)
+        #expect(preferences.history.dismissed.first?.sessionID == data.otherSessionID)
+        #expect(model.copilot.tree.dismissibleOutcomes.contains { $0.sessionID == data.sessionID })
+        #expect(model.navigation.status == .idle)
+    }
+
+    @Test(arguments: [SidebarHistoryRetention.fifteenSeconds, .never], SidebarMode.allCases)
+    func review002DisplayedDismissControlHandlesHiddenCompletedChild(
+        _ retention: SidebarHistoryRetention, _ mode: SidebarMode
+    ) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.selectedMode = mode
+        preferences.setRetention(retention)
+        let data = SidebarTreeFixtures(), event = UUID()
+        let now = Date()
+        let model = makeModel(data, children: [
+            .init(id: "result", parentID: nil, kind: .subagent, name: "Finished task", state: .completed,
+                  model: nil, terminalEvent: .init(id: event, timestamp: now)),
+            .init(id: "shell", parentID: "result", kind: .shell, name: "Finished shell", state: .completed,
+                  model: nil, terminalEvent: .init(id: UUID(), timestamp: now))
+        ], now: now)
+        defer { model.setVisible(false) }
+        let mounted = mount(model, preferences, width: 280)
+        defer { mounted.window.contentView = nil; mounted.window.close() }
+        await sidebarEventually { names(mounted.host).count == 1 }
+        let control = try #require(buttons(mounted.host).first { $0.localFocusID == "task-dismiss:\(data.sessionID):result" })
+        #expect(model.copilot.tree.sessions[0].nodes[0].hasChildren)
+        control.performClick(nil)
+        await sidebarEventually { names(mounted.host).isEmpty }
+        #expect(preferences.history.dismissed == [.init(sessionID: data.sessionID, childID: "result", eventID: event)])
+        #expect(model.copilot.tree.sessions[0].nodes.contains { $0.id == "shell" })
+        #expect(model.navigation.status == .idle)
+        #expect(SidebarTopology(model.hierarchy).workspaceBySurface.count == 2)
+        try capture(mounted.host, name: "review1-dismiss-hidden-child-\(retention.rawValue)-\(mode.rawValue)")
+    }
+
+    @Test(arguments: [false, true])
+    func review003ManagedTaskboardKeepsMixedLegacyActivityAcrossCollapse(_ showEnded: Bool) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.showEnded = showEnded
+        preferences.setRetention(.never)
+        preferences.selectedMode = .taskboard
+        let data = SidebarTreeFixtures(), now = Date()
+        let model = makeModel(data, children: [
+            .init(id: "task", parentID: nil, kind: .subagent, name: "Internal task", state: .completed,
+                  model: nil, terminalEvent: .init(id: UUID(), timestamp: now)),
+            .init(id: "shell", parentID: "task", kind: .shell, name: "Running shell", state: .working, model: nil),
+            .init(id: "idle", parentID: nil, kind: .skill, name: "Idle skill", state: .idle, model: nil),
+            .init(id: "unknown", parentID: nil, kind: .skill, name: "Unknown skill", state: .unknown, model: nil),
+            .init(id: "finished", parentID: nil, kind: .skill, name: "Finished skill", state: .completed,
+                  model: nil, terminalEvent: .init(id: UUID(), timestamp: now))
+        ], now: now, managed: true)
+        defer { model.setVisible(false) }
+        let mounted = mount(model, preferences, width: 350)
+        defer { mounted.window.contentView = nil; mounted.window.close() }
+        await sidebarEventually { model.orchestration.snapshot.nodes.count == 1 }
+        let owner = try #require(model.orchestration.snapshot.nodes.first)
+        let expected = ["Running shell", "Idle skill", "Unknown skill"] + (showEnded ? ["Finished skill"] : [])
+        for expanded in [true, false] {
+            preferences.setExpanded(expanded, for: .managed(owner.id))
+            preferences.setExpanded(expanded, for: .internalTasks(sessionID: data.sessionID))
+            preferences.selectedMode = .hierarchy
+            await Task.yield()
+            preferences.selectedMode = .taskboard
+            await sidebarEventually {
+                let labels = buttons(mounted.host).compactMap { $0.accessibilityLabel() }
+                return expected.allSatisfy { name in labels.contains("Open parent chat for \(name), Copilot 10000000") }
+                    && names(mounted.host).count == (expanded ? 1 : 0)
+            }
+            let labels = buttons(mounted.host).compactMap { $0.accessibilityLabel() }
+            for name in expected {
+                #expect(labels.filter { $0 == "Open parent chat for \(name), Copilot 10000000" }.count == 1)
+            }
+            #expect(labels.filter { $0 == "Focus Managed owner" }.count == 1)
+            #expect(!labels.contains("Focus Copilot session 10000000"))
+            #expect(names(mounted.host).count == (expanded ? 1 : 0))
+            #expect(model.navigation.status == .idle)
+        }
+        try capture(mounted.host, name: "review1-legacy-taskboard-ended-\(showEnded)")
+    }
+
+    @Test(arguments: SidebarMode.allCases)
+    func review004CollapsedMixedBranchAndOwnerRetainEvidenceAfterReload(_ mode: SidebarMode) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let data = SidebarTreeFixtures(), now = Date()
+        let preferences = fixture.preferences()
+        preferences.selectedMode = mode
+        preferences.setExpanded(false, for: .internalTasks(sessionID: data.sessionID))
+        func signal(_ kind: AgentAttentionKind, source: String = "copilot.events") -> AgentAttention {
+            .init(kind: kind, evidence: .init(source: source, eventID: UUID()), occurredAt: now)
+        }
+        let model = makeModel(data, children: [
+            .init(id: "task", parentID: nil, kind: .subagent, name: "Mixed task", state: .completed, model: nil),
+            .init(id: "working", parentID: "task", kind: .shell, name: "Working shell", state: .working, model: nil),
+            .init(id: "blocked", parentID: "task", kind: .shell, name: "Blocked shell", state: .blocked, model: nil,
+                  attention: [signal(.permission)]),
+            .init(id: "failed", parentID: "task", kind: .skill, name: "Failed skill", state: .failed, model: nil,
+                  attention: [signal(.error)]),
+            .init(id: "uncertain", parentID: "task", kind: .shell, name: "Uncertain shell", state: .unknown, model: nil,
+                  attention: [signal(.error, source: "invalid")]),
+            .init(id: "hidden", parentID: nil, kind: .subagent, name: "Hidden unknown task", state: .unknown, model: nil)
+        ], now: now, managed: true)
+        defer { model.setVisible(false) }
+        let reloaded = fixture.preferences()
+        let mounted = mount(model, reloaded, width: 350)
+        defer { mounted.window.contentView = nil; mounted.window.close() }
+        await sidebarEventually {
+            buttons(mounted.host).contains { $0.localFocusID == "task-disclosure:\(data.sessionID):session" }
+        }
+        let group = try #require(buttons(mounted.host).first { $0.localFocusID == "task-disclosure:\(data.sessionID):session" })
+        #expect(group.toolTip?.contains("1 known running") == true)
+        #expect(group.toolTip?.contains("1 blocked") == true)
+        #expect(group.toolTip?.contains("3 need attention") == true)
+        #expect(group.toolTip?.contains("Counts may be incomplete") == true)
+        #expect(names(mounted.host).isEmpty)
+        try capture(mounted.host, name: "review1-mixed-collapsed-group-\(mode.rawValue)")
+        let owner = try #require(model.orchestration.snapshot.nodes.first)
+        reloaded.setExpanded(false, for: .managed(owner.id))
+        await sidebarEventually {
+            !buttons(mounted.host).contains { $0.localFocusID == "task-disclosure:\(data.sessionID):session" }
+        }
+        let summary = SidebarBranchSummary(sessions: model.copilot.tree.sessions)
+        #expect(summary.incomplete && summary.running == 1 && summary.blocked == 1 && summary.attention == 3)
+        #expect(model.copilot.tree.sessions[0].internalTaskCountsIncomplete)
+        #expect(!fixture.preferences().layout.isExpanded(.managed(owner.id)))
+        #expect(model.navigation.status == .idle)
+        try capture(mounted.host, name: "review1-mixed-collapsed-owner-\(mode.rawValue)")
+    }
+
+    @Test(arguments: [(280, false), (280, true), (350, false), (350, true), (460, false), (460, true)],
+          SidebarMode.allCases)
+    func combinedProductionOwnerAndTaskDepthKeepsGeometry(
+        _ scenario: (width: Int, retained: Bool), _ mode: SidebarMode
+    ) async throws {
+        let data = SidebarTreeFixtures(), now = Date(), run = UUID()
+        var chain: [SidebarOrchestrationNode] = []
+        for depth in 0...SidebarOrchestrationReader.maximumDepth {
+            chain.append(.init(
+                id: UUID(), runId: run, parentId: chain.last?.id, role: depth == 0 ? "coordinator" : "worker",
+                label: "Managed depth \(depth)", workspaceId: data.workspaceA,
+                surfaceId: depth == SidebarOrchestrationReader.maximumDepth ? data.surfaceA : UUID(),
+                generation: 1, phase: "turn-failed", availability: "idle",
+                copilotSessionId: depth == SidebarOrchestrationReader.maximumDepth ? data.sessionID : UUID(),
+                executionMode: .interactive, createdAt: now, updatedAt: now
+            ))
+        }
+        try SidebarOrchestrationReader.validate(.init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: chain), now: now)
+        let children = (0...SidebarCopilotTree.maximumDepth).map { depth in
+            CopilotChildWork(
+                id: "nested-\(depth)", parentID: depth == 0 ? nil : "nested-\(depth - 1)", kind: .subagent,
+                name: "Provider depth \(depth): " + String(repeating: "combined-long-name-", count: 8) + "suffix-\(depth)",
+                state: scenario.retained ? .completed : .working, model: nil,
+                terminalEvent: scenario.retained ? .init(id: UUID(), timestamp: now) : nil
+            )
+        }
+        let hierarchy = HierarchySnapshot(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true, workspaceMetadataAvailable: true,
+            surfaceMetadataAvailable: true, workspacePathsAvailable: true,
+            workspaces: [.init(
+                id: data.workspaceA, title: .available("Combined depth fixture"), detail: .available(nil),
+                isSelected: .available(false), isPinned: .available(false), unreadCount: .available(0),
+                rootPath: .available(nil), projectRootPath: .available(nil),
+                surfaces: .available(chain.map {
+                    .init(id: $0.surfaceId, title: $0.label, kind: .terminal, isFocused: false,
+                          isPinned: false, unreadCount: 0, workingDirectory: .available(nil))
+                })
+            )], windowID: data.windowID
+        )
+        let additional = scenario.retained ? [data.session(id: data.otherSessionID, state: .working, now: now)] : []
+        for density in SidebarDensity.allCases {
+            let fixture = try SidebarPreferenceFixture()
+            defer { fixture.cleanup() }
+            let preferences = fixture.preferences()
+            preferences.selectedMode = mode
+            preferences.setDensity(density)
+            let model = makeModel(data, children: children, now: now, liveness: scenario.retained ? .dead : .alive,
+                                  additional: additional, managedNodes: chain, hierarchyOverride: hierarchy)
+            defer { model.setVisible(false) }
+            let mounted = mount(model, preferences, width: scenario.width, reduceMotion: true)
+            defer { mounted.window.contentView = nil; mounted.window.close() }
+            await sidebarEventually {
+                model.orchestration.snapshot.nodes.count == 9 && names(mounted.host).count == 13
+            }
+            let fields = names(mounted.host)
+            let deepest = try #require(fields.first { $0.stringValue.hasSuffix("suffix-12") })
+            mounted.host.layoutSubtreeIfNeeded()
+            deepest.scrollToVisible(deepest.bounds)
+            mounted.host.layoutSubtreeIfNeeded()
+            let frames = fields.map { mounted.host.convert($0.bounds, from: $0) }
+            #expect(frames.count == 13)
+            #expect(frames.allSatisfy { $0.width >= 124 && $0.height == 24 })
+            #expect((frames.map(\.maxX).max() ?? 0) - (frames.map(\.maxX).min() ?? 0) < 1)
+            #expect(fields.allSatisfy { $0.toolTip?.contains($0.stringValue) == true })
+            #expect(fields.allSatisfy { $0.accessibilityLabel()?.contains($0.stringValue) == true })
+            #expect(model.copilot.tree.sessions.first { $0.id == data.sessionID }?.nodes.map(\.depth).max() == 12)
+            #expect(chain.count == 9 && SidebarOrchestrationReader.maximumDepth == 8)
+            #expect(SidebarTopology(model.hierarchy).workspaceBySurface.count == 9)
+            let expectedOwner = scenario.retained ? "Inspect work context Managed depth 8" : "Focus Managed depth 8"
+            #expect(buttons(mounted.host).contains { $0.accessibilityLabel() == expectedOwner })
+            let metrics = SidebarRenderingEvidence.metrics(for: mounted.host)
+            #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
+            #expect(model.navigation.status == .idle && !mounted.window.isVisible)
+            let name = "review1-combined-owner8-task12-\(scenario.width)-\(mode.rawValue)-\(density.rawValue)-retained-\(scenario.retained)"
+            print("I131 C4 \(name): ownerDepth=8 taskDepth=12 taskRows=\(frames.count) "
+                  + "minNameWidth=\(frames.map(\.width).min() ?? 0) "
+                  + "rightEdgeSpread=\((frames.map(\.maxX).max() ?? 0) - (frames.map(\.maxX).min() ?? 0)) "
+                  + "viewport=\(metrics.viewportWidth) document=\(metrics.documentWidth)")
+            try capture(mounted.host, name: name)
+            let geometry = fields.map {
+                TaskGeometry(identity: $0.identifier?.rawValue ?? "", name: $0.stringValue,
+                             frame: mounted.host.convert($0.bounds, from: $0))
+            }
+            let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent(".build/layout-validation/offscreen")
+            try JSONEncoder().encode(geometry).write(to: folder.appendingPathComponent("\(name)-rows.json"))
+        }
+    }
+
+    private struct TaskGeometry: Codable {
+        let identity: String
+        let name: String
+        let frame: CGRect
+    }
+
+    @Test(arguments: SidebarMode.allCases)
     func managedOwnerRendersItsTasksOnceWithoutReplacingRealSurfaces(_ mode: SidebarMode) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
@@ -215,27 +491,29 @@ struct SidebarInternalTaskRenderingTests {
     }
     private func makeModel(
         _ data: SidebarTreeFixtures, children: [CopilotChildWork], now: Date,
-        liveness: CopilotLiveness = .alive, managed: Bool = false
+        liveness: CopilotLiveness = .alive, managed: Bool = false,
+        additional: [CopilotSessionObservation] = [], managedNodes: [SidebarOrchestrationNode]? = nil,
+        hierarchyOverride: HierarchySnapshot? = nil
     ) -> SidebarConnectionModel {
-        let snapshot = data.snapshot(sessions: [data.session(liveness: liveness, children: children, now: now)], now: now)
+        let snapshot = data.snapshot(sessions: [data.session(liveness: liveness, children: children, now: now)] + additional, now: now)
         let polling = SidebarCopilotPolling(
             read: neutralRead { _ in snapshot }, pause: { try await sidebarFrozenExpiry(0) },
             expiryPause: sidebarFrozenExpiry, now: { now }
         )
-        let nodes: [SidebarOrchestrationNode] = managed ? [
+        let nodes: [SidebarOrchestrationNode] = managedNodes ?? (managed ? [
             .init(id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Managed owner",
                   workspaceId: data.workspaceA, surfaceId: data.surfaceA, generation: 1, phase: "registered",
                   availability: "active", copilotSessionId: data.sessionID, executionMode: .interactive,
                   createdAt: now, updatedAt: now)
-        ] : []
+        ] : [])
         let orchestration = SidebarOrchestrationPolling(
             read: { .init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: nodes) },
             pause: { try await sidebarFrozenExpiry(0) }
         )
         let model = SidebarConnectionModel(copilot: polling, orchestration: orchestration)
-        let hierarchy = data.hierarchy()
+        let hierarchy = hierarchyOverride ?? data.hierarchy()
         model.replaceHierarchy(with: hierarchy)
-        model.showConnected(workspaceCount: 2, surfaceCount: 2)
+        model.showConnected(workspaceCount: hierarchy.workspaces.count, surfaceCount: SidebarTopology(hierarchy).workspaceBySurface.count)
         let topology = SidebarTopology(hierarchy)
         polling.update(topology: topology, connected: true)
         orchestration.update(topology: topology, connected: true)

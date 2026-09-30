@@ -8,6 +8,158 @@ struct SidebarInternalTaskTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let event = UUID(uuidString: "13100000-0000-0000-0000-000000000001")!
 
+    @Test(arguments: [CopilotLiveness.dead, .ambiguous, .alive], [false, true])
+    func review001SurfaceSuppressionNeverAttestsAnotherSessionsContents(
+        _ historicalLiveness: CopilotLiveness, _ missingManagedIdentity: Bool
+    ) throws {
+        let otherEvent = UUID()
+        let childrenA = [task("result", state: .completed)]
+        let childrenB = [task("result", state: .completed, eventID: otherEvent)]
+        let tree = SidebarCopilotTree.project(fixtures.snapshot(sessions: [
+            fixtures.session(children: childrenA, now: now),
+            fixtures.session(id: fixtures.otherSessionID, liveness: historicalLiveness, children: childrenB, now: now)
+        ], now: now), onto: fixtures.topology(), now: now)
+        let owner = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Current owner",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 1,
+            phase: "registered", availability: "active",
+            copilotSessionId: missingManagedIdentity ? nil : fixtures.sessionID,
+            executionMode: .interactive, createdAt: now, updatedAt: now
+        )
+        for observation in [tree, SidebarCopilotTree(availability: .partial, sessions: tree.sessions, issues: [],
+                                                     generatedAt: now.addingTimeInterval(-9))] {
+            let placements = SidebarPresentation.sessionPlacements(tree.sessions, managed: [owner], observations: observation, now: now)
+            #expect(placements.map(\.managedNodeID) == [owner.id, owner.id], "Preserve conservative surface suppression")
+            #expect(placements.map(\.contentOwnerID) == [missingManagedIdentity ? nil : owner.id, nil])
+            #expect(placements[1].requiresSeparateContext)
+            #expect(SidebarPresentation.retainedSessionIDs(observation, managed: [owner], now: now).contains(fixtures.otherSessionID))
+        }
+        let keys = Set(tree.sessions.flatMap { session in
+            session.nodes.compactMap { $0.dismissibleOutcome(sessionID: session.id) }
+        })
+        #expect(keys == [key("result"), .init(sessionID: fixtures.otherSessionID, childID: "result", eventID: otherEvent)])
+        var attentionTree = tree
+        attentionTree.sessions[0].attention = [signal(.permission)]
+        attentionTree.sessions[1].attention = [signal(.permission)]
+        let attention = SidebarPresentation.workspaceAttention(
+            sessions: attentionTree.sessions, managed: [owner], availability: .ready, now: now, observations: attentionTree
+        )
+        #expect(attention.approvals == 2, "Distinct session requests must not merge through surface coalescing")
+        #expect(SidebarPresentation.unmanagedSurfaces([], workspaceID: fixtures.workspaceA, managed: [owner], observations: tree).isEmpty)
+        #expect(fixtures.topology().workspaceBySurface.count == 2)
+    }
+
+    @Test(arguments: [SidebarHistoryRetention.fifteenSeconds, .never], [CopilotWorkKind.shell, .skill])
+    func review002HiddenCompletedActivityDoesNotMakeCurrentDismissalInert(
+        _ retention: SidebarHistoryRetention, _ kind: CopilotWorkKind
+    ) throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.setRetention(retention)
+        let children = [
+            task("result", state: .completed),
+            CopilotChildWork(id: "legacy", parentID: "result", kind: kind, name: "Completed activity",
+                             state: .completed, model: nil, terminalEvent: .init(id: UUID(), timestamp: now.addingTimeInterval(-1)))
+        ]
+        let tree = project(children, history: preferences.history)
+        let visible = SidebarVisibleWork(tree: tree, managed: [], history: preferences.history, showEnded: false, now: now)
+        for taskboard in [false, true] {
+            let section = try #require(visible.tree.sessions[0].childSections(layout: .init(), taskboard: taskboard).first)
+            let offered = try #require(section.rows[0].node.dismissibleOutcome(sessionID: fixtures.sessionID))
+            #expect(offered == key("result"))
+            #expect(tree.sessions[0].nodes[0].hasChildren)
+            #expect(tree.sessions[0].nodes[0].dismissibleOutcome(sessionID: fixtures.sessionID) == offered)
+        }
+        #expect(preferences.dismissInternalTask(key("result"), in: tree, now: now))
+        let after = SidebarVisibleWork(tree: project(children, history: preferences.history), managed: [],
+                                       history: preferences.history, showEnded: false, now: now)
+        #expect(after.tree.sessions[0].nodes.isEmpty)
+        #expect(preferences.history.dismissed == [key("result")])
+        let historyVisible = SidebarVisibleWork(tree: project(children, history: preferences.history), managed: [],
+                                                history: preferences.history, showEnded: true, now: now)
+        #expect(historyVisible.tree.sessions[0].nodes.map(\.id) == ["result", "legacy"])
+        #expect(historyVisible.tree.sessions[0].nodes[0].historyAncestor, "Only ancestry remains, not the dismissed outcome")
+    }
+
+    @Test(arguments: [CopilotWorkState.working, .blocked, .unknown, .failed])
+    func review002ProtectedOrUncertainDescendantsStillRejectDismissal(_ state: CopilotWorkState) {
+        let children = [task("result", state: .completed), task("child", parent: "result", state: state)]
+        let tree = project(children)
+        let visible = SidebarVisibleWork(tree: tree, managed: [], history: .init(), showEnded: false, now: now)
+        #expect(tree.sessions[0].nodes[0].dismissibleOutcome(sessionID: fixtures.sessionID) == nil)
+        #expect(visible.tree.sessions[0].nodes[0].dismissibleOutcome(sessionID: fixtures.sessionID) == nil)
+        #expect(project([task("result", state: .completed)], complete: false).dismissibleOutcomes.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func review003TaskboardKeepsEveryRetainedNonTaskIndependentOfDisclosure(_ showEnded: Bool) throws {
+        let children: [CopilotChildWork] = [
+            task("parent", state: .completed),
+            .init(id: "shell", parentID: "parent", kind: .shell, name: "Working shell", state: .working, model: nil),
+            .init(id: "unknown", parentID: nil, kind: .skill, name: "Unknown skill", state: .unknown, model: nil),
+            .init(id: "idle", parentID: nil, kind: .skill, name: "Idle skill", state: .idle, model: nil),
+            .init(id: "finished", parentID: nil, kind: .skill, name: "Finished skill", state: .completed, model: nil,
+                  terminalEvent: .init(id: UUID(), timestamp: now))
+        ]
+        let history = SidebarHistorySettings(retention: .never)
+        let visible = SidebarVisibleWork(tree: project(children, history: history), managed: [], history: history,
+                                         showEnded: showEnded, now: now)
+        let session = visible.tree.sessions[0]
+        let expected = showEnded ? ["shell", "unknown", "idle", "finished"] : ["shell", "unknown", "idle"]
+        for expanded in [true, false] {
+            var layout = SidebarLayoutSettings()
+            layout.setExpanded(expanded, for: .managed(UUID()))
+            layout.setExpanded(expanded, for: .internalTasks(sessionID: session.id))
+            layout.setExpanded(expanded, for: .child("parent", sessionID: session.id))
+            _ = session.taskSections(layout: layout)
+            #expect(session.taskboardActivity.map(\.id) == expected)
+            #expect(!session.taskboardActivity.contains { $0.isInternalTask })
+        }
+    }
+
+    @Test func review004MixedTaskBranchesSummarizeEveryRelatedWorkOwner() throws {
+        let invalid = AgentAttention(kind: .error, evidence: .init(source: "invalid", eventID: UUID()), occurredAt: now)
+        let children: [CopilotChildWork] = [
+            task("parent", state: .completed),
+            .init(id: "working", parentID: "parent", kind: .shell, name: "Working shell", state: .working, model: nil),
+            .init(id: "blocked", parentID: "parent", kind: .shell, name: "Permission shell", state: .blocked, model: nil,
+                  attention: [signal(.permission)]),
+            .init(id: "error", parentID: "parent", kind: .skill, name: "Failed skill", state: .failed, model: nil,
+                  attention: [signal(.error)]),
+            .init(id: "degraded", parentID: "parent", kind: .shell, name: "Uncertain shell", state: .unknown, model: nil,
+                  attention: [invalid])
+        ]
+        let session = project(children).sessions[0]
+        for taskboard in [false, true] {
+            let section = try #require(session.childSections(layout: .init(), taskboard: taskboard).first)
+            let summary = session.taskSummary(for: section)
+            #expect(summary.taskCount == 1)
+            #expect(summary.running == 1)
+            #expect(summary.blocked == 1)
+            #expect(summary.attention == 3)
+            #expect(summary.incomplete)
+        }
+    }
+
+    @Test func review004GeneralOwnerSummaryRetainsHiddenUnknownUncertaintyAcrossReload() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let owner = UUID()
+        preferences.setExpanded(false, for: .managed(owner))
+        let session = project([task("working", state: .working), task("hidden", state: .unknown)]).sessions[0]
+        #expect(session.nodes.map(\.id) == ["working"])
+        #expect(session.childrenComplete && session.internalTaskCountsIncomplete)
+        for mode in SidebarMode.allCases {
+            preferences.selectedMode = mode
+            #expect(!fixture.preferences().layout.isExpanded(.managed(owner)))
+            let summary = SidebarBranchSummary(sessions: [session])
+            #expect(summary.running == 1 && summary.incomplete)
+            #expect(SidebarPresentation.collapsed(summary).contains("States or counts incomplete"))
+        }
+    }
+
     @Test(arguments: ["missing", "unknown", "queued", "working", "blocked", "done"],
           ["none", "idle", "failed", "cancelled"])
     func everyNeutralStateDetailCombinationPreservesTruthOrDegrades(_ primary: String, _ detail: String) throws {
