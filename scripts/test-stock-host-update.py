@@ -43,10 +43,11 @@ import uuid
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
-BASE = "c2b829edb90e2d22eb5582153fb8684853925d4d"
+BASE = "bc9f5b73aacc6c9f2757167063c38aed42b699ef"
 FROZEN_PASS = {"product": "6efa5427cfca4f0dfb5af927ec29ba5962e2cd88",
                "head": "738e11bcca3aba4239d9dc2c9f253902f51044b1", "run": "36712857606"}
-CLEAN_COMBINED_PASS = {"product": BASE, "head": "b3de3aa475f7233c5a8d4fcfa2d525634aa2e741",
+CLEAN_COMBINED_PASS = {"product": "c2b829edb90e2d22eb5582153fb8684853925d4d",
+                       "head": "b3de3aa475f7233c5a8d4fcfa2d525634aa2e741",
                        "run": "36723431093",
                        "limit": "version-bumped B/C with preserved requirements; not same-version/fresh-DR proof"}
 FIXTURE_MARKER = "CMUXMaestroHostProofGeneration"

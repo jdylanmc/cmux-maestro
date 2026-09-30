@@ -1704,6 +1704,13 @@ requires the current build number; this feature does not bump it.
   candidate/retiring version are retained. Rollback exchanges current and
   previous, so the rollback itself can be undone. Backups are not integration
   setup targets and their owned registrations are retired.
+- Owned retirement finishes before a final exact-path registration of the
+  retained app. The existing cleanup/discard journal remains until that
+  registration verifies; interruption resumes finalization without the deleted
+  candidate bridge. Earlier registration and bridge work still precede cleanup
+  so verification failures can restore the app, integration and running state.
+  This is one ordered publication after cleanup, not a retry loop or proof that
+  asynchronous macOS registration services have settled.
 - Before app replacement, a private `0600` checkpoint at
   `~/Library/Application Support/CMUXMaestroPreview/Orchestration/install-transaction.json`
   captures the fixed owned resource set, registration provenance, prior absence,
