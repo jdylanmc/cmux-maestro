@@ -60,11 +60,20 @@ tests and a repeated concurrency test are errors. A selector/count extraction
 failure runs an unfiltered coverage fallback but **still fails** the command.
 There is no retry-until-pass path.
 
+Result accounting distinguishes logical test cases from recorded executions.
+The top-level summary must match the tree's complete logical status vector;
+device/configuration counters must match normalized execution statuses.
+Parameterized argument groups are not equated blindly with logical parents,
+and parameterized evidence without its execution counters is rejected.
+Unrecognized execution shapes, contradictory parent/run results, hidden runs
+and repetition nodes cannot certify coverage. The known nonparameterized
+isolated method must have exactly one non-repeated execution.
+
 Each hosted invocation retains separate xcresults, raw summary/test JSON and
-`coverage.json` under `.build/tests/scoped-results/`. The isolated raw result
-and both scope counts also appear in the job log, so the parent verifies the
-actual hosted selector rather than accepting a guessed selector or local
-standalone count. The inherited-MainActor negative remains sensitive because
+`coverage.json` under `.build/tests/scoped-results/`. Raw test trees, summaries
+and reconciled counts also appear in the job log, so the parent verifies the
+actual hosted selector and parameter hierarchy rather than accepting a guessed
+selector or local standalone count. The inherited-MainActor negative remains sensitive because
 the test body and non-yielding observer are unchanged. Previous hosted
 concurrency reds and the separate native viewport-settlement failure remain
 recorded; only a necessary current-head hosted run can establish their state.

@@ -140,6 +140,144 @@ class IntegratedTestScopeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             scopes.validate_remaining(remaining_summary, remaining_tree)
 
+    def test_review_flat_summary_cannot_claim_unrepresented_executions(self):
+        remaining = self.report([("OtherSuite/onlyCase()", "Passed")])
+        remaining[0].update(totalTestCount=200, passedTests=200)
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]), remaining)
+        self.assertEqual(result, 1)
+        self.assertFalse(evidence["passed"])
+        self.assertNotIn("combinedExecutedTestCount", evidence)
+
+    def test_review_isolated_failed_then_passed_repetition_cannot_authorize_exclusion(self):
+        isolated = self.report([(scopes.TEST, "Passed")])
+        isolated[1]["testNodes"][0]["children"][0]["children"] = [
+            {"nodeType": "Repetition", "name": "Attempt 1", "children": [
+                {"nodeType": "Test Case Run", "name": "Run 1", "result": "Failed"}]},
+            {"nodeType": "Repetition", "name": "Attempt 2", "children": [
+                {"nodeType": "Test Case Run", "name": "Run 2", "result": "Passed"}]},
+        ]
+        result, evidence = self.execute(isolated, self.report([(scopes.TEST, "Passed"), ("OtherSuite/test()", "Passed")]))
+        self.assertEqual(result, 1)
+        self.assertFalse(evidence["passed"])
+        self.assertFalse(evidence["selectorVerifiedByHostedResult"])
+        final = [command for command in self.commands if command[0] == "xcodebuild"][-1]
+        self.assertFalse(any(arg.startswith("-skip-testing:") for arg in final))
+        self.assertTrue((self.directory / "results/full-fallback-summary.json").exists())
+
+    def test_review_status_distribution_must_match_the_tree(self):
+        remaining = self.report([("OtherSuite/one()", "Passed"), ("OtherSuite/two()", "Passed")])
+        remaining[0].update(passedTests=1, expectedFailures=1)
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]), remaining)
+        self.assertEqual(result, 1)
+        self.assertIn("remainingValidationError", evidence)
+        self.assertFalse(evidence["passed"])
+
+    def test_summary_overall_result_cannot_hide_a_failed_isolated_case(self):
+        isolated = self.report([(scopes.TEST, "Failed")])
+        isolated[0]["result"] = "Passed"
+        result, evidence = self.execute(isolated, self.report([(scopes.TEST, "Passed"), ("OtherSuite/test()", "Passed")]))
+        self.assertEqual(result, 1)
+        self.assertFalse(evidence["passed"])
+        self.assertFalse(evidence["selectorVerifiedByHostedResult"])
+        final = [command for command in self.commands if command[0] == "xcodebuild"][-1]
+        self.assertFalse(any(arg.startswith("-skip-testing:") for arg in final))
+
+    def test_failure_counts_must_reconcile_not_just_failure_presence(self):
+        remaining = self.report([("OtherSuite/one()", "Failed"), ("OtherSuite/two()", "Failed")])
+        remaining[0].update(failedTests=1, expectedFailures=1)
+        with self.assertRaisesRegex(ValueError, "logical counts/statuses"):
+            scopes.validate_remaining(*remaining)
+
+    def test_actual_hosted_isolated_plan_target_path_is_normalized(self):
+        fixture = json.loads((ROOT / "scripts/test-fixtures/xcresult-isolated-hosted.json").read_text())
+        measured = scopes.validate_isolated(fixture["summary"], fixture["tests"])
+        self.assertEqual(measured["logicalCounts"]["totalTestCount"], 1)
+        self.assertEqual(measured["executionCounts"]["totalTestCount"], 1)
+        node = fixture["tests"]["testNodes"][0]["children"][0]["children"][0]["children"][0]
+        node["nodeIdentifierURL"] = node["nodeIdentifierURL"].replace("CMUXMaestroPreview/", "DifferentPlan/", 1)
+        with self.assertRaises(ValueError):
+            scopes.validate_isolated(fixture["summary"], fixture["tests"])
+
+    def test_parameterized_logical_and_execution_counts_are_distinct(self):
+        # Synthetic shape control, not a claim that this is the hosted parameter tree.
+        remaining = self.report([("OtherSuite/parameterized(value:)", "Passed")])
+        remaining[0]["devicesAndConfigurations"] = [
+            {"passedTests": 2, "failedTests": 0, "skippedTests": 0, "expectedFailures": 0}]
+        remaining[1]["testNodes"][0]["children"][0]["children"] = [
+            {"nodeType": "Arguments", "name": name, "result": "Passed", "children": [
+                {"nodeType": "Device", "name": "fixture device", "children": [
+                    {"nodeType": "Test Case Run", "name": "Run", "result": "Passed"}]}]}
+            for name in ("value=one", "value=two")]
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]), remaining)
+        self.assertEqual(result, 0)
+        self.assertEqual(evidence["remainingCounts"]["logicalCounts"]["totalTestCount"], 1)
+        self.assertEqual(evidence["remainingCounts"]["executionCounts"]["totalTestCount"], 2)
+        self.assertEqual(evidence["combinedExecutedTestCount"], 3)
+        remaining[0]["devicesAndConfigurations"][0]["passedTests"] = 200
+        with self.assertRaises(ValueError):
+            scopes.validate_remaining(*remaining)
+        remaining[0]["devicesAndConfigurations"][0]["passedTests"] = 2
+        remaining[0].update(totalTestCount=2, passedTests=2)
+        with self.assertRaises(ValueError):
+            scopes.validate_remaining(*remaining)
+
+    def test_hidden_or_duplicate_runs_and_parameterized_isolated_method_refuse(self):
+        for kind in ("duplicate-runs", "all-passed-repetitions", "hidden-run", "parameterized-isolated",
+                     "parent-run-status", "empty-device", "unknown-wrapper"):
+            with self.subTest(kind=kind):
+                isolated = self.report([(scopes.TEST, "Passed")])
+                run = {"nodeType": "Test Case Run", "name": "Run", "result": "Passed"}
+                if kind == "duplicate-runs":
+                    nested = [run, dict(run)]
+                elif kind == "all-passed-repetitions":
+                    nested = [{"nodeType": "Repetition", "name": f"Attempt {index}", "children": [dict(run)]}
+                              for index in (1, 2)]
+                elif kind == "hidden-run":
+                    nested = [{"nodeType": "Attachment", "name": "diagnostic", "children": [run]}]
+                elif kind == "parameterized-isolated":
+                    nested = [{"nodeType": "Arguments", "name": "unexpected=value", "children": [run]}]
+                elif kind == "empty-device":
+                    nested = [{"nodeType": "Device", "name": "empty", "result": "Passed"}]
+                elif kind == "unknown-wrapper":
+                    nested = [{"nodeType": "Unverified Wrapper", "name": "unknown", "children": [run]}]
+                else:
+                    nested = [{**run, "result": "Failed"}]
+                isolated[1]["testNodes"][0]["children"][0]["children"] = nested
+                with self.assertRaises(ValueError):
+                    scopes.validate_isolated(*isolated)
+
+    def test_parameter_execution_evidence_cannot_be_missing_repeated_or_contradictory(self):
+        for defect in ("missing-device-counts", "duplicate-argument", "duplicate-run", "status-mismatch",
+                       "skipped-argument", "mixed-runs", "invalid-device-count", "nested-arguments"):
+            with self.subTest(defect=defect):
+                summary, tree = self.report([("OtherSuite/parameterized(value:)", "Passed")])
+                summary["devicesAndConfigurations"] = [
+                    {"passedTests": 2, "failedTests": 0, "skippedTests": 0, "expectedFailures": 0}]
+                arguments = [
+                    {"nodeType": "Arguments", "name": name, "result": "Passed", "children": [
+                        {"nodeType": "Test Case Run", "name": "Run", "result": "Passed"}]}
+                    for name in ("one", "two")]
+                tree["testNodes"][0]["children"][0]["children"] = arguments
+                if defect == "missing-device-counts":
+                    del summary["devicesAndConfigurations"]
+                elif defect == "duplicate-argument":
+                    arguments[1]["name"] = "one"
+                elif defect == "duplicate-run":
+                    arguments[0]["children"].append(dict(arguments[0]["children"][0]))
+                elif defect == "status-mismatch":
+                    arguments[0]["children"][0]["result"] = "Failed"
+                elif defect == "skipped-argument":
+                    arguments[0]["result"] = arguments[0]["children"][0]["result"] = "Skipped"
+                    summary["devicesAndConfigurations"][0].update(passedTests=1, skippedTests=1)
+                elif defect == "mixed-runs":
+                    arguments.append({"nodeType": "Test Case Run", "name": "Run", "result": "Passed"})
+                elif defect == "invalid-device-count":
+                    summary["devicesAndConfigurations"][0]["failedTests"] = False
+                else:
+                    arguments[0]["children"] = [{"nodeType": "Arguments", "name": "nested", "result": "Passed"}]
+                with self.assertRaises(ValueError):
+                    scopes.validate_remaining(summary, tree)
+
 
 class BuildMetadataTests(unittest.TestCase):
     def test_app_bridge_markers_are_wired_as_input_plist_in_both_configurations(self):

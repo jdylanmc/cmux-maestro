@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Hosted-only partition: one blocking-observer regression, then its full complement."""
 import argparse
+from collections import Counter
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import subprocess
@@ -12,6 +14,17 @@ TARGET = "CMUXMaestroPreviewTests"
 TEST = "CopilotSetupTests/concurrentSupervisionDoesNotOccupyCooperativeExecutor()"
 SELECTOR = TARGET + "/" + TEST
 SCHEMA = "0.1.0"
+STATUSES = ("Passed", "Failed", "Skipped", "Expected Failure")
+STRUCTURE = ("Device", "Test Plan Configuration")
+DETAILS = ("Failure Message", "Source Code Reference", "Attachment", "Expression", "Test Value", "Runtime Warning")
+
+
+@dataclass(frozen=True)
+class Case:
+    identity: str
+    status: str
+    executions: tuple
+    parameterized: bool
 
 
 def require(condition, message):
@@ -19,39 +32,143 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def children(node):
+    values = node.get("children", [])
+    require(isinstance(values, list) and all(isinstance(child, dict) for child in values),
+            "Invalid test children.")
+    return values
+
+
+def aggregate(statuses):
+    require(statuses and all(status in STATUSES for status in statuses), "Missing execution status.")
+    if "Failed" in statuses:
+        return "Failed"
+    if all(status == "Skipped" for status in statuses):
+        return "Skipped"
+    if all(status == "Expected Failure" for status in statuses):
+        return "Expected Failure"
+    return "Passed"
+
+
+def execution_records(node):
+    """Normalize one logical case without treating its aggregate as every run."""
+    runs = []
+    arguments = []
+
+    def visit(child, argument=None):
+        kind = child.get("nodeType")
+        require(kind != "Repetition", "Repetition/retry evidence is not authorized.")
+        if kind == "Arguments":
+            require(argument is None, "Nested parameter groups have unverified execution semantics.")
+            label = child.get("nodeIdentifier") or child.get("name")
+            require(isinstance(label, str) and label and label not in arguments,
+                    "Missing or repeated parameter identity.")
+            arguments.append(label)
+            before = len(runs)
+            for nested in children(child):
+                visit(nested, label)
+            if len(runs) == before:
+                require(child.get("result") in STATUSES, "Parameter group has no execution result.")
+                runs.append((label, child["result"]))
+            require(len(runs) == before + 1, "Parameter invocation has repeated or ambiguous runs.")
+            if child.get("result") is not None:
+                require(child["result"] == runs[-1][1], "Parameter and execution statuses disagree.")
+        elif kind == "Test Case Run":
+            require(child.get("result") in STATUSES, "Missing test-run result.")
+            runs.append((argument, child["result"]))
+            for nested in children(child):
+                require(nested.get("nodeType") in DETAILS, "Unexpected nested execution inside a test run.")
+                validate_details(nested)
+        elif kind in STRUCTURE:
+            before = len(runs)
+            for nested in children(child):
+                visit(nested, argument)
+            require(len(runs) > before, "Execution container has no run evidence.")
+            if child.get("result") is not None:
+                require(child["result"] == aggregate([status for _, status in runs[before:]]),
+                        "Container and execution statuses disagree.")
+        elif kind in DETAILS:
+            validate_details(child)
+        else:
+            raise ValueError(f"Unrecognized execution shape: {kind!r}")
+
+    for child in children(node):
+        visit(child)
+    if not runs:
+        require(not arguments and not any(child.get("nodeType") in STRUCTURE for child in children(node)),
+                "Missing execution evidence.")
+        runs.append((None, node["result"]))
+    if arguments:
+        require(all(argument is not None for argument, _ in runs)
+                and {argument for argument, _ in runs} == set(arguments),
+                "Mixed parameterized and unparameterized execution evidence.")
+    else:
+        require(len(runs) == 1, "A nonparameterized test has multiple executions.")
+    require(node["result"] == aggregate([status for _, status in runs]),
+            "Logical test and execution statuses disagree.")
+    return tuple(runs), bool(arguments)
+
+
+def validate_details(node):
+    for child in children(node):
+        require(child.get("nodeType") in DETAILS, "Execution evidence cannot hide in diagnostic nodes.")
+        validate_details(child)
+
+
+def identifier_path(value):
+    require(isinstance(value, str), "Invalid test identifier URL.")
+    parsed = urlparse(value)
+    require(parsed.scheme == "test" and parsed.netloc == "com.apple.xcode"
+            and not parsed.query and not parsed.fragment,
+            "Unrecognized test identifier URL; preserve the result for inspection.")
+    return unquote(parsed.path).strip("/")
+
+
 def cases(document):
     require(isinstance(document, dict), "Invalid xcresult test document.")
     require(isinstance(document.get("testNodes"), list), "Missing xcresult test tree.")
     result = []
 
-    def visit(node, bundle=None):
+    def visit(node, bundle=None, plan=None, bundle_path=None):
         require(isinstance(node, dict), "Invalid xcresult test node.")
+        if node.get("nodeType") == "Test Plan":
+            require(isinstance(node.get("name"), str) and node["name"], "Missing test plan name.")
+            plan = node["name"]
         if node.get("nodeType") in ("Unit test bundle", "UI test bundle"):
             require(isinstance(node.get("name"), str), "Invalid test bundle name.")
             bundle = node["name"].removesuffix(".xctest")
+            bundle_path = (plan + "/" if plan else "") + bundle
+            if node.get("nodeIdentifierURL"):
+                require(identifier_path(node["nodeIdentifierURL"]) == bundle_path,
+                        "Test bundle URL disagrees with its plan/target ancestry.")
         if node.get("nodeType") == "Test Case":
             identifier = node.get("nodeIdentifier")
             url = node.get("nodeIdentifierURL")
+            require(bundle and bundle_path, "A test case has no attributable target.")
             if url:
-                require(isinstance(url, str), "Invalid test identifier URL.")
-                parsed = urlparse(url)
-                require(parsed.scheme == "test" and parsed.netloc == "com.apple.xcode",
-                        "Unrecognized test identifier URL; preserve the result for inspection.")
-                identity = unquote(parsed.path).lstrip("/")
+                path = identifier_path(url)
+                require(path.startswith(bundle_path + "/"), "Test URL is outside its plan/target ancestry.")
+                local = path[len(bundle_path) + 1:]
+                require(identifier is None or identifier in (local, bundle + "/" + local),
+                        "Test identifier and URL disagree.")
+                identity = bundle + "/" + local
             else:
                 require(bundle and isinstance(identifier, str) and identifier,
                         "A test case has no attributable identifier.")
                 identity = identifier if identifier.startswith(bundle + "/") else bundle + "/" + identifier
-            result.append((identity, node.get("result")))
-        children = node.get("children", [])
-        require(isinstance(children, list), "Invalid test children.")
-        for child in children:
-            visit(child, bundle)
+            require(node.get("result") in STATUSES, "Missing logical test result.")
+            executions, parameterized = execution_records(node)
+            result.append(Case(identity, node["result"], executions, parameterized))
+            return
+        require(node.get("nodeType") in ("Test Plan", "Unit test bundle", "UI test bundle", "Test Suite") + STRUCTURE,
+                "Execution node appeared outside a logical test.")
+        for child in children(node):
+            visit(child, bundle, plan, bundle_path)
 
     for node in document["testNodes"]:
         visit(node)
     require(result, "No test cases were reported; zero tests is not success.")
-    require(len({identity for identity, _ in result}) == len(result), "Repeated/ambiguous test identifiers.")
+    require(len({case.identity for case in result}) == len(result), "Repeated/ambiguous test identifiers.")
     return result
 
 
@@ -66,32 +183,61 @@ def counts(summary):
     return {key: summary[key] for key in keys}
 
 
-def validate_isolated(summary, tests):
+def tally(statuses):
+    values = Counter(statuses)
+    return {"totalTestCount": sum(values.values()), "passedTests": values["Passed"],
+            "failedTests": values["Failed"], "skippedTests": values["Skipped"],
+            "expectedFailures": values["Expected Failure"]}
+
+
+def reconcile(summary, selected):
     measured = counts(summary)
+    logical = tally([case.status for case in selected])
+    executions = tally([status for case in selected for _, status in case.executions])
+    require(measured == logical, "Summary logical counts/statuses disagree with the normalized test tree.")
+    require(summary.get("result") == ("Failed" if logical["failedTests"] else "Passed"),
+            "Summary overall result disagrees with the normalized test statuses.")
+    devices = summary.get("devicesAndConfigurations")
+    if devices is not None:
+        require(isinstance(devices, list) and devices, "Missing device/configuration execution counts.")
+        keys = ("passedTests", "failedTests", "skippedTests", "expectedFailures")
+        require(all(isinstance(device, dict) and all(type(device.get(key)) is int and device[key] >= 0 for key in keys)
+                    for device in devices), "Invalid device/configuration execution counts.")
+        observed = {key: sum(device[key] for device in devices) for key in keys}
+        observed["totalTestCount"] = sum(observed.values())
+        require(observed == executions, "Device/configuration counts disagree with normalized executions.")
+    else:
+        require(logical == executions, "Parameterized execution counts require device/configuration evidence.")
+    return {**measured, "countBasis": "logical-summary/execution-device-counts",
+            "logicalCounts": logical, "executionCounts": executions}
+
+
+def validate_isolated(summary, tests):
     selected = cases(tests)
+    measured = reconcile(summary, selected)
     require(measured["totalTestCount"] == 1 and measured["skippedTests"] == 0
             and measured["expectedFailures"] == 0 and measured["passedTests"] + measured["failedTests"] == 1,
             "Isolated execution must actually run exactly one test, not skip or retry it.")
-    require(len(selected) == 1 and selected[0][0] == SELECTOR
-            and selected[0][1] in ("Passed", "Failed"),
+    require(len(selected) == 1 and selected[0].identity == SELECTOR
+            and selected[0].status in ("Passed", "Failed")
+            and not selected[0].parameterized and len(selected[0].executions) == 1,
             "Hosted selector did not resolve to exactly the unchanged concurrency regression.")
-    require((selected[0][1] == "Passed") == (measured["passedTests"] == 1),
+    require((selected[0].status == "Passed") == (measured["passedTests"] == 1),
             "Isolated case result and counts disagree.")
     return measured
 
 
 def validate_remaining(summary, tests):
-    measured = counts(summary)
     selected = cases(tests)
-    excluded = [status for identity, status in selected if identity == SELECTOR]
+    measured = reconcile(summary, selected)
+    excluded = [case.status for case in selected if case.identity == SELECTOR]
     require(not excluded or excluded == ["Skipped"],
             "The isolated regression ran again in the loaded scope.")
-    remaining = [(identity, status) for identity, status in selected if identity != SELECTOR]
-    require(remaining and all(status in ("Passed", "Failed", "Expected Failure") for _, status in remaining),
+    remaining = [case for case in selected if case.identity != SELECTOR]
+    require(remaining and all(status in ("Passed", "Failed", "Expected Failure")
+                             for case in remaining for _, status in case.executions),
             "Another integrated test was skipped or did not execute.")
-    require(measured["skippedTests"] == len(excluded), "Unattributed skipped integrated tests.")
-    require(any(status == "Failed" for _, status in remaining) == (measured["failedTests"] > 0),
-            "Remaining case results and failure counts disagree.")
+    require(measured["executionCounts"]["skippedTests"] == len(excluded), "Unattributed skipped integrated tests.")
     return measured
 
 
@@ -164,8 +310,9 @@ def run(command, directory, runner=subprocess.run):
     try:
         remaining_summary, tests = read_result(remaining_bundle, directory, scope, runner)
         print("Remaining hosted summary: " + json.dumps(remaining_summary), flush=True)
+        print("Remaining hosted test tree: " + json.dumps(tests), flush=True)
         evidence["remainingCounts"] = (validate_remaining(remaining_summary, tests)
-                                       if selection else counts(remaining_summary))
+                                       if selection else reconcile(remaining_summary, cases(tests)))
     except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         evidence["remainingValidationError"] = str(error)
     success = (evidence["selectorVerifiedByHostedResult"] and not isolated.returncode and not remaining.returncode
@@ -176,9 +323,9 @@ def run(command, directory, runner=subprocess.run):
     evidence["passed"] = success
     if evidence["selectorVerifiedByHostedResult"] and "remainingCounts" in evidence:
         evidence["combinedExecutedTestCount"] = (
-            evidence["isolatedCounts"]["totalTestCount"]
-            + evidence["remainingCounts"]["totalTestCount"]
-            - evidence["remainingCounts"]["skippedTests"]
+            evidence["isolatedCounts"]["executionCounts"]["totalTestCount"]
+            + evidence["remainingCounts"]["executionCounts"]["totalTestCount"]
+            - evidence["remainingCounts"]["executionCounts"]["skippedTests"]
         )
     save()
     print("Integrated scope counts: " + json.dumps({
