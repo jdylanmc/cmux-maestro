@@ -517,6 +517,31 @@ final class InstallCheckpointFixture: @unchecked Sendable {
 }
 
 struct CopilotInstallCheckpointTests {
+    @Test func interruptedFirstInstallRemovalRetainsSourceUntilAbsenceIsVerified() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        _ = try await value.checkpoint().perform("prepare")
+        let original = try value.record()
+        _ = try await value.checkpoint().perform("apply")
+        await value.runner.configure(afterMutationResult: .exited(9))
+        do {
+            _ = try await value.checkpoint().perform("restore")
+            Issue.record("A failed provider exit must leave compensation pending")
+        } catch let error as CopilotRegistrationConflict {
+            #expect(error.message.contains("compensation failed"))
+        }
+        #expect(await value.runner.installed == false)
+        #expect(try value.record().phase == "restoring")
+        #expect(try CopilotSetupFileState.read(value.fixture.source.appendingPathComponent("plugin.json")).data != nil)
+        let calls = await value.runner.pluginOperations
+        #expect(calls.last == "uninstall:opaque-provider-source")
+        await value.runner.configure()
+        _ = try await value.checkpoint().perform("restore")
+        try value.verifyRestored(original)
+        #expect(await value.runner.pluginOperations == calls)
+        #expect(try CopilotSetupFileState.read(value.fixture.source.appendingPathComponent("plugin.json")).data == nil)
+        _ = try await value.checkpoint().perform("release")
+    }
+
     @Test func disabledProvenanceRefreshAndRecoveryPreserveForeignReceiptChanges() async throws {
         let value = try InstallCheckpointFixture(); defer { try? value.clean() }
         await value.runner.supplyMetadata(version: "1.0.89")
