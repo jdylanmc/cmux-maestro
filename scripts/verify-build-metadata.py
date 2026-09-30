@@ -219,7 +219,7 @@ def verify_signed(app):
             "The installer unexpectedly has App Sandbox enabled.")
 
 
-def registration_records(output, *, allow_empty=False):
+def registration_records(output, *, allow_empty=False, include_election=False):
     """Parse only the supported pluginkit listing; diagnostics are not success."""
     if allow_empty and output.strip() in ("(no matches)", "(0 plug-ins)"):
         return []
@@ -236,9 +236,11 @@ def registration_records(output, *, allow_empty=False):
         if summary:
             count = int(summary.group(1))
             continue
-        header = re.fullmatch(r"[+\-!=?]?\s*([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+)(?:\([^\r\n]*\))?", line)
+        header = re.fullmatch(r"([+\-!=?]?)\s*([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+)(?:\([^\r\n]*\))?", line)
         if header:
-            records.append({"id": header.group(1)})
+            records.append({"id": header.group(2)})
+            if include_election:
+                records[-1]["election"] = header.group(1)
             continue
         field = re.fullmatch(r"([A-Za-z][A-Za-z ]*)\s*=\s*(.+)", line)
         require(field is not None and records, "Unsupported registration output.")

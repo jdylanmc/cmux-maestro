@@ -45,15 +45,19 @@ class SyntheticMac(preview.MacOperations):
         self.wrong_extension = False
         self.wrong_app = False
         self.elections = {}
+        self.extension_points = {}
         self.release_on_withdrawal = False
         self.integration_calls = []
         self.application_calls = []
+        self.application_bridges = []
         self.running_application = None
         self.quit_refused = False
         self.quit_stays_running = False
         self.next_application_pid = 42001
 
     def application_lifecycle(self, bridge, action, app, *, expected=None, hidden=False):
+        assert plistlib.loads((bridge / "Contents/Info.plist").read_bytes()).get("CMUXMaestroAppLifecycleBridge") == "graceful-lifecycle-v1"
+        self.application_bridges.append(bridge)
         self.application_calls.append((action, app, hidden))
         self.fail("application-" + action)
         if action == "inspect":
@@ -211,10 +215,14 @@ class SyntheticMac(preview.MacOperations):
                 self.extensions.discard((identifier, Path(command[-1]).resolve()))
                 if self.release_on_withdrawal:
                     self.busy = False
-            elif command[1:] == ["-m", "-A", "-D", "-vv", "-i", identifier]:
+            elif command[1:] in (["-m", "-A", "-D", "-vv", "-i", identifier],
+                                 ["-m", "-A", "-D", "-vv", "-i", identifier, "-p", metadata.PRODUCTION_POINT]):
                 self.fail("query")
-                entries = sorted((key, path) for key, path in self.extensions if key == identifier)
+                entries = sorted((key, path) for key, path in self.extensions if key == identifier
+                                 and ("-p" not in command or self.extension_points.get(path, metadata.PRODUCTION_POINT)
+                                      == metadata.PRODUCTION_POINT))
                 stdout = ("".join(f"{self.elections.get((key, path), '+')} {key}(2)\n    Path = {path}\n"
+                                  f"    SDK = {self.extension_points.get(path, metadata.PRODUCTION_POINT)}\n"
                                   for key, path in entries)
                           + f"({len(entries)} plug-ins)\n").encode() if entries else b"(no matches)\n"
             else:
@@ -547,8 +555,8 @@ with installer.locked():
         before = self.receipt()
         owned = self.home / ".copilot/synthetic-owned-integration.json"
         integration = owned.read_bytes()
-        self.assertIsNotNone(before["integration"])
-        self.assertIsNone(before["transaction"])
+        self.assertEqual(before["transaction"]["phase"], "committed")
+        self.assertEqual(before["transaction"]["integration"]["state"], "releasing")
         self.assertIn("checkpoint cleanup", self.operation("status"))
         for action, kwargs in (("rollback", {}), ("prepare_update", {}), ("uninstall", {"hooks_retired": True})):
             with self.subTest(action=action):
@@ -736,7 +744,8 @@ with installer.locked():
                 with self.assertRaises(ValueError):
                     self.operation("install", self.new)
                 self.assertEqual((self.app / "payload").read_text(), "old")
-                self.assertEqual(self.receipt(), receipt)
+                self.assertEqual(self.receipt(), {**receipt, "retired": self.receipt()["retired"]})
+                self.assertEqual(self.receipt()["retired"]["identity"]["sha256"], preview.digest(self.new))
                 self.assertEqual(self.ops.running_application, before)
                 self.assertEqual(self.ops.next_application_pid, next_pid)
                 self.assertIn(self.app, self.ops.applications)
@@ -1079,6 +1088,297 @@ with installer.locked():
         receipt = self.receipt()
         return self.app.parent / preview.STATE_NAME / receipt["previous"]["slot"]
 
+    def retired(self):
+        return self.app.parent / preview.STATE_NAME / self.receipt()["retired"]["slot"]
+
+    def test_retained_noop_has_no_housekeeping_and_preparation_is_bounded_to_four(self):
+        self.operation("install", self.old)
+        self.operation("install", self.new)
+        self.operation("install", self.latest)
+        retired = self.retired()
+        before = self.receipt()
+        self.ops.commands.clear()
+        with patch.object(preview.shutil, "rmtree", side_effect=AssertionError("No-op deleted an app")):
+            self.operation("install", self.latest)
+        self.assertEqual(self.receipt(), before)
+        self.assertTrue(retired.exists())
+        self.assertFalse(any(command[:2] in ([preview.LSREGISTER, "-f"], [preview.LSREGISTER, "-u"],
+                                             ["/usr/bin/pluginkit", "-a"], ["/usr/bin/pluginkit", "-r"])
+                             for command in self.ops.commands))
+        copy, remove = self.ops.copy, preview.shutil.rmtree
+        prepared_counts = []
+
+        def stage(source, destination):
+            copy(source, destination)
+            self.assertTrue(retired.exists())
+            prepared_counts.append(1 + len(list(destination.parent.glob("slot-*.app"))))
+
+        def reclaim(path):
+            self.assertEqual(path, retired)
+            self.assertNotIn(self.app, self.ops.applications)
+            self.assertNotIn((metadata.BASE_ID + ".Extension", self.app / preview.EXTENSION), self.ops.extensions)
+            self.assertEqual(self.receipt()["transaction"]["phase"], "reclaiming")
+            return remove(path)
+
+        with patch.object(self.ops, "copy", side_effect=stage), patch.object(preview.shutil, "rmtree", side_effect=reclaim):
+            self.operation("install", self.fixture("fourth"))
+        self.assertEqual(prepared_counts, [4])
+        self.assertEqual((self.app / "payload").read_text(), "fourth")
+        self.assertEqual((self.previous() / "payload").read_text(), "latest")
+        self.assertEqual((self.retired() / "payload").read_text(), "new")
+        self.assertEqual(len(list((self.app.parent / preview.STATE_NAME).glob("slot-*.app"))), 2)
+
+    def test_stage_failure_preserves_existing_retired_bridge_and_running_app(self):
+        self.operation("install", self.old)
+        self.operation("install", self.new)
+        self.operation("install", self.latest)
+        running = self.start_containing_app(hidden=True)
+        retired = self.retired()
+        node = preview.directory_identity(retired)
+        before = self.receipt()
+        self.ops.commands.clear()
+        self.ops.application_calls.clear()
+        self.ops.failures["copy"] = OSError("stage failed")
+        with self.assertRaisesRegex(OSError, "stage failed"):
+            self.operation("install", self.fixture("fourth"))
+        self.assertEqual(self.receipt(), before)
+        self.assertEqual(preview.directory_identity(retired), node)
+        self.assertEqual(self.ops.running_application, running)
+        self.assertEqual(self.ops.application_calls, [])
+        self.assertFalse(any(command[:2] in ([preview.LSREGISTER, "-f"], [preview.LSREGISTER, "-u"],
+                                             ["/usr/bin/pluginkit", "-a"], ["/usr/bin/pluginkit", "-r"])
+                             for command in self.ops.commands))
+
+    def test_failed_update_retains_new_bridge_for_older_running_app_without_lifecycle_bridge(self):
+        self.operation("install", self.old)
+        # An older installer owned this app before either bridge was introduced.
+        self.change_plist(self.app, False, "CMUXMaestroAppLifecycleBridge", "")
+        self.change_plist(self.app, False, "CMUXMaestroInstallBridge", "")
+        receipt_path = self.app.parent / preview.STATE_NAME / "receipt.json"
+        receipt = self.receipt()
+        receipt["current"]["sha256"] = preview.digest(self.app)
+        receipt_path.write_text(json.dumps(receipt))
+        running = self.ops.application_lifecycle(self.new, "launch", self.app, hidden=True)
+        self.ops.application_calls.clear()
+        before = (self.home / ".copilot/synthetic-owned-integration.json").read_bytes()
+        self.ops.failures["integration-after-apply"] = OSError("candidate failed")
+        with self.assertRaisesRegex(OSError, "candidate failed"):
+            self.operation("install", self.new)
+        self.assertEqual((self.app / "payload").read_text(), "old")
+        self.assertEqual((self.retired() / "payload").read_text(), "new")
+        self.assertEqual(self.ops.integration_calls[-1][0], "release")
+        self.assertEqual(self.ops.integration_calls[-1][2], self.retired())
+        self.assertEqual(self.ops.application_bridges[-1], self.retired())
+        self.assertTrue(self.ops.running_application["hidden"])
+        self.assertNotEqual(self.ops.running_application["process"]["pid"], running["process"]["pid"])
+        self.assertEqual((self.home / ".copilot/synthetic-owned-integration.json").read_bytes(), before)
+        self.ops.verify_registration(self.retired(), absent=True)
+
+    def test_repeated_failed_updates_keep_one_retired_without_postpublication_mutators(self):
+        self.operation("install", self.old)
+        self.operation("install", self.new)
+        before = (self.home / ".copilot/synthetic-owned-integration.json").read_bytes()
+        for index in range(3):
+            candidate = self.fixture(f"failed-{index}")
+            self.ops.commands.clear()
+            self.ops.failures["integration-after-apply"] = OSError("candidate failed")
+            with self.assertRaises(OSError):
+                self.operation("install", candidate)
+            self.assertEqual((self.app / "payload").read_text(), "new")
+            self.assertEqual((self.previous() / "payload").read_text(), "old")
+            self.assertEqual((self.retired() / "payload").read_text(), f"failed-{index}")
+            self.assertEqual((self.home / ".copilot/synthetic-owned-integration.json").read_bytes(), before)
+            publications = [i for i, command in enumerate(self.ops.commands)
+                            if command[:2] == [preview.LSREGISTER, "-f"]]
+            self.assertEqual(len(publications), 1)
+            self.assertFalse(any(command[:2] in ([preview.LSREGISTER, "-u"], ["/usr/bin/pluginkit", "-r"])
+                                 for command in self.ops.commands[publications[0]:]))
+            self.assertEqual(len(list((self.app.parent / preview.STATE_NAME).glob("slot-*.app"))), 2)
+
+    def test_registered_owned_retired_is_preflight_allowed_then_withdrawn_before_reclaim(self):
+        self.operation("install", self.old)
+        self.operation("install", self.new)
+        self.operation("install", self.latest)
+        retired = self.retired()
+        self.ops.register(retired)
+        self.ops.commands.clear()
+        with self.assertRaises(ValueError):
+            self.operation("install", self.latest)
+        self.assertFalse(any(command[:2] in ([preview.LSREGISTER, "-f"], [preview.LSREGISTER, "-u"])
+                             for command in self.ops.commands))
+        self.operation("install", self.fixture("fourth"))
+        self.assertFalse(retired.exists())
+        self.assertNotIn(retired, self.ops.applications)
+        self.assertEqual((self.retired() / "payload").read_text(), "new")
+
+    def test_refresh_explicit_source_retirement_failure_restores_before_final_publication(self):
+        self.operation("install", self.old)
+        self.start_containing_app(hidden=True)
+        self.ops.register(self.old)
+        self.ops.commands.clear()
+        self.ops.failures["integration-verify"] = OSError("refresh failed")
+        with patch.object(preview, "DEVELOPMENT_APP", self.old), self.assertRaisesRegex(OSError, "refresh failed"):
+            self.operation("install", self.old, retire_source=True)
+        self.assertIn(self.old, self.ops.applications)
+        self.assertTrue(self.ops.running_application["hidden"])
+        self.assertIsNone(self.receipt()["transaction"])
+        publications = [i for i, command in enumerate(self.ops.commands)
+                        if command == [preview.LSREGISTER, "-f", str(self.app)]]
+        self.assertEqual(len(publications), 2)  # Failed refresh, then a separately withdrawn restoration.
+        self.assertFalse(any(command[:2] in ([preview.LSREGISTER, "-u"], ["/usr/bin/pluginkit", "-r"])
+                             for command in self.ops.commands[publications[-1]:]))
+
+    def test_retired_cannot_alias_staging_or_active_deletion(self):
+        self.operation("install", self.old)
+        self.ops.failures["before-move"] = Interrupted()
+        with self.assertRaises(Interrupted):
+            self.operation("install", self.new)
+        path = self.app.parent / preview.STATE_NAME / "receipt.json"
+        before = self.receipt()
+        for target in ("transaction", "garbage"):
+            with self.subTest(target=target):
+                record = json.loads(json.dumps(before))
+                slot = record["transaction"]["slot"]
+                record["retired"] = {"slot": slot, "identity": record["transaction"]["after"]}
+                if target == "garbage":
+                    record["transaction"]["phase"] = "reclaiming"
+                    record["garbage"] = {**record["retired"], "deleting": False, "node": None}
+                path.write_text(json.dumps(record))
+                self.ops.commands.clear()
+                with self.assertRaisesRegex(ValueError, "Aliased"):
+                    self.operation("recover")
+                self.assertEqual(self.ops.commands, [])
+        path.write_text(json.dumps(before))
+        self.operation("recover")
+
+    def test_restoration_crash_after_publication_reuses_registration_and_retains_bridge(self):
+        self.operation("install", self.old)
+        self.start_containing_app(hidden=True)
+        self.ops.failures["integration-after-apply"] = OSError("candidate failed")
+        self.ops.failures["after-register"] = Interrupted()
+        with self.assertRaises(Interrupted):
+            self.operation("install", self.new)
+        self.assertEqual((self.app / "payload").read_text(), "old")
+        self.assertIsNone(self.receipt()["retired"])
+        self.assertIsNotNone(self.receipt()["transaction"])
+        self.ops.commands.clear()
+        self.operation("recover")
+        self.assertFalse(any(command[:2] in ([preview.LSREGISTER, "-f"], [preview.LSREGISTER, "-u"],
+                                             ["/usr/bin/pluginkit", "-a"], ["/usr/bin/pluginkit", "-r"])
+                             for command in self.ops.commands))
+        self.assertEqual((self.retired() / "payload").read_text(), "new")
+        self.assertTrue(self.ops.running_application["hidden"])
+
+    def test_committed_release_and_final_receipt_interruptions_do_not_republish(self):
+        self.operation("install", self.old)
+        self.operation("install", self.new)
+        self.ops.failures["integration-release"] = Interrupted()
+        with self.assertRaises(Interrupted):
+            self.operation("install", self.latest)
+        self.assertEqual(self.receipt()["transaction"]["phase"], "committed")
+        self.assertIsNone(self.receipt()["retired"])
+        self.ops.commands.clear()
+        original = preview.Installer.save
+
+        def final_receipt(installer):
+            if installer.receipt["transaction"] is None:
+                raise Interrupted()
+            original(installer)
+
+        with patch.object(preview.Installer, "save", side_effect=final_receipt, autospec=True):
+            with self.assertRaises(Interrupted):
+                self.operation("recover")
+        self.assertEqual(self.receipt()["transaction"]["integration"]["state"], "released")
+        self.operation("recover")
+        self.assertFalse(any(command[:2] in ([preview.LSREGISTER, "-f"], ["/usr/bin/pluginkit", "-a"])
+                             for command in self.ops.commands))
+        self.assertEqual((self.retired() / "payload").read_text(), "old")
+        self.assertEqual((self.previous() / "payload").read_text(), "new")
+        self.assertEqual((self.app / "payload").read_text(), "latest")
+
+    def test_retired_alias_tamper_and_missing_artifacts_refuse_without_mutation(self):
+        self.operation("install", self.old)
+        self.operation("install", self.new)
+        self.operation("install", self.latest)
+        path = self.app.parent / preview.STATE_NAME / "receipt.json"
+        before = path.read_bytes()
+        retired = self.retired()
+        for mode in ("alias", "tamper", "missing"):
+            with self.subTest(mode=mode):
+                if mode == "alias":
+                    record = json.loads(before)
+                    record["retired"] = record["previous"]
+                    path.write_text(json.dumps(record))
+                elif mode == "tamper":
+                    (retired / "payload").write_text("foreign")
+                else:
+                    retired.rename(self.root / "saved-retired")
+                self.ops.commands.clear()
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    self.operation("install", self.latest)
+                self.assertFalse(any(command[:2] in ([preview.LSREGISTER, "-f"], [preview.LSREGISTER, "-u"],
+                                                     ["/usr/bin/pluginkit", "-a"], ["/usr/bin/pluginkit", "-r"])
+                                     for command in self.ops.commands))
+                path.write_bytes(before)
+                if mode == "tamper":
+                    (retired / "payload").write_text("old")
+                if mode == "missing":
+                    (self.root / "saved-retired").rename(retired)
+
+    def test_external_eligible_or_ambiguous_siblings_refuse_before_staging_or_provider_effects(self):
+        self.operation("install", self.old)
+        sibling = self.fixture("external")
+        self.ops.register(sibling)
+        extension = (metadata.BASE_ID + ".Extension", sibling / preview.EXTENSION)
+        before = self.receipt()
+        for election in ("+", "", "?", "!"):
+            with self.subTest(election=election):
+                self.ops.elections[extension] = election
+                self.ops.commands.clear()
+                self.ops.integration_calls.clear()
+                with self.assertRaisesRegex(ValueError, "external.app"):
+                    self.operation("install", self.new)
+                self.assertEqual(self.receipt(), before)
+                self.assertEqual(self.ops.integration_calls, [])
+                self.assertFalse(any(command[0] == "/usr/bin/ditto" or command[:2] in (
+                    [preview.LSREGISTER, "-f"], [preview.LSREGISTER, "-u"], ["/usr/bin/pluginkit", "-a"],
+                    ["/usr/bin/pluginkit", "-r"]) for command in self.ops.commands))
+                self.assertIn(extension, self.ops.extensions)
+        self.ops.elections[extension] = "-"
+        self.operation("install", self.new)
+        self.assertIn(extension, self.ops.extensions)
+
+    def test_legacy_receipt_without_retired_and_healthy_retired_recovery_are_compatible(self):
+        self.operation("install", self.old)
+        path = self.app.parent / preview.STATE_NAME / "receipt.json"
+        record = self.receipt()
+        del record["retired"]
+        path.write_text(json.dumps(record))
+        self.operation("install", self.new)
+        self.operation("install", self.latest)
+        before = self.receipt()
+        self.ops.commands.clear()
+        self.operation("recover")
+        self.assertEqual(self.receipt(), before)
+        self.assertIn("inactive retired: one", self.operation("status"))
+        self.assertFalse(any(command[:2] in ([preview.LSREGISTER, "-f"], [preview.LSREGISTER, "-u"],
+                                             ["/usr/bin/pluginkit", "-a"], ["/usr/bin/pluginkit", "-r"])
+                             for command in self.ops.commands))
+
+    def test_uninstall_includes_exact_retired_slot_without_sibling_sweep(self):
+        self.operation("install", self.old)
+        self.operation("install", self.new)
+        self.operation("install", self.latest)
+        sibling = self.fixture("ignored")
+        self.ops.register(sibling)
+        self.ops.elections[(metadata.BASE_ID + ".Extension", sibling / preview.EXTENSION)] = "-"
+        self.operation("uninstall", hooks_retired=True)
+        self.assertFalse(self.app.exists())
+        self.assertIsNone(self.receipt()["retired"])
+        self.assertEqual(list((self.app.parent / preview.STATE_NAME).glob("slot-*.app")), [])
+        self.assertIn(sibling, self.ops.applications)
+        self.assertTrue(sibling.exists())
+
     def change_signature(self, app, role, key, value):
         path = app / "signatures.json"
         signatures = json.loads(path.read_text())
@@ -1100,6 +1400,7 @@ with installer.locked():
         self.operation("install", self.old)
         unrelated = self.fixture("unrelated")
         self.ops.register(unrelated)
+        self.ops.extension_points[unrelated / preview.EXTENSION] = "com.example.unrelated.point"
         before = self.receipt()
         digest = preview.digest(self.app)
         self.assertIn("registration retired", self.operation("prepare_update"))
@@ -1127,6 +1428,7 @@ with installer.locked():
         self.operation("install", self.new, update=True)
         unrelated = self.fixture("unrelated")
         self.ops.register(unrelated)
+        self.ops.extension_points[unrelated / preview.EXTENSION] = "com.example.unrelated.point"
         before = self.receipt()
         for point in ("copy", "before-move"):
             with self.subTest(point=point):
@@ -1135,7 +1437,9 @@ with installer.locked():
                 with self.assertRaises(OSError):
                     self.operation("install", self.latest, update=True)
                 self.operation("recover")
-                self.assertEqual(self.receipt(), before)
+                self.assertEqual(self.receipt(), {**before, "retired": self.receipt()["retired"]})
+                if point == "before-move":
+                    self.assertEqual(self.receipt()["retired"]["identity"]["sha256"], preview.digest(self.latest))
                 self.assertEqual((self.app / "payload").read_text(), "new")
                 self.assertEqual((self.previous() / "payload").read_text(), "old")
                 self.assertIn("Verified installed preview", self.operation("status"))
@@ -1164,6 +1468,9 @@ with installer.locked():
             self.operation("prepare_update")
         self.assertEqual(self.receipt(), before)
         self.assertEqual(preview.digest(self.app), digest)
+        with self.assertRaisesRegex(ValueError, "Partial"):
+            self.operation("recover")
+        self.operation("prepare_update")
         self.operation("recover")
         self.assertIn("Verified installed preview", self.operation("status"))
 
@@ -1204,7 +1511,8 @@ with installer.locked():
         self.assertEqual((self.previous() / "payload").read_text(), "old")
         self.operation("install", self.latest, update=True)
         self.assertEqual((self.previous() / "payload").read_text(), "new")
-        self.assertEqual(len(list((self.app.parent / preview.STATE_NAME).glob("slot-*.app"))), 1)
+        self.assertEqual(len(list((self.app.parent / preview.STATE_NAME).glob("slot-*.app"))), 2)
+        self.assertEqual((self.retired() / "payload").read_text(), "old")
         self.assertEqual([move[2] for move in self.ops.moves], [False, True, True])
         self.operation("rollback")
         self.assertEqual((self.app / "payload").read_text(), "new")
@@ -1701,6 +2009,7 @@ except subprocess.TimeoutExpired:
         self.operation("install", self.old)
         unrelated = self.fixture("other-owner")
         self.ops.register(unrelated)
+        self.ops.extension_points[unrelated / preview.EXTENSION] = "com.example.unrelated.point"
         self.ops.commands.clear()
         self.ops.busy = True
         self.ops.release_on_withdrawal = True
@@ -1807,7 +2116,8 @@ except subprocess.TimeoutExpired:
 
     def test_interrupted_precommit_discard_is_resumable(self):
         self.operation("install", self.old)
-        self.ops.failures["before-move"] = Interrupted()
+        # Partial staging stays unverified and is deleted, never retained as a trusted app.
+        self.ops.failures["after-copy"] = Interrupted()
         with self.assertRaises(Interrupted):
             self.operation("install", self.new, update=True)
 
@@ -1832,7 +2142,8 @@ except subprocess.TimeoutExpired:
                 with self.assertRaises(OSError):
                     self.operation("install", self.new, update=True)
                 self.assertEqual((self.app / "payload").read_text(), "old")
-                self.assertEqual(self.receipt(), before)
+                self.assertEqual(self.receipt(), {**before, "retired": self.receipt()["retired"]})
+                self.assertEqual(self.receipt()["retired"]["identity"]["sha256"], preview.digest(self.new))
                 self.assertIn("Verified installed preview", self.operation("status"))
 
     def test_failed_first_install_restores_verified_absence(self):
@@ -1898,14 +2209,22 @@ except subprocess.TimeoutExpired:
         for attribute in ("wrong_app", "wrong_extension"):
             with self.subTest(attribute=attribute):
                 setattr(self.ops, attribute, True)
-                with self.assertRaises(ValueError):
+                with self.assertRaises((ValueError, preview.InstallRestorationError)):
                     self.operation("install", self.old)
+                if self.app.exists():
+                    self.assertEqual(attribute, "wrong_extension")
+                    self.assertIsNotNone(self.receipt()["transaction"])
+                    # Remove only the deliberately injected ambiguous fixture result.
+                    self.ops.extensions.discard((metadata.BASE_ID + ".Extension",
+                                                  (self.app / preview.EXTENSION).parent / "Wrong.appex"))
+                    setattr(self.ops, attribute, False)
+                    self.operation("recover")
                 self.assertFalse(self.app.exists())
                 self.assertIsNone(self.receipt()["transaction"])
                 setattr(self.ops, attribute, False)
                 self.operation("recover")
 
-    def test_superseded_and_unknown_siblings_survive_complete_install_lifecycle(self):
+    def test_superseded_and_ignored_siblings_survive_complete_install_lifecycle(self):
         identifier = metadata.BASE_ID + ".Extension"
         sibling_apps = [self.fixture("superseded-sibling"), self.fixture("unknown-sibling")]
         siblings = {(identifier, app / preview.EXTENSION) for app in sibling_apps}
@@ -1914,7 +2233,7 @@ except subprocess.TimeoutExpired:
         self.ops.extensions.update(siblings | {unrelated})
         self.ops.elections = {
             (identifier, sibling_apps[0] / preview.EXTENSION): "=",
-            (identifier, sibling_apps[1] / preview.EXTENSION): "?",
+            (identifier, sibling_apps[1] / preview.EXTENSION): "-",
         }
         self.operation("install", self.old)
         self.ops.failures["after-register"] = Interrupted()
@@ -1961,7 +2280,8 @@ except subprocess.TimeoutExpired:
         original = preview.Installer.save
 
         def fail_after_registration(installer):
-            if installer.receipt["current"] and installer.receipt["current"]["sha256"] == preview.digest(self.new):
+            if (installer.receipt["transaction"] and installer.receipt["transaction"]["phase"] == "committed"
+                    and installer.receipt["transaction"]["after"]["sha256"] == preview.digest(self.new)):
                 raise OSError("metadata disk full after successful registration")
             original(installer)
 
@@ -2038,6 +2358,9 @@ except subprocess.TimeoutExpired:
     def test_garbage_cleanup_interruption_is_owned_and_resumable(self):
         self.operation("install", self.old)
         self.operation("install", self.new, update=True)
+        self.operation("install", self.latest, update=True)
+        running = self.start_containing_app(hidden=True)
+        next_app = self.fixture("fourth")
         original = preview.shutil.rmtree
 
         def interrupted(path):
@@ -2046,20 +2369,26 @@ except subprocess.TimeoutExpired:
 
         with patch.object(preview.shutil, "rmtree", interrupted):
             with self.assertRaises(Interrupted):
-                self.operation("install", self.latest, update=True)
+                self.operation("install", next_app, update=True)
         self.assertTrue(self.receipt()["garbage"]["deleting"])
         self.assertEqual((self.previous() / "payload").read_text(), "new")
         self.assertEqual((self.app / "payload").read_text(), "latest")
         with patch.object(preview.shutil, "rmtree", original):
             self.operation("recover")
         self.assertIsNone(self.receipt()["garbage"])
+        self.assertEqual((self.app / "payload").read_text(), "latest")
+        self.assertEqual((self.retired() / "payload").read_text(), "fourth")
+        self.assertTrue(self.ops.running_application["hidden"])
+        self.assertNotEqual(self.ops.running_application["process"]["pid"], running["process"]["pid"])
+        self.assertEqual(self.ops.application_bridges[-1], self.retired())
 
     def test_replaced_cleanup_slot_is_refused_after_interrupted_deletion(self):
         self.operation("install", self.old)
         self.operation("install", self.new, update=True)
+        self.operation("install", self.latest, update=True)
         with patch.object(preview.shutil, "rmtree", side_effect=Interrupted()):
             with self.assertRaises(Interrupted):
-                self.operation("install", self.latest, update=True)
+                self.operation("install", self.fixture("fourth"), update=True)
         slot = self.app.parent / preview.STATE_NAME / self.receipt()["garbage"]["slot"]
         slot.rename(self.root / "original-garbage")
         shutil.copytree(self.old, slot)
@@ -2139,7 +2468,8 @@ except subprocess.TimeoutExpired:
     def test_no_implicit_source_registration_removal(self):
         self.ops.applications.add(self.old)
         self.ops.extensions.add((metadata.BASE_ID + ".Extension", self.old / preview.EXTENSION))
-        self.operation("install", self.old)
+        with self.assertRaisesRegex(ValueError, "External same-ID"):
+            self.operation("install", self.old)
         self.assertIn(self.old, self.ops.applications)
         self.assertFalse(any(command[:2] == [preview.LSREGISTER, "-u"] for command in self.ops.commands))
 
