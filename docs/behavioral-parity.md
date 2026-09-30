@@ -222,6 +222,27 @@ and unrelated plugin directories are never rewritten.
 Unexpected concurrent content or disable changes refuse compensation rather
 than being overwritten. Failed compensation retains the checkpoint.
 
+Receipt publication now has a write-ahead exact-image boundary. Before a
+staged/current observer receipt can change, the checkpoint validates its
+current image and durably records the complete intended bytes/mode/source
+binding. Missing-`after` recovery cannot substitute generation equality for
+that authorization. Tests change plugin identity and source path/ID without
+changing the generation, and require preserved edited bytes/resources and
+journal with no compensating provider mutation. A real compiled-bridge exit
+after current-receipt publication but before the final snapshot still recovers.
+
+The existing finite command guardian also covers nested provider groups.
+Standalone provider processes retain their independent groups and original
+timeout/cancellation cleanup. Coordinated providers use the same grouping but
+wait behind a launcher gate until the trusted bridge synchronizes their group
+IDs into the inherited install-guard record; providers never inherit that
+descriptor or its environment. The guardian re-reads and drains the complete
+record after bridge exit. If it also dies, fresh recovery refuses while any
+recorded group survives. Actual compiled bridge/provider gates prove this for
+forward and compensation paths, with and without guardian death, preserving
+unrelated processes. The old observed late-write-after-restoration results
+are retained as red evidence, not relabeled as supported behavior.
+
 Plugin mutations use public sessionless RPCs, with the supported status checked
 before the mutation request. An install receipt supplies the exact owned
 `directSourceId`; later discovery must match. Removal and compensation target

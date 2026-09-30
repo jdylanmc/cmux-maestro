@@ -333,7 +333,30 @@ private struct CheckpointOfficialProvider: CopilotSetupProcessRunner {
         await runner.run(executable: executable, arguments: arguments, path: path, providerHome: providerHome)
     }
     func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult {
-        await runner.metadata(executable: executable, path: path, providerHome: providerHome)
+        let result = await runner.metadata(executable: executable, path: path, providerHome: providerHome)
+        let marker = home.appendingPathComponent(".fixture-crash-after-receipt-publication")
+        if FileManager.default.fileExists(atPath: marker.path), case .value = result {
+            let support = home.appendingPathComponent("Library/Application Support/CMUXMaestroPreview")
+            let journal = support.appendingPathComponent("Orchestration/install-transaction.json")
+            let receipt = support.appendingPathComponent("Copilot/observer-registration.json")
+            if FileManager.default.fileExists(atPath: journal.path), FileManager.default.fileExists(atPath: receipt.path) {
+                do {
+                    let saved = try CopilotSetupJSON.object(Data(contentsOf: journal))
+                    let owned = try CopilotSetupJSON.object(Data(contentsOf: receipt))
+                    if saved["phase"] as? String == "applying", owned["phase"] as? String == "staged" {
+                        try Data("staged".utf8).write(to: marker)
+                    } else if saved["phase"] as? String == "applying", owned["phase"] as? String == "current",
+                              try String(contentsOf: marker, encoding: .utf8) == "staged" {
+                        let evidence = try CopilotSetupJSON.data(["phase": "applying", "afterMissing": saved["after"] == nil,
+                                                                 "receipt": "current"])
+                        try evidence.write(to: home.appendingPathComponent("receipt-crash-state.json"))
+                        try FileManager.default.removeItem(at: marker)
+                        Darwin._exit(95)
+                    }
+                } catch { return .failed(.unavailable) }
+            }
+        }
+        return result
     }
     func sourceIdentity(executable: URL, source: URL, path: String) async -> CopilotSourceIdentityResult {
         await runner.sourceIdentity(executable: executable, source: source, path: path)
@@ -466,6 +489,7 @@ nonisolated enum CopilotInstallBridgeProcessFixture {
             let runner: any CopilotSetupProcessRunner
             let selected: URL
             if marker["provider"] as? String == "isolated-official" {
+                _ = try CopilotProviderLease.load(required: true)
                 guard let requested = request.executable,
                       requested.path.hasPrefix(home.path + "/") else { return 2 }
                 runner = CheckpointOfficialProvider(home: home)
@@ -557,6 +581,43 @@ final class InstallCheckpointFixture: @unchecked Sendable {
 }
 
 struct CopilotInstallCheckpointTests {
+    @Test(arguments: [false, true], ["pluginIdentity", "source-path", "source-id"])
+    func editedReceiptProvenanceIsPreservedWithOrWithoutAfterSnapshot(durableAfter: Bool, field: String) async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        _ = try await value.checkpoint().perform("prepare")
+        _ = try await value.checkpoint().perform("apply")
+        if !durableAfter {
+            let journal = CopilotInstallCheckpoint.location(root: value.fixture.root)
+            var record = try CopilotSetupJSON.object(Data(contentsOf: journal))
+            record["phase"] = "applying"
+            record.removeValue(forKey: "after")
+            try value.fixture.write(record, to: journal)
+        }
+        let receipt = value.fixture.registration.receiptFile
+        var changed = try CopilotSetupJSON.object(Data(contentsOf: receipt))
+        if field == "pluginIdentity" {
+            changed["pluginIdentity"] = "foreign-receipt-edit"
+        } else {
+            var binding = try #require(changed["sourceIdentity"] as? [String: Any])
+            binding[field == "source-path" ? "source" : "directSourceId"] = field == "source-path" ? "/foreign/plugin" : "foreign-id"
+            changed["sourceIdentity"] = binding
+        }
+        try value.fixture.write(changed, to: receipt)
+        let before = try CopilotSetupFileState.read(receipt)
+        let resources = try value.record().entries.map {
+            try CopilotSetupFileState.read(URL(fileURLWithPath: $0.path), maximum: $0.maximum)
+        }
+        let calls = await value.runner.pluginOperations
+        do {
+            _ = try await value.checkpoint().perform("restore")
+            Issue.record("Edited provenance must not be accepted as an owned intermediate receipt")
+        } catch {}
+        try before.revalidate()
+        for resource in resources { try resource.revalidate() }
+        #expect(await value.runner.pluginOperations == calls)
+        #expect(try value.record().phase == (durableAfter ? "applied" : "applying"))
+    }
+
     @Test(arguments: ["reenabled-after-verification", "foreign-source-during-recovery"])
     func disabledRestorationDoesNotOverwriteNewChoiceOrForeignSource(change: String) async throws {
         let value = try InstallCheckpointFixture(legacy: true); defer { try? value.clean() }

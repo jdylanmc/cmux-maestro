@@ -555,7 +555,7 @@ class MacOperations:
         if allow_absent:
             command.append("--allow-absent")
         require(self.install_lock_fd is not None, "Integration changes require the active app install lock.")
-        result = command_worker.run(self.install_lock_fd, command, timeout=120, text=True)
+        result = command_worker.run(self.install_lock_fd, command, timeout=120, text=True, nested_providers=True)
         require(not result.stderr.strip() and len(result.stdout.encode()) <= 4096, "Unexpected integration bridge output.")
         response = json.loads(result.stdout)
         require(isinstance(response, dict) and set(response) == {"schema", "action", "transaction", "unchanged", "registration", "nativePlugin"}

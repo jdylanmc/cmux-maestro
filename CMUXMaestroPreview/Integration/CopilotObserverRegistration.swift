@@ -290,6 +290,7 @@ private nonisolated struct CopilotObserverReceipt: Codable {
 }
 
 nonisolated final class CopilotObserverRegistration: Sendable {
+    typealias ReceiptWrite = @Sendable (CopilotSetupFileState, Data?, UInt16, CopilotSourceIdentity?) throws -> Void
     static let filename = "cmux-maestro-observer.json"
     static let receiptName = "observer-registration.json"
     let home: URL
@@ -299,6 +300,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
     private let processHome: String?
     private let installTransaction: UUID?
     private let installGeneration: CopilotObserverGeneration?
+    private let beforeReceiptWrite: ReceiptWrite?
 
     var providerHome: URL { home.appendingPathComponent(".copilot", isDirectory: true) }
     var file: URL { providerHome.appendingPathComponent("hooks/\(Self.filename)") }
@@ -316,7 +318,8 @@ nonisolated final class CopilotObserverRegistration: Sendable {
 
     init(home: URL, root: URL, helper: URL, alternateHome: String? = ProcessInfo.processInfo.environment["COPILOT_HOME"],
          processHome: String? = ProcessInfo.processInfo.environment["HOME"],
-         installTransaction: UUID? = nil, installGeneration: CopilotObserverGeneration? = nil) {
+         installTransaction: UUID? = nil, installGeneration: CopilotObserverGeneration? = nil,
+         beforeReceiptWrite: ReceiptWrite? = nil) {
         self.home = home
         self.root = root
         self.helper = helper
@@ -324,6 +327,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         self.processHome = processHome
         self.installTransaction = installTransaction
         self.installGeneration = installGeneration
+        self.beforeReceiptWrite = beforeReceiptWrite
     }
 
     func validateHome() throws {
@@ -363,8 +367,18 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     }
 
-    func recognizesInstallReceipt(_ data: Data, generation: CopilotObserverGeneration) throws -> Bool {
-        try CopilotObserverReceipt.decode(data).desired == generation
+    func validateReceiptIntent(_ data: Data, generation: CopilotObserverGeneration,
+                               identity: CopilotSourceIdentity?, initiallyInstalled: Bool) throws {
+        let receipt = try CopilotObserverReceipt.decode(data)
+        guard receipt.desired == generation else { throw CopilotFileError.changed }
+        if receipt.pluginIdentity == nil && receipt.sourceIdentity == nil {
+            guard !initiallyInstalled, receipt.phase == "staged" else { throw CopilotFileError.changed }
+        } else {
+            guard let identity, identity.valid, identity.source == plugin.path,
+                  receipt.sourceIdentity == identity, receipt.pluginIdentity == identity.directSourceId else {
+                throw CopilotFileError.changed
+            }
+        }
     }
 
     func installReceiptIdentity(_ data: Data, generation: CopilotObserverGeneration) throws -> String? {
@@ -787,7 +801,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                 var record = CopilotObserverReceipt(schema: 1, desired: generation, previous: previous,
                     phase: "staged", pluginIdentity: pluginIdentity)
                 record.sourceIdentity = identity
-                receipt = try receipt.replacing(with: record.encoded())
+                try replaceReceipt(with: record.encoded())
             }
         }
 
@@ -834,7 +848,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             var record = CopilotObserverReceipt(schema: 1, desired: generation, previous: previous,
                                                 phase: "staged", pluginIdentity: pluginIdentity)
             record.sourceIdentity = sourceIdentity
-            receipt = try receipt.replacing(with: record.encoded())
+            try replaceReceipt(with: record.encoded())
             phase = .provenanceRecorded
             if action == .install || owned.data != nil {
                 owned = try owned.replacing(with: generation.manifest(disabled: true))
@@ -883,7 +897,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             try installed.manifest.revalidate(); try installed.hooks.revalidate()
             guard try store.otherHooks() == others else { throw CopilotFileError.changed }
             owned = try owned.replacing(with: originalOwned.data, permissions: originalOwned.stamp?.permissions)
-            receipt = try receipt.replacing(with: originalReceipt.data, permissions: originalReceipt.stamp?.permissions)
+            try replaceReceipt(with: originalReceipt.data, permissions: originalReceipt.stamp?.permissions)
             try owned.revalidate(); try receipt.revalidate()
             guard owned.data == originalOwned.data, receipt.data == originalReceipt.data,
                   owned.stamp?.permissions == originalOwned.stamp?.permissions,
@@ -970,7 +984,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             var record = CopilotObserverReceipt(schema: 1, desired: generation, previous: previous,
                 phase: "staged", pluginIdentity: identity)
             record.sourceIdentity = sourceIdentity
-            receipt = try receipt.replacing(with: record.encoded())
+            try replaceReceipt(with: record.encoded())
         }
 
         func verifyPlugin(_ metadata: CopilotSetupMetadata) throws {
@@ -1020,7 +1034,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             guard try verifyAlreadyCurrent(metadata), let data = receipt.data, let sourceIdentity else {
                 throw CopilotFileError.changed
             }
-            receipt = try receipt.replacing(with: store.enrichingReceipt(data, identity: sourceIdentity))
+            try replaceReceipt(with: store.enrichingReceipt(data, identity: sourceIdentity))
         }
 
         func verifyPublished(_ metadata: CopilotSetupMetadata, persist: Bool = true) throws {
@@ -1057,7 +1071,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                 schema: 1, desired: generation, previous: nil, phase: "current", pluginIdentity: pluginIdentity)
             record.sourceIdentity = sourceIdentity
             record.keyEvidence = evidence
-            if persist { receipt = try receipt.replacing(with: record.encoded()) }
+            if persist { try replaceReceipt(with: record.encoded()) }
         }
 
         func removeRegistration() throws {
@@ -1077,7 +1091,15 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                   !metadata.hooks.contains(where: { store.isOwnedSource($0) || ($0.origin == "plugin" && $0.source == CopilotPluginManifest.name) })
             else { throw CopilotRegistrationConflict("The CLI did not confirm removal of the owned registration.") }
             phase = .pluginRemoved
-            receipt = try receipt.replacing(with: nil)
+            try replaceReceipt(with: nil)
+        }
+
+        private func replaceReceipt(with data: Data?, permissions: UInt16? = nil) throws {
+            let mode = permissions ?? receipt.stamp?.permissions ?? 0o600
+            try receipt.revalidate()
+            if data == receipt.data && (data == nil || mode == receipt.stamp?.permissions) { return }
+            try store.beforeReceiptWrite?(receipt, data, mode, sourceIdentity)
+            receipt = try receipt.replacing(with: data, permissions: mode)
         }
     }
 }

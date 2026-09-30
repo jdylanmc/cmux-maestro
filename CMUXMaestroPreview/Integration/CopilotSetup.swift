@@ -105,6 +105,7 @@ nonisolated enum CopilotSetupCommandLine {
     static func coordinate(_ request: Bridge) async -> Completion {
         guard CopilotSetupAccess.currentAppAllowsChanges else { return completion(.validationOnly) }
         do {
+            _ = try CopilotProviderLease.load(required: true)
             let home = try CopilotPaths.realUserHome()
             let application = request.application
             guard application.deletingLastPathComponent() == home.appendingPathComponent("Applications"),
@@ -447,6 +448,10 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         init(_ state: CopilotSetupFileState) {
             data = state.data; permissions = state.stamp?.permissions
         }
+        init(data: Data?, permissions: UInt16) {
+            self.data = data
+            self.permissions = data == nil ? nil : permissions
+        }
         func matches(_ state: CopilotSetupFileState) -> Bool { self == Image(state) }
         func valid(maximum: Int) -> Bool {
             guard let data else { return permissions == nil }
@@ -482,6 +487,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         var sourceIdentity: CopilotSourceIdentity? = nil
         var keepsProviderRegistration: Bool? = nil
         var providerMutationStarted: Bool? = nil
+        var receiptIntents: [Image]? = nil
 
         var resourceOnly: Bool {
             keepsProviderRegistration ?? (metadata.plugins.first { $0.name == CopilotPluginManifest.name }?.enabled == false)
@@ -514,7 +520,10 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
     private var registration: CopilotObserverRegistration {
         CopilotObserverRegistration(home: home, root: root, helper: helper,
             alternateHome: nil, processHome: home.path, installTransaction: id,
-            installGeneration: record?.generation)
+            installGeneration: record?.generation,
+            beforeReceiptWrite: { before, data, permissions, identity in
+                try self.recordReceiptIntent(before: before, data: data, permissions: permissions, identity: identity)
+            })
     }
 
     init(id: UUID, home: URL, root: URL, application: URL, bundle: URL,
@@ -700,6 +709,48 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
                   value.after?[index].valid(maximum: entry.maximum) ?? true
             else { throw CopilotFileError.unsafePath }
         }
+        if let intents = value.receiptIntents {
+            guard intents.count <= 8 else { throw CopilotFileError.tooLarge }
+            for image in intents {
+                guard image.valid(maximum: 65_536) else { throw CopilotFileError.unsafePath }
+                if let data = image.data {
+                    try registration.validateReceiptIntent(data, generation: value.generation,
+                        identity: value.sourceIdentity,
+                        initiallyInstalled: value.metadata.plugins.contains { $0.name == CopilotPluginManifest.name })
+                }
+            }
+        }
+    }
+
+    private func recordReceiptIntent(before: CopilotSetupFileState, data: Data?, permissions: UInt16,
+                                     identity: CopilotSourceIdentity?) throws {
+        guard let record, record.phase == "applying",
+              before.url == registration.receiptFile,
+              let entry = record.entries.first(where: { $0.path == before.url.path }),
+              entry.before.matches(before) || record.receiptIntents?.contains(where: { $0.matches(before) }) == true
+        else { throw CopilotRegistrationConflict("Observer receipt changed outside the recorded write intent.") }
+        try before.revalidate()
+        let image = Image(data: data, permissions: permissions)
+        guard image.valid(maximum: entry.maximum) else { throw CopilotFileError.unsafePath }
+        if image == entry.before { return }
+        if let identity {
+            guard identity.valid, identity.source == registration.plugin.path,
+                  identity.version == record.metadata.version,
+                  record.sourceIdentity == nil || record.sourceIdentity == identity else { throw CopilotFileError.changed }
+            self.record?.sourceIdentity = identity
+        }
+        if let data {
+            try registration.validateReceiptIntent(data, generation: record.generation,
+                identity: self.record?.sourceIdentity,
+                initiallyInstalled: record.metadata.plugins.contains { $0.name == CopilotPluginManifest.name })
+        }
+        var intents = record.receiptIntents ?? []
+        if !intents.contains(image) {
+            guard intents.count < 8 else { throw CopilotFileError.tooLarge }
+            intents.append(image)
+        }
+        self.record?.receiptIntents = intents
+        try save()
     }
 
     private func save() throws {
@@ -790,6 +841,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
             self.record?.sourceIdentity = operation.sourceIdentity
             self.record?.keepsProviderRegistration = resourceOnly
             self.record?.providerMutationStarted = false
+            self.record?.receiptIntents = []
             try self.save()
             return unchanged
         }
@@ -907,8 +959,8 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
                record.cache[cacheIndex].matches(state) { continue }
             if entry.path == registration.file.path, record.after == nil || record.phase == "restoring", let data = state.data,
                try record.generation.recognizes(data) { continue }
-            if entry.path == registration.receiptFile.path, record.after == nil, let data = state.data,
-               try registration.recognizesInstallReceipt(data, generation: record.generation) { continue }
+            if entry.path == registration.receiptFile.path, record.after == nil,
+               record.receiptIntents?.contains(where: { $0.matches(state) }) == true { continue }
             guard state.data == entry.desired,
                   state.stamp?.permissions == (entry.desired == nil ? nil : entry.permissions)
             else { throw CopilotRegistrationConflict("An owned resource changed outside the recorded installation; restoration refuses to overwrite it.") }
@@ -1053,7 +1105,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
             guard priorDisabled || restoringMetadata.plugins.first(where: { $0.name == CopilotPluginManifest.name })?.enabled != false else {
                 throw CopilotRegistrationConflict("The native plugin was disabled after preparation; compensation will not re-enable it.")
             }
-            self.record?.sourceIdentity = binding
+            if let binding { self.record?.sourceIdentity = binding }
             try self.phase("restoring")
             let owned = try CopilotSetupFileState.read(self.registration.file)
             let observer = try owned.replacing(with: record.generation.manifest(disabled: true))
@@ -1202,6 +1254,71 @@ nonisolated enum CopilotSetupFileWork {
                 do { continuation.resume(returning: try operation()) }
                 catch { continuation.resume(throwing: error) }
             }
+        }
+    }
+}
+
+nonisolated struct CopilotProviderLease {
+    static let prefix = "CMUX_MAESTRO_INSTALL_LEASE_"
+    private static let registrationLock = NSLock()
+    let descriptor: Int32
+    let token: String
+    let python: String
+    let helper: String
+
+    static func load(required: Bool = false) throws -> Self? {
+        let environment = ProcessInfo.processInfo.environment
+        let keys = ["FD", "TOKEN", "PYTHON", "HELPER"]
+        if keys.allSatisfy({ environment[prefix + $0] == nil }) && !required { return nil }
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+        guard let value = environment[prefix + "FD"], let descriptor = Int32(value), descriptor > 2,
+              let token = environment[prefix + "TOKEN"], token.count == 32,
+              token.allSatisfy({ "0123456789abcdef".contains($0) }),
+              let python = environment[prefix + "PYTHON"], python.hasPrefix("/"),
+              let helper = environment[prefix + "HELPER"], helper.hasPrefix("/") else {
+            throw CopilotRegistrationConflict("Coordinated provider execution requires its inherited install guard.")
+        }
+        let lease = Self(descriptor: descriptor, token: token, python: python, helper: helper)
+        _ = try lease.marker()
+        guard fcntl(descriptor, F_SETFD, FD_CLOEXEC) == 0 else { throw CopilotFileError.io }
+        return lease
+    }
+
+    private func marker() throws -> [String: Any] {
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              info.st_uid == getuid(), getuid() != 0, geteuid() == getuid(),
+              info.st_mode & 0o777 == 0o600, info.st_nlink == 1,
+              info.st_size > 0, info.st_size <= 4096 else { throw CopilotFileError.unsafePath }
+        var bytes = [UInt8](repeating: 0, count: Int(info.st_size))
+        guard pread(descriptor, &bytes, bytes.count, 0) == bytes.count else { throw CopilotFileError.io }
+        let value = try CopilotSetupJSON.object(Data(bytes))
+        guard Set(value.keys) == ["schema", "state", "token", "supervisor", "group", "providers"],
+              value["schema"] as? Int == 2, value["state"] as? String == "running",
+              value["token"] as? String == token, value["group"] as? Int == Int(getpgrp()),
+              let supervisor = value["supervisor"] as? Int, supervisor > 1,
+              let providers = value["providers"] as? [Int], providers.count <= 128,
+              providers.allSatisfy({ $0 > 1 && $0 <= Int(Int32.max) }),
+              Set(providers).count == providers.count else {
+            throw CopilotRegistrationConflict("The inherited provider guard does not identify this bridge.")
+        }
+        return value
+    }
+
+    func register(_ pid: Int32) throws {
+        Self.registrationLock.lock()
+        defer { Self.registrationLock.unlock() }
+        guard pid > 1, pid != getpgrp(), getpgid(pid) == pid else { throw CopilotFileError.changed }
+        var record = try marker()
+        guard var providers = record["providers"] as? [Int], providers.count < 128 else { throw CopilotFileError.tooLarge }
+        if !providers.contains(Int(pid)) { providers.append(Int(pid)) }
+        record["providers"] = providers
+        let data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
+        guard data.count <= 4096,
+              data.withUnsafeBytes({ pwrite(descriptor, $0.baseAddress, $0.count, 0) }) == data.count,
+              ftruncate(descriptor, off_t(data.count)) == 0, fsync(descriptor) == 0 else {
+            throw CopilotFileError.io
         }
     }
 }
@@ -1376,6 +1493,15 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
                               environment: [String: String],
                               cancellation: CopilotSetupCancellation,
                               exchange: CopilotMetadataExchange?, workingDirectory: URL? = nil) -> Int32? {
+        let lease: CopilotProviderLease?
+        do { lease = try CopilotProviderLease.load() }
+        catch { return nil }
+        var gate: [Int32] = [-1, -1]
+        defer { for fd in gate where fd >= 0 { close(fd) } }
+        if lease != nil {
+            guard pipe(&gate) == 0,
+                  gate.allSatisfy({ fcntl($0, F_SETFD, FD_CLOEXEC) == 0 }) else { return nil }
+        }
         // Automatic child reaping would invalidate the retained PID/group anchor.
         var disposition = sigaction()
         guard sigaction(SIGCHLD, nil, &disposition) == 0,
@@ -1418,8 +1544,17 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
                   posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0) == 0
             else { return nil }
         }
-        let strings = [executable.path] + arguments
-        let variables = environment.map { "\($0.key)=\($0.value)" }
+        let strings: [String]
+        let launchPath: String
+        if let lease {
+            guard posix_spawn_file_actions_adddup2(&actions, gate[0], 3) == 0 else { return nil }
+            launchPath = lease.python
+            strings = [lease.python, "-I", "-S", "-B", lease.helper, "--gate", "3", executable.path] + arguments
+        } else {
+            launchPath = executable.path
+            strings = [executable.path] + arguments
+        }
+        let variables = environment.filter { !$0.key.hasPrefix(CopilotProviderLease.prefix) }.map { "\($0.key)=\($0.value)" }
         guard !(strings + variables).contains(where: { $0.contains("\0") }) else { return nil }
         let argv = strings.map { strdup($0) }
         let envp = variables.map { strdup($0) }
@@ -1431,11 +1566,23 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         let result = (argv + [nil]).withUnsafeBufferPointer { arguments in
             (envp + [nil]).withUnsafeBufferPointer { environment in
                 guard !cancellation.isCancelled else { return ECANCELED }
-                return posix_spawn(&pid, executable.path, &actions, &attributes,
+                return posix_spawn(&pid, launchPath, &actions, &attributes,
                                    arguments.baseAddress, environment.baseAddress)
             }
         }
-        return result == 0 ? pid : nil
+        guard result == 0 else { return nil }
+        if let lease {
+            do {
+                guard !cancellation.isCancelled else { throw CancellationError() }
+                try lease.register(pid)
+                var allowed: UInt8 = 71
+                guard write(gate[1], &allowed, 1) == 1 else { throw CopilotFileError.io }
+            } catch {
+                _ = stopGroup(pid, grace: 0.25)
+                return nil
+            }
+        }
+        return pid
     }
 
     private enum ChildState {

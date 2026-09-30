@@ -2,6 +2,7 @@
 """Synthetic filesystem/registries and owned test processes; no live app or CLI mutation."""
 
 import importlib.util
+import fcntl
 import errno
 import json
 import os
@@ -242,6 +243,186 @@ class CompiledBridgeMac(SyntheticMac):
 class LocalPreviewTests(unittest.TestCase):
     compiled_bridge_ready = False
     compiled_bridge_failure = None
+
+    def test_bridge_death_cannot_release_a_gated_provider_mutator(self):
+        for compensation, guardian_failure in ((False, False), (True, False), (False, True), (True, True)):
+            with self.subTest(compensation=compensation, guardian_failure=guardian_failure):
+                case = LocalPreviewTests()
+                case.setUp()
+                try:
+                    case.assert_bridge_death_preserves_provider_lease(compensation, guardian_failure)
+                finally:
+                    case.tearDown()
+                    case.doCleanups()
+
+    def use_gated_provider_bridge(self):
+        self.use_compiled_bridge()
+        marker = self.home / ".bridge-fixture.json"
+        configuration = json.loads(marker.read_text())
+        configuration["provider"] = "isolated-official"
+        marker.write_text(json.dumps(configuration))
+        provider = self.home / "gated-provider"
+        provider.write_text(f"#!{sys.executable}\n" + (ROOT / "scripts/test-fixtures/gated-copilot-provider.py").read_text().split("\n", 1)[1])
+        provider.chmod(0o700)
+        return provider
+
+    def assert_bridge_death_preserves_provider_lease(self, compensation, guardian_failure):
+        provider = self.use_gated_provider_bridge()
+        def operation(name, *args):
+            installer = preview.Installer(self.home, operations=self.ops, copilot_executable=provider)
+            with installer.locked():
+                return getattr(installer, name)(*args)
+        if compensation:
+            operation("install", self.old)
+        before = self.integration_snapshot()
+        (self.home / "provider-gate.json").write_text(json.dumps({"install": 3 if compensation else 1}))
+        gate = self.home / "provider-release"
+        os.mkfifo(gate, 0o600)
+        code = """
+import importlib.util,json,os,pathlib,sys,time
+spec=importlib.util.spec_from_file_location('fixture',sys.argv[1])
+tests=importlib.util.module_from_spec(spec); spec.loader.exec_module(tests)
+home,source,provider=map(pathlib.Path,sys.argv[2:5])
+ops=tests.CompiledBridgeMac()
+app=home/'Applications'/tests.preview.DEFAULT_NAME
+if app.exists():
+    ops.applications.add(app)
+    ops.extensions.add((tests.metadata.BASE_ID+'.Extension',app/tests.preview.EXTENSION))
+if sys.argv[5]=='compensation': ops.failures['integration-verify']=OSError('injected late failure')
+installer=tests.preview.Installer(home,operations=ops,copilot_executable=provider)
+try:
+    with installer.locked(): installer.install(source)
+except Exception as error:
+    (home/'installer-return.json').write_text(json.dumps({'lateWriteAlreadyPresent':(home/'provider-late-write.json').exists(),'error':str(error)}))
+else:
+    raise AssertionError('Bridge death must fail installation')
+"""
+        unrelated = subprocess.Popen(["/bin/cat"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
+        def close_unrelated():
+            unrelated.stdin.close()
+            unrelated.wait(timeout=10)
+        self.addCleanup(close_unrelated)
+        child = subprocess.Popen([sys.executable, "-c", code, str(Path(__file__).resolve()), str(self.home),
+                                  str(self.new if compensation else self.old), str(provider),
+                                  "compensation" if compensation else "forward"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        selected = None
+        blocked = False
+        returned_before_release = restored_before_release = False
+        try:
+            self.wait_for(lambda: (self.home / "provider-ready.json").exists(), "gated provider")
+            selected = json.loads((self.home / "provider-ready.json").read_text())
+            self.assertNotEqual(selected["bridgeGroup"], selected["providerGroup"])
+            self.assertEqual(selected["bridge"], selected["bridgeGroup"])
+            self.assertEqual(selected["provider"], selected["providerGroup"])
+            lock_path = self.home / "Applications" / preview.STATE_NAME / "lock"
+            supervisor = json.loads(lock_path.read_text())["supervisor"]
+            os.kill(selected["bridge"], signal.SIGKILL)
+            if guardian_failure:
+                os.kill(supervisor, signal.SIGKILL)
+                self.wait_for(lambda: (self.home / "installer-return.json").exists(), "killed guardian result")
+            # A waiting provider is a still-capable mutator, not a completed command.
+            raw_marker = lock_path.read_text()
+            marker = json.loads(raw_marker) if raw_marker else {}
+            if selected["providerGroup"] not in marker.get("providers", []):
+                self.wait_for(lambda: (self.home / "installer-return.json").exists(), "unprotected installer return")
+            fd = os.open(self.home / "Applications" / preview.STATE_NAME / "lock", os.O_RDWR)
+            try:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    blocked = True
+                else:
+                    try:
+                        preview.command_worker.recover_marker(fd)
+                    except ValueError:
+                        blocked = True
+            finally:
+                os.close(fd)
+            if not blocked and self.receipt()["transaction"]:
+                operation("recover")
+            returned_before_release = (self.home / "installer-return.json").exists()
+            restored_before_release = self.receipt()["transaction"] is None
+            self.assertFalse((self.home / "provider-late-write.json").exists())
+            print("BRIDGE_DEATH_GUARD", json.dumps({**selected, "compensation": compensation,
+                  "guardianKilled": guardian_failure, "blockedWhileProviderAlive": blocked}), flush=True)
+            self.assertIsNone(unrelated.poll())
+        finally:
+            if selected and not self.process_gone(selected["provider"]):
+                release = os.open(gate, os.O_WRONLY | os.O_NONBLOCK)
+                os.write(release, b"G")
+                os.close(release)
+            stdout, stderr = child.communicate(timeout=120)
+            if selected:
+                self.wait_for(lambda: self.process_gone(selected["provider"]), "provider completion")
+                self.wait_for(lambda: self.process_gone(selected["bridge"]), "bridge completion")
+        self.assertEqual(child.returncode, 0, stdout + stderr)
+        self.wait_for(lambda: self.process_gone(selected["provider"]), "provider completion")
+        self.wait_for(lambda: self.process_gone(selected["bridge"]), "bridge completion")
+        late = json.loads((self.home / "provider-late-write.json").read_text())
+        returned = json.loads((self.home / "installer-return.json").read_text())
+        print("BRIDGE_DEATH_RESULT", json.dumps({"compensation": compensation, "blocked": blocked,
+              "guardianKilled": guardian_failure,
+              "returnedBeforeGate": returned_before_release, "restoredBeforeGate": restored_before_release,
+              "lateWritePresentAfterGate": bool(late), "returnObservedLateWrite": returned["lateWriteAlreadyPresent"],
+              "transactionRetained": self.receipt()["transaction"] is not None}), flush=True)
+        self.assertTrue(blocked, "A separately grouped provider must retain the lease or block recovery after bridge death")
+        self.assertFalse(restored_before_release)
+        if not guardian_failure:
+            self.assertFalse(returned_before_release)
+            self.assertTrue(returned["lateWriteAlreadyPresent"], "Provider must finish before the command boundary returns")
+        if self.receipt()["transaction"]:
+            operation("recover")
+        self.assertEqual(self.integration_snapshot(), before)
+        self.assertIsNone(self.receipt()["transaction"])
+        if compensation:
+            self.assertEqual((self.app / "payload").read_text(), "old")
+        else:
+            self.assertFalse(self.app.exists())
+        self.assertIsNone(unrelated.poll(), "Restoration must not terminate an unrelated process")
+
+    def test_actual_bridge_exit_after_receipt_write_recovers_without_after_snapshot(self):
+        provider = self.use_gated_provider_bridge()
+        marker = self.home / ".fixture-crash-after-receipt-publication"
+        marker.write_text("waiting")
+        before = self.integration_snapshot()
+        installer = preview.Installer(self.home, operations=self.ops, copilot_executable=provider)
+        with installer.locked():
+            with self.assertRaises(subprocess.CalledProcessError) as failure:
+                installer.install(self.old)
+        self.assertEqual(failure.exception.returncode, 95)
+        evidence = json.loads((self.home / "receipt-crash-state.json").read_text())
+        self.assertEqual(evidence, {"phase": "applying", "afterMissing": True, "receipt": "current"})
+        self.assertEqual(self.integration_snapshot(), before)
+        self.assertFalse(self.app.exists())
+        self.assertIsNone(self.receipt()["transaction"])
+
+    def test_actual_provider_bridge_requires_inherited_guard(self):
+        provider = self.use_gated_provider_bridge()
+        before = self.integration_snapshot()
+        result = subprocess.run([
+            str(self.old / "Contents/MacOS/Preview"), "--coordinate-copilot-install", "prepare",
+            "--transaction", str(uuid.uuid4()), "--application", str(self.app),
+            "--copilot-executable", str(provider),
+        ], capture_output=True, text=True, timeout=30,
+            env={key: value for key, value in os.environ.items() if not key.startswith("CMUX_MAESTRO_INSTALL_LEASE_")})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("inherited install guard", result.stderr)
+        self.assertFalse((self.home / "provider-installs").exists())
+        self.assertEqual(self.integration_snapshot(), before)
+
+    def test_nested_guard_marker_rejects_invalid_provider_groups(self):
+        with self.installer().locked():
+            fd = self.ops.install_lock_fd
+            for groups in ([True], [0], [-1], ["123"], [123, 123], list(range(2, 131))):
+                with self.subTest(groups=groups):
+                    preview.command_worker.write_marker(fd, {
+                        "schema": 2, "state": "running", "token": "a" * 32,
+                        "supervisor": 123, "group": 124, "providers": groups,
+                    })
+                    with self.assertRaisesRegex(ValueError, "provider groups"):
+                        preview.command_worker.read_marker(fd)
+            preview.command_worker.write_marker(fd, None)
 
     def use_compiled_bridge(self):
         if not LocalPreviewTests.compiled_bridge_ready:

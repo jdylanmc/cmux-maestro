@@ -1646,15 +1646,19 @@ requires the current build number; this feature does not bump it.
   Python supervisor retains the lock while a mutating `ditto`, `lsregister`
   or `pluginkit` invocation, or a non-UI integration bridge, runs, including
   after caller timeout or `SIGKILL`.
-  Tools do not inherit the lock descriptor: closing their descriptors cannot
-  release the supervisor's copy. The supervisor waits for the tool's private
-  foreground process group, not just its direct child's exit or pipe EOF.
+  The trusted integration bridge also inherits the descriptor solely to record
+  its nested provider groups; other tools and actual provider executables do
+  not receive it. Each provider starts behind an EOF-safe gate, and cannot
+  execute until its separately owned group is recorded and synchronized.
+  The supervisor waits for both the bridge group and every recorded provider
+  group, not merely direct-child exit or pipe EOF. Killing the bridge therefore
+  cannot permit restoration while its provider can still write.
   There is no installed daemon or persistent background observer.
 - A bounded marker in that same lock file records command progress. A gated
   launcher cannot execute the tool until its private process group is durably
   recorded. If the supervisor itself dies, a new lock owner still refuses
-  recovery while that recorded group exists—even if the direct child already
-  exited. Once the group is gone, normal recovery may resume; a launcher whose
+  recovery while any recorded bridge/provider group exists—even if their
+  original supervisors exited. Once all groups are gone, recovery may resume; a launcher whose
   group was never recorded cannot pass its gate. Corrupt/unverifiable markers
   fail closed. Never delete or truncate the lock to bypass this barrier.
 - The 120-second command timeout ends the caller's wait, **not** a surviving
@@ -1682,6 +1686,13 @@ requires the current build number; this feature does not bump it.
   prefix; no sandbox grant is added. Its schema, exact paths, file bounds and
   transaction identity are validated before recovery. Separate setup refuses
   while the coordinated transaction is pending.
+- Every observer-receipt write records its exact permitted bytes, permissions
+  and independently established source provenance in the checkpoint before
+  publication. Recovery without a final `after` snapshot accepts only the
+  known prior image or those bounded exact intents, never desired-generation
+  equality alone. Edited plugin/source identities preserve their bytes and
+  pending journal. Durable-after and resource-only enrichment checks remain
+  strict; ambiguous older interrupted checkpoints are not guessed into authority.
 - The app receipt journals the companion transaction ID and its progress.
   Pending failure recovery first verifies/restores integration, using official
   `plugins.install` at the unchanged owned source path or `plugins.uninstall`
