@@ -12,6 +12,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Show internal Copilot tasks as compact, non-interactive lines with
+  workspace-local visibility, persistent disclosure, and exact-outcome
+  dismissal that preserves local keyboard focus (#131).
 - Coordinate updates to the recognized Maestro app and its Copilot CLI
   1.0.88/1.0.89 integration, verify identical reinstalls, and recover prior owned
   state after failed or interrupted publication. Bind ownership through public
