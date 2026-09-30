@@ -185,6 +185,32 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertEqual(evidence["remainingCounts"]["skippedTestsByIdentity"], [{
             "identity": scopes.SELECTOR, "policyReason": "verified-isolated-selector-exclusion", "reportedDetails": None}])
 
+    def test_enabled_benchmark_cannot_be_absent_from_otherwise_passing_results(self):
+        fixture = json.loads((ROOT / "scripts/test-fixtures/xcresult-isolated-hosted.json").read_text())
+        result, evidence = self.execute((fixture["summary"], fixture["tests"]),
+                                        self.report([("OtherSuite/test()", "Passed")]), benchmark_flag="1")
+        self.assertEqual(result, 1)
+        self.assertTrue(evidence["selectorVerifiedByHostedResult"])
+        self.assertTrue(evidence["optionalBenchmark"]["enabled"])
+        self.assertFalse(evidence["passed"])
+        self.assertIn("benchmark", evidence["remainingValidationError"].lower())
+        self.assertNotIn("combinedExecutedTestCount", evidence)
+
+    def test_enabled_benchmark_requires_one_nonparameterized_pass(self):
+        for status in ("Failed", "Expected Failure"):
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                scopes.validate_remaining(*self.report([(BENCHMARK_TEST, status), ("OtherSuite/test()", "Passed")]),
+                                          benchmark_enabled=True)
+        summary, tree = self.report([(BENCHMARK_TEST, "Passed"), ("OtherSuite/test()", "Passed")])
+        tree["testNodes"][0]["children"][0]["children"] = [
+            {"nodeType": "Arguments", "name": "unexpected", "result": "Passed"}]
+        with self.assertRaises(ValueError):
+            scopes.validate_remaining(summary, tree, benchmark_enabled=True)
+        for isolated_excluded in (False, True):
+            with self.subTest(isolated_excluded=isolated_excluded), self.assertRaises(ValueError):
+                scopes.validate_remaining(*self.report([("OtherSuite/test()", "Passed")]),
+                                          benchmark_enabled=True, isolated_excluded=isolated_excluded)
+
     def test_benchmark_skip_exception_requires_exact_identity_and_one_nonparameterized_record(self):
         for identity in (BENCHMARK_TEST + "-other", "OtherSuite/" + BENCHMARK_TEST.split("/")[1],
                          "OtherTarget/" + BENCHMARK_TEST):

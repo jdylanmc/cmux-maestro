@@ -1398,7 +1398,9 @@ Selection/retry overrides are rejected by this full-coverage entrypoint.
 The existing `CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()`
 remains opt-in. Its exact skip is attributed only when
 `CMUX_MAESTRO_READER_BENCHMARK` is not `"1"`; when enabled, a skip fails coverage.
-No other optional-test exception is inferred.
+Enabled runs require its exact identity with one nonparameterized passed
+execution; an absent benchmark also fails coverage. No other optional-test
+exception is inferred.
 
 Focused history/preference diagnostics after building the validation products
 (not a full-suite pass):
@@ -1498,10 +1500,14 @@ The Python 3 command uses the standard library and macOS `ditto`, `codesign`,
 LaunchServices and `pluginkit`; it does not install a service or dependency.
 
 The alpha installer coordinates the app and its owned Copilot integration as
-one journaled operation. **Issue #114 still requires resolution of the
-selected-source audit noted above, independent review, hosted CI and stock-host
-acceptance.** Registration withdrawal/re-registration is implemented; it is
-not proof of actual native loaded-generation behavior.
+one journaled operation. The implemented owned-source boundary uses public
+exact-source identity for the fixed owned path and rejects foreign or unproven
+owned provenance; unrelated plugins are preserved, not certified.
+**Issue #114 still requires current-head independent review, full hosted CI,
+combined installer/native-host acceptance and guarded live installed-session
+acceptance.** Registration withdrawal/re-registration or earlier native-only
+proof does not establish the current combined artifact's loaded-generation
+behavior or live acceptance.
 
 From a trusted checkout, explicitly build and install the ad-hoc-signed alpha:
 
