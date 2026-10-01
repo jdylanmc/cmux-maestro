@@ -335,7 +335,13 @@ nonisolated struct CopilotInteractionTests {
         }
         try fixture.writeEvents(rows)
         let snapshot = try await fixture.reader(clock: { now }).read(surfaceIDs: [fixture.surface])
-        let tree = interactionTree(snapshot, fixture: fixture)
+        let hidden = interactionTree(snapshot, fixture: fixture)
+        #expect(hidden.sessions.first?.nodes.isEmpty == true && hidden.hasCompleteCounts)
+        let sourceChildren = try #require(snapshot.sessions.first?.children)
+        #expect(sourceChildren.map(\.id) == names)
+        #expect(sourceChildren.map(\.parentID) == [nil, "parent", "child"])
+        #expect(sourceChildren.allSatisfy { $0.kind == .subagent && $0.state == .idle && $0.terminalEvent == nil })
+        let tree = interactionTree(snapshot, fixture: fixture, revealIdle: true)
         let session = try #require(tree.sessions.first)
         #expect(snapshot.isComplete && snapshot.issues.isEmpty && tree.hasCompleteCounts)
         #expect(tree.sessions.count == 1 && session.surfaceID == fixture.surface)
@@ -371,11 +377,15 @@ nonisolated struct CopilotInteractionTests {
         #expect(!tree.hasCompleteCounts)
         #expect(tree.sessions.count == 1)
         #expect(session.id == fixture.sessionID && session.surfaceID == fixture.surface)
-        #expect(session.nodes.first?.state == .unknown)
-        #expect(session.nodes.first?.name == "Synthetic child")
-        #expect(session.nodes.first?.kind == .subagent)
-        #expect(session.nodes.first?.parentID == nil)
-        #expect(session.nodes.first?.terminalEvent == nil)
+        let observed = try #require(snapshot.sessions.first?.children.first)
+        #expect(observed.state == .unknown && observed.name == "Synthetic child" && observed.kind == .subagent)
+        #expect(observed.parentID == nil && observed.terminalEvent == nil)
+        let neutral = CopilotSnapshotAdapter.child(observed, session: .init(providerID: "copilot", sessionID: fixture.sessionID.uuidString))
+        #expect(neutral.id.rawValue == observed.id && neutral.workState == .unknown)
+        #expect(neutral.title.knownValue == "Synthetic child" && neutral.kind == .subagent)
+        #expect(neutral.parentID == nil && neutral.terminalEvent == nil)
+        #expect(session.nodes.isEmpty && session.internalTaskCountsIncomplete)
+        #expect(interactionTree(snapshot, fixture: fixture, revealIdle: true).sessions.first?.nodes.isEmpty == true)
         #expect(session.knownRunningChildren == 0)
         #expect(tree.attentionOwnerCount == 0)
         let publicText = String(decoding: try JSONEncoder().encode(snapshot), as: UTF8.self)
@@ -477,7 +487,16 @@ nonisolated struct CopilotInteractionTests {
         let idle = try await reader.read(surfaceIDs: [fixture.surface])
         let idleTree = interactionTree(idle, fixture: fixture)
         #expect(idle.isComplete)
-        #expect(idleTree.sessions.first?.nodes.map(\.state) == [.idle, .idle, .idle])
+        let idleChildren = try #require(idle.sessions.first?.children)
+        #expect(idleChildren.map(\.id) == ["parent", "child", "grandchild"])
+        #expect(idleChildren.map(\.state) == [.idle, .idle, .idle])
+        #expect(idleChildren.map(\.parentID) == [nil, "parent", "child"])
+        #expect(idleTree.sessions.first?.nodes.isEmpty == true && idleTree.hasCompleteCounts)
+        let revealedIdle = interactionTree(idle, fixture: fixture, revealIdle: true)
+        #expect(revealedIdle.sessions.first?.nodes.map(\.state) == [.idle, .idle, .idle])
+        #expect(revealedIdle.sessions.first?.nodes.map(\.id) == idleChildren.map(\.id))
+        #expect(revealedIdle.sessions.first?.nodes.map(\.parentID) == idleChildren.map(\.parentID))
+        #expect(revealedIdle.sessions.first?.nodes.map(\.depth) == [0, 1, 2])
         #expect(idleTree.knownRunningChildren == 0)
         #expect(idleTree.attentionOwnerCount == 0)
         #expect(idleTree.retainedHistoryCount == 0)
@@ -1405,7 +1424,7 @@ nonisolated struct CopilotInteractionTests {
 @MainActor
 private func interactionTree(
     _ snapshot: CopilotSnapshot, fixture: CopilotReaderFixture,
-    attention: SidebarAttentionSettings = .init()
+    attention: SidebarAttentionSettings = .init(), revealIdle: Bool = false
 ) -> SidebarCopilotTree {
     let hierarchy = HierarchySnapshot(
         sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
@@ -1420,7 +1439,8 @@ private func interactionTree(
         ], windowID: UUID(uuidString: "60000000-0000-0000-0000-000000000006")
     )
     return SidebarCopilotTree.project(snapshot, onto: SidebarTopology(hierarchy),
-                                      now: snapshot.generatedAt, attention: attention)
+                                      now: snapshot.generatedAt, attention: attention,
+                                      revealingIdleTasksIn: revealIdle ? [fixture.workspace] : [])
 }
 
 nonisolated func interactionEvent(

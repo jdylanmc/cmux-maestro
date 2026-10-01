@@ -1013,6 +1013,8 @@ non-task activity does not block reviewing the parent outcome; when legacy histo
 is shown, the dismissed parent's ancestry can remain without restoring that outcome.
 After individual dismissal, keyboard focus returns to a visible local owner,
 workspace or Taskboard control without selecting or activating a native tab.
+This local restoration does not automatically open a keyboard preview; ordinary
+keyboard focus retains its existing preview behavior.
 Task quantities count only internal tasks. Branch working, blocked and attention
 totals include related non-task descendants; owner summaries preserve uncertainty
 from state-filtered unknown tasks. Incomplete/omitted evidence is explicit.

@@ -2,10 +2,10 @@ import Foundation
 
 extension AgentChildWork {
     // The neutral child contract carries a literal session/child parent.
-    var isInternalTask: Bool { SidebarInternalTaskPolicy.isInternalTask(kind: kind, parent: parent) }
+    nonisolated var isInternalTask: Bool { SidebarInternalTaskPolicy.isInternalTask(kind: kind, parent: parent) }
 }
 
-enum SidebarInternalTaskPolicy {
+nonisolated enum SidebarInternalTaskPolicy {
     static func isInternalTask(kind: AgentWorkKind?, parent: AgentChildWorkParent?) -> Bool {
         guard kind == .subagent, let parent else { return false }
         switch parent {

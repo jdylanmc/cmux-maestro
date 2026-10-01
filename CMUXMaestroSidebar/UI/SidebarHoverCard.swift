@@ -592,10 +592,10 @@ final class SidebarLocalFocus {
         let fallbacks = (ownerVisible ? ["surface:\(surfaceID)"] : [])
             + (workspaceVisible ? ["workspace:\(workspaceID)"] : []) + ["taskboard"]
         for id in targets + fallbacks {
-            guard let control = candidates.first(where: { $0.localFocusID == id }), let window = control.window else { continue }
+            guard let control = candidates.first(where: { $0.localFocusID == id }) else { continue }
             control.scrollToVisible(control.bounds)
             // Local first responder only. Never press a title or activate a host tab/window.
-            if window.makeFirstResponder(control) { return true }
+            if control.restoreLocalFirstResponder() { return true }
         }
         return false
     }
@@ -623,6 +623,7 @@ final class SidebarTitleNativeButton: NSButton {
     var localFocusID: String?
     var localFocusOrder = 0
     private var returningFromPreview = false
+    private var restoringLocalFocus = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -644,7 +645,7 @@ final class SidebarTitleNativeButton: NSButton {
         let result = super.becomeFirstResponder()
         if result {
             focusChanged(true)
-            if !returningFromPreview { preview.focus(true) }
+            if !returningFromPreview && !restoringLocalFocus { preview.focus(true) }
             needsDisplay = true
         }
         return result
@@ -658,6 +659,13 @@ final class SidebarTitleNativeButton: NSButton {
             needsDisplay = true
         }
         return result
+    }
+    func restoreLocalFirstResponder() -> Bool {
+        guard let window else { return false }
+        // Opening a keyboard preview can order its parent window; restoration is not a preview request.
+        restoringLocalFocus = true
+        defer { restoringLocalFocus = false }
+        return window.makeFirstResponder(self)
     }
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 48 && !event.modifierFlags.contains(.shift),

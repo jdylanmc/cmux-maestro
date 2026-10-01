@@ -441,9 +441,14 @@ struct SidebarInternalTaskRenderingTests {
         let hierarchy = model.hierarchy
         let mounted = mount(model, preferences, width: 280)
         defer { mounted.window.contentView = nil; mounted.window.close() }
+        try #require(!mounted.window.isVisible, "The fixture must start unordered")
         await sidebarEventually { names(mounted.host).count == 1 }
+        try #require(!mounted.window.isVisible, "Mounting and observations must not order the fixture")
+        let wasKey = mounted.window.isKeyWindow
+        let wasMain = mounted.window.isMainWindow
         let control = try #require(buttons(mounted.host).first { $0.localFocusID == "task-dismiss:\(data.sessionID):result" })
         try #require(mounted.window.makeFirstResponder(control))
+        try #require(!mounted.window.isVisible, "Focusing the dismiss control alone must not order the fixture")
         control.keyDown(with: keyEvent(window: mounted.window))
         await sidebarEventually {
             names(mounted.host).isEmpty && mounted.window.firstResponder !== control
@@ -458,7 +463,34 @@ struct SidebarInternalTaskRenderingTests {
         #expect(model.hierarchy == hierarchy)
         #expect(SidebarTopology(model.hierarchy).workspaceBySurface.count == 2)
         #expect(!mounted.window.isVisible)
+        #expect(mounted.window.isKeyWindow == wasKey && mounted.window.isMainWindow == wasMain)
+        print("R4 \(mode.rawValue)/alive=\(ownerAlive): initial/order-before-action=false; after-dismiss=\(mounted.window.isVisible); local=\(focused.localFocusID ?? "none")")
         try capture(mounted.host, name: "internal-task-dismiss-\(mode.rawValue)-owner-\(ownerAlive)")
+    }
+
+    @Test func programmaticFocusRestorationDoesNotOpenTheKeyboardPreview() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 30),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let control = SidebarTitleNativeButton(frame: NSRect(x: 0, y: 0, width: 100, height: 30))
+        window.contentView = control
+        defer { window.contentView = nil; window.close() }
+        var previewEvents: [Bool] = []
+        var localFocusEvents: [Bool] = []
+        control.preview = .init(available: true, focus: { previewEvents.append($0) })
+        control.focusChanged = { localFocusEvents.append($0) }
+        let surface = UUID(), workspace = UUID()
+        let focus = SidebarLocalFocus()
+        focus.register(control, id: "surface:\(surface)")
+        try #require(!window.isVisible)
+        #expect(focus.restore(surfaceID: surface, workspaceID: workspace, ownerVisible: true, workspaceVisible: false))
+        #expect(window.firstResponder === control)
+        #expect(localFocusEvents.contains(true))
+        #expect(!previewEvents.contains(true), "Restoring local focus must not call the preview path that orders a child panel")
+        #expect(!window.isVisible && !window.isKeyWindow)
+        try #require(window.makeFirstResponder(nil))
+        try #require(window.makeFirstResponder(control))
+        #expect(previewEvents.filter { $0 }.count == 1, "Ordinary keyboard focus must retain its existing preview behavior")
     }
 
     private func names(_ view: NSView) -> [NSTextField] {

@@ -284,20 +284,33 @@ struct SidebarMotionTests {
             #expect(rows.contains { $0.accessibilityLabel() == "Focus Protected descendant" })
             #expect(rows.contains { $0.accessibilityLabel() == "Focus Other current root" })
             if mode == .taskboard {
-                let labels = ["Focus Other current root", "Focus Protected descendant"]
-                for label in labels {
-                    let currentRow = try #require(rows.first { $0.accessibilityLabel() == label })
-                    #expect(hosting.convert(currentRow.bounds, from: currentRow).minY
-                            < hosting.convert(retainedRow.bounds, from: retainedRow).minY,
-                            "Independent current content must precede retained context")
-                }
+                let independent = try #require(rows.first { $0.accessibilityLabel() == "Focus Other current root" })
+                let descendant = try #require(rows.first { $0.accessibilityLabel() == "Focus Protected descendant" })
+                #expect(hosting.convert(independent.bounds, from: independent).minY
+                        < hosting.convert(retainedRow.bounds, from: retainedRow).minY,
+                        "Independent current roots precede retained context")
+                #expect(child.parentId == old.id)
+                #expect(hosting.convert(descendant.bounds, from: descendant).minY
+                        > hosting.convert(retainedRow.bounds, from: retainedRow).minY,
+                        "A real child stays beneath its required ancestor, not in a duplicate flat session row")
             }
             #expect(try leadingInk(of: retainedRow, in: hosting) == 0, "Retained record has no current focus stripe")
             #expect(try leadingInk(of: observedRow, in: hosting) > 0, "Current session keeps its focus stripe")
             if scenario.protectedObservation {
-                #expect(descendants(hosting).compactMap { $0 as? NSTextField }.contains {
-                    $0.stringValue == "Protected observed child" && !$0.isEditable && !$0.isSelectable
-                }, "Coalescing must preserve observed descendants without a managed equivalent")
+                let childEvidence = try #require(oldObservation.children.first)
+                #expect(childEvidence.id == "protected-observed" && childEvidence.state == .blocked)
+                #expect(childEvidence.name == "Protected observed child")
+                #expect(childEvidence.kind == .subagent && childEvidence.attention?.isEmpty != false)
+                let neutral = CopilotSnapshotAdapter.child(
+                    childEvidence, session: .init(providerID: "copilot", sessionID: f.otherSessionID.uuidString)
+                )
+                #expect(neutral.id.rawValue == childEvidence.id && neutral.workState == .blocked)
+                #expect(neutral.title.knownValue == "Protected observed child")
+                let original = try #require(poller.tree.sessions.first { $0.id == f.otherSessionID })
+                #expect(original.liveness == .dead && original.internalTaskCountsIncomplete)
+                #expect(!original.nodes.contains { $0.id == childEvidence.id },
+                        "Dead-owner blocked work without child attention becomes unknown and is state-filtered")
+                #expect(original.attention.contains { $0.kind == .answer }, "The actual owner request still protects its context")
             }
             #expect(try greenPixels(in: retainedRow) == 0, "Never borrow the new session's working state")
             let statePixels: Int
