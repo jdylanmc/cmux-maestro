@@ -26,7 +26,7 @@ struct SidebarLayoutRenderingTests {
                         destination: folder.appendingPathComponent("\(density.rawValue)-\(appearance.name)-\(width).png")
                     ) { host in
                         let titles = nativeTitles(in: host)
-                        try #require(titles.count == 11)
+                        try #require(titles.count == 10, "Internal tasks are text, not interactive native titles")
                         let before = titles.map { host.convert($0.bounds, from: $0) }
                         for title in titles { title.focusChanged(true) }
                         try await Task.sleep(for: .milliseconds(20))
@@ -72,7 +72,9 @@ struct SidebarLayoutRenderingTests {
 
     private func nativeTitles(in view: NSView) -> [SidebarTitleNativeButton] {
         view.subviews.flatMap { child in
-            (child as? SidebarTitleNativeButton).map { [$0] } ?? nativeTitles(in: child)
+            (child as? SidebarTitleNativeButton).map {
+                $0.localFocusID?.hasPrefix("task-") == true || $0.localFocusID == "taskboard" ? [] : [$0]
+            } ?? nativeTitles(in: child)
         }
     }
 
@@ -967,10 +969,11 @@ struct SidebarLayoutRenderingTests {
                 parentId: resolvedParent,
                 role: role, label: labels[index],
                 workspaceId: secondWorkspace ? fixtures.workspaceB : workspace,
-                surfaceId: surface, generation: role == "coordinator" ? 0 : 1,
+                surfaceId: surface, generation: 1,
                 phase: phases[index],
                 availability: role == "coordinator" ? "active" : index == 1 ? "busy" : "idle",
-                copilotSessionId: role == "worker" ? sessionIDs[index] : nil,
+                copilotSessionId: sessionIDs[index],
+                executionMode: role == "coordinator" ? .interactive : nil,
                 worktreeLabel: secondWorkspace ? "release-worktree" : index == 0
                     ? "cmux-maestro-hierarchy-first" : "worker-\(index)",
                 branchLabel: secondWorkspace ? "release/next" : index == 2
@@ -1098,22 +1101,22 @@ struct SidebarLayoutRenderingTests {
         let rootLabel = "Synthetic coordinator reviewing deeply nested layout and accessibility coverage"
         let childLabel = "Synthetic child verifying long metadata without losing running or blocked status"
         var children: [CopilotChildWork] = [
-            .init(id: "root", parentID: nil, kind: .subagent, name: longMetadata ? rootLabel : "Same name",
+            .init(id: "root", parentID: nil, kind: .skill, name: longMetadata ? rootLabel : "Same name",
                   state: .idle, model: nil)
         ]
         if longMetadata {
             children.append(.init(
-                id: "nested", parentID: "root", kind: .subagent,
+                id: "nested", parentID: "root", kind: .skill,
                 name: "Synthetic nested coordinator for the deliberately long presentation fixture",
                 state: .idle, model: nil
             ))
         }
         children.append(.init(
-            id: "running", parentID: longMetadata ? "nested" : "root", kind: .subagent,
+            id: "running", parentID: longMetadata ? "nested" : "root", kind: .skill,
             name: longMetadata ? childLabel : "Same name", state: .working, model: nil
         ))
         children.append(.init(
-            id: "blocked", parentID: longMetadata ? "running" : "root", kind: .subagent,
+            id: "blocked", parentID: longMetadata ? "running" : "root", kind: .skill,
             name: longMetadata ? "Synthetic nested child waiting for an explicit permission decision" : "Synthetic waiting task",
             state: .blocked, model: nil, attention: [
                 .init(kind: .permission, evidence: .init(source: "copilot.events", eventID: fixtures.otherSessionID), occurredAt: now)
@@ -1128,7 +1131,7 @@ struct SidebarLayoutRenderingTests {
         }
         if deep {
             children = (0...8).map { level in
-                .init(id: "level-\(level)", parentID: level == 0 ? nil : "level-\(level - 1)", kind: .subagent,
+                .init(id: "level-\(level)", parentID: level == 0 ? nil : "level-\(level - 1)", kind: .skill,
                       name: "Synthetic level \(level) with a deliberately long title", state: .working, model: nil)
             }
         }

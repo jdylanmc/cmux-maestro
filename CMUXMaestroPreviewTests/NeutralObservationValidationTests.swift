@@ -222,7 +222,7 @@ struct NeutralObservationValidationTests {
         child("active", state: .known(.done), terminal: true, attention: action == .acknowledge ? [
             .init(kind: .turnFinished, evidence: .init(source: "copilot.events", eventID: eventID),
                   occurredAt: now.addingTimeInterval(-60))
-        ] : nil)
+        ] : nil, kind: .skill)
     }
 
     private func invalidPeers(_ kind: InvalidCanonicalPeer) -> [AgentChildWork] {
@@ -306,10 +306,10 @@ struct NeutralObservationValidationTests {
         _ id: String, parent: AgentChildWorkParent? = nil,
         state: SnapshotValue<AgentSessionState> = .known(.working), detail: AgentSessionStateDetail? = nil,
         activity: SnapshotValue<AgentActivity> = .unknown(), terminal: Bool = false,
-        children: [AgentChildWork] = [], attention: [AgentAttention]? = nil
+        children: [AgentChildWork] = [], attention: [AgentAttention]? = nil, kind: AgentWorkKind = .subagent
     ) -> AgentChildWork {
         .init(id: .init(id), parent: parent ?? .session(identity), title: .known(id), state: state,
-              activity: activity, children: children, stateDetail: detail, kind: .subagent,
+              activity: activity, children: children, stateDetail: detail, kind: kind,
               terminalEvent: terminal ? .init(id: eventID, timestamp: now.addingTimeInterval(-60)) : nil,
               attention: attention)
     }

@@ -386,9 +386,13 @@ struct SidebarNavigationTests {
             model.update(context: .init(
                 snapshot: pathSnapshot().filtered(for: scopes), host: .init(performAction: { _, _ in })
             ))
+            let source = fixtures.snapshot(sessions: [fixtures.session(children: [fixtures.child("child")], now: now)], now: now)
+            #expect(source.sessions[0].children[0].id == "child" && source.sessions[0].children[0].state == .idle)
+            let hidden = SidebarCopilotTree.project(source, onto: SidebarTopology(model.hierarchy), now: now)
+            #expect(hidden.sessions[0].nodes.isEmpty)
             let tree = SidebarCopilotTree.project(
-                fixtures.snapshot(sessions: [fixtures.session(children: [fixtures.child("child")], now: now)], now: now),
-                onto: SidebarTopology(model.hierarchy), now: now
+                source, onto: SidebarTopology(model.hierarchy), now: now,
+                revealingIdleTasksIn: [fixtures.workspaceA]
             )
             let expectedPaths: [SidebarDetailLine] = [
                 .init(title: "Workspace path", value: granted ? "/repo/.worktrees/feature" : "Path unavailable"),

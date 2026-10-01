@@ -123,6 +123,20 @@ final class SidebarPreferences {
     func expandAll() { layoutStore.apply(.expandAll) }
     func resetLayout() { layoutStore.apply(.reset) }
     func refreshLayout() { layoutStore.refresh() }
+    func setIdleTasksVisible(_ visible: Bool, in workspaceID: UUID) {
+        layoutStore.apply(.idleTasks(workspaceID, visible))
+    }
+
+    func dismissInternalTask(_ outcome: SidebarDismissedOutcome, in tree: SidebarCopilotTree, now: Date = Date()) -> Bool {
+        guard [.ready, .partial].contains(tree.availability),
+              let generatedAt = tree.generatedAt, SidebarCopilotTree.isFresh(generatedAt, now: now),
+              let session = tree.sessions.first(where: { $0.id == outcome.sessionID }),
+              SidebarCopilotTree.isFresh(session.observedAt, now: now),
+              let node = session.nodes.first(where: { $0.id == outcome.childID }),
+              node.isInternalTask, node.dismissibleOutcome(sessionID: session.id) == outcome else { return false }
+        dismiss([outcome])
+        return historyNotice == nil && history.dismissed.contains(outcome)
+    }
 
     func setIcon(_ choice: SidebarIconChoice, for target: SidebarIconTarget) {
         iconStore.apply {

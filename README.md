@@ -675,8 +675,10 @@ Steady connection success adds no label or row, leaving the footer lower while
 preserving the host's 50-point clearance. Waiting, disconnection and navigation
 errors or permission summaries remain visible.
 
-The same preview is available on managed agent, observed session, and observed
-sub-agent titles in Hierarchy and Taskboard. Each card resolves its own exact
+The same preview is available on managed agent, observed session, and non-task
+activity titles in Hierarchy and Taskboard. Internal tasks instead use passive
+single-line names with complete accessibility labels and tooltips, not chat
+navigation or identity previews. Each card resolves its own exact
 subject and only current or explicitly last-known metadata. Missing/expired
 observations are labeled, not replaced with invented model, context, timing or
 Git metrics. Windowless children retain parent-session placement context.
@@ -821,9 +823,14 @@ different session/provider does not inherit a collapse. Returning with the
 same full identity intentionally does. Collapsed ancestors retain visible
 running, blocked and attention summaries; incomplete counts stay labelled.
 Collapse never dismisses or acknowledges work and never changes retention.
-Taskboard still shows the full retained projection regardless of tree collapse.
+Taskboard still shows retained non-task activity regardless of tree collapse.
+Internal-task groups and task-child disclosure share exact provider/session/task
+identities across both views and reloads, independently of actual child-agent tabs.
+Non-task Taskboard activity remains state-grouped even when a managed owner or
+internal-task group is collapsed; coalescing a heading does not remove that activity.
 
-Only density overrides and collapsed identities are stored, in a versioned
+Density overrides, collapsed identities and workspace-local idle-task reveal
+choices are stored in a versioned
 `CMUXMaestroPreview/sidebar-layout.json` record in the extension container's
 Application Support directory. Coordinated, atomic action-level writes merge
 across views/processes rather than replacing a stale window snapshot. Local
@@ -978,10 +985,53 @@ are read for authorization.
 
 ## Completed work history
 
+### Internal Copilot tasks
+
+Explicit provider `.subagent` observations with literal session/child parents
+are internal tasks, not interactive tabs. Both Hierarchy and Taskboard attach
+their shared compact consumer beneath the exact owning session, including
+coalesced managed rows and retained original-session context. A task is one
+connector-linked text line without an identity icon or navigation/lifecycle
+actions. Its full observed name and state remain in accessibility and tooltips.
+Working alone animates green; Reduce Motion keeps a static working arc.
+Completion, failure, blocked, queued, idle, unknown and cancellation use distinct
+state shapes. Bounded left indentation preserves a common status edge.
+Managed-owner and provider-task depth share one bounded indentation budget.
+Suppressing a duplicate native surface row is not session ownership: unmatched
+observations on that surface keep a separately identified session-context heading,
+never the current managed chat's task parentage.
+Multiple observations of the same agent surface do not add agent or state
+counts. This counting rule does not attach their task contents to a managed
+chat. Existing retained managed records keep the explicit entries/context legend.
+
+Idle, unknown and cancelled tasks hide by state. A workspace's eye reveals
+**idle tasks only**, independently of other workspaces and **Show ended agents**.
+Finished and failed task outcomes have **no retention clock**: they remain until
+their exact session/task/terminal-event outcome is dismissed. Outstanding
+attention, degraded evidence and necessary ancestry stay protected.
+New work, a new result or new attention can return. Dismissal revalidates current,
+fresh evidence and cannot hide a replacement outcome or bypass active, failed,
+uncertain, attention-bearing or relevant internal descendants. Harmless completed
+non-task activity does not block reviewing the parent outcome; when legacy history
+is shown, the dismissed parent's ancestry can remain without restoring that outcome.
+After individual dismissal, keyboard focus returns to a visible local owner,
+workspace or Taskboard control without selecting or activating a native tab.
+This local restoration does not automatically open a keyboard preview; ordinary
+keyboard focus retains its existing preview behavior.
+Task quantities count only internal tasks. Branch working, blocked and attention
+totals include related non-task descendants; owner summaries preserve uncertainty
+from state-filtered unknown tasks. Incomplete/omitted evidence is explicit.
+
+Real terminal-backed child agents keep their real tab identities. Neither task
+visibility nor the workspace eye filters real tabs from native Hierarchy,
+inflates agent/tab counts, changes ownership or closes a session.
+
+### Other activity and session history
+
 The sidebar's **History** shortcut opens history controls shared by
 **Hierarchy** and **Taskboard**. The default active outline hides finished/cancelled
-children and confirmed ended processes, including their otherwise redundant
-surface rows. Managed workers leave when a terminal outcome is known; active
+non-task activity and confirmed ended process observations. Native surface rows
+remain available. Managed workers leave when a terminal outcome is known; active
 descendants, blockers, unknown state and unread errors keep necessary context.
 This only filters the sidebar: terminals, sessions and controller ownership are
 never closed, stopped or archived.
@@ -991,7 +1041,7 @@ Failed rows remain until explicitly dismissed with their **×** control; focusin
 or inspecting them only marks nonblocking notices read. Questions, permissions,
 uncertain attention and live descendants protect rows from dismissal. Legacy
 automatic "viewed failure" markers no longer hide rows.
-Finished and cancelled child outcomes are retained for
+Finished and cancelled **non-task activity** outcomes are retained for
 **15 seconds** by default; choose **1 minute**, **5 minutes**, **1 hour**, or
 **Never**. Retention starts at the accepted terminal event's RFC 3339 timestamp,
 not the poll, first display, or application launch. Missing, malformed, or

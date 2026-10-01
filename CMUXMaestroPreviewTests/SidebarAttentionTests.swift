@@ -240,7 +240,7 @@ struct SidebarAttentionTests {
         #expect(view.contains("acknowledge: acknowledge, selection: $selection"))
         #expect(view.contains("SidebarPresentation.focusInteraction(from: old, to: new)"))
         #expect(view.contains("SidebarTitleButton(label: label,"))
-        #expect(view.contains("value: detail ?? \"\", action: focus)"))
+        #expect(view.contains("value: detail ?? \"\", localFocusID: localFocusID, action: focus)"))
         let normalized = view.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         #expect(normalized.contains(
             "SidebarRowAction.focus(target, navigation: navigation, prepareSeen: prepareSeen, subject: inspection, revalidate: focusInspection).perform()"

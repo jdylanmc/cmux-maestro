@@ -7,6 +7,21 @@ struct CopilotSnapshotAdapterTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let eventID = UUID(uuidString: "10000000-1000-1000-1000-000000000010")!
 
+    @Test(arguments: [CopilotLiveness.dead, .ambiguous, .unknown])
+    func uncertainParentKeepsExactChildAttentionWithoutClaimingLiveWork(_ liveness: CopilotLiveness) throws {
+        let child = CopilotChildWork(id: "protected", parentID: nil, kind: .subagent, name: "Protected child",
+                                    state: .blocked, model: nil, attention: [signal(.permission)])
+        let source = fixtures.snapshot(sessions: [fixtures.session(liveness: liveness, children: [child], now: now)], now: now)
+        let neutral = adapt(source)
+        #expect(neutral.sessions[0].childWorkObservation?.items[0].workState == .blocked)
+        let tree = SidebarCopilotTree.project(neutral, onto: fixtures.topology(), now: now)
+        let protected = try #require(tree.sessions[0].nodes.first)
+        #expect(protected.id == "protected" && protected.name == "Protected child" && protected.isInternalTask)
+        #expect(protected.state == .unknown && protected.attention == [signal(.permission)])
+        #expect(tree.knownRunningChildren == 0 && !tree.hasCompleteCounts)
+        #expect(tree.dismissibleOutcomes.isEmpty)
+    }
+
     @Test(arguments: [CopilotWorkState.working, .idle, .blocked, .completed, .failed, .cancelled, .unknown],
           [CopilotLiveness.alive, .dead, .ambiguous, .unknown])
     func lifecycleAndProcessEvidenceRemainIndependent(_ state: CopilotWorkState, _ liveness: CopilotLiveness) throws {
@@ -32,7 +47,8 @@ struct CopilotSnapshotAdapterTests {
         let tree = SidebarCopilotTree.project(snapshot, onto: fixtures.topology(), now: now)
         let expected = liveness == .alive || state.isTerminal ? state.rawValue : "unknown"
         #expect(tree.sessions.first?.state.rawValue == expected)
-        #expect(tree.sessions.first?.nodes.first?.state.rawValue == expected)
+        let visible = expected != "unknown" && expected != "idle" && expected != "cancelled"
+        #expect(tree.sessions.first?.nodes.first?.state.rawValue == (visible ? expected : nil))
         #expect(tree.knownRunningChildren == (liveness == .alive && state == .working ? 1 : 0))
         #expect(tree.hasCompleteCounts == (liveness == .alive && state != .unknown))
         #expect(try AgentSessionSnapshotJSONCodec.decode(AgentSessionSnapshotJSONCodec.encode(snapshot)) == snapshot)
@@ -83,7 +99,8 @@ struct CopilotSnapshotAdapterTests {
         #expect(item.childWork.first?.children.first?.id.rawValue == "child")
         #expect(!snapshot.isComplete)
         let tree = SidebarCopilotTree.project(snapshot, onto: fixtures.topology(moved: true), now: now,
-                                              history: .init(retention: .never))
+                                              history: .init(retention: .never),
+                                              revealingIdleTasksIn: [fixtures.workspaceB])
         let session = try #require(tree.sessions.first)
         #expect(session.nodes.prefix(3).map(\.id) == ["parent", "child", "shell"])
         #expect(session.nodes.prefix(3).map(\.depth) == [0, 1, 2])
@@ -249,8 +266,19 @@ struct CopilotSnapshotAdapterTests {
         #expect(tree.availability == .partial && !tree.hasCompleteCounts)
         #expect(tree.sessions.first?.model == nil && tree.sessions.first?.activity == nil)
         #expect(tree.sessions.first?.state == .unknown)
-        #expect(tree.sessions.first?.nodes.first?.state == .unknown)
-        #expect(tree.sessions.first?.nodes.first?.model == nil && tree.sessions.first?.nodes.first?.activity == nil)
+        #expect(child.workState == .unknown && child.activity.knownValue == nil && child.model?.knownValue == nil)
+        #expect(snapshot.sessions[0].childWorkObservation?.items.first?.id == child.id)
+        if availability == .degraded {
+            #expect(tree.sessions.first?.nodes.isEmpty == true)
+            #expect(tree.sessions.first?.internalTaskCountsIncomplete == true)
+            let revealed = SidebarCopilotTree.project(snapshot, onto: fixtures.topology(), now: now,
+                                                      revealingIdleTasksIn: [fixtures.workspaceA])
+            #expect(revealed.sessions.first?.nodes.isEmpty == true, "The eye does not reveal unknown state")
+        } else {
+            let protected = try #require(tree.sessions.first?.nodes.first)
+            #expect(protected.state == .unknown && protected.attentionDegraded)
+            #expect(protected.model == nil && protected.activity == nil)
+        }
         #expect(tree.hiddenHistoryCount == 0 && tree.dismissibleOutcomes.isEmpty)
     }
 
