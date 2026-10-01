@@ -38,9 +38,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
-- Preserve owned managed launches when bounded startup observation ends, report
-  acceptance separately from provider/work evidence, and retain uncertain
-  terminal resources without retries or guessed cleanup (#61).
+- Start managed Copilot terminals directly with verbatim Maestro-wrapped tasks,
+  return acceptance without a startup wait, and preserve native messaging and
+  uncertain launch ownership without retries or guessed cleanup (#61).
 - Qualify agent and child directories as CMUX surface or parent-surface reports,
   with explicit source and report-age limits, preserving exact placement, path
   permissions and home-relative display (#77).
