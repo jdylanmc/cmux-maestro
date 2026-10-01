@@ -2719,15 +2719,28 @@ class DirectLaunchTests(unittest.TestCase):
             "spawn", "--actor-id", self.h.node, "--token", self.h.token,
             "--name", "Direct", "--cwd", str(self.h.path), "--task", "Run without hooks",
         ])
+        application_time = unittest.mock.Mock(wraps=time)
+        application_time.sleep.side_effect = AssertionError("startup sleep")
         with patch.dict(os.environ, self.h.env):
             cmux = CONTROLLER_API["Cmux"]()
             cmux.surface_exists = unittest.mock.Mock(side_effect=AssertionError("startup inventory poll"))
-            with patch("time.sleep", side_effect=AssertionError("startup sleep")), patch.dict(
+            with patch.dict(
                 CONTROLLER_API["launch_direct_session"].__globals__, {
+                    "time": application_time,
                     "process_observation": unittest.mock.Mock(side_effect=AssertionError("startup process probe")),
                     "command_runtime": unittest.mock.Mock(side_effect=AssertionError("supervisor")),
                 },
             ):
+                # Exercise the real stdlib timeout wait while the child is held on stdin.
+                with subprocess.Popen(
+                    [sys.executable, "-c", "import sys; sys.stdin.buffer.read(1)"],
+                    stdin=subprocess.PIPE,
+                ) as bounded_io:
+                    try:
+                        with self.assertRaises(subprocess.TimeoutExpired):
+                            bounded_io.wait(timeout=0.05)
+                    finally:
+                        bounded_io.communicate(input=b"x", timeout=5)
                 receipt = CONTROLLER_API["command_spawn"](args, self.h.root, cmux)
         self.assertTrue(receipt["launchAccepted"])
         self.assertEqual(receipt["startup"], "pending")
@@ -2738,6 +2751,17 @@ class DirectLaunchTests(unittest.TestCase):
         self.assertEqual(self.h.state()["launches"], {})
         self.assertEqual(len([call for call in self.h.cmux_data()["calls"] if "surface.create" in call]), 1)
         self.assertFalse(any("send" in call or "send-key" in call for call in self.h.cmux_data()["calls"]))
+
+    def test_no_startup_wait_oracle_rejects_application_sleep(self):
+        launch = CONTROLLER_API["launch_direct_session"]
+
+        def sleep_before_launch(*args, **kwargs):
+            launch.__globals__["time"].sleep(0)
+            return launch(*args, **kwargs)
+
+        with patch.dict(launch.__globals__, {"launch_direct_session": sleep_before_launch}):
+            with self.assertRaisesRegex(AssertionError, "startup sleep"):
+                self.test_acceptance_has_no_startup_probe_sleep_or_observation_dependency()
 
     def test_initial_command_preserves_task_bytes_quotes_path_cwd_and_policy(self):
         cwd = self.h.path / "cwd ' ; $(not-a-command)"
