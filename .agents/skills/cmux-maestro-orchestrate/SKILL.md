@@ -322,10 +322,14 @@ The controller checks its private actor capability/control identity, invoking
 provider ancestry, exact child session/generation/surface, current workspace
 membership and live provider anchors. Both exact sessions must have one matching,
 safe `inuse.PID.lock` in the standard `~/.copilot/session-state/<sessionId>`
-source directory. Missing, stale, ambiguous or repurposed evidence refuses; an
-ended provider is not treated as a safely closable shell. Active run launch
-leases and unresolved ownership refuse. No provider shutdown is required or
-attempted before closing an eligible live child.
+source directory. Its live same-user owner must be the recorded launch PID or
+that PID's immediate child, as with the supported npm launcher/native CLI pair.
+OS parentage, PID/start and marker identity must remain stable across preflight;
+the launch anchor is never rewritten to the marker PID. Deeper, unrelated or
+sibling owners refuse, without executable-name guessing. Missing, stale,
+ambiguous or repurposed evidence and an ended/zombie launch or source owner
+refuse. Active run launch leases and unresolved ownership refuse. No provider
+shutdown is required or attempted before closing an eligible live child.
 
 Admission issues **one stock CMUX `surface.close`** request. It bypasses UI close
 confirmation and inherits stock last-terminal refusal. A successful tool result

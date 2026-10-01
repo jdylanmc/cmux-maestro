@@ -2086,6 +2086,29 @@ def close_process_is_live(process):
             and fields[0][0] in "IRSTU" and fields[1] == process["start"])
 
 
+def close_source_owner(pid, launch):
+    """Only the launch process itself or its immediate source-owning child."""
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-o", "ppid=,uid=,lstart=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return None
+    fields = result.stdout.strip().split(maxsplit=2)
+    if (result.returncode or len(fields) != 3
+            or not re.fullmatch(r"[1-9][0-9]*", fields[0])
+            or not re.fullmatch(r"0|[1-9][0-9]*", fields[1])
+            or int(fields[1]) != os.getuid()):
+        return None
+    owner = {"pid": pid, "start": fields[2], "parentPID": int(fields[0])}
+    if ((pid == launch["pid"] and owner["start"] != launch["start"])
+            or (pid != launch["pid"] and owner["parentPID"] != launch["pid"])
+            or not close_process_is_live(owner)):
+        return None
+    return owner
+
+
 def require_close_source(node):
     """Inspect only the exact session's ownership marker, never its transcript."""
     provider = node.get("providerProcess")
@@ -2102,24 +2125,40 @@ def require_close_source(node):
         info = os.fstat(descriptor)
         if info.st_uid != os.getuid() or info.st_mode & 0o022:
             raise OrchestrationError("Close session source ownership is unavailable.")
-        markers = []
-        with os.scandir(descriptor) as entries:
-            for index, entry in enumerate(entries):
-                if index >= 512:
-                    raise OrchestrationError("Close session source exceeds its inspection bound.")
-                if entry.name.startswith("inuse.") and entry.name.endswith(".lock"):
-                    markers.append(entry.name)
-        expected = f"inuse.{provider['pid']}.lock"
-        if markers != [expected]:
-            raise OrchestrationError("Close session source is missing or ambiguous.")
-        marker = os.stat(expected, dir_fd=descriptor, follow_symlinks=False)
+        def inspect_marker():
+            markers = []
+            with os.scandir(descriptor) as entries:
+                for index, entry in enumerate(entries):
+                    if index >= 512:
+                        raise OrchestrationError("Close session source exceeds its inspection bound.")
+                    if entry.name.startswith("inuse.") and entry.name.endswith(".lock"):
+                        markers.append(entry.name)
+            if len(markers) != 1 or not re.fullmatch(r"inuse\.[1-9][0-9]*\.lock", markers[0]):
+                raise OrchestrationError("Close session source is missing or ambiguous.")
+            marker = os.stat(markers[0], dir_fd=descriptor, follow_symlinks=False)
+            if (not stat.S_ISREG(marker.st_mode) or marker.st_uid != os.getuid()
+                    or marker.st_mode & 0o022 or marker.st_nlink != 1):
+                raise OrchestrationError("Close session source or provider generation changed.")
+            return markers[0], marker
+
+        name, marker = inspect_marker()
+        owner_pid = int(name.split(".")[1])
+        if not 1 < owner_pid <= 2_147_483_647:
+            raise OrchestrationError("Close source owner PID is invalid.")
+        owner = close_source_owner(owner_pid, provider)
+        if owner is None:
+            raise OrchestrationError("Close source owner is not a current launch process or direct child.")
         try:
-            started = datetime.datetime.strptime(provider["start"], "%a %b %d %H:%M:%S %Y").timestamp()
+            started = datetime.datetime.strptime(owner["start"], "%a %b %d %H:%M:%S %Y").timestamp()
+            launched = datetime.datetime.strptime(provider["start"], "%a %b %d %H:%M:%S %Y").timestamp()
         except ValueError as error:
             raise OrchestrationError("Close provider start time is unavailable.") from error
-        if (not stat.S_ISREG(marker.st_mode) or marker.st_uid != os.getuid()
-                or marker.st_mode & 0o022 or marker.st_nlink != 1
-                or getattr(marker, "st_birthtime", -1) < started
+        if getattr(marker, "st_birthtime", -1) < started or started < launched:
+            raise OrchestrationError("Close session source or provider generation changed.")
+        current_name, current_marker = inspect_marker()
+        if (current_name != name or any(getattr(current_marker, key, None) != getattr(marker, key, None)
+                                       for key in ("st_dev", "st_ino", "st_birthtime", "st_mode", "st_uid", "st_nlink"))
+                or close_source_owner(owner_pid, provider) != owner
                 or not close_process_is_live(provider)):
             raise OrchestrationError("Close session source or provider generation changed.")
     except OSError as error:

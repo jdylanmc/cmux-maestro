@@ -2,6 +2,7 @@
 """Fixture/launcher contracts only: never authenticates or launches a real provider."""
 
 import copy
+from contextlib import contextmanager
 import io
 import hashlib
 import json
@@ -1167,6 +1168,9 @@ class NativeCloseTests(unittest.TestCase):
             "workspace_id": self.child["workspaceId"], "surface_id": self.child["surfaceId"],
         }
         self.starts = {12345: self.actor["providerProcess"]["start"], 12346: self.child["providerProcess"]["start"]}
+        self.parents = {12345: 1, 12346: 1}
+        self.process_uids = {}
+        self.process_states = {}
 
     def source(self, node):
         return self.home / ".copilot/session-state" / node["copilotSessionId"]
@@ -1174,14 +1178,81 @@ class NativeCloseTests(unittest.TestCase):
     def persist(self):
         CONTROLLER["with_store"](self.root, lambda store: store.write(self.state))
 
+    @contextmanager
+    def owned_source_wrapper(self):
+        source = self.source(self.child)
+        (source / "inuse.12346.lock").unlink()
+        script = """
+import signal,subprocess,sys
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+owner = subprocess.Popen([
+    sys.executable, "-B", "-c",
+    "import os,sys; from pathlib import Path; "
+    "(Path(sys.argv[1])/f'inuse.{os.getpid()}.lock').touch(mode=0o644); "
+    "print('ready',flush=True); sys.stdin.readline()",
+    sys.argv[1],
+], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+try:
+    assert owner.stdout.readline().strip() == "ready"
+    print(owner.pid, flush=True)
+    for command in sys.stdin:
+        if command.strip() == "exit-owner":
+            owner.stdin.write("\\n")
+            owner.stdin.flush()
+finally:
+    owner.stdin.close()
+    owner.wait(timeout=5)
+    owner.stdout.close()
+"""
+        wrapper = subprocess.Popen(
+            [sys.executable, "-B", "-c", script, str(source)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            self.assertTrue(select.select([wrapper.stdout], [], [], 5)[0], "owned wrapper did not become ready")
+            owner_pid = int(wrapper.stdout.readline().strip())
+            self.assertNotEqual(wrapper.pid, owner_pid)
+            self.child["providerProcess"] = {
+                "pid": wrapper.pid, "start": CONTROLLER["process_start"](wrapper.pid),
+            }
+            self.assertIsNotNone(self.child["providerProcess"]["start"])
+            self.persist()
+            yield wrapper, owner_pid
+        finally:
+            wrapper.stdin.close()
+            try:
+                wrapper.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                wrapper.terminate()
+                wrapper.wait(timeout=5)
+            wrapper.stdout.close()
+            wrapper.stderr.close()
+
+    def separate_source_owner(self):
+        source = self.source(self.child)
+        (source / "inuse.12346.lock").unlink()
+        marker = source / "inuse.12347.lock"
+        marker.touch(mode=0o644)
+        self.starts[12347] = self.starts[12346]
+        self.parents[12347] = 12346
+        return marker
+
     def invoke(self, request=None, *, anchor=None, kill_error=ProcessLookupError, real_pids=()):
         close = CONTROLLER["command_native_close"]
         process_start = CONTROLLER["process_start"]
         run = subprocess.run
         def process_probe(arguments, **kwargs):
-            if arguments[:3] == ["/bin/ps", "-o", "state=,lstart="] and int(arguments[-1]) not in real_pids:
-                start = self.starts.get(int(arguments[-1]))
-                return subprocess.CompletedProcess(arguments, 0, f"S {start}\n" if start else "", "")
+            if arguments[:2] == ["/bin/ps", "-o"] and int(arguments[-1]) not in real_pids:
+                pid = int(arguments[-1])
+                start = self.starts.get(pid)
+                if arguments[2] == "state=,lstart=":
+                    output = f"{self.process_states.get(pid, 'S')} {start}\n" if start else ""
+                elif arguments[2] == "ppid=,uid=,lstart=":
+                    output = (f"{self.parents.get(pid, 1)} {self.process_uids.get(pid, os.getuid())} {start}\n"
+                              if start else "")
+                else:
+                    raise AssertionError("Unexpected process probe")
+                return subprocess.CompletedProcess(arguments, 0, output, "")
             return run(arguments, **kwargs)
         raw = request if isinstance(request, bytes) else json.dumps(
             request if request is not None else {"identity": self.identity, "target": self.target}
@@ -1194,7 +1265,8 @@ class NativeCloseTests(unittest.TestCase):
                     "direct_process_identity": anchor or (lambda _: dict(self.actor["providerProcess"])),
                     "retire_messaging": mock.Mock(side_effect=AssertionError("close must preserve routes")),
                     "reconcile_resources": mock.Mock(side_effect=AssertionError("close must not reconcile")),
-                }), mock.patch("time.sleep", side_effect=AssertionError("close must not wait")), \
+                    "time": mock.Mock(wraps=time, sleep=mock.Mock(side_effect=AssertionError("close must not wait"))),
+                }), \
                 mock.patch("os.kill", side_effect=kill_error), \
                 mock.patch("subprocess.run", side_effect=process_probe):
             return close(self.root, self.cmux)
@@ -1222,6 +1294,141 @@ class NativeCloseTests(unittest.TestCase):
         self.persist()
         self.assertTrue(self.invoke()["closeAccepted"])
         self.cmux.run.assert_called_once()
+
+    def test_close_accepts_real_wrapper_with_separate_direct_source_owner(self):
+        with self.owned_source_wrapper() as (wrapper, owner_pid):
+            source = self.source(self.child)
+            self.assertEqual([item.name for item in source.iterdir()], [f"inuse.{owner_pid}.lock"])
+            self.assertFalse((source / f"inuse.{wrapper.pid}.lock").exists())
+            before = (self.root / "control/state.json").read_bytes()
+            self.assertEqual(self.invoke(real_pids={wrapper.pid, owner_pid}), {
+                **self.target, "closeAccepted": True, "removal": "unconfirmed",
+            })
+            self.cmux.run.assert_called_once()
+            self.assertEqual((self.root / "control/state.json").read_bytes(), before)
+
+    def test_close_accepts_real_same_pid_launch_and_source_owner(self):
+        with self.owned_source_wrapper() as (wrapper, owner_pid):
+            self.child["providerProcess"] = {
+                "pid": owner_pid, "start": CONTROLLER["process_start"](owner_pid),
+            }
+            self.persist()
+            self.assertTrue(self.invoke(real_pids={wrapper.pid, owner_pid})["closeAccepted"])
+            self.cmux.run.assert_called_once()
+
+    def test_close_refuses_real_zombie_source_owner_under_live_wrapper(self):
+        with self.owned_source_wrapper() as (wrapper, owner_pid):
+            wrapper.stdin.write("exit-owner\n")
+            wrapper.stdin.flush()
+            deadline = time.monotonic() + 5
+            while True:
+                state = subprocess.run(
+                    ["/bin/ps", "-o", "state=", "-p", str(owner_pid)],
+                    capture_output=True, text=True, timeout=3, check=True,
+                ).stdout.strip()
+                if state.startswith("Z"):
+                    break
+                self.assertLess(time.monotonic(), deadline, "owned source process did not exit")
+                time.sleep(0.01)
+            self.assertTrue(CONTROLLER["close_process_is_live"](self.child["providerProcess"]))
+            self.assertTrue((self.source(self.child) / f"inuse.{owner_pid}.lock").exists())
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "source owner"):
+                self.invoke(real_pids={wrapper.pid, owner_pid})
+            self.assertEqual(self.cmux.mock_calls, [])
+
+    def test_close_refuses_real_source_owner_beyond_the_supported_direct_child_bound(self):
+        with self.owned_source_wrapper() as (wrapper, owner_pid):
+            self.child["providerProcess"] = {
+                "pid": os.getpid(), "start": CONTROLLER["process_start"](os.getpid()),
+            }
+            self.persist()
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "source owner"):
+                self.invoke(real_pids={os.getpid(), wrapper.pid, owner_pid})
+            self.assertEqual(self.cmux.mock_calls, [])
+
+    def test_close_refuses_sibling_unrelated_foreign_dead_and_unknown_source_owner(self):
+        self.separate_source_owner()
+        for mapping, pid, value in (
+            (self.parents, 12347, 1), (self.parents, 12347, 12345),
+            (self.process_uids, 12347, os.getuid() + 1), (self.process_uids, 12347, "unknown"),
+            (self.starts, 12347, None), (self.process_states, 12347, "Z"),
+            (self.process_states, 12347, "?"), (self.process_states, 12346, "Z"),
+            (self.starts, 12346, None), (self.starts, 12346, "replacement-start"),
+        ):
+            with self.subTest(pid=pid, value=value), mock.patch.dict(mapping, {pid: value}):
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.invoke()
+        self.assertEqual(self.cmux.mock_calls, [])
+
+    def test_close_refuses_changed_owner_lineage_launch_identity_or_marker_during_preflight(self):
+        marker = self.separate_source_owner()
+        source_owner = CONTROLLER["close_source_owner"]
+        def replace_marker():
+            replacement = marker.with_name("replacement")
+            replacement.touch(mode=0o644)
+            replacement.replace(marker)
+        for change in (
+            lambda: self.parents.update({12347: 1}),
+            lambda: self.starts.update({12347: "replacement-start"}),
+            lambda: self.starts.update({12346: "replacement-start"}),
+            replace_marker,
+            lambda: (marker.parent / "inuse.12348.lock").touch(),
+        ):
+            calls = 0
+            def changed(pid, launch):
+                nonlocal calls
+                result = source_owner(pid, launch)
+                if pid == 12347:
+                    calls += 1
+                    if calls == 1:
+                        change()
+                return result
+            with self.subTest(change=change), mock.patch.dict(CONTROLLER["command_native_close"].__globals__, {
+                "close_source_owner": changed,
+            }):
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.invoke()
+            self.parents[12347] = 12346
+            self.starts[12346] = self.starts[12347] = self.child["providerProcess"]["start"]
+            (marker.parent / "inuse.12348.lock").unlink(missing_ok=True)
+        self.assertEqual(self.cmux.mock_calls, [])
+
+    def test_close_refuses_invalid_marker_pids_and_owner_predating_launch(self):
+        marker = self.separate_source_owner()
+        for name in ("inuse.012347.lock", "inuse.1.lock", "inuse.2147483648.lock", "inuse.invalid.lock"):
+            invalid = marker.with_name(name)
+            marker.rename(invalid)
+            try:
+                with self.subTest(name=name):
+                    with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                        self.invoke()
+            finally:
+                invalid.rename(marker)
+        self.starts[12347] = "Wed Dec 31 00:00:00 2025"
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "generation changed"):
+            self.invoke()
+        self.assertEqual(self.cmux.mock_calls, [])
+
+    def test_close_source_owner_refuses_unavailable_or_malformed_os_metadata(self):
+        owner = CONTROLLER["close_source_owner"]
+        anchor = self.child["providerProcess"]
+        for output in ("", "12346", f"1 {os.getuid()} {anchor['start']}",
+                       f"unknown {os.getuid()} {anchor['start']}",
+                       f"12346 unknown {anchor['start']}"):
+            with self.subTest(output=output), mock.patch("subprocess.run", return_value=
+                    subprocess.CompletedProcess([], 0, output, "")) as run:
+                self.assertIsNone(owner(12347, anchor))
+                run.assert_called_once_with(
+                    ["/bin/ps", "-o", "ppid=,uid=,lstart=", "-p", "12347"],
+                    capture_output=True, text=True, timeout=3,
+                )
+        for error in (PermissionError(), subprocess.TimeoutExpired("/bin/ps", 3),
+                      UnicodeDecodeError("utf8", b"\xff", 0, 1, "invalid")):
+            with self.subTest(error=type(error).__name__), mock.patch("subprocess.run", side_effect=error):
+                self.assertIsNone(owner(12347, anchor))
+        with mock.patch("subprocess.run", return_value=
+                subprocess.CompletedProcess([], 1, f"12346 {os.getuid()} {anchor['start']}", "")):
+            self.assertIsNone(owner(12347, anchor))
 
     def test_close_accepts_stock_host_uuid_casing_without_interpreting_removal(self):
         self.cmux.run.return_value = {
