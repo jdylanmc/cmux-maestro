@@ -8,10 +8,13 @@ import json
 import os
 from pathlib import Path
 import runpy
+import select
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -1104,7 +1107,7 @@ class ProofTests(unittest.TestCase):
 
 
 class NativeCloseTests(unittest.TestCase):
-    """Real private state/routes/source markers; only host and process probes are synthetic."""
+    """Real private state/routes/markers; synthetic host and explicitly owned process fixtures."""
 
     def setUp(self):
         self.home = Path(tempfile.mkdtemp(prefix="m90-", dir="/tmp")).resolve()
@@ -1171,8 +1174,15 @@ class NativeCloseTests(unittest.TestCase):
     def persist(self):
         CONTROLLER["with_store"](self.root, lambda store: store.write(self.state))
 
-    def invoke(self, request=None, *, anchor=None, kill_error=ProcessLookupError):
+    def invoke(self, request=None, *, anchor=None, kill_error=ProcessLookupError, real_pids=()):
         close = CONTROLLER["command_native_close"]
+        process_start = CONTROLLER["process_start"]
+        run = subprocess.run
+        def process_probe(arguments, **kwargs):
+            if arguments[:3] == ["/bin/ps", "-o", "state=,lstart="] and int(arguments[-1]) not in real_pids:
+                start = self.starts.get(int(arguments[-1]))
+                return subprocess.CompletedProcess(arguments, 0, f"S {start}\n" if start else "", "")
+            return run(arguments, **kwargs)
         raw = request if isinstance(request, bytes) else json.dumps(
             request if request is not None else {"identity": self.identity, "target": self.target}
         ).encode()
@@ -1180,12 +1190,13 @@ class NativeCloseTests(unittest.TestCase):
                 mock.patch("sys.stdin", mock.Mock(buffer=io.BytesIO(raw))), \
                 mock.patch.object(Path, "home", return_value=self.home), \
                 mock.patch.dict(close.__globals__, {
-                    "process_start": lambda pid: self.starts.get(pid),
+                    "process_start": lambda pid: process_start(pid) if pid in real_pids else self.starts.get(pid),
                     "direct_process_identity": anchor or (lambda _: dict(self.actor["providerProcess"])),
                     "retire_messaging": mock.Mock(side_effect=AssertionError("close must preserve routes")),
                     "reconcile_resources": mock.Mock(side_effect=AssertionError("close must not reconcile")),
                 }), mock.patch("time.sleep", side_effect=AssertionError("close must not wait")), \
-                mock.patch("os.kill", side_effect=kill_error):
+                mock.patch("os.kill", side_effect=kill_error), \
+                mock.patch("subprocess.run", side_effect=process_probe):
             return close(self.root, self.cmux)
 
     def test_close_accepts_one_live_direct_child_and_preserves_every_record_and_route(self):
@@ -1342,6 +1353,84 @@ class NativeCloseTests(unittest.TestCase):
             with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "process anchor"):
                 self.invoke(kill_error=PermissionError)
         self.cmux.run.assert_not_called()
+
+    def test_close_refuses_real_unreaped_zombie_before_any_host_call(self):
+        source = self.source(self.child)
+        (source / "inuse.12346.lock").unlink()
+        process = subprocess.Popen([
+            sys.executable, "-B", "-c",
+            "import os,sys; from pathlib import Path; "
+            "(Path(sys.argv[1])/f'inuse.{os.getpid()}.lock').touch(mode=0o600); "
+            "print('ready',flush=True); sys.stdin.readline()",
+            str(source),
+        ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertTrue(select.select([process.stdout], [], [], 5)[0], "owned child did not become ready")
+            self.assertEqual(process.stdout.readline().strip(), "ready")
+            anchor = {"pid": process.pid, "start": CONTROLLER["process_start"](process.pid)}
+            self.assertIsNotNone(anchor["start"])
+            self.child["providerProcess"] = anchor
+            self.persist()
+            with mock.patch.object(Path, "home", return_value=self.home):
+                CONTROLLER["require_close_source"](self.child)
+            process.stdin.write("exit\n")
+            process.stdin.flush()
+            deadline = time.monotonic() + 5
+            while True:
+                state = subprocess.run(
+                    ["/bin/ps", "-o", "state=", "-p", str(process.pid)],
+                    capture_output=True, text=True, timeout=3, check=True,
+                ).stdout.strip()
+                if state.startswith("Z"):
+                    break
+                self.assertLess(time.monotonic(), deadline, "owned child did not exit within test watchdog")
+                time.sleep(0.01)
+            self.assertEqual(CONTROLLER["process_start"](process.pid), anchor["start"])
+            self.assertTrue(CONTROLLER["process_observation"](anchor), "resource retention stays conservative")
+            self.assertTrue((source / f"inuse.{process.pid}.lock").is_file())
+            before = (self.root / "control/state.json").read_bytes()
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "current provider process anchor"):
+                self.invoke(real_pids={process.pid})
+            self.assertEqual(self.cmux.mock_calls, [])
+            self.assertEqual((self.root / "control/state.json").read_bytes(), before)
+            self.assertEqual(process.wait(timeout=5), 0)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+            for pipe in (process.stdin, process.stdout, process.stderr):
+                pipe.close()
+
+    def test_close_process_probe_accepts_known_live_states_with_exact_start(self):
+        probe = CONTROLLER["close_process_is_live"]
+        anchor = self.child["providerProcess"]
+        for state in ("I", "R", "S", "T", "U", "S+", "Rs"):
+            with self.subTest(state=state), mock.patch("subprocess.run", return_value=
+                    subprocess.CompletedProcess([], 0, f" {state}  {anchor['start']}\n", "")) as run:
+                self.assertTrue(probe(anchor))
+                run.assert_called_once_with(
+                    ["/bin/ps", "-o", "state=,lstart=", "-p", str(anchor["pid"])],
+                    capture_output=True, text=True, timeout=3,
+                )
+
+    def test_close_process_probe_refuses_zombie_unknown_reused_or_failed_evidence(self):
+        probe = CONTROLLER["close_process_is_live"]
+        anchor = self.child["providerProcess"]
+        for output in ("", "S", f"Z {anchor['start']}", f"Z+ {anchor['start']}",
+                       f"X {anchor['start']}", f"? {anchor['start']}", "S replacement-start"):
+            with self.subTest(output=output), mock.patch("subprocess.run", return_value=
+                    subprocess.CompletedProcess([], 0, output, "")):
+                self.assertFalse(probe(anchor))
+        with mock.patch("subprocess.run", return_value=
+                subprocess.CompletedProcess([], 1, f"S {anchor['start']}", "")):
+            self.assertFalse(probe(anchor))
+        for error in (FileNotFoundError(), PermissionError(), subprocess.TimeoutExpired("/bin/ps", 3),
+                      UnicodeDecodeError("utf8", b"\xff", 0, 1, "invalid")):
+            with self.subTest(error=type(error).__name__), mock.patch("subprocess.run", side_effect=error):
+                self.assertFalse(probe(anchor))
+        with mock.patch("subprocess.run") as run:
+            self.assertFalse(probe(None))
+            run.assert_not_called()
 
     def test_close_refuses_missing_repurposed_and_ambiguous_source_markers(self):
         source = self.source(self.child)

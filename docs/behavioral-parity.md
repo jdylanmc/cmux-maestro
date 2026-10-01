@@ -109,9 +109,13 @@ waits for disappearance or starts a provider-exit/retry protocol.
 actor/invoker authority, direct-child scope, stale target fields, process/source
 anchors, workspace movement, launch leases, preflight changes, real store-lock
 exclusion, existing RPC error/timeout behavior and byte-preserved records/routes.
+An owned real subprocess also exits without being reaped while retaining its
+start identity and source marker: close refuses before any host call. Close
+requires affirmative non-zombie process state plus the exact PID/start; unknown
+state refuses. Shared conservative resource-retention observation is unchanged.
 Native adapter tests cover strict public input, bound private identity, one
 controller invocation, transport refusal/lost reply/cancellation and no fallback.
-They use synthetic host/process collaborators and disposable local sources,
+They use synthetic hosts, synthetic or owned test processes and disposable local sources,
 not live CMUX resources. The existing three runtime suites remain required.
 
 Acceptance is explicitly `closeAccepted: true`, `removal: "unconfirmed"`; it

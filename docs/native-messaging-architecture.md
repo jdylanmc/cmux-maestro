@@ -154,7 +154,9 @@ surface and provider ancestry. Public peer discovery grants no close rights.
 The controller rechecks exact direct-child ownership against the initial
 snapshot under its existing exclusive state lock. Active run launch leases,
 unresolved/changed identities, moved/missing workspace surfaces, and absent or
-changed provider anchors refuse. A bounded metadata-only inspection of each
+changed provider anchors refuse. Close admission positively checks non-zombie
+process state and exact PID/start before any host call; the shared conservative
+resource-retention predicate is unchanged. A bounded metadata-only inspection of each
 exact standard Copilot session directory requires one safe `inuse.PID.lock`
 whose birth time is not earlier than the recorded process start. Additional
 markers conservatively refuse, including stale ones. No transcript, hook wait,

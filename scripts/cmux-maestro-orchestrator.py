@@ -2070,10 +2070,26 @@ def command_native_observe(root):
     return mutate(root, observe)
 
 
+def close_process_is_live(process):
+    """Affirmative close admission, not conservative resource retention."""
+    if not process:
+        return False
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-o", "state=,lstart=", "-p", str(process["pid"])],
+            capture_output=True, text=True, timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return False
+    fields = result.stdout.strip().split(maxsplit=1)
+    return (result.returncode == 0 and len(fields) == 2
+            and fields[0][0] in "IRSTU" and fields[1] == process["start"])
+
+
 def require_close_source(node):
     """Inspect only the exact session's ownership marker, never its transcript."""
     provider = node.get("providerProcess")
-    if not provider or process_observation(provider) is not True:
+    if not close_process_is_live(provider):
         raise OrchestrationError("Close requires a current provider process anchor.")
     source = Path.home() / ".copilot/session-state" / node["copilotSessionId"]
     descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
@@ -2104,7 +2120,7 @@ def require_close_source(node):
         if (not stat.S_ISREG(marker.st_mode) or marker.st_uid != os.getuid()
                 or marker.st_mode & 0o022 or marker.st_nlink != 1
                 or getattr(marker, "st_birthtime", -1) < started
-                or process_observation(provider) is not True):
+                or not close_process_is_live(provider)):
             raise OrchestrationError("Close session source or provider generation changed.")
     except OSError as error:
         raise OrchestrationError("Close session source is unavailable; no close request was made.") from error
@@ -2166,11 +2182,11 @@ def command_native_close(root, cmux):
         current, child = owned(state)
         if not all(observation_matches(snapshot, state, node["id"]) for node in (actor, target)):
             raise OrchestrationError("Close ownership changed during preflight.")
+        require_close_source(current)
+        require_close_source(child)
         surfaces = cmux.workspace_surfaces(current["workspaceId"])
         if current["surfaceId"] not in surfaces or child["surfaceId"] not in surfaces:
             raise OrchestrationError("Close actor or child left its bound workspace.")
-        require_close_source(current)
-        require_close_source(child)
         # The existing lock fences controller changes, not host/provider changes.
         # Never write state or retry after crossing this external request boundary.
         try:
