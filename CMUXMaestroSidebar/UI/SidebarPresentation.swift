@@ -914,7 +914,7 @@ enum SidebarPresentation {
             || bySurface.values.contains { $0.filter { $0.liveness != .dead }.count > 1 }
 
         for node in managed {
-            let state = coordinatorSession(node, availability: orchestrationAvailability, tree: observations, now: now)
+            let state = observedManagedSession(node, availability: orchestrationAvailability, tree: observations, now: now)
                 .flatMap { session in
                     currentSnapshot && identityCounts[session.id] == 1 ? sessionSummaryState(session) : nil
                 } ?? managedSummaryState(node, availability: orchestrationAvailability, now: now)
@@ -981,15 +981,11 @@ enum SidebarPresentation {
         _ node: SidebarOrchestrationNode, availability: SidebarOrchestrationAvailability,
         now: Date, tree: SidebarCopilotTree? = nil
     ) -> SidebarVisual {
-        if node.executionMode == .interactive, node.phase == "turn-running",
-           [.ready, .partial, .stale].contains(availability) {
-            if let tree, let session = managedSession(for: node, in: tree, now: now) {
-                return sessionState(session)
-            }
-            return state(.unknown).titled("Interactive · session state unavailable")
-        }
-        if let session = coordinatorSession(node, availability: availability, tree: tree, now: now) {
+        if let session = observedManagedSession(node, availability: availability, tree: tree, now: now) {
             return sessionState(session)
+        }
+        if isInteractiveSessionPhase(node), [.ready, .partial, .stale].contains(availability) {
+            return state(.unknown).titled("Interactive · session state unavailable")
         }
         let age = now.timeIntervalSince(node.updatedAt)
         guard (availability == .ready || availability == .partial),
@@ -1121,11 +1117,15 @@ enum SidebarPresentation {
         return managedSession(for: node, in: tree, now: now).map { .session($0.id) }
     }
 
-    private static func coordinatorSession(
+    private static func isInteractiveSessionPhase(_ node: SidebarOrchestrationNode) -> Bool {
+        node.executionMode == .interactive && ["launching", "turn-running"].contains(node.phase)
+    }
+
+    private static func observedManagedSession(
         _ node: SidebarOrchestrationNode, availability: SidebarOrchestrationAvailability,
         tree: SidebarCopilotTree?, now: Date
     ) -> SidebarCopilotSession? {
-        guard node.role == "coordinator", node.phase == "registered",
+        guard isInteractiveSessionPhase(node) || (node.role == "coordinator" && node.phase == "registered"),
               [.ready, .partial, .stale].contains(availability), let tree else { return nil }
         return managedSession(for: node, in: tree, now: now)
     }
@@ -1134,6 +1134,7 @@ enum SidebarPresentation {
         for node: SidebarOrchestrationNode, in tree: SidebarCopilotTree, now: Date
     ) -> SidebarCopilotSession? {
         guard tree.availability == .ready || tree.availability == .partial,
+              !tree.issues.contains(.permissionDenied),
               let generatedAt = tree.generatedAt,
               SidebarCopilotTree.isFresh(generatedAt, now: now) else {
             return nil
@@ -1146,7 +1147,7 @@ enum SidebarPresentation {
                     && $0.liveness == .alive
                     && SidebarCopilotTree.isFresh($0.observedAt, now: now)
             }
-        } else if node.role == "coordinator" {
+        } else if node.role == "coordinator", node.phase == "registered" {
             matches = tree.sessions.filter {
                 $0.surfaceID == node.surfaceId
                     && $0.workspaceID == node.workspaceId
@@ -1156,8 +1157,10 @@ enum SidebarPresentation {
         } else {
             return nil
         }
-        guard matches.count == 1 else { return nil }
-        return matches[0]
+        guard matches.count == 1, let session = matches.first,
+              tree.sessions.filter({ $0.id == session.id }).count == 1,
+              session.observedAt <= generatedAt.addingTimeInterval(1) else { return nil }
+        return session
     }
 
     static func nodeDetails(_ node: SidebarCopilotNode, session: SidebarCopilotSession) -> [SidebarDetailLine] {
@@ -1287,6 +1290,7 @@ enum SidebarPresentation {
         availability: SidebarOrchestrationAvailability,
         now: Date
     ) -> AgentSummaryState {
+        if isInteractiveSessionPhase(node) { return .unknown }
         let age = now.timeIntervalSince(node.updatedAt)
         guard (availability == .ready || availability == .partial),
               age >= -1, age <= SidebarOrchestrationReader.staleInterval else {

@@ -3,19 +3,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { EventEmitter, once } from "node:events";
+import { spawn } from "node:child_process";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import { start, startManaged, validateSend } from "./delivery-proof/adapter.mjs";
 
-const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const base = path.join(repo, ".build", "dp");
+const base = await fs.realpath("/tmp");
 
 async function fixture(t) {
-  await fs.mkdir(base, { recursive: true, mode: 0o700 });
-  const root = path.join(base, randomUUID().slice(0, 8));
-  await fs.mkdir(root, { mode: 0o700 });
+  const root = await fs.mkdtemp(path.join(base, "m61-"));
   const workspaceId = randomUUID();
   const bindings = Object.fromEntries(["a", "b"].map((peer, i) => [peer, {
     peer, workspaceId, sessionId: randomUUID(), capability: `${i + 1}`.repeat(64),
@@ -221,8 +220,7 @@ test("malformed and fragmented wire input never uses terminal or readiness APIs"
 });
 
 async function managedFixture(t) {
-  const root = path.join(repo, ".build", randomUUID().slice(0, 5));
-  await fs.mkdir(root, { mode: 0o700 });
+  const root = await fs.mkdtemp(path.join(base, "m61-"));
   const workspaceId = randomUUID();
   const bindings = [0, 1, 2, 3].map((index) => ({
     peer: String(index).repeat(16), nodeId: randomUUID(), name: `Participant ${index}`,
@@ -266,6 +264,238 @@ async function managedFixture(t) {
 }
 
 const managedAddress = (binding) => ({ ...addr(binding), generation: binding.generation });
+
+async function loaderFixture(t) {
+  const root = await fs.mkdtemp(path.join(base, "m61-loader-"));
+  const surfaceId = randomUUID();
+  const binding = {
+    peer: "1111111111111111", nodeId: randomUUID(), name: "Synthetic lifecycle",
+    workspaceId: randomUUID(), sessionId: randomUUID(), generation: 1, capability: "c".repeat(64),
+  };
+  const endpoint = path.join(root, `${binding.peer}.sock`);
+  const route = path.join(root, `${binding.peer}.json`);
+  const children = [];
+  async function exists(file) {
+    try { return await fs.lstat(file); }
+    catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  }
+  async function waitFor(predicate) {
+    const deadline = Date.now() + 4000;
+    while (!await predicate()) {
+      assert.ok(Date.now() < deadline, "Synthetic lifecycle condition exceeded test watchdog");
+      await delay(10);
+    }
+  }
+  async function exited(item) {
+    const timeout = new AbortController();
+    try {
+      return await Promise.race([
+        item.done,
+        delay(4000, null, { signal: timeout.signal }).then(() => {
+          throw new Error("Owned synthetic extension did not terminate within test watchdog");
+        }),
+      ]);
+    } finally { timeout.abort(); }
+  }
+  async function stop(item, signal = "SIGTERM") {
+    item.child.kill(signal);
+    return exited(item);
+  }
+  t.after(async () => {
+    const failures = [];
+    try {
+      for (const item of children) {
+        if (item.child.exitCode === null && item.child.signalCode === null) {
+          try { await stop(item); }
+          catch (error) { item.child.kill("SIGKILL"); await item.done; failures.push(error); }
+        }
+        if (item.observing && await exists(item.stage)) {
+          const pid = Number(await fs.readFile(item.stage, "utf8"));
+          if (!await exists(item.stage + ".stopped")) {
+            try { process.kill(pid, "SIGTERM"); }
+            catch (error) { if (error.code !== "ESRCH") failures.push(error); }
+          }
+        }
+      }
+    } finally { await fs.rm(root, { recursive: true }); }
+    if (failures.length) throw new AggregateError(failures, "Synthetic extension cleanup failed");
+  });
+  await fs.writeFile(route, JSON.stringify(binding), { mode: 0o600 });
+  await fs.writeFile(path.join(root, "sdk.mjs"), `
+import { writeFileSync } from "node:fs";
+export async function joinSession() {
+  if (process.env.FIXTURE_FAIL_JOIN) {
+    throw Object.assign(new Error(process.env.FIXTURE_PRIVATE_TEXT), { code: process.env.FIXTURE_PRIVATE_TEXT });
+  }
+  if (process.env.FIXTURE_HOLD_STAGE === "join") {
+    writeFileSync(process.env.FIXTURE_STAGE, "join");
+    process.stdin.resume();
+    await new Promise(() => {});
+  }
+  return { sessionId: process.env.SESSION_ID };
+}
+`, { mode: 0o600 });
+  await fs.writeFile(path.join(root, "resolve.mjs"), `
+export function resolve(specifier, context, next) {
+  if (specifier === "@github/copilot-sdk/extension")
+    return { url: new URL("./sdk.mjs", import.meta.url).href, shortCircuit: true };
+  return next(specifier, context);
+}
+`, { mode: 0o600 });
+  await fs.writeFile(path.join(root, "preload.mjs"), `
+import { register, syncBuiltinESMExports } from "node:module";
+import { promises as fs, writeFileSync, appendFileSync } from "node:fs";
+import net from "node:net";
+import childProcess from "node:child_process";
+register(new URL("./resolve.mjs", import.meta.url));
+if (process.env.FIXTURE_HOLD_STAGE === "observe") {
+  const execFile = childProcess.execFile;
+  childProcess.execFile = (...args) => {
+    const child = execFile(...args);
+    child.stdin.end = data => child.stdin.write(data);
+    return child;
+  };
+  syncBuiltinESMExports();
+}
+const chmod = fs.chmod;
+fs.chmod = async (...args) => {
+  if (process.env.FIXTURE_HOLD_STAGE === "chmod") {
+    writeFileSync(process.env.FIXTURE_STAGE, "chmod");
+    await new Promise(() => {});
+  }
+  if (process.env.FIXTURE_FAIL_CHMOD) throw Object.assign(new Error("private fixture path"), { code: "EACCES" });
+  return chmod(...args);
+};
+const emit = net.Server.prototype.emit;
+net.Server.prototype.emit = function(event, ...args) {
+  if (event === "error") appendFileSync(process.env.FIXTURE_ERRORS, String(args[0]?.code) + "\\n", { mode: 0o600 });
+  return Reflect.apply(emit, this, [event, ...args]);
+};
+`, { mode: 0o600 });
+  await fs.writeFile(path.join(root, "controller"), `#!/usr/bin/env node
+const { writeFileSync } = require("node:fs");
+process.stdin.resume();
+if (process.env.FIXTURE_HOLD_STAGE === "observe") {
+  process.stdin.once("data", () => {
+    process.on("SIGTERM", () => {
+      writeFileSync(process.env.FIXTURE_STAGE + ".stopped", "stopped");
+      process.exit(0);
+    });
+    writeFileSync(process.env.FIXTURE_STAGE, String(process.pid));
+  });
+}
+process.stdin.on("end", () => process.stdout.write(JSON.stringify({ ok: true, observed: true })));
+`, { mode: 0o700 });
+  function launch(overrides = {}) {
+    const stage = path.join(root, `stage-${children.length}`);
+    const errors = path.join(root, `errors-${children.length}`);
+    const child = spawn(process.execPath, [
+      "--import", pathToFileURL(path.join(root, "preload.mjs")).href,
+      fileURLToPath(new URL("./delivery-proof/extension.mjs", import.meta.url)),
+    ], {
+      env: {
+        PATH: process.env.PATH,
+        SESSION_ID: binding.sessionId, CMUX_WORKSPACE_ID: binding.workspaceId, CMUX_SURFACE_ID: surfaceId,
+        CMUX_MAESTRO_MESSAGE_ROOT: root, CMUX_MAESTRO_MESSAGE_PEER: binding.peer,
+        CMUX_MAESTRO_WORKER_ID: binding.nodeId, CMUX_MAESTRO_GENERATION: "1",
+        CMUX_MAESTRO_EXECUTION_MODE: "interactive", CMUX_MAESTRO_DIRECT_LAUNCH: "1",
+        CMUX_MAESTRO_LAUNCH_PID: String(process.pid), CMUX_MAESTRO_ORCHESTRATOR: path.join(root, "controller"),
+        FIXTURE_STAGE: stage, FIXTURE_ERRORS: errors, ...overrides,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const item = { child, done: once(child, "exit"), stage, errors, stderr: "",
+      observing: overrides.FIXTURE_HOLD_STAGE === "observe" };
+    child.stderr.setEncoding("utf8").on("data", chunk => { item.stderr += chunk; });
+    child.stdout.resume();
+    children.push(item);
+    return item;
+  }
+  const listening = () => waitFor(async () => {
+    const info = await exists(endpoint);
+    return info?.isSocket() && (info.mode & 0o777) === 0o600;
+  });
+  return { root, binding, endpoint, route, exists, waitFor, exited, stop, launch, listening };
+}
+
+test("actual native loader closes its listener on SIGTERM and the same binding reloads", async (t) => {
+  const f = await loaderFixture(t);
+  const bindingBefore = await fs.readFile(f.route);
+  const first = f.launch();
+  await f.listening();
+  const connection = net.createConnection(f.endpoint);
+  t.after(() => connection.destroy());
+  await once(connection, "connect");
+  const disconnected = once(connection, "close");
+  assert.deepEqual(await f.stop(first), [0, null]);
+  await disconnected;
+  assert.equal(await f.exists(f.endpoint), null);
+  assert.deepEqual(await fs.readFile(f.route), bindingBefore);
+  const replacement = f.launch();
+  await f.listening();
+  assert.deepEqual(await f.stop(replacement), [0, null]);
+  assert.equal(await f.exists(f.endpoint), null);
+  assert.deepEqual(await fs.readFile(f.route), bindingBefore);
+});
+
+for (const stage of ["join", "observe", "chmod"]) {
+  test(`actual native loader handles SIGTERM during ${stage} initialization`, async (t) => {
+    const f = await loaderFixture(t);
+    const first = f.launch({ FIXTURE_HOLD_STAGE: stage });
+    await f.waitFor(() => f.exists(first.stage));
+    assert.equal(Boolean(await f.exists(f.endpoint)), stage === "chmod");
+    assert.deepEqual(await f.stop(first), [0, null]);
+    if (stage === "observe") await f.waitFor(() => f.exists(first.stage + ".stopped"));
+    assert.equal(await f.exists(f.endpoint), null);
+    const replacement = f.launch();
+    await f.listening();
+    assert.deepEqual(await f.stop(replacement), [0, null]);
+    assert.equal(await f.exists(f.endpoint), null);
+  });
+}
+
+test("actual native loader cleans its owned listener after initialization failure", async (t) => {
+  const f = await loaderFixture(t);
+  const failed = f.launch({ FIXTURE_FAIL_CHMOD: "1" });
+  assert.deepEqual(await f.exited(failed), [1, null]);
+  assert.match(failed.stderr, /\(EACCES\)/);
+  assert.equal(await f.exists(f.endpoint), null);
+  const replacement = f.launch();
+  await f.listening();
+  assert.deepEqual(await f.stop(replacement), [0, null]);
+});
+
+for (const killed of [false, true]) {
+  test(`actual native loader refuses ${killed ? "unproven stale" : "occupied live"} sockets without unlinking`, async (t) => {
+    const f = await loaderFixture(t);
+    const first = f.launch();
+    await f.listening();
+    const original = await fs.lstat(f.endpoint);
+    if (killed) assert.deepEqual(await f.stop(first, "SIGKILL"), [null, "SIGKILL"]);
+    const replacement = f.launch();
+    assert.deepEqual(await f.exited(replacement), [1, null]);
+    assert.match(await fs.readFile(replacement.errors, "utf8"), /EADDRINUSE/);
+    assert.match(replacement.stderr, /\(EADDRINUSE\)/);
+    assert.equal(replacement.stderr.includes(f.binding.capability), false);
+    assert.equal(replacement.stderr.includes(f.root), false);
+    const retained = await fs.lstat(f.endpoint);
+    assert.equal(retained.dev, original.dev);
+    assert.equal(retained.ino, original.ino);
+    if (!killed) assert.deepEqual(await f.stop(first), [0, null]);
+  });
+}
+
+test("actual native loader diagnostics never print raw exception text or private values", async (t) => {
+  const f = await loaderFixture(t);
+  const privateText = `PRIVATE_TASK_AND_CAPABILITY_${f.binding.capability}`;
+  const failed = f.launch({ FIXTURE_FAIL_JOIN: "1", FIXTURE_PRIVATE_TEXT: privateText });
+  assert.deepEqual(await f.exited(failed), [1, null]);
+  assert.match(failed.stderr, /\(INITIALIZATION_FAILED\)/);
+  assert.ok(failed.stderr.length < 200);
+  assert.equal(failed.stderr.includes(privateText), false);
+  assert.equal(failed.stderr.includes(f.binding.capability), false);
+  assert.equal(await f.exists(f.endpoint), null);
+});
 
 test("installed mode discovers arbitrary same-workspace participants and peer replies", async (t) => {
   const f = await managedFixture(t);
@@ -311,12 +541,71 @@ test("installed loader is inert outside managed sessions and refuses mismatched 
   }
 });
 
+test("direct loader uses precreated bindings and observes only its joined CLI session once", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  const surfaceId = randomUUID();
+  const order = [];
+  const environment = {
+    ...f.environment(0), CMUX_MAESTRO_DIRECT_LAUNCH: "1",
+    CMUX_MAESTRO_LAUNCH_PID: "12345", CMUX_SURFACE_ID: surfaceId,
+    CMUX_MAESTRO_ORCHESTRATOR: "/synthetic/controller",
+  };
+  const adapter = await startManaged({
+    environment,
+    joinSession: async options => {
+      order.push("join");
+      assert.deepEqual(options.tools.map(tool => tool.name),
+        ["maestro_peers", "maestro_send", "maestro_identity", "maestro_spawn"]);
+      return { sessionId: own.sessionId };
+    },
+    observe: async (request, controller) => {
+      order.push("observe");
+      assert.equal(controller, environment.CMUX_MAESTRO_ORCHESTRATOR);
+      assert.deepEqual(request, {
+        nodeId: own.nodeId, workspaceId: own.workspaceId, sessionId: own.sessionId,
+        generation: 1, surfaceId, pid: 12345,
+      });
+      assert.equal(JSON.stringify(request).includes("capability"), false);
+      return { ok: true, observed: true };
+    },
+  });
+  t.after(() => adapter.close());
+  assert.deepEqual(order, ["join", "observe"]);
+});
+
+test("direct observation failure is explicit and never retried or adopted", async (t) => {
+  const f = await managedFixture(t);
+  let observations = 0;
+  const environment = {
+    ...f.environment(0), CMUX_MAESTRO_DIRECT_LAUNCH: "1",
+    CMUX_MAESTRO_LAUNCH_PID: "12345", CMUX_SURFACE_ID: randomUUID(),
+  };
+  await assert.rejects(startManaged({
+    environment, joinSession: async () => ({ sessionId: f.bindings[0].sessionId }),
+    observe: async () => { observations++; throw new Error("ownership changed"); },
+  }), /ownership changed/);
+  assert.equal(observations, 1);
+  await assert.rejects(startManaged({
+    environment, joinSession: async () => ({ sessionId: randomUUID() }),
+    observe: async () => { observations++; },
+  }));
+  assert.equal(observations, 1);
+  await assert.rejects(fs.stat(path.join(f.root, `${f.bindings[0].peer}.sock`)), { code: "ENOENT" });
+});
+
 test("native launch reads the invoking session account on each request, not task-supplied identity", async (t) => {
   const f = await managedFixture(t);
   const own = f.bindings[0];
   let tools;
   let login = "parent-a";
   const requests = [];
+  const receipt = {
+    ok: true, workerId: "synthetic-worker", launchAccepted: true, startup: "pending",
+    initialTask: "configured", supervisorStarted: false, providerStarted: false,
+    providerRunning: null, messaging: "configured", messagingAvailability: "unknown",
+    workObservation: "unavailable",
+  };
   const adapter = await start({
     root: f.root, peer: own.peer, managed: true, expected: own,
     joinSession: async options => {
@@ -330,7 +619,7 @@ test("native launch reads the invoking session account on each request, not task
     },
     launch: async request => {
       requests.push(request);
-      return { ok: true, workerId: "synthetic-worker", supervisorStarted: true };
+      return receipt;
     },
   });
   t.after(() => adapter.close());
@@ -345,7 +634,7 @@ test("native launch reads the invoking session account on each request, not task
     assert.equal(observed.sessionId, own.sessionId);
     assert.equal(JSON.stringify(observed).includes(own.capability), false);
     const result = await spawn(assignment, invocation);
-    assert.equal(JSON.parse(result).ok, true);
+    assert.deepEqual(JSON.parse(result), receipt);
     assert.equal(requests.at(-1).identity.login, next);
     assert.equal(result.includes(own.capability), false);
     assert.equal(result.includes(next), false);

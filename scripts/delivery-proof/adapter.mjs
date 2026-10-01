@@ -128,14 +128,14 @@ async function writeOnce(endpoint, frame) {
   });
 }
 
-async function launchNative(request, controller) {
+async function invokeController(command, request, controller, signal) {
   requireCondition(typeof controller === "string" && path.isAbsolute(controller));
   const info = await fs.lstat(controller);
   requireCondition(info.isFile() && [0, process.getuid()].includes(info.uid) &&
     !(info.mode & 0o022) && await fs.realpath(controller) === controller);
   return new Promise((resolve, reject) => {
-    const child = execFile(controller, ["native-spawn"], {
-      timeout: 60_000, maxBuffer: 65_536,
+    const child = execFile(controller, [command], {
+      timeout: 60_000, maxBuffer: 65_536, signal,
     }, (error, stdout, stderr) => {
       if (error) {
         try {
@@ -159,9 +159,13 @@ async function launchNative(request, controller) {
   });
 }
 
-export async function start({ root, peer, joinSession, managed = false, expected, launch = launchNative, diagnostic = () => {
+const launchNative = (request, controller) => invokeController("native-spawn", request, controller);
+
+export async function start({ root, peer, joinSession, managed = false, expected, launch = launchNative,
+  observe, signal, onListener, diagnostic = () => {
   console.error("Maestro message dropped; no retry.");
 } }) {
+  signal?.throwIfAborted();
   requireCondition(path.isAbsolute(root) && (managed ? MANAGED_PEER.test(peer) : PEERS.includes(peer)));
   await privateDirectory(root);
   const own = await bindingAt(root, peer, managed);
@@ -176,8 +180,10 @@ export async function start({ root, peer, joinSession, managed = false, expected
       current.capability === own.capability && current.nodeId === own.nodeId);
   }
   let session;
+  let observation;
   async function currentAccount(invocation) {
     requireCondition(session?.sessionId === own.sessionId && invocation?.sessionId === own.sessionId);
+    if (observation) await observation;
     await currentBinding();
     let auth;
     try {
@@ -269,7 +275,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
   });
   if (managed) tools.push({
     name: "maestro_spawn",
-    description: "Launch one explicitly authorized visible Maestro child using this session's current Copilot account. No hidden fallback; launch acknowledgement is not readiness or task completion.",
+    description: "Launch one explicitly authorized visible interactive Maestro child using this session's current Copilot account. Returns after exact terminal creation/ownership without waiting for provider, hooks, or tools. Acceptance is not prompt consumption, readiness, or task completion. No fallback or retry.",
     parameters: {
       type: "object",
       properties: {
@@ -308,13 +314,22 @@ export async function start({ root, peer, joinSession, managed = false, expected
     },
   });
   // Join only the CLI-owned session; do not supply account, model, or permission handlers.
+  signal?.throwIfAborted();
   session = await joinSession({ tools });
+  signal?.throwIfAborted();
   requireCondition(session.sessionId === own.sessionId);
+  if (observe) {
+    observation = observe();
+    await observation;
+  }
+  signal?.throwIfAborted();
   const endpoint = path.join(root, `${peer}.sock`);
   requireCondition(Buffer.byteLength(endpoint) <= 100);
   let pending = 0;
+  let closing;
   const sockets = new Set();
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+    if (closing) { socket.destroy(); return; }
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
     let bytes = 0;
@@ -328,7 +343,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
     });
     socket.once("end", () => {
       socket.end(); // No application response or acknowledgement.
-      if (bytes > MAX_FRAME || pending >= 8) return;
+      if (closing || bytes > MAX_FRAME || pending >= 8) return;
       pending++;
       (async () => {
         const wire = JSON.parse(decoder.decode(Buffer.concat(chunks)));
@@ -353,29 +368,42 @@ export async function start({ root, peer, joinSession, managed = false, expected
     });
   });
   server.maxConnections = 8;
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(endpoint, resolve);
-  });
+  const listener = {
+    close: () => {
+      if (closing) return closing;
+      for (const socket of sockets) socket.destroy();
+      // A failed bind owns no pathname. Never unlink or close another listener.
+      if (!server.listening) return Promise.resolve();
+      closing = new Promise((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+      return closing;
+    },
+  };
+  // Publish shutdown ownership before listen/chmod can yield during initialization.
+  onListener?.(listener);
   try {
+    signal?.throwIfAborted();
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(endpoint, resolve);
+    });
+    signal?.throwIfAborted();
     await fs.chmod(endpoint, 0o600);
+    signal?.throwIfAborted();
   } catch (error) {
-    server.close();
+    await listener.close();
     throw error;
   }
 
   server.on("error", () => diagnostic());
-  return {
-    close: () => new Promise((resolve, reject) => {
-      for (const socket of sockets) socket.destroy();
-      server.close((error) => error ? reject(error) : resolve());
-    }),
-  };
+  return listener;
 }
 
 // Inert in ordinary CLI sessions, including sessions with no launcher binding.
 // SESSION_ID is supplied by Copilot to its native extension child.
-export async function startManaged({ joinSession, environment = process.env, diagnostic }) {
+export async function startManaged({ joinSession, environment = process.env, diagnostic, signal, onListener,
+  observe = (request, controller) => invokeController("native-observe", request, controller, signal) }) {
   const root = environment.CMUX_MAESTRO_MESSAGE_ROOT;
   const peer = environment.CMUX_MAESTRO_MESSAGE_PEER;
   if (!root || !peer || !environment.CMUX_MAESTRO_WORKER_ID ||
@@ -388,5 +416,15 @@ export async function startManaged({ joinSession, environment = process.env, dia
     nodeId: environment.CMUX_MAESTRO_WORKER_ID,
     controller: environment.CMUX_MAESTRO_ORCHESTRATOR,
   };
-  return start({ root, peer, joinSession, managed: true, expected, diagnostic });
+  let observation;
+  if (environment.CMUX_MAESTRO_DIRECT_LAUNCH === "1") {
+    const pid = Number(environment.CMUX_MAESTRO_LAUNCH_PID);
+    const surfaceId = environment.CMUX_SURFACE_ID?.toLowerCase();
+    requireCondition(Number.isSafeInteger(pid) && pid > 1 && typeof surfaceId === "string" && UUID.test(surfaceId));
+    observation = () => observe({
+      nodeId: expected.nodeId, workspaceId: expected.workspaceId, sessionId: expected.sessionId,
+      generation, surfaceId, pid,
+    }, expected.controller);
+  }
+  return start({ root, peer, joinSession, managed: true, expected, diagnostic, observe: observation, signal, onListener });
 }
