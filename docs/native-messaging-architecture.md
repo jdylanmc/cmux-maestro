@@ -142,6 +142,41 @@ proof bypass was fixed before credential lookup/reservation. No full parent
 permission inheritance, auto-approval callback, or persistent policy rewrite is
 inferred. Cleanup must follow exact lifecycle ownership, not a guessed idle state.
 
+### Explicit owned-child close
+
+`maestro_close({target: {workerId, workspaceId, surfaceId, sessionId, generation}})`
+uses the CLI-owned adapter and existing controller, not the peer socket or the
+sidebar. The model supplies only one explicit child identity. The adapter binds
+the actual invoking session and private capability; controller admission also
+requires that session's inherited actor/control token, run, generation, current
+surface and provider ancestry. Public peer discovery grants no close rights.
+
+The controller rechecks exact direct-child ownership against the initial
+snapshot under its existing exclusive state lock. Active run launch leases,
+unresolved/changed identities, moved/missing workspace surfaces, and absent or
+changed provider anchors refuse. A bounded metadata-only inspection of each
+exact standard Copilot session directory requires one safe `inuse.PID.lock`
+whose birth time is not earlier than the recorded process start. Additional
+markers conservatively refuse, including stale ones. No transcript, hook wait,
+source-directory scan across sessions or provider API is used.
+
+With the same lock held, one existing `Cmux.run("rpc", "surface.close", ...)`
+uses explicit workspace/surface UUIDs and its normal 15-second I/O bound.
+Stock CMUX's socket path bypasses confirmation and may refuse the last terminal.
+An exact successful reply maps to `closeAccepted: true`, `removal: "unconfirmed"`;
+the host's result naming is not a removal proof. Errors, timeout, cancellation
+and lost replies are surfaced without retries or post-send observations.
+No process exit, completion acknowledgement, new lifecycle state, capacity
+release, archive or descendant cleanup follows.
+
+The lock serializes controller changes only. PID/start precision and source
+marker freshness remain limited by their existing sources; markers are not an
+OS lock Maestro acquires or an authoritative host current-session assertion.
+The same-user boundary still applies. Host close takes no expected session or
+provider generation, so preflight cannot promise atomic fencing against
+replacement/movement after inspection. Ordinary independent observation and
+resource reconciliation remain separate.
+
 ## Evidence, corrected assumptions, and remaining gap
 
 Initial SDK inspection used npm Copilot **1.0.83**; live sessions reported

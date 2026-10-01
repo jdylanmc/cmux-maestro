@@ -521,7 +521,8 @@ test("installed mode discovers arbitrary same-workspace participants and peer re
   assert.equal((await f.tools[0].maestro_send({
     destination: managedAddress(f.bindings[3]), body: "different workspace",
   })).resultType, "failure");
-  assert.deepEqual(Object.keys(f.tools[0]), ["maestro_peers", "maestro_send", "maestro_identity", "maestro_spawn"]);
+  assert.deepEqual(Object.keys(f.tools[0]),
+    ["maestro_peers", "maestro_send", "maestro_identity", "maestro_close", "maestro_spawn"]);
 });
 
 test("installed loader is inert outside managed sessions and refuses mismatched bindings before join", async (t) => {
@@ -556,7 +557,7 @@ test("direct loader uses precreated bindings and observes only its joined CLI se
     joinSession: async options => {
       order.push("join");
       assert.deepEqual(options.tools.map(tool => tool.name),
-        ["maestro_peers", "maestro_send", "maestro_identity", "maestro_spawn"]);
+        ["maestro_peers", "maestro_send", "maestro_identity", "maestro_close", "maestro_spawn"]);
       return { sessionId: own.sessionId };
     },
     observe: async (request, controller) => {
@@ -686,4 +687,166 @@ test("installed routes refuse stale generations, lost participation and wrong in
     destination: managedAddress(f.bindings[1]), body: "removed",
   })).resultType, "failure");
   assert.equal(f.sends.length, 0);
+});
+
+test("native close supplies private invoking identity and one explicit target without account or observation calls", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  const target = { workerId: f.bindings[1].nodeId, ...managedAddress(f.bindings[1]), surfaceId: randomUUID() };
+  const result = { ok: true, ...target, closeAccepted: true, removal: "unconfirmed" };
+  const requests = [];
+  let close;
+  const controller = new AbortController();
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: { ...own, controller: "/synthetic/controller" },
+    signal: controller.signal,
+    joinSession: async ({ tools }) => {
+      close = tools.find(tool => tool.name === "maestro_close");
+      return { sessionId: own.sessionId };
+    },
+    closeChild: async (...args) => { requests.push(args); return result; },
+  });
+  t.after(() => adapter.close());
+  assert.deepEqual(close.parameters.required, ["target"]);
+  assert.equal(close.parameters.additionalProperties, false);
+  const output = await close.handler({ target }, { sessionId: own.sessionId });
+  assert.deepEqual(JSON.parse(output), result);
+  assert.equal(output.includes(own.capability), false);
+  assert.deepEqual(requests, [[{
+    identity: { nodeId: own.nodeId, ...managedAddress(own), capability: own.capability }, target,
+  }, "/synthetic/controller", controller.signal]]);
+  assert.deepEqual(f.sends, []);
+});
+
+test("native close rejects public peer addresses, forged authority, broad targets and wrong invocations before ingress", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  const target = { workerId: f.bindings[1].nodeId, ...managedAddress(f.bindings[1]), surfaceId: randomUUID() };
+  let close, attempts = 0;
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async ({ tools }) => {
+      close = tools.find(tool => tool.name === "maestro_close").handler;
+      return { sessionId: own.sessionId };
+    },
+    closeChild: async () => { attempts++; throw new Error("must not reach ingress"); },
+  });
+  t.after(() => adapter.close());
+  for (const args of [
+    {}, { target: managedAddress(f.bindings[1]) }, { target: [target] },
+    { target, identity: own }, { target, subtree: true },
+    { target: { ...target, capability: own.capability } },
+    { target: { ...target, generation: 0 } }, { target: { ...target, generation: 1.5 } },
+    { target: { ...target, surfaceId: "../other" } },
+    { target: { ...target, workspaceId: randomUUID() } },
+    { target: { ...target, workerId: own.nodeId } },
+    { target: { ...target, sessionId: own.sessionId } },
+  ]) {
+    assert.equal((await close(args, { sessionId: own.sessionId })).resultType, "failure");
+  }
+  assert.equal((await close({ target }, { sessionId: f.bindings[1].sessionId })).resultType, "failure");
+  const route = path.join(f.root, `${own.peer}.json`);
+  await fs.writeFile(route, JSON.stringify({ ...own, generation: 2 }));
+  assert.equal((await close({ target }, { sessionId: own.sessionId })).resultType, "failure");
+  await fs.writeFile(route, `{"capability":"${own.capability}", broken}`);
+  const corrupt = await close({ target }, { sessionId: own.sessionId });
+  assert.equal(corrupt.resultType, "failure");
+  assert.equal(corrupt.textResultForLlm.includes(own.capability), false);
+  await fs.unlink(route);
+  assert.equal((await close({ target }, { sessionId: own.sessionId })).resultType, "failure");
+  assert.equal(attempts, 0);
+});
+
+test("native close surfaces one refusal or lost reply without retry or resource-completion claims", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  let close, attempts = 0;
+  let failure = new Error("stock last-surface refusal");
+  const controller = new AbortController();
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own, signal: controller.signal,
+    joinSession: async ({ tools }) => {
+      close = tools.find(tool => tool.name === "maestro_close").handler;
+      return { sessionId: own.sessionId };
+    },
+    closeChild: async () => { attempts++; throw failure; },
+  });
+  t.after(() => adapter.close());
+  const args = { target: {
+    workerId: f.bindings[1].nodeId, ...managedAddress(f.bindings[1]), surfaceId: randomUUID(),
+  } };
+  for (const message of ["stock last-surface refusal", "lost reply", "timeout", "cancelled"]) {
+    failure = new Error(message);
+    const before = attempts;
+    const result = await close(args, { sessionId: own.sessionId });
+    assert.equal(result.resultType, "failure");
+    assert.ok(result.textResultForLlm.includes(message));
+    assert.match(result.textResultForLlm, /No fallback or retry.*removal is unconfirmed/);
+    assert.equal(attempts, before + 1);
+  }
+  controller.abort();
+  assert.equal((await close(args, { sessionId: own.sessionId })).resultType, "failure");
+  assert.equal(attempts, 4, "already cancelled invocation never reaches the controller");
+});
+
+test("native close controller transport passes stdin once and reports refusal, lost reply and in-flight cancellation", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  const executable = path.join(f.root, "controller.mjs");
+  const modeFile = path.join(f.root, "mode");
+  const callsFile = path.join(f.root, "calls");
+  await fs.writeFile(executable, `#!${process.execPath}
+import { readFileSync, appendFileSync } from "node:fs";
+if (process.argv.slice(2).join() !== "native-close") process.exit(3);
+const request = JSON.parse(readFileSync(0, "utf8"));
+if (Object.keys(request).sort().join() !== "identity,target") process.exit(4);
+const mode = readFileSync(${JSON.stringify(modeFile)}, "utf8");
+appendFileSync(${JSON.stringify(callsFile)}, mode + "\\n");
+if (mode === "accepted") console.log(JSON.stringify({
+  ok: true, ...request.target, closeAccepted: true, removal: "unconfirmed",
+}));
+if (mode === "refused") {
+  console.error(JSON.stringify({ ok: false, error: "stock lastSurface refusal" }));
+  process.exitCode = 2;
+}
+if (mode === "lost") { console.error("unstructured local failure"); process.exitCode = 2; }
+if (mode === "invalid") console.log('{"private":"must-not-escape", broken}');
+if (mode === "cancel") setTimeout(() => process.exit(5), 4000);
+`, { mode: 0o700 });
+  const abort = new AbortController();
+  let close;
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true,
+    expected: { ...own, controller: executable }, signal: abort.signal,
+    joinSession: async ({ tools }) => {
+      close = tools.find(tool => tool.name === "maestro_close").handler;
+      return { sessionId: own.sessionId };
+    },
+  });
+  t.after(() => adapter.close());
+  const target = { workerId: f.bindings[1].nodeId, ...managedAddress(f.bindings[1]), surfaceId: randomUUID() };
+  for (const mode of ["accepted", "refused", "lost", "invalid", "cancel"]) {
+    await fs.writeFile(modeFile, mode);
+    const pending = close({ target }, { sessionId: own.sessionId });
+    if (mode === "cancel") {
+      const deadline = Date.now() + 2000;
+      while (!(await fs.readFile(callsFile, "utf8")).endsWith("cancel\n")) {
+        assert.ok(Date.now() < deadline, "synthetic controller did not receive request");
+        await delay(10);
+      }
+      abort.abort();
+    }
+    const result = await pending;
+    if (mode === "accepted") assert.deepEqual(JSON.parse(result), {
+      ok: true, ...target, closeAccepted: true, removal: "unconfirmed",
+    });
+    else {
+      assert.equal(result.resultType, "failure");
+      assert.match(result.textResultForLlm, mode === "refused" ? /lastSurface/ : /uncertain/);
+      assert.match(result.textResultForLlm, /No fallback or retry/);
+      assert.equal(result.textResultForLlm.includes("unstructured local failure"), false);
+      assert.equal(result.textResultForLlm.includes("must-not-escape"), false);
+    }
+  }
+  assert.equal(await fs.readFile(callsFile, "utf8"), "accepted\nrefused\nlost\ninvalid\ncancel\n");
 });

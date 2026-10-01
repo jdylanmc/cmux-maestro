@@ -8,8 +8,9 @@ description: Launch chat-ready interactive Copilot workers in CMUX terminal tabs
 Installed invocation: `/cmux-maestro-native:cmux-maestro-orchestrate`.
 
 Use this skill only when the user explicitly delegates work to another Copilot
-session. Each worker receives a real terminal tab in the coordinator's current
-CMUX pane and workspace. Never create a window or split.
+session or requests closure of an owned child terminal. Each worker receives a
+real terminal tab in the coordinator's current CMUX pane and workspace. Never
+create a window or split.
 
 Set the command path once:
 
@@ -292,6 +293,55 @@ noninteractive Copilot may deny a tool without offering the human a prompt.
 Dual final-message and helper reports are refused rather than reconciled.
 Reports are self-reported operational evidence, not independent review or
 artifact acceptance. Keep secrets, raw output and full prompts out of summaries.
+
+## Request one owned child close
+
+Only for an explicitly authorized close, call native `maestro_close` with the
+exact identity from that child's launch result:
+
+```json
+{
+  "target": {
+    "workerId": "<exact owned child UUID>",
+    "workspaceId": "<exact bound workspace UUID>",
+    "surfaceId": "<exact created surface UUID>",
+    "sessionId": "<exact Copilot session UUID>",
+    "generation": 1
+  }
+}
+```
+
+Use the actual generation, not the illustrative `1`. The adapter supplies the
+invoking native identity privately. Do not inspect tokens, construct a private
+`native-close` request, or substitute a peer address, name, current focus or
+worktree. Peer participation is not close authority. Only a direct child in the
+same run/workspace is eligible: never self, parent, sibling, unrelated peer or
+subtree. Unselected descendants remain owned and untouched.
+
+The controller checks its private actor capability/control identity, invoking
+provider ancestry, exact child session/generation/surface, current workspace
+membership and live provider anchors. Both exact sessions must have one matching,
+safe `inuse.PID.lock` in the standard `~/.copilot/session-state/<sessionId>`
+source directory. Missing, stale, ambiguous or repurposed evidence refuses; an
+ended provider is not treated as a safely closable shell. Active run launch
+leases and unresolved ownership refuse. No provider shutdown is required or
+attempted before closing an eligible live child.
+
+Admission issues **one stock CMUX `surface.close`** request. It bypasses UI close
+confirmation and inherits stock last-terminal refusal. A successful tool result
+contains the exact target plus `ok: true`, `closeAccepted: true`,
+`removal: "unconfirmed"`. This is request acceptance, not terminal disappearance,
+provider exit, task completion or permission to release capacity. Refusal,
+timeout, cancellation and lost/invalid replies may leave an uncertain outcome.
+Do not automatically retry, wait for disappearance, send `/exit`, abort a provider,
+type into a terminal, or force-kill as a fallback.
+
+The existing controller lock excludes competing state changes during admission
+and the bounded host call; no close lifecycle state is added or bookkeeping
+removed. Source markers and recorded PID/start values are pre-request evidence,
+not host-side atomic session/generation fencing. The host accepts surface UUIDs,
+not expected provider identities; changes after preflight cannot be ruled out.
+Ordinary independent status/resource accounting stays separate from this call.
 
 ## End or recover a run
 

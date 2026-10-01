@@ -376,6 +376,24 @@ success. New workers cannot be
 launched in headless mode. Invisible SDK tasks must not be substituted for
 visible Maestro roles when startup fails.
 
+Native `maestro_close` requests closure of one explicitly authorized, currently
+owned direct child using its exact `workerId`, `workspaceId`, `surfaceId`,
+`sessionId` and `generation`. It validates private native authority, process and
+session-source anchors, current workspace membership and launch fences, then
+sends one stock CMUX `surface.close`. No sidebar control or host change is
+involved. Stock socket close bypasses confirmation and can refuse the last
+terminal; this is not UI-close parity.
+
+`closeAccepted: true` with `removal: "unconfirmed"` means only local request
+acceptance. There is no disappearance wait, retry, provider shutdown, typing or
+force-kill fallback; timeout/cancellation/lost replies remain uncertain. Records,
+unselected descendants and resource accounting stay intact. Missing or changed
+provider/source evidence refuses rather than closing a possibly repurposed
+shell. Separate preflight and UUID-based host close are **not atomic
+session/generation fencing**. See the
+[installed lifecycle guide](.agents/skills/cmux-maestro-orchestrate/SKILL.md#request-one-owned-child-close)
+for the exact tool shape and source limits.
+
 Interactive startup uses `surface.create` with `initial_command`, rather than
 CLI `new-surface --command`, which queues input behind interactive shell
 initialization. Only the caller's executable search path is added to the startup

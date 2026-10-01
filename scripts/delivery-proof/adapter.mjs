@@ -140,9 +140,12 @@ async function invokeController(command, request, controller, signal) {
       if (error) {
         try {
           const failure = JSON.parse(stderr);
-          reject(new Error(typeof failure.error === "string" ? failure.error : "Native launch failed."));
+          reject(new Error(typeof failure.error === "string" ? failure.error :
+            command === "native-close" ? "Native close failed; request outcome is uncertain." : "Native launch failed."));
         } catch {
-          reject(new Error("Native launch failed or timed out; reconcile owned resources before retrying."));
+          reject(new Error(command === "native-close"
+            ? "Native close failed, timed out, or was cancelled; request outcome is uncertain. Do not automatically retry."
+            : "Native launch failed or timed out; reconcile owned resources before retrying."));
         }
         return;
       }
@@ -151,7 +154,9 @@ async function invokeController(command, request, controller, signal) {
         requireCondition(result.ok === true);
         resolve(result);
       } catch (parseError) {
-        reject(parseError);
+        reject(command === "native-close"
+          ? new Error("Native close reply is invalid; request outcome is uncertain. Do not automatically retry.")
+          : parseError);
       }
     });
     child.stdin.on("error", reject);
@@ -162,6 +167,7 @@ async function invokeController(command, request, controller, signal) {
 const launchNative = (request, controller) => invokeController("native-spawn", request, controller);
 
 export async function start({ root, peer, joinSession, managed = false, expected, launch = launchNative,
+  closeChild = (request, controller, signal) => invokeController("native-close", request, controller, signal),
   observe, signal, onListener, diagnostic = () => {
   console.error("Maestro message dropped; no retry.");
 } }) {
@@ -270,6 +276,57 @@ export async function start({ root, peer, joinSession, managed = false, expected
         return JSON.stringify({ nodeId: own.nodeId, ...ownAddress, account });
       } catch {
         return { resultType: "failure", textResultForLlm: "Maestro session identity or account is unavailable; no fallback was used." };
+      }
+    },
+  });
+  if (managed) tools.push({
+    name: "maestro_close",
+    description: "Request closure of one explicitly authorized, currently owned direct child's terminal. Uses stock CMUX close (no confirmation; last-terminal refusal applies). Acceptance is not removal or task completion. No wait, retry, provider shutdown, or subtree cleanup.",
+    parameters: {
+      type: "object",
+      properties: {
+        target: {
+          type: "object",
+          properties: {
+            workerId: { type: "string" }, workspaceId: { type: "string" },
+            surfaceId: { type: "string" }, sessionId: { type: "string" },
+            generation: { type: "integer", minimum: 1 },
+          },
+          required: ["workerId", "workspaceId", "surfaceId", "sessionId", "generation"],
+          additionalProperties: false,
+        },
+      },
+      required: ["target"],
+      additionalProperties: false,
+    },
+    handler: async (args, invocation) => {
+      try {
+        signal?.throwIfAborted();
+        requireCondition(session?.sessionId === own.sessionId && invocation?.sessionId === own.sessionId);
+        exactKeys(args, ["target"]);
+        exactKeys(args.target, ["workerId", "workspaceId", "surfaceId", "sessionId", "generation"]);
+        for (const key of ["workerId", "workspaceId", "surfaceId", "sessionId"]) {
+          requireCondition(typeof args.target[key] === "string" && UUID.test(args.target[key]));
+        }
+        requireCondition(Number.isSafeInteger(args.target.generation) && args.target.generation > 0 &&
+          args.target.workspaceId === own.workspaceId && args.target.workerId !== own.nodeId &&
+          args.target.sessionId !== own.sessionId);
+        try {
+          await currentBinding();
+        } catch {
+          throw new Error("Native close binding is unavailable; no request was made");
+        }
+        signal?.throwIfAborted();
+        const result = await closeChild({
+          identity: { nodeId: own.nodeId, ...ownAddress, capability: own.capability },
+          target: args.target,
+        }, expected.controller, signal);
+        return JSON.stringify(result);
+      } catch (error) {
+        return {
+          resultType: "failure",
+          textResultForLlm: `Maestro close refused or uncertain: ${error.message}. No fallback or retry was made; removal is unconfirmed.`,
+        };
       }
     },
   });

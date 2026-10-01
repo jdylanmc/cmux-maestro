@@ -97,6 +97,29 @@ commands remain unchanged. Full xcresult bundles are not included in this
 diagnostic artifact.
 All eleven workflow commands remain required.
 
+### Explicit owned-child close (#90)
+
+The native adapter's `maestro_close` and controller's private `native-close`
+ingress admit one exact, currently owned direct interactive child, then request
+stock `surface.close` once. This intentionally inherits socket confirmation
+bypass and last-terminal refusal, not UI confirmation/pinning parity. It never
+waits for disappearance or starts a provider-exit/retry protocol.
+
+`NativeCloseTests` in `scripts/test-delivery-proof.py` exercise private
+actor/invoker authority, direct-child scope, stale target fields, process/source
+anchors, workspace movement, launch leases, preflight changes, real store-lock
+exclusion, existing RPC error/timeout behavior and byte-preserved records/routes.
+Native adapter tests cover strict public input, bound private identity, one
+controller invocation, transport refusal/lost reply/cancellation and no fallback.
+They use synthetic host/process collaborators and disposable local sources,
+not live CMUX resources. The existing three runtime suites remain required.
+
+Acceptance is explicitly `closeAccepted: true`, `removal: "unconfirmed"`; it
+does not prove removal, release capacity or complete work. Source metadata is
+conservative preflight evidence, not atomic host/provider session-generation
+fencing. Real disposable native proof and hosted validation are separate
+delivery evidence, not claims made by these regression tests.
+
 ### Dedicated observer registration (#114)
 
 Explicit setup now owns a dedicated version-1 user file for exactly
