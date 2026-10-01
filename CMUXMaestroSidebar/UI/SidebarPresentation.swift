@@ -36,11 +36,24 @@ struct SidebarDetailLine: Equatable, Identifiable {
     let title: String
     let value: String
     var copyableSessionID: UUID? = nil
+    var help: String? = nil
     var id: String { title }
 
     static func sessionID(_ id: UUID, isParent: Bool = false, canCopy: Bool = true) -> Self {
         .init(title: isParent ? "Parent session ID" : "Session ID", value: id.uuidString,
               copyableSessionID: canCopy ? id : nil)
+    }
+}
+
+extension SidebarSurfaceDirectory {
+    static func line(
+        _ directory: HierarchyAvailability<String?>, isParent: Bool = false, retained: Bool = false
+    ) -> SidebarDetailLine {
+        .init(
+            title: isParent ? parentTitle : title,
+            value: retained ? "Not current for this original session" : directory.pathDisplayText,
+            help: isParent ? parentHelp : help
+        )
     }
 }
 
@@ -169,8 +182,11 @@ struct SidebarSeenWork {
 
 struct SidebarSessionPlacement {
     let session: SidebarCopilotSession
+    // Surface suppression is not evidence that a session's contents belong to that row.
     let managedNodeID: UUID?
     let retainsContents: Bool
+    var contentOwnerID: UUID? = nil
+    var requiresSeparateContext: Bool { managedNodeID != nil && contentOwnerID == nil }
 }
 
 struct SidebarVisibleWork {
@@ -226,6 +242,7 @@ struct SidebarVisibleWork {
             var result = session
             let byID = Dictionary(uniqueKeysWithValues: session.nodes.map { ($0.id, $0) })
             var retained = Set(session.nodes.filter { node in
+                if node.isInternalTask { return !node.historyAncestor }
                 if node.attentionDegraded || node.attention.contains(where: { $0.kind.isBlocking || $0.kind == .error }) { return true }
                 if [.completed, .cancelled].contains(node.state) { return false }
                 return true
@@ -243,7 +260,7 @@ struct SidebarVisibleWork {
             }
             let protected = session.attentionDegraded || session.attention.contains(where: { $0.kind.isBlocking || $0.kind == .error })
                 || result.nodes.contains {
-                    $0.state == .failed || $0.state == .blocked || $0.attentionDegraded
+                    $0.isInternalTask || $0.state == .failed || $0.state == .blocked || $0.attentionDegraded
                         || $0.attention.contains(where: { $0.kind.isBlocking })
                 }
             if session.liveness == .dead && !protected && !contextSessions.contains(session.id) { return nil }
@@ -257,7 +274,7 @@ struct SidebarVisibleWork {
                     && ($0.hasBlockingEvidence || $0.attention.contains(where: { $0.kind == .error })
                         || ($0.liveness == .alive && ($0.state == .working
                             || (node.copilotSessionId != nil && node.copilotSessionId != $0.id)))
-                        || $0.nodes.contains(where: { $0.kind == .subagent && !$0.state.isTerminal }))
+                        || $0.nodes.contains(where: { $0.isInternalTask || ($0.kind == .subagent && !$0.state.isTerminal) }))
             }) { return true }
             if ["reported-completed", "process-disappeared", "terminal-disappeared", "resource-retired"].contains(node.phase) {
                 return false
@@ -288,7 +305,7 @@ private extension SidebarCopilotSession {
         treeDegraded || attentionDegraded || omittedChildrenCount > 0 || omittedActiveChildrenCount > 0
             || [.blocked, .failed].contains(state) || attention.contains { $0.kind.isBlocking || $0.kind == .error }
             || nodes.contains {
-                !$0.state.isTerminal || $0.state == .failed || $0.attentionDegraded
+                $0.isInternalTask || !$0.state.isTerminal || $0.state == .failed || $0.attentionDegraded
                     || $0.attention.contains { $0.kind.isBlocking || $0.kind == .error }
             }
     }
@@ -343,7 +360,7 @@ enum SidebarPresentation {
         }
         for placement in sessionPlacements(sessions, managed: managed, observations: observations, now: now) {
             let session = placement.session
-            let owner = placement.managedNodeID.map { Owner.managed($0) } ?? .session(session.id)
+            let owner = placement.contentOwnerID.map { Owner.managed($0) } ?? .session(session.id)
             include(owner, state: session.state, signals: session.attention, live: session.liveness == .alive)
             for child in session.nodes {
                 include(.child(session.id, child.id), state: child.state, signals: child.attention,
@@ -392,7 +409,7 @@ enum SidebarPresentation {
 
     static func sessionStatus(_ session: SidebarCopilotSession) -> String {
         let state = statusDescription(sessionState(session), needsInput: needsInput(session.attention))
-        return session.childrenComplete && !session.treeDegraded ? state
+        return session.childrenComplete && !session.treeDegraded && !session.internalTaskCountsIncomplete ? state
             : "\(state). Child history incomplete; missing work is not assumed finished"
     }
 
@@ -412,7 +429,21 @@ enum SidebarPresentation {
         guard session.liveness == .alive else {
             return process(session.liveness).titled("Last reported: \(state(node.state).title). \(process(session.liveness).title)")
         }
+
         return state(node.state)
+    }
+
+    static func internalTaskState(_ node: SidebarCopilotNode) -> SidebarVisual {
+        switch node.state {
+        case .working: .init(title: "Working", symbol: "circle.dotted", tone: .green)
+        case .completed: .init(title: "Finished", symbol: "checkmark", tone: .neutral)
+        case .failed: .init(title: "Failed", symbol: "xmark.circle", tone: .red)
+        case .blocked: .init(title: "Blocked", symbol: "pause", tone: .red)
+        case .queued: .init(title: "Queued", symbol: "clock", tone: .neutral)
+        case .idle: .init(title: "Idle", symbol: "circle", tone: .neutral)
+        case .unknown: .init(title: "Unknown", symbol: "questionmark.circle", tone: .neutral)
+        case .cancelled: .init(title: "Cancelled", symbol: "slash.circle", tone: .neutral)
+        }
     }
 
     static func focusInteraction(from old: HierarchySnapshot, to new: HierarchySnapshot) -> SidebarSeenTarget? {
@@ -485,7 +516,7 @@ enum SidebarPresentation {
            managedSession(for: node, in: tree, now: now)?.id == session.id {
             result.title = node.label
             result.visual = managedState(node, availability: availability, now: now, tree: tree)
-            let fields = Set(["Model", "Branch", "Worktree", "Git evidence", "Git changes", "Working directory", "Session ID"])
+            let fields = Set(["Model", "Branch", "Worktree", "Git evidence", "Git changes", SidebarSurfaceDirectory.title, "Session ID"])
             result.lines = managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { fields.contains($0.title) }
             result.gitChanges = node.currentGitChanges(at: now)
@@ -619,7 +650,7 @@ enum SidebarPresentation {
                 return .init(title: surface.title.isEmpty ? "Surface" : surface.title, lines: [
                     .init(title: "Type", value: surface.kind.title),
                     .init(title: "Surface ID", value: surface.id.uuidString),
-                    .init(title: "Working directory", value: surface.workingDirectory.pathDisplayText)
+                    SidebarSurfaceDirectory.line(surface.workingDirectory)
                 ])
             case .session(let id), .child(let id, _):
                 guard let session = tree.sessions.first(where: { $0.id == id }) else { return nil }
@@ -628,13 +659,16 @@ enum SidebarPresentation {
                 let retained = retainedSessionIDs(tree, managed: managed.nodes, now: now).contains(session.id)
                 let notice = retained ? "Work context. \(retainedFocusUnavailable)"
                     : current ? nil : "Session observation is stale. Last-known metadata is not live state."
-                let context = retained ? [] : paths(hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID))
                 if case .child(_, let childID) = selection {
                     guard let child = session.nodes.first(where: { $0.id == childID }) else { return nil }
+                    let context = retained ? [] : paths(
+                        hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID), isParent: true
+                    )
                     return .init(title: child.name, lines: nodeDetails(child, session: session) + [
                         .init(title: "Placement", value: "Observed child; native placement belongs to its parent session")
                     ] + context, notice: notice, isAgent: child.kind == .subagent)
                 }
+                let context = retained ? [] : paths(hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID))
                 return .init(title: "Copilot · \(session.shortID)", lines: sessionDetails(session) + context,
                              notice: notice, isAgent: true, otherActivity: session.secondaryActivity)
             }
@@ -830,16 +864,18 @@ enum SidebarPresentation {
                 $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
                     && $0.copilotSessionId == session.id
             }
+            let identityCount = (observations?.sessions ?? sessions).filter { $0.id == session.id }.count
+            let contentOwnerID = exact.count == 1 && identityCount == 1 ? exact.first?.id : nil
             // Releasing a surface for a replacement does not release the old identity.
             // Its observed contents still need a home; the managed row cannot replace them.
             if exact.count == 1, let owner = exact.first, !surfaceOwnerIDs.contains(owner.id),
                observations?.sessions.filter({ $0.id == session.id }).count == 1 {
-                return .init(session: session, managedNodeID: owner.id, retainsContents: true)
+                return .init(session: session, managedNodeID: owner.id, retainsContents: true, contentOwnerID: contentOwnerID)
             }
             let owner = surfaceOwners.first {
                 $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
             }
-            return .init(session: session, managedNodeID: owner?.id, retainsContents: false)
+            return .init(session: session, managedNodeID: owner?.id, retainsContents: false, contentOwnerID: contentOwnerID)
         }
     }
 
@@ -847,7 +883,7 @@ enum SidebarPresentation {
         _ tree: SidebarCopilotTree, managed: [SidebarOrchestrationNode], now: Date
     ) -> Set<UUID> {
         Set(sessionPlacements(tree.sessions, managed: managed, observations: tree, now: now)
-            .filter(\.retainsContents).map { $0.session.id })
+            .filter { $0.retainsContents || $0.requiresSeparateContext }.map { $0.session.id })
     }
 
     static func workspaceSummary(
@@ -861,29 +897,43 @@ enum SidebarPresentation {
     ) -> SidebarWorkspaceSummary {
         let managedSurfaces = Set(managed.map(\.surfaceId))
         let placements = sessionPlacements(sessions, managed: managed, observations: observations, now: now)
+        // Counting a destination is independent of attesting its session contents.
         let unmanagedSessions = placements.filter { $0.managedNodeID == nil }.map(\.session)
+        let bySurface = Dictionary(grouping: sessions, by: \.surfaceID)
+        let identityCounts = Dictionary(grouping: observations?.sessions ?? sessions, by: \.id).mapValues(\.count)
+        let currentSnapshot = observations.map {
+            [.ready, .partial].contains($0.availability) && !$0.issues.contains(.permissionDenied)
+                && $0.generatedAt.map { SidebarCopilotTree.isFresh($0, now: now) } == true
+        } ?? true
         var counts: [AgentSummaryState: Int] = [:]
-        var incomplete = !countsComplete || orchestrationAvailability != .ready
+        var incomplete = !countsComplete || orchestrationAvailability != .ready || !currentSnapshot
+            || sessions.contains {
+                !SidebarCopilotTree.isFresh($0.observedAt, now: now) || identityCounts[$0.id] != 1
+                    || !$0.childrenComplete || $0.treeDegraded || $0.internalTaskCountsIncomplete
+            }
+            || bySurface.values.contains { $0.filter { $0.liveness != .dead }.count > 1 }
 
         for node in managed {
             let state = coordinatorSession(node, availability: orchestrationAvailability, tree: observations, now: now)
-                .map(sessionSummaryState) ?? managedSummaryState(node, availability: orchestrationAvailability, now: now)
+                .flatMap { session in
+                    currentSnapshot && identityCounts[session.id] == 1 ? sessionSummaryState(session) : nil
+                } ?? managedSummaryState(node, availability: orchestrationAvailability, now: now)
+            counts[state, default: 0] += 1
+            if state == .unknown { incomplete = true }
+        }
+        for group in Dictionary(grouping: unmanagedSessions, by: \.surfaceID).values {
+            let state = currentSnapshot ? unmanagedSummaryState(group, identityCounts: identityCounts, now: now) : .unknown
             counts[state, default: 0] += 1
             if state == .unknown { incomplete = true }
         }
         for placement in placements where placement.managedNodeID == nil || placement.retainsContents {
             let session = placement.session
-            if placement.managedNodeID == nil {
-                let state = sessionSummaryState(session)
-                counts[state, default: 0] += 1
-                if state == .unknown { incomplete = true }
-            }
-            for node in session.nodes where node.kind == .subagent {
+            guard identityCounts[session.id] == 1 else { continue }
+            for node in session.nodes where node.kind == .subagent && !node.isInternalTask {
                 let state = observedSummaryState(node.state)
                 counts[state, default: 0] += 1
                 if state == .unknown { incomplete = true }
             }
-            incomplete = incomplete || !session.childrenComplete || session.treeDegraded
         }
 
         let agentSurfaceIDs = managedSurfaces.union(unmanagedSessions.map(\.surfaceID))
@@ -905,6 +955,16 @@ enum SidebarPresentation {
             incomplete: incomplete,
             retainedRecordCount: displacedManagedNodeIDs(managed, observations: observations, now: now).count
         )
+    }
+
+    private static func unmanagedSummaryState(
+        _ sessions: [SidebarCopilotSession], identityCounts: [UUID: Int], now: Date
+    ) -> AgentSummaryState {
+        let current = sessions.filter { $0.liveness != .dead }
+        let candidate = current.count == 1 ? current.first : sessions.count == 1 ? sessions.first : nil
+        guard let candidate, identityCounts[candidate.id] == 1,
+              SidebarCopilotTree.isFresh(candidate.observedAt, now: now) else { return .unknown }
+        return sessionSummaryState(candidate)
     }
 
     static func sessionState(_ session: SidebarCopilotSession) -> SidebarVisual {
@@ -963,11 +1023,11 @@ enum SidebarPresentation {
         return nil
     }
 
-    static func paths(_ paths: HierarchyPathContext) -> [SidebarDetailLine] {
+    static func paths(_ paths: HierarchyPathContext, isParent: Bool = false) -> [SidebarDetailLine] {
         [
             .init(title: "Workspace path", value: paths.rootPath.pathDisplayText),
             .init(title: "Project path", value: paths.projectRootPath.pathDisplayText),
-            .init(title: "Working directory", value: paths.workingDirectory.pathDisplayText)
+            SidebarSurfaceDirectory.line(paths.workingDirectory, isParent: isParent)
         ]
     }
 
@@ -1019,7 +1079,7 @@ enum SidebarPresentation {
             .init(title: "Copilot observation", value: tree.summary),
             .init(title: "Session glyph", value: node.iconId ?? "Sidebar default"),
             .init(title: "Icon color", value: node.iconColor?.title ?? "Theme default"),
-            .init(title: "Working directory", value: retained ? "Not current for this original session" : paths.workingDirectory.pathDisplayText),
+            SidebarSurfaceDirectory.line(paths.workingDirectory, retained: retained),
             .init(title: "Role", value: node.role.capitalized)
         ]
         if node.role == "worker" {

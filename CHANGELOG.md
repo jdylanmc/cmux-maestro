@@ -12,6 +12,18 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Show internal Copilot tasks as compact, non-interactive lines with
+  workspace-local visibility, persistent disclosure, and exact-outcome
+  dismissal that preserves local keyboard focus (#131).
+- Coordinate updates to the recognized Maestro app and its Copilot CLI
+  1.0.88/1.0.89 integration, verify identical reinstalls, and recover prior owned
+  state after failed or interrupted publication. Bind ownership through public
+  provider results, restore supported disable choices before publication, and
+  preserve unrelated plugins. Gracefully restore the exact containing app
+  without activation; do not restart existing Copilot sessions. Retain one
+  inactive app for recovery, and report conflicting native registrations before
+  changing the installed app. Registration status describes owned state, not
+  provider-wide uniqueness or loaded-session behavior (#114).
 - Route live Copilot observations through the existing provider-neutral session
   snapshot, preserving lifecycle/liveness distinctions, partial ancestry,
   history and attention behavior. Retain v1 decoding and nested validation,
@@ -29,6 +41,9 @@ Notable changes are recorded using Keep a Changelog categories.
 - Preserve owned managed launches when bounded startup observation ends, report
   acceptance separately from provider/work evidence, and retain uncertain
   terminal resources without retries or guessed cleanup (#61).
+- Qualify agent and child directories as CMUX surface or parent-surface reports,
+  with explicit source and report-age limits, preserving exact placement, path
+  permissions and home-relative display (#77).
 - Start setup-test fixture readiness after installer spawn rather than task
   enqueue, preserving timeout, cancellation and process-cleanup checks.
 - Stabilize offscreen focus-layout fixtures with owned overlay/legacy-equivalent

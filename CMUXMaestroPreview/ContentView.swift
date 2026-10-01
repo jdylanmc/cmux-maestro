@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var result: CopilotSetupResult?
     @State private var pendingAction: CopilotSetupAction?
     @State private var setupTask: Task<Void, Never>?
+    @State private var registrationHealth: IntegrationRegistrationHealth?
+    @State private var checkingRegistration = false
 
     var body: some View {
         if CopilotSetupAccess.currentAppAllowsChanges {
@@ -28,9 +30,9 @@ struct ContentView: View {
             Label("CMUX Maestro Preview", systemImage: "sidebar.left")
                 .font(.title2.weight(.semibold))
 
-            Text("One-time Copilot integration")
+            Text("Copilot integration maintenance")
                 .font(.headline)
-            Text("The native sidebar reads validated session and orchestration metadata locally. Terminal-backed control stays outside the sandboxed extension; the sidebar can only observe and use CMUX's typed Focus action.")
+            Text("The alpha installer configures Copilot automatically. These explicit controls repair or remove integration. The native sidebar reads validated metadata locally; terminal-backed control stays outside the sandboxed extension.")
                 .foregroundStyle(.secondary)
 
             HStack {
@@ -41,14 +43,23 @@ struct ContentView: View {
                     .disabled(busy)
             }
 
-            Text("Enable installs the cmux-maestro-native lifecycle and icon plugin, the local controller, and a native messaging loader under ~/.copilot/extensions/maestro. The loader is inert outside newly Maestro-launched participating sessions. Install the optional global /maestro guide separately from Settings > CLI Integration. Existing unrelated plugins and settings are preserved. Choose only a Copilot executable you trust.")
+            Text("Enable installs the hookless cmux-maestro-native lifecycle and icon plugin, ~/.copilot/hooks/cmux-maestro-observer.json, the local controller and the loader under ~/.copilot/extensions/maestro. Private observer-registration.json provenance and .observer-setup.lock live in the app's Copilot support directory. The loader is inert outside newly Maestro-launched participating sessions. Settings values and disable choices are preserved; coordinated rollback can restore verified prior settings bytes after CLI normalization. Choose only a Copilot executable you trust.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+
+            HStack(alignment: .top) {
+                Text(registrationHealth?.message ?? "Observer registration has not been checked.")
+                    .font(.callout)
+                    .accessibilityIdentifier("copilot-registration-status")
+                Spacer()
+                Button("Check Registration", action: checkRegistration)
+                    .disabled(busy || checkingRegistration)
+            }
 
             HStack {
                 Button("Enable Copilot Integration") { pendingAction = .install }
                     .buttonStyle(.borderedProminent)
-                Button("Uninstall Native Plugin…") { pendingAction = .uninstall }
+                Button("Remove Copilot Integration…") { pendingAction = .uninstall }
                 if busy { ProgressView().controlSize(.small) }
             }
             .disabled(busy)
@@ -69,18 +80,18 @@ struct ContentView: View {
             }
             Text("Next: choose an initial coordinator account and explicit model in Agent launch settings, then use Maestro’s launch-coordinator entry. Managed children inherit their invoking session’s account. Existing conversations are not adopted. Messaging preserves focus and human input and does not guarantee delivery; the sidebar is optional.")
                 .font(.callout)
-            Text("Keep this app at its installed location. If you move or replace it, enable the integration again to refresh the bundled helper path. Uses the standard ~/.copilot/session-state location only.")
+            Text("Keep this app at its installed location and use the alpha installer for updates. A pending coordinated installation must be recovered before separate maintenance. Uses the standard ~/.copilot/session-state location only.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(24)
         .frame(width: 580, alignment: .leading)
-        .confirmationDialog("Allow Copilot plugin changes?", isPresented: Binding(
+        .confirmationDialog("Allow Copilot integration changes?", isPresented: Binding(
             get: { pendingAction != nil },
             set: { if !$0 { pendingAction = nil } }
         ), titleVisibility: .visible) {
             if let action = pendingAction {
-                Button(action == .install ? "Install Native Plugin" : "Uninstall Native Plugin",
+                Button(action == .install ? "Enable Integration" : "Remove Integration",
                        role: action == .uninstall ? .destructive : nil) {
                     pendingAction = nil
                     perform(action)
@@ -88,7 +99,23 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) { pendingAction = nil }
         } message: {
-            Text("This explicitly runs the selected Copilot CLI for cmux-maestro-native and installs or removes its native messaging entry point. No CLI sessions will be restarted and no legacy integration will be removed.")
+            Text("This runs bounded metadata checks and plugin commands through the selected Copilot CLI. Enable stages only a disabled owned hook file, replaces recognized legacy observer declarations, then verifies before activation. Maestro never clears disable keys. The CLI may rewrite settings without value changes or add an empty plugin map; other changed values stop setup. Unresolvable disables, foreign content and unsafe paths also stop setup. Remove deletes only recognized owned observer registration and its native messaging entry point. Partial changes are reported. Existing CLI sessions and other integrations are not restarted, adopted or removed.")
+        }
+    }
+
+    private func checkRegistration() {
+        guard CopilotSetupAccess.currentAppAllowsChanges, !checkingRegistration else { return }
+        checkingRegistration = true
+        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/CMUXMaestroCopilotHook")
+        Task {
+            defer { checkingRegistration = false }
+            do {
+                registrationHealth = try await CopilotSetupFileWork.run {
+                    let home = try CopilotPaths.realUserHome()
+                    let root = try CopilotPaths.integrationRoot()
+                    return CopilotObserverRegistration(home: home, root: root, helper: helper).health()
+                }
+            } catch { registrationHealth = .unavailable }
         }
     }
 
@@ -127,6 +154,7 @@ struct ContentView: View {
             result = await CopilotSetup().perform(action, selected: executable,
                 path: ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
                 root: root, helper: helper, controller: controller, skill: skill)
+            checkRegistration()
         }
     }
 }

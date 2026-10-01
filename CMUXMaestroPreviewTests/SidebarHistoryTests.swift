@@ -220,11 +220,11 @@ struct SidebarHistoryTests {
             + "selection: unmanagedSelection, retainedSessionIDs: retainedIDs"
         #expect(normalized.components(separatedBy: taskboard).count == 3,
                 "Both Taskboard sections must consume the same captured history projection")
-        #expect(normalized.contains(taskboard + " )"))
-        #expect(normalized.contains(taskboard + ", retainedOnly: true )"))
+        #expect(normalized.contains(taskboard + ", managedSessionIDs: managedSessionIDs )"))
+        #expect(normalized.contains(taskboard + ", retainedOnly: true, managedSessionIDs: managedSessionIDs )"))
         #expect(view.contains("visibleWork: visibleWork,"))
         #expect(view.components(separatedBy: "DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)").count == 2)
-        #expect(view.components(separatedBy: "CopilotWorkRow(").count == 3)
+        #expect(view.contains("SidebarInternalTaskGroup("))
         #expect(view.contains(".popover(isPresented: Binding("))
         #expect(view.contains("get: { showingHistory || unavailableHeaderAction != nil }"))
         #expect(view.contains("if showingHistory {\n                    historySettings"))
@@ -242,7 +242,7 @@ struct SidebarHistoryTests {
         _ id: String, parent: String? = nil, state: CopilotWorkState = .completed,
         age: TimeInterval? = nil, event: UUID? = nil
     ) -> CopilotChildWork {
-        .init(id: id, parentID: parent, kind: .subagent, name: "Same label", state: state, model: nil,
+        .init(id: id, parentID: parent, kind: .skill, name: "Same label", state: state, model: nil,
               terminalEvent: .init(id: event ?? eventID, timestamp: age.map { now.addingTimeInterval(-$0) }))
     }
 

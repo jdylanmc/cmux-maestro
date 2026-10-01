@@ -26,11 +26,11 @@ struct SidebarHistoryReaderTests {
         let initialTree = try project(initial, fixture: fixture)
         #expect(initialTree.retainedHistoryCount == 1)
         let history = expired ? SidebarHistorySettings() : SidebarHistorySettings(
-            retention: .never, dismissed: initialTree.dismissibleOutcomes
+            retention: .never, dismissed: try previouslyDismissedOutcome(initial, fixture: fixture, childID: "worker")
         )
         if expired { clock.advance(15) }
         let hidden = try await reader.read(surfaceIDs: [fixture.surface])
-        #expect(try project(hidden, fixture: fixture, history: history).hiddenHistoryCount == 1)
+        #expect(try project(hidden, fixture: fixture, history: history).hiddenHistoryCount == (expired ? 0 : 1))
         let start = try attentionEvent("tool.execution_start", agent: "worker", data: [
             "toolCallId": "fresh-owner-31", "toolName": toolName, "model": "unproven-model"
         ], timestamp: clock.read().addingTimeInterval(3600).ISO8601Format())
@@ -42,7 +42,9 @@ struct SidebarHistoryReaderTests {
         #expect(child.state == .unknown && child.terminalEvent == nil)
         #expect(child.model == "known-model" && child.activity == nil)
         let exposed = try project(uncertain, fixture: fixture, history: history)
-        #expect(exposed.sessions.first?.nodes.first?.id == "worker")
+        #expect(exposed.sessions.first?.nodes.isEmpty == true)
+        #expect(exposed.sessions.first?.internalTaskCountsIncomplete == true)
+        #expect(!exposed.hasCompleteCounts)
         #expect(exposed.hiddenHistoryCount == 0 && exposed.knownRunningChildren == 0)
         #expect(exposed.nextHistoryExpiry == nil)
 
@@ -144,7 +146,10 @@ struct SidebarHistoryReaderTests {
         ])
         let outstanding = try project(ended, fixture: fixture, history: history)
         #expect(outstanding.sessions.first?.nodes.first { $0.id == "worker" }?.attention.map(\.kind) == [.aborted])
-        #expect(outstanding.hiddenHistoryCount == (ended.sessions.first?.children.count ?? 1) - 1)
+        #expect(outstanding.hiddenHistoryCount == 0, "Internal outcomes no longer expire")
+        #expect(outstanding.nextHistoryExpiry == nil)
+        #expect(outstanding.sessions.first?.nodes.filter { $0.state == .completed }.count
+                == ended.sessions.first?.children.filter { $0.state == .completed }.count)
         preferences.acknowledge(oldRootKeys, in: outstanding)
         #expect(preferences.attention.acknowledged.isEmpty)
         preferences.acknowledge(outstanding.acknowledgeableOutcomes, in: outstanding)
@@ -312,7 +317,7 @@ struct SidebarHistoryReaderTests {
         #expect(!degraded.isComplete)
         #expect(degraded.sessions.first?.children.first?.state == .unknown)
         #expect(degraded.sessions.first?.children.first?.terminalEvent == nil)
-        #expect(try project(degraded, fixture: fixture).sessions.first?.nodes.first?.state == .unknown)
+        try expectUnknownTaskRelevance(degraded, fixture: fixture, childID: "child")
         #expect(await reader.hasPendingHistory() == false)
 
         clock.advance(30)
@@ -320,7 +325,7 @@ struct SidebarHistoryReaderTests {
         #expect(refreshed.sessions.first?.observedAt == clock.read())
         let tree = try project(refreshed, fixture: fixture)
         #expect(tree.availability == .partial)
-        #expect(tree.sessions.first?.nodes.first?.state == .unknown)
+        try expectUnknownTaskRelevance(refreshed, fixture: fixture, childID: "child")
         #expect(tree.knownRunningChildren == 0)
         #expect(!tree.hasCompleteCounts)
 
@@ -345,7 +350,10 @@ struct SidebarHistoryReaderTests {
         future["timestamp"] = "2099-01-01T00:00:00Z"
         try fixture.writeEvents([start, JSONSerialization.data(withJSONObject: future)])
         let ended = try await reader.read(surfaceIDs: [fixture.surface])
-        let history = SidebarHistorySettings(dismissed: try project(ended, fixture: fixture).dismissibleOutcomes)
+        let current = try project(ended, fixture: fixture)
+        #expect(current.sessions.first?.nodes.first?.ancestryUnresolved == true)
+        #expect(current.dismissibleOutcomes.isEmpty, "Incomplete parent evidence cannot authorize a new UI dismissal")
+        let history = SidebarHistorySettings(dismissed: try previouslyDismissedOutcome(ended, fixture: fixture, childID: "child"))
         #expect(history.dismissed.count == 1)
         #expect(try project(ended, fixture: fixture, history: history).sessions.first?.nodes.isEmpty == true)
         try fixture.append(copilotTestEvent("subagent.started", agent: "child", data: [
@@ -385,7 +393,7 @@ struct SidebarHistoryReaderTests {
         clock.advance(30)
         let refreshed = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(refreshed.sessions.first?.observedAt == clock.read())
-        #expect(try project(refreshed, fixture: fixture).sessions.first?.nodes.first?.state == .unknown)
+        try expectUnknownTaskRelevance(refreshed, fixture: fixture, childID: "child")
         let rebuilt = try await self.reader(fixture, clock: clock, limits: limits).read(surfaceIDs: [fixture.surface])
         #expect(rebuilt == refreshed)
     }
@@ -415,7 +423,7 @@ struct SidebarHistoryReaderTests {
         #expect(attention.acknowledged.count == (state == .completed ? 0 : 1))
         let history = SidebarHistorySettings(
             retention: .never,
-            dismissed: try project(ended, fixture: fixture, history: unexpired, attention: attention).dismissibleOutcomes
+            dismissed: try previouslyDismissedOutcome(ended, fixture: fixture, childID: "child")
         )
         #expect(history.dismissed.count == 1)
         #expect(try project(ended, fixture: fixture, history: history, attention: attention).sessions.first?.nodes.isEmpty == true)
@@ -432,13 +440,24 @@ struct SidebarHistoryReaderTests {
         #expect(restarted.sessions.first?.children.first?.state == expected)
         #expect(restarted.sessions.first?.children.first?.terminalEvent == nil)
         let tree = try project(restarted, fixture: fixture, history: history, attention: attention)
-        #expect(tree.sessions.first?.nodes.first?.state.rawValue == expected.rawValue)
+        if saturated {
+            try expectUnknownTaskRelevance(restarted, fixture: fixture, childID: "child", history: history, attention: attention)
+        } else {
+            #expect(tree.sessions.first?.nodes.first?.state.rawValue == expected.rawValue)
+        }
         #expect(tree.hiddenHistoryCount == 0)
         #expect(tree.dismissibleOutcomes.isEmpty)
         #expect(!tree.hasCompleteCounts)
         clock.advance(30)
         let refreshed = try await reader.read(surfaceIDs: [fixture.surface])
-        #expect(try project(refreshed, fixture: fixture, history: history).sessions.first?.nodes.first?.state.rawValue == expected.rawValue)
+        if saturated {
+            try expectUnknownTaskRelevance(
+                refreshed, fixture: fixture, childID: "child", history: history,
+                protectedBy: state == .failed ? .error : state == .cancelled ? .aborted : nil
+            )
+        } else {
+            #expect(try project(refreshed, fixture: fixture, history: history).sessions.first?.nodes.first?.state.rawValue == expected.rawValue)
+        }
         let rebuilt = try await self.reader(fixture, clock: clock, limits: limits).read(surfaceIDs: [fixture.surface])
         #expect(rebuilt == refreshed)
     }
@@ -493,7 +512,7 @@ struct SidebarHistoryReaderTests {
         let ended = try await reader.read(surfaceIDs: [fixture.surface])
         let history = SidebarHistorySettings(
             retention: .never,
-            dismissed: try project(ended, fixture: fixture, history: .init(retention: .never)).dismissibleOutcomes
+            dismissed: try previouslyDismissedOutcome(ended, fixture: fixture, childID: "child")
         )
         try fixture.append(copilotTestEvent("subagent.started", agent: "child", data: [
             "toolCallId": "old", "agentDisplayName": "Child"
@@ -527,11 +546,11 @@ struct SidebarHistoryReaderTests {
         let initialTree = try project(initial, fixture: fixture)
         #expect(initialTree.retainedHistoryCount == 1)
         let history = expired ? SidebarHistorySettings() : SidebarHistorySettings(
-            retention: .never, dismissed: initialTree.dismissibleOutcomes
+            retention: .never, dismissed: try previouslyDismissedOutcome(initial, fixture: fixture, childID: "worker")
         )
         if expired { clock.advance(15) }
         let hidden = try await reader.read(surfaceIDs: [fixture.surface])
-        #expect(try project(hidden, fixture: fixture, history: history).hiddenHistoryCount == 1)
+        #expect(try project(hidden, fixture: fixture, history: history).hiddenHistoryCount == (expired ? 0 : 1))
         try fixture.append(copilotTestEvent(type, agent: "worker", data: [
             "toolCallId": "fresh-457", "turnId": "fresh-turn-135",
             "agentDisplayName": "Unattested B", "model": "unattested-model"
@@ -541,8 +560,7 @@ struct SidebarHistoryReaderTests {
         #expect(uncertain.sessions.first?.children.first?.state == .unknown)
         #expect(uncertain.sessions.first?.children.first?.terminalEvent == nil)
         let visible = try project(uncertain, fixture: fixture, history: history)
-        #expect(visible.sessions.first?.nodes.first?.id == "worker")
-        #expect(visible.sessions.first?.nodes.first?.state == .unknown)
+        try expectUnknownTaskRelevance(uncertain, fixture: fixture, childID: "worker", history: history)
         #expect(visible.knownRunningChildren == 0)
         #expect(visible.hiddenHistoryCount == 0)
         #expect(visible.dismissibleOutcomes.isEmpty)
@@ -592,12 +610,13 @@ struct SidebarHistoryReaderTests {
         #expect(initialTree.retainedHistoryCount == 1)
         let oldEvent = try #require(initial.sessions.first?.children.first?.terminalEvent)
         let acknowledgedA = SidebarAttentionSettings(acknowledged: initialTree.acknowledgeableOutcomes)
-        let historyEligible = try project(initial, fixture: fixture, attention: acknowledgedA)
-        let dismissed = SidebarHistorySettings(retention: .never, dismissed: historyEligible.dismissibleOutcomes)
+        let dismissed = SidebarHistorySettings(
+            retention: .never, dismissed: try previouslyDismissedOutcome(initial, fixture: fixture, childID: "worker")
+        )
         #expect(try project(initial, fixture: fixture, history: dismissed, attention: acknowledgedA).hiddenHistoryCount == 1)
         clock.advance(15)
         let expired = try await reader.read(surfaceIDs: [fixture.surface])
-        #expect(try project(expired, fixture: fixture, attention: acknowledgedA).hiddenHistoryCount == (outcome == .failed ? 0 : 1))
+        #expect(try project(expired, fixture: fixture, attention: acknowledgedA).hiddenHistoryCount == (outcome == .cancelled ? 1 : 0))
 
         if retire {
             // Presentation acknowledgement is not an ingestion signal. A new
@@ -672,13 +691,12 @@ struct SidebarHistoryReaderTests {
         let acknowledgedB = SidebarAttentionSettings(
             acknowledged: acknowledgedA.acknowledged.union(visible.acknowledgeableOutcomes)
         )
-        #expect(try project(finished, fixture: fixture, attention: acknowledgedB).nextHistoryExpiry
-            == (outcome == .failed ? nil : clock.read().addingTimeInterval(15)))
+        #expect(try project(finished, fixture: fixture, attention: acknowledgedB).nextHistoryExpiry == nil)
         clock.advance(15)
         let refreshed = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(try project(refreshed, fixture: fixture, attention: acknowledgedB).sessions.first?.nodes.contains {
             $0.id == "worker"
-        } == (outcome == .failed))
+        } == (outcome != .cancelled))
         let finalRebuilt = try await self.reader(fixture, clock: clock, limits: limits).read(surfaceIDs: [fixture.surface])
         #expect(finalRebuilt.sessions == refreshed.sessions)
         #expect(try project(finalRebuilt, fixture: fixture, history: dismissed).sessions.first?.nodes.contains {
@@ -791,10 +809,51 @@ struct SidebarHistoryReaderTests {
         return try JSONSerialization.data(withJSONObject: event)
     }
 
+    // A persisted review key predates the current incomplete ancestry observation.
+    // It must not be manufactured by asking today's UI to authorize a new dismissal.
+    private func previouslyDismissedOutcome(
+        _ snapshot: CopilotSnapshot, fixture: CopilotReaderFixture, childID: String
+    ) throws -> Set<SidebarDismissedOutcome> {
+        let session = try #require(snapshot.sessions.first { $0.sessionID == fixture.sessionID })
+        let child = try #require(session.children.first { $0.id == childID })
+        let event = try #require(child.terminalEvent)
+        #expect(child.state.isTerminal)
+        let neutral = CopilotSnapshotAdapter.child(child, session: .init(providerID: "copilot", sessionID: fixture.sessionID.uuidString))
+        #expect(neutral.id.rawValue == childID && neutral.workState.rawValue == child.state.rawValue)
+        #expect(neutral.terminalEvent?.id == event.id)
+        return [.init(sessionID: fixture.sessionID, childID: childID, eventID: event.id)]
+    }
+
+    private func expectUnknownTaskRelevance(
+        _ snapshot: CopilotSnapshot, fixture: CopilotReaderFixture, childID: String,
+        history: SidebarHistorySettings = .init(), attention: SidebarAttentionSettings = .init(),
+        protectedBy: AgentAttentionKind? = nil
+    ) throws {
+        let session = try #require(snapshot.sessions.first { $0.sessionID == fixture.sessionID })
+        let child = try #require(session.children.first { $0.id == childID })
+        #expect(child.kind == .subagent && child.state == .unknown && child.terminalEvent == nil)
+        let neutral = CopilotSnapshotAdapter.child(child, session: .init(providerID: "copilot", sessionID: fixture.sessionID.uuidString))
+        #expect(neutral.id.rawValue == childID && neutral.workState == .unknown)
+        #expect(neutral.parentID == child.parentID && neutral.title.knownValue == child.name)
+        #expect(neutral.terminalEvent == nil)
+        for eye in [false, true] {
+            let tree = try project(snapshot, fixture: fixture, history: history, attention: attention, revealIdle: eye)
+            if let protectedBy {
+                let node = try #require(tree.sessions.first?.nodes.first { $0.id == childID })
+                #expect(node.state == .unknown && node.attention.map(\.kind) == [protectedBy])
+            } else {
+                #expect(tree.sessions.first?.nodes.contains { $0.id == childID } == false)
+            }
+            #expect(tree.sessions.first?.internalTaskCountsIncomplete == true)
+            #expect(!tree.hasCompleteCounts)
+        }
+    }
+
     private func project(
         _ snapshot: CopilotSnapshot, fixture: CopilotReaderFixture,
         history: SidebarHistorySettings = SidebarHistorySettings(),
-        attention: SidebarAttentionSettings = SidebarAttentionSettings()
+        attention: SidebarAttentionSettings = SidebarAttentionSettings(),
+        revealIdle: Bool = false
     ) throws -> SidebarCopilotTree {
         let topology = SidebarTopology(HierarchySnapshot(
             sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
@@ -809,7 +868,8 @@ struct SidebarHistoryReaderTests {
                 )])
             )], windowID: UUID(uuidString: "50000000-0000-0000-0000-000000000005")!
         ))
-        return SidebarCopilotTree.project(snapshot, onto: topology, now: snapshot.generatedAt, history: history, attention: attention)
+        return SidebarCopilotTree.project(snapshot, onto: topology, now: snapshot.generatedAt, history: history, attention: attention,
+                                         revealingIdleTasksIn: revealIdle ? [fixture.workspace] : [])
     }
 }
 

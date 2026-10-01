@@ -174,7 +174,7 @@ struct SidebarPreferenceCoordinationTests {
         #expect(try await b.line() == "ready")
         try a.send("retain never")
         #expect(try await a.line() == "done")
-        try await eventually { preferences.history.retention == .never && projection.tree.retainedHistoryCount == 2 }
+        try await eventually { preferences.history.retention == .never && projection.tree.retainedHistoryCount == 4 }
 
         try a.send("hold a")
         #expect(try await a.line() == "locked")
@@ -188,6 +188,7 @@ struct SidebarPreferenceCoordinationTests {
                 && projection.tree.hiddenHistoryCount == 2
         }
         #expect(projection.tree.knownRunningChildren == 1)
+        #expect(Set(projection.tree.sessions.flatMap(\.nodes).filter { $0.state.isTerminal }.map(\.id)) == ["legacy-a", "legacy-b"])
         try a.send("expect 2 never")
         #expect(try await a.line() == "done")
 
@@ -196,11 +197,14 @@ struct SidebarPreferenceCoordinationTests {
         try b.send("expect 0 never")
         #expect(try await a.line() == "done")
         #expect(try await b.line() == "done")
-        try await eventually { projection.tree.retainedHistoryCount == 2 }
+        try await eventually { projection.tree.retainedHistoryCount == 4 }
 
         try b.send("reset")
         #expect(try await b.line() == "done")
         try await eventually { preferences.history == .init() && projection.tree.hiddenHistoryCount == 2 }
+        #expect(projection.tree.retainedHistoryCount == 2)
+        #expect(Set(projection.tree.sessions.flatMap(\.nodes).filter { $0.state.isTerminal }.map(\.id)) == ["a", "b"],
+                "Reset expires only legacy activity, not internal task outcomes")
         try a.send("expect 0 fifteenSeconds")
         #expect(try await a.line() == "done")
         #expect(preferences.selectedMode == .taskboard)
@@ -238,6 +242,9 @@ private final class HistoryPreferenceProjection {
         let now = self.now
         let children = ["a", "b"].map {
             CopilotChildWork(id: $0, parentID: nil, kind: .subagent, name: $0, state: .completed, model: nil,
+                             terminalEvent: .init(id: eventID, timestamp: now.addingTimeInterval(-60)))
+        } + ["legacy-a", "legacy-b"].map {
+            CopilotChildWork(id: $0, parentID: nil, kind: .shell, name: $0, state: .completed, model: nil,
                              terminalEvent: .init(id: eventID, timestamp: now.addingTimeInterval(-60)))
         } + [fixtures.child("working", state: .working)]
         snapshot = fixtures.snapshot(sessions: [fixtures.session(id: sessionID, children: children, now: now)], now: now)

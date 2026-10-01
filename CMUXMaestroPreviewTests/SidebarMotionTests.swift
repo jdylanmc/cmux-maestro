@@ -95,7 +95,7 @@ struct SidebarMotionTests {
             surfaces: [], sessions: visible.tree.sessions, managed: visible.managed,
             orchestrationAvailability: orchestration.availability, countsComplete: false, now: Date(), observations: visible.tree
         )
-        #expect(summary.agentCount == 2 && summary.retainedRecordCount == 0)
+        #expect(summary.agentCount == 1 && summary.retainedRecordCount == 0)
         #expect(orchestration.snapshot.nodes == [old] && polling.tree.sessions.count == 2)
         #expect(preferences.history == .init() && preferences.attention.acknowledged.isEmpty && model.navigation.status == .idle)
         let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
@@ -269,7 +269,7 @@ struct SidebarMotionTests {
                     > hosting.convert(observedRow.bounds, from: observedRow).minY)
             let retainedActions = descendants(hosting).compactMap { ($0 as? SidebarRowMenuAnchorView)?.presenter }
                 .flatMap(\.groups).flatMap(\.actions).filter { $0.title == "Focus original session" }
-            let retainedActionCount = mode == .hierarchy || (!scenario.showEnded && !scenario.protectedObservation) ? 1 : 2
+            let retainedActionCount = 1
             #expect(retainedActions.count == retainedActionCount && retainedActions.allSatisfy { $0.unavailable != nil })
             retainedRow.activate()
             capturedPrimary?()
@@ -284,20 +284,33 @@ struct SidebarMotionTests {
             #expect(rows.contains { $0.accessibilityLabel() == "Focus Protected descendant" })
             #expect(rows.contains { $0.accessibilityLabel() == "Focus Other current root" })
             if mode == .taskboard {
-                let labels = ["Focus Other current root", "Focus Copilot session \(String(childSessionID.uuidString.prefix(8)).lowercased())"]
-                for label in labels {
-                    let currentRow = try #require(rows.first { $0.accessibilityLabel() == label })
-                    #expect(hosting.convert(currentRow.bounds, from: currentRow).minY
-                            < hosting.convert(retainedRow.bounds, from: retainedRow).minY,
-                            "Independent current content must precede retained context")
-                }
+                let independent = try #require(rows.first { $0.accessibilityLabel() == "Focus Other current root" })
+                let descendant = try #require(rows.first { $0.accessibilityLabel() == "Focus Protected descendant" })
+                #expect(hosting.convert(independent.bounds, from: independent).minY
+                        < hosting.convert(retainedRow.bounds, from: retainedRow).minY,
+                        "Independent current roots precede retained context")
+                #expect(child.parentId == old.id)
+                #expect(hosting.convert(descendant.bounds, from: descendant).minY
+                        > hosting.convert(retainedRow.bounds, from: retainedRow).minY,
+                        "A real child stays beneath its required ancestor, not in a duplicate flat session row")
             }
             #expect(try leadingInk(of: retainedRow, in: hosting) == 0, "Retained record has no current focus stripe")
             #expect(try leadingInk(of: observedRow, in: hosting) > 0, "Current session keeps its focus stripe")
             if scenario.protectedObservation {
-                #expect(rows.contains {
-                    $0.accessibilityLabel() == "Inspect context activity Protected observed child, Copilot 20000000"
-                }, "Coalescing must preserve observed descendants without a managed equivalent")
+                let childEvidence = try #require(oldObservation.children.first)
+                #expect(childEvidence.id == "protected-observed" && childEvidence.state == .blocked)
+                #expect(childEvidence.name == "Protected observed child")
+                #expect(childEvidence.kind == .subagent && childEvidence.attention?.isEmpty != false)
+                let neutral = CopilotSnapshotAdapter.child(
+                    childEvidence, session: .init(providerID: "copilot", sessionID: f.otherSessionID.uuidString)
+                )
+                #expect(neutral.id.rawValue == childEvidence.id && neutral.workState == .blocked)
+                #expect(neutral.title.knownValue == "Protected observed child")
+                let original = try #require(poller.tree.sessions.first { $0.id == f.otherSessionID })
+                #expect(original.liveness == .dead && original.internalTaskCountsIncomplete)
+                #expect(!original.nodes.contains { $0.id == childEvidence.id },
+                        "Dead-owner blocked work without child attention becomes unknown and is state-filtered")
+                #expect(original.attention.contains { $0.kind == .answer }, "The actual owner request still protects its context")
             }
             #expect(try greenPixels(in: retainedRow) == 0, "Never borrow the new session's working state")
             let statePixels: Int
@@ -325,7 +338,7 @@ struct SidebarMotionTests {
                   + "states=\(summary.states.map { "\($0.title):\($0.count)" }) "
                   + "primaryGreenPixels=\(statePixels) "
                   + "oldObservedRows=\(rows.filter { $0.accessibilityLabel() == "Focus Copilot session 20000000" }.count)")
-            #expect(summary.agentCount == (scenario.protectedObservation ? 5 : 4))
+            #expect(summary.agentCount == 4, "Internal tasks do not inflate real agent entries")
             #expect(summary.retainedRecordCount == 1)
             #expect(summary.states.first { $0.title == (state == .working ? "Working" : "Idle") }?.count == (state == .idle ? 2 : 1))
             #expect(orchestration.snapshot.nodes == [old, child, otherRoot], "Ownership, ancestry and generations are unchanged")
@@ -414,11 +427,11 @@ struct SidebarMotionTests {
         let oldObservation = CopilotSessionObservation(
             sessionID: f.otherSessionID, surfaceID: f.surfaceA, launchWorkspaceID: f.workspaceA,
             liveness: .dead, state: .unknown, model: nil, children: [
-                .init(id: "nested-child", parentID: nil, kind: .subagent, name: "Observed child",
+                .init(id: "nested-child", parentID: nil, kind: .skill, name: "Observed child",
                       state: .blocked, model: nil, attention: [
                         .init(kind: .permission, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
                       ]),
-                .init(id: "nested-grandchild", parentID: "nested-child", kind: .subagent, name: "Observed grandchild",
+                .init(id: "nested-grandchild", parentID: "nested-child", kind: .skill, name: "Observed grandchild",
                       state: .blocked, model: nil, attention: [
                         .init(kind: .answer, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
                       ])
@@ -463,7 +476,7 @@ struct SidebarMotionTests {
         await sidebarEventually { poller.tree.sessions.count == 2 && orchestration.snapshot.nodes.count == managed.count }
         func titles(_ view: NSView) -> [SidebarTitleNativeButton] {
             view.subviews.flatMap { child in
-                (child as? SidebarTitleNativeButton).map { [$0] } ?? titles(child)
+                (child as? SidebarTitleNativeButton).map { $0.localFocusID == "taskboard" ? [] : [$0] } ?? titles(child)
             }
         }
         for (ancestorExpanded, ownerExpanded) in [(true, true), (true, false), (false, true)] {
@@ -553,7 +566,7 @@ struct SidebarMotionTests {
                 sessions: poller.tree.sessions, managed: managed, availability: orchestration.availability,
                 now: Date(), observations: poller.tree
             )
-            #expect(summary.agentCount == scenario.depth + 5)
+            #expect(summary.agentCount == scenario.depth + 3)
             #expect(attention.needsInput == 2 && attention.questions == 1 && attention.approvals == 1)
             #expect(orchestration.snapshot.nodes == managed && preferences.attention.acknowledged.isEmpty)
             #expect(model.navigation.status == .idle && !window.isVisible)

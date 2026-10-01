@@ -51,7 +51,7 @@ struct SidebarPinnedDetailsTests {
             return .init(generatedAt: now, sessions: [
                 .init(sessionID: sessionID, surfaceID: surfaceID, launchWorkspaceID: launchWorkspaceID,
                       liveness: .alive, state: .working, model: nil, children: [
-                        .init(id: "moving-child", parentID: nil, kind: .subagent, name: "Moving child",
+                        .init(id: "moving-child", parentID: nil, kind: .skill, name: "Moving child",
                               state: .working, model: nil, attention: [attention])
                       ], observedAt: now, attention: [attention])
             ], issues: [], isComplete: true)
@@ -64,7 +64,7 @@ struct SidebarPinnedDetailsTests {
     private func hierarchy(
         active: UUID? = nil, kind: HierarchySurfaceKind = .terminal,
         focused: Bool = true, duplicateFocus: Bool = false, duplicateID: Bool = false,
-        granted: Bool = true, paths: Bool = true
+        granted: Bool = true, paths: Bool = true, directory: String? = nil
     ) -> HierarchySnapshot {
         let active = active ?? fixtures.workspaceA
         return .init(
@@ -75,7 +75,7 @@ struct SidebarPinnedDetailsTests {
                 let surface = HierarchySurface(
                     id: index == 0 || duplicateID ? fixtures.surfaceA : fixtures.surfaceB,
                     title: "Same title", kind: kind, isFocused: focused, isPinned: false, unreadCount: 0,
-                    workingDirectory: paths ? .available("/synthetic/worktree-\(index)") : .unavailable
+                    workingDirectory: paths ? .available(directory ?? "/synthetic/worktree-\(index)") : .unavailable
                 )
                 return .init(
                     id: id, title: .available("Same workspace"), detail: .available(nil),
@@ -173,7 +173,10 @@ struct SidebarPinnedDetailsTests {
             #expect(!result.isAgent && result.inspection == nil && result.lines.isEmpty)
         }
         #expect(pinned(connected: false).lines.isEmpty)
-        #expect(pinned(hierarchy(paths: false)).lines.contains(.init(title: "Working directory", value: "Path unavailable")))
+        #expect(pinned(hierarchy(paths: false)).lines.contains(.init(
+            title: "Surface directory", value: "Path unavailable",
+            help: "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory."
+        )))
     }
 
     @Test func ordinarySurfacesAndUnconfirmedIdentityCannotRetainAgentFields() {
@@ -898,6 +901,86 @@ struct SidebarPinnedDetailsTests {
             }
         }
         #expect(!copies.isEmpty && inspections == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func directoryProvenanceRendersInProductionHoverPinnedAndDetails(dark: Bool) async throws {
+        // A relative report avoids OCR's slash/parenthesis ambiguity; absolute/home paths have projection oracles.
+        let hierarchy = hierarchy(directory: "reports")
+        let observed = session()
+        let node = managed()
+        let tree = tree([observed])
+        let managed = snapshot([node])
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var cards: [(String, AnyView, String)] = []
+        for (name, target, label) in [
+            ("session-hover", SidebarAgentHoverTarget.session(observed.id), "Surface directory"),
+            ("managed-hover", .managed(node.id, generation: node.generation), "Surface directory"),
+            ("child-hover", .child(sessionID: observed.id, childID: "child"), "Parent surface directory")
+        ] {
+            let content = try #require(SidebarAgentHoverContent.card(
+                for: target, hierarchy: hierarchy, connected: true, tree: tree,
+                managed: managed, availability: .ready, now: now
+            ))
+            cards.append((name, AnyView(SidebarHoverCard(
+                data: content, close: { Issue.record("Offscreen render must not close") },
+                copySessionID: { _ in Issue.record("Offscreen render must not copy"); return false }
+            )), label))
+        }
+        for (name, target, label) in [
+            ("surface-details", SidebarInspection.Target.unmanaged(.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA)), "Surface directory"),
+            ("session-details", .unmanaged(.session(observed.id)), "Surface directory"),
+            ("managed-details", .managed(node), "Surface directory"),
+            ("child-details", .unmanaged(.child(sessionID: observed.id, childID: "child")), "Parent surface directory")
+        ] {
+            let subject = try #require(SidebarPresentation.inspection(
+                for: target, hierarchy: hierarchy, connected: true, tree: tree,
+                managed: managed, availability: .ready, now: now
+            ))
+            let content = try #require(SidebarPresentation.inspectorDetails(
+                for: subject, hierarchy: hierarchy, connected: true, tree: tree,
+                managed: managed, availability: .ready, now: now
+            ))
+            cards.append((name, AnyView(SidebarInspector(
+                content: content, close: { Issue.record("Offscreen render must not close") }
+            )), label))
+        }
+        for (name, sessions, nodes) in [
+            ("surface-pinned", [SidebarCopilotSession](), [SidebarOrchestrationNode]()),
+            ("session-pinned", [observed], []), ("managed-pinned", [observed], [node])
+        ] {
+            let content = pinned(hierarchy, sessions: sessions, nodes: nodes)
+            cards.append((name, AnyView(SidebarPinnedFooter(
+                content: content, maximumHeight: 900, inspect: { Issue.record("Offscreen render must not inspect") },
+                copySessionID: { _ in Issue.record("Offscreen render must not copy"); return false }
+            )), "Surface directory"))
+        }
+        for (name, card, label) in cards {
+            let frame = NSRect(x: 0, y: 0, width: 340, height: 900)
+            let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let hosting = NSHostingView(rootView: card
+                .environment(\.colorScheme, dark ? .dark : .light)
+                .background(Color(nsColor: .windowBackgroundColor)))
+            window.contentView = hosting
+            defer { window.contentView = nil; window.close() }
+            let responder = window.firstResponder
+            try await settle(hosting)
+            #expect(!window.isVisible && window.firstResponder === responder)
+            let bitmap = try capture(hosting)
+            let destination = folder.appendingPathComponent("directory77-\(name)-\(dark ? "dark" : "light").png")
+            try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
+            let text = try SidebarRenderingEvidence.recognizedLines(in: destination, dark: dark, naturalLanguage: true)
+            #expect(text.contains { $0.contains(label) }, "\(name): directory label must survive all production filters: \(text)")
+            #expect(text.contains("reports") || text.contains("Surface directory: reports"),
+                    "\(name): exact surface value must render: \(text)")
+            #expect(!text.contains { $0.contains("Working directory") || $0.contains("Parent working directory") })
+            let metrics = SidebarRenderingEvidence.metrics(for: hosting)
+            #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
+        }
     }
 
     @Test(arguments: [false, true])

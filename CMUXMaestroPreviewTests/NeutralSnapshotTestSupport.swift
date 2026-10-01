@@ -6,10 +6,12 @@ import Foundation
 extension SidebarCopilotTree {
     static func project(
         _ source: CopilotSnapshot, onto topology: SidebarTopology, now: Date,
-        history: SidebarHistorySettings = .init(), attention: SidebarAttentionSettings = .init()
+        history: SidebarHistorySettings = .init(), attention: SidebarAttentionSettings = .init(),
+        revealingIdleTasksIn: Set<UUID> = []
     ) -> SidebarCopilotTree {
         project(CopilotSnapshotAdapter.snapshot(source, workspaceBySurface: topology.workspaceBySurface),
-                onto: topology, now: now, history: history, attention: attention)
+                onto: topology, now: now, history: history, attention: attention,
+                revealingIdleTasksIn: revealingIdleTasksIn)
     }
 }
 
