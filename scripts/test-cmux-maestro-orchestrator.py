@@ -585,7 +585,14 @@ class Harness:
             arguments.extend(["--allow-tool", rule])
         for rule in deny:
             arguments.extend(["--deny-tool", rule])
-        return self.run(*arguments)
+        if self.env["FAKE_SESSION_MODE"] != "bounded" or self.env.get("FAKE_PROVIDER_BARRIER"):
+            return self.run(*arguments)
+        # Report/protocol fixtures exercise the turn after startup acceptance.
+        gate = self.path / f"provider-{uuid.uuid4()}"
+        try:
+            return self.run(*arguments, env={**self.env, "FAKE_PROVIDER_BARRIER": str(gate)})
+        finally:
+            gate.with_suffix(".release").write_text("release")
 
     def state(self):
         return json.loads((self.root / "control" / "state.json").read_text())
@@ -598,8 +605,15 @@ class Harness:
 
     def wait_node(self, node_id, predicate, timeout=6):
         deadline = time.monotonic() + timeout
+        node = None
         while time.monotonic() < deadline:
-            node = self.state()["nodes"][node_id]
+            try:
+                node = CONTROLLER_API["read_state"](self.root, wait=0)["nodes"][node_id]
+            except CONTROLLER_API["OrchestrationError"] as error:
+                if "operation is active" not in str(error):
+                    raise
+                time.sleep(0.05)
+                continue
             if predicate(node):
                 return node
             if node.get("launchMethod") == "direct" and node.get("launchAccepted"):
@@ -700,6 +714,64 @@ class OrchestratorTests(unittest.TestCase):
             ticket.symlink_to(self.h.root / "control" / "state.json")
             with self.assertRaises(OSError):
                 store.launch_attachment(identifier)
+
+    def test_wait_node_does_not_accept_an_intermediate_state_publication(self):
+        published, release, blocked, done = (threading.Event() for _ in range(4))
+        errors, results = [], []
+        atomic = CONTROLLER_API["Store"]._atomic
+        read = CONTROLLER_API["read_state"]
+
+        def write_state():
+            try:
+                self.h.change_state(lambda state: state["nodes"][self.h.node].update(label="Committed label"))
+            except Exception as error:
+                errors.append(error)
+
+        writer = threading.Thread(target=write_state)
+
+        def held_publication(directory, name, data):
+            atomic(directory, name, data)
+            if threading.current_thread() is writer and name == "state.json":
+                published.set()
+                if not release.wait(5):
+                    raise AssertionError("Publication fixture was not released")
+
+        def observed_read(*args, **kwargs):
+            try:
+                return read(*args, **kwargs)
+            except CONTROLLER_API["OrchestrationError"] as error:
+                if "operation is active" in str(error):
+                    blocked.set()
+                raise
+
+        def await_node():
+            try:
+                results.append(self.h.wait_node(self.h.node, lambda node: node["label"] == "Committed label"))
+            except Exception as error:
+                errors.append(error)
+            finally:
+                done.set()
+
+        waiter = threading.Thread(target=await_node)
+        with patch.object(CONTROLLER_API["Store"], "_atomic", side_effect=held_publication), \
+                patch.dict(CONTROLLER_API, {"read_state": observed_read}):
+            try:
+                writer.start()
+                self.assertTrue(published.wait(3))
+                self.assertEqual(self.h.state()["nodes"][self.h.node]["label"], "Committed label")
+                waiter.start()
+                self.assertTrue(blocked.wait(3))
+                self.assertFalse(done.is_set())
+                release.set()
+                self.assertTrue(done.wait(6))
+            finally:
+                release.set()
+                writer.join(timeout=6)
+                if waiter.ident is not None:
+                    waiter.join(timeout=6)
+        self.assertFalse(writer.is_alive() or waiter.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(results[0]["label"], "Committed label")
 
     def test_local_subscription_and_model_are_pinned_without_leaking_or_changing_git_auth(self):
         h = Harness(interactive=True)
@@ -2206,7 +2278,12 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(state["launches"], {})
         for index in range(7):
             worker = self.h.spawn(label=f"Capacity {index}")
-            self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
+            idle = self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
+            self.assertTrue(CONTROLLER_API["process_matches"](idle))
+            # Keep the real terminal resource, without unrelated idle-supervisor publication traffic.
+            os.kill(idle["supervisor"]["pid"], signal.SIGTERM)
+            self.h.wait_node(worker["workerId"], lambda node: node["phase"] == "process-disappeared")
+            self.assertIn(worker["surfaceId"], self.h.cmux_data()["surfaces"])
         surfaces_before = set(self.h.cmux_data()["surfaces"])
         rejected = self.h.run(
             "spawn", "--actor-id", self.h.node, "--token", self.h.token,
@@ -2214,6 +2291,7 @@ class OrchestratorTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(rejected["returncode"], 2)
+        self.assertIn("Live worker resource limit", rejected["stderr"])
         self.assertEqual(set(self.h.cmux_data()["surfaces"]), surfaces_before)
 
     def test_follow_up_waits_for_verified_boundary_and_uses_exact_resume(self):
@@ -2268,6 +2346,27 @@ class OrchestratorTests(unittest.TestCase):
         failed = self.h.wait_node(malformed["workerId"], lambda node: node["phase"] == "turn-failed")
         self.assertEqual(failed["availability"], "idle")
         self.assertIn("valid exact-session", failed["result"])
+
+    def test_legacy_startup_still_refuses_an_already_failed_first_boundary(self):
+        args = CONTROLLER_API["parser"]().parse_args([
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Early malformed", "--cwd", str(self.h.path), "--task", "[MALFORMED]",
+        ])
+        with patch.dict(os.environ, self.h.env):
+            cmux = CONTROLLER_API["Cmux"]()
+            probe = cmux.surface_exists
+
+            def after_invalid_result(workspace, surface):
+                identifier = next(node["id"] for node in self.h.state()["nodes"].values()
+                                  if node.get("surfaceId") == surface)
+                failed = self.h.wait_node(identifier, lambda node: node["phase"] == "turn-failed")
+                self.assertTrue(CONTROLLER_API["process_matches"](failed))
+                self.assertIsNone(failed["verifiedBoundaryGeneration"])
+                return probe(workspace, surface)
+
+            cmux.surface_exists = after_invalid_result
+            with self.assertRaises(CONTROLLER_API["SessionLaunchError"]):
+                CONTROLLER_API["command_spawn"](args, self.h.root, cmux)
 
     def test_nonzero_exact_session_never_finalizes_pending_report(self):
         for task in (

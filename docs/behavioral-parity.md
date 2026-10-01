@@ -445,6 +445,16 @@ uses an owner-held kernel lock released after the admission assertions, not an
 elapsed-time assumption; the same eight reservations/ninth refusal and eight
 eventual results are required. No production or CI timeout was enlarged.
 
+Legacy report fixtures release their synthetic first-turn output after the
+launch receipt, keeping post-start protocol assertions separate from the
+unchanged rejection of an already-failed first boundary during startup.
+Fixture condition waits read committed control state under its shared lock;
+an atomically replaced `state.json` alone does not mean observer publication
+has finished or the writer has released ownership. The failed-attachment
+capacity fixture stops only its completed synthetic supervisors while retaining
+every terminal, and requires the actual eight-resource-limit error, not a busy
+store error. Separate live-supervisor capacity and recovery cases remain intact.
+
 Fixtures are not installed workers, live provider readiness, visible native
 acceptance or evidence that the historical host delay is understood. Full
 delivery CI and independent review remain separate gates; live host/provider
