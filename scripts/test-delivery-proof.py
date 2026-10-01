@@ -23,6 +23,18 @@ CONTROLLER = runpy.run_path(str(REPO / "scripts/cmux-maestro-orchestrator.py"))
 
 class ProofTests(unittest.TestCase):
     def setUp(self):
+        source = Path(tempfile.mkdtemp(prefix="m61-", dir="/tmp")).resolve()
+        self.addCleanup(shutil.rmtree, source)
+        globals_patch = mock.patch.dict(PROOF["prepare"].__globals__, {
+            "SOURCE": source, "BASE": source / ".build/dp",
+        })
+        globals_patch.start()
+        self.addCleanup(globals_patch.stop)
+        proof_patch = mock.patch.dict(CONTROLLER["delivery_proof_api"].__globals__, {
+            "delivery_proof_api": lambda: PROOF,
+        })
+        proof_patch.start()
+        self.addCleanup(proof_patch.stop)
         self.paths = PROOF["prepare"](uuid.uuid4().hex[:8])
         self.root = Path(self.paths["root"])
         self.addCleanup(shutil.rmtree, self.root)
@@ -290,8 +302,7 @@ class ProofTests(unittest.TestCase):
     def install_synthetic_messaging(self):
         self.root = self.root / "Orchestration"
         self.root.mkdir(mode=0o700)
-        routes = REPO / ".build" / uuid.uuid4().hex[:5]
-        routes.mkdir(mode=0o700)
+        routes = Path(tempfile.mkdtemp(prefix="m61-", dir="/tmp")).resolve()
         self.addCleanup(shutil.rmtree, routes)
         extension = self.root / "extension"
         extension.mkdir(mode=0o700)
@@ -1095,7 +1106,7 @@ class LifecycleFailureTests(unittest.TestCase):
     """No provider, filesystem routes, credentials, or installed state."""
 
     def setUp(self):
-        self.root = REPO / "unused-mocked-control-root"
+        self.root = Path("/unused-mocked-control-root")
         self.actor, self.token = CONTROLLER["new_root"](
             str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()), "Coordinator",
         )
@@ -1248,7 +1259,14 @@ class LifecycleFailureTests(unittest.TestCase):
             self.cmux.validate_surface.side_effect = [
                 self.actor["paneId"], RuntimeError("attachment failed"),
             ]
+        legacy_launch = CONTROLLER["launch_legacy_session"]
+        def persisted_launch(root, cmux, identifier, *args):
+            # Exercise retained legacy tickets, not a fictitious supervisor
+            # in the new direct path.
+            self.state["nodes"][identifier].pop("launchMethod", None)
+            return legacy_launch(root, cmux, identifier, *args)
         with mock.patch.dict(spawn.__globals__, {
+            "launch_reserved_session": persisted_launch,
             "read_state": lambda *a, **k: copy.deepcopy(self.state),
             "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
             "authorize_native_spawn": lambda state, *_: state["nodes"][self.actor["id"]],
@@ -1668,10 +1686,10 @@ class RootCustodyTests(unittest.TestCase):
     """Real private Store and command entrypoint; synthetic host/provider only."""
 
     def setUp(self):
-        (REPO / ".build").mkdir(exist_ok=True)
-        directory = tempfile.TemporaryDirectory(prefix="root-custody-", dir=REPO / ".build")
+        directory = tempfile.TemporaryDirectory(prefix="root-custody-", dir="/tmp")
         self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name)
+        self.root = Path(directory.name).resolve()
+        (self.root / "routes").mkdir(mode=0o700)
         self.original, _ = CONTROLLER["new_root"](
             str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()), "Original session",
         )
@@ -1691,6 +1709,7 @@ class RootCustodyTests(unittest.TestCase):
             "default_root": lambda: self.root, "Cmux": lambda: self.cmux,
             "require_current_surface": lambda *a: None,
             "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+            "trusted_executable": lambda *a: "/synthetic/copilot",
             "resolve_copilot_token": lambda _: None,
             "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
             "messaging_configuration": lambda _: {
@@ -1702,7 +1721,7 @@ class RootCustodyTests(unittest.TestCase):
         self.patches.start()
         self.addCleanup(self.patches.stop)
 
-    def failure(self, *, custody=True, fenced=True):
+    def failure(self, *, custody=True, fenced=False):
         output, error = io.StringIO(), io.StringIO()
         with mock.patch("sys.stdout", output), mock.patch("sys.stderr", error):
             self.assertEqual(CONTROLLER["main"](self.argv), 2)
@@ -1732,11 +1751,13 @@ class RootCustodyTests(unittest.TestCase):
         return payload, state
 
     def test_missing_host_executable_returns_exact_private_custody(self):
-        payload, _ = self.failure()
+        payload, state = self.failure()
         self.assertEqual(payload["reservationState"], "committed")
         self.cmux.create_surface.assert_called_once()
         self.cmux.rename.assert_not_called()
         self.assertEqual(list((self.root / "control").glob("launch-*.json")), [])
+        self.assertTrue(state["nodes"][payload["coordinatorId"]]["surfaceUnknown"])
+        self.assertIn(payload["coordinatorId"], state["launches"])
 
     def test_cmux_subprocess_os_failure_returns_custody(self):
         host = object.__new__(CONTROLLER["Cmux"])
@@ -1748,23 +1769,24 @@ class RootCustodyTests(unittest.TestCase):
     def test_ticket_write_and_cleanup_os_errors_preserve_private_custody(self):
         atomic = CONTROLLER["Store"]._atomic
         def fail_ticket(directory, name, data):
-            if name.startswith("launch-"):
+            if name.startswith("direct-"):
                 raise PermissionError(13, "synthetic private diagnostic")
             return atomic(directory, name, data)
         with mock.patch.object(CONTROLLER["Store"], "_atomic", side_effect=fail_ticket):
-            self.failure()
+            self.failure(fenced=True)
         self.cmux.create_surface.assert_not_called()
 
-    def test_ticket_removal_error_does_not_hide_original_launch_failure(self):
+    def test_uncertain_creation_retains_private_environment_without_cleanup(self):
+        cleanup = mock.Mock(side_effect=PermissionError(13, "synthetic private diagnostic"))
         with mock.patch.dict(CONTROLLER["main"].__globals__, {
-            "remove_launch_credential": mock.Mock(
-                side_effect=PermissionError(13, "synthetic private diagnostic"),
-            ),
+            "remove_launch_credential": cleanup,
         }):
-            payload, _ = self.failure()
+            payload, state = self.failure()
         self.assertIn("FileNotFoundError", payload["error"])
-        self.assertIn("PermissionError", payload["error"])
-        self.assertEqual(len(list((self.root / "control").glob("launch-*.json"))), 1)
+        cleanup.assert_not_called()
+        self.assertEqual(len(list((self.root / "control").glob("direct-*.sh"))), 1)
+        self.assertIn(payload["coordinatorId"], state["launches"])
+        self.assertNotIn("runtimeNotStarted", state["nodes"][payload["coordinatorId"]])
 
     def test_observer_failure_after_reservation_publication_returns_custody_and_fences_start(self):
         atomic = CONTROLLER["Store"]._atomic
@@ -1773,7 +1795,7 @@ class RootCustodyTests(unittest.TestCase):
                 raise OSError(28, "synthetic private diagnostic")
             return atomic(directory, name, data)
         with mock.patch.object(CONTROLLER["Store"], "_atomic", side_effect=fail_observer):
-            payload, _ = self.failure()
+            payload, _ = self.failure(fenced=True)
         self.assertEqual(payload["reservationState"], "committed")
         self.cmux.create_surface.assert_not_called()
         args = CONTROLLER["parser"]().parse_args([
@@ -1790,7 +1812,7 @@ class RootCustodyTests(unittest.TestCase):
             if name == "state.json":
                 raise OSError(5, "synthetic private diagnostic")
         with mock.patch.object(CONTROLLER["Store"], "_atomic", side_effect=fail_after_commit):
-            payload, _ = self.failure()
+            payload, _ = self.failure(fenced=True)
         self.assertEqual(payload["reservationState"], "committed")
         self.cmux.create_surface.assert_not_called()
 
@@ -1830,6 +1852,8 @@ class RootCustodyTests(unittest.TestCase):
         ]
         payload, state = self.failure()
         self.assertEqual(state["nodes"][payload["coordinatorId"]]["surfaceId"], surface)
+        self.assertIn(payload["coordinatorId"], state["launches"])
+        self.assertNotIn("runtimeNotStarted", state["nodes"][payload["coordinatorId"]])
         self.assertEqual(state["retainedResources"], [])
         self.cmux.rename.assert_not_called()
 
@@ -1845,7 +1869,7 @@ class RootCustodyTests(unittest.TestCase):
         self.assertIn("FileNotFoundError", payload["error"])
         self.assertIn("OSError", payload["error"])
         self.assertEqual(state["launches"][payload["coordinatorId"]]["state"], "creating")
-        self.assertEqual(len(list((self.root / "control").glob("launch-*.json"))), 1)
+        self.assertEqual(len(list((self.root / "control").glob("direct-*.sh"))), 1)
 
     def test_created_surface_is_in_private_receipt_when_attachment_and_failure_writes_fail(self):
         surface = str(uuid.uuid4())
@@ -1862,7 +1886,7 @@ class RootCustodyTests(unittest.TestCase):
         node = state["nodes"][payload["coordinatorId"]]
         self.assertIsNone(node["surfaceId"])
         self.assertEqual(state["launches"][node["id"]]["state"], "creating")
-        self.assertEqual(len(list((self.root / "control").glob("launch-*.json"))), 1)
+        self.assertEqual(len(list((self.root / "control").glob("direct-*.sh"))), 1)
         self.cmux.rename.assert_not_called()
 
     def test_uncommitted_state_write_failure_does_not_claim_custody(self):

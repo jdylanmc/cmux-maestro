@@ -398,7 +398,7 @@ rename, not file existence before `printf` finishes. A gate-controlled negative
 control demonstrates the old empty-marker window; the atomic case cannot expose
 it. Error/cancellation paths join the owned task before deleting its fixtures.
 
-### Managed startup observation (#61)
+### Direct interactive launch and legacy startup (#61)
 
 The controller Harness reproduces both a delayed runtime after caller timeout
 and a child whose exact attachment is delayed. The former previously revoked
@@ -408,15 +408,25 @@ not a reproduction or explanation of the historical native host trigger.
 The earlier provider-initialization explanation was retracted: supervisor
 identity is recorded **before** the provider is launched.
 
-Synthetic gates now prove pending launch acceptance without lease destruction,
-attachment serialization without a global-lock or busy-wait loop, exact
-late-claim refusal, caller disappearance, unknown inventory/process probes,
-surface loss and concurrent claim revalidation. Provider readiness is gated
-independently, including a provider that never becomes ready; synthetic
-`render_health: not_started` never drives lifecycle decisions. Pending and
-unknown resources continue consuming the eight-slot limit. A lost create reply
-is not guessed to mean no terminal exists. Native adapter tests preserve the
-pending receipt unchanged and do not retry.
+New interactive roots/children now directly exec Copilot through
+`initial_command`, with no supervisor/startup polling window. Synthetic
+regressions exercise actual argument quoting and verbatim task wrapping,
+terminal I/O, the validated executable/PATH/cwd, acceptance with missing
+observations, native observation on either side of attachment, cancellation
+and ambiguous creation, exact generation/process identity, account/policy
+boundaries and both eight-resource limits. Native adapter tests exercise
+precreated bindings, exact session join and one independent observation,
+ordinary peer send/reply and no retries. Hooks remain observers; these fixtures
+do not claim hook delivery or prompt consumption.
+
+Preserved legacy tests still cover attachment-ticket serialization, late-claim
+refusal, strict reports and exact resume. The inherited eight-pending fixture
+previously gave each held runtime a ten-second synthetic barrier deadline
+while sequentially launching all eight and checking rejection/archive. Its
+first runtime could expire before release on hosted runners. That fixture now
+uses an owner-held kernel lock released after the admission assertions, not an
+elapsed-time assumption; the same eight reservations/ninth refusal and eight
+eventual results are required. No production or CI timeout was enlarged.
 
 Fixtures are not installed workers, live provider readiness, visible native
 acceptance or evidence that the historical host delay is understood. Full

@@ -370,9 +370,9 @@ disposable proof compatibility is not a production fallback. **New workers are
 interactive Copilot sessions**, launched with `--interactive` and the initial
 task. Their terminal is a normal conversation: humans can type follow-ups and
 answer permission/questions directly, and completing a task does not close it.
-A foreground supervisor inherits terminal I/O rather than capturing a JSON
-stream. Ctrl-C goes to Copilot without terminating the supervisor; normal
-session exit is recorded without claiming task success. New workers cannot be
+Copilot itself owns terminal I/O, including Ctrl-C; there is no interactive
+supervisor or captured JSON stream. An observed process exit never claims task
+success. New workers cannot be
 launched in headless mode. Invisible SDK tasks must not be substituted for
 visible Maestro roles when startup fails.
 
@@ -382,19 +382,32 @@ initialization. Only the caller's executable search path is added to the startup
 environment; credentials are not passed through the host creation request.
 Because the host may rewrite that environment, the launch record also captures
 the validated absolute Copilot executable and caller search path privately.
-The supervisor uses those values for provider startup and invokes its own
-Python interpreter explicitly; it does not depend on interactive shell setup.
-The eight-second **caller observation budget** is unchanged, but its end does
-not revoke a current launch. An exact attached terminal can return
-`launchAccepted: true`, `startup: pending` while its runtime has not started.
-A one-time credential stays in the private control directory until claim or
-explicit failure. An attachment-only file lock on that existing ticket covers
-the external create/attach transaction. The child waits in the kernel, outside
-the global state lock, then rechecks the lease, token and exact current surface;
-it does not poll indefinitely or wait for a provider/model response. Caller
-exit releases the lock but cannot substitute for a committed attachment.
-The terminal command contains no token. Both supervisor and provider process
-anchors retain the existing resource bounds.
+The one-shot non-login shell sources a private launch environment, restores
+that PATH and immediately `exec`s the absolute Copilot executable with a fresh
+`--session-id` and `--interactive` prompt. Pinned subscription credentials are
+resolved through the existing bounded GitHub CLI lookup directly into the
+process environment, never persisted or included in the host command.
+Necessary authorization, setup, create/attach and individual I/O remain bounded.
+**Return is immediate after exact terminal creation/ownership:** no supervisor
+acknowledgement, sleep, startup observation window, hook/model/provider wait or
+optional readiness gate. Creation acceptance does not establish provider start.
+
+One reusable prompt wrapper preserves the original task verbatim, explains
+human interaction, exact `maestro_peers`/`maestro_send` discovery and genuine
+envelope-sender replies, fire-and-forget uncertainty and the prohibition on
+terminal-input fallbacks. It supplies a genuine coordinator address only when
+available. The agent begins its task without a startup acknowledgement;
+`/maestro-minion` and other slash skills are not launch dependencies.
+
+Private native bindings are prepared **before** creation. After joining its
+exact CLI-owned conversation, the native adapter independently records the
+session/generation/surface and the exec-preserved provider PID/start identity,
+verifying process ancestry. This can occur before or after caller attachment;
+neither side waits for the other. Hooks remain independent observers, not tool
+providers. Missing/late hooks or native observation are unknown, not death.
+If the caller disappears or creation/attachment is ambiguous, the lease,
+private setup and capacity remain retained: Copilot may already be running.
+No failed caller may guess that it prevented execution.
 
 Launch receipts and private `status` distinguish the evidence below. This
 applies to interactive sessions and preserved legacy bounded workers; neither
@@ -403,8 +416,8 @@ receipt is a turn-completion boundary.
 | Field | Evidence, not inference |
 | --- | --- |
 | `launchAccepted` | Exact native surface attached to the owned launch; `null` for older records without this fact. |
-| `startup` | `pending`, `supervisor-started`, or `failed` from a recorded failure/verified process exit; not model readiness. |
-| `initialTask` | `configured` in private state; `submitted` when a provider process identity or exact legacy result boundary establishes submission. Neither proves model consumption. |
+| `startup` | `pending`, `provider-observed` for direct native observation, legacy `supervisor-started`, or `failed`; none establishes model readiness. |
+| `initialTask` / `taskConsumption` | Direct launches remain `configured` / `unknown` even after a native process observation. Legacy `submitted` retains its previous process/result boundary meaning. |
 | `supervisorStarted` / `providerStarted` | Corresponding process identity recorded, not necessarily still running. A missing provider anchor is not proof it never started. |
 | `supervisorRunning` / `providerRunning` / `surfacePresent` | Current exact process/inventory observation: `true`, confirmed `false`, or unknown `null`. |
 | `messaging` / `messagingAvailability` | Wiring is `configured` or `unsupported`; configured availability remains `unknown` here. Native peer observation is separate. |
@@ -413,15 +426,15 @@ receipt is a turn-completion boundary.
 
 `render_health`, quiet periods, terminal output and elapsed time prove none of
 these phases. Inventory/probe errors remain unknown, not death. A confirmed
-missing surface can cancel an unchanged unclaimed lease; a concurrent runtime
-claim cannot be revoked by the stale observation. Status can reconcile that
-same boundary after a pending caller return. Status captures process and host
+missing surface can cancel an unchanged **legacy** unclaimed lease. Direct
+launches cannot infer that Copilot never ran: unresolved leases stay retained,
+and a missing process anchor prevents reclamation. Status captures process and host
 probes outside the global write lock, then applies only identity/lease-matched
 evidence under the lock. Launch receipts revalidate current ownership and the
-lease after all external probes, including successful or unavailable surface
-observations. Changed identities discard probe facts to `null`; retained facts
-keep their capture timestamp. Cancelled/expired leases and
-foreign surface/session/generation/token identities still refuse late execution.
+lease at attachment without startup probes. Changed identities discard status
+probe facts to `null`; retained facts keep their capture timestamp. Cancelled
+legacy leases refuse late execution; direct native observation refuses
+foreign surface/session/generation/token/process identities without adoption.
 No duplicate spawn, focus change, terminal input or automatic process cleanup
 is attempted. Pending launches retain their credential and capacity slot.
 If a create reply is lost, an unidentified possibly-created terminal retains
@@ -430,8 +443,9 @@ that no resource exists. Reconcile the original launch rather than retrying it.
 Verify exact surfaces, native tools, and returned evidence separately.
 Root callers must retain the private custody receipt even when startup returns
 `ok: false`; its control token remains private. The controller preserves bounded
-startup errors in owned lifecycle diagnostics rather than replacing them with a
-generic exit message or publishing them to the sidebar.
+setup/attachment errors in private receipts and lifecycle diagnostics. Provider
+exec or extension errors remain visible in the terminal; absent native
+observation cannot be converted into a controller success or failure claim.
 Managed coordinators have their own controlled sessions and runs; existing
 conversations are not converted. A live or uncertain legacy supervisor blocks
 the new coordinator schema; the launcher fails rather than interrupting it.

@@ -158,21 +158,29 @@ beside the caller and launch normal interactive Copilot with the supplied task.
 Managed children inherit the verified invoking account; no account or model
 fallback is allowed. No personal account or model is shipped as a project default. Input and
 output belong directly to that terminal: the human can type follow-ups, answer
-questions, and continue after the first task finishes. A foreground supervisor
-maintains ownership and metadata without intercepting terminal input. Launch
-uses a private one-time credential, never a token typed into shell history.
-The runtime starts through CMUX's `surface.create` direct `initial_command`,
+questions, and continue after the first task finishes. Copilot itself starts
+through CMUX's `surface.create` direct `initial_command`,
 not shell startup input. Unsupported direct creation fails without a shell-input
-fallback. The existing eight-second caller observation budget is not lease
-expiry: an owned attached launch may return pending and start later.
-The private launch ticket also serializes the external create/attach transaction;
-the child blocks outside the state lock, then validates its exact lease and
-current surface. Caller disappearance before attachment does not authorize
-execution. No provider/model acknowledgement or polling scheduler is added.
+fallback. Launch acceptance returns immediately after exact creation/ownership:
+no interactive supervisor, startup acknowledgement, observation window, sleep,
+provider/model/hook wait or polling scheduler. Necessary local setup and
+individual I/O are still bounded.
 The caller resolves the provider executable before creating the terminal and
-captures its executable search path privately. The runtime revalidates that
-absolute executable and restores the path for its child, without depending on
-the host's noninteractive PATH or shell startup files.
+captures its executable search path privately. A non-login shell sources the
+private environment and execs that absolute executable; account credentials
+are obtained through the bounded resolver into the process environment, never
+the prompt, host command, or persistent launch files.
+The canonical Maestro-context wrapper preserves task bytes, explains native
+peer discovery/send and genuine envelope-sender replies, human-interactive chat,
+uncertainty and no input fallback. A genuine available coordinator address is
+included; no slash skill or startup acknowledgement is required.
+
+Native bindings exist before creation. The CLI-owned adapter joins its exact
+session and independently records its exec-preserved PID/start, verified
+ancestry, surface and generation, before or after caller attachment. Hooks
+observe naturally; they do not install tools. Neither hooks nor this native
+observation gate the caller. Cancellation or ambiguous create/attach retains
+the lease and capacity because Copilot may already be executing.
 
 Do not create headless-worker tabs or substitute tabless SDK helpers for
 Maestro roles. A failed launch is a blocker, not permission to change runtimes.
@@ -188,12 +196,13 @@ snapshot, not separate pane inventories that can miss a moving terminal.
 Unavailable or malformed inventory blocks launch without freeing resource slots.
 
 A successful return can establish only `launchAccepted: true` and
-`startup: pending`. Do not retry that launch: its lease, credential and resource
-slot remain owned. `supervisorStarted` and `providerStarted` report recorded
+`startup: pending`. Do not retry that launch: its resources remain owned.
+Direct `startup: provider-observed` means native session/process observation,
+not model readiness. `supervisorStarted` (legacy) and `providerStarted` report recorded
 identities, not readiness; the separate `supervisorRunning`, `providerRunning`
 and `surfacePresent` fields are current exact probes (`null` means unknown).
-`initialTask: configured` proves configuration, while `submitted` requires a
-provider identity or exact legacy result boundary; neither proves consumption.
+Direct `initialTask: configured` / `taskConsumption: unknown` never claims
+prompt consumption. Legacy `submitted` retains its process/result boundary.
 `messaging: configured` is not proof of adapter attachment, peer availability,
 or delivery; `messagingAvailability` remains `unknown` here.
 `workObservation: unavailable` is not failure, even for a live provider.
@@ -203,8 +212,9 @@ rules apply to both interactive and legacy launches without changing legacy
 report, follow-up or exact-resume requirements.
 
 Status never interprets a failed host/process probe or `render_health` as death.
-Confirmed surface loss fences an unchanged unclaimed lease; cancellation and
-true expiry still refuse late execution. Unknown/lost create replies retain
+Confirmed surface loss fences an unchanged unclaimed legacy lease. Direct
+launches with absent process observation remain uncertain, never guessed dead.
+Unknown/lost create replies retain
 capacity and block archive/recovery, not automatic retries or cleanup.
 Do not count a prepared worktree, a failed tab, or an SDK task as a
 running Maestro agent. Verify the exact returned surface/session and subsequent

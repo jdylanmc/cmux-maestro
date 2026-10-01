@@ -3,19 +3,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { EventEmitter, once } from "node:events";
 import { start, startManaged, validateSend } from "./delivery-proof/adapter.mjs";
 
-const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const base = path.join(repo, ".build", "dp");
+const base = await fs.realpath("/tmp");
 
 async function fixture(t) {
-  await fs.mkdir(base, { recursive: true, mode: 0o700 });
-  const root = path.join(base, randomUUID().slice(0, 8));
-  await fs.mkdir(root, { mode: 0o700 });
+  const root = await fs.mkdtemp(path.join(base, "m61-"));
   const workspaceId = randomUUID();
   const bindings = Object.fromEntries(["a", "b"].map((peer, i) => [peer, {
     peer, workspaceId, sessionId: randomUUID(), capability: `${i + 1}`.repeat(64),
@@ -221,8 +217,7 @@ test("malformed and fragmented wire input never uses terminal or readiness APIs"
 });
 
 async function managedFixture(t) {
-  const root = path.join(repo, ".build", randomUUID().slice(0, 5));
-  await fs.mkdir(root, { mode: 0o700 });
+  const root = await fs.mkdtemp(path.join(base, "m61-"));
   const workspaceId = randomUUID();
   const bindings = [0, 1, 2, 3].map((index) => ({
     peer: String(index).repeat(16), nodeId: randomUUID(), name: `Participant ${index}`,
@@ -309,6 +304,59 @@ test("installed loader is inert outside managed sessions and refuses mismatched 
     }));
     assert.equal(joined, false);
   }
+});
+
+test("direct loader uses precreated bindings and observes only its joined CLI session once", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  const surfaceId = randomUUID();
+  const order = [];
+  const environment = {
+    ...f.environment(0), CMUX_MAESTRO_DIRECT_LAUNCH: "1",
+    CMUX_MAESTRO_LAUNCH_PID: "12345", CMUX_SURFACE_ID: surfaceId,
+    CMUX_MAESTRO_ORCHESTRATOR: "/synthetic/controller",
+  };
+  const adapter = await startManaged({
+    environment,
+    joinSession: async options => {
+      order.push("join");
+      assert.deepEqual(options.tools.map(tool => tool.name),
+        ["maestro_peers", "maestro_send", "maestro_identity", "maestro_spawn"]);
+      return { sessionId: own.sessionId };
+    },
+    observe: async (request, controller) => {
+      order.push("observe");
+      assert.equal(controller, environment.CMUX_MAESTRO_ORCHESTRATOR);
+      assert.deepEqual(request, {
+        nodeId: own.nodeId, workspaceId: own.workspaceId, sessionId: own.sessionId,
+        generation: 1, surfaceId, pid: 12345,
+      });
+      assert.equal(JSON.stringify(request).includes("capability"), false);
+      return { ok: true, observed: true };
+    },
+  });
+  t.after(() => adapter.close());
+  assert.deepEqual(order, ["join", "observe"]);
+});
+
+test("direct observation failure is explicit and never retried or adopted", async (t) => {
+  const f = await managedFixture(t);
+  let observations = 0;
+  const environment = {
+    ...f.environment(0), CMUX_MAESTRO_DIRECT_LAUNCH: "1",
+    CMUX_MAESTRO_LAUNCH_PID: "12345", CMUX_SURFACE_ID: randomUUID(),
+  };
+  await assert.rejects(startManaged({
+    environment, joinSession: async () => ({ sessionId: f.bindings[0].sessionId }),
+    observe: async () => { observations++; throw new Error("ownership changed"); },
+  }), /ownership changed/);
+  assert.equal(observations, 1);
+  await assert.rejects(startManaged({
+    environment, joinSession: async () => ({ sessionId: randomUUID() }),
+    observe: async () => { observations++; },
+  }));
+  assert.equal(observations, 1);
+  await assert.rejects(fs.stat(path.join(f.root, `${f.bindings[0].peer}.sock`)), { code: "ENOENT" });
 });
 
 test("native launch reads the invoking session account on each request, not task-supplied identity", async (t) => {

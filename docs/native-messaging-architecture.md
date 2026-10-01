@@ -105,6 +105,25 @@ bindings. Newly Maestro-launched visible interactive sessions participate
 automatically; existing/unmanaged sessions are neither adopted nor restarted.
 A coordinator without a launcher-bound session cannot receive; the sidebar sees no bodies or secrets.
 
+New interactive launches precreate the exact workspace/session/generation
+binding before CMUX `initial_command` execs Copilot. The one-shot non-login
+shell restores the validated PATH and private control environment; subscription
+credentials go directly from the bounded account resolver into the process
+environment, not the command or a persistent credential file. The canonical
+interactive prompt explains capabilities but neither installs nor grants them.
+
+The loader joins the CLI-owned session, validates its actual session ID, then
+makes one bounded `native-observe` call. It records the exec-preserved provider
+PID/start only after verifying ancestry, current control identity, generation
+and host-supplied surface. The controller merges observation either before or
+after exact caller attachment without replacing another surface/process owner.
+The creation caller does **not** await this call, socket listening, hooks,
+provider readiness or prompt consumption. There is no startup acknowledgement
+protocol, retry, adoption, broker or alternate SDK client. A lost create reply
+or cancelled attachment retains the launch lease and capacity even if native
+observation already occurred. Legacy bindings and loaders keep their existing
+path; existing sessions are not converted or restarted.
+
 The launcher retains the configured account/model pins and normal terminal I/O.
 Native extension trust/tool prompts remain Copilot-owned. Defaults add no grants;
 explicit user-approved coordinator `--yolo` launches may use `--allow-all` while
