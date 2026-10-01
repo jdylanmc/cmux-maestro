@@ -96,6 +96,146 @@ struct SidebarWorkspaceCountTests {
         #expect(placements[2].contentOwnerID == nil)
     }
 
+    @Test(arguments: ["coordinator", "worker"], ["launching", "turn-running"])
+    func directInteractiveStateUsesFreshExactObservationAfterControllerExpires(_ role: String, _ phase: String) {
+        let node = directNode(role: role, phase: phase)
+        let projection = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: node.updatedAt, complete: true, omittedCount: 0, nodes: [node]
+        )
+        #expect(SidebarOrchestrationReader.isStale(projection, now: now))
+        for work: AgentWorkState in [.working, .idle, .blocked] {
+            let observed = session(fixtures.sessionID, surface: fixtures.surfaceA, state: work)
+            let tree = tree([observed])
+            for availability: SidebarOrchestrationAvailability in [.ready, .partial, .stale] {
+                #expect(SidebarPresentation.managedState(node, availability: availability, now: now, tree: tree)
+                        == SidebarPresentation.state(work))
+                let summary = summary(tree, managed: [node], availability: availability)
+                #expect(summary.agentCount == 1)
+                #expect(summary.states.map(\.title) == [SidebarPresentation.state(work).title])
+                if availability != .ready { #expect(summary.incomplete) }
+            }
+        }
+        #expect(node.updatedAt == now.addingTimeInterval(-61), "Observation does not refresh controller metadata")
+    }
+
+    @Test(arguments: ["coordinator", "worker"], ["launching", "turn-running"])
+    func directProviderObservationWithoutWorkNeverMeansWorking(_ role: String, _ phase: String) {
+        let node = directNode(role: role, phase: phase, age: 0)
+        for tree in [tree([]), tree([session(fixtures.sessionID, surface: fixtures.surfaceA, state: .unknown)])] {
+            let row = SidebarPresentation.managedState(node, availability: .ready, now: now, tree: tree)
+            #expect(row.tone == .neutral)
+            let summary = summary(tree, managed: [node])
+            #expect(summary.states.map(\.title) == ["Unknown"])
+            #expect(summary.agentCount == 1 && summary.incomplete)
+        }
+        let noSnapshot = SidebarPresentation.workspaceSummary(
+            surfaces: [], sessions: [], managed: [node], orchestrationAvailability: .ready,
+            countsComplete: true, now: now
+        )
+        #expect(noSnapshot.states.map(\.title) == ["Unknown"])
+    }
+
+    @Test(arguments: [
+        "absent", "stale-snapshot", "missing-date", "future-snapshot", "unavailable", "denied",
+        "stale-session", "future-session", "after-snapshot", "unknown", "ambiguous", "dead",
+        "foreign-session", "foreign-surface", "foreign-workspace", "missing-managed-session",
+        "duplicate", "duplicate-foreign-placement", "duplicate-stale"
+    ])
+    func directInteractiveStateRejectsUnavailableOrNonuniqueEvidence(_ variant: String) {
+        let exact = session(fixtures.sessionID, surface: fixtures.surfaceA)
+        var observed = tree([exact])
+        switch variant {
+        case "absent": observed.sessions = []
+        case "stale-snapshot": observed.generatedAt = now.addingTimeInterval(-9)
+        case "missing-date": observed.generatedAt = nil
+        case "future-snapshot": observed.generatedAt = now.addingTimeInterval(2)
+        case "unavailable": observed.availability = .unavailable
+        case "denied": observed.issues = [.permissionDenied]
+        case "stale-session":
+            observed.sessions = [session(fixtures.sessionID, surface: fixtures.surfaceA, observedAt: now.addingTimeInterval(-9))]
+        case "future-session":
+            observed.sessions = [session(fixtures.sessionID, surface: fixtures.surfaceA, observedAt: now.addingTimeInterval(2))]
+        case "after-snapshot": observed.generatedAt = now.addingTimeInterval(-2)
+        case "unknown", "ambiguous", "dead":
+            let liveness: AgentProcessLiveness = variant == "unknown" ? .unknown : variant == "ambiguous" ? .ambiguous : .dead
+            observed.sessions = [session(fixtures.sessionID, surface: fixtures.surfaceA, liveness: liveness)]
+        case "foreign-session": observed.sessions = [session(fixtures.otherSessionID, surface: fixtures.surfaceA)]
+        case "foreign-surface": observed.sessions = [session(fixtures.sessionID, surface: fixtures.surfaceB)]
+        case "foreign-workspace":
+            observed.sessions = [session(fixtures.sessionID, surface: fixtures.surfaceA, workspace: fixtures.workspaceB)]
+        case "missing-managed-session": break
+        case "duplicate": observed.sessions.append(exact)
+        case "duplicate-foreign-placement":
+            observed.sessions.append(session(fixtures.sessionID, surface: fixtures.surfaceB, workspace: fixtures.workspaceB))
+        case "duplicate-stale":
+            observed.sessions.append(session(fixtures.sessionID, surface: fixtures.surfaceA, observedAt: now.addingTimeInterval(-9)))
+        default: preconditionFailure("Unknown direct observation fixture")
+        }
+        for role in ["coordinator", "worker"] {
+            for phase in ["launching", "turn-running"] {
+                let node = directNode(role: role, phase: phase, age: 0, pinnedIdentity: variant != "missing-managed-session")
+                #expect(SidebarPresentation.managedState(node, availability: .ready, now: now, tree: observed).tone == .neutral)
+                // Inspect only the managed entry; unrelated observed sessions have their own identity and state.
+                let summary = SidebarPresentation.workspaceSummary(
+                    surfaces: [], sessions: [], managed: [node], orchestrationAvailability: .ready,
+                    countsComplete: true, now: now, observations: observed
+                )
+                #expect(summary.states.map(\.title) == ["Unknown"])
+                #expect(summary.agentCount == 1 && summary.incomplete)
+            }
+        }
+    }
+
+    @Test func freshInteractiveActivityDoesNotRefreshGitOrClaimOtherSessionContents() throws {
+        let node = directNode(role: "worker", phase: "launching")
+        let exact = session(fixtures.sessionID, surface: fixtures.surfaceA, state: .idle)
+        let other = session(fixtures.otherSessionID, surface: fixtures.surfaceA, state: .blocked)
+        let tree = tree([exact, other])
+        let placements = SidebarPresentation.sessionPlacements(tree.sessions, managed: [node], observations: tree, now: now)
+        #expect(placements.map(\.managedNodeID) == [node.id, node.id])
+        #expect(placements.map(\.contentOwnerID) == [node.id, nil])
+        #expect(placements[1].requiresSeparateContext)
+        #expect(SidebarPresentation.managedState(node, availability: .stale, now: now, tree: tree).title == "Idle")
+        let details = SidebarPresentation.managedNodeDetails(node, hierarchy: fixtures.hierarchy(), tree: tree, now: now)
+        #expect(!details.contains { $0.title == "Branch" || $0.title == "Worktree" })
+        #expect(try #require(details.first { $0.title == "Git evidence" }).value.hasPrefix("Stale"))
+        #expect(node.currentGitChanges(at: now) == nil)
+        #expect(node.updatedAt == now.addingTimeInterval(-61))
+    }
+
+    @Test func legacyBoundedReportsAndTurnStateDoNotUseInteractiveObservation() {
+        let observed = tree([session(fixtures.sessionID, surface: fixtures.surfaceA, state: .working)])
+        let completed = directNode(role: "worker", phase: "reported-completed", age: 0, mode: .bounded)
+        #expect(SidebarPresentation.managedState(completed, availability: .ready, now: now, tree: observed)
+            .title == "Completed · available")
+        #expect(summary(observed, managed: [completed]).states.map(\.title) == ["Finished"])
+        let stale = directNode(role: "worker", phase: "reported-completed", mode: .bounded)
+        #expect(SidebarPresentation.managedState(stale, availability: .stale, now: now, tree: observed).title
+            .contains("State unverified"))
+        #expect(summary(observed, managed: [stale], availability: .stale).states.map(\.title) == ["Unknown"])
+        let running = directNode(role: "worker", phase: "turn-running", age: 0, mode: .bounded)
+        #expect(SidebarPresentation.managedState(running, availability: .ready, now: now).title == "Working")
+        #expect(summary(tree([]), managed: [running]).states.map(\.title) == ["Working"])
+    }
+
+    private func directNode(
+        role: String, phase: String, age: TimeInterval = 61, mode: SidebarWorkerMode = .interactive,
+        pinnedIdentity: Bool = true
+    ) -> SidebarOrchestrationNode {
+        let recordedAt = now.addingTimeInterval(-age)
+        return .init(
+            id: UUID(), runId: UUID(), parentId: role == "worker" ? UUID() : nil, role: role, label: "Managed",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 1,
+            phase: phase, availability: phase == "reported-completed" ? "idle" : "busy",
+            copilotSessionId: pinnedIdentity ? fixtures.sessionID : nil, executionMode: mode,
+            worktreeLabel: "observed-worktree", branchLabel: "observed-branch",
+            gitEvidenceStatus: "verified", gitEvidenceAt: recordedAt,
+            gitChangesStatus: "verified",
+            gitChanges: .init(files: 1, insertions: 2, deletions: 0, untrackedFiles: 0, binaryFiles: 0),
+            gitChangesAt: recordedAt, createdAt: recordedAt, updatedAt: recordedAt
+        )
+    }
+
     private func variantTree(_ variant: String) -> SidebarCopilotTree {
         let current = session(fixtures.sessionID, surface: fixtures.surfaceA)
         switch variant {
@@ -110,11 +250,12 @@ struct SidebarWorkspaceCountTests {
     }
 
     private func summary(
-        _ tree: SidebarCopilotTree, managed: [SidebarOrchestrationNode], surfaces: [HierarchySurface] = []
+        _ tree: SidebarCopilotTree, managed: [SidebarOrchestrationNode], surfaces: [HierarchySurface] = [],
+        availability: SidebarOrchestrationAvailability = .ready
     ) -> SidebarWorkspaceSummary {
         SidebarPresentation.workspaceSummary(
             surfaces: surfaces, sessions: tree.sessions, managed: managed,
-            orchestrationAvailability: .ready, countsComplete: true, now: now, observations: tree
+            orchestrationAvailability: availability, countsComplete: true, now: now, observations: tree
         )
     }
 
@@ -131,10 +272,10 @@ struct SidebarWorkspaceCountTests {
 
     private func session(
         _ id: UUID, surface: UUID, state: AgentWorkState = .working,
-        liveness: AgentProcessLiveness = .alive, observedAt: Date? = nil
+        liveness: AgentProcessLiveness = .alive, observedAt: Date? = nil, workspace: UUID? = nil
     ) -> SidebarCopilotSession {
         .init(
-            id: id, workspaceID: fixtures.workspaceA, surfaceID: surface, liveness: liveness,
+            id: id, workspaceID: workspace ?? fixtures.workspaceA, surfaceID: surface, liveness: liveness,
             state: state, model: nil, observedAt: observedAt ?? now,
             nodes: [.init(id: "task", parentID: nil, depth: 0, kind: .subagent, name: "Same task name",
                           state: .completed, model: nil, ancestryUnresolved: false, hasChildren: false,

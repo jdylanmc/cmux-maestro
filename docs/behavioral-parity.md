@@ -419,6 +419,15 @@ precreated bindings, exact session join and one independent observation,
 ordinary peer send/reply and no retries. Hooks remain observers; these fixtures
 do not claim hook delivery or prompt consumption.
 
+Presentation-model regressions cover fresh exact working/idle/blocked observations
+for interactive coordinators and children after the controller node and projection
+expire, including accepted/pending `launching` nodes. Both row state and workspace
+counts use the same independent observation selection. Missing work does not
+become Working from `turn-running`; stale, duplicate, foreign, denied or ambiguous
+observations remain unknown. Legacy bounded reports, stale Git provenance and
+the distinction between surface suppression and exact session-content ownership
+remain covered. No heartbeat, timestamp refresh or visual styling change follows.
+
 Preserved legacy tests still cover attachment-ticket serialization, late-claim
 refusal, strict reports and exact resume. The inherited eight-pending fixture
 previously gave each held runtime a ten-second synthetic barrier deadline

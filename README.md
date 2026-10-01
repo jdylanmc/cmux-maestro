@@ -409,6 +409,13 @@ If the caller disappears or creation/attachment is ambiguous, the lease,
 private setup and capacity remain retained: Copilot may already be running.
 No failed caller may guess that it prevented execution.
 
+Managed interactive rows and workspace counts use fresh, uniquely exact
+session/workspace/surface observations in both `launching` and `turn-running`,
+even when controller metadata is older than its 60-second freshness budget.
+Native process observation alone never means Working: absent, stale or ambiguous
+work evidence remains unknown. Git provenance keeps its own freshness budget;
+fresh session activity does not refresh an old branch, worktree or change count.
+
 Launch receipts and private `status` distinguish the evidence below. This
 applies to interactive sessions and preserved legacy bounded workers; neither
 receipt is a turn-completion boundary.
