@@ -1000,6 +1000,9 @@ Managed-owner and provider-task depth share one bounded indentation budget.
 Suppressing a duplicate native surface row is not session ownership: unmatched
 observations on that surface keep a separately identified session-context heading,
 never the current managed chat's task parentage.
+Multiple observations of the same agent surface do not add agent or state
+counts. This counting rule does not attach their task contents to a managed
+chat. Existing retained managed records keep the explicit entries/context legend.
 
 Idle, unknown and cancelled tasks hide by state. A workspace's eye reveals
 **idle tasks only**, independently of other workspaces and **Show ended agents**.

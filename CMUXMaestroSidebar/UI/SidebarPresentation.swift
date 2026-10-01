@@ -897,29 +897,43 @@ enum SidebarPresentation {
     ) -> SidebarWorkspaceSummary {
         let managedSurfaces = Set(managed.map(\.surfaceId))
         let placements = sessionPlacements(sessions, managed: managed, observations: observations, now: now)
-        let unmanagedSessions = placements.filter { $0.contentOwnerID == nil }.map(\.session)
+        // Counting a destination is independent of attesting its session contents.
+        let unmanagedSessions = placements.filter { $0.managedNodeID == nil }.map(\.session)
+        let bySurface = Dictionary(grouping: sessions, by: \.surfaceID)
+        let identityCounts = Dictionary(grouping: observations?.sessions ?? sessions, by: \.id).mapValues(\.count)
+        let currentSnapshot = observations.map {
+            [.ready, .partial].contains($0.availability) && !$0.issues.contains(.permissionDenied)
+                && $0.generatedAt.map { SidebarCopilotTree.isFresh($0, now: now) } == true
+        } ?? true
         var counts: [AgentSummaryState: Int] = [:]
-        var incomplete = !countsComplete || orchestrationAvailability != .ready
+        var incomplete = !countsComplete || orchestrationAvailability != .ready || !currentSnapshot
+            || sessions.contains {
+                !SidebarCopilotTree.isFresh($0.observedAt, now: now) || identityCounts[$0.id] != 1
+                    || !$0.childrenComplete || $0.treeDegraded || $0.internalTaskCountsIncomplete
+            }
+            || bySurface.values.contains { $0.filter { $0.liveness != .dead }.count > 1 }
 
         for node in managed {
             let state = coordinatorSession(node, availability: orchestrationAvailability, tree: observations, now: now)
-                .map(sessionSummaryState) ?? managedSummaryState(node, availability: orchestrationAvailability, now: now)
+                .flatMap { session in
+                    currentSnapshot && identityCounts[session.id] == 1 ? sessionSummaryState(session) : nil
+                } ?? managedSummaryState(node, availability: orchestrationAvailability, now: now)
             counts[state, default: 0] += 1
             if state == .unknown { incomplete = true }
         }
-        for placement in placements where placement.contentOwnerID == nil || placement.retainsContents {
+        for group in Dictionary(grouping: unmanagedSessions, by: \.surfaceID).values {
+            let state = currentSnapshot ? unmanagedSummaryState(group, identityCounts: identityCounts, now: now) : .unknown
+            counts[state, default: 0] += 1
+            if state == .unknown { incomplete = true }
+        }
+        for placement in placements where placement.managedNodeID == nil || placement.retainsContents {
             let session = placement.session
-            if placement.contentOwnerID == nil {
-                let state = sessionSummaryState(session)
-                counts[state, default: 0] += 1
-                if state == .unknown { incomplete = true }
-            }
+            guard identityCounts[session.id] == 1 else { continue }
             for node in session.nodes where node.kind == .subagent && !node.isInternalTask {
                 let state = observedSummaryState(node.state)
                 counts[state, default: 0] += 1
                 if state == .unknown { incomplete = true }
             }
-            incomplete = incomplete || !session.childrenComplete || session.treeDegraded || session.internalTaskCountsIncomplete
         }
 
         let agentSurfaceIDs = managedSurfaces.union(unmanagedSessions.map(\.surfaceID))
@@ -940,8 +954,17 @@ enum SidebarPresentation {
             tabs: tabs,
             incomplete: incomplete,
             retainedRecordCount: displacedManagedNodeIDs(managed, observations: observations, now: now).count
-                + placements.filter(\.requiresSeparateContext).count
         )
+    }
+
+    private static func unmanagedSummaryState(
+        _ sessions: [SidebarCopilotSession], identityCounts: [UUID: Int], now: Date
+    ) -> AgentSummaryState {
+        let current = sessions.filter { $0.liveness != .dead }
+        let candidate = current.count == 1 ? current.first : sessions.count == 1 ? sessions.first : nil
+        guard let candidate, identityCounts[candidate.id] == 1,
+              SidebarCopilotTree.isFresh(candidate.observedAt, now: now) else { return .unknown }
+        return sessionSummaryState(candidate)
     }
 
     static func sessionState(_ session: SidebarCopilotSession) -> SidebarVisual {
