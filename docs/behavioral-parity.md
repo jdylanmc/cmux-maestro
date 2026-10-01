@@ -428,6 +428,14 @@ observations remain unknown. Legacy bounded reports, stale Git provenance and
 the distinction between surface suppression and exact session-content ownership
 remain covered. No heartbeat, timestamp refresh or visual styling change follows.
 
+Native-loader subprocess regressions use the actual loader/adapter with a fake
+joined session. They reproduce a SIGTERM-left socket blocking a same-binding
+replacement with `EADDRINUSE`, then verify owned-listener cleanup, termination
+during join/observation/chmod, and normal CLI-style reload. Live occupied and
+forced-termination stale sockets remain untouched and refused; diagnostics do
+not reveal raw exception text or private values. This is isolated lifecycle
+evidence, not a replacement for real CLI/provider proof.
+
 Preserved legacy tests still cover attachment-ticket serialization, late-claim
 refusal, strict reports and exact resume. The inherited eight-pending fixture
 previously gave each held runtime a ten-second synthetic barrier deadline

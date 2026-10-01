@@ -6,6 +6,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { EventEmitter, once } from "node:events";
+import { spawn } from "node:child_process";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import { start, startManaged, validateSend } from "./delivery-proof/adapter.mjs";
 
 const base = await fs.realpath("/tmp");
@@ -261,6 +264,238 @@ async function managedFixture(t) {
 }
 
 const managedAddress = (binding) => ({ ...addr(binding), generation: binding.generation });
+
+async function loaderFixture(t) {
+  const root = await fs.mkdtemp(path.join(base, "m61-loader-"));
+  const surfaceId = randomUUID();
+  const binding = {
+    peer: "1111111111111111", nodeId: randomUUID(), name: "Synthetic lifecycle",
+    workspaceId: randomUUID(), sessionId: randomUUID(), generation: 1, capability: "c".repeat(64),
+  };
+  const endpoint = path.join(root, `${binding.peer}.sock`);
+  const route = path.join(root, `${binding.peer}.json`);
+  const children = [];
+  async function exists(file) {
+    try { return await fs.lstat(file); }
+    catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  }
+  async function waitFor(predicate) {
+    const deadline = Date.now() + 4000;
+    while (!await predicate()) {
+      assert.ok(Date.now() < deadline, "Synthetic lifecycle condition exceeded test watchdog");
+      await delay(10);
+    }
+  }
+  async function exited(item) {
+    const timeout = new AbortController();
+    try {
+      return await Promise.race([
+        item.done,
+        delay(4000, null, { signal: timeout.signal }).then(() => {
+          throw new Error("Owned synthetic extension did not terminate within test watchdog");
+        }),
+      ]);
+    } finally { timeout.abort(); }
+  }
+  async function stop(item, signal = "SIGTERM") {
+    item.child.kill(signal);
+    return exited(item);
+  }
+  t.after(async () => {
+    const failures = [];
+    try {
+      for (const item of children) {
+        if (item.child.exitCode === null && item.child.signalCode === null) {
+          try { await stop(item); }
+          catch (error) { item.child.kill("SIGKILL"); await item.done; failures.push(error); }
+        }
+        if (item.observing && await exists(item.stage)) {
+          const pid = Number(await fs.readFile(item.stage, "utf8"));
+          if (!await exists(item.stage + ".stopped")) {
+            try { process.kill(pid, "SIGTERM"); }
+            catch (error) { if (error.code !== "ESRCH") failures.push(error); }
+          }
+        }
+      }
+    } finally { await fs.rm(root, { recursive: true }); }
+    if (failures.length) throw new AggregateError(failures, "Synthetic extension cleanup failed");
+  });
+  await fs.writeFile(route, JSON.stringify(binding), { mode: 0o600 });
+  await fs.writeFile(path.join(root, "sdk.mjs"), `
+import { writeFileSync } from "node:fs";
+export async function joinSession() {
+  if (process.env.FIXTURE_FAIL_JOIN) {
+    throw Object.assign(new Error(process.env.FIXTURE_PRIVATE_TEXT), { code: process.env.FIXTURE_PRIVATE_TEXT });
+  }
+  if (process.env.FIXTURE_HOLD_STAGE === "join") {
+    writeFileSync(process.env.FIXTURE_STAGE, "join");
+    process.stdin.resume();
+    await new Promise(() => {});
+  }
+  return { sessionId: process.env.SESSION_ID };
+}
+`, { mode: 0o600 });
+  await fs.writeFile(path.join(root, "resolve.mjs"), `
+export function resolve(specifier, context, next) {
+  if (specifier === "@github/copilot-sdk/extension")
+    return { url: new URL("./sdk.mjs", import.meta.url).href, shortCircuit: true };
+  return next(specifier, context);
+}
+`, { mode: 0o600 });
+  await fs.writeFile(path.join(root, "preload.mjs"), `
+import { register, syncBuiltinESMExports } from "node:module";
+import { promises as fs, writeFileSync, appendFileSync } from "node:fs";
+import net from "node:net";
+import childProcess from "node:child_process";
+register(new URL("./resolve.mjs", import.meta.url));
+if (process.env.FIXTURE_HOLD_STAGE === "observe") {
+  const execFile = childProcess.execFile;
+  childProcess.execFile = (...args) => {
+    const child = execFile(...args);
+    child.stdin.end = data => child.stdin.write(data);
+    return child;
+  };
+  syncBuiltinESMExports();
+}
+const chmod = fs.chmod;
+fs.chmod = async (...args) => {
+  if (process.env.FIXTURE_HOLD_STAGE === "chmod") {
+    writeFileSync(process.env.FIXTURE_STAGE, "chmod");
+    await new Promise(() => {});
+  }
+  if (process.env.FIXTURE_FAIL_CHMOD) throw Object.assign(new Error("private fixture path"), { code: "EACCES" });
+  return chmod(...args);
+};
+const emit = net.Server.prototype.emit;
+net.Server.prototype.emit = function(event, ...args) {
+  if (event === "error") appendFileSync(process.env.FIXTURE_ERRORS, String(args[0]?.code) + "\\n", { mode: 0o600 });
+  return Reflect.apply(emit, this, [event, ...args]);
+};
+`, { mode: 0o600 });
+  await fs.writeFile(path.join(root, "controller"), `#!/usr/bin/env node
+const { writeFileSync } = require("node:fs");
+process.stdin.resume();
+if (process.env.FIXTURE_HOLD_STAGE === "observe") {
+  process.stdin.once("data", () => {
+    process.on("SIGTERM", () => {
+      writeFileSync(process.env.FIXTURE_STAGE + ".stopped", "stopped");
+      process.exit(0);
+    });
+    writeFileSync(process.env.FIXTURE_STAGE, String(process.pid));
+  });
+}
+process.stdin.on("end", () => process.stdout.write(JSON.stringify({ ok: true, observed: true })));
+`, { mode: 0o700 });
+  function launch(overrides = {}) {
+    const stage = path.join(root, `stage-${children.length}`);
+    const errors = path.join(root, `errors-${children.length}`);
+    const child = spawn(process.execPath, [
+      "--import", pathToFileURL(path.join(root, "preload.mjs")).href,
+      fileURLToPath(new URL("./delivery-proof/extension.mjs", import.meta.url)),
+    ], {
+      env: {
+        PATH: process.env.PATH,
+        SESSION_ID: binding.sessionId, CMUX_WORKSPACE_ID: binding.workspaceId, CMUX_SURFACE_ID: surfaceId,
+        CMUX_MAESTRO_MESSAGE_ROOT: root, CMUX_MAESTRO_MESSAGE_PEER: binding.peer,
+        CMUX_MAESTRO_WORKER_ID: binding.nodeId, CMUX_MAESTRO_GENERATION: "1",
+        CMUX_MAESTRO_EXECUTION_MODE: "interactive", CMUX_MAESTRO_DIRECT_LAUNCH: "1",
+        CMUX_MAESTRO_LAUNCH_PID: String(process.pid), CMUX_MAESTRO_ORCHESTRATOR: path.join(root, "controller"),
+        FIXTURE_STAGE: stage, FIXTURE_ERRORS: errors, ...overrides,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const item = { child, done: once(child, "exit"), stage, errors, stderr: "",
+      observing: overrides.FIXTURE_HOLD_STAGE === "observe" };
+    child.stderr.setEncoding("utf8").on("data", chunk => { item.stderr += chunk; });
+    child.stdout.resume();
+    children.push(item);
+    return item;
+  }
+  const listening = () => waitFor(async () => {
+    const info = await exists(endpoint);
+    return info?.isSocket() && (info.mode & 0o777) === 0o600;
+  });
+  return { root, binding, endpoint, route, exists, waitFor, exited, stop, launch, listening };
+}
+
+test("actual native loader closes its listener on SIGTERM and the same binding reloads", async (t) => {
+  const f = await loaderFixture(t);
+  const bindingBefore = await fs.readFile(f.route);
+  const first = f.launch();
+  await f.listening();
+  const connection = net.createConnection(f.endpoint);
+  t.after(() => connection.destroy());
+  await once(connection, "connect");
+  const disconnected = once(connection, "close");
+  assert.deepEqual(await f.stop(first), [0, null]);
+  await disconnected;
+  assert.equal(await f.exists(f.endpoint), null);
+  assert.deepEqual(await fs.readFile(f.route), bindingBefore);
+  const replacement = f.launch();
+  await f.listening();
+  assert.deepEqual(await f.stop(replacement), [0, null]);
+  assert.equal(await f.exists(f.endpoint), null);
+  assert.deepEqual(await fs.readFile(f.route), bindingBefore);
+});
+
+for (const stage of ["join", "observe", "chmod"]) {
+  test(`actual native loader handles SIGTERM during ${stage} initialization`, async (t) => {
+    const f = await loaderFixture(t);
+    const first = f.launch({ FIXTURE_HOLD_STAGE: stage });
+    await f.waitFor(() => f.exists(first.stage));
+    assert.equal(Boolean(await f.exists(f.endpoint)), stage === "chmod");
+    assert.deepEqual(await f.stop(first), [0, null]);
+    if (stage === "observe") await f.waitFor(() => f.exists(first.stage + ".stopped"));
+    assert.equal(await f.exists(f.endpoint), null);
+    const replacement = f.launch();
+    await f.listening();
+    assert.deepEqual(await f.stop(replacement), [0, null]);
+    assert.equal(await f.exists(f.endpoint), null);
+  });
+}
+
+test("actual native loader cleans its owned listener after initialization failure", async (t) => {
+  const f = await loaderFixture(t);
+  const failed = f.launch({ FIXTURE_FAIL_CHMOD: "1" });
+  assert.deepEqual(await f.exited(failed), [1, null]);
+  assert.match(failed.stderr, /\(EACCES\)/);
+  assert.equal(await f.exists(f.endpoint), null);
+  const replacement = f.launch();
+  await f.listening();
+  assert.deepEqual(await f.stop(replacement), [0, null]);
+});
+
+for (const killed of [false, true]) {
+  test(`actual native loader refuses ${killed ? "unproven stale" : "occupied live"} sockets without unlinking`, async (t) => {
+    const f = await loaderFixture(t);
+    const first = f.launch();
+    await f.listening();
+    const original = await fs.lstat(f.endpoint);
+    if (killed) assert.deepEqual(await f.stop(first, "SIGKILL"), [null, "SIGKILL"]);
+    const replacement = f.launch();
+    assert.deepEqual(await f.exited(replacement), [1, null]);
+    assert.match(await fs.readFile(replacement.errors, "utf8"), /EADDRINUSE/);
+    assert.match(replacement.stderr, /\(EADDRINUSE\)/);
+    assert.equal(replacement.stderr.includes(f.binding.capability), false);
+    assert.equal(replacement.stderr.includes(f.root), false);
+    const retained = await fs.lstat(f.endpoint);
+    assert.equal(retained.dev, original.dev);
+    assert.equal(retained.ino, original.ino);
+    if (!killed) assert.deepEqual(await f.stop(first), [0, null]);
+  });
+}
+
+test("actual native loader diagnostics never print raw exception text or private values", async (t) => {
+  const f = await loaderFixture(t);
+  const privateText = `PRIVATE_TASK_AND_CAPABILITY_${f.binding.capability}`;
+  const failed = f.launch({ FIXTURE_FAIL_JOIN: "1", FIXTURE_PRIVATE_TEXT: privateText });
+  assert.deepEqual(await f.exited(failed), [1, null]);
+  assert.match(failed.stderr, /\(INITIALIZATION_FAILED\)/);
+  assert.ok(failed.stderr.length < 200);
+  assert.equal(failed.stderr.includes(privateText), false);
+  assert.equal(failed.stderr.includes(f.binding.capability), false);
+  assert.equal(await f.exists(f.endpoint), null);
+});
 
 test("installed mode discovers arbitrary same-workspace participants and peer replies", async (t) => {
   const f = await managedFixture(t);

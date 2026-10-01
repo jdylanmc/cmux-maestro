@@ -124,6 +124,16 @@ or cancelled attachment retains the launch lease and capacity even if native
 observation already occurred. Legacy bindings and loaders keep their existing
 path; existing sessions are not converted or restarted.
 
+The CLI may stop and reload an extension within the same owned session. On
+SIGTERM, the loader cancels its pending local observation and closes only its
+own listener/connections before exiting, including during initialization.
+The private session binding stays intact for the CLI's replacement extension.
+There is no timer, messaging retry or startup acknowledgement. An occupied
+socket, or one left behind by forced termination, still fails closed; startup
+never unlinks or adopts an existing endpoint. Initialization failures report
+bounded allowlisted error codes (for example `EADDRINUSE`), never raw exception
+messages, prompts, capabilities or frames.
+
 The launcher retains the configured account/model pins and normal terminal I/O.
 Native extension trust/tool prompts remain Copilot-owned. Defaults add no grants;
 explicit user-approved coordinator `--yolo` launches may use `--allow-all` while
