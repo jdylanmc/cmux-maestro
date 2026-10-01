@@ -63,6 +63,9 @@ do not copy its source or history, modify it, or make this project depend on it.
   denied recovery requires that exact current-generation boundary and exact
   session resume. Archive/recovery must never guess ownership, kill a process,
   delete a terminal, or bypass the still-live resource bound.
+  Explicit authorized `maestro_close` is separate: one exact owned direct-child
+  stock host close request, without automatic cleanup, removal waits, retries,
+  provider shutdown, task-success inference or capacity release.
 - Preserve the launch lease across external surface creation and attachment.
   Archive must not cross an active lease, and every exact created surface must
   remain owned or retained. Interactive I/O belongs to the terminal, not a JSON

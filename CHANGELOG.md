@@ -6,6 +6,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Request one exact owned child-terminal close through stock CMUX, preserving
+  private ownership and launch guards. Return request acceptance without waiting
+  for removal, retrying, shutting down the provider, or releasing capacity; inherit
+  CMUX's socket confirmation bypass and last-terminal refusal (#90).
 - Versioned September 25 visual-design reference, reproducible browser
   prototype, focused screenshots, and visual-backlog audit for #57. This
   documents the approved target; it does not ship native behavior.

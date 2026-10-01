@@ -1913,25 +1913,25 @@ def record_launch_failure(state, worker_id, surface=None, *, phase="launch-faile
         )
 
 
-def authorize_native_spawn(state, identity):
+def authorize_native_actor(state, identity):
     if not isinstance(identity, dict) or set(identity) != {
-        "nodeId", "workspaceId", "sessionId", "generation", "capability", "login", "host"
+        "nodeId", "workspaceId", "sessionId", "generation", "capability"
     }:
-        raise OrchestrationError("Native launch identity is invalid.")
+        raise OrchestrationError("Native actor identity is invalid.")
     node_id = canonical_uuid(identity["nodeId"], "native actor ID")
     actor = state["nodes"].get(node_id)
     if not actor or actor.get("archiving") or not actor.get("messaging"):
-        raise OrchestrationError("Native launch actor is unavailable.")
+        raise OrchestrationError("Native actor is unavailable.")
     if is_direct_launch(actor) and (
         not actor.get("providerProcess") or not actor.get("surfaceId") or actor.get("launchError")
     ):
-        raise OrchestrationError("Native launch actor has unresolved terminal ownership.")
+        raise OrchestrationError("Native actor has unresolved terminal ownership.")
     if (
         (identity["workspaceId"], identity["sessionId"], identity["generation"])
         != (actor["workspaceId"], actor["copilotSessionId"], actor["generation"])
         or type(identity["generation"]) is not int
     ):
-        raise OrchestrationError("Native launch session identity changed.")
+        raise OrchestrationError("Native session identity changed.")
     routes = Path(actor["messaging"]["routes"])
     private_message_directory(routes)
     binding = message_json(routes / f"{message_peer(actor)}.json")
@@ -1945,7 +1945,18 @@ def authorize_native_spawn(state, identity):
         or not isinstance(binding.get("capability"), str)
         or not secrets.compare_digest(binding.get("capability", ""), identity["capability"])
     ):
-        raise OrchestrationError("Native launch capability is unavailable.")
+        raise OrchestrationError("Native capability is unavailable.")
+    return actor
+
+
+def authorize_native_spawn(state, identity):
+    if not isinstance(identity, dict) or set(identity) != {
+        "nodeId", "workspaceId", "sessionId", "generation", "capability", "login", "host"
+    }:
+        raise OrchestrationError("Native launch identity is invalid.")
+    actor = authorize_native_actor(state, {
+        key: value for key, value in identity.items() if key not in {"login", "host"}
+    })
     if identity["host"] not in {"github.com", "https://github.com"}:
         raise OrchestrationError("Parent account host is unsupported; no account fallback was used.")
     validate_launch_settings({"version": 1, "copilotAccount": identity["login"]})
@@ -2057,6 +2068,188 @@ def command_native_observe(root):
             node["phase"] = "turn-running"
         return {"observed": True}
     return mutate(root, observe)
+
+
+def close_process_is_live(process):
+    """Affirmative close admission, not conservative resource retention."""
+    if not process:
+        return False
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-o", "state=,lstart=", "-p", str(process["pid"])],
+            capture_output=True, text=True, timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return False
+    fields = result.stdout.strip().split(maxsplit=1)
+    return (result.returncode == 0 and len(fields) == 2
+            and fields[0][0] in "IRSTU" and fields[1] == process["start"])
+
+
+def close_source_owner(pid, launch):
+    """Only the launch process itself or its immediate source-owning child."""
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-o", "ppid=,uid=,lstart=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return None
+    fields = result.stdout.strip().split(maxsplit=2)
+    if (result.returncode or len(fields) != 3
+            or not re.fullmatch(r"[1-9][0-9]*", fields[0])
+            or not re.fullmatch(r"0|[1-9][0-9]*", fields[1])
+            or int(fields[1]) != os.getuid()):
+        return None
+    owner = {"pid": pid, "start": fields[2], "parentPID": int(fields[0])}
+    if ((pid == launch["pid"] and owner["start"] != launch["start"])
+            or (pid != launch["pid"] and owner["parentPID"] != launch["pid"])
+            or not close_process_is_live(owner)):
+        return None
+    return owner
+
+
+def require_close_source(node):
+    """Inspect only the exact session's ownership marker, never its transcript."""
+    provider = node.get("providerProcess")
+    if not close_process_is_live(provider):
+        raise OrchestrationError("Close requires a current provider process anchor.")
+    source = Path.home() / ".copilot/session-state" / node["copilotSessionId"]
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for component in source.parts[1:]:
+            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        info = os.fstat(descriptor)
+        if info.st_uid != os.getuid() or info.st_mode & 0o022:
+            raise OrchestrationError("Close session source ownership is unavailable.")
+        def inspect_marker():
+            markers = []
+            with os.scandir(descriptor) as entries:
+                for index, entry in enumerate(entries):
+                    if index >= 512:
+                        raise OrchestrationError("Close session source exceeds its inspection bound.")
+                    if entry.name.startswith("inuse.") and entry.name.endswith(".lock"):
+                        markers.append(entry.name)
+            if len(markers) != 1 or not re.fullmatch(r"inuse\.[1-9][0-9]*\.lock", markers[0]):
+                raise OrchestrationError("Close session source is missing or ambiguous.")
+            marker = os.stat(markers[0], dir_fd=descriptor, follow_symlinks=False)
+            if (not stat.S_ISREG(marker.st_mode) or marker.st_uid != os.getuid()
+                    or marker.st_mode & 0o022 or marker.st_nlink != 1):
+                raise OrchestrationError("Close session source or provider generation changed.")
+            return markers[0], marker
+
+        name, marker = inspect_marker()
+        owner_pid = int(name.split(".")[1])
+        if not 1 < owner_pid <= 2_147_483_647:
+            raise OrchestrationError("Close source owner PID is invalid.")
+        owner = close_source_owner(owner_pid, provider)
+        if owner is None:
+            raise OrchestrationError("Close source owner is not a current launch process or direct child.")
+        try:
+            started = datetime.datetime.strptime(owner["start"], "%a %b %d %H:%M:%S %Y").timestamp()
+            launched = datetime.datetime.strptime(provider["start"], "%a %b %d %H:%M:%S %Y").timestamp()
+        except ValueError as error:
+            raise OrchestrationError("Close provider start time is unavailable.") from error
+        if getattr(marker, "st_birthtime", -1) < started or started < launched:
+            raise OrchestrationError("Close session source or provider generation changed.")
+        current_name, current_marker = inspect_marker()
+        if (current_name != name or any(getattr(current_marker, key, None) != getattr(marker, key, None)
+                                       for key in ("st_dev", "st_ino", "st_birthtime", "st_mode", "st_uid", "st_nlink"))
+                or close_source_owner(owner_pid, provider) != owner
+                or not close_process_is_live(provider)):
+            raise OrchestrationError("Close session source or provider generation changed.")
+    except OSError as error:
+        raise OrchestrationError("Close session source is unavailable; no close request was made.") from error
+    finally:
+        os.close(descriptor)
+
+
+def command_native_close(root, cmux):
+    try:
+        raw = sys.stdin.buffer.read(8193)
+        if len(raw) > 8192:
+            raise ValueError()
+        request = json.loads(raw)
+        if not isinstance(request, dict) or set(request) != {"identity", "target"}:
+            raise ValueError()
+        target_identity = request["target"]
+        if (not isinstance(target_identity, dict) or set(target_identity) != {
+            "workerId", "workspaceId", "surfaceId", "sessionId", "generation"
+        } or type(target_identity["generation"]) is not int or target_identity["generation"] < 1):
+            raise ValueError()
+        for key in ("workerId", "workspaceId", "surfaceId", "sessionId"):
+            canonical_uuid(target_identity[key], f"close {key}")
+    except (UnicodeError, ValueError) as error:
+        raise OrchestrationError("Native close request is invalid.") from error
+
+    def owned(state):
+        actor = authorize_native_actor(state, request["identity"])
+        if (actor["id"] != os.environ.get("CMUX_MAESTRO_WORKER_ID")
+                or actor["copilotSessionId"] != os.environ.get("SESSION_ID")
+                or actor["runId"] != os.environ.get("CMUX_MAESTRO_RUN_ID")
+                or str(actor["generation"]) != os.environ.get("CMUX_MAESTRO_GENERATION")):
+            raise OrchestrationError("Close does not match the invoking native session.")
+        authorize(state, actor["id"], os.environ.get("CMUX_MAESTRO_CONTROL_TOKEN"))
+        require_current_surface(actor["workspaceId"], actor["surfaceId"])
+        target = ensure_owned(state, actor, target_identity["workerId"], direct=True)
+        if any(target.get(field) != target_identity[key] for key, field in (
+            ("workspaceId", "workspaceId"), ("surfaceId", "surfaceId"),
+            ("sessionId", "copilotSessionId"), ("generation", "generation"),
+        )):
+            raise OrchestrationError("Close target identity changed.")
+        for node in (actor, target):
+            if (node.get("executionMode") != "interactive" or not node.get("messaging")
+                    or node.get("archiving") or node.get("surfaceUnknown") or node.get("launchError")
+                    or not node.get("surfaceId") or not node.get("providerProcess")
+                    or node["phase"] != "turn-running"
+                    or is_direct_launch(node) and node.get("launchAccepted") is not True):
+                raise OrchestrationError("Close ownership is unresolved or no longer current.")
+        if any(lease["runId"] == actor["runId"] for lease in state["launches"].values()):
+            raise OrchestrationError("Close refuses an active run launch lease.")
+        return actor, target
+
+    snapshot = read_state(root)
+    actor, target = owned(snapshot)
+    if direct_process_identity(actor["providerProcess"]["pid"]) != actor["providerProcess"]:
+        raise OrchestrationError("Close invoking provider identity changed.")
+
+    def send_once(store):
+        state = store.read()
+        current, child = owned(state)
+        if not all(observation_matches(snapshot, state, node["id"]) for node in (actor, target)):
+            raise OrchestrationError("Close ownership changed during preflight.")
+        require_close_source(current)
+        require_close_source(child)
+        surfaces = cmux.workspace_surfaces(current["workspaceId"])
+        if current["surfaceId"] not in surfaces or child["surfaceId"] not in surfaces:
+            raise OrchestrationError("Close actor or child left its bound workspace.")
+        # The existing lock fences controller changes, not host/provider changes.
+        # Never write state or retry after crossing this external request boundary.
+        try:
+            result = cmux.run("rpc", "surface.close", json.dumps({
+                "workspace_id": child["workspaceId"], "surface_id": child["surfaceId"],
+            }))
+        except (OrchestrationError, OSError) as error:
+            detail = str(error)[:240] if isinstance(error, OrchestrationError) else type(error).__name__
+            raise OrchestrationError(
+                f"Close request failed or is uncertain: {detail} No retry was made; removal is unconfirmed."
+            ) from error
+        try:
+            if (not isinstance(result, dict) or result.get("ok") is False
+                    or result.get("closed") is False or "error" in result
+                    or canonical_uuid(result.get("workspace_id"), "close reply workspace") != child["workspaceId"]
+                    or canonical_uuid(result.get("surface_id"), "close reply surface") != child["surfaceId"]):
+                raise ValueError()
+        except (OrchestrationError, ValueError) as error:
+            raise OrchestrationError(
+                "Close reply is unrecognized; removal is unconfirmed. No retry was made."
+            ) from error
+        return {**target_identity, "closeAccepted": True, "removal": "unconfirmed"}
+
+    return with_store(root, send_once, wait=0)
 
 
 def command_spawn(args, root, cmux, *, native_identity=None):
@@ -3582,6 +3775,7 @@ def parser():
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("accounts", help="List configured GitHub account names without credentials")
     commands.add_parser("native-spawn", help="Private session-bound launch ingress; use the native maestro_spawn tool")
+    commands.add_parser("native-close", help="Private owned-child close ingress; use the native maestro_close tool")
     commands.add_parser("native-observe", help=argparse.SUPPRESS)
     commands.add_parser("launch-credential", help=argparse.SUPPRESS)
     commands.add_parser(
@@ -3693,6 +3887,8 @@ def main(argv=None):
             output = command_spawn(args, root, cmux)
         elif args.command == "native-spawn":
             output = command_native_spawn(root, cmux)
+        elif args.command == "native-close":
+            output = command_native_close(root, cmux)
         elif args.command == "native-observe":
             output = command_native_observe(root)
         elif args.command == "runtime":

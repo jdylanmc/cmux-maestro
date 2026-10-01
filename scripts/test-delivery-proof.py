@@ -2,16 +2,21 @@
 """Fixture/launcher contracts only: never authenticates or launches a real provider."""
 
 import copy
+from contextlib import contextmanager
 import io
 import hashlib
 import json
 import os
 from pathlib import Path
 import runpy
+import select
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
+import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 import uuid
@@ -1100,6 +1105,668 @@ class ProofTests(unittest.TestCase):
                 worker["deliveryProof"]["yolo"] = value
                 with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "delivery proof"):
                     CONTROLLER["validate_state"](state)
+
+
+class NativeCloseTests(unittest.TestCase):
+    """Real private state/routes/markers; synthetic host and explicitly owned process fixtures."""
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp(prefix="m90-", dir="/tmp")).resolve()
+        self.addCleanup(shutil.rmtree, self.home)
+        self.root = self.home / "Orchestration"
+        self.routes = self.home / "routes"
+        self.routes.mkdir(mode=0o700)
+        self.actor, self.token = CONTROLLER["new_root"](
+            str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()), "Coordinator",
+        )
+        self.actor.update(
+            executionMode="interactive", runtimeProtocolVersion=2, launchMethod="direct",
+            launchAccepted=True, phase="turn-running", availability="busy", generation=1,
+            launchSettings={"version": 1, "model": "synthetic-model", "copilotAccount": "synthetic"},
+            copilotSessionId=str(uuid.uuid4()), providerProcess={
+                "pid": 12345, "start": "Thu Jan  1 00:00:00 2026",
+            },
+            messaging={"version": 1, "routes": str(self.routes), "extension": str(self.home / "extension")},
+        )
+        self.child = {
+            **copy.deepcopy(self.actor), "id": str(uuid.uuid4()), "role": "worker",
+            "parentId": self.actor["id"], "copilotSessionId": str(uuid.uuid4()),
+            "surfaceId": str(uuid.uuid4()), "tokenHash": CONTROLLER["token_hash"]("child-private-token"),
+            "providerProcess": {"pid": 12346, "start": "Thu Jan  1 00:00:00 2026"},
+        }
+        self.sibling = {**copy.deepcopy(self.child), "id": str(uuid.uuid4()),
+                        "surfaceId": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4())}
+        self.grandchild = {**copy.deepcopy(self.sibling), "id": str(uuid.uuid4()),
+                           "parentId": self.child["id"], "surfaceId": str(uuid.uuid4()),
+                           "copilotSessionId": str(uuid.uuid4())}
+        self.state = {**CONTROLLER["empty_state"](), "nodes": {
+            node["id"]: node for node in (self.actor, self.child, self.sibling, self.grandchild)
+        }}
+        self.persist()
+        CONTROLLER["bind_messaging"](self.actor)
+        binding = json.loads((self.routes / f'{CONTROLLER["message_peer"](self.actor)}.json').read_text())
+        self.identity = {key: binding[key] for key in (
+            "nodeId", "workspaceId", "sessionId", "generation", "capability",
+        )}
+        self.target = {
+            "workerId": self.child["id"], "workspaceId": self.child["workspaceId"],
+            "surfaceId": self.child["surfaceId"], "sessionId": self.child["copilotSessionId"], "generation": 1,
+        }
+        self.environment = {
+            "CMUX_MAESTRO_WORKER_ID": self.actor["id"], "SESSION_ID": self.actor["copilotSessionId"],
+            "CMUX_MAESTRO_CONTROL_TOKEN": self.token, "CMUX_MAESTRO_RUN_ID": self.actor["runId"],
+            "CMUX_MAESTRO_GENERATION": "1", "CMUX_WORKSPACE_ID": self.actor["workspaceId"],
+            "CMUX_SURFACE_ID": self.actor["surfaceId"],
+        }
+        for node in (self.actor, self.child):
+            source = self.source(node)
+            source.mkdir(parents=True, mode=0o700)
+            (source / f'inuse.{node["providerProcess"]["pid"]}.lock').touch(mode=0o600)
+        self.cmux = mock.Mock()
+        self.cmux.workspace_surfaces.return_value = {node["surfaceId"] for node in self.state["nodes"].values()}
+        self.cmux.run.return_value = {
+            "workspace_id": self.child["workspaceId"], "surface_id": self.child["surfaceId"],
+        }
+        self.starts = {12345: self.actor["providerProcess"]["start"], 12346: self.child["providerProcess"]["start"]}
+        self.parents = {12345: 1, 12346: 1}
+        self.process_uids = {}
+        self.process_states = {}
+
+    def source(self, node):
+        return self.home / ".copilot/session-state" / node["copilotSessionId"]
+
+    def persist(self):
+        CONTROLLER["with_store"](self.root, lambda store: store.write(self.state))
+
+    @contextmanager
+    def owned_source_wrapper(self):
+        source = self.source(self.child)
+        (source / "inuse.12346.lock").unlink()
+        script = """
+import signal,subprocess,sys
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+owner = subprocess.Popen([
+    sys.executable, "-B", "-c",
+    "import os,sys; from pathlib import Path; "
+    "(Path(sys.argv[1])/f'inuse.{os.getpid()}.lock').touch(mode=0o644); "
+    "print('ready',flush=True); sys.stdin.readline()",
+    sys.argv[1],
+], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+try:
+    assert owner.stdout.readline().strip() == "ready"
+    print(owner.pid, flush=True)
+    for command in sys.stdin:
+        if command.strip() == "exit-owner":
+            owner.stdin.write("\\n")
+            owner.stdin.flush()
+finally:
+    owner.stdin.close()
+    owner.wait(timeout=5)
+    owner.stdout.close()
+"""
+        wrapper = subprocess.Popen(
+            [sys.executable, "-B", "-c", script, str(source)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            self.assertTrue(select.select([wrapper.stdout], [], [], 5)[0], "owned wrapper did not become ready")
+            owner_pid = int(wrapper.stdout.readline().strip())
+            self.assertNotEqual(wrapper.pid, owner_pid)
+            self.child["providerProcess"] = {
+                "pid": wrapper.pid, "start": CONTROLLER["process_start"](wrapper.pid),
+            }
+            self.assertIsNotNone(self.child["providerProcess"]["start"])
+            self.persist()
+            yield wrapper, owner_pid
+        finally:
+            wrapper.stdin.close()
+            try:
+                wrapper.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                wrapper.terminate()
+                wrapper.wait(timeout=5)
+            wrapper.stdout.close()
+            wrapper.stderr.close()
+
+    def separate_source_owner(self):
+        source = self.source(self.child)
+        (source / "inuse.12346.lock").unlink()
+        marker = source / "inuse.12347.lock"
+        marker.touch(mode=0o644)
+        self.starts[12347] = self.starts[12346]
+        self.parents[12347] = 12346
+        return marker
+
+    def invoke(self, request=None, *, anchor=None, kill_error=ProcessLookupError, real_pids=()):
+        close = CONTROLLER["command_native_close"]
+        process_start = CONTROLLER["process_start"]
+        run = subprocess.run
+        def process_probe(arguments, **kwargs):
+            if arguments[:2] == ["/bin/ps", "-o"] and int(arguments[-1]) not in real_pids:
+                pid = int(arguments[-1])
+                start = self.starts.get(pid)
+                if arguments[2] == "state=,lstart=":
+                    output = f"{self.process_states.get(pid, 'S')} {start}\n" if start else ""
+                elif arguments[2] == "ppid=,uid=,lstart=":
+                    output = (f"{self.parents.get(pid, 1)} {self.process_uids.get(pid, os.getuid())} {start}\n"
+                              if start else "")
+                else:
+                    raise AssertionError("Unexpected process probe")
+                return subprocess.CompletedProcess(arguments, 0, output, "")
+            return run(arguments, **kwargs)
+        raw = request if isinstance(request, bytes) else json.dumps(
+            request if request is not None else {"identity": self.identity, "target": self.target}
+        ).encode()
+        with mock.patch.dict(os.environ, self.environment), \
+                mock.patch("sys.stdin", mock.Mock(buffer=io.BytesIO(raw))), \
+                mock.patch.object(Path, "home", return_value=self.home), \
+                mock.patch.dict(close.__globals__, {
+                    "process_start": lambda pid: process_start(pid) if pid in real_pids else self.starts.get(pid),
+                    "direct_process_identity": anchor or (lambda _: dict(self.actor["providerProcess"])),
+                    "retire_messaging": mock.Mock(side_effect=AssertionError("close must preserve routes")),
+                    "reconcile_resources": mock.Mock(side_effect=AssertionError("close must not reconcile")),
+                    "time": mock.Mock(wraps=time, sleep=mock.Mock(side_effect=AssertionError("close must not wait"))),
+                }), \
+                mock.patch("os.kill", side_effect=kill_error), \
+                mock.patch("subprocess.run", side_effect=process_probe):
+            return close(self.root, self.cmux)
+
+    def test_close_accepts_one_live_direct_child_and_preserves_every_record_and_route(self):
+        before = {file: file.read_bytes() for directory in (self.root, self.routes)
+                  for file in directory.rglob("*") if file.is_file()}
+        result = self.invoke()
+        self.assertEqual(result, {**self.target, "closeAccepted": True, "removal": "unconfirmed"})
+        self.assertEqual(self.cmux.mock_calls, [
+            mock.call.workspace_surfaces(self.actor["workspaceId"]),
+            mock.call.run("rpc", "surface.close", json.dumps({
+                "workspace_id": self.target["workspaceId"], "surface_id": self.target["surfaceId"],
+            })),
+        ])
+        self.assertEqual({file: file.read_bytes() for file in before}, before)
+        self.assertEqual(CONTROLLER["read_state"](self.root), self.state)
+        self.assertNotIn(self.token, json.dumps(result))
+        self.assertNotIn(self.identity["capability"], json.dumps(result))
+
+    def test_close_also_accepts_an_unchanged_managed_supervised_interactive_child(self):
+        self.child.pop("launchMethod")
+        self.child.pop("launchAccepted")
+        self.child["supervisor"] = {"pid": 12347, "start": "Thu Jan  1 00:00:00 2026"}
+        self.persist()
+        self.assertTrue(self.invoke()["closeAccepted"])
+        self.cmux.run.assert_called_once()
+
+    def test_close_accepts_real_wrapper_with_separate_direct_source_owner(self):
+        with self.owned_source_wrapper() as (wrapper, owner_pid):
+            source = self.source(self.child)
+            self.assertEqual([item.name for item in source.iterdir()], [f"inuse.{owner_pid}.lock"])
+            self.assertFalse((source / f"inuse.{wrapper.pid}.lock").exists())
+            before = (self.root / "control/state.json").read_bytes()
+            self.assertEqual(self.invoke(real_pids={wrapper.pid, owner_pid}), {
+                **self.target, "closeAccepted": True, "removal": "unconfirmed",
+            })
+            self.cmux.run.assert_called_once()
+            self.assertEqual((self.root / "control/state.json").read_bytes(), before)
+
+    def test_close_accepts_real_same_pid_launch_and_source_owner(self):
+        with self.owned_source_wrapper() as (wrapper, owner_pid):
+            self.child["providerProcess"] = {
+                "pid": owner_pid, "start": CONTROLLER["process_start"](owner_pid),
+            }
+            self.persist()
+            self.assertTrue(self.invoke(real_pids={wrapper.pid, owner_pid})["closeAccepted"])
+            self.cmux.run.assert_called_once()
+
+    def test_close_refuses_real_zombie_source_owner_under_live_wrapper(self):
+        with self.owned_source_wrapper() as (wrapper, owner_pid):
+            wrapper.stdin.write("exit-owner\n")
+            wrapper.stdin.flush()
+            deadline = time.monotonic() + 5
+            while True:
+                state = subprocess.run(
+                    ["/bin/ps", "-o", "state=", "-p", str(owner_pid)],
+                    capture_output=True, text=True, timeout=3, check=True,
+                ).stdout.strip()
+                if state.startswith("Z"):
+                    break
+                self.assertLess(time.monotonic(), deadline, "owned source process did not exit")
+                time.sleep(0.01)
+            self.assertTrue(CONTROLLER["close_process_is_live"](self.child["providerProcess"]))
+            self.assertTrue((self.source(self.child) / f"inuse.{owner_pid}.lock").exists())
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "source owner"):
+                self.invoke(real_pids={wrapper.pid, owner_pid})
+            self.assertEqual(self.cmux.mock_calls, [])
+
+    def test_close_refuses_real_source_owner_beyond_the_supported_direct_child_bound(self):
+        with self.owned_source_wrapper() as (wrapper, owner_pid):
+            self.child["providerProcess"] = {
+                "pid": os.getpid(), "start": CONTROLLER["process_start"](os.getpid()),
+            }
+            self.persist()
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "source owner"):
+                self.invoke(real_pids={os.getpid(), wrapper.pid, owner_pid})
+            self.assertEqual(self.cmux.mock_calls, [])
+
+    def test_close_refuses_sibling_unrelated_foreign_dead_and_unknown_source_owner(self):
+        self.separate_source_owner()
+        for mapping, pid, value in (
+            (self.parents, 12347, 1), (self.parents, 12347, 12345),
+            (self.process_uids, 12347, os.getuid() + 1), (self.process_uids, 12347, "unknown"),
+            (self.starts, 12347, None), (self.process_states, 12347, "Z"),
+            (self.process_states, 12347, "?"), (self.process_states, 12346, "Z"),
+            (self.starts, 12346, None), (self.starts, 12346, "replacement-start"),
+        ):
+            with self.subTest(pid=pid, value=value), mock.patch.dict(mapping, {pid: value}):
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.invoke()
+        self.assertEqual(self.cmux.mock_calls, [])
+
+    def test_close_refuses_changed_owner_lineage_launch_identity_or_marker_during_preflight(self):
+        marker = self.separate_source_owner()
+        source_owner = CONTROLLER["close_source_owner"]
+        def replace_marker():
+            replacement = marker.with_name("replacement")
+            replacement.touch(mode=0o644)
+            replacement.replace(marker)
+        for change in (
+            lambda: self.parents.update({12347: 1}),
+            lambda: self.starts.update({12347: "replacement-start"}),
+            lambda: self.starts.update({12346: "replacement-start"}),
+            replace_marker,
+            lambda: (marker.parent / "inuse.12348.lock").touch(),
+        ):
+            calls = 0
+            def changed(pid, launch):
+                nonlocal calls
+                result = source_owner(pid, launch)
+                if pid == 12347:
+                    calls += 1
+                    if calls == 1:
+                        change()
+                return result
+            with self.subTest(change=change), mock.patch.dict(CONTROLLER["command_native_close"].__globals__, {
+                "close_source_owner": changed,
+            }):
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.invoke()
+            self.parents[12347] = 12346
+            self.starts[12346] = self.starts[12347] = self.child["providerProcess"]["start"]
+            (marker.parent / "inuse.12348.lock").unlink(missing_ok=True)
+        self.assertEqual(self.cmux.mock_calls, [])
+
+    def test_close_refuses_invalid_marker_pids_and_owner_predating_launch(self):
+        marker = self.separate_source_owner()
+        for name in ("inuse.012347.lock", "inuse.1.lock", "inuse.2147483648.lock", "inuse.invalid.lock"):
+            invalid = marker.with_name(name)
+            marker.rename(invalid)
+            try:
+                with self.subTest(name=name):
+                    with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                        self.invoke()
+            finally:
+                invalid.rename(marker)
+        self.starts[12347] = "Wed Dec 31 00:00:00 2025"
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "generation changed"):
+            self.invoke()
+        self.assertEqual(self.cmux.mock_calls, [])
+
+    def test_close_source_owner_refuses_unavailable_or_malformed_os_metadata(self):
+        owner = CONTROLLER["close_source_owner"]
+        anchor = self.child["providerProcess"]
+        for output in ("", "12346", f"1 {os.getuid()} {anchor['start']}",
+                       f"unknown {os.getuid()} {anchor['start']}",
+                       f"12346 unknown {anchor['start']}"):
+            with self.subTest(output=output), mock.patch("subprocess.run", return_value=
+                    subprocess.CompletedProcess([], 0, output, "")) as run:
+                self.assertIsNone(owner(12347, anchor))
+                run.assert_called_once_with(
+                    ["/bin/ps", "-o", "ppid=,uid=,lstart=", "-p", "12347"],
+                    capture_output=True, text=True, timeout=3,
+                )
+        for error in (PermissionError(), subprocess.TimeoutExpired("/bin/ps", 3),
+                      UnicodeDecodeError("utf8", b"\xff", 0, 1, "invalid")):
+            with self.subTest(error=type(error).__name__), mock.patch("subprocess.run", side_effect=error):
+                self.assertIsNone(owner(12347, anchor))
+        with mock.patch("subprocess.run", return_value=
+                subprocess.CompletedProcess([], 1, f"12346 {os.getuid()} {anchor['start']}", "")):
+            self.assertIsNone(owner(12347, anchor))
+
+    def test_close_accepts_stock_host_uuid_casing_without_interpreting_removal(self):
+        self.cmux.run.return_value = {
+            "workspace_id": self.child["workspaceId"].upper(), "workspace_ref": "workspace:1",
+            "surface_id": self.child["surfaceId"].upper(), "surface_ref": "surface:2",
+            "window_id": str(uuid.uuid4()).upper(), "window_ref": "window:1",
+        }
+        self.assertEqual(self.invoke(), {**self.target, "closeAccepted": True, "removal": "unconfirmed"})
+        self.cmux.run.assert_called_once()
+
+    def test_close_rejects_stale_target_fields(self):
+        for key, value in (
+            ("workerId", str(uuid.uuid4())), ("workspaceId", str(uuid.uuid4())),
+            ("surfaceId", str(uuid.uuid4())), ("sessionId", str(uuid.uuid4())), ("generation", 2),
+        ):
+            with self.subTest(key=key):
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.invoke({"identity": self.identity, "target": {**self.target, key: value}})
+        self.cmux.run.assert_not_called()
+
+    def test_close_rejects_self_grandchild_and_unrelated_target(self):
+        foreign = {**copy.deepcopy(self.actor), "id": str(uuid.uuid4()), "runId": str(uuid.uuid4()),
+                   "surfaceId": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4())}
+        self.state["nodes"][foreign["id"]] = foreign
+        self.persist()
+        for node in (self.actor, self.grandchild, foreign):
+            with self.subTest(node=node["id"]):
+                target = {
+                    "workerId": node["id"], "workspaceId": node["workspaceId"],
+                    "surfaceId": node["surfaceId"], "sessionId": node["copilotSessionId"], "generation": 1,
+                }
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "outside"):
+                    self.invoke({"identity": self.identity, "target": target})
+        self.cmux.run.assert_not_called()
+
+    def test_close_rejects_public_peer_capability_without_actual_invoker_authority(self):
+        for key, value in (
+            ("CMUX_MAESTRO_CONTROL_TOKEN", ""), ("CMUX_MAESTRO_WORKER_ID", self.child["id"]),
+            ("SESSION_ID", self.child["copilotSessionId"]), ("CMUX_MAESTRO_RUN_ID", str(uuid.uuid4())),
+            ("CMUX_MAESTRO_GENERATION", "2"), ("CMUX_WORKSPACE_ID", str(uuid.uuid4())),
+            ("CMUX_SURFACE_ID", self.child["surfaceId"]),
+        ):
+            with self.subTest(key=key), mock.patch.dict(self.environment, {key: value}):
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.invoke()
+        self.cmux.run.assert_not_called()
+
+    def test_worker_cannot_close_its_parent_or_sibling_even_with_its_own_native_authority(self):
+        CONTROLLER["bind_messaging"](self.child)
+        binding = json.loads((self.routes / f'{CONTROLLER["message_peer"](self.child)}.json').read_text())
+        self.identity = {key: binding[key] for key in self.identity}
+        self.environment.update(
+            CMUX_MAESTRO_WORKER_ID=self.child["id"], SESSION_ID=self.child["copilotSessionId"],
+            CMUX_MAESTRO_CONTROL_TOKEN="child-private-token", CMUX_SURFACE_ID=self.child["surfaceId"],
+        )
+        for node in (self.actor, self.sibling):
+            with self.subTest(node=node["id"]):
+                target = {
+                    "workerId": node["id"], "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
+                    "sessionId": node["copilotSessionId"], "generation": 1,
+                }
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "outside"):
+                    self.invoke({"identity": self.identity, "target": target})
+        self.cmux.run.assert_not_called()
+
+    def test_close_rejects_changed_actor_identity_capability_or_ancestry(self):
+        for key, value in (
+            ("nodeId", self.child["id"]), ("workspaceId", str(uuid.uuid4())),
+            ("sessionId", str(uuid.uuid4())), ("generation", 2), ("capability", "f" * 64),
+        ):
+            with self.subTest(key=key):
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.invoke({"identity": {**self.identity, key: value}, "target": self.target})
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "provider identity"):
+            self.invoke(anchor=lambda _: {"pid": 12345, "start": "replacement"})
+        self.cmux.run.assert_not_called()
+
+    def test_close_refuses_active_launch_and_unresolved_ownership(self):
+        for node in (self.actor, self.child):
+            for key, value in (
+                ("archiving", True), ("launchError", "launch-failed"),
+                ("phase", "launching"), ("providerProcess", None),
+                ("messaging", None),
+            ):
+                with self.subTest(node=node["id"], key=key), mock.patch.dict(node, {key: value}):
+                    self.persist()
+                    with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                        self.invoke()
+            self.persist()
+        self.child.pop("launchAccepted")
+        self.persist()
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "unresolved"):
+            self.invoke()
+        self.child.update(surfaceId=None, surfaceUnknown=True)
+        self.persist()
+        with self.assertRaises(CONTROLLER["OrchestrationError"]):
+            self.invoke()
+        self.child.update(surfaceId=self.target["surfaceId"], launchAccepted=True)
+        self.child.pop("surfaceUnknown")
+        self.state["launches"][self.sibling["id"]] = {
+            "workerId": self.sibling["id"], "runId": self.actor["runId"],
+            "workspaceId": self.actor["workspaceId"], "sessionId": self.sibling["copilotSessionId"],
+            "generation": 1, "surfaceId": self.sibling["surfaceId"], "state": "starting",
+            "createdAt": CONTROLLER["now"](), "updatedAt": CONTROLLER["now"](),
+        }
+        self.sibling["phase"] = "launching"
+        self.persist()
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "launch lease"):
+            self.invoke()
+        self.cmux.run.assert_not_called()
+
+    def test_close_rejects_moved_or_missing_actor_and_child_without_following_them(self):
+        for node in (self.actor, self.child):
+            self.cmux.workspace_surfaces.return_value = {
+                other["surfaceId"] for other in self.state["nodes"].values() if other["id"] != node["id"]
+            }
+            with self.subTest(node=node["id"]):
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "bound workspace"):
+                    self.invoke()
+        self.cmux.run.assert_not_called()
+
+    def test_close_refuses_provider_exit_pid_reuse_and_unknown_probe(self):
+        for pid in (12345, 12346):
+            for start in (None, "replacement-start"):
+                with self.subTest(pid=pid, start=start), mock.patch.dict(self.starts, {pid: start}):
+                    with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "process anchor"):
+                        self.invoke()
+        with mock.patch.dict(self.starts, {12346: None}):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "process anchor"):
+                self.invoke(kill_error=PermissionError)
+        self.cmux.run.assert_not_called()
+
+    def test_close_refuses_real_unreaped_zombie_before_any_host_call(self):
+        source = self.source(self.child)
+        (source / "inuse.12346.lock").unlink()
+        process = subprocess.Popen([
+            sys.executable, "-B", "-c",
+            "import os,sys; from pathlib import Path; "
+            "(Path(sys.argv[1])/f'inuse.{os.getpid()}.lock').touch(mode=0o600); "
+            "print('ready',flush=True); sys.stdin.readline()",
+            str(source),
+        ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertTrue(select.select([process.stdout], [], [], 5)[0], "owned child did not become ready")
+            self.assertEqual(process.stdout.readline().strip(), "ready")
+            anchor = {"pid": process.pid, "start": CONTROLLER["process_start"](process.pid)}
+            self.assertIsNotNone(anchor["start"])
+            self.child["providerProcess"] = anchor
+            self.persist()
+            with mock.patch.object(Path, "home", return_value=self.home):
+                CONTROLLER["require_close_source"](self.child)
+            process.stdin.write("exit\n")
+            process.stdin.flush()
+            deadline = time.monotonic() + 5
+            while True:
+                state = subprocess.run(
+                    ["/bin/ps", "-o", "state=", "-p", str(process.pid)],
+                    capture_output=True, text=True, timeout=3, check=True,
+                ).stdout.strip()
+                if state.startswith("Z"):
+                    break
+                self.assertLess(time.monotonic(), deadline, "owned child did not exit within test watchdog")
+                time.sleep(0.01)
+            self.assertEqual(CONTROLLER["process_start"](process.pid), anchor["start"])
+            self.assertTrue(CONTROLLER["process_observation"](anchor), "resource retention stays conservative")
+            self.assertTrue((source / f"inuse.{process.pid}.lock").is_file())
+            before = (self.root / "control/state.json").read_bytes()
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "current provider process anchor"):
+                self.invoke(real_pids={process.pid})
+            self.assertEqual(self.cmux.mock_calls, [])
+            self.assertEqual((self.root / "control/state.json").read_bytes(), before)
+            self.assertEqual(process.wait(timeout=5), 0)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+            for pipe in (process.stdin, process.stdout, process.stderr):
+                pipe.close()
+
+    def test_close_process_probe_accepts_known_live_states_with_exact_start(self):
+        probe = CONTROLLER["close_process_is_live"]
+        anchor = self.child["providerProcess"]
+        for state in ("I", "R", "S", "T", "U", "S+", "Rs"):
+            with self.subTest(state=state), mock.patch("subprocess.run", return_value=
+                    subprocess.CompletedProcess([], 0, f" {state}  {anchor['start']}\n", "")) as run:
+                self.assertTrue(probe(anchor))
+                run.assert_called_once_with(
+                    ["/bin/ps", "-o", "state=,lstart=", "-p", str(anchor["pid"])],
+                    capture_output=True, text=True, timeout=3,
+                )
+
+    def test_close_process_probe_refuses_zombie_unknown_reused_or_failed_evidence(self):
+        probe = CONTROLLER["close_process_is_live"]
+        anchor = self.child["providerProcess"]
+        for output in ("", "S", f"Z {anchor['start']}", f"Z+ {anchor['start']}",
+                       f"X {anchor['start']}", f"? {anchor['start']}", "S replacement-start"):
+            with self.subTest(output=output), mock.patch("subprocess.run", return_value=
+                    subprocess.CompletedProcess([], 0, output, "")):
+                self.assertFalse(probe(anchor))
+        with mock.patch("subprocess.run", return_value=
+                subprocess.CompletedProcess([], 1, f"S {anchor['start']}", "")):
+            self.assertFalse(probe(anchor))
+        for error in (FileNotFoundError(), PermissionError(), subprocess.TimeoutExpired("/bin/ps", 3),
+                      UnicodeDecodeError("utf8", b"\xff", 0, 1, "invalid")):
+            with self.subTest(error=type(error).__name__), mock.patch("subprocess.run", side_effect=error):
+                self.assertFalse(probe(anchor))
+        with mock.patch("subprocess.run") as run:
+            self.assertFalse(probe(None))
+            run.assert_not_called()
+
+    def test_close_refuses_missing_repurposed_and_ambiguous_source_markers(self):
+        source = self.source(self.child)
+        marker = source / "inuse.12346.lock"
+        marker.unlink()
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "missing or ambiguous"):
+            self.invoke()
+        marker.touch(mode=0o600)
+        extra = source / "inuse.12347.lock"
+        extra.touch(mode=0o600)
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "missing or ambiguous"):
+            self.invoke()
+        extra.unlink()
+        marker.unlink()
+        marker.symlink_to(self.source(self.actor) / "inuse.12345.lock")
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "source or provider"):
+            self.invoke()
+        self.cmux.run.assert_not_called()
+
+    def test_close_refuses_symlinked_source_directory_and_source_inspection_overflow(self):
+        source = self.source(self.child)
+        original = source.with_name("original")
+        source.rename(original)
+        source.symlink_to(original)
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "source is unavailable"):
+            self.invoke()
+        source.unlink()
+        original.rename(source)
+        for index in range(512):
+            (source / f"entry-{index}").touch()
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "inspection bound"):
+            self.invoke()
+        self.cmux.run.assert_not_called()
+
+    def test_close_refuses_unsafe_or_pre_provider_source_marker(self):
+        original_stat = os.stat
+        for change in ({"st_birthtime": 0}, {"st_uid": os.getuid() + 1}, {"st_nlink": 2}, {"st_mode": 0o100666}):
+            def altered(path, *args, **kwargs):
+                result = original_stat(path, *args, **kwargs)
+                if path == "inuse.12346.lock":
+                    return SimpleNamespace(**{
+                        key: getattr(result, key) for key in ("st_birthtime", "st_uid", "st_nlink", "st_mode")
+                    } | change)
+                return result
+            with self.subTest(change=change), mock.patch("os.stat", side_effect=altered):
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "source or provider"):
+                    self.invoke()
+        self.cmux.run.assert_not_called()
+
+    def test_close_uses_existing_bounded_rpc_for_stock_refusal_timeout_and_invalid_json(self):
+        host = CONTROLLER["Cmux"].__new__(CONTROLLER["Cmux"])
+        host.executable = "/synthetic/cmux"
+        inventory = subprocess.CompletedProcess([], 0, json.dumps({
+            "workspace_id": self.actor["workspaceId"],
+            "surfaces": [{"id": node["surfaceId"]} for node in (self.actor, self.child)],
+        }), "")
+        self.cmux = host
+        for failure in (
+            subprocess.CompletedProcess([], 1, "", "lastSurface"),
+            subprocess.CompletedProcess([], 0, "{", ""),
+            subprocess.TimeoutExpired("cmux", 15), FileNotFoundError(),
+        ):
+            with self.subTest(failure=str(failure)), \
+                    mock.patch("subprocess.run", side_effect=[inventory, failure]) as run:
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "failed or is uncertain"):
+                    self.invoke()
+                self.assertEqual(run.call_count, 2)
+                self.assertEqual(run.call_args.args[0][:6], [
+                    "/synthetic/cmux", "--json", "--id-format", "uuids", "rpc", "surface.close",
+                ])
+                self.assertEqual(run.call_args.kwargs["timeout"], 15)
+
+    def test_close_rechecks_state_after_preflight_and_holds_lock_through_only_request(self):
+        def changed(_):
+            self.child["generation"] = 2
+            self.persist()
+            return self.actor["providerProcess"]
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "target identity"):
+            self.invoke(anchor=changed)
+        self.cmux.run.assert_not_called()
+
+    def test_close_excludes_concurrent_controller_writes_without_persistent_close_state(self):
+        def request(*_):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "operation is active"):
+                CONTROLLER["mutate"](self.root, lambda _: self.fail("must not acquire"), wait=0)
+            return {"workspace_id": self.target["workspaceId"], "surface_id": self.target["surfaceId"]}
+        self.cmux.run.side_effect = request
+        self.assertTrue(self.invoke()["closeAccepted"])
+        self.cmux.run.assert_called_once()
+        self.assertEqual(CONTROLLER["read_state"](self.root), self.state)
+
+    def test_close_local_failures_and_unrecognized_replies_never_retry_or_read_after_send(self):
+        before = (self.root / "control/state.json").read_bytes()
+        for failure in (
+            CONTROLLER["OrchestrationError"]("lastSurface"),
+            CONTROLLER["OrchestrationError"]("timed out"),
+            CONTROLLER["OrchestrationError"]("operation is active"),
+            OSError("lost reply"),
+        ):
+            with self.subTest(failure=str(failure)):
+                self.cmux.run.reset_mock()
+                self.cmux.run.side_effect = failure
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "failed or is uncertain"):
+                    self.invoke()
+                self.cmux.run.assert_called_once()
+        self.cmux.run.side_effect = None
+        accepted = dict(self.cmux.run.return_value)
+        for reply in (None, {}, {"surface_id": str(uuid.uuid4())},
+                      {**accepted, "ok": False}, {**accepted, "closed": False},
+                      {**accepted, "error": "refused"}):
+            with self.subTest(reply=reply):
+                self.cmux.run.reset_mock()
+                self.cmux.run.return_value = reply
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "reply is unrecognized"):
+                    self.invoke()
+                self.cmux.run.assert_called_once()
+        self.assertEqual((self.root / "control/state.json").read_bytes(), before)
+
+    def test_close_strict_bounded_request_and_private_parser_entry(self):
+        self.assertEqual(CONTROLLER["parser"]().parse_args(["native-close"]).command, "native-close")
+        for request in (
+            b"x" * 8193, b"{", [], {}, {"identity": self.identity, "target": [self.target]},
+            {"identity": self.identity, "target": self.target, "subtree": True},
+            {"identity": self.identity, "target": {**self.target, "generation": True}},
+        ):
+            with self.subTest(request=str(request)[:80]):
+                with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.invoke(request)
+        self.cmux.run.assert_not_called()
 
 
 class LifecycleFailureTests(unittest.TestCase):

@@ -142,6 +142,50 @@ proof bypass was fixed before credential lookup/reservation. No full parent
 permission inheritance, auto-approval callback, or persistent policy rewrite is
 inferred. Cleanup must follow exact lifecycle ownership, not a guessed idle state.
 
+### Explicit owned-child close
+
+`maestro_close({target: {workerId, workspaceId, surfaceId, sessionId, generation}})`
+uses the CLI-owned adapter and existing controller, not the peer socket or the
+sidebar. The model supplies only one explicit child identity. The adapter binds
+the actual invoking session and private capability; controller admission also
+requires that session's inherited actor/control token, run, generation, current
+surface and provider ancestry. Public peer discovery grants no close rights.
+
+The controller rechecks exact direct-child ownership against the initial
+snapshot under its existing exclusive state lock. Active run launch leases,
+unresolved/changed identities, moved/missing workspace surfaces, and absent or
+changed provider anchors refuse. Close admission positively checks non-zombie
+process state and exact PID/start before any host call; shared conservative
+resource-retention predicates are unchanged. The recorded `providerProcess`
+remains the launch anchor: npm can keep that Node process alive while its direct
+native CLI child owns the session source. A bounded metadata-only inspection of
+each exact standard session directory requires one safe `inuse.PID.lock`.
+Its owner must be the same live PID or one immediate same-user child of the
+current recorded launch PID. Both processes' identities and the owner's parent
+link are rechecked; marker identity and uniqueness must remain unchanged.
+Marker birth must follow the source owner's start, which cannot predate launch.
+Additional markers conservatively refuse, including stale ones. This permits
+the evidenced one-edge wrapper layout, not arbitrary descendant discovery or
+executable-name inference. No recorded-anchor/schema rewrite, transcript, hook
+wait, scan across sessions or provider API is used.
+
+With the same lock held, one existing `Cmux.run("rpc", "surface.close", ...)`
+uses explicit workspace/surface UUIDs and its normal 15-second I/O bound.
+Stock CMUX's socket path bypasses confirmation and may refuse the last terminal.
+An exact successful reply maps to `closeAccepted: true`, `removal: "unconfirmed"`;
+the host's result naming is not a removal proof. Errors, timeout, cancellation
+and lost replies are surfaced without retries or post-send observations.
+No process exit, completion acknowledgement, new lifecycle state, capacity
+release, archive or descendant cleanup follows.
+
+The lock serializes controller changes only. PID/start precision and source
+marker freshness remain limited by their existing sources; markers are not an
+OS lock Maestro acquires or an authoritative host current-session assertion.
+The same-user boundary still applies. Host close takes no expected session or
+provider generation, so preflight cannot promise atomic fencing against
+replacement/movement after inspection. Ordinary independent observation and
+resource reconciliation remain separate.
+
 ## Evidence, corrected assumptions, and remaining gap
 
 Initial SDK inspection used npm Copilot **1.0.83**; live sessions reported

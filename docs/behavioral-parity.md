@@ -97,6 +97,40 @@ commands remain unchanged. Full xcresult bundles are not included in this
 diagnostic artifact.
 All eleven workflow commands remain required.
 
+### Explicit owned-child close (#90)
+
+The native adapter's `maestro_close` and controller's private `native-close`
+ingress admit one exact, currently owned direct interactive child, then request
+stock `surface.close` once. This intentionally inherits socket confirmation
+bypass and last-terminal refusal, not UI confirmation/pinning parity. It never
+waits for disappearance or starts a provider-exit/retry protocol.
+
+`NativeCloseTests` in `scripts/test-delivery-proof.py` exercise private
+actor/invoker authority, direct-child scope, stale target fields, process/source
+anchors, workspace movement, launch leases, preflight changes, real store-lock
+exclusion, existing RPC error/timeout behavior and byte-preserved records/routes.
+An owned real subprocess also exits without being reaped while retaining its
+start identity and source marker: close refuses before any host call. Close
+requires affirmative non-zombie process state plus the exact PID/start; unknown
+state refuses. Shared conservative resource-retention observation is unchanged.
+Separate real-process tests cover a live launch wrapper whose distinct direct
+child owns the only source marker, and a same-PID launch/source owner. The
+wrapper case failed with the original marker-PID-equals-launch-PID assumption.
+A zombie source child under a live wrapper, a deeper source descendant,
+controlled sibling/unrelated/foreign ownership, changed parent/start/marker and
+unknown evidence refuse before host calls. Only the evidenced immediate-child
+relationship is supported; stored launch anchors are unchanged.
+Native adapter tests cover strict public input, bound private identity, one
+controller invocation, transport refusal/lost reply/cancellation and no fallback.
+They use synthetic hosts, synthetic or owned test processes and disposable local sources,
+not live CMUX resources. The existing three runtime suites remain required.
+
+Acceptance is explicitly `closeAccepted: true`, `removal: "unconfirmed"`; it
+does not prove removal, release capacity or complete work. Source metadata is
+conservative preflight evidence, not atomic host/provider session-generation
+fencing. Real disposable native proof and hosted validation are separate
+delivery evidence, not claims made by these regression tests.
+
 ### Dedicated observer registration (#114)
 
 Explicit setup now owns a dedicated version-1 user file for exactly
