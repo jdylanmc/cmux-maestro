@@ -1987,9 +1987,6 @@ private struct CopilotSessionContents: View {
                 .sidebarFont(.caption).foregroundStyle(SidebarTone.attention.color)
                 .padding(.leading, density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
-        if session.internalTaskCountsIncomplete {
-            Text("Internal task counts incomplete").sidebarFont(.caption2).foregroundStyle(.secondary)
-        }
         if expanded {
             ForEach(taskboard ? session.taskSections(layout: layout) : session.childSections(layout: layout)) { section in
                 if section.taskDisclosure != nil {
@@ -2069,7 +2066,7 @@ struct SidebarInternalTaskGroup<Activity: View>: View {
                     HStack(spacing: 4) {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 8, weight: .semibold)).frame(width: 12)
-                        Text("\(summary.incomplete ? "At least " : "")\(summary.taskCount) internal \(summary.taskCount == 1 ? "task" : "tasks")")
+                        Text("\(summary.taskCount) internal \(summary.taskCount == 1 ? "task" : "tasks")")
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         if !expanded {
@@ -2086,7 +2083,6 @@ struct SidebarInternalTaskGroup<Activity: View>: View {
                                 Text("\(summary.attention)")
                             }
                         }
-                        if summary.incomplete { Image(systemName: "info.circle") }
                     }
                     .font(.system(size: density.rowMetadataSize))
                     .foregroundStyle(.secondary)
