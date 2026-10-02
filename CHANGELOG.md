@@ -44,6 +44,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Qualify managed Git labels, verification and change counts as evidence from
+  the assigned directory, not Copilot's current `/cwd`, preserving stale and
+  unavailable states and separate CMUX surface-directory reports (#119, #59).
 - Keep exact-chat visual status through temporary observation gaps for five
   minutes, then quietly show Status unavailable without retaining control
   authority; preserve real background tabs and internal-task parents (#119).
