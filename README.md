@@ -342,6 +342,8 @@ Recovery after those boundaries requires a new valid observation; an unreadable
 cached observation cannot seed display memory for the new scope. Unsupported
 child lifecycle events keep their warning and unknown child state without
 suppressing independently validated sibling chats.
+Partial data can also contain a fresh, valid unknown status; that alone is not
+an observation failure and does not remove the observation before reconciliation.
 Internal tasks keep their original real open parent, without actionable stale
 outcomes. Actual open background tabs remain reachable through current host
 metadata; unknown chats without a real open surface are not fabricated.

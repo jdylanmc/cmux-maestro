@@ -268,8 +268,8 @@ final class SidebarCopilotPolling {
         let current = Dictionary(grouping: tree.sessions, by: \.surfaceID)
         let unreadable = Set(tree.sessions.filter {
             [.alive, .dead].contains($0.liveness)
-                && ((snapshot.issues?.contains(.stateUnavailable) == true && $0.observedAt < snapshot.generatedAt)
-                    || (!snapshot.isComplete && $0.state == .unknown))
+                && snapshot.issues?.contains(.stateUnavailable) == true
+                && $0.observedAt < snapshot.generatedAt
         }.map(\.id))
         lastStatuses = lastStatuses.filter { id, saved in
             guard topology.workspaceBySurface[saved.session.surfaceID] == saved.session.workspaceID else { return false }

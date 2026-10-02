@@ -256,6 +256,63 @@ struct SidebarHistoryPollingTests {
         await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
     }
 
+    @Test(arguments: [CopilotLiveness.alive, .dead], [false, true])
+    func partialSemanticUnknownRemainsCurrentBesideHealthyObservation(
+        _ liveness: CopilotLiveness, sameSurface: Bool
+    ) async throws {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        start(poller)
+        for index in 1...2 {
+            await sidebarEventually { await harness.reads == index }
+            await harness.succeed(fixtures.snapshot(sessions: [
+                fixtures.session(state: .working, now: clock.read()),
+                fixtures.session(
+                    id: fixtures.otherSessionID, surface: sameSurface ? fixtures.surfaceA : fixtures.surfaceB,
+                    liveness: liveness, state: .unknown, now: clock.read()
+                )
+            ], issues: [.ambiguousTurn], complete: false, now: clock.read()))
+            await sidebarEventually { await harness.isPaused }
+            #expect(Set(poller.tree.sessions.map(\.id)) == [fixtures.sessionID, fixtures.otherSessionID])
+            let unknown = try #require(poller.tree.sessions.first { $0.id == fixtures.otherSessionID })
+            #expect(unknown.liveness.rawValue == liveness.rawValue && unknown.state == .unknown)
+            #expect(unknown.observedAt == clock.read() && !unknown.statusOnly)
+            #expect(unknown.nodes.isEmpty && unknown.attention.isEmpty && unknown.model == nil)
+            #expect(poller.tree.sessions.first { $0.id == fixtures.sessionID }?.state == .working)
+            #expect(poller.tree.issues == [.ambiguousTurn] && poller.tree.availability == .partial)
+            #expect(poller.tree.statusSessions.isEmpty)
+            if index == 1 {
+                clock.advance(2)
+                await harness.nextRead()
+            }
+        }
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
+    @Test(arguments: [CopilotWorkState.idle, .unknown])
+    func explicitlyUnreadableCacheCannotInitializeCurrentOrRetainedStatus(_ state: CopilotWorkState) async {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(fixtures.snapshot(
+            sessions: [fixtures.session(state: state, now: initial.addingTimeInterval(-1))],
+            issues: [.stateUnavailable], complete: false, now: initial
+        ))
+        await sidebarEventually { await harness.isPaused }
+        #expect(poller.tree.sessions.isEmpty && poller.tree.statusSessions.isEmpty)
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 2 }
+        await harness.failRead(CopilotFileError.io)
+        await sidebarEventually { await harness.isPaused }
+        #expect(poller.tree.sessions.isEmpty && poller.tree.statusSessions.isEmpty)
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
     @Test func unsupportedSnapshotSchemaInvalidatesVisualGrace() async {
         let clock = HistoryTestClock(initial)
         let harness = HistoryPollingHarness()

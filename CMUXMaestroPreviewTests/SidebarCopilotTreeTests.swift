@@ -352,20 +352,33 @@ struct SidebarCopilotTreeTests {
     @Test
     func lateTopologyReadSettlesBeforeNextReadAndCannotReattachOldPlacement() async {
         let harness = SidebarReadHarness()
-        let poller = SidebarCopilotPolling(read: neutralRead { try await harness.read($0) })
+        let clock = CopilotReaderTestClock()
+        let old = fixtures.snapshot(sessions: [fixtures.session(now: clock.now())], now: clock.now())
+        let poller = SidebarCopilotPolling(
+            read: neutralRead { try await harness.read($0) },
+            pause: { try await sidebarFrozenExpiry(0) },
+            expiryPause: sidebarFrozenExpiry,
+            now: { clock.now() }
+        )
         poller.update(topology: fixtures.topology(), connected: true)
         poller.setVisible(true)
         await sidebarEventually { await harness.callCount == 1 }
+        clock.advance(by: 1)
         poller.update(topology: fixtures.topology(moved: true), connected: true)
         #expect(poller.tree.sessions.isEmpty)
         #expect(await harness.callCount == 1)
-        await harness.succeed(0, with: fixtures.snapshot(sessions: [fixtures.session()]))
+        await harness.succeed(0, with: old)
         await sidebarEventually { await harness.callCount == 2 }
         #expect(poller.tree.sessions.isEmpty)
-        await harness.succeed(1, with: fixtures.snapshot(sessions: [fixtures.session()]))
+        clock.advance(by: 1)
+        await harness.succeed(1, with: fixtures.snapshot(
+            sessions: [fixtures.session(now: clock.now())], now: clock.now()
+        ))
         await sidebarEventually { poller.tree.sessions.first?.workspaceID == fixtures.workspaceB }
+        #expect(poller.tree.sessions.first?.observedAt == clock.now())
         #expect(await harness.maximumActive == 1)
         poller.setVisible(false)
+        await sidebarEventually { !poller.isReading }
     }
 
     @Test
