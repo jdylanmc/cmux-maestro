@@ -44,6 +44,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Keep exact-chat visual status through temporary observation gaps for five
+  minutes, then quietly show Status unavailable without retaining control
+  authority; preserve real background tabs and internal-task parents (#119).
 - Start managed Copilot terminals directly with verbatim Maestro-wrapped tasks,
   return acceptance without a startup wait, and derive activity from fresh exact
   session observations. Preserve messaging across normal extension reloads and

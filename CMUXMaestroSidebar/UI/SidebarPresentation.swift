@@ -198,6 +198,8 @@ struct SidebarVisibleWork {
         tree: SidebarCopilotTree, managed: [SidebarOrchestrationNode],
         history: SidebarHistorySettings, showEnded: Bool, now: Date = Date()
     ) {
+        var tree = tree
+        tree.sessions += tree.statusSessions
         let displaced = SidebarPresentation.displacedManagedNodeIDs(managed, observations: tree, now: now)
         let unneeded = managed.filter { node in
             guard displaced.contains(node.id), managed.filter({ $0.id == node.id }).count == 1 else { return false }
@@ -223,7 +225,6 @@ struct SidebarVisibleWork {
         }
         let obsolete = unneeded.filter { !needed.contains($0.id) }
         let managed = managed.filter { needed.contains($0.id) }
-        var tree = tree
         tree.sessions.removeAll { session in
             obsolete.contains {
                 $0.copilotSessionId == session.id && $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
@@ -331,6 +332,9 @@ enum SidebarPresentation {
     ) -> SidebarDismissedManagedOutcome? {
         let key = SidebarDismissedManagedOutcome(nodeID: node.id, generation: node.generation, phase: node.phase)
         guard node.role == "worker", key.isValid,
+              !tree.statusSessions.contains(where: {
+                  $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId
+              }),
               !tree.sessions.contains(where: {
                   $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId
                       && ($0.hasBlockingEvidence
@@ -425,6 +429,7 @@ enum SidebarPresentation {
     }
 
     static func childState(_ node: SidebarCopilotNode, session: SidebarCopilotSession) -> SidebarVisual {
+        if node.statusOnly { return node.lastKnownState.map(state) ?? statusUnavailable }
         if node.state == .blocked || node.state == .failed { return state(node.state) }
         guard session.liveness == .alive else {
             return process(session.liveness).titled("Last reported: \(state(node.state).title). \(process(session.liveness).title)")
@@ -434,7 +439,8 @@ enum SidebarPresentation {
     }
 
     static func internalTaskState(_ node: SidebarCopilotNode) -> SidebarVisual {
-        switch node.state {
+        if node.statusOnly && node.lastKnownState == nil { return statusUnavailable }
+        return switch node.lastKnownState ?? node.state {
         case .working: .init(title: "Working", symbol: "circle.dotted", tone: .green)
         case .completed: .init(title: "Finished", symbol: "checkmark", tone: .neutral)
         case .failed: .init(title: "Failed", symbol: "xmark.circle", tone: .red)
@@ -495,6 +501,10 @@ enum SidebarPresentation {
               session.liveness == .alive, [.ready, .partial].contains(tree.availability),
               tree.generatedAt.map({ SidebarCopilotTree.isFresh($0, now: now) }) == true,
               SidebarCopilotTree.isFresh(session.observedAt, now: now) else {
+            let retained = tree.statusSessions.filter { $0.workspaceID == workspaceID && $0.surfaceID == surfaceID }
+            if sessions.isEmpty, retained.count == 1, let status = retained.first {
+                result.visual = sessionState(status)
+            }
             if !sessions.isEmpty || surface.kind == .agentSession {
                 result.notice = "Agent identity is stale, unavailable or unconfirmed."
             }
@@ -883,7 +893,7 @@ enum SidebarPresentation {
         _ tree: SidebarCopilotTree, managed: [SidebarOrchestrationNode], now: Date
     ) -> Set<UUID> {
         Set(sessionPlacements(tree.sessions, managed: managed, observations: tree, now: now)
-            .filter { $0.retainsContents || $0.requiresSeparateContext }.map { $0.session.id })
+            .filter { $0.session.statusOnly || $0.retainsContents || $0.requiresSeparateContext }.map { $0.session.id })
     }
 
     static func workspaceSummary(
@@ -968,6 +978,10 @@ enum SidebarPresentation {
     }
 
     static func sessionState(_ session: SidebarCopilotSession) -> SidebarVisual {
+        if session.statusOnly {
+            guard let state = session.lastKnownState, let liveness = session.lastKnownLiveness else { return statusUnavailable }
+            return liveness == .dead ? process(.dead) : Self.state(state)
+        }
         if session.state == .blocked { return state(.blocked) }
         switch session.liveness {
         case .alive: return state(session.state)
@@ -984,9 +998,20 @@ enum SidebarPresentation {
         if let session = observedManagedSession(node, availability: availability, tree: tree, now: now) {
             return sessionState(session)
         }
+        if isInteractiveSessionPhase(node) || (node.role == "coordinator" && node.phase == "registered"),
+           let tree {
+            let retained = tree.statusSessions.filter {
+                $0.statusOwnerID == node.id && $0.statusOwnerRunID == node.runId
+                    && $0.statusOwnerGeneration == node.generation
+                    && $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId
+                    && (node.copilotSessionId == nil || node.copilotSessionId == $0.id)
+            }
+            if retained.count == 1, let session = retained.first { return sessionState(session) }
+        }
         if isInteractiveSessionPhase(node), [.ready, .partial, .stale].contains(availability) {
             return state(.unknown).titled("Interactive · session state unavailable")
         }
+
         let age = now.timeIntervalSince(node.updatedAt)
         guard (availability == .ready || availability == .partial),
               age >= -1, age <= SidebarOrchestrationReader.staleInterval else {
@@ -1011,6 +1036,11 @@ enum SidebarPresentation {
         case .none: return state(.unknown).titled(title)
         }
     }
+
+    static let statusUnavailable = SidebarVisual(
+        title: String(localized: "sidebar.status.unavailable", defaultValue: "Status unavailable"),
+        symbol: "circle.dashed", tone: .neutral
+    )
 
     static func briefPath(root: HierarchyAvailability<String?>, project: HierarchyAvailability<String?>) -> String? {
         for path in [root, project] {

@@ -470,6 +470,7 @@ nonisolated struct CopilotEventReducer: Sendable {
             guard let version = event.version, version > 0 else {
                 unsupportedSession = true
                 addIssue(.unsupportedFormat)
+                addIssue(.ambiguousIdentity)
                 return
             }
         }

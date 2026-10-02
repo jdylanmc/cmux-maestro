@@ -639,12 +639,16 @@ struct SidebarView: View {
             model.copilot.updateHistory(preferences.history)
             model.copilot.updateAttention(preferences.attention)
             model.copilot.updateIdleTasks(preferences.layout.revealingIdleTasksIn)
+            model.copilot.updateManagedSubjects(model.orchestration.snapshot)
             model.setVisible(true)
         }
         .onChange(of: preferences.history) { _, history in model.copilot.updateHistory(history) }
         .onChange(of: preferences.attention) { _, attention in model.copilot.updateAttention(attention) }
         .onChange(of: preferences.layout.revealingIdleTasksIn) { _, workspaces in
             model.copilot.updateIdleTasks(workspaces)
+        }
+        .onChange(of: model.orchestration.snapshot) { _, snapshot in
+            model.copilot.updateManagedSubjects(snapshot)
         }
         .onChange(of: model.hierarchy) { old, new in
             preferences.refreshLayout()
@@ -1727,7 +1731,7 @@ private struct SurfaceRow: View {
             .init(title: "Open details", perform: inspect)
         ]
         if hasChildren { items.append(.init(title: expanded ? "Collapse branch" : "Expand branch", perform: toggleExpanded)) }
-        let iconTarget: SidebarIconTarget? = singleSession.map { .session($0.id) }
+        let iconTarget: SidebarIconTarget? = singleSession.flatMap { $0.statusOnly ? nil : .session($0.id) }
             ?? ((surface.kind == .terminal || surface.kind == .browser) ? .surface(surface.id) : nil)
         return [
             .init(title: "Navigation", actions: items),
@@ -1754,7 +1758,7 @@ private struct SurfaceRow: View {
                 }
                 if let singleSession {
                     SidebarItemIcon(
-                        kind: .agent, target: .session(singleSession.id), title: title,
+                        kind: .agent, target: singleSession.statusOnly ? nil : .session(singleSession.id), title: title,
                         agentGlyph: singleSession.iconId,
                         agentColor: singleSession.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
                         inspect: inspect, picker: $showingPicker
@@ -1836,7 +1840,7 @@ private struct SurfaceRow: View {
     }
 
     private func inspect() {
-        if let singleSession { selection = .session(singleSession.id) }
+        if let singleSession, !singleSession.statusOnly { selection = .session(singleSession.id) }
         else { selection = .surface(workspaceID: workspaceID, surfaceID: surface.id) }
     }
 
@@ -1866,13 +1870,14 @@ private struct CopilotSessionRow: View {
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
     var retained = false
+    private var focusUnavailable: Bool { retained || session.statusOnly }
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
     @State private var showingPicker: SidebarIconTarget?
     private var expanded: Bool { layout.isExpanded(.session(session.id)) }
     private var actions: [SidebarRowActionGroup] {
         var items: [SidebarRowAction] = [
-            retained ? .unavailable("Focus original session", SidebarPresentation.retainedFocusUnavailable)
+            focusUnavailable ? .unavailable("Focus original session", SidebarPresentation.retainedFocusUnavailable)
                 : .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                          navigation: navigation, prepareSeen: prepareSeen),
             .init(title: "Open details", perform: { selection = .session(session.id) })
@@ -1882,7 +1887,7 @@ private struct CopilotSessionRow: View {
                                perform: { setExpanded(.session(session.id), !expanded) }))
         }
         return [.init(title: "Navigation", actions: items),
-                .appearance(icon: { showingPicker = .session(session.id) }, agent: true), .placement, .lifecycle()]
+                .appearance(icon: session.statusOnly ? nil : { showingPicker = .session(session.id) }, agent: true), .placement, .lifecycle()]
     }
 
     var body: some View {
@@ -1896,7 +1901,7 @@ private struct CopilotSessionRow: View {
                     Color.clear.frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
                 }
                 SidebarItemIcon(
-                    kind: .agent, target: .session(session.id), title: "Copilot \(session.shortID)",
+                    kind: .agent, target: session.statusOnly ? nil : .session(session.id), title: "Copilot \(session.shortID)",
                     agentGlyph: session.iconId, agentColor: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
                     inspect: { selection = .session(session.id) }, picker: $showingPicker
                 )
@@ -1905,7 +1910,7 @@ private struct CopilotSessionRow: View {
                     navigation: navigation,
                     label: retained ? "Inspect context session \(session.shortID)" : "Focus Copilot session \(session.shortID)",
                     detail: retained ? SidebarPresentation.retainedFocusUnavailable : SidebarPresentation.sessionStatus(session),
-                    inspectOnly: retained ? { selection = .session(session.id) } : nil,
+                    inspectOnly: focusUnavailable ? { selection = .session(session.id) } : nil,
                     localFocusIDOverride: retained ? "session:\(session.id)" : nil
                 ) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -1935,7 +1940,7 @@ private struct CopilotSessionRow: View {
                 session: session, expanded: expanded,
                 navigation: navigation, layout: layout, setExpanded: setExpanded,
                 dismiss: dismiss, acknowledge: acknowledge, selection: $selection,
-                parentFocusUnavailable: retained ? SidebarPresentation.retainedFocusUnavailable : nil
+                parentFocusUnavailable: focusUnavailable ? SidebarPresentation.retainedFocusUnavailable : nil
             )
         }
         .padding(.leading, density.spacing(8))
@@ -2594,14 +2599,14 @@ private struct TaskboardSessionRow: View {
                          navigation: navigation, prepareSeen: prepareSeen,
                          subject: .unmanaged(.session(session.id)), revalidate: focusInspection),
             .init(title: "Open details", perform: { selection = .session(session.id) })
-        ]), .appearance(icon: { showingPicker = .session(session.id) }, agent: true), .placement, .lifecycle()]
+        ]), .appearance(icon: session.statusOnly ? nil : { showingPicker = .session(session.id) }, agent: true), .placement, .lifecycle()]
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 SidebarItemIcon(
-                    kind: .agent, target: .session(session.id), title: title,
+                    kind: .agent, target: session.statusOnly ? nil : .session(session.id), title: title,
                     agentGlyph: session.iconId, agentColor: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
                     inspect: { selection = .session(session.id) }, picker: $showingPicker
                 )

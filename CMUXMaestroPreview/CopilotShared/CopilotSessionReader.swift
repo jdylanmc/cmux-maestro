@@ -138,6 +138,7 @@ actor CopilotSessionReader {
             let stamp = try CopilotFileAccess.statFile(bindings)
             if let previous = discoveryStamp, !previous.sameFile(as: stamp) {
                 resetDiscovery()
+                issues.append(.identityChanged)
             }
             if discovery == nil || (discovery?.finished == true && cohortFinished) {
                 discovery = try CopilotDirectoryStream(at: bindings)
@@ -167,10 +168,12 @@ actor CopilotSessionReader {
                 )
                 guard surfaceIDs.contains(record.surfaceID) else {
                     bindingsByID.removeValue(forKey: id)
+                    recordCycleIssue(.identityChanged)
                     continue
                 }
                 guard record.schemaVersion == 1 else {
                     bindingsByID.removeValue(forKey: id)
+                    recordCycleIssue(.identityChanged)
                     recordCycleIssue(.unsupportedFormat)
                     continue
                 }
@@ -178,7 +181,7 @@ actor CopilotSessionReader {
             } catch {
                 try Self.rethrowCancellation(error)
                 bindingsByID.removeValue(forKey: id)
-                recordCycleIssue(Self.issue(error))
+                recordCycleIssue(error is DecodingError ? .ambiguousIdentity : Self.issue(error, missing: .identityChanged))
             }
         }
         bindingOrder.removeAll { bindingsByID[$0] == nil }
@@ -488,6 +491,7 @@ actor CopilotSessionReader {
         if let previous = bindingsByID[id], !Self.sameBindingIdentity(previous.record, entry.record) {
             tails.removeValue(forKey: id)
             publishedCohort.remove(id)
+            recordCycleIssue(.identityChanged)
         }
         bindingsByID[id] = entry
     }

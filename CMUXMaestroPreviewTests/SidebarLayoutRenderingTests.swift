@@ -7,7 +7,7 @@ import Testing
 @Suite(SidebarAppKitTestScope())
 struct SidebarLayoutRenderingTests {
     @Test func targetLedNativeComposition() async throws {
-        let model = makeVisualTargetModel()
+        let model = await makeVisualTargetModel()
         let fixture = try SidebarPreferenceFixture()
         defer { model.setVisible(false); fixture.cleanup() }
         let preferences = fixture.preferences()
@@ -78,7 +78,7 @@ struct SidebarLayoutRenderingTests {
         }
     }
 
-    private func makeVisualTargetModel() -> SidebarConnectionModel {
+    private func makeVisualTargetModel() async -> SidebarConnectionModel {
         let now = Date()
         let first = UUID(), second = UUID()
         let surfaces = (0..<6).map { _ in UUID() }
@@ -150,6 +150,9 @@ struct SidebarLayoutRenderingTests {
                                 surfaceAllowed: true, perform: { _ in Issue.record("Synthetic render cannot navigate") })
         copilot.update(topology: topology, connected: true)
         orchestration.update(topology: topology, connected: true)
+        orchestration.setVisible(true)
+        await sidebarEventually { orchestration.snapshot.generatedAt == now.addingTimeInterval(-600) }
+        copilot.updateManagedSubjects(orchestration.snapshot)
         model.setVisible(true)
         return model
     }
@@ -459,8 +462,8 @@ struct SidebarLayoutRenderingTests {
         )
         let commandModel = makeModel(fixtures: fixtures, longMetadata: false, shellActivity: true)
         let longModel = makeModel(fixtures: fixtures, longMetadata: true)
-        let managedModel = makeManagedModel(fixtures: fixtures)
-        let mixedModel = makeManagedModel(fixtures: fixtures, nodeCount: 2, mixed: true)
+        let managedModel = await makeManagedModel(fixtures: fixtures)
+        let mixedModel = await makeManagedModel(fixtures: fixtures, nodeCount: 2, mixed: true)
         defer {
             model.setVisible(false)
             unmanagedBaseline.setVisible(false)
@@ -736,8 +739,8 @@ struct SidebarLayoutRenderingTests {
 
     @Test func managedRowsStayWithinCompactHeightBudgetAtThreeHundredWidth() async throws {
         let fixtures = SidebarTreeFixtures()
-        let rootModel = makeManagedModel(fixtures: fixtures, nodeCount: 1)
-        let treeModel = makeManagedModel(fixtures: fixtures, nodeCount: 5)
+        let rootModel = await makeManagedModel(fixtures: fixtures, nodeCount: 1)
+        let treeModel = await makeManagedModel(fixtures: fixtures, nodeCount: 5)
         defer { rootModel.setVisible(false); treeModel.setVisible(false) }
         let suite = "SidebarRootMeasure.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
@@ -784,7 +787,7 @@ struct SidebarLayoutRenderingTests {
             preferences.setDensity(density)
             for (width, height) in [(240, 400), (340, 600)] {
                 for appearance in [RenderAppearance.light, .dark] {
-                    let model = makeManagedModel(fixtures: SidebarTreeFixtures(), focusFirst: true)
+                    let model = await makeManagedModel(fixtures: SidebarTreeFixtures(), focusFirst: true)
                     defer { model.setVisible(false) }
                     let destination = folder.appendingPathComponent(
                         "pinned46-sidebar-\(density.rawValue)-\(appearance.name)-\(width)x\(height).png"
@@ -902,7 +905,7 @@ struct SidebarLayoutRenderingTests {
     }
 
     @Test func frozenManagedRenderFixtureDoesNotExpireOnWallClock() async throws {
-        let model = makeManagedModel(fixtures: SidebarTreeFixtures())
+        let model = await makeManagedModel(fixtures: SidebarTreeFixtures())
         defer { model.setVisible(false) }
         await sidebarEventually { model.copilot.tree.sessions.count == 6 }
         try #require(model.copilot.tree.sessions.count == 6)
@@ -919,7 +922,7 @@ struct SidebarLayoutRenderingTests {
 
     private func makeManagedModel(
         fixtures: SidebarTreeFixtures, nodeCount: Int = 6, mixed: Bool = false, focusFirst: Bool = false
-    ) -> SidebarConnectionModel {
+    ) async -> SidebarConnectionModel {
         let workspace = fixtures.workspaceA
         let surfaces = (0..<nodeCount).map { _ in UUID() }
         let firstRun = UUID()
@@ -1090,6 +1093,9 @@ struct SidebarLayoutRenderingTests {
             topology: topology, connected: true, workspaceAllowed: true,
             surfaceAllowed: true, perform: { _ in }
         )
+        orchestration.setVisible(true)
+        await sidebarEventually { orchestration.snapshot.generatedAt == now }
+        copilot.updateManagedSubjects(orchestration.snapshot)
         model.setVisible(true)
         return model
     }
@@ -1190,6 +1196,11 @@ struct SidebarLayoutRenderingTests {
     ) async throws -> SidebarRenderingEvidence.Metrics {
         // Yield between renders so unrelated asynchronous navigation tests can service their deadlines.
         try await Task.sleep(for: .milliseconds(10))
+        if managed {
+            model.orchestration.setVisible(true)
+            await sidebarEventually { !model.orchestration.snapshot.nodes.isEmpty }
+            model.copilot.updateManagedSubjects(model.orchestration.snapshot)
+        }
         model.setVisible(true)
         let frame = NSRect(x: 0, y: 0, width: width, height: height)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)

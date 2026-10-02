@@ -114,6 +114,7 @@ struct SidebarTopology: Equatable, Sendable {
     let windowID: UUID?
     let workspaceIDs: Set<UUID>
     let workspaceBySurface: [UUID: UUID]
+    let sessionSurfaceIDs: Set<UUID>
     let canReadSessions: Bool
 
     init(_ snapshot: HierarchySnapshot) {
@@ -123,10 +124,12 @@ struct SidebarTopology: Equatable, Sendable {
             ? Set(groupedWorkspaces.filter { $0.value.count == 1 }.keys) : []
         workspaceIDs = allowedWorkspaces
         var placements: [UUID: [UUID]] = [:]
+        var sessionSurfaces: Set<UUID> = []
         for workspace in snapshot.workspaces {
             if case .available(let surfaces) = workspace.surfaces {
                 for surface in surfaces {
                     placements[surface.id, default: []].append(workspace.id)
+                    if [.terminal, .agentSession].contains(surface.kind) { sessionSurfaces.insert(surface.id) }
                 }
             }
         }
@@ -138,6 +141,7 @@ struct SidebarTopology: Equatable, Sendable {
             ? placements.compactMapValues {
                 $0.count == 1 && allowedWorkspaces.contains($0[0]) ? $0.first : nil
             } : [:]
+        sessionSurfaceIDs = sessionSurfaces.intersection(workspaceBySurface.keys)
     }
 }
 

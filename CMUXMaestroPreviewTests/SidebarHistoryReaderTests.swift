@@ -486,6 +486,7 @@ struct SidebarHistoryReaderTests {
             clock.advance(30)
             let rejected = try await reader.read(surfaceIDs: [fixture.surface])
             #expect(rejected.issues.contains(invalidVersion ? .unsupportedFormat : .identityChanged))
+            if invalidVersion { #expect(rejected.issues.contains(.ambiguousIdentity)) }
             #expect(!rejected.isComplete)
             #expect(rejected.sessions == safe.sessions)
             #expect(try project(rejected, fixture: fixture).sessions.isEmpty)

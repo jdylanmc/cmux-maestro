@@ -8,20 +8,23 @@ private final class RetainedMenuSource {
     var node: SidebarOrchestrationNode
     var includesNode = true
     let evidence: AgentAttention
-    let date: Date
+    let clock: CopilotReaderTestClock
 
-    init(node: SidebarOrchestrationNode, evidence: AgentAttention, date: Date) {
+    init(node: SidebarOrchestrationNode, evidence: AgentAttention, clock: CopilotReaderTestClock) {
         self.node = node
         self.evidence = evidence
-        self.date = date
+        self.clock = clock
     }
 
     var managed: SidebarOrchestrationSnapshot {
-        .init(version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: includesNode ? [node] : [])
+        .init(version: 1, generatedAt: clock.now(), complete: true, omittedCount: 0, nodes: includesNode ? [node] : [])
     }
 
     var observed: CopilotSnapshot {
-        .init(generatedAt: date, sessions: [
+        // Each successful fixture read represents new evidence, including after subject replacement.
+        clock.advance(by: 0.001)
+        let date = clock.now()
+        return .init(generatedAt: date, sessions: [
             .init(sessionID: node.copilotSessionId!, surfaceID: node.surfaceId, launchWorkspaceID: node.workspaceId,
                   liveness: .alive, state: .idle, model: "retained-menu-model", children: [], observedAt: date,
                   attention: [evidence])
@@ -470,13 +473,14 @@ struct SidebarPinnedDetailsTests {
         let original = node(replaced: false), replacement = node(replaced: true)
         let evidence = AgentAttention(kind: .turnFinished,
                                       evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: date)
-        let source = RetainedMenuSource(node: original, evidence: evidence, date: date)
+        let clock = CopilotReaderTestClock(date)
+        let source = RetainedMenuSource(node: original, evidence: evidence, clock: clock)
         let orchestration = SidebarOrchestrationPolling(
             read: { await source.managed }, pause: { try await Task.sleep(for: .seconds(60)) }
         )
         let polling = SidebarCopilotPolling(
             read: neutralRead { _ in await source.observed }, pause: { try await Task.sleep(for: .seconds(60)) },
-            expiryPause: sidebarFrozenExpiry, now: { date }
+            expiryPause: sidebarFrozenExpiry, now: { clock.now() }
         )
         let model = SidebarConnectionModel(copilot: polling, orchestration: orchestration)
         var nativeActions: [SidebarNavigationTarget] = []
@@ -505,6 +509,9 @@ struct SidebarPinnedDetailsTests {
                                     surfaceAllowed: true, perform: { nativeActions.append($0) })
         }
         refreshHierarchy(moved: false)
+        orchestration.setVisible(true)
+        await sidebarEventually { orchestration.snapshot.nodes == [original] }
+        polling.updateManagedSubjects(orchestration.snapshot)
         model.setVisible(true)
         defer { model.setVisible(false) }
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 600),
