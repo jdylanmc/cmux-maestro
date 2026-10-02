@@ -900,8 +900,8 @@ struct SidebarPinnedDetailsTests {
                     let text = try SidebarRenderingEvidence.recognizedNativeLines(in: destination)
                     #expect(text.contains { $0.contains("Verified agent") },
                             "\(destination.lastPathComponent): \(text)")
-                    #expect(text.contains("verified-model"),
-                            "\(destination.lastPathComponent): \(text)")
+                    let model = try await footerModelPixels(in: bitmap, dark: dark, destination: destination)
+                    #expect(model, "\(destination.lastPathComponent): exact visible model pixels")
                     #expect(text.contains("Copied"),
                             "\(destination.lastPathComponent): \(text)")
                     for scroll in views(hosting).compactMap({ $0 as? NSScrollView }) {
@@ -999,11 +999,15 @@ struct SidebarPinnedDetailsTests {
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/layout-validation/offscreen")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        for control in ["visible", "wrong", "missing", "hidden", "clipped"] {
+        for control in ["visible", "wrong", "missing", "hidden", "clipped", "elsewhere", "suffix"] {
             var content = pinned(nodes: [managed()])
-            if control == "wrong" || control == "missing" {
+            if ["wrong", "missing", "elsewhere", "suffix"].contains(control) {
                 content.lines.removeAll { $0.title == "Model" }
-                if control == "wrong" { content.lines.append(.init(title: "Model", value: "verifled-model")) }
+                if control != "missing" {
+                    content.lines.append(.init(title: "Model", value: control == "suffix"
+                                               ? "verified-model-plus-suffix" : "verifled-model"))
+                }
+                if control == "elsewhere" { content.notice = "verified-model" }
             }
             let frame = NSRect(x: 0, y: 0, width: 240, height: 214)
             let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
@@ -1031,8 +1035,8 @@ struct SidebarPinnedDetailsTests {
             )
             try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
             let text = try SidebarRenderingEvidence.recognizedNativeLines(in: destination)
-            #expect(text.contains("verified-model") == (control == "visible"),
-                    "\(destination.lastPathComponent): \(text)")
+            let model = try await footerModelPixels(in: bitmap, dark: dark, destination: destination)
+            #expect(model == (control == "visible"), "\(destination.lastPathComponent): exact visible model pixels")
             #expect(!text.contains("Copied"), "\(destination.lastPathComponent): \(text)")
             if control != "hidden" {
                 #expect(text.contains("Verified agent"), "\(destination.lastPathComponent): \(text)")
@@ -1207,6 +1211,53 @@ struct SidebarPinnedDetailsTests {
         return differences.allSatisfy { $0 == 0 }
     }
 
+    private func footerModelPixels(
+        in actual: NSBitmapImageRep, dark: Bool, destination: URL
+    ) async throws -> Bool {
+        let size = actual.size
+        try #require([CGFloat(240), 340].contains(size.width))
+        try #require([CGFloat(214), 290].contains(size.height))
+        let frame = NSRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        var modelRegion = CGRect.null
+        // Independent literal header geometry: outer inset, divider, gaps, 24-point heading and 38-point pet.
+        let reference = NSHostingView(rootView: VStack(alignment: .leading, spacing: 2) {
+            Text("Verified agent").font(.system(.caption).weight(.semibold)).lineLimit(2)
+            Label("Working", systemImage: "circle.fill")
+                .font(.system(.caption2).weight(.regular))
+                .fixedSize(horizontal: false, vertical: true)
+            Text("verified-model").font(.system(.caption2).weight(.regular))
+                .foregroundStyle(.secondary).lineLimit(1)
+                .onGeometryChange(for: CGRect.self) {
+                    $0.frame(in: .named("footer-model-reference"))
+                } action: { modelRegion = $0 }
+        }
+        .frame(width: size.width - 20 - 38 - 8, alignment: .leading)
+        .padding(.leading, 10 + 38 + 8).padding(.top, 10 + 0.5 + 4 + 24 + 4)
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .coordinateSpace(name: "footer-model-reference")
+        .environment(\.colorScheme, dark ? .dark : .light)
+        .background(Color(nsColor: .windowBackgroundColor)))
+        window.contentView = reference
+        defer { window.contentView = nil; window.close() }
+        let responder = window.firstResponder
+        try await settle(reference)
+        #expect(!window.isVisible && window.firstResponder === responder)
+        let expected = try capture(reference)
+        try #require(expected.representation(using: .png, properties: [:])).write(to:
+            destination.deletingPathExtension().appendingPathExtension("reference.png"))
+        try #require(!modelRegion.isNull && !modelRegion.isEmpty)
+        let value = modelRegion
+        let left = Int((value.minX - 1) * 2), right = Int((size.width - 10) * 2)
+        let top = Int((value.minY - 1) * 2), bottom = Int((value.maxY + 1) * 2)
+        // Include the entire trailing model column so extra suffix ink cannot match.
+        return try exactModelPixels(in: actual, reference: expected, regions: [
+            (CGRect(x: left, y: top, width: right - left, height: bottom - top), 100)
+        ], destination: destination)
+    }
+
     private func inspectorModelPixels(
         in actual: NSBitmapImageRep, dark: Bool, destination: URL
     ) async throws -> Bool {
@@ -1248,35 +1299,53 @@ struct SidebarPinnedDetailsTests {
         let middle = Int(value.minY * 2)
         let bottom = Int((value.maxY + 1) * 2)
         try #require(actual.pixelsWide == 600 && actual.pixelsHigh == 920)
+        return try exactModelPixels(in: actual, reference: expected, regions: [
+            (CGRect(x: left, y: top, width: right - left, height: middle - top), 20),
+            (CGRect(x: left, y: middle, width: right - left, height: bottom - middle), 100)
+        ], destination: destination)
+    }
+
+    private func exactModelPixels(
+        in actual: NSBitmapImageRep, reference expected: NSBitmapImageRep,
+        regions: [(bounds: CGRect, minimumInk: Int)], destination: URL
+    ) throws -> Bool {
         try #require(expected.pixelsWide == actual.pixelsWide && expected.pixelsHigh == actual.pixelsHigh)
-        try #require(left > 0 && top > 0 && right < actual.pixelsWide && bottom < actual.pixelsHigh)
-        let background = try #require(expected.colorAt(x: right - 1, y: middle)?.usingColorSpace(.deviceRGB))
+        try #require(actual.pixelsWide == Int(actual.size.width) * 2 && actual.pixelsHigh == Int(actual.size.height) * 2)
+        try #require(!regions.isEmpty)
+        let bounds = regions.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
+        try #require(bounds.minX > 0 && bounds.minY > 0 && bounds.maxX < CGFloat(actual.pixelsWide)
+                     && bounds.maxY < CGFloat(actual.pixelsHigh))
+        let background = try #require(expected.colorAt(
+            x: Int(bounds.maxX) - 1, y: Int(bounds.midY)
+        )?.usingColorSpace(.deviceRGB))
         var best = Double.infinity
         var differingPixels = Int.max
         var alignment = [0, 0]
-        var referenceInk = [0, 0]
+        var referenceInk: [Int] = []
         for dy in -1...1 {
             for dx in -1...1 {
                 var error = 0.0, differences = 0
-                var ink = [0, 0]
-                for y in top..<bottom {
-                    for x in left..<right {
-                        let a = try #require(actual.colorAt(x: x + dx, y: y + dy)?.usingColorSpace(.deviceRGB))
-                        let e = try #require(expected.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
-                        let delta = Double(max(abs(a.redComponent - e.redComponent),
-                                               abs(a.greenComponent - e.greenComponent),
-                                               abs(a.blueComponent - e.blueComponent),
-                                               abs(a.alphaComponent - e.alphaComponent)))
-                        error = max(error, delta)
-                        if delta > 0 { differences += 1 }
-                        if max(abs(background.redComponent - e.redComponent),
-                               abs(background.greenComponent - e.greenComponent),
-                               abs(background.blueComponent - e.blueComponent)) > 0.1 {
-                            ink[y < middle ? 0 : 1] += 1
+                var ink = Array(repeating: 0, count: regions.count)
+                for (index, region) in regions.enumerated() {
+                    for y in Int(region.bounds.minY)..<Int(region.bounds.maxY) {
+                        for x in Int(region.bounds.minX)..<Int(region.bounds.maxX) {
+                            let a = try #require(actual.colorAt(x: x + dx, y: y + dy)?.usingColorSpace(.deviceRGB))
+                            let e = try #require(expected.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                            let delta = Double(max(abs(a.redComponent - e.redComponent),
+                                                   abs(a.greenComponent - e.greenComponent),
+                                                   abs(a.blueComponent - e.blueComponent),
+                                                   abs(a.alphaComponent - e.alphaComponent)))
+                            error = max(error, delta)
+                            if delta > 0 { differences += 1 }
+                            if max(abs(background.redComponent - e.redComponent),
+                                   abs(background.greenComponent - e.greenComponent),
+                                   abs(background.blueComponent - e.blueComponent)) > 0.1 {
+                                ink[index] += 1
+                            }
                         }
                     }
+                    try #require(ink[index] > region.minimumInk, "Blank or incomplete literal reference")
                 }
-                try #require(ink[0] > 20 && ink[1] > 100, "Blank or incomplete literal reference")
                 if error < best || (error == best && differences < differingPixels) {
                     best = error
                     differingPixels = differences
@@ -1288,7 +1357,7 @@ struct SidebarPinnedDetailsTests {
         let evidence: [String: Any] = [
             "maximumChannelDifference": best, "differingPixels": differingPixels,
             "alignmentPixels": alignment, "referenceInkPixels": referenceInk,
-            "regionPixels": [left, top, right - left, bottom - top], "tolerance": 0
+            "regionPixels": [Int(bounds.minX), Int(bounds.minY), Int(bounds.width), Int(bounds.height)], "tolerance": 0
         ]
         try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys])
             .write(to: destination.deletingPathExtension().appendingPathExtension("pixels.json"))

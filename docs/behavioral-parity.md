@@ -573,6 +573,26 @@ their identity, freshness and compact-layout checks. These tests require the
 unchanged hosted native suite; source inspection or an unsigned build alone
 does not establish test execution or installed-host acceptance.
 
+The combined owner/task-depth render supplies its frozen observation clock through
+the shared `sidebarPresentationNow` environment seam. Outline placement, retained
+context, details, hover and action revalidation use that clock; production still
+reads `Date()` on demand, with the same eight-second identity freshness boundary.
+`controlledPresentationAgeExpiresRetainedOwnerWithoutChangingObservations`
+checks the exact retained-owner label at eight seconds and its expiry at 8.001
+seconds in both modes without refreshing observations. Geometry assertions remain
+unchanged and failures include native owner labels and observation ages.
+
+Footer model rendering uses the same zero-tolerance native-pixel comparator as
+the inspector, against an independent literal `verified-model` reference in its
+expected region. All eight production size/theme combinations retain copy and
+geometry checks. Both themes also require rejection of wrong `verifled-model`,
+suffix, missing, hidden, clipped and elsewhere text. This replaces only the
+model-line OCR oracle, not production typography or content; whole-image OCR
+misread the visible line in both initial hosted runs. A prior owner-label failure
+is consistent with the fixture's frozen clock crossing wall-clock freshness, but
+its failure-time labels/ages were not logged, so that historical cause remains
+inferred. Repair execution and sensitivity evidence still require hosted CI.
+
 ## Capability matrix
 
 Links below point to test files; named methods identify representative checks,

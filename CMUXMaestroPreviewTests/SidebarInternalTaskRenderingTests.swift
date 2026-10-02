@@ -236,7 +236,7 @@ struct SidebarInternalTaskRenderingTests {
             let model = await makeModel(data, children: children, now: now, liveness: scenario.retained ? .dead : .alive,
                                   additional: additional, managedNodes: chain, hierarchyOverride: hierarchy)
             defer { model.setVisible(false) }
-            let mounted = mount(model, preferences, width: scenario.width, reduceMotion: true)
+            let mounted = mount(model, preferences, width: scenario.width, reduceMotion: true, now: now)
             defer { mounted.window.contentView = nil; mounted.window.close() }
             await sidebarEventually {
                 model.orchestration.snapshot.nodes.count == 9 && names(mounted.host).count == 13
@@ -256,7 +256,13 @@ struct SidebarInternalTaskRenderingTests {
             #expect(chain.count == 9 && SidebarOrchestrationReader.maximumDepth == 8)
             #expect(SidebarTopology(model.hierarchy).workspaceBySurface.count == 9)
             let expectedOwner = scenario.retained ? "Inspect work context Managed depth 8" : "Focus Managed depth 8"
-            #expect(buttons(mounted.host).contains { $0.accessibilityLabel() == expectedOwner })
+            let ownerLabels = buttons(mounted.host).map {
+                "\($0.localFocusID ?? "none"): \($0.accessibilityLabel() ?? "none")"
+            }
+            let observationAge = model.copilot.tree.generatedAt.map { now.timeIntervalSince($0) }
+            let wallClockAge = model.copilot.tree.generatedAt.map { Date().timeIntervalSince($0) }
+            #expect(buttons(mounted.host).contains { $0.accessibilityLabel() == expectedOwner },
+                    "Expected \(expectedOwner), presentation age \(String(describing: observationAge)), wall age \(String(describing: wallClockAge)); actual \(ownerLabels)")
             let metrics = SidebarRenderingEvidence.metrics(for: mounted.host)
             #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
             #expect(model.navigation.status == .idle && !mounted.window.isVisible)
@@ -273,6 +279,51 @@ struct SidebarInternalTaskRenderingTests {
             let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent(".build/layout-validation/offscreen")
             try JSONEncoder().encode(geometry).write(to: folder.appendingPathComponent("\(name)-rows.json"))
+        }
+    }
+
+    @Test(arguments: SidebarMode.allCases)
+    func controlledPresentationAgeExpiresRetainedOwnerWithoutChangingObservations(_ mode: SidebarMode) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.selectedMode = mode
+        let data = SidebarTreeFixtures(), observedAt = Date()
+        let model = await makeModel(data, children: [
+            .init(id: "protected", parentID: nil, kind: .subagent, name: "Protected work", state: .blocked, model: nil)
+        ], now: observedAt, liveness: .dead, managed: true, additional: [
+            data.session(id: data.otherSessionID, state: .working, now: observedAt)
+        ])
+        defer { model.setVisible(false) }
+        let frame = NSRect(x: 0, y: 0, width: 280, height: 900)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        func content(at date: Date) -> some View {
+            SidebarView(model: model, preferences: preferences)
+                .environment(\.sidebarPresentationNow, { date })
+                .environment(\._accessibilityReduceMotion, true)
+        }
+        let host = NSHostingView(rootView: content(at: observedAt))
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        await sidebarEventually {
+            names(host).count == 1
+                && buttons(host).contains { $0.accessibilityLabel() == "Inspect work context Managed owner" }
+        }
+        let original = model.copilot.tree
+        let owner = try #require(model.orchestration.snapshot.nodes.first)
+        for (age, expected) in [(8.0, "Inspect work context Managed owner"), (8.001, "Focus Managed owner")] {
+            let date = observedAt.addingTimeInterval(age)
+            host.rootView = content(at: date)
+            host.layoutSubtreeIfNeeded()
+            await sidebarEventually { buttons(host).contains { $0.accessibilityLabel() == expected } }
+            let labels = buttons(host).map { "\($0.localFocusID ?? "none"): \($0.accessibilityLabel() ?? "none")" }
+            #expect(buttons(host).contains { $0.accessibilityLabel() == expected }, "Age \(age): \(labels)")
+            #expect(SidebarPresentation.displacedManagedNodeIDs(
+                [owner], observations: model.copilot.tree, now: date
+            ).contains(owner.id) == (age == 8))
+            #expect(model.copilot.tree == original, "Advancing presentation time must not refresh observation evidence")
+            #expect(model.navigation.status == .idle && !window.isVisible)
         }
     }
 
@@ -508,12 +559,14 @@ struct SidebarInternalTaskRenderingTests {
                          charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49)!
     }
     private func mount(
-        _ model: SidebarConnectionModel, _ preferences: SidebarPreferences, width: Int, reduceMotion: Bool = false
+        _ model: SidebarConnectionModel, _ preferences: SidebarPreferences, width: Int, reduceMotion: Bool = false,
+        now: Date? = nil
     ) -> (window: NSWindow, host: NSView) {
         let frame = NSRect(x: 0, y: 0, width: width, height: 900)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let host = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
+            .environment(\.sidebarPresentationNow, { now ?? Date() })
             .environment(\._accessibilityReduceMotion, reduceMotion)
             .background(Color(nsColor: .windowBackgroundColor)))
         window.contentView = host
