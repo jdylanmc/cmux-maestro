@@ -16,6 +16,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Match internal-task headings to the approved prototype without inline
+  completeness diagnostics, preserving counts, task visibility and detail hints.
 - Show internal Copilot tasks as compact, non-interactive lines with
   workspace-local visibility, persistent disclosure, and exact-outcome
   dismissal that preserves local keyboard focus (#131).
