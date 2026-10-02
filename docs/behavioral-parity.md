@@ -546,6 +546,33 @@ layout and AppKit test gates remain unchanged. Fixed-input focus coverage and
 actual native composition/transition coverage are separate layers; neither
 substitutes for the other.
 
+## Managed Git provenance
+
+Managed Git branch/worktree labels, verification times and change counts describe
+the **assigned directory**, not Copilot's current `/cwd` or a tool's working
+directory. The controller's `collect_git_evidence` probes `node.workingDirectory`
+via `git_display_metadata`, applies evidence only to the matching run/directory,
+and publishes bounded labels/counts through `Orchestration/observer/current.json`.
+The sidebar's existing reader validates that projection; `managedGitDetails`
+shares the assigned-directory qualifier across inspector, hover, pinned details
+and row tooltips. Compact row labels remain unchanged; the count badge identifies
+the assigned directory in its caption, tooltip and accessibility description.
+
+The existing 60-second Git freshness checks still suppress current branch/worktree
+fields and counts when stale. Last-verified labels remain explicitly historical;
+unavailable evidence never proves a non-repository, and detached HEAD does not
+require a branch label. CMUX **Surface directory** and **Parent surface directory**
+remain separate host reports with unchanged permission and provenance rules.
+No dynamic directory collector, worktree identity/grouping key or new grant is
+introduced. This correction references #119/#59 without completing either.
+
+`SidebarAgentHoverTests.managedGitConsumersQualifyAssignedDirectoryWithoutChangingFreshness`
+covers shared fresh, stale, unavailable, absent, stale-count and detached-HEAD
+presentation. Existing pinned-detail and native row-tooltip assertions retain
+their identity, freshness and compact-layout checks. These tests require the
+unchanged hosted native suite; source inspection or an unsigned build alone
+does not establish test execution or installed-host acceptance.
+
 ## Capability matrix
 
 Links below point to test files; named methods identify representative checks,

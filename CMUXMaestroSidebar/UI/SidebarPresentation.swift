@@ -1057,21 +1057,25 @@ enum SidebarPresentation {
         ]
     }
 
-    static func managedNodeDetails(
-        _ node: SidebarOrchestrationNode,
-        hierarchy: HierarchySnapshot,
-        tree: SidebarCopilotTree,
-        now: Date = Date()
-    ) -> [SidebarDetailLine] {
+    static let assignedGitTitle = String(
+        localized: "sidebar.git.assignedDirectory", defaultValue: "Assigned directory"
+    )
+
+    static let assignedGitHelp = String(
+        localized: "sidebar.git.assignedDirectory.help",
+        defaultValue: "Git is probed at the directory assigned to this managed session, not Copilot's current /cwd or a tool's working directory."
+    )
+
+    static func assignedGitValue(_ value: String) -> String {
+        String(localized: "sidebar.git.assignedDirectory.value", defaultValue: "Assigned directory: \(value)")
+    }
+
+    static func assignedGitChangesDescription(_ changes: SidebarGitChanges?) -> String {
+        assignedGitValue(changes?.description ?? "Current counts unavailable")
+    }
+
+    static func managedGitDetails(_ node: SidebarOrchestrationNode, now: Date) -> [SidebarDetailLine] {
         var result: [SidebarDetailLine] = []
-        let retained = displacedManagedNodeIDs([node], observations: tree, now: now).contains(node.id)
-        if retained {
-            result += [.init(title: "Context", value: "Needed by work or attention"),
-                       .init(title: "Focus", value: retainedFocusUnavailable)]
-        }
-        if let model = managedModel(for: node, in: tree, now: now) {
-            result.append(.init(title: "Model", value: model))
-        }
         if node.hasFreshGitEvidence(at: now) {
             if let branch = node.branchLabel {
                 result.append(.init(title: "Branch", value: branch))
@@ -1093,11 +1097,37 @@ enum SidebarPresentation {
                 }
             }
         }
-        if let changes = node.currentGitChanges(at: now) {
-            result.append(.init(title: "Git changes", value: changes.description))
-        } else {
-            result.append(.init(title: "Git changes", value: "Current counts unavailable"))
+        result = result.map {
+            .init(title: $0.title, value: assignedGitValue($0.value), help: assignedGitHelp)
         }
+        result.append(.init(
+            title: "Git changes", value: assignedGitChangesDescription(node.currentGitChanges(at: now)),
+            help: assignedGitHelp
+        ))
+        return result
+    }
+
+    static func managedGitMetadataHelp(_ node: SidebarOrchestrationNode, now: Date) -> String {
+        managedGitDetails(node, now: now).map { "\($0.title): \($0.value)" }.joined(separator: ". ")
+            + ". \(assignedGitHelp)"
+    }
+
+    static func managedNodeDetails(
+        _ node: SidebarOrchestrationNode,
+        hierarchy: HierarchySnapshot,
+        tree: SidebarCopilotTree,
+        now: Date = Date()
+    ) -> [SidebarDetailLine] {
+        var result: [SidebarDetailLine] = []
+        let retained = displacedManagedNodeIDs([node], observations: tree, now: now).contains(node.id)
+        if retained {
+            result += [.init(title: "Context", value: "Needed by work or attention"),
+                       .init(title: "Focus", value: retainedFocusUnavailable)]
+        }
+        if let model = managedModel(for: node, in: tree, now: now) {
+            result.append(.init(title: "Model", value: model))
+        }
+        result += managedGitDetails(node, now: now)
         let paths = hierarchy.pathContext(
             workspaceID: node.workspaceId, surfaceID: node.surfaceId
         )

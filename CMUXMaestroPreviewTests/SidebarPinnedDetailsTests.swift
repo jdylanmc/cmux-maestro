@@ -253,8 +253,10 @@ struct SidebarPinnedDetailsTests {
             #expect(content.inspection?.sessionID == replacementID)
             #expect(content.lines.contains(.init(title: "Model", value: "replacement-model")))
             #expect(content.lines.filter { $0.copyableSessionID != nil } == [.sessionID(replacementID)])
-            #expect(content.lines.contains(.init(title: "Branch", value: "feat/pinned-details")))
-            #expect(content.lines.contains(.init(title: "Worktree", value: "pinned-46")))
+            #expect(content.lines.contains(.init(title: "Branch", value: "Assigned directory: feat/pinned-details",
+                                                help: SidebarPresentation.assignedGitHelp)))
+            #expect(content.lines.contains(.init(title: "Worktree", value: "Assigned directory: pinned-46",
+                                                help: SidebarPresentation.assignedGitHelp)))
             #expect(content.gitChanges == node.gitChanges)
             #expect(!content.lines.contains { $0.value.contains("ended-model") || $0.value.contains(fixture.sessionID.uuidString) })
 
@@ -281,7 +283,8 @@ struct SidebarPinnedDetailsTests {
         let node = managed()
         let result = pinned(nodes: [node])
         #expect(result.title == node.label && result.isAgent)
-        #expect(result.lines.contains(.init(title: "Branch", value: "feat/pinned-details")))
+        #expect(result.lines.contains(.init(title: "Branch", value: "Assigned directory: feat/pinned-details",
+                                           help: SidebarPresentation.assignedGitHelp)))
         #expect(result.lines.contains { $0.title == "Git changes" && $0.value.contains("+24") })
         for nodes in [[node, node], [managed(updatedAt: now.addingTimeInterval(-61))],
                       [managed(sessionID: UUID())]] {
@@ -297,8 +300,9 @@ struct SidebarPinnedDetailsTests {
         #expect(replaced.title != node.label)
         let staleGit = pinned(nodes: [managed(gitAt: now.addingTimeInterval(-3_600))])
         #expect(!staleGit.lines.contains { $0.title == "Branch" || $0.title == "Worktree" })
-        #expect(staleGit.lines.contains { $0.title == "Git evidence" && $0.value.hasPrefix("Stale") })
-        #expect(staleGit.lines.contains(.init(title: "Git changes", value: "Current counts unavailable")))
+        #expect(staleGit.lines.contains { $0.title == "Git evidence" && $0.value.hasPrefix("Assigned directory: Stale") })
+        #expect(staleGit.lines.contains(.init(title: "Git changes", value: "Assigned directory: Current counts unavailable",
+                                             help: SidebarPresentation.assignedGitHelp)))
         #expect(pinned(nodes: [managed(coordinator: true)]).lines.contains(.sessionID(fixtures.sessionID)))
     }
 

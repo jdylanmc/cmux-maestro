@@ -1308,7 +1308,7 @@ private struct ManagedNodeRow: View {
                             kind: isRetainedRecord ? "Needed context · \(stateCaption)"
                                 : stateVisual.tone == .red || stateVisual.tone == .attention ? stateCaption
                                 : node.role == "worker" && node.executionMode != .interactive ? "Legacy worker" : "Agent",
-                            directory: verifiedWorktree
+                            directory: assignedWorktree
                         )).lineLimit(1).truncationMode(.tail)
                     }
                     .font(.system(size: density.rowMetadataSize))
@@ -1351,18 +1351,7 @@ private struct ManagedNodeRow: View {
         .accessibilityIdentifier("managed-node-\(node.id)")
     }
 
-    private var metadataLine: String? {
-        guard node.gitEvidenceStatus == "verified", node.gitEvidenceAt != nil else { return nil }
-        switch (node.branchLabel, node.worktreeLabel) {
-        case let (branch?, worktree?) where branch != worktree:
-            return "\(branch)  ·  \(SidebarPathDisplay.text(worktree))"
-        case let (branch?, _): return branch
-        case let (_, worktree?): return SidebarPathDisplay.text(worktree)
-        default: return nil
-        }
-    }
-
-    private var verifiedWorktree: String? {
+    private var assignedWorktree: String? {
         guard node.gitEvidenceStatus == "verified", node.gitEvidenceAt != nil else { return nil }
         return node.worktreeLabel.map(SidebarPathDisplay.text)
     }
@@ -1385,11 +1374,7 @@ private struct ManagedNodeRow: View {
             stateVisual, needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate)
         )
         let state = isRetainedRecord ? "Work context. \(ownState). \(SidebarPresentation.retainedFocusUnavailable)" : ownState
-        let git = node.currentGitChanges(at: evidenceDate)?.description ?? "Current Git counts unavailable"
-        guard let metadataLine else { return "\(state). \(git)" }
-        let location = node.hasFreshGitEvidence(at: evidenceDate)
-            ? metadataLine : "Last verified location, not current Git state: \(metadataLine)"
-        return "\(state). \(location). \(git)"
+        return "\(state). \(SidebarPresentation.managedGitMetadataHelp(node, now: evidenceDate))"
     }
 }
 
@@ -1398,6 +1383,7 @@ struct GitChangeBadge: View {
 
     var body: some View {
         HStack(spacing: 4) {
+            Text(SidebarPresentation.assignedGitTitle).foregroundStyle(.secondary)
             Text("\(changes.files) \(changes.files == 1 ? "file" : "files")")
                 .foregroundStyle(.secondary)
             Text("+\(changes.insertions)").foregroundStyle(SidebarTone.attention.color)
@@ -1407,8 +1393,9 @@ struct GitChangeBadge: View {
         .monospacedDigit()
         .fixedSize()
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(changes.description)
-        .help(changes.description)
+        .accessibilityLabel(SidebarPresentation.assignedGitChangesDescription(changes))
+        .accessibilityHint(SidebarPresentation.assignedGitHelp)
+        .help(SidebarPresentation.assignedGitChangesDescription(changes) + ". " + SidebarPresentation.assignedGitHelp)
     }
 }
 
