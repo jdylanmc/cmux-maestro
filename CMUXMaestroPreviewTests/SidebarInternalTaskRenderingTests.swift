@@ -288,13 +288,40 @@ struct SidebarInternalTaskRenderingTests {
         defer { fixture.cleanup() }
         let preferences = fixture.preferences()
         preferences.selectedMode = mode
-        let data = SidebarTreeFixtures(), observedAt = Date()
+        let data = SidebarTreeFixtures(), observedAt = Date(), terminalID = UUID()
         let model = await makeModel(data, children: [
-            .init(id: "protected", parentID: nil, kind: .subagent, name: "Protected work", state: .blocked, model: nil)
+            .init(id: "protected", parentID: nil, kind: .subagent, name: "Protected work",
+                  state: .completed, model: nil, terminalEvent: .init(id: terminalID, timestamp: observedAt))
         ], now: observedAt, liveness: .dead, managed: true, additional: [
             data.session(id: data.otherSessionID, state: .working, now: observedAt)
         ])
         defer { model.setVisible(false) }
+        await sidebarEventually { model.copilot.tree.generatedAt == observedAt }
+        let observations = model.copilot.tree
+        try #require(observations.availability == .ready && observations.generatedAt == observedAt)
+        try #require(observations.sessions.count == 2 && model.orchestration.snapshot.nodes.count == 1)
+        let originalSession = try #require(observations.sessions.first { $0.id == data.sessionID })
+        let replacement = try #require(observations.sessions.first { $0.id == data.otherSessionID })
+        let owner = try #require(model.orchestration.snapshot.nodes.first)
+        try #require(owner.copilotSessionId == originalSession.id
+                     && owner.workspaceId == data.workspaceA && owner.surfaceId == data.surfaceA)
+        try #require(originalSession.workspaceID == owner.workspaceId && originalSession.surfaceID == owner.surfaceId
+                     && originalSession.liveness == .dead && originalSession.observedAt == observedAt)
+        try #require(replacement.workspaceID == owner.workspaceId && replacement.surfaceID == owner.surfaceId
+                     && replacement.liveness == .alive && replacement.observedAt == observedAt)
+        try #require(originalSession.nodes.count == 1)
+        let child = try #require(originalSession.nodes.first)
+        try #require(child.id == "protected" && child.isInternalTask && child.state == .completed
+                     && child.terminalEvent?.id == terminalID && child.terminalTimestamp == observedAt)
+        let visible = SidebarVisibleWork(
+            tree: observations, managed: [owner], history: preferences.history,
+            showEnded: preferences.showEnded, now: observedAt
+        )
+        try #require(visible.managed.map(\.id) == [owner.id])
+        try #require(visible.tree.sessions.contains { $0.id == originalSession.id })
+        try #require(SidebarPresentation.displacedManagedNodeIDs(
+            [owner], observations: observations, now: observedAt
+        ) == [owner.id])
         let frame = NSRect(x: 0, y: 0, width: 280, height: 900)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -311,7 +338,6 @@ struct SidebarInternalTaskRenderingTests {
                 && buttons(host).contains { $0.accessibilityLabel() == "Inspect work context Managed owner" }
         }
         let original = model.copilot.tree
-        let owner = try #require(model.orchestration.snapshot.nodes.first)
         for (age, expected) in [(8.0, "Inspect work context Managed owner"), (8.001, "Focus Managed owner")] {
             let date = observedAt.addingTimeInterval(age)
             host.rootView = content(at: date)
