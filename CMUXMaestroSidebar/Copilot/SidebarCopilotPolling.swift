@@ -14,6 +14,7 @@ final class SidebarCopilotPolling {
     private var topology = SidebarTopology(.empty)
     private var visible = false
     private var connected = false
+    private var hasStartedPolling = false
     private var generation: UInt64 = 0
     private var lastGeneratedAt: Date?
     private var invalidatedAt: Date?
@@ -86,7 +87,7 @@ final class SidebarCopilotPolling {
     func setVisible(_ visible: Bool) {
         guard visible != self.visible else { return }
         self.visible = visible
-        invalidate()
+        invalidate(scopeChanged: false)
     }
 
     func updateManagedSubjects(_ snapshot: SidebarOrchestrationSnapshot) {
@@ -95,7 +96,8 @@ final class SidebarCopilotPolling {
                            sessionID: $0.copilotSessionId, workspaceID: $0.workspaceId, surfaceID: $0.surfaceId)
         }.sorted { $0.nodeID.uuidString < $1.nodeID.uuidString }
         // Unavailable observer reads are not proof that an existing registration ended.
-        guard snapshot.complete || !subjects.isEmpty, subjects != managedSubjects else { return }
+        guard snapshot.generatedAt != .distantPast,
+              snapshot.complete || !subjects.isEmpty, subjects != managedSubjects else { return }
         managedSubjects = subjects
         invalidate()
     }
@@ -118,7 +120,11 @@ final class SidebarCopilotPolling {
         reprojectHistory()
     }
 
-    private func invalidate() {
+    private func invalidate(scopeChanged: Bool = true) {
+        // Once reading starts, a new scope must not relabel cached evidence.
+        if scopeChanged && hasStartedPolling {
+            invalidatedAt = now()
+        }
         generation &+= 1
         worker?.cancel()
         expiry?.cancel()
@@ -128,7 +134,6 @@ final class SidebarCopilotPolling {
         snapshot = nil
         lastStatuses.removeAll()
         lastGeneratedAt = nil
-        invalidatedAt = nil
         tree = SidebarCopilotTree(
             availability: !visible ? .hidden : !connected ? .disconnected
                 : !topology.canReadSessions ? .waiting : .loading,
@@ -142,6 +147,7 @@ final class SidebarCopilotPolling {
     private func startIfNeeded() {
         // A cancelled read must unwind before a new topology starts I/O.
         guard worker == nil, canPoll else { return }
+        hasStartedPolling = true
         let token = generation
         let capturedTopology = topology
         let read = read
@@ -190,9 +196,11 @@ final class SidebarCopilotPolling {
 
     private func accept(_ snapshot: AgentSessionSnapshot, topology: SidebarTopology) -> Bool {
         let unsafeIssues: [AgentSnapshotIssue] = [
-            .permissionDenied, .identityChanged, .ambiguousIdentity, .unsupportedFormat,
+            .permissionDenied, .identityChanged, .ambiguousIdentity,
             .integrationNotInstalled, .noIdentityRecords
         ]
+        // Aggregate format warnings can describe only one child's unknown lifecycle.
+        // The envelope schema and explicit identity failures remain global barriers.
         if snapshot.issues?.contains(where: { unsafeIssues.contains($0) }) == true
             || !SnapshotSchemaVersion.supported.contains(snapshot.schemaVersion) {
             lastStatuses.removeAll()
@@ -259,8 +267,9 @@ final class SidebarCopilotPolling {
         if groups[nil] != nil { lastStatuses.removeAll() }
         let current = Dictionary(grouping: tree.sessions, by: \.surfaceID)
         let unreadable = Set(tree.sessions.filter {
-            (snapshot.issues?.contains(.stateUnavailable) == true && $0.observedAt < snapshot.generatedAt)
-                || (!snapshot.isComplete && $0.state == .unknown)
+            [.alive, .dead].contains($0.liveness)
+                && ((snapshot.issues?.contains(.stateUnavailable) == true && $0.observedAt < snapshot.generatedAt)
+                    || (!snapshot.isComplete && $0.state == .unknown))
         }.map(\.id))
         lastStatuses = lastStatuses.filter { id, saved in
             guard topology.workspaceBySurface[saved.session.surfaceID] == saved.session.workspaceID else { return false }
@@ -279,7 +288,7 @@ final class SidebarCopilotPolling {
                 lastStatuses.removeValue(forKey: session.id)
                 continue
             }
-            if unreadable.contains(session.id) && lastStatuses[session.id] != nil { continue }
+            if unreadable.contains(session.id) { continue }
             guard lastStatuses[session.id].map({ session.observedAt >= $0.session.observedAt }) ?? true else { continue }
             // A repeated prefix during history catch-up is not a new observation.
             if let saved = lastStatuses[session.id], saved.lostAt != nil,
@@ -301,7 +310,9 @@ final class SidebarCopilotPolling {
             return !unreadable.contains(session.id) && saved.lostAt == nil && saved.session.observedAt == session.observedAt
                 && [.alive, .dead].contains(session.liveness)
         }.map(\.id))
-        tree.sessions.removeAll { lastStatuses[$0.id] != nil && !accepted.contains($0.id) }
+        tree.sessions.removeAll {
+            unreadable.contains($0.id) || (lastStatuses[$0.id] != nil && !accepted.contains($0.id))
+        }
         projectStatusLoss()
     }
 

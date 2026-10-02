@@ -338,6 +338,10 @@ trust limit is unchanged; retained status grants no identity, focus,
 acknowledgement, dismissal, permission or lifecycle authority. Access denial,
 invalid/ambiguous identity, confirmed removal/replacement, and changes to
 window, placement, grants or managed generation invalidate the retained display.
+Recovery after those boundaries requires a new valid observation; an unreadable
+cached observation cannot seed display memory for the new scope. Unsupported
+child lifecycle events keep their warning and unknown child state without
+suppressing independently validated sibling chats.
 Internal tasks keep their original real open parent, without actionable stale
 outcomes. Actual open background tabs remain reachable through current host
 metadata; unknown chats without a real open surface are not fabricated.

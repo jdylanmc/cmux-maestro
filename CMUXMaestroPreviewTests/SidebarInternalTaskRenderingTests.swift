@@ -18,7 +18,7 @@ struct SidebarInternalTaskRenderingTests {
             .init(id: "same-task", parentID: nil, kind: .subagent, name: "Identical task label",
                   state: .completed, model: nil, terminalEvent: .init(id: event, timestamp: now))
         }
-        let model = makeModel(data, children: [result(UUID())], now: now, managed: true, additional: [
+        let model = await makeModel(data, children: [result(UUID())], now: now, managed: true, additional: [
             data.session(id: data.otherSessionID, liveness: .dead, children: [
                 result(UUID()),
                 .init(id: "remaining", parentID: nil, kind: .subagent, name: "Another historical outcome",
@@ -70,7 +70,7 @@ struct SidebarInternalTaskRenderingTests {
         preferences.setRetention(retention)
         let data = SidebarTreeFixtures(), event = UUID()
         let now = Date()
-        let model = makeModel(data, children: [
+        let model = await makeModel(data, children: [
             .init(id: "result", parentID: nil, kind: .subagent, name: "Finished task", state: .completed,
                   model: nil, terminalEvent: .init(id: event, timestamp: now)),
             .init(id: "shell", parentID: "result", kind: .shell, name: "Finished shell", state: .completed,
@@ -100,7 +100,7 @@ struct SidebarInternalTaskRenderingTests {
         preferences.setRetention(.never)
         preferences.selectedMode = .taskboard
         let data = SidebarTreeFixtures(), now = Date()
-        let model = makeModel(data, children: [
+        let model = await makeModel(data, children: [
             .init(id: "task", parentID: nil, kind: .subagent, name: "Internal task", state: .completed,
                   model: nil, terminalEvent: .init(id: UUID(), timestamp: now)),
             .init(id: "shell", parentID: "task", kind: .shell, name: "Running shell", state: .working, model: nil),
@@ -149,7 +149,7 @@ struct SidebarInternalTaskRenderingTests {
         func signal(_ kind: AgentAttentionKind, source: String = "copilot.events") -> AgentAttention {
             .init(kind: kind, evidence: .init(source: source, eventID: UUID()), occurredAt: now)
         }
-        let model = makeModel(data, children: [
+        let model = await makeModel(data, children: [
             .init(id: "task", parentID: nil, kind: .subagent, name: "Mixed task", state: .completed, model: nil),
             .init(id: "working", parentID: "task", kind: .shell, name: "Working shell", state: .working, model: nil),
             .init(id: "blocked", parentID: "task", kind: .shell, name: "Blocked shell", state: .blocked, model: nil,
@@ -233,7 +233,7 @@ struct SidebarInternalTaskRenderingTests {
             let preferences = fixture.preferences()
             preferences.selectedMode = mode
             preferences.setDensity(density)
-            let model = makeModel(data, children: children, now: now, liveness: scenario.retained ? .dead : .alive,
+            let model = await makeModel(data, children: children, now: now, liveness: scenario.retained ? .dead : .alive,
                                   additional: additional, managedNodes: chain, hierarchyOverride: hierarchy)
             defer { model.setVisible(false) }
             let mounted = mount(model, preferences, width: scenario.width, reduceMotion: true)
@@ -289,7 +289,7 @@ struct SidebarInternalTaskRenderingTests {
         let preferences = fixture.preferences()
         preferences.selectedMode = mode
         let data = SidebarTreeFixtures()
-        let model = makeModel(data, children: [
+        let model = await makeModel(data, children: [
             .init(id: "owned", parentID: nil, kind: .subagent, name: "Owned internal task", state: .working, model: nil)
         ], now: Date(), managed: true)
         defer { model.setVisible(false) }
@@ -333,7 +333,7 @@ struct SidebarInternalTaskRenderingTests {
             .init(id: "blocked", parentID: nil, kind: .subagent, name: "Wait for permission",
                   state: .blocked, model: nil)
         ]
-        let model = makeModel(data, children: children, now: now)
+        let model = await makeModel(data, children: children, now: now)
         defer { model.setVisible(false) }
         for density in SidebarDensity.allCases {
             preferences.setDensity(density)
@@ -370,7 +370,7 @@ struct SidebarInternalTaskRenderingTests {
             CopilotChildWork(id: "task-\($0)", parentID: nil, kind: .subagent, name: "Bounded synthetic task \($0)",
                              state: .working, model: nil)
         }
-        let model = makeModel(data, children: children, now: now)
+        let model = await makeModel(data, children: children, now: now)
         defer { model.setVisible(false) }
         let mounted = mount(model, fixture.preferences(), width: 280)
         defer { mounted.window.contentView = nil; mounted.window.close() }
@@ -396,7 +396,7 @@ struct SidebarInternalTaskRenderingTests {
             .init(id: "parent", parentID: nil, kind: .subagent, name: "Parent task", state: .working, model: nil),
             .init(id: "nested", parentID: "parent", kind: .subagent, name: "Nested task", state: .blocked, model: nil)
         ]
-        let model = makeModel(data, children: children, now: now)
+        let model = await makeModel(data, children: children, now: now)
         defer { model.setVisible(false) }
         let mounted = mount(model, preferences, width: 350)
         defer { mounted.window.contentView = nil; mounted.window.close() }
@@ -436,7 +436,7 @@ struct SidebarInternalTaskRenderingTests {
         let event = UUID()
         let child = CopilotChildWork(id: "result", parentID: nil, kind: .subagent, name: "Reviewed outcome",
                                     state: .completed, model: nil, terminalEvent: .init(id: event, timestamp: now))
-        let model = makeModel(data, children: [child], now: now, liveness: ownerAlive ? .alive : .dead)
+        let model = await makeModel(data, children: [child], now: now, liveness: ownerAlive ? .alive : .dead)
         defer { model.setVisible(false) }
         let hierarchy = model.hierarchy
         let mounted = mount(model, preferences, width: 280)
@@ -526,7 +526,7 @@ struct SidebarInternalTaskRenderingTests {
         liveness: CopilotLiveness = .alive, managed: Bool = false,
         additional: [CopilotSessionObservation] = [], managedNodes: [SidebarOrchestrationNode]? = nil,
         hierarchyOverride: HierarchySnapshot? = nil
-    ) -> SidebarConnectionModel {
+    ) async -> SidebarConnectionModel {
         let snapshot = data.snapshot(sessions: [data.session(liveness: liveness, children: children, now: now)] + additional, now: now)
         let polling = SidebarCopilotPolling(
             read: neutralRead { _ in snapshot }, pause: { try await sidebarFrozenExpiry(0) },
@@ -551,6 +551,9 @@ struct SidebarInternalTaskRenderingTests {
         orchestration.update(topology: topology, connected: true)
         model.navigation.update(topology: topology, connected: true, workspaceAllowed: true, surfaceAllowed: true,
                                 perform: { _ in Issue.record("Internal task controls must not invoke native navigation") })
+        orchestration.setVisible(true)
+        await sidebarEventually { orchestration.snapshot.generatedAt == now }
+        polling.updateManagedSubjects(orchestration.snapshot)
         model.setVisible(true)
         return model
     }

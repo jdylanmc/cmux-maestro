@@ -173,6 +173,7 @@ actor CopilotSessionReader {
                 }
                 guard record.schemaVersion == 1 else {
                     bindingsByID.removeValue(forKey: id)
+                    recordCycleIssue(.identityChanged)
                     recordCycleIssue(.unsupportedFormat)
                     continue
                 }

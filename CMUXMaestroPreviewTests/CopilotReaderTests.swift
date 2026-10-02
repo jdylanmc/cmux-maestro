@@ -74,7 +74,7 @@ nonisolated struct CopilotReaderTests {
         print("S119 synthetic 20-tab reader+projection: cold=\(coldElapsed), update=\(updateElapsed), failure=\(failureElapsed); default poll pause=2s (not included); no host/render latency measured")
     }
 
-    @Test(arguments: ["removed", "replaced"])
+    @Test(arguments: ["removed", "replaced", "unsupported"])
     func knownBindingChangeIsExplicitRatherThanTemporaryObservationLoss(_ change: String) async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
@@ -85,13 +85,16 @@ nonisolated struct CopilotReaderTests {
             try FileManager.default.removeItem(at: fixture.bindings.appendingPathComponent(fixture.sessionID.uuidString.lowercased() + ".json"))
         } else {
             try fixture.writeRecord(.init(
+                schemaVersion: change == "unsupported" ? 2 : 1,
                 sessionID: fixture.sessionID, surfaceID: fixture.surface, launchWorkspaceID: fixture.workspace,
-                ownerPID: fixture.process.pid, ownerStartSeconds: fixture.process.startSeconds + 1,
+                ownerPID: fixture.process.pid,
+                ownerStartSeconds: fixture.process.startSeconds + (change == "replaced" ? 1 : 0),
                 ownerStartMicroseconds: fixture.process.startMicroseconds, recordedAt: fixture.record.recordedAt
             ), atomic: true)
         }
         let changed = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(changed.issues.contains(.identityChanged))
+        if change == "unsupported" { #expect(changed.issues.contains(.unsupportedFormat)) }
         #expect(!changed.sessions.contains { $0.liveness == .alive })
     }
 
@@ -466,7 +469,7 @@ nonisolated struct CopilotReaderTests {
         try FileManager.default.createDirectory(at: fixture.bindings, withIntermediateDirectories: true)
         let replaced = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(replaced.sessions.isEmpty)
-        #expect(replaced.issues == [.noIdentityRecords])
+        #expect(replaced.issues == [.identityChanged, .noIdentityRecords])
         #expect(await reader.hasPendingHistory() == false)
         try FileManager.default.removeItem(at: fixture.bindings)
         try FileManager.default.createSymbolicLink(at: fixture.bindings, withDestinationURL: parked)
@@ -1069,7 +1072,11 @@ nonisolated struct CopilotReaderTests {
 
 nonisolated final class CopilotReaderTestClock: @unchecked Sendable {
     private let lock = NSLock()
-    private var instant = Date(timeIntervalSince1970: 2_000)
+    private var instant: Date
+
+    init(_ instant: Date = Date(timeIntervalSince1970: 2_000)) {
+        self.instant = instant
+    }
 
     func now() -> Date {
         lock.lock()
