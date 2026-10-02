@@ -5,6 +5,39 @@ import Testing
 struct SidebarCopilotTreeTests {
     private let fixtures = SidebarTreeFixtures()
 
+    @Test func backgroundTerminalsRemainVisibleButBrowserReplacementCannotInheritSession() {
+        let now = Date()
+        let original = fixtures.hierarchy()
+        let observations = fixtures.snapshot(sessions: [
+            fixtures.session(state: .working, children: [fixtures.child("internal", state: .working)], now: now),
+            fixtures.session(id: fixtures.otherSessionID, surface: UUID(), now: now)
+        ], now: now)
+        let open = SidebarCopilotTree.project(observations, onto: SidebarTopology(original), now: now)
+        #expect(open.sessions.map(\.id) == [fixtures.sessionID])
+        #expect(open.sessions.first?.nodes.first?.isInternalTask == true)
+        let workspaces = original.workspaces.map { workspace in
+            guard workspace.id == fixtures.workspaceA else { return workspace }
+            return HierarchyWorkspace(
+                id: workspace.id, title: workspace.title, detail: workspace.detail,
+                isSelected: workspace.isSelected, isPinned: workspace.isPinned, unreadCount: workspace.unreadCount,
+                rootPath: workspace.rootPath, projectRootPath: workspace.projectRootPath,
+                surfaces: .available([.init(
+                    id: fixtures.surfaceA, title: "Browser replacement", kind: .browser,
+                    isFocused: false, isPinned: false, unreadCount: 0, workingDirectory: .unavailable
+                )])
+            )
+        }
+        let replacement = HierarchySnapshot(
+            sequence: 2, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: true,
+            workspaces: workspaces, windowID: fixtures.windowID
+        )
+        #expect(SidebarTopology(original) != SidebarTopology(replacement))
+        let replaced = SidebarCopilotTree.project(observations, onto: SidebarTopology(replacement), now: now)
+        #expect(replaced.sessions.isEmpty)
+        #expect(SidebarTopology(replacement).workspaceBySurface[fixtures.surfaceA] == fixtures.workspaceA)
+    }
+
     @Test
     func exactSurfacePlacementIgnoresNamesPathsAndLaunchWorkspace() {
         let now = Date()
@@ -661,14 +694,22 @@ private actor SidebarCancellationHarness {
 
 private actor SidebarExpiryHarness {
     private(set) var delay: TimeInterval?
-    private var continuation: CheckedContinuation<Void, Error>?
+    private var nextID = 0
+    private var continuations: [Int: CheckedContinuation<Void, Error>] = [:]
     func wait(_ delay: TimeInterval) async throws {
         self.delay = delay
-        try await withCheckedThrowingContinuation { continuation = $0 }
+        let id = nextID
+        nextID += 1
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try await withCheckedThrowingContinuation { continuations[id] = $0 }
+        } onCancel: { Task { await self.cancel(id) } }
     }
     func expire() {
-        continuation?.resume()
-        continuation = nil
+        for id in continuations.keys { continuations.removeValue(forKey: id)?.resume() }
+    }
+    private func cancel(_ id: Int) {
+        continuations.removeValue(forKey: id)?.resume(throwing: CancellationError())
     }
 }
 

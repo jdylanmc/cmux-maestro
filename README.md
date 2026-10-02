@@ -320,6 +320,36 @@ symlinked state directories are not supported. Missing lifecycle events can
 leave completion/status unknown, and agent IDs are not automatically native
 child-session IDs. No title/transcript heuristics repair missing identity.
 
+### Temporary status observation loss
+
+The confirmed first status/visibility slice of #119 keeps the existing bounded
+reader and two-second polling pause. Ordinary updates should appear in roughly
+2-3 seconds; 10 seconds or more is too slow. This is a practical responsiveness
+goal, not a new session cap or a reason to increase read bounds.
+
+When an ordinary read fails or reliable observation expires, the sidebar keeps
+the exact subject's last known **visual status for five minutes**, then quietly
+shows **Status unavailable**. A fresh valid observation restores current status.
+Idle chat is not observation loss: a verified unchanged event-file boundary is
+still a fresh observation. Replayed or older evidence cannot restart the grace.
+
+Display memory is separate from current session evidence. The eight-second
+trust limit is unchanged; retained status grants no identity, focus,
+acknowledgement, dismissal, permission or lifecycle authority. Access denial,
+invalid/ambiguous identity, confirmed removal/replacement, and changes to
+window, placement, grants or managed generation invalidate the retained display.
+Internal tasks keep their original real open parent, without actionable stale
+outcomes. Actual open background tabs remain reachable through current host
+metadata; unknown chats without a real open surface are not fabricated.
+A browser replacing a terminal cannot inherit the terminal's agent observation.
+
+The regression workload uses 20 synthetic open background tabs with real bounded
+file reads, fake-clock idle/failure transitions, and measured reader/projection
+cost. Its timings exclude the two-second pause, host delivery and rendering;
+they are not a stock-host end-to-end latency claim. A possible 100-chat day
+remains a nonblocking goal. This slice does not complete #119 or authorize
+installation, broader settings architecture, or lifecycle changes.
+
 ## Sidebar layout
 
 When a coordinator explicitly registers a terminal-backed run, its coordinator

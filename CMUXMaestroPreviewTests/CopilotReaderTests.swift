@@ -7,6 +7,95 @@ import Testing
 @Suite(.serialized)
 nonisolated struct CopilotReaderTests {
     @MainActor
+    @Test func twentyOpenBackgroundChatsRefreshIdleAndReportFailureWithoutChangingBounds() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let surfaces = [fixture.surface] + (1..<20).map { _ in UUID() }
+        var directories = [fixture.session]
+        for surface in surfaces.dropFirst() { directories.append(try fixture.addSession(surface: surface)) }
+        for directory in directories {
+            try Data().write(to: directory.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
+            try (copilotTestEvent("session.idle") + Data([10])).write(to: directory.appendingPathComponent("events.jsonl"))
+        }
+        let topology = SidebarTopology(.init(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: false,
+            workspaces: [.init(
+                id: fixture.workspace, title: .available("Synthetic twenty-chat workload"), detail: .available(nil),
+                isSelected: .available(false), isPinned: .available(false), unreadCount: .available(0),
+                rootPath: .unavailable, projectRootPath: .unavailable,
+                surfaces: .available(surfaces.map {
+                    .init(id: $0, title: "Synthetic background tab", kind: .terminal, isFocused: false,
+                          isPinned: false, unreadCount: 0, workingDirectory: .unavailable)
+                })
+            )], windowID: UUID()
+        ))
+        let clock = CopilotReaderTestClock()
+        let reader = fixture.reader(clock: { clock.now() })
+        let measured = ContinuousClock()
+        let coldStart = measured.now
+        let cold = try await reader.read(surfaceIDs: Set(surfaces))
+        let coldTree = SidebarCopilotTree.project(cold, onto: topology, now: clock.now())
+        let coldElapsed = coldStart.duration(to: measured.now)
+        #expect(coldTree.sessions.count == 20)
+        #expect(coldTree.sessions.allSatisfy { $0.state == .idle })
+        clock.advance(by: 600)
+        let idle = try await reader.read(surfaceIDs: Set(surfaces))
+        #expect(idle.sessions.count == 20)
+        #expect(idle.sessions.allSatisfy { $0.state == .idle && $0.observedAt == clock.now() })
+        for directory in directories {
+            let file = try FileHandle(forWritingTo: directory.appendingPathComponent("events.jsonl"))
+            try file.seekToEnd()
+            try file.write(contentsOf: copilotTestEvent("assistant.turn_start", data: ["turnId": "new"]) + Data([10]))
+            try file.close()
+        }
+        clock.advance(by: 2)
+        let updateStart = measured.now
+        let updated = try await reader.read(surfaceIDs: Set(surfaces))
+        let tree = SidebarCopilotTree.project(updated, onto: topology, now: clock.now())
+        let updateElapsed = updateStart.duration(to: measured.now)
+        #expect(tree.sessions.count == 20 && tree.sessions.allSatisfy { $0.state == .working })
+        try FileManager.default.removeItem(at: fixture.events)
+        clock.advance(by: 10)
+        let failureStart = measured.now
+        let failed = try await reader.read(surfaceIDs: Set(surfaces))
+        let failedTree = SidebarCopilotTree.project(failed, onto: topology, now: clock.now())
+        let failureElapsed = failureStart.duration(to: measured.now)
+        #expect(failed.issues.contains(.stateUnavailable))
+        #expect(failedTree.sessions.count == 19)
+        #expect(failedTree.sessions.allSatisfy { $0.state == .working })
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        clock.advance(by: 2)
+        let recovered = try await reader.read(surfaceIDs: Set(surfaces))
+        #expect(recovered.sessions.count == 20)
+        #expect(recovered.sessions.first { $0.sessionID == fixture.sessionID }?.state == .idle)
+        let counts = await reader.retentionCounts()
+        #expect(counts.bindings == 20 && counts.tails == 20)
+        print("S119 synthetic 20-tab reader+projection: cold=\(coldElapsed), update=\(updateElapsed), failure=\(failureElapsed); default poll pause=2s (not included); no host/render latency measured")
+    }
+
+    @Test(arguments: ["removed", "replaced"])
+    func knownBindingChangeIsExplicitRatherThanTemporaryObservationLoss(_ change: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        let reader = fixture.reader()
+        #expect(try await reader.read(surfaceIDs: [fixture.surface]).sessions.count == 1)
+        if change == "removed" {
+            try FileManager.default.removeItem(at: fixture.bindings.appendingPathComponent(fixture.sessionID.uuidString.lowercased() + ".json"))
+        } else {
+            try fixture.writeRecord(.init(
+                sessionID: fixture.sessionID, surfaceID: fixture.surface, launchWorkspaceID: fixture.workspace,
+                ownerPID: fixture.process.pid, ownerStartSeconds: fixture.process.startSeconds + 1,
+                ownerStartMicroseconds: fixture.process.startMicroseconds, recordedAt: fixture.record.recordedAt
+            ), atomic: true)
+        }
+        let changed = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(changed.issues.contains(.identityChanged))
+        #expect(!changed.sessions.contains { $0.liveness == .alive })
+    }
+
+    @MainActor
     @Test func unchangedOverflowCatchupPublishesFreshTreeOnNormalCadence() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }

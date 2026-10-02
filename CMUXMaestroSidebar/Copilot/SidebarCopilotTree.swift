@@ -49,6 +49,8 @@ struct SidebarCopilotNode: Identifiable, Equatable {
     var stateDetail: AgentSessionStateDetail? = nil
     var observedParent: AgentChildWorkParent? = nil
     var outcomeHasProtectedDescendants: Bool? = nil
+    var statusOnly = false
+    var lastKnownState: AgentWorkState? = nil
 
     var isInternalTask: Bool { SidebarInternalTaskPolicy.isInternalTask(kind: kind, parent: observedParent) }
 
@@ -92,6 +94,12 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     var attentionDegraded = false
     var activity: AgentActivity? = nil
     var internalTaskCountsIncomplete = false
+    var statusOnly = false
+    var lastKnownState: AgentWorkState? = nil
+    var lastKnownLiveness: AgentProcessLiveness? = nil
+    var statusOwnerID: UUID? = nil
+    var statusOwnerRunID: UUID? = nil
+    var statusOwnerGeneration: Int? = nil
 
     var knownRunningChildren: Int { nodes.filter { $0.state == .working }.count }
     var retainedHistoryCount: Int { nodes.filter { $0.state.isTerminal && !$0.historyAncestor }.count }
@@ -120,6 +128,8 @@ struct SidebarCopilotTree: Equatable {
     var issues: [AgentSnapshotIssue]
     var generatedAt: Date?
     var nextHistoryExpiry: Date? = nil
+    // Display records never participate in identity, attention or history authority.
+    var statusSessions: [SidebarCopilotSession] = []
 
     static let waiting = SidebarCopilotTree(
         availability: .waiting, sessions: [], issues: [], generatedAt: nil
@@ -127,6 +137,35 @@ struct SidebarCopilotTree: Equatable {
     static let maximumAge: TimeInterval = 8
     static let maximumNodes = 256
     static let maximumDepth = 12
+
+    static func statusOnly(_ session: SidebarCopilotSession, retainingStatus: Bool) -> SidebarCopilotSession {
+        var result = SidebarCopilotSession(
+            id: session.id, workspaceID: session.workspaceID, surfaceID: session.surfaceID,
+            liveness: .unknown, state: .unknown, model: nil, observedAt: session.observedAt,
+            nodes: session.nodes.map { node in
+                var result = SidebarCopilotNode(
+                    id: node.id, parentID: node.parentID, depth: node.depth, kind: node.kind,
+                    name: node.name, state: .unknown, model: nil,
+                    ancestryUnresolved: node.ancestryUnresolved, hasChildren: node.hasChildren
+                )
+                result.observedParent = node.observedParent
+                result.historyAncestor = node.historyAncestor
+                result.statusOnly = true
+                result.lastKnownState = retainingStatus ? node.state : nil
+                return result
+            },
+            childrenComplete: false, treeDegraded: true,
+            omittedChildrenCount: session.omittedChildrenCount,
+            omittedActiveChildrenCount: session.omittedActiveChildrenCount
+        )
+        result.statusOnly = true
+        result.lastKnownState = retainingStatus ? session.state : nil
+        result.lastKnownLiveness = retainingStatus ? session.liveness : nil
+        result.statusOwnerID = session.statusOwnerID
+        result.statusOwnerRunID = session.statusOwnerRunID
+        result.statusOwnerGeneration = session.statusOwnerGeneration
+        return result
+    }
 
     var knownRunningChildren: Int {
         sessions.reduce(0) { $0 + $1.knownRunningChildren }
@@ -229,6 +268,7 @@ struct SidebarCopilotTree: Equatable {
                   groups[sessionID]?.count == 1,
                   case .bound(let binding) = observation.binding,
                   let surfaceID = UUID(uuidString: binding.surfaceID.rawValue),
+                  topology.sessionSurfaceIDs.contains(surfaceID),
                   let workspaceID = topology.workspaceBySurface[surfaceID],
                   let observedAt = observation.observedAt,
                   isFresh(observedAt, now: now),

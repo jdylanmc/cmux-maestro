@@ -157,7 +157,8 @@ struct SidebarHistoryPollingTests {
         await sidebarEventually { poller.tree.availability == .unavailable }
         poller.updateHistory(.init(retention: .never))
         #expect(poller.tree.sessions.isEmpty)
-        await sidebarEventually { await harness.activeTimers == 0 }
+        await sidebarEventually { await harness.activeTimers == 1 }
+        #expect(poller.tree.statusSessions.count == 1)
         await harness.nextRead()
         await sidebarEventually { await harness.reads == 3 }
         await harness.succeed(snapshot(at: clock.read()))
@@ -170,6 +171,217 @@ struct SidebarHistoryPollingTests {
     private func start(_ poller: SidebarCopilotPolling) {
         poller.update(topology: fixtures.topology(), connected: true)
         poller.setVisible(true)
+    }
+
+    @Test func readLossRetainsOnlyVisualStatusForFiveMinutesThenRecovers() async throws {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(snapshot(at: initial))
+        await sidebarEventually { await harness.isPaused }
+        clock.advance(2)
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 2 }
+        await harness.failRead(CopilotFileError.io)
+        await sidebarEventually { await harness.isPaused && poller.tree.statusSessions.count == 1 }
+        #expect(poller.tree.sessions.isEmpty)
+        #expect(poller.tree.dismissibleOutcomes.isEmpty)
+        #expect(poller.tree.acknowledgeableOutcomes.isEmpty)
+        let display = SidebarVisibleWork(tree: poller.tree, managed: [], history: .init(), showEnded: false).tree
+        let session = try #require(display.sessions.first)
+        #expect(session.id == fixtures.sessionID && session.surfaceID == fixtures.surfaceA)
+        #expect(session.liveness == .unknown && session.state == .unknown)
+        #expect(session.model == nil && session.activity == nil && session.attention.isEmpty)
+        #expect(SidebarPresentation.sessionState(session).title == "Idle")
+        #expect(session.nodes.contains { $0.id == "working" && $0.isInternalTask })
+        #expect(session.nodes.allSatisfy { $0.state == .unknown && $0.terminalEvent == nil })
+        #expect(display.dismissibleOutcomes.isEmpty && display.acknowledgeableOutcomes.isEmpty)
+        #expect(SidebarSeenWork.capture(.session(session.id), tree: display).notices.isEmpty)
+        #expect(SidebarPresentation.inspection(
+            for: .unmanaged(.session(session.id)), hierarchy: fixtures.hierarchy(), connected: true,
+            tree: display, managed: .empty, availability: .ready, now: clock.read()
+        ) == nil)
+        #expect(SidebarPresentation.inspection(
+            for: .unmanaged(.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA)),
+            hierarchy: fixtures.hierarchy(), connected: true, tree: display,
+            managed: .empty, availability: .ready, now: clock.read()
+        ) != nil)
+        clock.advance(299)
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 3 }
+        await harness.failRead(CopilotFileError.io)
+        await sidebarEventually {
+            let paused = await harness.isPaused
+            let timers = await harness.activeTimers
+            return paused && timers == 1
+        }
+        #expect(SidebarPresentation.sessionState(try #require(poller.tree.statusSessions.first)).title == "Idle")
+        clock.advance(1)
+        await harness.fire(delay: 1)
+        await sidebarEventually { poller.tree.statusSessions.first?.lastKnownState == nil }
+        #expect(SidebarPresentation.sessionState(try #require(poller.tree.statusSessions.first)).title == "Status unavailable")
+        #expect(poller.tree.statusSessions.first?.nodes.allSatisfy { $0.lastKnownState == nil } == true)
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 4 }
+        await harness.succeed(snapshot(at: clock.read()))
+        await sidebarEventually { await harness.isPaused && poller.tree.sessions.count == 1 }
+        #expect(poller.tree.statusSessions.isEmpty)
+        #expect(poller.tree.knownRunningChildren == 1)
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
+    @Test(arguments: [CopilotIssue.permissionDenied, .identityChanged, .ambiguousIdentity,
+                      .unsupportedFormat, .integrationNotInstalled, .noIdentityRecords])
+    func unsafeEvidenceInvalidatesVisualGraceImmediately(_ issue: CopilotIssue) async {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(snapshot(at: initial))
+        await sidebarEventually { await harness.isPaused }
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 2 }
+        await harness.failRead(CopilotFileError.io)
+        await sidebarEventually { await harness.isPaused && !poller.tree.statusSessions.isEmpty }
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 3 }
+        await harness.succeed(fixtures.snapshot(sessions: [], issues: [issue], complete: false, now: clock.read()))
+        await sidebarEventually { await harness.isPaused }
+        #expect(poller.tree.sessions.isEmpty && poller.tree.statusSessions.isEmpty)
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
+    @Test(arguments: ["replacement", "removed", "duplicate", "ambiguous"])
+    func confirmedSubjectChangesCannotBorrowRetainedStatus(_ change: String) async {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(snapshot(at: initial))
+        await sidebarEventually { await harness.isPaused }
+        clock.advance(2)
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 2 }
+        let sessions: [CopilotSessionObservation]
+        switch change {
+        case "replacement": sessions = [fixtures.session(id: fixtures.otherSessionID, state: .working, now: clock.read())]
+        case "duplicate": sessions = [fixtures.session(now: clock.read()), fixtures.session(now: clock.read())]
+        case "ambiguous": sessions = [fixtures.session(liveness: .ambiguous, now: clock.read())]
+        default: sessions = []
+        }
+        await harness.succeed(fixtures.snapshot(sessions: sessions, now: clock.read()))
+        await sidebarEventually { await harness.isPaused }
+        #expect(poller.tree.statusSessions.isEmpty)
+        #expect(!poller.tree.sessions.contains { $0.id == fixtures.sessionID && $0.liveness == .alive })
+        if change == "replacement" {
+            #expect(poller.tree.sessions.first?.id == fixtures.otherSessionID)
+            #expect(poller.tree.sessions.first?.state == .working)
+        }
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
+    @Test func idleRefreshIsNotLossAndOlderEvidenceCannotRecoverGrace() async {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        start(poller)
+        for index in 1...5 {
+            await sidebarEventually { await harness.reads == index }
+            await harness.succeed(fixtures.snapshot(sessions: [fixtures.session(now: clock.read())], now: clock.read()))
+            await sidebarEventually { await harness.isPaused }
+            #expect(poller.tree.sessions.first?.state == .idle)
+            #expect(poller.tree.statusSessions.isEmpty)
+            clock.advance(100)
+            await harness.nextRead()
+        }
+        await sidebarEventually { await harness.reads == 6 }
+        await harness.failRead(CopilotFileError.io)
+        await sidebarEventually { await harness.isPaused }
+        for index in 7...8 {
+            await harness.nextRead()
+            await sidebarEventually { await harness.reads == index }
+            let generated = index == 7 ? initial : clock.read()
+            await harness.succeed(fixtures.snapshot(sessions: [fixtures.session(now: initial)], now: generated))
+            await sidebarEventually { await harness.isPaused }
+            #expect(poller.tree.sessions.isEmpty)
+            #expect(poller.tree.statusSessions.first?.lastKnownState == .idle)
+        }
+        clock.advance(8)
+        await harness.fire(delay: 8)
+        await sidebarEventually { await harness.delays.contains(292) }
+        clock.advance(292)
+        await harness.fire(delay: 292)
+        await sidebarEventually { poller.tree.statusSessions.first?.lastKnownState == nil }
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
+    @Test(arguments: ["move", "revoke", "generation"])
+    func scopeChangesDropVisualMemory(_ change: String) async {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(snapshot(at: initial))
+        await sidebarEventually { await harness.isPaused }
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 2 }
+        await harness.failRead(CopilotFileError.io)
+        await sidebarEventually { await harness.isPaused && !poller.tree.statusSessions.isEmpty }
+        if change == "generation" {
+            poller.updateManagedSubjects(.init(version: 1, generatedAt: initial, complete: true, omittedCount: 0, nodes: [
+                .init(id: fixtures.sessionID, runId: fixtures.otherSessionID, parentId: nil, role: "worker",
+                      label: "Synthetic", workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA,
+                      generation: 2, phase: "turn-running", availability: "busy",
+                      copilotSessionId: fixtures.sessionID, executionMode: .interactive,
+                      createdAt: initial, updatedAt: initial)
+            ]))
+        } else {
+            poller.update(topology: fixtures.topology(moved: change == "move", granted: change != "revoke"), connected: true)
+        }
+        #expect(poller.tree.sessions.isEmpty && poller.tree.statusSessions.isEmpty)
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
+    @Test(arguments: ["coordinator", "worker"])
+    func managedVisualMemoryRequiresTheSameRegistrationGeneration(_ role: String) async {
+        func node(_ generation: Int) -> SidebarOrchestrationNode {
+            .init(id: fixtures.sessionID, runId: fixtures.otherSessionID, parentId: nil, role: role,
+                  label: "Synthetic", workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA,
+                  generation: generation, phase: role == "coordinator" ? "registered" : "turn-running",
+                  availability: role == "coordinator" ? "idle" : "busy",
+                  copilotSessionId: role == "coordinator" ? nil : fixtures.sessionID,
+                  executionMode: .interactive, createdAt: initial, updatedAt: initial)
+        }
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        poller.updateManagedSubjects(.init(
+            version: 1, generatedAt: initial, complete: true, omittedCount: 0, nodes: [node(1)]
+        ))
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(snapshot(at: initial))
+        await sidebarEventually { await harness.isPaused }
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 2 }
+        await harness.failRead(CopilotFileError.io)
+        await sidebarEventually { await harness.isPaused && !poller.tree.statusSessions.isEmpty }
+        #expect(SidebarPresentation.managedState(node(1), availability: .ready, now: initial, tree: poller.tree).title == "Idle")
+        #expect(SidebarPresentation.managedState(node(2), availability: .ready, now: initial, tree: poller.tree).title != "Idle")
+        #expect(SidebarPresentation.managedModel(for: node(1), in: poller.tree, now: initial) == nil)
+        #expect(!SidebarPresentation.managedNeedsInput(node(1), tree: poller.tree, now: initial))
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
     }
 
     private func poller(_ clock: HistoryTestClock, _ harness: HistoryPollingHarness) -> SidebarCopilotPolling {
@@ -219,10 +431,10 @@ private actor HistoryPollingHarness {
         reading = nil
         pending?.resume(returning: snapshot)
     }
-    func failRead() {
+    func failRead(_ error: any Error = CocoaError(.fileReadNoPermission)) {
         let pending = reading
         reading = nil
-        pending?.resume(throwing: CocoaError(.fileReadNoPermission))
+        pending?.resume(throwing: error)
     }
     func pause() async throws {
         try await withTaskCancellationHandler {
