@@ -22,6 +22,99 @@ metadata, installer transactions, SDK-fetch concurrency, compiled-hook and
 sandbox checks. Validation hosts do not open installation windows or permit
 plugin changes. No new test framework is required.
 
+### Single-row lift (#115)
+
+The existing row-action container explicitly opts full interactive managed
+agents, agent sessions, terminals and browsers into one decorative surface.
+Headers, utility rows, retained context, observed-only children, internal-task
+text/disclosure and metadata/copy controls stay outside that opt-in.
+
+The shared native treatment uses a 4% semantic highlight and two softened
+semantic shadows (2.5/5-point radii, 1/4-point vertical offsets, 10%/6% opacity).
+An even-odd exterior clip removes the shadow source from the row interior
+without erasing the existing selected and activity backgrounds. Only the
+decoration fades, with 160ms ease-out; Reduce Motion
+applies the same surface immediately. Row geometry, hit testing, per-control
+focus rings, navigation, menus and ownership do not change.
+
+Keyboard lift observes window-local keyboard/pointer input, native title/icon
+responders inside the row, and explicit SwiftUI `FocusState` from the row's
+disclosure, overflow and dismiss controls. It does not depend on SwiftUI's
+private hosting-responder geometry. It neither moves focus nor invokes an action.
+Pointer input clears keyboard lift independently of selection; moving between
+icon, title, disclosure and overflow retains one row surface. Hidden rows and
+rows with empty frames or bounds cannot retain keyboard lift, even when AppKit
+reports a nonempty logical visible rectangle. The visible rectangle must also
+intersect the row bounds before either explicit-control or native-responder
+focus can lift the row.
+Input reaches every attached row in the exact window before a row consumes a
+context click. Pointer invalidation also applies while a row is temporarily
+ineligible. Native menu actions and close/return boundaries sample the app's
+last event within that menu's tracking lifetime; pointer completion clears the
+lift without treating keyboard-only Escape as pointer input. Only an event
+already attributed to the exact owning window is accepted: a newer timestamp
+alone cannot establish menu ownership. Nil-window or other-window samples are
+not remapped. Actual menu-event attribution and delivery remain native proof
+requirements. This does not add global event monitoring or move the first
+responder.
+
+`SidebarRowLiftStyleTests` covers the eligibility and hover/focus predicate.
+`SidebarRowLiftTests` adds hosted synthetic native-responder, production-row
+eligibility, appearance, geometry, passive-state and metadata-copy scenarios.
+Its offscreen window overrides only reported key state; its static captures
+drive the production row callbacks, not the operating system's pointer route.
+Native interaction, appearance and geometry require the hosted integrated
+suite and candidate-specific `sidebar-layout-offscreen` artifacts. Real pointer
+delivery, visible keyboard outlines and dynamic transition timing remain
+separate acceptance evidence. An unsigned build or a frozen browser reference
+is not native visual acceptance. The authoring environment prohibits local GUI
+execution; no local GUI RED/GREEN or installed-sidebar acceptance is implied.
+
+For the unresolved one-pixel glyph drift, `CMUX_VALIDATION` builds expose an
+instance-local title measurement observer. It records existing update, proposal,
+root-assignment, fitting and layout boundaries without adding a measurement or
+layout call. The reported root width is the completed source assignment, not
+private SwiftUI rendering geometry. Registration starts with unknown root width;
+only assignments observed while opted in update it, and a nil observer performs
+no bookkeeping. Tests own the bounded history and mark
+events inside the original captures. Recording changes execution timing, so
+correlation or a passing instrumented capture alone cannot establish the cause.
+Normal builds contain neither this observer nor its bookkeeping. The native
+title now owns one persistent hosting controller/view: label updates install
+leading-aligned content, actual native bounds determine its display, and finite
+size proposals use the controller's public `sizeThatFits(in:)` API. Ideal-size
+queries retain `fittingSize`. Measurement no longer installs a proposed width
+into the displayed root; no duplicate measuring host or width rounding is used.
+
+`mountedTitleMeasurementOrderDoesNotChangeDisplayedPixels` is a separate
+controlled diagnostic, not a sizing repair. On the same mounted blocked-session
+title at dark/240, it applies two equal-multiset proposal orders in A,A,B,B,A
+sequence for compact and comfortable density. It saves each full-title capture
+without masks or tolerances and checks repeat stability, reversibility and
+order independence. Exact identities, native/backing geometry, model state,
+focus and inactive keyboard lift must remain unchanged. A bounded per-step
+trace must retain every event; root assignments during measurement or capture
+invalidate the isolation. The pre-repair hosted diagnostic demonstrated stable,
+reversible status-icon pixel changes with proposal order, not title-text
+movement or the cause of every full-row failure. The regression keeps the same
+proposal sequences and exact image comparisons while requiring measurements
+to leave the displayed root unchanged. The original six-phase captures and their
+diagnostic coverage/overflow assertions remain unchanged.
+
+`SidebarRowLiftNativeInputTests` adds hosted-only native menu-cancellation
+diagnostics through the real Shift-F10/popup path and app-posted input. It
+distinguishes Escape, owner-window pointer cancellation and foreign-window
+pointer cancellation. A two-second rescue fails and cancels the exact menu;
+a synchronized ten-second watchdog fails the hosted test process if the
+native call cannot return. These are diagnostic containment limits, not
+accepted production behavior. All three cases must actually execute on the
+hosted runner; skips are not proof. Pointer item selection, OS-generated
+menu-window events, visible outlines and physical input remain unverified.
+The CI test step forwards only its inherited runner markers, after both match
+the hosted guard, through Xcode's documented `TEST_RUNNER_` environment
+transport. Before native access, the test gate logs those two marker values
+and its derived eligibility; both hosted checks remain required.
+
 ### Setup fixture readiness
 
 Process-cleanup tests wait for the injected clock's first post-`posix_spawn`
