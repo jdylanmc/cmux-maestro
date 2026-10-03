@@ -92,10 +92,19 @@ struct CLIIntegrationGuideRenderingTests {
     @Test func nativeRecheckDrivesCheckingChangedStatusAndRetry() async throws {
         // The same 180-second action deadline starts after the AppKit scope is acquired.
         // A test-level TimeLimitTrait also counts time queued behind unrelated native tests.
+        try await withNativeActionDeadline { try await exerciseNativeRecheck() }
+    }
+
+    private func withNativeActionDeadline(
+        waitForDeadline: @escaping @Sendable () async throws -> Void = {
+            try await Task.sleep(for: .seconds(180))
+        },
+        operation: @escaping @MainActor @Sendable () async throws -> Void
+    ) async throws {
         try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask { try await exerciseNativeRecheck() }
+            group.addTask { try await operation() }
             group.addTask {
-                try await Task.sleep(for: .seconds(180))
+                try await waitForDeadline()
                 throw NativeActionDeadlineExceeded()
             }
             defer { group.cancelAll() }
@@ -105,6 +114,42 @@ struct CLIIntegrationGuideRenderingTests {
 
     private struct NativeActionDeadlineExceeded: Error, CustomStringConvertible {
         var description: String { "Native Re-check exceeded 180 seconds after acquiring the AppKit scope" }
+    }
+
+    @Test func noOpRecheckFailsAtDeadlineAndCancelsItsReadStartWait() async throws {
+        let reader = ControlledReader(initial: result(.missing))
+        let host = ExposureFixtureView(frame: NSRect(x: 0, y: 0, width: 600, height: 350))
+        host.setAccessibilityElement(true)
+        host.setAccessibilityRole(.group)
+        let button = ExposureFixtureButton(frame: NSRect(x: 20, y: 20, width: 180, height: 28))
+        button.title = "Re-check"
+        button.setAccessibilityIdentifier("cli-integration-recheck")
+        button.setAccessibilityElement(true)
+        host.addSubview(button)
+        host.exposedChildren = [button]
+        let window = makeWindow(host: host, dark: false)
+        defer { window.contentView = nil; window.close() }
+        let action = try element("cli-integration-recheck", in: host, window: window)
+        let (waiting, waiterInstalled) = AsyncStream<Void>.makeStream()
+        defer { waiterInstalled.finish() }
+
+        await #expect(throws: NativeActionDeadlineExceeded.self) {
+            try await withNativeActionDeadline(waitForDeadline: {
+                // Expire only once the read-start observer is installed, without wall-clock waiting.
+                for await _ in waiting { return }
+                throw CancellationError()
+            }, operation: {
+                try #require(action.press())
+                try await reader.waitUntilReading {
+                    waiterInstalled.yield()
+                    waiterInstalled.finish()
+                }
+                Issue.record("A no-op Re-check must not pass the read-start boundary")
+            })
+        }
+        #expect(button.presses == 1)
+        #expect(await reader.calls == 0)
+        #expect(await !reader.isWaitingForRead)
     }
 
     private func exerciseNativeRecheck() async throws {
@@ -175,6 +220,7 @@ struct CLIIntegrationGuideRenderingTests {
         private var pending: CheckedContinuation<CLIIntegrationGuideReader.Result, Never>?
         private var reading: AsyncStream<Void>.Continuation?
         private var cancelled = false
+        var isWaitingForRead: Bool { reading != nil }
 
         init(initial: CLIIntegrationGuideReader.Result) { self.initial = initial }
 
@@ -190,11 +236,14 @@ struct CLIIntegrationGuideRenderingTests {
             }
         }
 
-        func waitUntilReading() async throws {
+        func waitUntilReading(observingWait: @Sendable () -> Void = {}) async throws {
             if pending != nil { return }
             let events = AsyncStream<Void> { reading = $0 }
+            defer { reading = nil }
+            observingWait()
             for await _ in events { break }
             try Task.checkCancellation()
+            try #require(pending != nil, "Native Re-check did not start a read")
         }
 
         func complete(_ result: CLIIntegrationGuideReader.Result) {
