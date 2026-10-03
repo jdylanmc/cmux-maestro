@@ -591,6 +591,37 @@ struct SidebarRowLiftTests {
             let beforeAttention = preferences.attention
             let beforeIcons = preferences.icons
             let beforePinned = pinned(model, now: data.now)
+            let managedNode = try #require(beforeManaged.nodes.first { $0.id == data.node })
+            try #require(SidebarPresentation.managedState(
+                managedNode, availability: model.orchestration.availability, now: data.now, tree: beforeTree
+            ).tone == .red)
+            try #require(SidebarPresentation.managedState(
+                legacyNode, availability: model.orchestration.availability, now: data.now, tree: beforeTree
+            ).tone != .red)
+            let terminalSurface = try #require(data.baseSurfaces.first { $0.kind == .terminal })
+            let browserSurface = try #require(data.baseSurfaces.first { $0.kind == .browser })
+            try #require(SidebarPresentation.focusedSurface(in: beforeHierarchy)
+                == .surface(workspaceID: data.workspace, surfaceID: terminalSurface.id))
+            let terminal = try #require(controls.first {
+                $0.accessibilityLabel() == "Focus \(terminalSurface.kind.title) \(terminalSurface.title)"
+            })
+            let browser = try #require(controls.first {
+                $0.accessibilityLabel() == "Focus \(browserSurface.kind.title) \(browserSurface.title)"
+            })
+            let backingInputs: [(String, SidebarTitleNativeButton, Bool, Bool)] = [
+                ("blocked-managed", managed, true, false),
+                ("plain-legacy", legacy, false, false),
+                ("focused-terminal", terminal, false, true),
+                ("plain-browser", browser, false, false)
+            ]
+            try #require(mounted.host.isFlipped && mounted.host.bounds.origin == .zero)
+            let backingRows = try backingInputs.map { id, control, blocked, focused in
+                let anchor = try owner(of: control, in: anchors)
+                return NativeBackingReference(
+                    id: id, rect: mounted.host.convert(anchor.bounds, from: anchor),
+                    blocked: blocked, focused: focused
+                )
+            }
             let beforeFrames = controls.map { mounted.host.convert($0.bounds, from: $0) }
             let iconControls = descendants(mounted.host).compactMap { $0 as? SidebarIconNativeButton }
             let iconFrames = iconControls.map { mounted.host.convert($0.bounds, from: $0) }
@@ -674,6 +705,10 @@ struct SidebarRowLiftTests {
             #expect(preferences.attention == beforeAttention && preferences.icons == beforeIcons)
             #expect(pinned(model, now: data.now) == beforePinned && model.navigation.status == .idle)
             #expect(!mounted.window.isVisible)
+            try assertNativeBackingRecipes(
+                backingRows, rest: rest, lifted: lifted, bounds: mounted.host.bounds,
+                appearance: appearance, name: captureName
+            )
         }
     }
 
@@ -1138,6 +1173,91 @@ struct SidebarRowLiftTests {
         view.cacheDisplay(in: view.bounds, to: bitmap)
         return bitmap
     }
+    private struct NativeBackingReference: Identifiable {
+        let id: String
+        let rect: NSRect
+        let blocked: Bool
+        let focused: Bool
+    }
+
+    private func nativeBackingReference(
+        _ rows: [NativeBackingReference], lifted: Bool, bounds: NSRect,
+        appearance: Appearance, name: String
+    ) throws -> NSBitmapImageRep {
+        let window = NSWindow(contentRect: bounds, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: appearance.nativeName)
+        // Reproduce fixture source layers before rasterization, never colors decoded from its screenshot.
+        let host = NSHostingView(rootView: ZStack(alignment: .topLeading) {
+            Color(nsColor: .windowBackgroundColor)
+            ForEach(rows) { row in
+                ZStack(alignment: .leading) {
+                    if row.blocked {
+                        RoundedRectangle(cornerRadius: 4).fill(Color.red.opacity(0.065))
+                    }
+                    if lifted {
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(Color(nsColor: .highlightColor).opacity(0.04))
+                    }
+                    if row.focused {
+                        Capsule().fill(Color.accentColor)
+                            .frame(width: 2)
+                            .shadow(color: .accentColor.opacity(0.65), radius: 3)
+                            .padding(.vertical, 2)
+                    }
+                }
+                .frame(width: row.rect.width, height: row.rect.height, alignment: .leading)
+                .offset(x: row.rect.minX - bounds.minX, y: row.rect.minY - bounds.minY)
+            }
+        }
+        .frame(width: bounds.width, height: bounds.height, alignment: .topLeading)
+        .environment(\._colorSchemeContrast, appearance.contrast)
+        .environment(\._accessibilityReduceMotion, true))
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.frame = bounds
+        try #require(host.isFlipped && host.bounds == bounds)
+        let bitmap = try capture(host)
+        try save(bitmap, name: "\(name)-recipe-\(lifted ? "lift" : "rest")")
+        #expect(!window.isVisible && host.bounds == bounds)
+        return bitmap
+    }
+
+    private func assertNativeBackingRecipes(
+        _ rows: [NativeBackingReference], rest: NSBitmapImageRep, lifted: NSBitmapImageRep,
+        bounds: NSRect, appearance: Appearance, name: String
+    ) throws {
+        let expectedRest = try nativeBackingReference(rows, lifted: false, bounds: bounds, appearance: appearance, name: name)
+        let expectedLift = try nativeBackingReference(rows, lifted: true, bounds: bounds, appearance: appearance, name: name)
+        var restingColors: [String: [CGFloat]] = [:]
+        var liftedColors: [String: [CGFloat]] = [:]
+        for row in rows {
+            let point = NSPoint(x: row.rect.minX + 2, y: row.rect.midY)
+            let before = try rgba(pixel(rest, at: point, bounds: bounds))
+            let after = try rgba(pixel(lifted, at: point, bounds: bounds))
+            let referenceBefore = try rgba(pixel(expectedRest, at: point, bounds: bounds))
+            let referenceAfter = try rgba(pixel(expectedLift, at: point, bounds: bounds))
+            print("row-lift115 \(name) recipe \(row.id) at \(point): actualRest=\(before), referenceRest=\(referenceBefore), actualLift=\(after), referenceLift=\(referenceAfter)")
+            #expect(referenceBefore[3] == 1 && referenceAfter[3] == 1)
+            #expect(before == referenceBefore, "The fixture's actual resting layers must match the known source recipe")
+            #expect(after == referenceAfter, "Full native row highlight must preserve its backing and focus marker")
+            restingColors[row.id] = before
+            liftedColors[row.id] = after
+        }
+        for colors in [restingColors, liftedColors] {
+            let focused = try #require(colors["focused-terminal"])
+            let unfocused = try #require(colors["plain-browser"])
+            let blocked = try #require(colors["blocked-managed"])
+            let plain = try #require(colors["plain-legacy"])
+            #expect(focused != unfocused, "The selected surface's native focus marker must remain distinguishable")
+            #expect(blocked != plain, "Blocked activity backing must not flatten into a generic row surface")
+        }
+    }
+
+    private func rgba(_ color: NSColor) -> [CGFloat] {
+        [color.redComponent, color.greenComponent, color.blueComponent, color.alphaComponent]
+    }
+
     private func differences(_ lhs: NSBitmapImageRep, _ rhs: NSBitmapImageRep) -> Int {
         guard lhs.pixelsWide == rhs.pixelsWide, lhs.pixelsHigh == rhs.pixelsHigh else {
             Issue.record("Row lift changed the capture geometry")
