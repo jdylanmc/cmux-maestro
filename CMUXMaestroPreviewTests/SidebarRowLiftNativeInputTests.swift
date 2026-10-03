@@ -1,5 +1,6 @@
 import AppKit
 import Testing
+import os
 
 // Actual AppKit menu tracking with app-queued input, not OS/HID or installed-CMUX evidence.
 // Non-hosted runs skip before touching AppKit. A two-second tracking timeout fails and cancels
@@ -34,7 +35,7 @@ struct SidebarRowLiftNativeInputTests {
             context: nil, characters: String(f10), charactersIgnoringModifiers: String(f10),
             isARepeat: false, keyCode: 109
         ))
-        application.sendEvent(open)
+        tracking.sendWithDeadline(open)
         #expect(!tracking.takeBackUnconsumedInput(),
                 "A posted event left in the application queue is not native-menu input consumption")
 
@@ -134,8 +135,6 @@ struct SidebarRowLiftNativeInputTests {
         private var menu: NSMenu?
         private var inputTimer: Timer?
         private var deadline: Timer?
-        // A native nested loop cannot be interrupted by Swift Testing task cancellation.
-        private var hardDeadline: DispatchSourceTimer?
         private var postedEvent: NSEvent?
         private var monitor: Any?
         private(set) var began = 0
@@ -152,13 +151,6 @@ struct SidebarRowLiftNativeInputTests {
         }
 
         func start() {
-            let watchdog = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
-            watchdog.schedule(deadline: .now() + 10)
-            watchdog.setEventHandler {
-                fatalError("Hosted row-lift native menu exceeded its ten-second hard deadline")
-            }
-            hardDeadline = watchdog
-            watchdog.resume()
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self] event in
                 if let self, event === self.postedEvent { self.localCompletionEvents += 1 }
                 return event
@@ -168,6 +160,42 @@ struct SidebarRowLiftNativeInputTests {
                                name: NSMenu.didBeginTrackingNotification, object: nil)
             center.addObserver(self, selector: #selector(didEnd(_:)),
                                name: NSMenu.didEndTrackingNotification, object: nil)
+        }
+
+        private enum DeadlineState { case armed, disarmed, expired }
+
+        func sendWithDeadline(_ event: NSEvent) {
+            // Short synchronous CAS only: the native loop and timer callback cannot await an actor.
+            let state = OSAllocatedUnfairLock(initialState: DeadlineState.armed)
+            let limit = DispatchTime.now() + 10
+            let watchdog = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
+            watchdog.schedule(deadline: limit)
+            watchdog.setEventHandler {
+                let expired = state.withLock { value in
+                    guard value == .armed else { return false }
+                    value = .expired
+                    return true
+                }
+                if expired {
+                    fatalError("Hosted row-lift native menu exceeded its ten-second hard deadline; proof unavailable")
+                }
+            }
+            watchdog.resume()
+            defer {
+                let disarmed = state.withLock { value in
+                    guard value != .expired, DispatchTime.now().uptimeNanoseconds < limit.uptimeNanoseconds else {
+                        value = .expired
+                        return false
+                    }
+                    value = .disarmed
+                    return true
+                }
+                watchdog.cancel()
+                if !disarmed {
+                    fatalError("Hosted row-lift native menu returned after its hard deadline; proof unavailable")
+                }
+            }
+            NSApp.sendEvent(event)
         }
 
         @objc private func didBegin(_ notification: Notification) {
@@ -286,8 +314,6 @@ struct SidebarRowLiftNativeInputTests {
             NotificationCenter.default.removeObserver(self)
             if ended == 0 { menu?.cancelTrackingWithoutAnimation() }
             menu = nil
-            hardDeadline?.cancel()
-            hardDeadline = nil
         }
     }
 }
