@@ -375,6 +375,7 @@ struct CLIIntegrationGuideRenderingTests {
             print("Exposed host AX tree:\n\(diagnostic(nodes))")
             let raw = ([host] + descendants(host)).map { NativeElement(object: $0) }
             print("Raw views (diagnostics only):\n\(diagnostic(raw))")
+            logAXBoundary([NativeElement(object: host)] + nodes)
         }
         return try #require(match, "Missing \(id) from the exposed host AX tree")
     }
@@ -382,6 +383,72 @@ struct CLIIntegrationGuideRenderingTests {
     private func diagnostic(_ nodes: [NativeElement]) -> String {
         nodes.map { "\(type(of: $0.object)): \($0.identifier ?? "-") \($0.text.prefix(256))" }
             .joined(separator: "\n")
+    }
+
+    private func logAXBoundary(_ nodes: [NativeElement]) {
+        print("Guide AX boundary: inspecting \(min(nodes.count, 64))/\(nodes.count) reached objects")
+        for (index, node) in nodes.prefix(64).enumerated() {
+            let object = node.object
+            let attributesValue = diagnosticGetter("accessibilityAttributeNames", from: object)
+            let attributes = attributesValue as? [String]
+            let legacySelector = NSSelectorFromString("accessibilityAttributeValue:")
+            print("AX[\(index)] type=\(String(reflecting: type(of: object)).prefix(128))")
+            print("  bridge identifier=\(diagnosticValue(node.identifier)) role=\(diagnosticValue(node.role))")
+            for name in ["accessibilityIdentifier", "accessibilityRole", "accessibilityChildren",
+                         "isAccessibilityElement", "isAccessibilityEnabled", "accessibilityFrame",
+                         "accessibilityPerformPress", "accessibilityAttributeNames", "accessibilityAttributeValue:"] {
+                print("  selector \(name)=\(object.responds(to: NSSelectorFromString(name)))")
+            }
+            print("  legacy names=\(diagnosticValue(attributesValue)) parsed=\(attributes != nil)")
+            let bridgeChildren = (object as AnyObject).accessibilityChildren?() ?? []
+            print("  bridge children: \(diagnosticChildren(bridgeChildren))")
+            for (attribute, getter): (NSAccessibility.Attribute, String) in [
+                (.identifier, "accessibilityIdentifier"), (.role, "accessibilityRole"),
+                (.children, "accessibilityChildren")
+            ] {
+                let modern = diagnosticGetter(getter, from: object)
+                let advertised = attributes?.contains(attribute.rawValue) == true
+                let readable = advertised && object.responds(to: legacySelector)
+                let legacy = readable
+                    ? object.perform(legacySelector, with: attribute.rawValue)?.takeUnretainedValue() : nil
+                print("  \(attribute.rawValue) modern=\(diagnosticValue(modern)) advertised=\(advertised)")
+                print("  \(attribute.rawValue) legacy=\(readable ? diagnosticValue(legacy) : "not read")")
+                if attribute == .children {
+                    print("  modern children: \(diagnosticChildren(modern))")
+                    if readable { print("  legacy children: \(diagnosticChildren(legacy))") }
+                }
+            }
+        }
+    }
+
+    private func diagnosticGetter(_ name: String, from object: NSObject) -> Any? {
+        let selector = NSSelectorFromString(name)
+        guard object.responds(to: selector) else { return nil }
+        return object.perform(selector)?.takeUnretainedValue()
+    }
+
+    private func diagnosticValue(_ value: Any?) -> String {
+        guard let value else { return "nil" }
+        let type = String(reflecting: Swift.type(of: value)).prefix(128)
+        if let string = value as? String {
+            return "\(type):\(String(reflecting: String(string.prefix(256))))"
+        }
+        if let array = value as? [Any] { return "\(type):count=\(array.count)" }
+        if let number = value as? NSNumber { return "\(type):\(number.stringValue.prefix(32))" }
+        return "\(type):value not expanded"
+    }
+
+    private func diagnosticChildren(_ value: Any?) -> String {
+        guard let raw = value as? [Any] else { return "not an array: \(diagnosticValue(value))" }
+        let rawSample = Array(raw.prefix(256))
+        let unignored = NSAccessibility.unignoredChildren(from: rawSample)
+        let sample = Array(unignored.prefix(256))
+        let retained = sample.compactMap { $0 as? NSObject }
+        let rejected = sample.filter { ($0 as? NSObject) == nil }
+        let types = rejected.prefix(8).map { String(String(reflecting: type(of: $0)).prefix(128)) }
+        return "raw=\(raw.count) inspectedRaw=\(rawSample.count) unignored=\(unignored.count) "
+            + "inspectedUnignored=\(sample.count) retainedNSObject=\(retained.count) "
+            + "rejected=\(rejected.count) rejectedTypeSample=\(types)"
     }
 
     private func accessibilityNodes(from root: NSObject) -> [NativeElement] {
@@ -422,6 +489,16 @@ struct CLIIntegrationGuideRenderingTests {
         window.contentView?.layoutSubtreeIfNeeded()
         #expect(omitted.isAccessibilityElement() && exposed.isAccessibilityElement())
         #expect(!ignored.isAccessibilityElement())
+
+        if buttons.contains(where: { NativeElement(object: $0).role != NSAccessibility.Role.button.rawValue }) {
+            for (name, button) in zip(["omitted", "ignored", "exposed"], buttons) {
+                let direct = button.accessibilityRole()?.rawValue
+                let bridged = NativeElement(object: button).role
+                print("Guide role fixture \(name) element=\(button.isAccessibilityElement()) "
+                      + "direct=\(diagnosticValue(direct)) bridge=\(diagnosticValue(bridged))")
+            }
+            logAXBoundary(buttons.map { NativeElement(object: $0) })
+        }
 
         // Correct labels, frames and working actions on raw objects are insufficient.
         for button in [omitted, ignored] {
