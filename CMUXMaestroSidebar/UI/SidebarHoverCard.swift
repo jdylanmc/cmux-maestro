@@ -672,6 +672,42 @@ final class SidebarTitleNativeButton: NSButton {
     private var returningFromPreview = false
     private var restoringLocalFocus = false
 
+    #if CMUX_VALIDATION
+    struct MeasurementObservation {
+        enum Event: String {
+            case snapshot, viewUpdateBegin, viewUpdateEnd, sizeProposalBegin, sizeProposalEnd
+            case measureBegin, rootAssigned, measureEnd, layoutBegin, layoutEnd
+        }
+        let event: Event
+        let proposedWidth: CGFloat?
+        let normalizedWidth: CGFloat?
+        let installedRootWidth: CGFloat?
+        let hasInstalledRoot: Bool
+        let fittingSize: CGSize?
+        let buttonFrame: NSRect
+        let buttonBounds: NSRect
+        let hostingFrame: NSRect
+        let hostingBounds: NSRect
+    }
+
+    var measurementObserver: (@MainActor (MeasurementObservation) -> Void)?
+    private var installedRootWidth: CGFloat?
+    private var hasInstalledRoot = false
+
+    func recordMeasurement(
+        _ event: MeasurementObservation.Event, proposedWidth: CGFloat? = nil,
+        normalizedWidth: CGFloat? = nil, fittingSize: CGSize? = nil
+    ) {
+        guard let measurementObserver else { return }
+        measurementObserver(MeasurementObservation(
+            event: event, proposedWidth: proposedWidth, normalizedWidth: normalizedWidth,
+            installedRootWidth: installedRootWidth, hasInstalledRoot: hasInstalledRoot,
+            fittingSize: fittingSize, buttonFrame: frame, buttonBounds: bounds,
+            hostingFrame: hosting.frame, hostingBounds: hosting.bounds
+        ))
+    }
+    #endif
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         isBordered = false
@@ -737,13 +773,29 @@ final class SidebarTitleNativeButton: NSButton {
     }
     override var focusRingMaskBounds: NSRect { bounds }
     override func layout() {
+        #if CMUX_VALIDATION
+        recordMeasurement(.layoutBegin)
+        defer { recordMeasurement(.layoutEnd) }
+        #endif
         super.layout()
         hosting.frame = bounds
     }
     func measure(width proposedWidth: CGFloat?) -> CGSize {
         let width = proposedWidth.flatMap { $0.isFinite ? max(0, $0) : nil }
+        #if CMUX_VALIDATION
+        recordMeasurement(.measureBegin, proposedWidth: proposedWidth, normalizedWidth: width)
+        #endif
         hosting.rootView = AnyView(labelContent.frame(width: width, alignment: .leading))
+        #if CMUX_VALIDATION
+        // This records the completed source assignment, not SwiftUI's private rendered geometry.
+        installedRootWidth = width
+        hasInstalledRoot = true
+        recordMeasurement(.rootAssigned, proposedWidth: proposedWidth, normalizedWidth: width)
+        #endif
         let size = hosting.fittingSize
+        #if CMUX_VALIDATION
+        recordMeasurement(.measureEnd, proposedWidth: proposedWidth, normalizedWidth: width, fittingSize: size)
+        #endif
         return CGSize(width: width ?? size.width, height: max(24, size.height))
     }
 }
@@ -761,6 +813,10 @@ struct SidebarTitleButton<Label: View>: NSViewRepresentable {
 
     func makeNSView(context: Context) -> SidebarTitleNativeButton { SidebarTitleNativeButton() }
     func updateNSView(_ button: SidebarTitleNativeButton, context: Context) {
+        #if CMUX_VALIDATION
+        button.recordMeasurement(.viewUpdateBegin)
+        defer { button.recordMeasurement(.viewUpdateEnd) }
+        #endif
         button.labelContent = AnyView(content.environment(\.self, context.environment))
         button.activate = action
         button.preview = preview
@@ -777,6 +833,10 @@ struct SidebarTitleButton<Label: View>: NSViewRepresentable {
         _ = button.measure(width: button.bounds.width > 0 ? button.bounds.width : nil)
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: SidebarTitleNativeButton, context: Context) -> CGSize? {
-        nsView.measure(width: proposal.width)
+        #if CMUX_VALIDATION
+        nsView.recordMeasurement(.sizeProposalBegin, proposedWidth: proposal.width)
+        defer { nsView.recordMeasurement(.sizeProposalEnd, proposedWidth: proposal.width) }
+        #endif
+        return nsView.measure(width: proposal.width)
     }
 }

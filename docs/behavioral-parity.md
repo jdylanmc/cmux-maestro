@@ -90,6 +90,15 @@ separate acceptance evidence. An unsigned build or a frozen browser reference
 is not native visual acceptance. The authoring environment prohibits local GUI
 execution; no local GUI RED/GREEN or installed-sidebar acceptance is implied.
 
+For the unresolved one-pixel glyph drift, `CMUX_VALIDATION` builds expose an
+instance-local title measurement observer. It records existing update, proposal,
+root-assignment, fitting and layout boundaries without adding a measurement or
+layout call. The reported root width is the completed source assignment, not
+private SwiftUI rendering geometry. Tests own the bounded history and mark
+events inside the original captures. Recording changes execution timing, so
+correlation or a passing instrumented capture alone cannot establish the cause.
+Normal builds contain neither this observer nor its bookkeeping.
+
 ### Setup fixture readiness
 
 Process-cleanup tests wait for the injected clock's first post-`posix_spawn`
