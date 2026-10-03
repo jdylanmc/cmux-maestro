@@ -94,7 +94,9 @@ For the unresolved one-pixel glyph drift, `CMUX_VALIDATION` builds expose an
 instance-local title measurement observer. It records existing update, proposal,
 root-assignment, fitting and layout boundaries without adding a measurement or
 layout call. The reported root width is the completed source assignment, not
-private SwiftUI rendering geometry. Tests own the bounded history and mark
+private SwiftUI rendering geometry. Registration starts with unknown root width;
+only assignments observed while opted in update it, and a nil observer performs
+no bookkeeping. Tests own the bounded history and mark
 events inside the original captures. Recording changes execution timing, so
 correlation or a passing instrumented capture alone cannot establish the cause.
 Normal builds contain neither this observer nor its bookkeeping.

@@ -690,7 +690,12 @@ final class SidebarTitleNativeButton: NSButton {
         let hostingBounds: NSRect
     }
 
-    var measurementObserver: (@MainActor (MeasurementObservation) -> Void)?
+    var measurementObserver: (@MainActor (MeasurementObservation) -> Void)? {
+        didSet {
+            installedRootWidth = nil
+            hasInstalledRoot = false
+        }
+    }
     private var installedRootWidth: CGFloat?
     private var hasInstalledRoot = false
 
@@ -788,8 +793,10 @@ final class SidebarTitleNativeButton: NSButton {
         hosting.rootView = AnyView(labelContent.frame(width: width, alignment: .leading))
         #if CMUX_VALIDATION
         // This records the completed source assignment, not SwiftUI's private rendered geometry.
-        installedRootWidth = width
-        hasInstalledRoot = true
+        if measurementObserver != nil {
+            installedRootWidth = width
+            hasInstalledRoot = true
+        }
         recordMeasurement(.rootAssigned, proposedWidth: proposedWidth, normalizedWidth: width)
         #endif
         let size = hosting.fittingSize
