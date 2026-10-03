@@ -64,7 +64,9 @@ private hosting-responder geometry. It neither moves focus nor invokes an action
 Pointer input clears keyboard lift independently of selection; moving between
 icon, title, disclosure and overflow retains one row surface. Hidden rows and
 rows with empty frames or bounds cannot retain keyboard lift, even when AppKit
-reports a nonempty logical visible rectangle.
+reports a nonempty logical visible rectangle. The visible rectangle must also
+intersect the row bounds before either explicit-control or native-responder
+focus can lift the row.
 Input reaches every attached row in the exact window before a row consumes a
 context click. Pointer invalidation also applies while a row is temporarily
 ineligible. Native menu actions and close/return boundaries sample the app's
