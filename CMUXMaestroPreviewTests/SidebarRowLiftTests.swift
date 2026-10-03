@@ -463,6 +463,14 @@ struct SidebarRowLiftTests {
             row.presenter.menuDidClose(menu)
             #expect(row.anchor.keyboardFocused && foreignRow.anchor.keyboardFocused,
                     "A newer event from an ordinary foreign window is not evidence of this menu's input")
+            sampled = sampledMenuEvent(.leftMouseUp, window: nil, timestamp: ProcessInfo.processInfo.systemUptime)
+            guard let windowless = sampled, windowless.window == nil else {
+                Issue.record("Expected a native event with no attributable window")
+                return
+            }
+            row.presenter.menuDidClose(menu)
+            #expect(row.anchor.keyboardFocused && foreignRow.anchor.keyboardFocused,
+                    "Windowless input must not be assigned to the current menu owner by assumption")
             sampled = sampledMenuEvent(.leftMouseUp, window: window, timestamp: 0)
             guard sampled != nil else { Issue.record("Expected a stale event"); return }
             row.presenter.menuDidClose(menu)
@@ -957,16 +965,16 @@ struct SidebarRowLiftTests {
     }
 
     private func sampledMenuEvent(
-        _ type: NSEvent.EventType, window: NSWindow, timestamp: TimeInterval
+        _ type: NSEvent.EventType, window: NSWindow?, timestamp: TimeInterval
     ) -> NSEvent? {
         switch type {
         case .keyDown, .keyUp:
             return NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: timestamp,
-                                   windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
+                                   windowNumber: window?.windowNumber ?? 0, context: nil, characters: "\u{1b}",
                                    charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)
         case .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseUp, .rightMouseUp, .otherMouseUp:
             return NSEvent.mouseEvent(with: type, location: .zero, modifierFlags: [], timestamp: timestamp,
-                                     windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                     windowNumber: window?.windowNumber ?? 0, context: nil, eventNumber: 0,
                                      clickCount: 1, pressure: 1)
         default:
             Issue.record("Unsupported menu input fixture type")
