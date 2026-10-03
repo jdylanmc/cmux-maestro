@@ -317,6 +317,192 @@ struct SidebarRowLiftTests {
         #expect(root.subviews.map(\.frame) == frames && !window.isVisible && !foreign.isVisible)
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func windowInputBroadcastPrecedesSiblingContextHandling(reverseOrder: Bool, controlClick: Bool) throws {
+        let (window, root) = inputWindow()
+        let (foreign, foreignRoot) = inputWindow()
+        let rows = [InputRow(y: 100), InputRow(y: 20)]
+        let foreignRow = InputRow(y: 20)
+        for row in reverseOrder ? Array(rows.reversed()) : rows { row.attach(to: root) }
+        foreignRow.attach(to: foreignRoot)
+        defer {
+            for row in rows + [foreignRow] { row.detach() }
+            window.contentView = nil; foreign.contentView = nil
+            window.close(); foreign.close()
+        }
+        try #require(foreign.makeFirstResponder(foreignRow.title))
+        foreignRow.anchor.observeInput(try keyEvent(foreign))
+        try #require(foreignRow.anchor.keyboardFocused)
+        let pointerType: NSEvent.EventType = controlClick ? .leftMouseDown : .rightMouseDown
+        let modifiers: NSEvent.ModifierFlags = controlClick ? [.control] : []
+        for focusedIndex in rows.indices {
+            let focused = rows[focusedIndex], other = rows[1 - focusedIndex]
+            for menuEligible in [true, false] {
+                focused.presenter.liftEligible = true
+                other.presenter.liftEligible = menuEligible
+                try #require(window.makeFirstResponder(focused.title))
+                focused.anchor.observeInput(try keyEvent(window))
+                try #require(focused.anchor.keyboardFocused)
+                other.anchor.observeInput(try pointerEvent(foreign, type: pointerType, point: .zero))
+                #expect(focused.anchor.keyboardFocused && foreignRow.anchor.keyboardFocused)
+                let point = NSPoint(x: 245, y: other.anchor.frame.midY)
+                let event = try pointerEvent(window, type: pointerType, point: point, modifiers: modifiers)
+                other.anchor.observeInput(event)
+                #expect(rows.allSatisfy { !$0.anchor.keyboardInteraction && !$0.anchor.keyboardFocused },
+                        "Every same-window row must see pointer input before another row handles a context menu")
+                try #require(other.anchor.handles(event))
+                var presentations = 0
+                other.presenter.present = { _, _, _ in
+                    presentations += 1
+                    #expect(!focused.anchor.keyboardFocused && window.firstResponder === focused.title)
+                }
+                other.presenter.show()
+                #expect(presentations == 1)
+                focused.anchor.observeInput(event)
+                #expect(!focused.anchor.keyboardFocused && foreignRow.anchor.keyboardFocused)
+                #expect(window.firstResponder === focused.title)
+
+                focused.anchor.observeInput(try keyEvent(window))
+                let iconPoint = root.convert(NSPoint(x: other.icon.bounds.midX, y: other.icon.bounds.midY), from: other.icon)
+                let iconEvent = try pointerEvent(window, type: pointerType, point: iconPoint, modifiers: modifiers)
+                other.anchor.observeInput(iconEvent)
+                #expect(!other.anchor.handles(iconEvent), "Icon secondary-click remains owned by its existing picker route")
+                #expect(!focused.anchor.keyboardFocused && foreignRow.anchor.keyboardFocused)
+            }
+        }
+        #expect(!window.isVisible && !foreign.isVisible)
+    }
+
+    @Test(arguments: [
+        NSEvent.EventType.leftMouseDown, .rightMouseDown, .otherMouseDown,
+        .leftMouseUp, .rightMouseUp, .otherMouseUp, .keyDown, .keyUp
+    ], MenuBoundary.allCases)
+    func trackedMenuCompletionReconcilesOnlyItsOwner(_ eventType: NSEvent.EventType, boundary: MenuBoundary) throws {
+        let (window, root) = inputWindow()
+        let (foreign, foreignRoot) = inputWindow()
+        let row = InputRow(y: 100), sibling = InputRow(y: 20), foreignRow = InputRow(y: 20)
+        for owned in [row, sibling] { owned.attach(to: root) }
+        foreignRow.attach(to: foreignRoot)
+        defer {
+            for owned in [row, sibling, foreignRow] { owned.detach() }
+            window.contentView = nil; foreign.contentView = nil
+            window.close(); foreign.close()
+        }
+        try #require(window.makeFirstResponder(row.title))
+        try #require(foreign.makeFirstResponder(foreignRow.title))
+        row.anchor.observeInput(try keyEvent(window))
+        foreignRow.anchor.observeInput(try keyEvent(foreign))
+        try #require(row.anchor.keyboardFocused && foreignRow.anchor.keyboardFocused)
+        let keyboardReturn = eventType == .keyDown || eventType == .keyUp
+        var sampled: NSEvent?
+        var presentations = 0, actions = 0
+        row.presenter.currentMenuEvent = { sampled }
+        row.presenter.groups = [.init(title: "Navigation", actions: [
+            .init(title: "Non-focusing action", perform: {
+                actions += 1
+                #expect(row.anchor.keyboardFocused == keyboardReturn,
+                        "Input reconciliation must precede the unchanged action")
+            })
+        ])]
+        row.presenter.present = { menu, _, _ in
+            presentations += 1
+            // Stand-in menu event window differs from the captured owner; no actual menu tracking is claimed.
+            sampled = sampledMenuEvent(eventType, window: foreign, timestamp: ProcessInfo.processInfo.systemUptime)
+            guard sampled != nil else { Issue.record("Expected a native menu input event"); return }
+            switch boundary {
+            case .close:
+                row.presenter.menuDidClose(menu)
+            case .action:
+                guard let item = menu.items.first?.submenu?.items.first else {
+                    Issue.record("Expected the actual presented menu action")
+                    return
+                }
+                row.presenter.invoke(item)
+            case .return:
+                #expect(row.anchor.keyboardFocused, "Return reconciliation must not happen before the boundary")
+            }
+            if boundary != .return { #expect(row.anchor.keyboardFocused == keyboardReturn) }
+        }
+        row.presenter.show()
+        #expect(presentations == 1 && sampled != nil)
+        #expect(actions == (boundary == .action ? 1 : 0))
+        #expect(row.anchor.keyboardFocused == keyboardReturn && row.anchor.keyboardInteraction == keyboardReturn)
+        #expect(sibling.anchor.keyboardInteraction == keyboardReturn && !sibling.anchor.keyboardFocused)
+        #expect(foreignRow.anchor.keyboardFocused, "Menu-window identity cannot redirect state to an unrelated owner")
+        #expect(window.firstResponder === row.title && foreign.firstResponder === foreignRow.title)
+        #expect(row.title.focusRingType == .exterior && !window.isVisible && !foreign.isVisible)
+    }
+
+    @Test func menuSamplingRejectsStaleWrongMenuEndedAndDetachedLifetimes() throws {
+        let (window, root) = inputWindow()
+        let (foreign, foreignRoot) = inputWindow()
+        let row = InputRow(y: 100), sibling = InputRow(y: 20), foreignRow = InputRow(y: 20)
+        for owned in [row, sibling] { owned.attach(to: root) }
+        foreignRow.attach(to: foreignRoot)
+        defer {
+            for owned in [row, sibling, foreignRow] { owned.detach() }
+            window.contentView = nil; foreign.contentView = nil
+            window.close(); foreign.close()
+        }
+        try #require(window.makeFirstResponder(row.title))
+        try #require(foreign.makeFirstResponder(foreignRow.title))
+        row.anchor.observeInput(try keyEvent(window))
+        foreignRow.anchor.observeInput(try keyEvent(foreign))
+        var sampled: NSEvent?
+        var reads = 0
+        var completedMenu: NSMenu?
+        row.presenter.currentMenuEvent = { reads += 1; return sampled }
+        row.presenter.present = { menu, _, _ in
+            completedMenu = menu
+            sampled = sampledMenuEvent(.leftMouseUp, window: foreign, timestamp: ProcessInfo.processInfo.systemUptime)
+            guard sampled != nil else { Issue.record("Expected a current event"); return }
+            row.presenter.menuDidClose(NSMenu(title: "Unrelated menu"))
+            #expect(reads == 0 && row.anchor.keyboardFocused)
+            sampled = sampledMenuEvent(.leftMouseUp, window: foreign, timestamp: 0)
+            guard sampled != nil else { Issue.record("Expected a stale event"); return }
+            row.presenter.menuDidClose(menu)
+            #expect(row.anchor.keyboardFocused && foreignRow.anchor.keyboardFocused)
+        }
+        row.presenter.show()
+        let oldMenu = try #require(completedMenu)
+        let readsAfterReturn = reads
+        sampled = try #require(sampledMenuEvent(.leftMouseUp, window: foreign, timestamp: ProcessInfo.processInfo.systemUptime))
+        row.presenter.menuDidClose(oldMenu)
+        #expect(reads == readsAfterReturn && row.anchor.keyboardFocused)
+
+        foreignRow.presenter.currentMenuEvent = { sampled }
+        foreignRow.presenter.present = { menu, _, _ in
+            sampled = sampledMenuEvent(.rightMouseUp, window: window, timestamp: ProcessInfo.processInfo.systemUptime)
+            guard sampled != nil else { Issue.record("Expected a different owner's current event"); return }
+            row.presenter.menuDidClose(oldMenu)
+            #expect(row.anchor.keyboardFocused && foreignRow.anchor.keyboardFocused && reads == readsAfterReturn)
+            foreignRow.presenter.menuDidClose(menu)
+            #expect(row.anchor.keyboardFocused && !foreignRow.anchor.keyboardFocused)
+        }
+        foreignRow.presenter.show()
+        #expect(row.anchor.keyboardFocused && !foreignRow.anchor.keyboardFocused)
+
+        row.presenter.present = { menu, _, _ in
+            row.anchor.detach()
+            #expect(window.makeFirstResponder(sibling.title))
+            guard let keyboard = sampledMenuEvent(.keyDown, window: window, timestamp: ProcessInfo.processInfo.systemUptime) else {
+                Issue.record("Expected fresh sibling keyboard input")
+                return
+            }
+            sibling.anchor.observeInput(keyboard)
+            #expect(sibling.anchor.keyboardFocused)
+            sampled = sampledMenuEvent(.leftMouseUp, window: window, timestamp: ProcessInfo.processInfo.systemUptime)
+            guard sampled != nil else { Issue.record("Expected post-detach pointer input"); return }
+            let readsBeforeClose = reads
+            row.presenter.menuDidClose(menu)
+            #expect(reads == readsBeforeClose && sibling.anchor.keyboardFocused)
+        }
+        row.presenter.show()
+        #expect(row.anchor.presenter == nil && row.presenter.anchor == nil)
+        #expect(sibling.anchor.keyboardFocused && window.firstResponder === sibling.title)
+        #expect(!window.isVisible && !foreign.isVisible)
+    }
+
     @Test(arguments: Appearance.allCases, [240, 350])
     func productionRowsPreserveGeometryAndPassiveStateAcrossNativeAppearances(
         appearance: Appearance, width: Int
@@ -723,6 +909,66 @@ struct SidebarRowLiftTests {
         case title, icon, explicit
     }
 
+    enum MenuBoundary: CaseIterable, Equatable, Sendable {
+        case close, action, `return`
+    }
+
+    @MainActor
+    private struct InputRow {
+        let anchor: SidebarRowMenuAnchorView
+        let presenter = SidebarRowMenuPresenter()
+        let title: SidebarTitleNativeButton
+        let icon = SidebarIconNativeButton()
+
+        init(y: CGFloat) {
+            anchor = SidebarRowMenuAnchorView(frame: NSRect(x: 0, y: y, width: 280, height: 46))
+            title = SidebarTitleNativeButton(frame: NSRect(x: 40, y: y + 8, width: 180, height: 30))
+            icon.frame = NSRect(x: 8, y: y + 10, width: 24, height: 24)
+            presenter.liftEligible = true
+            presenter.anchor = anchor
+            presenter.currentMenuEvent = { nil }
+            anchor.presenter = presenter
+        }
+
+        func attach(to root: NSView) {
+            let views: [NSView] = [anchor, title, icon]
+            for view in views { root.addSubview(view) }
+        }
+
+        func detach() {
+            presenter.present = { _, _, _ in }
+            presenter.currentMenuEvent = { nil }
+            anchor.detach()
+        }
+    }
+
+    private func inputWindow() -> (KeyboardWindow, NSView) {
+        let window = KeyboardWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 180),
+                                    styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let root = NSView(frame: window.contentLayoutRect)
+        window.contentView = root
+        return (window, root)
+    }
+
+    private func sampledMenuEvent(
+        _ type: NSEvent.EventType, window: NSWindow, timestamp: TimeInterval
+    ) -> NSEvent? {
+        switch type {
+        case .keyDown, .keyUp:
+            return NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: timestamp,
+                                   windowNumber: window.windowNumber, context: nil, characters: "\u{1b}",
+                                   charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseUp, .rightMouseUp, .otherMouseUp:
+            return NSEvent.mouseEvent(with: type, location: .zero, modifierFlags: [], timestamp: timestamp,
+                                     windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                     clickCount: 1, pressure: 1)
+        default:
+            Issue.record("Unsupported menu input fixture type")
+            return nil
+        }
+    }
+
     private struct Fixture {
         let now = Date()
         let windowID = UUID()
@@ -861,9 +1107,10 @@ struct SidebarRowLiftTests {
                                      charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48))
     }
     private func pointerEvent(
-        _ window: NSWindow, type: NSEvent.EventType = .leftMouseDown, point: NSPoint
+        _ window: NSWindow, type: NSEvent.EventType = .leftMouseDown, point: NSPoint,
+        modifiers: NSEvent.ModifierFlags = []
     ) throws -> NSEvent {
-        try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+        try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: modifiers, timestamp: 0,
                                        windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                                        clickCount: 1, pressure: 1))
     }
