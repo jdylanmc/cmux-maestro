@@ -645,8 +645,21 @@ struct SidebarRowLiftTests {
             let iconControls = descendants(mounted.host).compactMap { $0 as? SidebarIconNativeButton }
             let iconFrames = iconControls.map { mounted.host.convert($0.bounds, from: $0) }
             let menuBefore = anchors.map { $0.presenter?.menu().items.map(\.title) }
-            let rest = try capture(mounted.host)
             let captureName = "\(appearance.rawValue)-\(width)-\(density.rawValue)"
+            #if CMUX_VALIDATION
+            let measurements = try TitleMeasurementBuffer(name: captureName, controls: phaseControls)
+            defer {
+                measurements.detach()
+                #expect(measurements.overflowCount == 0,
+                        "Measurement buffer overflow: \(measurements.overflowCount) events were not retained")
+            }
+            measurements.inCapture = true
+            #endif
+            let rest = try capture(mounted.host)
+            #if CMUX_VALIDATION
+            measurements.inCapture = false
+            measurements.snapshot()
+            #endif
             var phaseGeometry = titleGeometryDiagnostics(
                 phaseControls, host: mounted.host, phase: "\(captureName)-rest"
             )
@@ -658,10 +671,20 @@ struct SidebarRowLiftTests {
             let laneColors = try lanePoints.map { try pixel(rest, at: $0, bounds: mounted.host.bounds) }
             let eligible = anchors.filter { $0.presenter?.liftEligible == true }
             try #require(!eligible.isEmpty)
+            #if CMUX_VALIDATION
+            measurements.phase = .lift
+            #endif
             for anchor in anchors { anchor.presenter?.hoverChanged(true) }
             await Task.yield()
             mounted.host.layoutSubtreeIfNeeded()
+            #if CMUX_VALIDATION
+            measurements.inCapture = true
+            #endif
             let lifted = try capture(mounted.host)
+            #if CMUX_VALIDATION
+            measurements.inCapture = false
+            measurements.snapshot()
+            #endif
             phaseGeometry += titleGeometryDiagnostics(
                 phaseControls, host: mounted.host, phase: "\(captureName)-lift"
             )
@@ -690,9 +713,19 @@ struct SidebarRowLiftTests {
             #expect(controls.allSatisfy { !$0.isBordered && $0.focusRingType == .exterior })
             #expect(iconControls.allSatisfy { !$0.isBordered && $0.focusRingType == .exterior })
             #expect(anchors.map { $0.presenter?.menu().items.map(\.title) } == menuBefore)
+            #if CMUX_VALIDATION
+            measurements.phase = .repeated
+            #endif
             for anchor in eligible { anchor.presenter?.hoverChanged(true) }
             await Task.yield()
+            #if CMUX_VALIDATION
+            measurements.inCapture = true
+            #endif
             let repeated = try capture(mounted.host)
+            #if CMUX_VALIDATION
+            measurements.inCapture = false
+            measurements.snapshot()
+            #endif
             phaseGeometry += titleGeometryDiagnostics(
                 phaseControls, host: mounted.host, phase: "\(captureName)-repeated"
             )
@@ -700,12 +733,22 @@ struct SidebarRowLiftTests {
             diagnoseDifference(lifted, repeated, phase: "\(captureName)-repeated", host: mounted.host, anchors: anchors)
             #expect(differences(lifted, repeated) == 0,
                     "Repeated hover input cannot add or restart another surface")
+            #if CMUX_VALIDATION
+            measurements.phase = .keyboard
+            #endif
             for anchor in eligible {
                 anchor.presenter?.liftFocusChanged(true)
                 anchor.presenter?.hoverChanged(false)
             }
             await Task.yield()
+            #if CMUX_VALIDATION
+            measurements.inCapture = true
+            #endif
             let keyboardOnly = try capture(mounted.host)
+            #if CMUX_VALIDATION
+            measurements.inCapture = false
+            measurements.snapshot()
+            #endif
             phaseGeometry += titleGeometryDiagnostics(
                 phaseControls, host: mounted.host, phase: "\(captureName)-keyboard"
             )
@@ -713,12 +756,22 @@ struct SidebarRowLiftTests {
             diagnoseDifference(lifted, keyboardOnly, phase: "\(captureName)-keyboard", host: mounted.host, anchors: anchors)
             #expect(differences(lifted, keyboardOnly) == 0,
                     "Keyboard-only focus must retain the same row elevation after the pointer leaves")
+            #if CMUX_VALIDATION
+            measurements.phase = .hoverReturn
+            #endif
             for anchor in eligible {
                 anchor.presenter?.hoverChanged(true)
                 anchor.presenter?.liftFocusChanged(false)
             }
             await Task.yield()
+            #if CMUX_VALIDATION
+            measurements.inCapture = true
+            #endif
             let hoverOnly = try capture(mounted.host)
+            #if CMUX_VALIDATION
+            measurements.inCapture = false
+            measurements.snapshot()
+            #endif
             phaseGeometry += titleGeometryDiagnostics(
                 phaseControls, host: mounted.host, phase: "\(captureName)-hover-return"
             )
@@ -726,10 +779,20 @@ struct SidebarRowLiftTests {
             diagnoseDifference(lifted, hoverOnly, phase: "\(captureName)-hover-return", host: mounted.host, anchors: anchors)
             #expect(differences(lifted, hoverOnly) == 0,
                     "Losing keyboard focus while still hovered must not drop or double the lift")
+            #if CMUX_VALIDATION
+            measurements.phase = .restored
+            #endif
             for anchor in anchors { anchor.presenter?.hoverChanged(false) }
             await Task.yield()
             mounted.host.layoutSubtreeIfNeeded()
+            #if CMUX_VALIDATION
+            measurements.inCapture = true
+            #endif
             let restored = try capture(mounted.host)
+            #if CMUX_VALIDATION
+            measurements.inCapture = false
+            measurements.snapshot()
+            #endif
             phaseGeometry += titleGeometryDiagnostics(
                 phaseControls, host: mounted.host, phase: "\(captureName)-restored"
             )
@@ -742,11 +805,17 @@ struct SidebarRowLiftTests {
             #expect(preferences.attention == beforeAttention && preferences.icons == beforeIcons)
             #expect(pinned(model, now: data.now) == beforePinned && model.navigation.status == .idle)
             #expect(!mounted.window.isVisible)
+            #if CMUX_VALIDATION
+            measurements.detach()
+            #endif
             for line in phaseGeometry { print(line) }
             try assertNativeBackingRecipes(
                 backingRows, rest: rest, lifted: lifted, bounds: mounted.host.bounds,
                 appearance: appearance, name: captureName
             )
+            #if CMUX_VALIDATION
+            try measurements.report()
+            #endif
         }
     }
 
@@ -1314,6 +1383,88 @@ struct SidebarRowLiftTests {
         }
         return changed
     }
+    #if CMUX_VALIDATION
+    @MainActor
+    private final class TitleMeasurementBuffer {
+        enum Phase: String, CaseIterable {
+            case rest, lift, repeated, keyboard, hoverReturn = "hover-return", restored
+        }
+
+        struct Record {
+            let fixtureID: UUID
+            let controlID: ObjectIdentifier
+            let label: String
+            let sequence: Int
+            let phase: Phase
+            let inCapture: Bool
+            let observation: SidebarTitleNativeButton.MeasurementObservation
+        }
+
+        let fixtureID = UUID()
+        let name: String
+        let controls: [SidebarTitleNativeButton]
+        var phase = Phase.rest
+        var inCapture = false
+        private var records: [Record] = []
+        private var sequence = 0
+        private(set) var overflowCount = 0
+
+        init(name: String, controls: [SidebarTitleNativeButton]) throws {
+            self.name = name
+            self.controls = controls
+            try #require(controls.count == 5 && Set(controls.map(ObjectIdentifier.init)).count == 5)
+            try #require(controls.allSatisfy { $0.measurementObserver == nil })
+            records.reserveCapacity(2048)
+            for control in controls {
+                let id = ObjectIdentifier(control)
+                let label = control.accessibilityLabel() ?? "<missing label>"
+                control.measurementObserver = { [weak self] observation in
+                    self?.append(observation, controlID: id, label: label)
+                }
+            }
+        }
+
+        private func append(
+            _ observation: SidebarTitleNativeButton.MeasurementObservation,
+            controlID: ObjectIdentifier, label: String
+        ) {
+            sequence += 1
+            guard records.count < 2048 else {
+                overflowCount += 1
+                return
+            }
+            records.append(Record(
+                fixtureID: fixtureID, controlID: controlID, label: label, sequence: sequence,
+                phase: phase, inCapture: inCapture, observation: observation
+            ))
+        }
+
+        func snapshot() {
+            for control in controls { control.recordMeasurement(.snapshot) }
+        }
+
+        func detach() {
+            inCapture = false
+            for control in controls { control.measurementObserver = nil }
+        }
+
+        func report() throws {
+            print("row-lift115 measurement fixture=\(fixtureID) name=\(name) retained=\(records.count) observed=\(sequence) overflow=\(overflowCount)")
+            for record in records {
+                let value = record.observation
+                print("row-lift115 measurement fixture=\(record.fixtureID) seq=\(record.sequence) phase=\(record.phase.rawValue) inCapture=\(record.inCapture) control=\(record.controlID) label=\(record.label) event=\(value.event.rawValue) proposedWidth=\(String(describing: value.proposedWidth)) normalizedWidth=\(String(describing: value.normalizedWidth)) installedRootWidth=\(String(describing: value.installedRootWidth)) hasInstalledRoot=\(value.hasInstalledRoot) fittingSize=\(String(describing: value.fittingSize)) buttonFrame=\(value.buttonFrame) buttonBounds=\(value.buttonBounds) hostingFrame=\(value.hostingFrame) hostingBounds=\(value.hostingBounds)")
+            }
+            let identities = Set(controls.map(ObjectIdentifier.init))
+            for phase in Phase.allCases {
+                let snapshots = records.filter { $0.phase == phase && $0.observation.event == .snapshot }
+                try #require(snapshots.count == 5 && Set(snapshots.map(\.controlID)) == identities,
+                             "Each measured title needs exactly one snapshot in \(phase.rawValue)")
+                try #require(snapshots.allSatisfy { $0.fixtureID == fixtureID && !$0.inCapture })
+            }
+        }
+    }
+    #endif
+
     private func titleGeometryDiagnostics(
         _ controls: [SidebarTitleNativeButton], host: NSView, phase: String
     ) -> [String] {
