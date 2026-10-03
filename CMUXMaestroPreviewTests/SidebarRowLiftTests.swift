@@ -117,6 +117,99 @@ struct SidebarRowLiftTests {
         #expect(!window.isVisible && !foreign.isVisible)
     }
 
+    @Test(arguments: [NSEvent.EventType.leftMouseDown, .rightMouseDown, .otherMouseDown])
+    func explicitControlFocusSurvivesTokenHandoffButNotPointerSelection(_ pointerType: NSEvent.EventType) throws {
+        let window = KeyboardWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120),
+                                    styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let root = NSView(frame: window.contentLayoutRect)
+        let anchor = SidebarRowMenuAnchorView(frame: NSRect(x: 0, y: 0, width: 200, height: 46))
+        let unrelated = SidebarTitleNativeButton(frame: NSRect(x: 20, y: 70, width: 100, height: 30))
+        let presenter = SidebarRowMenuPresenter()
+        presenter.liftEligible = true
+        presenter.anchor = anchor
+        anchor.presenter = presenter
+        var transitions: [Bool] = []
+        presenter.liftFocusChanged = { transitions.append($0) }
+        root.addSubview(anchor)
+        root.addSubview(unrelated)
+        window.contentView = root
+        defer { anchor.detach(); window.contentView = nil; window.close() }
+        try #require(window.makeFirstResponder(unrelated))
+        anchor.observeInput(try keyEvent(window))
+        #expect(!anchor.keyboardFocused, "Native responder geometry alone cannot explain this row's focus")
+        let disclosure = UUID(), overflow = UUID()
+        presenter.controlFocusChanged(disclosure, focused: true)
+        #expect(anchor.keyboardFocused && transitions == [true])
+        presenter.controlFocusChanged(overflow, focused: true)
+        presenter.controlFocusChanged(disclosure, focused: false)
+        presenter.controlFocusChanged(disclosure, focused: false)
+        #expect(presenter.focusedControls == [overflow])
+        #expect(anchor.keyboardFocused && transitions == [true],
+                "Removing a disappearing control must not clear a different control's focus")
+
+        anchor.observeInput(try pointerEvent(window, type: pointerType, point: NSPoint(x: 280, y: 110)))
+        #expect(!anchor.keyboardFocused && !anchor.keyboardInteraction)
+        #expect(presenter.focusedControls == [overflow], "Pointer modality, not invented focus mutation, clears the lift")
+        anchor.refreshKeyboardFocus()
+        #expect(transitions == [true, false])
+        #expect(window.firstResponder === unrelated)
+        anchor.observeInput(try keyEvent(window))
+        #expect(anchor.keyboardFocused && transitions == [true, false, true])
+        presenter.controlFocusChanged(overflow, focused: false)
+        #expect(!anchor.keyboardFocused && presenter.focusedControls.isEmpty)
+        #expect(transitions == [true, false, true, false])
+        #expect(window.firstResponder === unrelated && !window.isVisible)
+    }
+
+    @Test func explicitControlFocusHonorsEligibilityWindowVisibilityAndDetach() throws {
+        let window = KeyboardWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120),
+                                    styleMask: .borderless, backing: .buffered, defer: false)
+        let foreign = KeyboardWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120),
+                                     styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        foreign.isReleasedWhenClosed = false
+        let root = NSView(frame: window.contentLayoutRect)
+        let frame = NSRect(x: 0, y: 0, width: 200, height: 46)
+        let anchor = SidebarRowMenuAnchorView(frame: frame)
+        let presenter = SidebarRowMenuPresenter()
+        presenter.anchor = anchor
+        anchor.presenter = presenter
+        root.addSubview(anchor)
+        window.contentView = root
+        defer { anchor.detach(); window.contentView = nil; window.close(); foreign.close() }
+        let control = UUID()
+        presenter.controlFocusChanged(control, focused: true)
+        anchor.observeInput(try keyEvent(window))
+        #expect(!anchor.keyboardFocused && !anchor.keyboardInteraction, "Explicit focus cannot opt an excluded row in")
+        presenter.liftEligible = true
+        anchor.observeInput(try keyEvent(foreign))
+        #expect(!anchor.keyboardFocused && !anchor.keyboardInteraction)
+        anchor.observeInput(try keyEvent(window))
+        try #require(anchor.keyboardFocused)
+        anchor.observeInput(try pointerEvent(foreign, point: .zero))
+        #expect(anchor.keyboardFocused, "Only this window's pointer changes this row's input modality")
+        window.reportsKeyState = false
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+        #expect(!anchor.keyboardFocused && presenter.focusedControls == [control])
+        window.reportsKeyState = true
+        NotificationCenter.default.post(name: NSWindow.didUpdateNotification, object: window)
+        try #require(anchor.keyboardFocused)
+        anchor.frame = .zero
+        anchor.refreshKeyboardFocus()
+        #expect(anchor.visibleRect.isEmpty && !anchor.keyboardFocused)
+        anchor.frame = frame
+        anchor.refreshKeyboardFocus()
+        try #require(anchor.keyboardFocused)
+        presenter.liftEligible = false
+        anchor.refreshKeyboardFocus()
+        #expect(!anchor.keyboardFocused)
+        anchor.detach()
+        #expect(presenter.focusedControls.isEmpty && presenter.anchor == nil && anchor.presenter == nil)
+        #expect(!anchor.keyboardInteraction && !anchor.keyboardFocused)
+        #expect(!window.isVisible && !foreign.isVisible)
+    }
+
     @Test(arguments: Appearance.allCases, [240, 350])
     func productionRowsPreserveGeometryAndPassiveStateAcrossNativeAppearances(
         appearance: Appearance, width: Int
