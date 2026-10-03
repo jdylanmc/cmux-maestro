@@ -2,6 +2,7 @@
 """Check validation namespaces and the explicit native publication boundary."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -101,6 +102,19 @@ def verify_messaging_resources(app):
         resource = resources / name
         require(resource.is_file() and not resource.is_symlink() and 0 < resource.stat().st_size <= maximum,
                 f"Bundled messaging resource {name} is missing or oversized.")
+
+
+def verify_guide_reference(app, canonical):
+    reference = Path(app) / "Contents/Resources/maestro-guide.sha256"
+    require(reference.is_file() and not reference.is_symlink() and reference.stat().st_size == 65,
+            "Build guide reference is missing or malformed.")
+    with reference.open("rb") as stream:
+        actual = stream.read(66)
+    with Path(canonical).open("rb") as stream:
+        content = stream.read(65_537)
+    require(0 < len(content) <= 65_536, "Canonical guide is empty or oversized.")
+    expected = (hashlib.sha256(content).hexdigest() + "\n").encode("ascii")
+    require(actual == expected, "Build guide reference differs from this source checkout.")
 
 
 def verify_metadata(app, mode, *, expected_build=APP_BUILD_VERSION, require_orchestration=True, require_bridge=True):
@@ -291,6 +305,8 @@ def main():
             verify_signed(args.app)
         else:
             verify_metadata(args.app, args.mode)
+        if args.app:
+            verify_guide_reference(args.app, Path(__file__).resolve().parents[1] / "skills/maestro/SKILL.md")
         if args.source_entitlements:
             verify_profile(plist(args.source_entitlements))
     except (ValueError, OSError, KeyError, plistlib.InvalidFileException, subprocess.CalledProcessError):

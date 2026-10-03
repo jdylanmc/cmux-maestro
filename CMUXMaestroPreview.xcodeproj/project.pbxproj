@@ -347,6 +347,7 @@
 				A3685BE52FCA3AEE00009F1B /* Sources */,
 				A3685BE62FCA3AEE00009F1B /* Frameworks */,
 				A3685BE72FCA3AEE00009F1B /* Resources */,
+				D05500000000000000000001 /* Generate guide content reference */,
 				A3685C312FCA3B3700009F1B /* Embed ExtensionKit Extensions */,
 				C06100000000000000000005 /* Embed Helpers */,
 			);
@@ -459,6 +460,25 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		D05500000000000000000001 /* Generate guide content reference */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = (
+				"$(SRCROOT)/skills/maestro/SKILL.md",
+				"$(SRCROOT)/scripts/write-guide-reference.py",
+			);
+			name = "Generate guide content reference";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/maestro-guide.sha256",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\n/usr/bin/python3 \"$SRCROOT/scripts/write-guide-reference.py\" \"$SRCROOT/skills/maestro/SKILL.md\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/maestro-guide.sha256\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A3685BE72FCA3AEE00009F1B /* Resources */ = {

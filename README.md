@@ -211,17 +211,21 @@ YOLO and terminal I/O; they do not require a guide or pass `--plugin-dir`.
 ### CLI Integration: install the global guide
 
 Maestro's native **Settings > CLI Integration** tab explains the guide and
-provides selectable command text and **Copy install command**. It does not inspect
-global files, check versions or manage updates. Richer Settings management is
-deferred; it is not required for messaging or guide distribution. After the skill
-is merged to `main`, run this command in your own terminal:
+provides read-only guide-content status, **Re-check**, selectable command text
+and **Copy install command**. Each global location is reported separately as
+missing, unreadable, different, or **Matches this build**. Matching compares
+the file's exact bytes with a SHA-256 reference generated from this build's
+canonical `skills/maestro/SKILL.md`; the global guide itself is not bundled.
+A missing or invalid build reference is an explicit comparison error, not a
+local-guide verdict. Different content may be newer or customized, not outdated.
+Run this command in your own terminal to install or update:
 
 ```sh
 npx skills add jdylanmc/cmux-maestro --skill maestro --agent github-copilot --global --copy
 ```
 
 Review the installer's interactive confirmation; the command deliberately omits
-`--yes`. Settings only copies text: it does not execute `npx`, open a terminal,
+`--yes`. Settings only reads guide content and copies text: it does not execute `npx`, open a terminal,
 install a skill, or change global configuration. This is the **single canonical
 guide distribution**, from `skills/maestro/{SKILL.md,intent.md}`. Invoke global
 **`/maestro`**, or use the skill tool with `{"skill":"maestro"}`. No extra
@@ -245,6 +249,19 @@ all global skills live under `.copilot`. Bare plugin loading and explicit
 `--plugin-dir` both failed live; no upstream root cause is claimed. See the
 [public findings](docs/delivery-proof.md#guide-distribution-decision-after-live-proof).
 Any refresh of the user's existing global copy remains a separate consentful action.
+
+On opening CLI Integration or choosing **Re-check**, Maestro reads only
+`~/.agents/skills/maestro/SKILL.md` (the observed shared global installation)
+and `~/.copilot/skills/maestro/SKILL.md` (Copilot's agent-specific global location).
+Copies and symbolic links are supported; only stable regular files up to 64 KiB
+are read, off the main thread. Broken links, unsupported types, access failures
+and files changing during a read are reported without changing anything.
+No polling, project-skill search, provider configuration or session history is
+read. These are file observations, not evidence of which guide a session loaded,
+upstream freshness, observer hooks, observation health or messaging readiness.
+The isolated non-GUI reader/model checks can run with
+`./scripts/test-copilot-setup.sh --guide-only`; the normal setup and hosted test
+suites retain their full coverage.
 
 On the next explicit **Enable Copilot Integration**, setup removes only its old
 `Copilot/plugin/skills/maestro/SKILL.md` copy, if present, using owner-checked,

@@ -13,7 +13,8 @@ struct WorkerLaunchSettingsTests {
         #expect(CLIIntegrationGuide.copyInstallCommand(to: pasteboard))
         #expect(pasteboard.string(forType: .string) == expected)
         #expect(!expected.contains("--yes"))
-        let view = NSHostingView(rootView: CLIIntegrationSettingsView())
+        let model = CLIIntegrationGuideModel(read: { .referenceUnavailable })
+        let view = NSHostingView(rootView: CLIIntegrationSettingsView(model: model, copyCommand: { false }))
         #expect(view.fittingSize.width == 600)
         #expect(view.fittingSize.height == 350)
         let settings = NSHostingView(rootView: MaestroSettingsView())
@@ -37,9 +38,8 @@ struct WorkerLaunchSettingsTests {
         #expect(guide.contains(#"Button("Copy install command")"#))
         #expect(guide.contains("CLIIntegrationGuide.copyInstallCommand()"))
         for forbidden in [
-            "Process(", "NSWorkspace", "CopilotSetup()", ".task", ".onAppear", "--yes",
-            ".copilot/skills", "FileManager", "Data(contentsOf:", "URLSession",
-            "Up to date", "Matches this build", ".orange"
+            "Process(", "NSWorkspace", "CopilotSetup()", "--yes",
+            "FileManager", "Data(contentsOf:", "URLSession", "Up to date", ".orange"
         ] {
             #expect(!guide.contains(forbidden))
         }

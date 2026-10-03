@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -435,6 +436,41 @@ class IntegratedTestScopeTests(unittest.TestCase):
 
 
 class BuildMetadataTests(unittest.TestCase):
+    def test_generated_guide_reference_is_exact_digest_only_and_fails_on_drift(self):
+        self.fixture("tests")
+        canonical = self.directory / "SKILL.md"
+        canonical.write_bytes(b"---\nname: maestro\n---\nSynthetic build guide.\n")
+        destination = self.app / "Contents/Resources/maestro-guide.sha256"
+        subprocess.run([sys.executable, str(ROOT / "scripts/write-guide-reference.py"),
+                        str(canonical), str(destination)], check=True)
+        self.assertEqual(destination.read_bytes(),
+                         (hashlib.sha256(canonical.read_bytes()).hexdigest() + "\n").encode("ascii"))
+        metadata.verify_guide_reference(self.app, canonical)
+        canonical.write_bytes(b"Changed canonical guide.\n")
+        with self.assertRaisesRegex(ValueError, "differs"):
+            metadata.verify_guide_reference(self.app, canonical)
+        for content in (b"", b"invalid\n", b"a" * 64, b"a" * 66):
+            destination.write_bytes(content)
+            with self.assertRaisesRegex(ValueError, "malformed"):
+                metadata.verify_guide_reference(self.app, canonical)
+        destination.unlink()
+        with self.assertRaisesRegex(ValueError, "missing"):
+            metadata.verify_guide_reference(self.app, canonical)
+        destination.symlink_to(canonical)
+        with self.assertRaisesRegex(ValueError, "malformed"):
+            metadata.verify_guide_reference(self.app, canonical)
+
+    def test_guide_reference_generation_rejects_missing_empty_and_oversized_source(self):
+        source = self.directory / "guide.md"
+        destination = self.directory / "reference"
+        for content in (None, b"", b"x" * 65_537):
+            if content is not None:
+                source.write_bytes(content)
+            result = subprocess.run([sys.executable, str(ROOT / "scripts/write-guide-reference.py"),
+                                     str(source), str(destination)], capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(destination.exists())
+
     def test_ci_preserves_all_eleven_validation_commands_without_new_conditions(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         self.assertEqual(re.findall(r"^        run: (.+)$", workflow, re.MULTILINE), [
