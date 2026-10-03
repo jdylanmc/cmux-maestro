@@ -110,6 +110,10 @@ native call cannot return. These are diagnostic containment limits, not
 accepted production behavior. All three cases must actually execute on the
 hosted runner; skips are not proof. Pointer item selection, OS-generated
 menu-window events, visible outlines and physical input remain unverified.
+The CI test step forwards only its inherited runner markers, after both match
+the hosted guard, through Xcode's documented `TEST_RUNNER_` environment
+transport. Before native access, the test gate logs those two marker values
+and its derived eligibility; both hosted checks remain required.
 
 ### Setup fixture readiness
 

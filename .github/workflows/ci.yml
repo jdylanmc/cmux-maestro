@@ -24,7 +24,14 @@ jobs:
       - name: Build isolated validation targets
         run: ./scripts/build-unsigned.sh
       - name: Run integrated Swift tests
-        run: ./scripts/test.sh
+        run: |
+          unset TEST_RUNNER_GITHUB_ACTIONS TEST_RUNNER_RUNNER_ENVIRONMENT
+          if [ "${GITHUB_ACTIONS-}" = true ] && [ "${RUNNER_ENVIRONMENT-}" = github-hosted ]; then
+            export TEST_RUNNER_GITHUB_ACTIONS="$GITHUB_ACTIONS"
+            export TEST_RUNNER_RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT"
+          fi
+          printf 'row-lift-native-input workflow: GITHUB_ACTIONS=%s; RUNNER_ENVIRONMENT=%s\n' "${GITHUB_ACTIONS-<unset>}" "${RUNNER_ENVIRONMENT-<unset>}"
+          ./scripts/test.sh
       - name: Upload synthetic sidebar layout renders
         if: always()
         uses: actions/upload-artifact@v4
