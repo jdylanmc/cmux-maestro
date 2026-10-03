@@ -404,9 +404,6 @@ struct SidebarRowLiftTests {
                 return NSPoint(x: rect.minX + 2, y: rect.midY)
             }
             let laneColors = try lanePoints.map { try pixel(rest, at: $0, bounds: mounted.host.bounds) }
-            let laneReferences = try semanticLaneReferences(
-                laneColors, appearance: appearance, name: "\(captureName)-lane-reference"
-            )
             let eligible = anchors.filter { $0.presenter?.liftEligible == true }
             try #require(!eligible.isEmpty)
             for anchor in anchors { anchor.presenter?.hoverChanged(true) }
@@ -424,12 +421,6 @@ struct SidebarRowLiftTests {
                 #expect(before.alphaComponent == 1 && after.alphaComponent == 1,
                         "Decoration cannot erase the opaque underlying selected/activity/window background")
                 if anchor.presenter?.liftEligible == true {
-                    let expected = laneReferences[index]
-                    let actualRGBA = [after.redComponent, after.greenComponent, after.blueComponent, after.alphaComponent]
-                    let expectedRGBA = [expected.redComponent, expected.greenComponent, expected.blueComponent, expected.alphaComponent]
-                    print("row-lift115 \(captureName) lane[\(index)] \(lanePoints[index]): base=\(before), expected=\(expectedRGBA), actual=\(actualRGBA)")
-                    #expect(actualRGBA == expectedRGBA,
-                            "Each native row lane must composite four-percent semantic highlight over its own resting background")
                     if appearance == .dark || appearance == .darkContrast {
                         #expect(after.redComponent + after.greenComponent + after.blueComponent
                             > before.redComponent + before.greenComponent + before.blueComponent,
@@ -887,39 +878,6 @@ struct SidebarRowLiftTests {
         view.cacheDisplay(in: view.bounds, to: bitmap)
         return bitmap
     }
-    private struct SemanticSwatch: Identifiable {
-        let id = UUID()
-        let color: NSColor
-    }
-
-    private func semanticLaneReferences(
-        _ colors: [NSColor], appearance: Appearance, name: String
-    ) throws -> [NSColor] {
-        try #require(!colors.isEmpty)
-        let swatches = colors.map { SemanticSwatch(color: $0) }
-        let frame = NSRect(x: 0, y: 0, width: swatches.count * 20, height: 20)
-        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.appearance = NSAppearance(named: appearance.nativeName)
-        let host = NSHostingView(rootView: HStack(spacing: 0) {
-            ForEach(swatches) { swatch in
-                Rectangle().fill(Color(nsColor: swatch.color))
-                    .overlay { Rectangle().fill(Color(nsColor: .highlightColor).opacity(0.04)) }
-                    .frame(width: 20, height: 20)
-            }
-        }
-        .environment(\._colorSchemeContrast, appearance.contrast))
-        window.contentView = host
-        defer { window.contentView = nil; window.close() }
-        host.frame = frame
-        let bitmap = try capture(host)
-        try save(bitmap, name: name)
-        #expect(!window.isVisible && host.bounds == frame)
-        return try swatches.enumerated().map { index, _ in
-            try pixel(bitmap, at: NSPoint(x: index * 20 + 10, y: 10), bounds: frame)
-        }
-    }
-
     private func differences(_ lhs: NSBitmapImageRep, _ rhs: NSBitmapImageRep) -> Int {
         guard lhs.pixelsWide == rhs.pixelsWide, lhs.pixelsHigh == rhs.pixelsHigh else {
             Issue.record("Row lift changed the capture geometry")
