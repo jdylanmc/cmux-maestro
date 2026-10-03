@@ -145,7 +145,7 @@ struct SidebarRowLiftTests {
                 Issue.record("Synthetic surface fixture must remain available")
                 return
             }
-            for row in rows where row.id != data.managedSurface {
+            for row in rows where row.id != data.managedSurface && row.id != data.legacySurface {
                 let title = try #require(controls.first { $0.accessibilityLabel() == "Focus \(row.kind.title) \(row.title)" })
                 let owners = owners(of: title, in: anchors)
                 try #require(owners.count == 1, "A full row has exactly one native row owner")
@@ -154,6 +154,11 @@ struct SidebarRowLiftTests {
             }
             let managed = try #require(controls.first { $0.accessibilityLabel() == "Focus Lift managed" })
             #expect(try owner(of: managed, in: anchors).presenter?.liftEligible == true)
+            let legacy = try #require(controls.first { $0.accessibilityLabel() == "Focus Lift legacy" })
+            #expect(try owner(of: legacy, in: anchors).presenter?.liftEligible == true,
+                    "A full actionable legacy worker row is eligible independently of execution mode")
+            let legacyNode = try #require(model.orchestration.snapshot.nodes.first { $0.id == data.legacyNode })
+            #expect(legacyNode.role == "worker" && legacyNode.executionMode == nil)
             for session in [data.multiSessionA, data.multiSessionB] {
                 let label = "Focus Copilot session \(session.uuidString.prefix(8).lowercased())"
                 let title = try #require(controls.first { $0.accessibilityLabel() == label })
@@ -353,6 +358,66 @@ struct SidebarRowLiftTests {
         #expect(!descendants(host).contains { $0 is SidebarRowMenuAnchorView })
     }
 
+    @Test(arguments: [80, 140], [240, 350])
+    func shortSharedRowRetainsTitleIconAndOutsideHitTargets(height: Int, width: Int) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let frame = NSRect(x: 0, y: 0, width: width, height: height)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        var activations = 0
+        let host = NSHostingView(rootView: SidebarRowActions(
+            title: "Short row", groups: [], liftEligible: true
+        ) {
+            HStack(spacing: 4) {
+                SidebarItemIcon(kind: .terminal, target: .surface(UUID()), title: "Short row", inspect: {})
+                SidebarTitleButton(label: "Short row title", hint: "Synthetic short viewport", action: { activations += 1 }) {
+                    Text("Short row title").frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .frame(height: 46)
+        }
+        .padding(8)
+        .frame(width: CGFloat(width), height: CGFloat(height), alignment: .top)
+        .environment(preferences)
+        .environment(\._accessibilityReduceMotion, true))
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.frame = frame
+        host.layoutSubtreeIfNeeded()
+        let title = try #require(titles(host).first { $0.accessibilityLabel() == "Short row title" })
+        let icon = try #require(descendants(host).compactMap { $0 as? SidebarIconNativeButton }.first)
+        let anchor = try #require(descendants(host).compactMap { $0 as? SidebarRowMenuAnchorView }.first)
+        let titleFrame = host.convert(title.bounds, from: title)
+        let iconFrame = host.convert(icon.bounds, from: icon)
+        let rowFrame = host.convert(anchor.bounds, from: anchor)
+        try #require(host.bounds.contains(titleFrame) && host.bounds.contains(iconFrame))
+        try #require(rowFrame.height == 46)
+        let points = [
+            NSPoint(x: titleFrame.midX, y: titleFrame.midY),
+            NSPoint(x: iconFrame.midX, y: iconFrame.midY),
+            NSPoint(x: rowFrame.midX, y: rowFrame.maxY + 12)
+        ]
+        try #require(points.allSatisfy(host.bounds.contains))
+        let hitTargets = points.map { host.hitTest($0).map(ObjectIdentifier.init) }
+        #expect(hitTargets[0] == ObjectIdentifier(title))
+        #expect(hitTargets[1] == ObjectIdentifier(icon))
+        for hovered in [true, true, false] {
+            anchor.presenter?.hoverChanged(hovered)
+            await Task.yield()
+            host.layoutSubtreeIfNeeded()
+            #expect(host.convert(title.bounds, from: title) == titleFrame)
+            #expect(host.convert(icon.bounds, from: icon) == iconFrame)
+            #expect(host.convert(anchor.bounds, from: anchor) == rowFrame)
+            #expect(points.map { host.hitTest($0).map(ObjectIdentifier.init) } == hitTargets,
+                    "The decorative shadow cannot enlarge or intercept existing hit targets")
+        }
+        #expect(activations == 0 && !window.isVisible)
+        title.performClick(nil)
+        #expect(activations == 1, "The unchanged title remains explicitly actionable")
+    }
+
     // Only key-state reporting is injected. Real AppKit containment, responder changes,
     // notifications and production observer callbacks run without ordering any window.
     private final class KeyboardWindow: NSWindow {
@@ -379,10 +444,11 @@ struct SidebarRowLiftTests {
         let now = Date()
         let windowID = UUID()
         let workspace = UUID()
-        let managedSurface = UUID(), observedSurface = UUID(), multiSurface = UUID()
-        let managedSession = UUID(), observedSession = UUID(), multiSessionA = UUID(), multiSessionB = UUID()
+        let managedSurface = UUID(), legacySurface = UUID(), observedSurface = UUID(), multiSurface = UUID()
+        let managedSession = UUID(), legacySession = UUID(), observedSession = UUID(), multiSessionA = UUID(), multiSessionB = UUID()
         let retainedSession = UUID()
         let node = UUID()
+        let legacyNode = UUID()
         let baseSurfaces = HierarchySurfaceKind.allCases.map { kind in
             HierarchySurface(id: UUID(), title: "Lift \(kind.rawValue)", kind: kind,
                              isFocused: kind == .terminal, isPinned: kind == .browser,
@@ -390,7 +456,10 @@ struct SidebarRowLiftTests {
                              workingDirectory: .available("/synthetic/row-lift"))
         }
         var hierarchy: HierarchySnapshot {
-            let additional = [(managedSurface, "Lift managed"), (observedSurface, "Lift observed"), (multiSurface, "Lift multi")]
+            let additional = [
+                (managedSurface, "Lift managed"), (legacySurface, "Lift legacy"),
+                (observedSurface, "Lift observed"), (multiSurface, "Lift multi")
+            ]
                 .map { id, title in
                     HierarchySurface(id: id, title: title, kind: .terminal, isFocused: false,
                                      isPinned: false, unreadCount: 0, workingDirectory: .available("/synthetic/row-lift"))
@@ -404,7 +473,7 @@ struct SidebarRowLiftTests {
         }
         var observations: [CopilotSessionObservation] {
             let current: [CopilotSessionObservation] = [
-                (managedSession, managedSurface), (observedSession, observedSurface),
+                (managedSession, managedSurface), (legacySession, legacySurface), (observedSession, observedSurface),
                 (multiSessionA, multiSurface), (multiSessionB, multiSurface)
             ].map { session, surface in
                 let kinds: [(CopilotWorkKind, String)] = [
@@ -443,13 +512,17 @@ struct SidebarRowLiftTests {
             .init(id: data.node, runId: UUID(), parentId: nil, role: "coordinator", label: "Lift managed",
                   workspaceId: data.workspace, surfaceId: data.managedSurface, generation: 1, phase: "registered",
                   availability: "active", copilotSessionId: data.managedSession, executionMode: .interactive,
+                  createdAt: data.now, updatedAt: data.now),
+            .init(id: data.legacyNode, runId: UUID(), parentId: nil, role: "worker", label: "Lift legacy",
+                  workspaceId: data.workspace, surfaceId: data.legacySurface, generation: 1, phase: "turn-running",
+                  availability: "busy", copilotSessionId: data.legacySession,
                   createdAt: data.now, updatedAt: data.now)
         ])
         let orchestration = SidebarOrchestrationPolling(read: { snapshot }, pause: { try await sidebarFrozenExpiry(0) })
         let model = SidebarConnectionModel(copilot: polling, orchestration: orchestration)
         let hierarchy = data.hierarchy
         model.replaceHierarchy(with: hierarchy)
-        model.showConnected(workspaceCount: 1, surfaceCount: data.baseSurfaces.count + 3)
+        model.showConnected(workspaceCount: 1, surfaceCount: data.baseSurfaces.count + 4)
         let topology = SidebarTopology(hierarchy)
         polling.update(topology: topology, connected: true)
         orchestration.update(topology: topology, connected: true)
