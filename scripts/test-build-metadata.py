@@ -568,6 +568,23 @@ class BuildMetadataTests(unittest.TestCase):
     def test_ci_preserves_all_fourteen_validation_commands_without_new_conditions(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
+        hosted_step = (
+            "      - name: Run integrated Swift tests\n"
+            "        run: |\n"
+            "          unset TEST_RUNNER_GITHUB_ACTIONS TEST_RUNNER_RUNNER_ENVIRONMENT\n"
+            '          if [ "${GITHUB_ACTIONS-}" = true ] && [ "${RUNNER_ENVIRONMENT-}" = github-hosted ]; then\n'
+            '            export TEST_RUNNER_GITHUB_ACTIONS="$GITHUB_ACTIONS"\n'
+            '            export TEST_RUNNER_RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT"\n'
+            "          fi\n"
+            "          printf 'row-lift-native-input workflow: GITHUB_ACTIONS=%s; RUNNER_ENVIRONMENT=%s\\n' "
+            '"${GITHUB_ACTIONS-<unset>}" "${RUNNER_ENVIRONMENT-<unset>}"\n'
+            "          ./scripts/test.sh\n"
+        )
+        self.assertEqual(workflow.count(hosted_step), 1)
+        workflow = workflow.replace(hosted_step, (
+            "      - name: Run integrated Swift tests\n"
+            "        run: ./scripts/test.sh\n"
+        ))
         self.assertEqual(re.findall(r"^        run: (.+)$", workflow, re.MULTILINE), [
             "node --test scripts/test-skill-overrides.mjs",
             "node scripts/check-skill-overrides.mjs",
@@ -599,6 +616,44 @@ class BuildMetadataTests(unittest.TestCase):
         section = policy.split("## Actual CI and formatting gates", 1)[1]
         documented = section.split("```sh\n", 1)[1].split("\n```", 1)[0].splitlines()
         self.assertEqual(documented, commands)
+
+    def test_ci_forwards_only_inherited_hosted_markers_and_preserves_test_exit(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        step = workflow.split("      - name: Run integrated Swift tests\n", 1)[1].split("      - name:", 1)[0]
+        self.assertTrue(step.startswith("        run: |\n"))
+        script = "\n".join(line[10:] for line in step.splitlines()[1:])
+        stub = self.directory / "scripts/test.sh"
+        stub.parent.mkdir()
+        stub.write_text(
+            '#!/bin/bash\nprintf "%s\\n" "${TEST_RUNNER_GITHUB_ACTIONS-<unset>}" '
+            '"${TEST_RUNNER_RUNNER_ENVIRONMENT-<unset>}"\nexit "${FIXTURE_EXIT_CODE:?}"\n'
+        )
+        stub.chmod(0o700)
+        cases = [
+            {},
+            {"GITHUB_ACTIONS": "true"},
+            {"RUNNER_ENVIRONMENT": "github-hosted"},
+            {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted"},
+            {"GITHUB_ACTIONS": "false", "RUNNER_ENVIRONMENT": "self-hosted"},
+            {"GITHUB_ACTIONS": "", "RUNNER_ENVIRONMENT": ""},
+        ]
+        for values in cases:
+            for exit_code in (0, 7):
+                with self.subTest(inherited=values, exit_code=exit_code):
+                    environment = dict(os.environ)
+                    for key, stale in (("GITHUB_ACTIONS", "true"), ("RUNNER_ENVIRONMENT", "github-hosted")):
+                        environment.pop(key, None)
+                        environment["TEST_RUNNER_" + key] = stale
+                    environment.update(values, FIXTURE_EXIT_CODE=str(exit_code))
+                    result = subprocess.run(
+                        ["/bin/bash", "-e", "-o", "pipefail", "-c", script],
+                        cwd=self.directory, env=environment, capture_output=True, text=True, timeout=5,
+                    )
+                    self.assertEqual(result.returncode, exit_code, result.stderr)
+                    expected = (["true", "github-hosted"] if values == {
+                        "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+                    } else ["<unset>", "<unset>"])
+                    self.assertEqual(result.stdout.splitlines()[-2:], expected)
 
     def test_ci_always_uploads_json_evidence_and_retains_required_png_artifact(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()

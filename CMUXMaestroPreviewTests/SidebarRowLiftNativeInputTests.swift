@@ -8,8 +8,7 @@ import os
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarRowLiftNativeInputTests {
-    @Test(.enabled(if: ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
-                   && ProcessInfo.processInfo.environment["RUNNER_ENVIRONMENT"] == "github-hosted"),
+    @Test(.enabled(if: SidebarRowLiftNativeInputTests.hostedInputEnabled),
           arguments: [Completion.escape, .ownerPointerCancel, .foreignPointerCancel])
     func keyboardOpenedMenuConsumesNativeInput(_ completion: Completion) throws {
         // Keep the gate inside the body too: no local window ordering, even under direct invocation.
@@ -69,6 +68,16 @@ struct SidebarRowLiftNativeInputTests {
 
     enum Completion: String, Sendable {
         case escape, ownerPointerCancel, foreignPointerCancel
+    }
+
+    nonisolated private static var hostedInputEnabled: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        let actions = environment["GITHUB_ACTIONS"]
+        let runner = environment["RUNNER_ENVIRONMENT"]
+        let enabled = actions == "true" && runner == "github-hosted"
+        print("row-lift-native-input gate: GITHUB_ACTIONS=\(actions ?? "<unset>"); "
+              + "RUNNER_ENVIRONMENT=\(runner ?? "<unset>"); enabled=\(enabled)")
+        return enabled
     }
 
     @MainActor
