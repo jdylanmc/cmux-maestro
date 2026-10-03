@@ -18,7 +18,7 @@ struct SidebarRowActionGroup {
 }
 
 @MainActor
-final class SidebarRowMenuPresenter: NSObject {
+final class SidebarRowMenuPresenter: NSObject, NSMenuDelegate {
     var groups: [SidebarRowActionGroup] = []
     weak var anchor: NSView?
     var dismissPreview: () -> Void = {}
@@ -28,6 +28,8 @@ final class SidebarRowMenuPresenter: NSObject {
     var liftFocusChanged: (Bool) -> Void = { _ in }
     var liftEligible = false
     private(set) var focusedControls: Set<UUID> = []
+    var currentMenuEvent: () -> NSEvent? = { NSApp.currentEvent }
+    private var menuTracking: (menu: NSMenu, window: NSWindow, startedAt: TimeInterval)?
     var present: (NSMenu, NSPoint, NSView) -> Void = { menu, point, view in
         menu.popUp(positioning: nil, at: point, in: view)
     }
@@ -72,13 +74,37 @@ final class SidebarRowMenuPresenter: NSObject {
     @objc func invoke(_ item: NSMenuItem) {
         guard item.isEnabled, let action = item.representedObject as? SidebarRowAction,
               action.unavailable == nil else { return }
+        recordMenuInput()
         action.perform()
     }
 
     func show(at point: NSPoint? = nil) {
-        guard let anchor, anchor.window != nil, !anchor.visibleRect.isEmpty else { return }
+        guard let anchor, let window = anchor.window, !anchor.visibleRect.isEmpty else { return }
         dismissPreview()
-        present(menu(), point ?? NSPoint(x: anchor.bounds.minX, y: anchor.bounds.maxY), anchor)
+        let menu = menu()
+        let previousTracking = menuTracking
+        menuTracking = (menu, window, ProcessInfo.processInfo.systemUptime)
+        menu.delegate = self
+        defer {
+            if menuTracking?.menu === menu {
+                recordMenuInput()
+                menuTracking = previousTracking
+            }
+            menu.delegate = nil
+        }
+        present(menu, point ?? NSPoint(x: anchor.bounds.minX, y: anchor.bounds.maxY), anchor)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menuTracking?.menu === menu else { return }
+        recordMenuInput()
+    }
+
+    private func recordMenuInput() {
+        guard let tracking = menuTracking, let event = currentMenuEvent(),
+              event.timestamp >= tracking.startedAt else { return }
+        // Menu tracking bypasses local monitors; its final event belongs to this menu's owning window.
+        SidebarRowMenuAnchorView.distributeInput(event, in: tracking.window)
     }
 
     func controlFocusChanged(_ id: UUID, focused: Bool) {
@@ -88,6 +114,7 @@ final class SidebarRowMenuPresenter: NSObject {
     }
 
     func detach() {
+        menuTracking = nil
         anchor = nil
         groups = []
         dismissPreview = {}
@@ -101,8 +128,10 @@ final class SidebarRowMenuPresenter: NSObject {
 }
 
 final class SidebarRowMenuAnchorView: NSView {
+    private static let inputNotification = Notification.Name("com.jdylanmc.CMUXMaestroPreview.sidebarRowInput")
     var presenter: SidebarRowMenuPresenter?
     private var monitor: Any?
+    private weak var lastInput: NSEvent?
     private(set) var keyboardInteraction = false
     private(set) var keyboardFocused = false
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -110,9 +139,13 @@ final class SidebarRowMenuAnchorView: NSView {
         super.viewDidMoveToWindow()
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
         NotificationCenter.default.removeObserver(self)
+        lastInput = nil
         keyboardInteraction = false
         setKeyboardFocused(false)
         guard let window else { return }
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(receiveInput(_:)), name: Self.inputNotification, object: window
+        )
         for name in [NSWindow.didUpdateNotification, NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
             NotificationCenter.default.addObserver(self, selector: #selector(refreshKeyboardFocus), name: name, object: window)
         }
@@ -126,11 +159,31 @@ final class SidebarRowMenuAnchorView: NSView {
     }
 
     func observeInput(_ event: NSEvent) {
-        guard presenter?.liftEligible == true, let window, event.window === window else { return }
-        if event.type == .keyDown {
-            keyboardInteraction = true
-        } else if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
+        guard let window, event.window === window, lastInput !== event else { return }
+        Self.distributeInput(event, in: window)
+    }
+
+    fileprivate static func distributeInput(_ event: NSEvent, in window: NSWindow) {
+        switch event.type {
+        case .keyDown, .keyUp, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+             .leftMouseUp, .rightMouseUp, .otherMouseUp:
+            NotificationCenter.default.post(name: inputNotification, object: window, userInfo: ["event": event])
+        default:
+            break
+        }
+    }
+
+    @objc private func receiveInput(_ notification: Notification) {
+        guard let event = notification.userInfo?["event"] as? NSEvent,
+              let source = notification.object as? NSWindow, source === window else { return }
+        lastInput = event
+        switch event.type {
+        case .keyDown, .keyUp:
+            keyboardInteraction = presenter?.liftEligible == true
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseUp, .rightMouseUp, .otherMouseUp:
             keyboardInteraction = false
+        default:
+            return
         }
         refreshKeyboardFocus()
     }
@@ -178,6 +231,7 @@ final class SidebarRowMenuAnchorView: NSView {
     func detach() {
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
         NotificationCenter.default.removeObserver(self)
+        lastInput = nil
         keyboardInteraction = false
         setKeyboardFocused(false)
         if presenter?.anchor === self { presenter?.detach() }

@@ -45,6 +45,12 @@ Pointer input clears keyboard lift independently of selection; moving between
 icon, title, disclosure and overflow retains one row surface. Hidden rows and
 rows with empty frames or bounds cannot retain keyboard lift, even when AppKit
 reports a nonempty logical visible rectangle.
+Input reaches every attached row in the exact window before a row consumes a
+context click. Pointer invalidation also applies while a row is temporarily
+ineligible. Native menu actions and close/return boundaries sample the app's
+last event within that menu's tracking lifetime; pointer completion clears the
+lift without treating keyboard-only Escape as pointer input. This does not add
+global event monitoring or move the first responder.
 
 `SidebarRowLiftStyleTests` covers the eligibility and hover/focus predicate.
 `SidebarRowLiftTests` adds hosted synthetic native-responder, production-row
