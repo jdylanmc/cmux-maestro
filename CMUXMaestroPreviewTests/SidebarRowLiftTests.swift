@@ -182,7 +182,7 @@ struct SidebarRowLiftTests {
         let root = NSView(frame: window.contentLayoutRect)
         root.clipsToBounds = true
         let frame = NSRect(x: 0, y: 0, width: 200, height: 46)
-        let anchor = SidebarRowMenuAnchorView(frame: frame)
+        let anchor = SidebarRowMenuAnchorView(frame: .zero)
         let presenter = SidebarRowMenuPresenter()
         presenter.anchor = anchor
         anchor.presenter = presenter
@@ -197,6 +197,12 @@ struct SidebarRowLiftTests {
         anchor.observeInput(try keyEvent(foreign))
         #expect(!anchor.keyboardFocused && !anchor.keyboardInteraction)
         anchor.observeInput(try keyEvent(window))
+        try #require(anchor.frame.isEmpty && anchor.bounds.isEmpty)
+        #expect(!anchor.keyboardFocused && anchor.keyboardInteraction && presenter.focusedControls == [control],
+                "An initially empty native row cannot display the retained control's keyboard lift")
+        anchor.frame = frame
+        try #require(anchor.bounds == NSRect(origin: .zero, size: frame.size))
+        anchor.refreshKeyboardFocus()
         try #require(anchor.keyboardFocused)
         anchor.observeInput(try pointerEvent(foreign, point: .zero))
         #expect(anchor.keyboardFocused, "Only this window's pointer changes this row's input modality")
@@ -216,10 +222,15 @@ struct SidebarRowLiftTests {
         anchor.refreshKeyboardFocus()
         try #require(anchor.keyboardFocused)
 
-        anchor.bounds = .zero
+        // Empty bounds were constructed above; test scaling here without a singular transform.
+        let scaledBounds = NSRect(origin: originalBounds.origin,
+                                  size: NSSize(width: originalBounds.width * 2, height: originalBounds.height))
+        anchor.bounds = scaledBounds
+        try #require(anchor.bounds == scaledBounds && anchor.frame == frame)
+        try #require(!anchor.bounds.intersection(anchor.visibleRect).isEmpty)
         anchor.refreshKeyboardFocus()
-        #expect(anchor.bounds.isEmpty && !anchor.keyboardFocused)
-        #expect(presenter.focusedControls == [control])
+        #expect(anchor.keyboardFocused && presenter.focusedControls == [control],
+                "A nondegenerate bounds transform preserves visible control focus without moving the row")
         anchor.bounds = originalBounds
         try #require(anchor.frame == frame)
         anchor.refreshKeyboardFocus()
@@ -238,12 +249,12 @@ struct SidebarRowLiftTests {
         anchor.setFrameOrigin(NSPoint(x: root.bounds.maxX + 1, y: frame.minY))
         try #require(!root.bounds.intersects(root.convert(anchor.bounds, from: anchor)))
         try #require(anchor.bounds == originalBounds && anchor.window === window && anchor.presenter === presenter)
-        try #require(anchor.visibleRect.isEmpty)
+        try #require(anchor.bounds.intersection(anchor.visibleRect).isEmpty)
         print("row-lift115 clipped-row: parent=\(root.bounds), rowInParent=\(root.convert(anchor.bounds, from: anchor)), rowBounds=\(anchor.bounds), visible=\(anchor.visibleRect), clips=\(root.clipsToBounds)")
         anchor.refreshKeyboardFocus()
         #expect(!anchor.keyboardFocused && presenter.focusedControls == [control])
         anchor.frame = frame
-        try #require(!anchor.visibleRect.isEmpty && anchor.bounds == originalBounds)
+        try #require(!anchor.bounds.intersection(anchor.visibleRect).isEmpty && anchor.bounds == originalBounds)
         anchor.refreshKeyboardFocus()
         try #require(anchor.keyboardFocused)
         presenter.liftEligible = false
