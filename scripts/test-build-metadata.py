@@ -617,6 +617,22 @@ class BuildMetadataTests(unittest.TestCase):
         documented = section.split("```sh\n", 1)[1].split("\n```", 1)[0].splitlines()
         self.assertEqual(documented, commands)
 
+    def test_ci_marker_wrapper_rejects_command_skip_and_failure_mutations(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        title = "      - name: Run integrated Swift tests\n"
+        mutations = [
+            ("          ./scripts/test.sh\n", "          ./scripts/build-unsigned.sh\n"),
+            (title, title + "        if: false\n"),
+            (title, title + "        continue-on-error: true\n"),
+            ("          ./scripts/test.sh\n", "          ./scripts/test.sh || true\n"),
+        ]
+        for original, replacement in mutations:
+            with self.subTest(replacement=replacement):
+                self.assertEqual(workflow.count(original), 1)
+                with patch.object(Path, "read_text", return_value=workflow.replace(original, replacement)):
+                    with self.assertRaises(AssertionError):
+                        self.test_ci_preserves_all_fourteen_validation_commands_without_new_conditions()
+
     def test_ci_forwards_only_inherited_hosted_markers_and_preserves_test_exit(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         step = workflow.split("      - name: Run integrated Swift tests\n", 1)[1].split("      - name:", 1)[0]
@@ -635,6 +651,8 @@ class BuildMetadataTests(unittest.TestCase):
             {"RUNNER_ENVIRONMENT": "github-hosted"},
             {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted"},
             {"GITHUB_ACTIONS": "false", "RUNNER_ENVIRONMENT": "self-hosted"},
+            {"GITHUB_ACTIONS": "false", "RUNNER_ENVIRONMENT": "github-hosted"},
+            {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted"},
             {"GITHUB_ACTIONS": "", "RUNNER_ENVIRONMENT": ""},
         ]
         for values in cases:
