@@ -20,6 +20,10 @@ struct CLIIntegrationGuideRenderingTests {
     }
 
     @Test func syntheticStatusesRetainNativeSizeScrollingAndAccessibleActions() async throws {
+        try await withNativeActionDeadline { try await exerciseSyntheticStatuses() }
+    }
+
+    private func exerciseSyntheticStatuses() async throws {
         let cases: [(String, CLIIntegrationGuideReader.Result, String, String)] = [
             ("missing", result(.missing), "Missing", "No guide found at this location."),
             ("unreadable", result(.unreadable(.permissionDenied)), "Unreadable",
@@ -37,15 +41,17 @@ struct CLIIntegrationGuideRenderingTests {
                 await model.recheck()
                 var copies = 0
                 var copySucceeds = false
-                // Enable assistive output in this synthetic host, not in system preferences.
-                let host = NSHostingView(rootView: CLIIntegrationSettingsView(model: model, copyCommand: {
+                let presentation = try GuideCalibrationHost(guide: CLIIntegrationSettingsView(model: model, copyCommand: {
                     copies += 1
                     return copySucceeds
-                }).environment(\.accessibilityEnabled, true))
-                let window = makeWindow(host: host, dark: dark)
-                defer { window.contentView = nil; window.close() }
+                }), dark: dark)
+                let host = presentation.guide.view
+                let window = presentation.window
+                defer { presentation.close() }
                 let prefix = "cli-guide-\(name)-\(dark ? "dark" : "light")"
-                await renderTurn(host, window: window)
+                try await renderTurn(host, window: window)
+                try capture(host, named: prefix)
+                try await waitForPresentedGuide(presentation, status: result, context: prefix)
                 try capture(host, named: prefix)
                 #expect(host.fittingSize == NSSize(width: 600, height: 350))
                 #expect(copies == 0)
@@ -59,7 +65,7 @@ struct CLIIntegrationGuideRenderingTests {
                 #expect(document.bounds.height > scroll.contentView.bounds.height)
                 let before = scroll.contentView.bounds.origin
                 try scrollToBottom(scroll)
-                await renderTurn(host, window: window)
+                try await renderTurn(host, window: window)
                 #expect(scroll.contentView.bounds.origin != before)
                 try capture(host, named: prefix + "-scrolled")
 
@@ -70,13 +76,13 @@ struct CLIIntegrationGuideRenderingTests {
                     #expect(copy.enabled)
                     try assertVisible(copy, in: scroll, window: window)
                     #expect(copy.press())
-                    await renderTurn(host, window: window)
+                    try await renderTurn(host, window: window)
                     #expect(copies == (succeeds ? 2 : 1))
                     let notice = succeeds
                         ? "Copied. Run the command in your terminal when ready."
                         : "Could not copy the command. Select and copy the text above."
                     try scrollToBottom(scroll)
-                    await renderTurn(host, window: window)
+                    try await renderTurn(host, window: window)
                     let feedback = try element("cli-integration-copy-feedback", in: host, window: window)
                     #expect(feedback.text.contains(notice))
                     try assertVisible(feedback, in: scroll, window: window)
@@ -113,7 +119,7 @@ struct CLIIntegrationGuideRenderingTests {
     }
 
     private struct NativeActionDeadlineExceeded: Error, CustomStringConvertible {
-        var description: String { "Native Re-check exceeded 180 seconds after acquiring the AppKit scope" }
+        var description: String { "Native guide case exceeded 180 seconds after acquiring the AppKit scope" }
     }
 
     @Test func noOpRecheckFailsAtDeadlineAndCancelsItsReadStartWait() async throws {
@@ -125,6 +131,7 @@ struct CLIIntegrationGuideRenderingTests {
         button.title = "Re-check"
         button.setAccessibilityIdentifier("cli-integration-recheck")
         button.setAccessibilityElement(true)
+        button.setAccessibilityRole(.button)
         host.addSubview(button)
         host.exposedChildren = [button]
         let window = makeWindow(host: host, dark: false)
@@ -157,13 +164,15 @@ struct CLIIntegrationGuideRenderingTests {
             let reader = ControlledReader(initial: result(.missing))
             let model = CLIIntegrationGuideModel(read: { await reader.read() })
             await model.recheck()
-            let host = NSHostingView(rootView: CLIIntegrationSettingsView(model: model, copyCommand: {
+            let presentation = try GuideCalibrationHost(guide: CLIIntegrationSettingsView(model: model, copyCommand: {
                 Issue.record("Re-check must never invoke Copy")
                 return false
-            }).environment(\.accessibilityEnabled, true))
-            let window = makeWindow(host: host, dark: dark)
-            defer { window.contentView = nil; window.close() }
-            await renderTurn(host, window: window)
+            }), dark: dark)
+            let host = presentation.guide.view
+            let window = presentation.window
+            defer { presentation.close() }
+            try await waitForPresentedGuide(presentation, status: result(.missing),
+                                            context: "recheck-\(dark ? "dark" : "light")")
             try assertStatus(result(.missing), title: "Missing", detail: "No guide found at this location.",
                              host: host, window: window)
             let outcomes: [(CLIIntegrationGuideReader.Result, String, String, String)] = [
@@ -181,7 +190,7 @@ struct CLIIntegrationGuideRenderingTests {
                     try #require(button.press())
                     try await reader.waitUntilReading()
                     #expect(await reader.calls == index + 2)
-                    await renderTurn(host, window: window)
+                    try await renderTurn(host, window: window)
                     let checking = try element("cli-integration-checking", in: host, window: window)
                     #expect(checking.text.contains("Checking guide content..."))
                     #expect(try !element("cli-integration-recheck", in: host, window: window).enabled)
@@ -202,7 +211,7 @@ struct CLIIntegrationGuideRenderingTests {
                     await reader.complete(next)
                     for await _ in completed { break }
                     try Task.checkCancellation()
-                    await renderTurn(host, window: window)
+                    try await renderTurn(host, window: window)
                     #expect(try element("cli-integration-recheck", in: host, window: window).enabled)
                     try assertStatus(next, title: title, detail: detail, host: host, window: window)
                     try capture(host, named: prefix + "-completed")
@@ -277,13 +286,210 @@ struct CLIIntegrationGuideRenderingTests {
         return window
     }
 
-    private func renderTurn(_ host: NSView, window: NSWindow) async {
-        // Commit pending SwiftUI work on the host run loop, without a delay or condition-polling loop.
-        await withCheckedContinuation { continuation in
-            RunLoop.main.perform { continuation.resume() }
+    private func renderTurn(_ host: NSView, window: NSWindow) async throws {
+        try Task.checkCancellation()
+        // AsyncStream releases a cancelled waiter even if the scheduled run-loop turn has not run.
+        let (turns, continuation) = AsyncStream<Void>.makeStream()
+        defer { continuation.finish() }
+        RunLoop.main.perform {
+            continuation.yield()
+            continuation.finish()
         }
+        for await _ in turns { break }
+        try Task.checkCancellation()
         host.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
+        try Task.checkCancellation()
+    }
+
+    /// Two independently queried SwiftUI subjects share one public, CI-only presentation context.
+    @MainActor
+    private final class GuideCalibrationHost {
+        let guide: CalibrationHostingController
+        let minimal: CalibrationHostingController
+        let container: NSViewController
+        let window: NSWindow
+        let minimalPressCount: () -> Int
+        private let originalActivationPolicy: NSApplication.ActivationPolicy
+        private let wasActive: Bool
+
+        init<Content: View>(guide rootView: Content, dark: Bool) throws {
+            #if CMUX_VALIDATION
+            let validationBuild = true
+            #else
+            let validationBuild = false
+            #endif
+            let environment = ProcessInfo.processInfo.environment
+            try #require(validationBuild
+                         && Bundle.main.bundleIdentifier == "com.jdylanmc.CMUXMaestroPreview.Validation.Tests"
+                         && environment["GITHUB_ACTIONS"] == "true"
+                         && environment["RUNNER_ENVIRONMENT"] == "github-hosted",
+                         "Presented guide calibration requires the isolated GitHub-hosted validation app")
+            let app = NSApplication.shared
+            try #require(app.isRunning, "Calibration requires the validation app's running public lifecycle")
+            originalActivationPolicy = app.activationPolicy()
+            wasActive = app.isActive
+            guide = CalibrationHostingController(rootView: rootView.environment(\.accessibilityEnabled, true))
+            var presses = 0
+            minimalPressCount = { presses }
+            minimal = CalibrationHostingController(rootView:
+                Button("Synthetic host calibration action") { presses += 1 }
+                    .accessibilityIdentifier("guide-calibration-minimal-action")
+                    .frame(width: 600, height: 64)
+                    .environment(\.accessibilityEnabled, true))
+            container = NSViewController()
+            container.view = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 414))
+            for (controller, frame) in [
+                (guide, NSRect(x: 0, y: 0, width: 600, height: 350)),
+                (minimal, NSRect(x: 0, y: 350, width: 600, height: 64))
+            ] {
+                container.addChild(controller)
+                controller.view.frame = frame
+                container.view.addSubview(controller.view)
+            }
+            window = NSWindow(contentRect: container.view.frame, styleMask: [.titled, .closable],
+                              backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.title = "Synthetic CLI guide host calibration"
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            window.contentViewController = container
+            window.center()
+            print("Guide calibration before presentation: \(observation)")
+            let activated = app.setActivationPolicy(.regular)
+            if !activated { close() }
+            try #require(activated, "Could not apply the validation app's public activation policy")
+            window.makeKeyAndOrderFront(nil)
+            app.activate()
+        }
+
+        var isPresented: Bool {
+            NSApplication.shared.isRunning && NSApplication.shared.isActive
+                && window.isVisible && window.isKeyWindow && window.occlusionState.contains(.visible)
+                && window.contentViewController === container && window.contentView === container.view
+                && guide.parent === container && minimal.parent === container
+                && guide.view.window === window && minimal.view.window === window
+                && guide.appeared && minimal.appeared
+        }
+
+        var observation: String {
+            let app = NSApplication.shared
+            return "bundle=\(Bundle.main.bundleIdentifier ?? "-") appRunning=\(app.isRunning) "
+                + "active=\(app.isActive) hidden=\(app.isHidden) policy=\(app.activationPolicy().rawValue) "
+                + "window=\(ObjectIdentifier(window)) number=\(window.windowNumber) visible=\(window.isVisible) "
+                + "key=\(window.isKeyWindow) main=\(window.isMainWindow) occlusion=\(window.occlusionState.rawValue) "
+                + "screen=\(String(describing: window.screen?.frame)) content=\(ObjectIdentifier(container.view)) "
+                + "contentControllerExact=\(window.contentViewController === container) "
+                + "contentViewExact=\(window.contentView === container.view) "
+                + "guide={\(guide.observation)} minimal={\(minimal.observation)} "
+                + "parentsExact=\(guide.parent === container && minimal.parent === container) "
+                + "windowsExact=\(guide.view.window === window && minimal.view.window === window)"
+        }
+
+        func close() {
+            window.orderOut(nil)
+            window.contentViewController = nil
+            window.contentView = nil
+            window.close()
+            guide.removeFromParent()
+            minimal.removeFromParent()
+            let app = NSApplication.shared
+            if !wasActive { app.deactivate() }
+            #expect(app.setActivationPolicy(originalActivationPolicy))
+            #expect(!window.isVisible)
+        }
+    }
+
+    @MainActor
+    private final class CalibrationHostingController: NSHostingController<AnyView> {
+        private(set) var appeared = false
+        private let subjectType: String
+
+        init<Content: View>(rootView: Content) {
+            subjectType = String(reflecting: Content.self)
+            super.init(rootView: AnyView(rootView))
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { nil }
+
+        override func viewDidAppear() {
+            super.viewDidAppear()
+            appeared = true
+            print("Guide calibration viewDidAppear: \(observation)")
+        }
+
+        override func viewDidDisappear() {
+            super.viewDidDisappear()
+            appeared = false
+            print("Guide calibration viewDidDisappear: \(observation)")
+        }
+
+        var observation: String {
+            "subject=\(subjectType) controller=\(ObjectIdentifier(self)) root=\(ObjectIdentifier(view)) "
+                + "appeared=\(appeared) frame=\(view.frame) hidden=\(view.isHiddenOrHasHiddenAncestor)"
+        }
+    }
+
+    private func waitForPresentedGuide(
+        _ presentation: GuideCalibrationHost, status: CLIIntegrationGuideReader.Result, context: String
+    ) async throws {
+        let requiredIDs: [String]
+        switch status {
+        case .checked:
+            requiredIDs = CLIIntegrationGuideReader.relativePaths.map { "cli-integration-status-" + $0 }
+        case .referenceUnavailable:
+            requiredIDs = ["cli-integration-reference-error"]
+        }
+        var minimalNodes: [NativeElement] = []
+        var guideNodes: [NativeElement] = []
+        var minimalPassed = false
+        var guideReady = false
+        var previousObservation = ""
+        defer {
+            print("Guide calibration \(context): minimalActionPassed=\(minimalPassed) guideReady=\(guideReady)")
+            print("Guide calibration final host: \(presentation.observation)")
+            print("Minimal exposed root AX:\n\(diagnostic(minimalNodes))")
+            print("Guide exposed root AX:\n\(diagnostic(guideNodes))")
+            if !minimalPassed || !guideReady {
+                logAXBoundary([NativeElement(object: presentation.minimal.view)] + minimalNodes)
+                logAXBoundary([NativeElement(object: presentation.guide.view)] + guideNodes)
+            }
+        }
+        // No step timeout: presentation, both subjects and all scenarios/actions share the
+        // enclosing case's 180-second deadline and cooperative cancellation.
+        while true {
+            try await renderTurn(presentation.container.view, window: presentation.window)
+            minimalNodes = accessibilityNodes(from: presentation.minimal.view)
+            guideNodes = accessibilityNodes(from: presentation.guide.view)
+            try Task.checkCancellation()
+            let minimalActions = minimalNodes.filter { $0.identifier == "guide-calibration-minimal-action" }
+            let rechecks = guideNodes.filter { $0.identifier == "cli-integration-recheck" }
+            let presented = presentation.isPresented
+            guideReady = presented && rechecks.count == 1
+                && isReadyButton(rechecks[0], in: presentation.guide.view, window: presentation.window)
+                && requiredIDs.allSatisfy { id in guideNodes.filter { $0.identifier == id }.count == 1 }
+            if !minimalPassed, presented, minimalActions.count == 1,
+               isReadyButton(minimalActions[0], in: presentation.minimal.view, window: presentation.window) {
+                try #require(minimalActions[0].press())
+                try #require(presentation.minimalPressCount() == 1)
+                minimalPassed = true
+            }
+            let observation = "presented=\(presented) minimalActionPassed=\(minimalPassed) guideReady=\(guideReady)"
+            if observation != previousObservation {
+                print("Guide calibration \(context): \(observation)")
+                previousObservation = observation
+            }
+            try Task.checkCancellation()
+            if minimalPassed && guideReady { return }
+        }
+    }
+
+    private func isReadyButton(_ node: NativeElement, in host: NSView, window: NSWindow) -> Bool {
+        guard node.role == NSAccessibility.Role.button.rawValue, node.enabled,
+              let frame = node.frame, frame.width > 0, frame.height > 0 else { return false }
+        let viewport = window.convertToScreen(host.convert(host.bounds, to: nil))
+        let intersection = viewport.intersection(frame)
+        return intersection.width > 0 && intersection.height > 0
     }
 
     private func capture(_ host: NSView, named name: String) throws {
@@ -381,7 +587,11 @@ struct CLIIntegrationGuideRenderingTests {
     }
 
     private func diagnostic(_ nodes: [NativeElement]) -> String {
-        nodes.map { "\(type(of: $0.object)): \($0.identifier ?? "-") \($0.text.prefix(256))" }
+        nodes.map {
+            "\(type(of: $0.object)) \(ObjectIdentifier($0.object)): \($0.identifier ?? "-") "
+                + "role=\($0.role ?? "-") enabled=\($0.enabled) frame=\(String(describing: $0.frame)) "
+                + "\($0.text.prefix(256))"
+        }
             .joined(separator: "\n")
     }
 
@@ -480,6 +690,7 @@ struct CLIIntegrationGuideRenderingTests {
             button.setAccessibilityIdentifier("guide-oracle-action")
             button.setAccessibilityLabel("Synthetic action")
             button.setAccessibilityElement(true)
+            button.setAccessibilityRole(.button)
             host.addSubview(button)
             return button
         }

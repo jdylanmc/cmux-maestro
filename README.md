@@ -263,6 +263,17 @@ The isolated non-GUI reader/model checks can run with
 `./scripts/test-copilot-setup.sh --guide-only`; the normal setup and hosted test
 suites retain their full coverage.
 
+The guide rendering/action tests require the isolated GitHub-hosted validation
+app. Their public AppKit presentation calibrates an ordinary SwiftUI button and
+the unchanged guide in separate hosting controllers in the same synthetic window.
+Exact exposed-root readiness and actions share one 180-second budget per active
+test case, not per control or appearance. A passing minimal control with a failing
+guide narrows investigation to composition; both failing leaves the host/query
+boundary unresolved, not a proven production defect. A changed host passing does
+not identify which presentation operation caused it. Native
+acceptance still requires the actual hosted results. For local compilation
+without opening windows, use `./scripts/test-copilot-setup.sh --compile-only`.
+
 On the next explicit **Enable Copilot Integration**, setup removes only its old
 `Copilot/plugin/skills/maestro/SKILL.md` copy, if present, using owner-checked,
 non-symlink traversal. It preserves other skills and files, including lifecycle,
