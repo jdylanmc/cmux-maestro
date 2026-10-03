@@ -62,11 +62,16 @@ Pointer input clears keyboard lift independently of selection; moving between
 icon, title, disclosure and overflow retains one row surface.
 
 `SidebarRowLiftStyleTests` covers the eligibility and hover/focus predicate.
+`SidebarRowLiftTests` adds hosted synthetic native-responder, production-row
+eligibility, appearance, geometry, passive-state and metadata-copy scenarios.
+Its offscreen window overrides only reported key state; its static captures
+drive the production row callbacks, not the operating system's pointer route.
 Native interaction, appearance and geometry require the hosted integrated
-suite and candidate-specific `sidebar-layout-offscreen` artifacts. An unsigned
-build or a frozen browser reference is not native visual acceptance. The
-authoring environment prohibits local GUI execution; no local GUI RED/GREEN
-or installed-sidebar acceptance is implied.
+suite and candidate-specific `sidebar-layout-offscreen` artifacts. Real pointer
+delivery, visible keyboard outlines and dynamic transition timing remain
+separate acceptance evidence. An unsigned build or a frozen browser reference
+is not native visual acceptance. The authoring environment prohibits local GUI
+execution; no local GUI RED/GREEN or installed-sidebar acceptance is implied.
 
 ### Setup fixture readiness
 
