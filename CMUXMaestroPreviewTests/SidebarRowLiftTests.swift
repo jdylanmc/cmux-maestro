@@ -527,6 +527,107 @@ struct SidebarRowLiftTests {
         #expect(!window.isVisible && !foreign.isVisible)
     }
 
+    #if CMUX_VALIDATION
+    // Diagnostic regression: a RED order-independence assertion is evidence, not accepted behavior.
+    @Test func mountedTitleMeasurementOrderDoesNotChangeDisplayedPixels() async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.setRetention(.never)
+        let data = Fixture()
+        let model = await makeModel(data)
+        defer { model.setVisible(false) }
+        for density in SidebarDensity.allCases {
+            preferences.setDensity(density)
+            let mounted = mount(model, preferences, width: 240, appearance: .dark, now: data.now)
+            defer { unmount(mounted) }
+            let label = "Focus Copilot session \(data.multiSessionA.uuidString.prefix(8).lowercased())"
+            await sidebarEventually {
+                mounted.host.layoutSubtreeIfNeeded()
+                return model.copilot.tree.sessions.count == data.observations.count
+                    && titles(mounted.host).contains { $0.accessibilityLabel() == label }
+            }
+            let title = try #require(titles(mounted.host).first { $0.accessibilityLabel() == label })
+            let anchors = descendants(mounted.host).compactMap { $0 as? SidebarRowMenuAnchorView }
+            let anchor = try owner(of: title, in: anchors)
+            try #require(anchor.presenter?.liftEligible == true)
+            let session = try #require(model.copilot.tree.sessions.first { $0.id == data.multiSessionA })
+            try #require(session.state == .blocked && SidebarPresentation.sessionState(session).tone == .red)
+            let expectedWidth: CGFloat = density == .comfortable ? 133 : 140
+            try #require(title.bounds.width == expectedWidth, "Use the observed production geometry, not an inferred substitute")
+            let hierarchy = model.hierarchy
+            let tree = model.copilot.tree
+            let managed = model.orchestration.snapshot
+            let layout = preferences.layout
+            let responder = mounted.window.firstResponder
+            let titleID = ObjectIdentifier(title)
+            let hostingID = ObjectIdentifier(title.hosting)
+            let geometry = [title.frame, title.bounds, title.hosting.frame, title.hosting.bounds,
+                            mounted.host.convert(title.bounds, from: title), title.convertToBacking(title.bounds),
+                            title.hosting.convertToBacking(title.hosting.bounds)]
+            let finite: [CGFloat] = density == .comfortable ? [133.7, 133.2] : [140]
+            let orderA: [CGFloat] = [0, .infinity] + finite
+            let orderB: [CGFloat] = finite + [0, .infinity]
+            var captures: [NSBitmapImageRep] = []
+            var observations: [SidebarTitleNativeButton.MeasurementObservation] = []
+            var observedCount = 0
+            var inCapture = false
+            var captureAssignments = 0
+            try #require(title.measurementObserver == nil)
+            title.measurementObserver = { observation in
+                observedCount += 1
+                if observations.count < 128 { observations.append(observation) }
+                if inCapture && observation.event == .rootAssigned { captureAssignments += 1 }
+            }
+            defer { title.measurementObserver = nil }
+            for (index, order) in [orderA, orderA, orderB, orderB, orderA].enumerated() {
+                observations.removeAll(keepingCapacity: true)
+                observedCount = 0
+                captureAssignments = 0
+                for width in order { _ = title.measure(width: width) }
+                title.recordMeasurement(.snapshot)
+                let endpoint = try #require(observations.last)
+                inCapture = true
+                let image = try capture(title)
+                inCapture = false
+                title.recordMeasurement(.snapshot)
+                captures.append(image)
+                try save(image, name: "proposal-order-\(density.rawValue)-\(index)")
+                print("row-lift115 proposal-order density=\(density.rawValue) step=\(index) title=\(titleID) hosting=\(hostingID) observed=\(observedCount) retained=\(observations.count) captureAssignments=\(captureAssignments)")
+                for (sequence, observation) in observations.enumerated() {
+                    print("row-lift115 proposal-order step=\(index) seq=\(sequence) event=\(observation.event.rawValue) proposed=\(String(describing: observation.proposedWidth)) installed=\(String(describing: observation.installedRootWidth)) known=\(observation.hasInstalledRoot) fit=\(String(describing: observation.fittingSize))")
+                }
+                try #require(observedCount == observations.count, "Diagnostic trace overflow; result is inconclusive")
+                try #require(captureAssignments == 0, "Capture changed the intervention; result is inconclusive")
+                try #require(endpoint.hasInstalledRoot && endpoint.event == .snapshot)
+                let expectedEndpoint = index == 2 || index == 3 ? nil : finite.last
+                try #require(endpoint.installedRootWidth == expectedEndpoint)
+                try #require(observations.filter { $0.event == .rootAssigned }.count == order.count,
+                             "Only the explicit proposal sequence may assign the measured root")
+                try #require(titles(mounted.host).first { $0.accessibilityLabel() == label } === title)
+                try #require(ObjectIdentifier(title.hosting) == hostingID)
+                try #require([title.frame, title.bounds, title.hosting.frame, title.hosting.bounds,
+                              mounted.host.convert(title.bounds, from: title), title.convertToBacking(title.bounds),
+                              title.hosting.convertToBacking(title.hosting.bounds)] == geometry)
+                try #require(model.hierarchy == hierarchy && model.copilot.tree == tree)
+                try #require(model.orchestration.snapshot == managed && preferences.layout == layout)
+                try #require(mounted.window.firstResponder === responder && !mounted.window.isVisible)
+                try #require(!anchor.keyboardInteraction && !anchor.keyboardFocused)
+                try #require(anchor.presenter?.focusedControls.isEmpty == true && model.navigation.status == .idle)
+            }
+            let aa = differences(captures[0], captures[1])
+            let ab = differences(captures[1], captures[2])
+            let bb = differences(captures[2], captures[3])
+            let ba = differences(captures[3], captures[4])
+            let restored = differences(captures[0], captures[4])
+            print("row-lift115 proposal-order density=\(density.rawValue) AA=\(aa) AB=\(ab) BB=\(bb) BA=\(ba) restoredA=\(restored)")
+            #expect(aa == 0 && bb == 0 && restored == 0, "Repeated orders must be stable and reversible")
+            #expect(ab == 0 && ba == 0,
+                    "Measurement proposal order alone must not move displayed title pixels; RED establishes a sizing defect only when isolation guards pass")
+        }
+    }
+    #endif
+
     @Test(arguments: Appearance.allCases, [240, 350])
     func productionRowsPreserveGeometryAndPassiveStateAcrossNativeAppearances(
         appearance: Appearance, width: Int

@@ -81,6 +81,18 @@ events inside the original captures. Recording changes execution timing, so
 correlation or a passing instrumented capture alone cannot establish the cause.
 Normal builds contain neither this observer nor its bookkeeping.
 
+`mountedTitleMeasurementOrderDoesNotChangeDisplayedPixels` is a separate
+controlled diagnostic, not a sizing repair. On the same mounted blocked-session
+title at dark/240, it applies two equal-multiset proposal orders in A,A,B,B,A
+sequence for compact and comfortable density. It saves each full-title capture
+without masks or tolerances and checks repeat stability, reversibility and
+order independence. Exact identities, native/backing geometry, model state,
+focus and inactive keyboard lift must remain unchanged. A bounded per-step
+trace must retain every event; extra root assignments during capture invalidate
+the isolation. A red order-independence assertion is causal evidence only if
+those controls pass. The original six-phase acceptance captures and their
+diagnostic coverage/overflow assertions remain unchanged.
+
 ### Setup fixture readiness
 
 Process-cleanup tests wait for the injected clock's first post-`posix_spawn`
