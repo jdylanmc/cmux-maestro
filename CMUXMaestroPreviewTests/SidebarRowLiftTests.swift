@@ -569,40 +569,31 @@ struct SidebarRowLiftTests {
             let orderA: [CGFloat] = [0, .infinity] + finite
             let orderB: [CGFloat] = finite + [0, .infinity]
             var captures: [NSBitmapImageRep] = []
-            var observations: [SidebarTitleNativeButton.MeasurementObservation] = []
-            var observedCount = 0
-            var inCapture = false
-            var captureAssignments = 0
+            let trace = ProposalOrderTrace()
             try #require(title.measurementObserver == nil)
-            title.measurementObserver = { observation in
-                observedCount += 1
-                if observations.count < 128 { observations.append(observation) }
-                if inCapture && observation.event == .rootAssigned { captureAssignments += 1 }
-            }
+            title.measurementObserver = { trace.append($0) }
             defer { title.measurementObserver = nil }
             for (index, order) in [orderA, orderA, orderB, orderB, orderA].enumerated() {
-                observations.removeAll(keepingCapacity: true)
-                observedCount = 0
-                captureAssignments = 0
+                trace.reset()
                 for width in order { _ = title.measure(width: width) }
                 title.recordMeasurement(.snapshot)
-                let endpoint = try #require(observations.last)
-                inCapture = true
+                let endpoint = try #require(trace.observations.last)
+                trace.inCapture = true
                 let image = try capture(title)
-                inCapture = false
+                trace.inCapture = false
                 title.recordMeasurement(.snapshot)
                 captures.append(image)
                 try save(image, name: "proposal-order-\(density.rawValue)-\(index)")
-                print("row-lift115 proposal-order density=\(density.rawValue) step=\(index) title=\(titleID) hosting=\(hostingID) observed=\(observedCount) retained=\(observations.count) captureAssignments=\(captureAssignments)")
-                for (sequence, observation) in observations.enumerated() {
+                print("row-lift115 proposal-order density=\(density.rawValue) step=\(index) title=\(titleID) hosting=\(hostingID) observed=\(trace.observedCount) retained=\(trace.observations.count) captureAssignments=\(trace.captureAssignments)")
+                for (sequence, observation) in trace.observations.enumerated() {
                     print("row-lift115 proposal-order step=\(index) seq=\(sequence) event=\(observation.event.rawValue) proposed=\(String(describing: observation.proposedWidth)) installed=\(String(describing: observation.installedRootWidth)) known=\(observation.hasInstalledRoot) fit=\(String(describing: observation.fittingSize))")
                 }
-                try #require(observedCount == observations.count, "Diagnostic trace overflow; result is inconclusive")
-                try #require(captureAssignments == 0, "Capture changed the intervention; result is inconclusive")
+                try #require(trace.observedCount == trace.observations.count, "Diagnostic trace overflow; result is inconclusive")
+                try #require(trace.captureAssignments == 0, "Capture changed the intervention; result is inconclusive")
                 try #require(endpoint.hasInstalledRoot && endpoint.event == .snapshot)
                 let expectedEndpoint = index == 2 || index == 3 ? nil : finite.last
                 try #require(endpoint.installedRootWidth == expectedEndpoint)
-                try #require(observations.filter { $0.event == .rootAssigned }.count == order.count,
+                try #require(trace.observations.filter { $0.event == .rootAssigned }.count == order.count,
                              "Only the explicit proposal sequence may assign the measured root")
                 try #require(titles(mounted.host).first { $0.accessibilityLabel() == label } === title)
                 try #require(ObjectIdentifier(title.hosting) == hostingID)
@@ -1485,6 +1476,26 @@ struct SidebarRowLiftTests {
         return changed
     }
     #if CMUX_VALIDATION
+    @MainActor
+    private final class ProposalOrderTrace {
+        var observations: [SidebarTitleNativeButton.MeasurementObservation] = []
+        var observedCount = 0
+        var inCapture = false
+        var captureAssignments = 0
+
+        func append(_ observation: SidebarTitleNativeButton.MeasurementObservation) {
+            observedCount += 1
+            if observations.count < 128 { observations.append(observation) }
+            if inCapture && observation.event == .rootAssigned { captureAssignments += 1 }
+        }
+
+        func reset() {
+            observations.removeAll(keepingCapacity: true)
+            observedCount = 0
+            captureAssignments = 0
+        }
+    }
+
     @MainActor
     private final class TitleMeasurementBuffer {
         enum Phase: String, CaseIterable {

@@ -93,6 +93,16 @@ the isolation. A red order-independence assertion is causal evidence only if
 those controls pass. The original six-phase acceptance captures and their
 diagnostic coverage/overflow assertions remain unchanged.
 
+`SidebarRowLiftNativeInputTests` adds hosted-only native menu-cancellation
+diagnostics through the real Shift-F10/popup path and app-posted input. It
+distinguishes Escape, owner-window pointer cancellation and foreign-window
+pointer cancellation. A two-second rescue fails and cancels the exact menu;
+a synchronized ten-second watchdog fails the hosted test process if the
+native call cannot return. These are diagnostic containment limits, not
+accepted production behavior. All three cases must actually execute on the
+hosted runner; skips are not proof. Pointer item selection, OS-generated
+menu-window events, visible outlines and physical input remain unverified.
+
 ### Setup fixture readiness
 
 Process-cleanup tests wait for the injected clock's first post-`posix_spawn`
