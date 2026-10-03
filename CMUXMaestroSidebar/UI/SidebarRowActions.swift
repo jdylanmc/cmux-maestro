@@ -191,7 +191,7 @@ final class SidebarRowMenuAnchorView: NSView {
     @objc func refreshKeyboardFocus() {
         guard presenter?.liftEligible == true, keyboardInteraction,
               let window, window.isKeyWindow, !isHiddenOrHasHiddenAncestor,
-              !frame.isEmpty, !bounds.isEmpty, !visibleRect.isEmpty else {
+              !frame.isEmpty, !bounds.intersection(visibleRect).isEmpty else {
             setKeyboardFocused(false)
             return
         }
