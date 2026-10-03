@@ -569,15 +569,23 @@ struct SidebarRowLiftTests {
                     "A full actionable legacy worker row is eligible independently of execution mode")
             let legacyNode = try #require(model.orchestration.snapshot.nodes.first { $0.id == data.legacyNode })
             #expect(legacyNode.role == "worker" && legacyNode.executionMode == nil)
+            var phaseControls: [SidebarTitleNativeButton] = []
             for session in [data.multiSessionA, data.multiSessionB] {
                 let label = "Focus Copilot session \(session.uuidString.prefix(8).lowercased())"
                 let title = try #require(controls.first { $0.accessibilityLabel() == label })
                 #expect(try owner(of: title, in: anchors).presenter?.liftEligible == true)
+                phaseControls.append(title)
             }
             let retained = try #require(controls.first {
                 $0.accessibilityLabel() == "Inspect context session \(data.retainedSession.uuidString.prefix(8).lowercased())"
             })
             #expect(try owner(of: retained, in: anchors).presenter?.liftEligible == false)
+            phaseControls.append(retained)
+            for name in ["Legacy skill", "Legacy unknown"] {
+                phaseControls.append(try #require(controls.first {
+                    $0.accessibilityLabel()?.hasPrefix("Open parent chat for \(name), Copilot ") == true
+                }))
+            }
             for title in controls where title.accessibilityLabel()?.hasPrefix("Focus workspace") == true
                 || title.accessibilityLabel()?.hasPrefix("Open parent chat") == true {
                 #expect(try owner(of: title, in: anchors).presenter?.liftEligible == false)
@@ -639,6 +647,9 @@ struct SidebarRowLiftTests {
             let menuBefore = anchors.map { $0.presenter?.menu().items.map(\.title) }
             let rest = try capture(mounted.host)
             let captureName = "\(appearance.rawValue)-\(width)-\(density.rawValue)"
+            var phaseGeometry = titleGeometryDiagnostics(
+                phaseControls, host: mounted.host, phase: "\(captureName)-rest"
+            )
             try save(rest, name: "\(captureName)-rest")
             let lanePoints = anchors.map { anchor in
                 let rect = mounted.host.convert(anchor.bounds, from: anchor)
@@ -651,6 +662,9 @@ struct SidebarRowLiftTests {
             await Task.yield()
             mounted.host.layoutSubtreeIfNeeded()
             let lifted = try capture(mounted.host)
+            phaseGeometry += titleGeometryDiagnostics(
+                phaseControls, host: mounted.host, phase: "\(captureName)-lift"
+            )
             try save(lifted, name: "\(captureName)-lift")
             #expect(differences(rest, lifted) > 0, "The production callback must change the rendered surface")
             #expect(titles(mounted.host).map(ObjectIdentifier.init) == controls.map(ObjectIdentifier.init))
@@ -679,6 +693,9 @@ struct SidebarRowLiftTests {
             for anchor in eligible { anchor.presenter?.hoverChanged(true) }
             await Task.yield()
             let repeated = try capture(mounted.host)
+            phaseGeometry += titleGeometryDiagnostics(
+                phaseControls, host: mounted.host, phase: "\(captureName)-repeated"
+            )
             try save(repeated, name: "\(captureName)-repeated")
             diagnoseDifference(lifted, repeated, phase: "\(captureName)-repeated", host: mounted.host, anchors: anchors)
             #expect(differences(lifted, repeated) == 0,
@@ -689,6 +706,9 @@ struct SidebarRowLiftTests {
             }
             await Task.yield()
             let keyboardOnly = try capture(mounted.host)
+            phaseGeometry += titleGeometryDiagnostics(
+                phaseControls, host: mounted.host, phase: "\(captureName)-keyboard"
+            )
             try save(keyboardOnly, name: "\(captureName)-keyboard")
             diagnoseDifference(lifted, keyboardOnly, phase: "\(captureName)-keyboard", host: mounted.host, anchors: anchors)
             #expect(differences(lifted, keyboardOnly) == 0,
@@ -699,6 +719,9 @@ struct SidebarRowLiftTests {
             }
             await Task.yield()
             let hoverOnly = try capture(mounted.host)
+            phaseGeometry += titleGeometryDiagnostics(
+                phaseControls, host: mounted.host, phase: "\(captureName)-hover-return"
+            )
             try save(hoverOnly, name: "\(captureName)-hover-return")
             diagnoseDifference(lifted, hoverOnly, phase: "\(captureName)-hover-return", host: mounted.host, anchors: anchors)
             #expect(differences(lifted, hoverOnly) == 0,
@@ -707,6 +730,9 @@ struct SidebarRowLiftTests {
             await Task.yield()
             mounted.host.layoutSubtreeIfNeeded()
             let restored = try capture(mounted.host)
+            phaseGeometry += titleGeometryDiagnostics(
+                phaseControls, host: mounted.host, phase: "\(captureName)-restored"
+            )
             try save(restored, name: "\(captureName)-restored")
             diagnoseDifference(rest, restored, phase: "\(captureName)-restored", host: mounted.host, anchors: anchors)
             #expect(differences(rest, restored) == 0, "Leaving restores selected and resting appearance exactly")
@@ -716,6 +742,7 @@ struct SidebarRowLiftTests {
             #expect(preferences.attention == beforeAttention && preferences.icons == beforeIcons)
             #expect(pinned(model, now: data.now) == beforePinned && model.navigation.status == .idle)
             #expect(!mounted.window.isVisible)
+            for line in phaseGeometry { print(line) }
             try assertNativeBackingRecipes(
                 backingRows, rest: rest, lifted: lifted, bounds: mounted.host.bounds,
                 appearance: appearance, name: captureName
@@ -1287,6 +1314,24 @@ struct SidebarRowLiftTests {
         }
         return changed
     }
+    private func titleGeometryDiagnostics(
+        _ controls: [SidebarTitleNativeButton], host: NSView, phase: String
+    ) -> [String] {
+        // Read existing geometry only; fittingSize, layout, layer creation and transaction flushing would perturb it.
+        var lines = ["row-lift115 geometry \(phase): host=\(ObjectIdentifier(host)), bounds=\(host.bounds), backing=\(host.convertToBacking(host.bounds)), flipped=\(host.isFlipped), windowScale=\(String(describing: host.window?.backingScaleFactor))"]
+        for control in controls {
+            let views: [(String, NSView)] = [("button", control), ("hosting", control.hosting)]
+            for (role, view) in views {
+                let hostRect = host.convert(view.bounds, from: view)
+                let layer = view.layer.map {
+                    "id=\(ObjectIdentifier($0)), position=\($0.position), bounds=\($0.bounds), anchorPoint=\($0.anchorPoint), contentsScale=\($0.contentsScale), flipped=\($0.isGeometryFlipped)"
+                } ?? "nil"
+                lines.append("row-lift115 geometry \(phase) \(control.accessibilityLabel() ?? "<missing label>") \(role): id=\(ObjectIdentifier(view)), frame=\(view.frame), bounds=\(view.bounds), hostRect=\(hostRect), localBacking=\(view.convertToBacking(view.bounds)), hostBacking=\(host.convertToBacking(hostRect)), windowRect=\(view.convert(view.bounds, to: nil)), flipped=\(view.isFlipped), needsLayout=\(view.needsLayout), wantsLayer=\(view.wantsLayer), layer={\(layer)}")
+            }
+        }
+        return lines
+    }
+
     private func diagnoseDifference(
         _ lhs: NSBitmapImageRep, _ rhs: NSBitmapImageRep, phase: String,
         host: NSView, anchors: [SidebarRowMenuAnchorView]
