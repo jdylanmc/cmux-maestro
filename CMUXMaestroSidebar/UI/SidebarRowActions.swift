@@ -102,8 +102,8 @@ final class SidebarRowMenuPresenter: NSObject, NSMenuDelegate {
 
     private func recordMenuInput() {
         guard let tracking = menuTracking, let event = currentMenuEvent(),
-              event.timestamp >= tracking.startedAt else { return }
-        // Menu tracking bypasses local monitors; its final event belongs to this menu's owning window.
+              event.timestamp >= tracking.startedAt, event.window === tracking.window else { return }
+        // The app's last event is not necessarily from this menu; never remap another window's input.
         SidebarRowMenuAnchorView.distributeInput(event, in: tracking.window)
     }
 
