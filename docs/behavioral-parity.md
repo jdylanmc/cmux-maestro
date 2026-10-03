@@ -31,8 +31,9 @@ text/disclosure and metadata/copy controls stay outside that opt-in.
 
 The shared native treatment uses a 4% semantic highlight and two softened
 semantic shadows (2.5/5-point radii, 1/4-point vertical offsets, 10%/6% opacity).
-Its transparent interior preserves the existing selected and activity
-backgrounds. Only the decoration fades, with 160ms ease-out; Reduce Motion
+An even-odd exterior clip removes the shadow source from the row interior
+without erasing the existing selected and activity backgrounds. Only the
+decoration fades, with 160ms ease-out; Reduce Motion
 applies the same surface immediately. Row geometry, hit testing, per-control
 focus rings, navigation, menus and ownership do not change.
 
@@ -41,7 +42,9 @@ responders inside the row, and explicit SwiftUI `FocusState` from the row's
 disclosure, overflow and dismiss controls. It does not depend on SwiftUI's
 private hosting-responder geometry. It neither moves focus nor invokes an action.
 Pointer input clears keyboard lift independently of selection; moving between
-icon, title, disclosure and overflow retains one row surface.
+icon, title, disclosure and overflow retains one row surface. Hidden rows and
+rows with empty frames or bounds cannot retain keyboard lift, even when AppKit
+reports a nonempty logical visible rectangle.
 
 `SidebarRowLiftStyleTests` covers the eligibility and hover/focus predicate.
 `SidebarRowLiftTests` adds hosted synthetic native-responder, production-row
