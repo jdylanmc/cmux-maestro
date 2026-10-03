@@ -1,0 +1,342 @@
+{
+  "sourceTreeSha256": "cd2b10cb2355406c28b844199b0716a7c576de6161bc4cc836dc5096674b7158",
+  "treeEncoding": "SHA-256 of UTF-8 compact JSON sourceFiles object with lexicographically sorted keys",
+  "archiveSha256": "4b54c765a550f3081fc88ccd57a6cbfa701d83bb59ee8e868ec122f3b5d8093a",
+  "archiveBytes": 1279006,
+  "archiveEntries": 26,
+  "sourceFilesVerified": 17,
+  "lockImagesVerified": 8,
+  "reviewImagesVerified": 56,
+  "contactSheetsVerified": 4,
+  "archiveCaptureManifestByteEqual": true,
+  "archiveCRCVerified": true,
+  "archiveExactAllowlistVerified": true,
+  "excluded": [
+    "sidebar-refinement/capture.cjs",
+    "sidebar-review/capture-matrix.cjs"
+  ],
+  "verifiedAt": "2026-10-03T03:09:13Z",
+  "scope": "Frozen evidence integrity only; not native acceptance or present-day ticket readiness.",
+  "frozenFiles": {
+    "sidebar-refinement/README.md": {
+      "sha256": "305b4c119a01a1d74c935863158ee00c3ca088ea81114adb579270d432d6ba46",
+      "bytes": 7567
+    },
+    "sidebar-refinement/archive.json": {
+      "sha256": "ec226bfafe8be402e9cf9b85789878581aa198e37745ff543cc198fbd35e849c",
+      "bytes": 307
+    },
+    "sidebar-refinement/capture.json": {
+      "sha256": "0ed9fff6f7fc8f5490e3723dcd7a9cc04ad0ad4356e12b93f536d5548ccbf549",
+      "bytes": 6205
+    },
+    "sidebar-refinement/sidebar-refinement-target-20260929.zip": {
+      "sha256": "4b54c765a550f3081fc88ccd57a6cbfa701d83bb59ee8e868ec122f3b5d8093a",
+      "bytes": 1279006
+    },
+    "sidebar-review/README.md": {
+      "sha256": "f8df150633b1af716cee19c0fae9fdf8f391ab90b569e95b10d8ead26e79cd0c",
+      "bytes": 13743
+    },
+    "sidebar-review/gallery.html": {
+      "sha256": "b485a81091a569efd30a57c3390bafca045524cb5b53478860abdae21e22dd19",
+      "bytes": 22530
+    },
+    "sidebar-review/screenshots.json": {
+      "sha256": "d9da07ed3cbafca44b3aaf235fb128f35b5dab448af04acc21f8c237429bb272",
+      "bytes": 21843
+    },
+    "sidebar-review/contact-sheets.json": {
+      "sha256": "20df89b45c713650151501c66423e1f243a35ec6a0547655bae91079f65ce676",
+      "bytes": 602
+    },
+    "sidebar-review/backlog-review.md": {
+      "sha256": "e96cbf435b31812aef779858c78c2ae393b2bd4705e30433a9fce570cbd5a6ae",
+      "bytes": 25496
+    },
+    "sidebar-review/backlog-audit.json": {
+      "sha256": "592d54e5a0ee19ee3a94cf6e23ed9f414a2dd96a941ee84dc6296a1ef335fff7",
+      "bytes": 114561
+    },
+    "sidebar-review/proposed-structural-work.md": {
+      "sha256": "d2a7f60f8972193cd9b4f484d38eaa915f30da930166110a6261e9edd88a00a6",
+      "bytes": 16118
+    },
+    "sidebar-review/backlog-enrichment-20260930.json": {
+      "sha256": "f31c25b6f0c98382dfc0d9e23b0e7d597d127401aa6506dfb81d56bf92c65b78",
+      "bytes": 28199
+    },
+    "sidebar-refinement/images/overview.png": {
+      "sha256": "40654d7218c1257783b4c76ef0d9e4af2a7aad64357ab7ff07f1d7ed7a646a23",
+      "bytes": 592475
+    },
+    "sidebar-refinement/images/internal-tasks.png": {
+      "sha256": "6493287c78487c567bebc652edca0ebd3ff90a248005b52f9d09022e8b76d77a",
+      "bytes": 19272
+    },
+    "sidebar-refinement/images/icon-card-start.png": {
+      "sha256": "5bbc0474088acf0abdee86b0df0f6bfcc153cb959f8931cc696d22d7467e6c34",
+      "bytes": 19407
+    },
+    "sidebar-refinement/images/icon-card-end.png": {
+      "sha256": "9c56241bdd575f262296f5d196301dcb7fc388cf3dd437bee6b4864e510f4166",
+      "bytes": 17966
+    },
+    "sidebar-refinement/images/collapsed-tasks.png": {
+      "sha256": "a59f9050502e0fa9c6905830d529ec0f09d8b61e0f11ac94efcd46ffec472296",
+      "bytes": 4927
+    },
+    "sidebar-refinement/images/nested-tasks.png": {
+      "sha256": "356a90ff38d847bea00adaf2a2c3a7e1e5dc49ad60ba3796e77eaced3ac09e4f",
+      "bytes": 56288
+    },
+    "sidebar-refinement/images/wrapped-hover.png": {
+      "sha256": "f8058266ec26ebc7801a8a71813b7830f3b0bd7b75fd214a6750c58649277577",
+      "bytes": 345953
+    },
+    "sidebar-refinement/images/narrow-sidebar.png": {
+      "sha256": "19ab9378fe7cbecf6fb9ffdd6a775a85a23b4f4f60dcf9c2cd778c1f3a0a79e7",
+      "bytes": 189309
+    },
+    "sidebar-review/images/s01-worktrees.png": {
+      "sha256": "dd58638c4dc31ae3e530c7af83d2a766755964ed76b24afa803df5dfb7f2cd92",
+      "bytes": 239713
+    },
+    "sidebar-review/images/s02-header.png": {
+      "sha256": "44e5e904a1e378cdec1b9ea8c9d623d3783a8481cf312d34df9426b70d094b0a",
+      "bytes": 2861
+    },
+    "sidebar-review/images/s03-pinned-agent.png": {
+      "sha256": "05e68b4abe6c2bdc1809ed95d8fe7f99af53e37b28828f3256675b984cb7b576",
+      "bytes": 24752
+    },
+    "sidebar-review/images/s04-subagents.png": {
+      "sha256": "9dcef85cbc057918e2b3a5960a503ac1a91fa0cde42fed10a49804faa342769f",
+      "bytes": 84726
+    },
+    "sidebar-review/images/s05-native-workspace.png": {
+      "sha256": "877a1c709a1629fd5d30d5f6c0d54847d76db0ad79d6ff7241012c844f674c87",
+      "bytes": 77471
+    },
+    "sidebar-review/images/s06-pane-collapsed.png": {
+      "sha256": "729a21de98ced1cbb06412b1d620789bc138c317f6e810ec74089a19b6bb0cf3",
+      "bytes": 76956
+    },
+    "sidebar-review/images/s07-workspace-eye.png": {
+      "sha256": "4817a2acc54253285b9c751cb77c3c0477a5fadee0608c8ab6db86606eda1de5",
+      "bytes": 78469
+    },
+    "sidebar-review/images/s08-internal-tasks-collapsed.png": {
+      "sha256": "c8f4078d3a0bc348ffff738f030fd0ba2b3d5924ce80474099c4a7815bd1c5b0",
+      "bytes": 1730
+    },
+    "sidebar-review/images/s09-workspace-preview.png": {
+      "sha256": "4f9dd2593ac15bf6cfd2d2bff61ae9afc44546a3cbf94830ce6d13544931218c",
+      "bytes": 11849
+    },
+    "sidebar-review/images/s10-agent-preview.png": {
+      "sha256": "a933ade41548d5e227700832e554527b67549b8283e36890d0a46a6793cc2e20",
+      "bytes": 43460
+    },
+    "sidebar-review/images/s11-copy-keyboard-focus.png": {
+      "sha256": "dca9198f4880d8aec3306b8195daf69d94020a44a68db3778817eb2ec05e05de",
+      "bytes": 44132
+    },
+    "sidebar-review/images/s12-pinned-browser.png": {
+      "sha256": "a182e4c0180568e91b1139434c44c20f9b8772b1167e03b73d9ae73d0505963d",
+      "bytes": 9951
+    },
+    "sidebar-review/images/s13-preview-browser.png": {
+      "sha256": "25bfcdfe0c002d3945da7ce1c5c7a19f39aa787307065a515ec9ceedf320c22d",
+      "bytes": 13337
+    },
+    "sidebar-review/images/s14-pinned-terminal.png": {
+      "sha256": "f50304c136ed95b4b3ca8cfba45ad7203d7b51d5fa4a9ab5aad33c7d155ceb35",
+      "bytes": 9624
+    },
+    "sidebar-review/images/s15-preview-terminal.png": {
+      "sha256": "8187ab250edbd5ac75d8c89e2a8bd1b1e11429f4c240200f4484936c15915a7d",
+      "bytes": 12006
+    },
+    "sidebar-review/images/s16-agent-icon-picker.png": {
+      "sha256": "44d33287a8e52355677c0cb6507178ba4291944d8b21c25dd11f6d0a9e0185a0",
+      "bytes": 28933
+    },
+    "sidebar-review/images/s17-icon-search.png": {
+      "sha256": "b4cc5c8d7d1cbf0e44cc5a671045e89358a842248336292260f17006cf073da3",
+      "bytes": 20126
+    },
+    "sidebar-review/images/s18-browser-appearance.png": {
+      "sha256": "8e7c40d22435317153da84d24544f1047fc14a2197e8710896c1c4f58b992682",
+      "bytes": 27903
+    },
+    "sidebar-review/images/s19-pet-picker.png": {
+      "sha256": "51baafb2ae3c1cd238c08326484daa8dfe389143d75b4c8bb53d82f2bfddc649",
+      "bytes": 23723
+    },
+    "sidebar-review/images/s20-pet-hidden.png": {
+      "sha256": "b26efd6340cc423cb952121e566f90dd863f754c6a8e08a7bd1410ae233b7b49",
+      "bytes": 29637
+    },
+    "sidebar-review/images/s21-tag-editor.png": {
+      "sha256": "71b3eda922af088ce2fee41b5cb4b7abba1379720db138ff5f3402408cf7f02d",
+      "bytes": 27963
+    },
+    "sidebar-review/images/s22-tag-validation.png": {
+      "sha256": "6cdd1559bc6d4fa979ed07251c7c7a5ebe71a32d55a6a800dcdee2111a6c6e7f",
+      "bytes": 29124
+    },
+    "sidebar-review/images/s23-tag-color.png": {
+      "sha256": "cab13a4c624e832c5217cc99f4259188f7c2454973be8be608daa9b2dac336c3",
+      "bytes": 17961
+    },
+    "sidebar-review/images/s24-agent-menu.png": {
+      "sha256": "67cc8b55e0ced369dd2d59a0dd05faa44446902e6702df1e6b4b5792e942325a",
+      "bytes": 12610
+    },
+    "sidebar-review/images/s25-browser-menu.png": {
+      "sha256": "2e7b303c3ad9b6d8ac6ee184fc52d7e4d3b824de7c7c9413850bed3f534dc724",
+      "bytes": 7644
+    },
+    "sidebar-review/images/s26-workspace-menu.png": {
+      "sha256": "11c6a045b7955d48240616336aaf9c16c633f7ac5d56c068fe03b7c1a41ce419",
+      "bytes": 8129
+    },
+    "sidebar-review/images/s27-history.png": {
+      "sha256": "217845351788e5ce3da64d7946868d63df5a855eeaea87104cfee051f8e4de81",
+      "bytes": 195143
+    },
+    "sidebar-review/images/s28-legacy-exit-confirmation.png": {
+      "sha256": "8172fd7548540f0af518636d67c499159e6d4d19694de2e42c5242e5ad30683f",
+      "bytes": 33266
+    },
+    "sidebar-review/images/s29-legacy-descendant-scope.png": {
+      "sha256": "da768a2a6f28af7ea117e6577b91ab7035f854a86924d528e9d73d62f0e23a23",
+      "bytes": 47218
+    },
+    "sidebar-review/images/s30-directory-entry.png": {
+      "sha256": "be02031794515c7ee96488278743652db7824d31429a32a2c9942783fb64017c",
+      "bytes": 19477
+    },
+    "sidebar-review/images/s31-directory-validation.png": {
+      "sha256": "f36db7ab271fd805a9537ce16573d18ed01090540e8d5579e31f2a245a5bab04",
+      "bytes": 21845
+    },
+    "sidebar-review/images/s32-settings-matching.png": {
+      "sha256": "6d449b3cd00214f3355bfb9e4d434868ea3152d50045d4113d52cdda93db2813",
+      "bytes": 40089
+    },
+    "sidebar-review/images/s33-settings-missing.png": {
+      "sha256": "9da54fe23fcf28ebc96ac6370c4ce662fd88e1eb419a67ffe35547fd6eef160f",
+      "bytes": 38598
+    },
+    "sidebar-review/images/s34-settings-different.png": {
+      "sha256": "7772f0a50f12b7842fda306d09655b934ab846f17b5bbbc1d5107556753787a1",
+      "bytes": 40400
+    },
+    "sidebar-review/images/s35-settings-unreadable.png": {
+      "sha256": "4a572a561b125402f7cb92703007c073bd7b457c952a8299a32bf47dcf0b1f7b",
+      "bytes": 39698
+    },
+    "sidebar-review/images/s36-fermata-on.png": {
+      "sha256": "c054dedac658c8af68994c8d6dedd23df84ad64954544f39a1bb1aaa181efda4",
+      "bytes": 3050
+    },
+    "sidebar-review/images/s37-beats-editor.png": {
+      "sha256": "282119cf3b8907f366a745d12a3022bbcc2cb17be9190e099b8627bd960f98d7",
+      "bytes": 84807
+    },
+    "sidebar-review/images/s38-cron-builder.png": {
+      "sha256": "b32c3a1017fc5990d31c69a308cb2eb02d490dbfe59b55eb3fd55dcf257e82f8",
+      "bytes": 26188
+    },
+    "sidebar-review/images/s39-cron-weekly.png": {
+      "sha256": "82fd9c2bc83d94b344ec9c75e266f95fdb1eb9c37ca73d02f2e2a158fc3eeb6a",
+      "bytes": 27866
+    },
+    "sidebar-review/images/s40-beats-diagnostics.png": {
+      "sha256": "c90d3cc891c699e182990d9d147ffdded4843130d2d97fe9550f5c0c6c166f1a",
+      "bytes": 102762
+    },
+    "sidebar-review/images/s41-taskboard.png": {
+      "sha256": "39cae41f694adbaa3144cba961d57f2a7bca569707f1f9ff0e9e64d6f09659da",
+      "bytes": 436486
+    },
+    "sidebar-review/images/s42-utility-move.png": {
+      "sha256": "83115472831bde35fa8e82f03a6359bc6409f0de2a47be047209dc9d334f3801",
+      "bytes": 16367
+    },
+    "sidebar-review/images/s43-utility-move-after-reorder.png": {
+      "sha256": "46f62681ac41dc9633b25208ade08ddcfa74581bef999e95e350ab6ed6dd15cd",
+      "bytes": 16360
+    },
+    "sidebar-review/images/s44-stress-overview.png": {
+      "sha256": "9f2d2fbe3cfe9eca99a77b42e4c5dc8a03cc84184b76e7a2274650b1dee50657",
+      "bytes": 301366
+    },
+    "sidebar-review/images/s45-stress-icon-card-start.png": {
+      "sha256": "f37d2169a7677a438070dae6efa0f287633a55a806d9bb4be4875e9b753ff39c",
+      "bytes": 8779
+    },
+    "sidebar-review/images/s46-stress-icon-card-end.png": {
+      "sha256": "3fa825cc89b953549c6ee616dad5b295954220eaf6830da8022f0b9ba6eb73d8",
+      "bytes": 8021
+    },
+    "sidebar-review/images/s47-stress-nested-tasks.png": {
+      "sha256": "727b3e9ee737a48187febc4f90ee6f1b1b6caf6c8f2fe20763752005e14fad3e",
+      "bytes": 5290
+    },
+    "sidebar-review/images/s48-stress-hover-top.png": {
+      "sha256": "189c81b02852ff36281b951c41e300f8f1d483b630450c651825644fe4ce85b4",
+      "bytes": 91304
+    },
+    "sidebar-review/images/s49-stress-hover-bottom.png": {
+      "sha256": "43ed920b17d8fb402219a682433f94bec5052df68255abe18d2f6c75f4d4395a",
+      "bytes": 84054
+    },
+    "sidebar-review/images/s50-stress-menu-overflow.png": {
+      "sha256": "53b2a0643588f88a18b2be6d8de7f6c29a6b74120d4a0871c48defc0ee097c33",
+      "bytes": 27403
+    },
+    "sidebar-review/images/s51-stress-history-overflow.png": {
+      "sha256": "7bbb71631346378c529d0eebcc688ede495a40e2f5b5f213f7aad05fe3d49fd8",
+      "bytes": 195195
+    },
+    "sidebar-review/images/s52-long-workspace-name.png": {
+      "sha256": "278eea8df534c2c76813b000e9452a3bfa7e884d020c2eaae11b9b7bec841e1d",
+      "bytes": 3968
+    },
+    "sidebar-review/images/s53-preview-subject-scroll.png": {
+      "sha256": "9f4d09f8a51b604134fbb4b848c7736e3f723dd42e956ab155a4ecda67979458",
+      "bytes": 459133
+    },
+    "sidebar-review/images/s54-pointer-dismisses-keyboard-preview.png": {
+      "sha256": "67dc9ffc8624230b3d82cf64b1241daba19a4a3d0d7bd6be87f5f9044417ef16",
+      "bytes": 239713
+    },
+    "sidebar-review/images/s55-preview-dialog-return.png": {
+      "sha256": "dd58638c4dc31ae3e530c7af83d2a766755964ed76b24afa803df5dfb7f2cd92",
+      "bytes": 239713
+    },
+    "sidebar-review/images/s56-filtered-parent-dismissal.png": {
+      "sha256": "a28cce8f748698bf968f06ec79b0297029d633124563a1fc4d2a561b1e105cea",
+      "bytes": 248341
+    },
+    "sidebar-review/contact-sheet-1.png": {
+      "sha256": "9fd3a264b2f132c0dd2648c13d9d629fe37fee4d627af70da497abf58e11bb09",
+      "bytes": 269506
+    },
+    "sidebar-review/contact-sheet-2.png": {
+      "sha256": "bde7096822d3e1b0afa5bd75860e57bfda4761d88c4a4a95b9992e4eee1e9617",
+      "bytes": 322804
+    },
+    "sidebar-review/contact-sheet-3.png": {
+      "sha256": "7b6803df1ccc1af28239f58f9ec59fd02fd6c6b551d7ebd428520f23bea30668",
+      "bytes": 304341
+    },
+    "sidebar-review/contact-sheet-4.png": {
+      "sha256": "163857f15b7a2f8ea0b26460250b591ba73cbf153f3b7b0bacd750726254ec54",
+      "bytes": 403286
+    }
+  }
+}

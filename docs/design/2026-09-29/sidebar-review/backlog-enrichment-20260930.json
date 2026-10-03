@@ -1,0 +1,1040 @@
+{
+  "verifiedAt": "2026-09-30T15:32:14.514953+00:00",
+  "repository": "jdylanmc/cmux-maestro",
+  "readEvidence": {
+    "allIssueIdentities": 87,
+    "openBodies": 55,
+    "allCommentsFetched": 65,
+    "previousBodiesRevalidated": 61,
+    "newOpenBodiesRead": [
+      113,
+      114,
+      121,
+      127
+    ],
+    "openPRs": [
+      125,
+      129
+    ]
+  },
+  "result": {
+    "newIssues": {
+      "menu-containment": {
+        "number": 132,
+        "id": 5648948106,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/132",
+        "parent": 106
+      },
+      "long-content": {
+        "number": 133,
+        "id": 5648948312,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/133",
+        "parent": 105
+      },
+      "publish-evidence": {
+        "number": 134,
+        "id": 5648948541,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/134",
+        "parent": 57
+      }
+    },
+    "enrichedExisting": [
+      112,
+      131,
+      48,
+      58,
+      93,
+      86,
+      59,
+      78,
+      75,
+      79,
+      44,
+      67,
+      70,
+      83,
+      85,
+      105,
+      106,
+      101,
+      57
+    ],
+    "parentLinksAdded": [
+      {
+        "parent": 101,
+        "child": 131
+      },
+      {
+        "parent": 106,
+        "child": 132
+      },
+      {
+        "parent": 105,
+        "child": 133
+      },
+      {
+        "parent": 57,
+        "child": 134
+      }
+    ],
+    "openIssuesBefore": 55,
+    "openIssuesAfter": 58,
+    "epicIssuesIncludingClosed": 57
+  },
+  "coverage": [
+    {
+      "proposal": "G1",
+      "owners": "#112 (R1-R3), #131 (R4)",
+      "disposition": "Enrich existing shared preview/copy and task-dismissal owners; no new POC repair umbrella."
+    },
+    {
+      "proposal": "G2",
+      "owners": "#132 under #106",
+      "disposition": "Only new implementation follow-up; keep delivered #43 closed."
+    },
+    {
+      "proposal": "G3",
+      "owners": "#133 under #105",
+      "disposition": "One new design-first long-content/disclosure decision; do not guess retention or UI."
+    },
+    {
+      "proposal": "G4",
+      "owners": "#58, with #87/#112 consuming",
+      "disposition": "Existing projection owner gets explicit collision/disambiguation design gate."
+    },
+    {
+      "proposal": "G5/P6",
+      "owners": "#93 under #42",
+      "disposition": "In-ticket runtime/store/management gate, not another scheduler/research ticket."
+    },
+    {
+      "proposal": "G6/P7",
+      "owners": "#86 under #104",
+      "disposition": "In-ticket hosting/reuse/restoration/draft gate."
+    },
+    {
+      "proposal": "G7/P8",
+      "owners": "#59, consumed by #73/#58",
+      "disposition": "In-ticket current-worktree source/key-lifetime gate."
+    },
+    {
+      "proposal": "G8/P9",
+      "owners": "#78 -> shared ownership for #75; #79 context separately",
+      "disposition": "One ownership investigation; separate endpoint/context consumers, no duplicate collectors."
+    },
+    {
+      "proposal": "G9",
+      "owners": "#44, #67, #70, #83, #85",
+      "disposition": "Feature-local host capability gates; reuse #110's topology evidence without widening it."
+    },
+    {
+      "proposal": "Publication",
+      "owners": "#134 under #57",
+      "disposition": "One documentation/evidence handoff for the whole approved target."
+    },
+    {
+      "proposal": "P1",
+      "owners": "#48 reconciliation -> #131 implementation",
+      "disposition": "Keep report/evidence; do not run two relevance renderers or assume original bug still reproduces."
+    },
+    {
+      "proposal": "P2",
+      "owners": "#131 -> #101",
+      "disposition": "Attach existing approved work, not a duplicate new task."
+    },
+    {
+      "proposal": "P3",
+      "owners": "#111",
+      "disposition": "Keep original-gate evidence/acceptance reconciliation; no fresh masking implementation or automatic closure."
+    },
+    {
+      "proposal": "P4",
+      "owners": "#105",
+      "disposition": "Retain tracking parent with the specific new design leaf; delivered containers stay closed."
+    },
+    {
+      "proposal": "P5",
+      "owners": "#61 unchanged",
+      "disposition": "Do not churn runtime hierarchy or in-flight #129; preserve #57 blocker and #119."
+    }
+  ],
+  "receipts": [
+    {
+      "number": 1,
+      "changed": false,
+      "updatedAt": "2026-09-14T09:53:10Z",
+      "bodySha256": "4eab06421756d39611405882223857f766c1a2038652460960a451ff4f3a3235",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 2,
+      "changed": false,
+      "updatedAt": "2026-09-14T01:06:57Z",
+      "bodySha256": "3ca382d73f991f465f61d96769f445a20089af90a3cc857894e78bc69beaa026",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 3,
+      "changed": false,
+      "updatedAt": "2026-09-14T04:52:47Z",
+      "bodySha256": "290b42c797750e30345af66e8f985e63b1931ed2fc4da650b4d11ab6d85e0169",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 4,
+      "changed": false,
+      "updatedAt": "2026-09-14T04:52:47Z",
+      "bodySha256": "d303ad62362bee13221c9e339dc74501d591cb1d8edb4bfd4dd99f3271282bd6",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 5,
+      "changed": false,
+      "updatedAt": "2026-09-14T01:06:57Z",
+      "bodySha256": "b14e449f082281bcc5770a14c6ae78cea24d282d77c285e40d84037d272d66ae",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 6,
+      "changed": false,
+      "updatedAt": "2026-09-14T06:09:06Z",
+      "bodySha256": "89ad6fe5020253aabf2f6b43e997642586aa2f438ab3f7db46a2ba8f701e6e4d",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 7,
+      "changed": false,
+      "updatedAt": "2026-09-14T06:09:08Z",
+      "bodySha256": "1c27984c57c6faa553bf9633fef5111789e8f7d948fef3bb251d089d964bd81d",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 8,
+      "changed": false,
+      "updatedAt": "2026-09-14T06:09:09Z",
+      "bodySha256": "53ecaab027bef53c6f6ed329a2ebb6d35c7b1625a168571fffe196367d3c645d",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 9,
+      "changed": false,
+      "updatedAt": "2026-09-14T01:46:35Z",
+      "bodySha256": "35c66a4bdd3e8cd6c99133268a56133e62dfdcf5849bb688d222fe3ce20da1d9",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 10,
+      "changed": false,
+      "updatedAt": "2026-09-22T15:38:07Z",
+      "bodySha256": "84ceefa71b66f4ae8e24a5d78dd81865822695389baef356477f83fb1b197d1a",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 11,
+      "changed": false,
+      "updatedAt": "2026-09-14T06:09:11Z",
+      "bodySha256": "42ac4400a3ab2f10ac20bbbf8b51d2fd73eb7b0460f0e46533f7372c44859e54",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 12,
+      "changed": false,
+      "updatedAt": "2026-09-14T01:46:35Z",
+      "bodySha256": "60981eb8cc09db84127cd0349cfe1810f44fbd89a499b8455978c71afad62aa6",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 13,
+      "changed": false,
+      "updatedAt": "2026-09-14T09:46:05Z",
+      "bodySha256": "ecb27d47a135567ed6f96f3cf5d80d0fac49d291d6693765cb3505fa870c51db",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 14,
+      "changed": false,
+      "updatedAt": "2026-09-14T06:09:13Z",
+      "bodySha256": "fe42ce95795ca79797bf04c07eb8769eb2b21e62219272d041e48d61ffc622ef",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 15,
+      "changed": false,
+      "updatedAt": "2026-09-14T07:08:10Z",
+      "bodySha256": "ef3ed48427bccac14f23535f2e8812cbae796180385adbd371892ece01d8a731",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 16,
+      "changed": false,
+      "updatedAt": "2026-09-14T09:49:42Z",
+      "bodySha256": "16c0744b9d99d699b3dddb2677b816bd026866a0083d8c70cc2637441d35d878",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 17,
+      "changed": false,
+      "updatedAt": "2026-09-14T09:46:05Z",
+      "bodySha256": "295cd5a991ceeff9aee84673349daaa934bbc165866aaf025c8cf3d62f437eae",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 18,
+      "changed": false,
+      "updatedAt": "2026-09-22T15:38:09Z",
+      "bodySha256": "1eded2b4bb122baef3365382a541d3c7435f1042e819590e6a3f069b3429223a",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 36,
+      "changed": false,
+      "updatedAt": "2026-09-22T15:38:37Z",
+      "bodySha256": "dc62c48e91ba98ee11ba7f3903577a1cc9958b2896d21bc51e13de2dbab26b68",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 38,
+      "changed": false,
+      "updatedAt": "2026-09-22T15:38:10Z",
+      "bodySha256": "245174783045f7ddb8706b60a837175441ff586283a3d271c28f6b424f06a183",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 39,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:08Z",
+      "bodySha256": "9a2dcd26b7138dca783cea967c3d9bda2359625e9cff0f087086b8ac1d941a22",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 42,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:10Z",
+      "bodySha256": "7543cdeac1c039bdbe086032d33419206dc7de66d1138f0073ace7b0321c6351",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 43,
+      "changed": false,
+      "updatedAt": "2026-09-26T19:14:39Z",
+      "bodySha256": "57f081536c2e9b47b86ac65d117e1fe3624da1e305abc5a5df63074ad33c4f58",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 44,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:30:10Z",
+      "bodySha256": "00d71bc1f1b1f587d50727da4e8904ab460e696468e15c9523a6596c3150bc7c",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 45,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:33:16Z",
+      "bodySha256": "9cd6109592fb09cb9bedcc3c1261998b5210d9f7d52efc22a9cf9aae761d153f",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 46,
+      "changed": false,
+      "updatedAt": "2026-09-26T22:20:58Z",
+      "bodySha256": "b6f795e24f7787cb5df901daf2ee77967a42c281b55a7e2f0d6c6a29b3a7560b",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 48,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:29:52Z",
+      "bodySha256": "bb4a1839f7fb14a76df0955dfd9b863449ae30417792b03c5fdd41b035b8e32b",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 49,
+      "changed": false,
+      "updatedAt": "2026-09-26T16:11:13Z",
+      "bodySha256": "5f56a67c1a6f0cfb67ddde1e12b18afc31a255e1966ebf7417087151f347a230",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 50,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:33:03Z",
+      "bodySha256": "77293b9a5a4549757a0cc0bed9e48e299eb54b69aed36e2ce496dc6994769fe3",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 51,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:33:05Z",
+      "bodySha256": "c6efc6efc61922a331d83f192122017c8e7986211ae4199db4c2c4dd5febc967",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 52,
+      "changed": false,
+      "updatedAt": "2026-09-26T16:11:20Z",
+      "bodySha256": "2cafcc524a4df6a6eb27963dc5af1330a6ea2b57cd2e0393e07bbd464388f198",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 54,
+      "changed": false,
+      "updatedAt": "2026-09-22T15:38:35Z",
+      "bodySha256": "920c7ef2aa88b7e191bc359d09acf0cfb9f2b80d344fb11534c529fc66216b96",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 55,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:33:10Z",
+      "bodySha256": "0506b85ddcee656cf2c4534c97f80fc11431f65d4aa8ced113ae3967e62876f7",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 57,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:30:28Z",
+      "bodySha256": "3454bc85f4ad36fd73df1991b0d87dceb3be45546bdcb85f34752509e7e129c5",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 58,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:29:55Z",
+      "bodySha256": "230840da95ea41293804098d6f1e381e44e13e41275847a9ee6540869b61aedd",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 59,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:30:02Z",
+      "bodySha256": "78a1910ce9793ebecc35f200231dfafb751d50b6b0f8f5c69d3132fddd0d6a20",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 60,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:12Z",
+      "bodySha256": "a04aa16b18d6b0a86a42fe834399227043f761babd5c1ff24a96e3eda2e527c7",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 61,
+      "changed": false,
+      "updatedAt": "2026-09-26T23:29:30Z",
+      "bodySha256": "3e0666199263bb1eba700e32a7ddff1f05a7f2fdd17363207d70aeeff790eb0d",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 63,
+      "changed": false,
+      "updatedAt": "2026-09-23T13:25:04Z",
+      "bodySha256": "43860a9204d6b04d6dd0b65d4c58cf20f256f23a93b59dcad78233e9816d1168",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 64,
+      "changed": false,
+      "updatedAt": "2026-09-23T13:37:55Z",
+      "bodySha256": "53c94d33370099d02b70dcd56766f9511a9d37de98102dcbd6c4a09617fb23ee",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 67,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:30:12Z",
+      "bodySha256": "d12280edf64593c03a972a9b80f571c0e4e3a6fedf19b6a89609ad039d7855dd",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 70,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:30:14Z",
+      "bodySha256": "0e6186895abba8ce244b048893eaf6bb03b3e7f549af0edc3d27a581aafedede",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 73,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:52Z",
+      "bodySha256": "717ff10de2e46eb6c3153af07c2d24790662506054a386a487ecca36a6cf255d",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 74,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:54Z",
+      "bodySha256": "dc66da5aef23499b488c623311ae7d3f4a2867f98531ec49bee72698bd9bdad7",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 75,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:30:06Z",
+      "bodySha256": "fa0ebd1499caf04e51f83d7f34899bf2e6095269599fd55bde6975afc8ea5ad2",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 76,
+      "changed": false,
+      "updatedAt": "2026-09-26T22:20:56Z",
+      "bodySha256": "fb185bff73d6b846a0d96fa70a2af4151fb20a10e0bbc9a4464eae6d0d523f75",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 77,
+      "changed": false,
+      "updatedAt": "2026-09-29T21:10:36Z",
+      "bodySha256": "3f39067c247b7d9fd72e55650fa1f9572ed8419a13ad587c458dd70d36230844",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 78,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:30:04Z",
+      "bodySha256": "8d230acaf228ef015667d5acf2315fc5e2c526089e535969a9860ed4d6455125",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 79,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:30:08Z",
+      "bodySha256": "1bcaa4969b999734f7cd9b366ed42e6e2a5eee7252d8a0742fa61201be77dce5",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 80,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:33:01Z",
+      "bodySha256": "75ab98ef772abed019920d09de409e5dddc1a73e7d714360bb45263ba39a082f",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 81,
+      "changed": false,
+      "updatedAt": "2026-09-26T17:17:55Z",
+      "bodySha256": "00272016257a98639d44349888c815bab189041d051918868c0b4829d21d40f1",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 83,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:30:16Z",
+      "bodySha256": "14078b517b2ff7d711dc2dae777e966a4ca263030924f4e33ddcf83062a7572a",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 84,
+      "changed": false,
+      "updatedAt": "2026-09-26T17:17:56Z",
+      "bodySha256": "14f3d1b4a7f66a5d53647b3d93dfcc39d090fb1d5b821edc182f71003823bd8e",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 85,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:30:18Z",
+      "bodySha256": "fcfbcb849ce7fb70c6c815e4c0119cba1f641f7400ab50cdb88bb499d73cc2c0",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 86,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:29:59Z",
+      "bodySha256": "3cee393ceb9f98e25e6de18473ad630af61b68f805a54bee91aa8116cf5939e9",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 87,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:33:20Z",
+      "bodySha256": "4c72be88ead63395dbbd33de2632ff8bbeb65e30f5b699ec3986730a39815e32",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 88,
+      "changed": false,
+      "updatedAt": "2026-09-26T17:17:55Z",
+      "bodySha256": "be02f4ec1730669c3c1ae1c895461c5a25705a81a165b3ac690657a6f8582d2c",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 90,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:33:27Z",
+      "bodySha256": "21c8383f01d20b8f7ac3d7350424ea0d11ae0d2a781f21b24572ad761434ff2a",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 91,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:33:29Z",
+      "bodySha256": "b7e78f0a0925e2dac19bfcef035ea23725d863164cee53cb43c6cb7e4681d5e1",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 93,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:29:57Z",
+      "bodySha256": "8adc021d49cbf1dc8bd686ce28d53680ddc524e04694eb5120520670d9f8de24",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 94,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:33:33Z",
+      "bodySha256": "c4fb6311db875670d3cda37fc0ec925c9f6a4c8ff25a7f721bba6ef9403f671f",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 95,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:33:35Z",
+      "bodySha256": "788d6b1b6495d501419b40b3fcbfec05b20eeb309ab2d13bac8fe937b74f01d5",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 96,
+      "changed": false,
+      "updatedAt": "2026-09-26T19:15:22Z",
+      "bodySha256": "5ca8eb66deb046651a02c2d9925b946287c39bbaba66d5d958ff1fc3064821a4",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 97,
+      "changed": false,
+      "updatedAt": "2026-09-26T19:15:26Z",
+      "bodySha256": "f6446cd6b6f9f1254a171836b86e3a78a0670a65e006134b311ab0629834636f",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 98,
+      "changed": false,
+      "updatedAt": "2026-09-26T19:15:29Z",
+      "bodySha256": "a44346935f50aa23adfe5d73c4ea2fa98950e209d3627cb14133a2de96389251",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 100,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:15Z",
+      "bodySha256": "3ea44e47da9f87603e48e4f7a8098b70a7f8d05db8aa258f1426985045f1dd79",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 101,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:30:25Z",
+      "bodySha256": "d3e2c2b90163ec417e0261a95821e18340bd7b06b032fdfc42e87683660cadce",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 102,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:19Z",
+      "bodySha256": "2838ebb6f91960e92ecb4219913dd00ffb6c0e4fb0dcedba417e9d1fa736cf9c",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 103,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:22Z",
+      "bodySha256": "a1239bbb04c5d4da9c477692aa9c88b129e1b19aba39c870ff1e244a405f90b1",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 104,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:24Z",
+      "bodySha256": "2225a1faae0761442af4d9fbdebde65cfb361b3cd9a71484983a5e703e55beef",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 105,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:30:20Z",
+      "bodySha256": "269cdcdbeb46c1b1478d0337af6e8a707df30c7f03572095aa445d6795646d6f",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 106,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:30:23Z",
+      "bodySha256": "5cf50cfebabcad3fc4efb0f39aa49502f719e3430ed1bf93731900537dcbc27d",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 107,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:38Z",
+      "bodySha256": "17f207e06ba90fc72443daec67371a6895e3ee2e835d891d3ed1fdadc98c5fbf",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 108,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:35Z",
+      "bodySha256": "713d195a43e78846d86c716287c25ec60f1a828e99ed34f2a85eb7f431fa1840",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 109,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:33Z",
+      "bodySha256": "79013e7b9ba98d63d1144f526aa73805aecc2866932fae0d3822a9df24e3b010",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 110,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:31Z",
+      "bodySha256": "dd98cff02c94edeb4f6c5b2bf178853ca4004c3b35ea915df4fcf9c7c2de1add",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 111,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:32:50Z",
+      "bodySha256": "f748896da0d832437a8b7fedf61dddb6d915e0989e2a248ca9d3a0fdff237a6f",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 112,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:29:47Z",
+      "bodySha256": "5429375a679555d1bd91a23add4c190cd6a3e10b880386d508e7495b397f8188",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 113,
+      "changed": false,
+      "updatedAt": "2026-09-26T22:38:52Z",
+      "bodySha256": "2b61bd7c35cece4294d2e7ccf34ffc0ea1e26138762361e8904643e0b00bf790",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 114,
+      "changed": false,
+      "updatedAt": "2026-09-26T23:50:25Z",
+      "bodySha256": "977bb9a3562b93c91771acbf318bc82d40d433967017543b7f517bb89613554c",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 115,
+      "changed": false,
+      "updatedAt": "2026-09-30T02:33:25Z",
+      "bodySha256": "5e93cdc3a7f84f33d7f0b61b393baa22c3139d4d5536ffd49a3f3e74f7cecac0",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 116,
+      "changed": false,
+      "updatedAt": "2026-09-26T23:50:12Z",
+      "bodySha256": "667653b9df82e8100e4948c86ea2cbf29cec2c96eed76f381b3b68b4e6920651",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 118,
+      "changed": false,
+      "updatedAt": "2026-09-28T01:04:33Z",
+      "bodySha256": "a78f92e3b7b870688d648d7b6ad86d5cec0e59a8d04064e24097723527d74b78",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 119,
+      "changed": false,
+      "updatedAt": "2026-09-29T09:35:06Z",
+      "bodySha256": "dc56d7f4525ce774ffc88f9b8561ec25cc5267e20b93c6cafe5eb17783e9ab0e",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 121,
+      "changed": false,
+      "updatedAt": "2026-09-27T23:07:12Z",
+      "bodySha256": "de7c998dcac8c45ba1577c5578cd9ceefa59a70d1f3ae3923b7974b323c2ea61",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 127,
+      "changed": false,
+      "updatedAt": "2026-09-29T04:29:54Z",
+      "bodySha256": "a27f93d20a8c2375c01bea748fea489f41cb67b0cfc82151c13f129fa262f729",
+      "protectedMetadataPreserved": true
+    },
+    {
+      "number": 131,
+      "changed": true,
+      "updatedAt": "2026-09-30T15:29:50Z",
+      "bodySha256": "86cb8f237b7235044398de61fb6684e83304bcbec8c9ab4c04736f9b2d04b1f4",
+      "protectedMetadataPreserved": true
+    }
+  ],
+  "existingDependenciesVerified": [
+    {
+      "number": 10,
+      "blockedBy": []
+    },
+    {
+      "number": 18,
+      "blockedBy": []
+    },
+    {
+      "number": 38,
+      "blockedBy": []
+    },
+    {
+      "number": 39,
+      "blockedBy": []
+    },
+    {
+      "number": 42,
+      "blockedBy": []
+    },
+    {
+      "number": 44,
+      "blockedBy": [
+        39,
+        58
+      ]
+    },
+    {
+      "number": 45,
+      "blockedBy": []
+    },
+    {
+      "number": 48,
+      "blockedBy": []
+    },
+    {
+      "number": 50,
+      "blockedBy": []
+    },
+    {
+      "number": 51,
+      "blockedBy": []
+    },
+    {
+      "number": 55,
+      "blockedBy": []
+    },
+    {
+      "number": 57,
+      "blockedBy": [
+        61
+      ]
+    },
+    {
+      "number": 58,
+      "blockedBy": [
+        39,
+        59
+      ]
+    },
+    {
+      "number": 59,
+      "blockedBy": []
+    },
+    {
+      "number": 60,
+      "blockedBy": []
+    },
+    {
+      "number": 61,
+      "blockedBy": []
+    },
+    {
+      "number": 63,
+      "blockedBy": []
+    },
+    {
+      "number": 64,
+      "blockedBy": []
+    },
+    {
+      "number": 67,
+      "blockedBy": []
+    },
+    {
+      "number": 70,
+      "blockedBy": [
+        49
+      ]
+    },
+    {
+      "number": 73,
+      "blockedBy": [
+        59,
+        81
+      ]
+    },
+    {
+      "number": 74,
+      "blockedBy": []
+    },
+    {
+      "number": 75,
+      "blockedBy": []
+    },
+    {
+      "number": 78,
+      "blockedBy": []
+    },
+    {
+      "number": 79,
+      "blockedBy": []
+    },
+    {
+      "number": 80,
+      "blockedBy": []
+    },
+    {
+      "number": 83,
+      "blockedBy": []
+    },
+    {
+      "number": 85,
+      "blockedBy": [
+        39,
+        84,
+        81
+      ]
+    },
+    {
+      "number": 86,
+      "blockedBy": []
+    },
+    {
+      "number": 87,
+      "blockedBy": [
+        86
+      ]
+    },
+    {
+      "number": 90,
+      "blockedBy": []
+    },
+    {
+      "number": 91,
+      "blockedBy": [
+        90
+      ]
+    },
+    {
+      "number": 93,
+      "blockedBy": []
+    },
+    {
+      "number": 94,
+      "blockedBy": [
+        93,
+        86
+      ]
+    },
+    {
+      "number": 95,
+      "blockedBy": [
+        93,
+        91
+      ]
+    },
+    {
+      "number": 100,
+      "blockedBy": []
+    },
+    {
+      "number": 101,
+      "blockedBy": []
+    },
+    {
+      "number": 102,
+      "blockedBy": []
+    },
+    {
+      "number": 103,
+      "blockedBy": []
+    },
+    {
+      "number": 104,
+      "blockedBy": []
+    },
+    {
+      "number": 105,
+      "blockedBy": []
+    },
+    {
+      "number": 106,
+      "blockedBy": []
+    },
+    {
+      "number": 107,
+      "blockedBy": [
+        108
+      ]
+    },
+    {
+      "number": 108,
+      "blockedBy": [
+        109
+      ]
+    },
+    {
+      "number": 109,
+      "blockedBy": [
+        110
+      ]
+    },
+    {
+      "number": 110,
+      "blockedBy": []
+    },
+    {
+      "number": 111,
+      "blockedBy": []
+    },
+    {
+      "number": 112,
+      "blockedBy": []
+    },
+    {
+      "number": 113,
+      "blockedBy": []
+    },
+    {
+      "number": 114,
+      "blockedBy": [
+        111
+      ]
+    },
+    {
+      "number": 115,
+      "blockedBy": []
+    },
+    {
+      "number": 119,
+      "blockedBy": []
+    },
+    {
+      "number": 121,
+      "blockedBy": []
+    },
+    {
+      "number": 127,
+      "blockedBy": []
+    },
+    {
+      "number": 131,
+      "blockedBy": []
+    }
+  ],
+  "newIssueMarkersAndTitlesUnique": true,
+  "unchangedExistingStatesOwnersMilestones": true,
+  "existingNativeRelationshipsPreserved": true,
+  "implementationPerformed": false,
+  "artifactPublicationPerformed": false,
+  "remainingGates": [
+    "Current diagram/source/screenshot publication is tracked by #134, not performed here.",
+    "#58 disambiguation and #133 disclosure require product decisions.",
+    "Source/host/runtime contracts remain explicit needs-info gates in their existing feature owners.",
+    "#119/H8 and current runtime ownership/acceptance gates are unchanged."
+  ]
+}
