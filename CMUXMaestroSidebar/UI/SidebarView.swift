@@ -1350,7 +1350,7 @@ private struct ManagedNodeRow: View {
             }
         }
         .frame(minHeight: density.rowHeight)
-        .sidebarRowActions(title: node.label, groups: actions)
+        .sidebarRowActions(title: node.label, groups: actions, liftEligible: !isRetainedRecord)
         .background { SidebarActivityBackground(visual: stateVisual) }
         .modifier(SidebarFocusBorder(workspaceID: node.workspaceId, surfaceID: node.surfaceId, enabled: !isRetainedRecord))
         .padding(.leading, density.indentation(depth: depth, unresolved: false, width: contentWidth))
@@ -1813,7 +1813,8 @@ private struct SurfaceRow: View {
                 if surface.unreadCount > 0 { UnreadBadge(count: surface.unreadCount) }
             }
             .frame(minHeight: density.rowHeight)
-            .sidebarRowActions(title: title, groups: actions)
+            .sidebarRowActions(title: title, groups: actions, liftEligible:
+                singleSession != nil || [.agentSession, .terminal, .browser].contains(surface.kind))
             .background {
                 if let singleSession {
                     SidebarActivityBackground(visual: SidebarPresentation.sessionState(singleSession))
@@ -1940,7 +1941,7 @@ private struct CopilotSessionRow: View {
                 }
             }
             .frame(minHeight: density.rowHeight)
-            .sidebarRowActions(title: "Copilot \(session.shortID)", groups: actions)
+            .sidebarRowActions(title: "Copilot \(session.shortID)", groups: actions, liftEligible: !focusUnavailable)
             .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session)) }
             CopilotSessionContents(
                 session: session, expanded: expanded,
