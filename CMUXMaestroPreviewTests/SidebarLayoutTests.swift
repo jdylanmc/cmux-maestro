@@ -539,6 +539,11 @@ struct SidebarLayoutTests {
         #expect(view.contains("model.navigation.permissionSummary"))
         #expect(view.contains("model.copilot.updateHistory(preferences.history)"))
         #expect(view.contains("model.copilot.updateAttention(preferences.attention)"))
+        #expect(lift.contains(".allowsHitTesting(false)") && lift.contains(".accessibilityHidden(true)"))
+        for forbidden in [".offset(", ".scaleEffect(", ".rotationEffect("] {
+            #expect(!lift.contains(forbidden))
+            #expect(!rowActions.contains(forbidden))
+        }
     }
 
     private func tree(moved: Bool = false, partial: Bool = false) -> SidebarCopilotTree {
