@@ -508,6 +508,60 @@ struct SidebarRowLiftTests {
         #expect(!descendants(host).contains { $0 is SidebarRowMenuAnchorView })
     }
 
+    @Test(arguments: Appearance.allCases)
+    func staticSurfaceInteriorMatchesFourPercentSemanticReference(_ appearance: Appearance) throws {
+        let frame = NSRect(x: 0, y: 0, width: 280, height: 100)
+        let backgrounds: [(String, NSColor)] = [("black", .black), ("window", .windowBackgroundColor)]
+        for (backgroundName, background) in backgrounds {
+            // Independent literal acceptance reference, not the production opacity constant or shadow implementation.
+            let variants: [(String, AnyView)] = [
+                ("base", AnyView(Color.clear)),
+                ("reference", AnyView(Rectangle().fill(Color(nsColor: .highlightColor).opacity(0.04)))),
+                ("production", AnyView(SidebarRowLiftSurface(lifted: true)))
+            ]
+            var images: [String: NSBitmapImageRep] = [:]
+            for (name, content) in variants {
+                let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.appearance = NSAppearance(named: appearance.nativeName)
+                let host = NSHostingView(rootView: content
+                    .frame(width: 248, height: 46)
+                    .frame(width: 280, height: 100)
+                    .environment(\._accessibilityReduceMotion, true)
+                    .environment(\._colorSchemeContrast, appearance.contrast)
+                    .background(Color(nsColor: background)))
+                window.contentView = host
+                defer { window.contentView = nil; window.close() }
+                host.frame = frame
+                host.layoutSubtreeIfNeeded()
+                let bitmap = try capture(host)
+                images[name] = bitmap
+                try save(bitmap, name: "semantic-\(appearance.rawValue)-\(backgroundName)-\(name)")
+                #expect(!window.isVisible && host.bounds == frame)
+            }
+            let base = try #require(images["base"])
+            let reference = try #require(images["reference"])
+            let production = try #require(images["production"])
+            for y in [36.0, 50.0, 64.0] {
+                for x in [64.0, 140.0, 216.0] {
+                    let point = NSPoint(x: x, y: y)
+                    let before = try pixel(base, at: point, bounds: frame)
+                    let expected = try pixel(reference, at: point, bounds: frame)
+                    let actual = try pixel(production, at: point, bounds: frame)
+                    let beforeRGBA = [before.redComponent, before.greenComponent, before.blueComponent, before.alphaComponent]
+                    let expectedRGBA = [expected.redComponent, expected.greenComponent, expected.blueComponent, expected.alphaComponent]
+                    let actualRGBA = [actual.redComponent, actual.greenComponent, actual.blueComponent, actual.alphaComponent]
+                    print("row-lift115 semantic \(appearance.rawValue)-\(backgroundName) \(point): base=\(beforeRGBA), fourPercent=\(expectedRGBA), production=\(actualRGBA)")
+                    if backgroundName == "black" {
+                        #expect(beforeRGBA != expectedRGBA, "The independent reference must expose a nonzero highlight")
+                    }
+                    #expect(actualRGBA == expectedRGBA,
+                            "The row interior must contain only the four-percent semantic highlight, not an opaque shadow source")
+                }
+            }
+        }
+    }
+
     @Test(arguments: [80, 140], [240, 350])
     func shortSharedRowRetainsTitleIconAndOutsideHitTargets(height: Int, width: Int) async throws {
         let fixture = try SidebarPreferenceFixture()
