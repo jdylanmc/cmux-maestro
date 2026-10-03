@@ -610,6 +610,8 @@ struct SidebarRowLiftTests {
                     let before = try pixel(base, at: point, bounds: frame)
                     let expected = try pixel(reference, at: point, bounds: frame)
                     let actual = try pixel(production, at: point, bounds: frame)
+                    #expect(before.alphaComponent == 1 && expected.alphaComponent == 1 && actual.alphaComponent == 1,
+                            "Baseline, independent reference and production must all preserve opaque backing")
                     let beforeRGBA = [before.redComponent, before.greenComponent, before.blueComponent, before.alphaComponent]
                     let expectedRGBA = [expected.redComponent, expected.greenComponent, expected.blueComponent, expected.alphaComponent]
                     let actualRGBA = [actual.redComponent, actual.greenComponent, actual.blueComponent, actual.alphaComponent]
