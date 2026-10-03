@@ -198,7 +198,7 @@ struct SidebarWorkspaceCountTests {
         #expect(SidebarPresentation.managedState(node, availability: .stale, now: now, tree: tree).title == "Idle")
         let details = SidebarPresentation.managedNodeDetails(node, hierarchy: fixtures.hierarchy(), tree: tree, now: now)
         #expect(!details.contains { $0.title == "Branch" || $0.title == "Worktree" })
-        #expect(try #require(details.first { $0.title == "Git evidence" }).value.hasPrefix("Stale"))
+        #expect(try #require(details.first { $0.title == "Git evidence" }).value.hasPrefix("Assigned directory: Stale"))
         #expect(node.currentGitChanges(at: now) == nil)
         #expect(node.updatedAt == now.addingTimeInterval(-61))
     }

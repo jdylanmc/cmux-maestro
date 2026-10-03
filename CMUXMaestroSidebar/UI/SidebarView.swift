@@ -8,6 +8,10 @@ private struct SidebarContentWidthKey: EnvironmentKey {
     static let defaultValue: Double = 300
 }
 
+private struct SidebarPresentationNowKey: EnvironmentKey {
+    static let defaultValue: () -> Date = { Date() }
+}
+
 private struct SidebarPrepareSeenKey: EnvironmentKey {
     static let defaultValue: (SidebarSeenTarget) -> () -> Void = { _ in {} }
 }
@@ -33,6 +37,11 @@ private struct SidebarFocusedSurfaceKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
+    var sidebarPresentationNow: () -> Date {
+        get { self[SidebarPresentationNowKey.self] }
+        set { self[SidebarPresentationNowKey.self] = newValue }
+    }
+
     var sidebarFocusInspection: ((SidebarInspection.Target, SidebarNavigationTarget) -> Void)? {
         get { self[SidebarFocusInspectionKey.self] }
         set { self[SidebarFocusInspectionKey.self] = newValue }
@@ -417,6 +426,7 @@ struct SidebarView: View {
     @State private var dismissedTaskOwner: (session: UUID, surface: UUID, workspace: UUID)?
     @State private var taskFocusNotice: String?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.sidebarPresentationNow) private var now
 
     init(model: SidebarConnectionModel, preferences: SidebarPreferences) {
         self.model = model
@@ -434,7 +444,8 @@ struct SidebarView: View {
         SidebarVisibleWork(
             tree: model.copilot.tree, managed: model.orchestration.snapshot.nodes,
             history: preferences.history,
-            showEnded: preferences.showEnded || preferences.historyNotice != nil || preferences.attentionNotice != nil
+            showEnded: preferences.showEnded || preferences.historyNotice != nil || preferences.attentionNotice != nil,
+            now: now()
         )
     }
 
@@ -442,7 +453,7 @@ struct SidebarView: View {
         let work = visibleWork
         return SidebarPresentation.workspaceAttention(
             sessions: work.tree.sessions, managed: work.managed,
-            availability: model.orchestration.availability, now: Date(), observations: work.tree
+            availability: model.orchestration.availability, now: now(), observations: work.tree
         )
     }
 
@@ -459,7 +470,7 @@ struct SidebarView: View {
     private var pinnedDetails: SidebarDetailContent {
         SidebarPresentation.pinnedDetails(
             hierarchy: model.hierarchy, connected: connected, tree: model.copilot.tree,
-            managed: model.orchestration.snapshot, availability: model.orchestration.availability, now: Date()
+            managed: model.orchestration.snapshot, availability: model.orchestration.availability, now: now()
         )
     }
 
@@ -467,7 +478,7 @@ struct SidebarView: View {
         inspector.flatMap {
             SidebarPresentation.inspectorDetails(
                 for: $0, hierarchy: model.hierarchy, connected: connected, tree: model.copilot.tree,
-                managed: model.orchestration.snapshot, availability: model.orchestration.availability, now: Date()
+                managed: model.orchestration.snapshot, availability: model.orchestration.availability, now: now()
             )
         }
     }
@@ -617,7 +628,7 @@ struct SidebarView: View {
             return SidebarAgentHoverContent.card(
                 for: target, hierarchy: model.hierarchy, connected: connected,
                 tree: model.copilot.tree, managed: model.orchestration.snapshot,
-                availability: model.orchestration.availability, now: Date()
+                availability: model.orchestration.availability, now: now()
             )
         })
         .environment(\.sidebarHoverConnected, {
@@ -705,9 +716,9 @@ struct SidebarView: View {
             )
         case .taskboard:
             let work = visibleWork
-            let retainedIDs = SidebarPresentation.retainedSessionIDs(work.tree, managed: work.managed, now: Date())
+            let retainedIDs = SidebarPresentation.retainedSessionIDs(work.tree, managed: work.managed, now: now())
             let managedSessionIDs = Set(SidebarPresentation.sessionPlacements(
-                work.tree.sessions, managed: work.managed, observations: work.tree, now: Date()
+                work.tree.sessions, managed: work.managed, observations: work.tree, now: now()
             ).filter { $0.contentOwnerID != nil }.map { $0.session.id })
             if !model.orchestration.snapshot.nodes.isEmpty {
                 ManagedHierarchyContent(
@@ -804,7 +815,7 @@ struct SidebarView: View {
 
     private func inspectManaged(_ node: SidebarOrchestrationNode) {
         guard openInspector(.managed(node)) else { return }
-        if SidebarPresentation.displacedManagedNodeIDs([node], observations: model.copilot.tree, now: Date()).contains(node.id) {
+        if SidebarPresentation.displacedManagedNodeIDs([node], observations: model.copilot.tree, now: now()).contains(node.id) {
             if let sessionID = node.copilotSessionId { prepareSeen(.session(sessionID))() }
         } else {
             prepareSeen(.surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId))()
@@ -816,7 +827,7 @@ struct SidebarView: View {
               let subject = SidebarPresentation.inspection(
             for: target, hierarchy: model.hierarchy, connected: connected,
             tree: model.copilot.tree, managed: model.orchestration.snapshot,
-            availability: model.orchestration.availability, now: Date(),
+            availability: model.orchestration.availability, now: now(),
             capturedPlacement: (capturedWorkspaceID, capturedSurfaceID)
         ) else {
             inspector = nil
@@ -849,7 +860,7 @@ struct SidebarView: View {
     private func openInspector(_ target: SidebarInspection.Target) -> Bool {
         guard let subject = SidebarPresentation.inspection(
             for: target, hierarchy: model.hierarchy, connected: connected, tree: model.copilot.tree,
-            managed: model.orchestration.snapshot, availability: model.orchestration.availability
+            managed: model.orchestration.snapshot, availability: model.orchestration.availability, now: now()
         ) else {
             inspector = nil
             showingInspector = true
@@ -1103,6 +1114,7 @@ struct ManagedHierarchyContent: View {
     var taskboard = false
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
+    @Environment(\.sidebarPresentationNow) private var now
     private var nodes: [SidebarOrchestrationNode] { displayNodes ?? polling.snapshot.nodes }
     private func children(of id: UUID) -> [SidebarOrchestrationNode] {
         nodes.filter { $0.parentId == id }
@@ -1126,7 +1138,7 @@ struct ManagedHierarchyContent: View {
     }
 
     var body: some View {
-        let evidenceDate = Date()
+        let evidenceDate = now()
         let displaced = SidebarPresentation.displacedManagedNodeIDs(nodes, observations: copilotTree, now: evidenceDate)
         VStack(alignment: .leading, spacing: 12) {
             ForEach(workspaceGroups, id: \.id) { group in
@@ -1308,7 +1320,7 @@ private struct ManagedNodeRow: View {
                             kind: isRetainedRecord ? "Needed context · \(stateCaption)"
                                 : stateVisual.tone == .red || stateVisual.tone == .attention ? stateCaption
                                 : node.role == "worker" && node.executionMode != .interactive ? "Legacy worker" : "Agent",
-                            directory: verifiedWorktree
+                            directory: assignedWorktree
                         )).lineLimit(1).truncationMode(.tail)
                     }
                     .font(.system(size: density.rowMetadataSize))
@@ -1351,18 +1363,7 @@ private struct ManagedNodeRow: View {
         .accessibilityIdentifier("managed-node-\(node.id)")
     }
 
-    private var metadataLine: String? {
-        guard node.gitEvidenceStatus == "verified", node.gitEvidenceAt != nil else { return nil }
-        switch (node.branchLabel, node.worktreeLabel) {
-        case let (branch?, worktree?) where branch != worktree:
-            return "\(branch)  ·  \(SidebarPathDisplay.text(worktree))"
-        case let (branch?, _): return branch
-        case let (_, worktree?): return SidebarPathDisplay.text(worktree)
-        default: return nil
-        }
-    }
-
-    private var verifiedWorktree: String? {
+    private var assignedWorktree: String? {
         guard node.gitEvidenceStatus == "verified", node.gitEvidenceAt != nil else { return nil }
         return node.worktreeLabel.map(SidebarPathDisplay.text)
     }
@@ -1385,11 +1386,7 @@ private struct ManagedNodeRow: View {
             stateVisual, needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate)
         )
         let state = isRetainedRecord ? "Work context. \(ownState). \(SidebarPresentation.retainedFocusUnavailable)" : ownState
-        let git = node.currentGitChanges(at: evidenceDate)?.description ?? "Current Git counts unavailable"
-        guard let metadataLine else { return "\(state). \(git)" }
-        let location = node.hasFreshGitEvidence(at: evidenceDate)
-            ? metadataLine : "Last verified location, not current Git state: \(metadataLine)"
-        return "\(state). \(location). \(git)"
+        return "\(state). \(SidebarPresentation.managedGitMetadataHelp(node, now: evidenceDate))"
     }
 }
 
@@ -1398,6 +1395,7 @@ struct GitChangeBadge: View {
 
     var body: some View {
         HStack(spacing: 4) {
+            Text(SidebarPresentation.assignedGitTitle).foregroundStyle(.secondary)
             Text("\(changes.files) \(changes.files == 1 ? "file" : "files")")
                 .foregroundStyle(.secondary)
             Text("+\(changes.insertions)").foregroundStyle(SidebarTone.attention.color)
@@ -1407,8 +1405,9 @@ struct GitChangeBadge: View {
         .monospacedDigit()
         .fixedSize()
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(changes.description)
-        .help(changes.description)
+        .accessibilityLabel(SidebarPresentation.assignedGitChangesDescription(changes))
+        .accessibilityHint(SidebarPresentation.assignedGitHelp)
+        .help(SidebarPresentation.assignedGitChangesDescription(changes) + ". " + SidebarPresentation.assignedGitHelp)
     }
 }
 
@@ -1550,17 +1549,18 @@ private struct WorkspaceRow: View {
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarHoverConnected) private var connected
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
+    @Environment(\.sidebarPresentationNow) private var now
     private var expanded: Bool { layout.isExpanded(.workspace(workspace.id)) }
     private var managedNodes: [SidebarOrchestrationNode] {
         displayManaged.filter { $0.workspaceId == workspace.id }
     }
     private var sessionPlacements: [SidebarSessionPlacement] {
-        SidebarPresentation.sessionPlacements(sessions, managed: managedNodes, observations: copilotTree, now: Date())
+        SidebarPresentation.sessionPlacements(sessions, managed: managedNodes, observations: copilotTree, now: now())
     }
     private var attentionSummary: SidebarWorkspaceAttention {
         SidebarPresentation.workspaceAttention(
             sessions: sessions, managed: managedNodes,
-            availability: orchestration.availability, now: Date(), observations: copilotTree
+            availability: orchestration.availability, now: now(), observations: copilotTree
         )
     }
 
@@ -1650,7 +1650,7 @@ private struct WorkspaceRow: View {
                 case .available(let surfaces):
                     ForEach(SidebarPresentation.unmanagedSurfaces(
                         surfaces,
-                        workspaceID: workspace.id, managed: managedNodes, observations: copilotTree
+                        workspaceID: workspace.id, managed: managedNodes, observations: copilotTree, now: now()
                     )) { surface in
                         SurfaceRow(
                             workspaceID: workspace.id, surface: surface,

@@ -263,6 +263,13 @@ struct SidebarLayoutTests {
         await sidebarEventually { store?.value.settings.isExpanded(key) == false }
         #expect(file.apply(.density(.comfortable)).notice == nil)
         await sidebarEventually { store?.value.settings.density == .comfortable }
+        // Capture the presented value before another coordinated read can deliver notifications.
+        let presented = store?.value
+        let persisted = file.read()
+        #expect(presented?.settings.density == .comfortable && presented?.notice == nil,
+                "Presented: \(String(describing: presented)); independently coordinated disk: \(persisted)")
+        #expect(persisted.settings.density == .comfortable && persisted.notice == nil,
+                "Presented: \(String(describing: presented)); independently coordinated disk: \(persisted)")
         store = nil
         await sidebarEventually { released.value == nil }
     }

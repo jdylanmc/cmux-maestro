@@ -56,8 +56,9 @@ struct SidebarLayoutRenderingTests {
                         #expect(ordinary.prefix(3).allSatisfy { $0.frame.minX == ordinary[0].frame.minX })
                         #expect(geometry.contains { $0.help.contains("State unavailable")
                             && $0.help.contains("Child history incomplete") && $0.help.contains("~/git/_opensource/example/maestro-design") })
-                        #expect(geometry.contains { $0.help.contains("Last verified location, not current Git state")
-                            && $0.help.contains("Current Git counts unavailable") })
+                        #expect(geometry.contains { $0.help.contains("Last verified location: Assigned directory: Not current Git state")
+                            && $0.help.contains("Git changes: Assigned directory: Current counts unavailable")
+                            && $0.help.contains("not Copilot's current /cwd") })
                     }
                 }
             }

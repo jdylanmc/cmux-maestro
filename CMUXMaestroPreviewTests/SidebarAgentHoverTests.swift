@@ -130,8 +130,86 @@ struct SidebarAgentHoverTests {
         #expect(paths.accessibilityDescription ==
             "Workspace: \(granted ? "/synthetic/workspace" : "Path unavailable"). Project: \(granted ? "/synthetic/project" : "Path unavailable"). Surface directory: \(expectedValue). Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory.")
         #expect(consumers.first { $0.0 == "managed hover" }?.1.contains(
-            .init(title: "Worktree", value: "/synthetic/assigned-git-label")
+            .init(title: "Worktree", value: "Assigned directory: /synthetic/assigned-git-label",
+                  help: SidebarPresentation.assignedGitHelp)
         ) == true, "Assigned Git evidence stays separate, never used as the directory")
+    }
+
+    @Test(arguments: ["fresh", "stale", "unavailable", "absent", "stale-counts", "detached"])
+    func managedGitConsumersQualifyAssignedDirectoryWithoutChangingFreshness(_ evidence: String) throws {
+        let session = session()
+        let captured = now.addingTimeInterval(evidence == "stale" ? -61 : 0)
+        let verified = !["unavailable", "absent"].contains(evidence)
+        let changes = SidebarGitChanges(files: 3, insertions: 24, deletions: 2, untrackedFiles: 1, binaryFiles: 1)
+        let node = SidebarOrchestrationNode(
+            id: fixtures.surfaceB, runId: fixtures.workspaceB, parentId: nil, role: "worker", label: "Assigned Git",
+            workspaceId: session.workspaceID, surfaceId: session.surfaceID, generation: 2,
+            phase: "turn-running", availability: "busy", copilotSessionId: session.id, executionMode: .interactive,
+            worktreeLabel: verified ? "assigned-worktree" : nil,
+            branchLabel: verified && evidence != "detached" ? "assigned-branch" : nil,
+            gitEvidenceStatus: evidence == "absent" ? nil : verified ? "verified" : "unavailable",
+            gitEvidenceAt: evidence == "absent" ? nil : captured,
+            gitChangesStatus: evidence == "absent" ? nil : verified ? "verified" : "unavailable",
+            gitChanges: verified ? changes : nil,
+            gitChangesAt: evidence == "absent" ? nil : evidence == "stale-counts" ? now.addingTimeInterval(-61) : captured,
+            createdAt: now, updatedAt: now
+        )
+        let hierarchy = directoryHierarchy("/synthetic/independent-host-report")
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+        let managed = SidebarOrchestrationSnapshot(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node])
+        let hover = try #require(card(.managed(node.id, generation: 2), sessions: [session], hierarchy: hierarchy, nodes: [node]))
+        let pinned = SidebarPresentation.pinnedDetails(
+            hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
+        )
+        let subject = try #require(pinned.inspection)
+        let details = try #require(SidebarPresentation.inspectorDetails(
+            for: subject, hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
+        ))
+        let tooltip = SidebarPresentation.managedGitMetadataHelp(node, now: now)
+        let expectedHelp = "Git is probed at the directory assigned to this managed session, not Copilot's current /cwd or a tool's working directory."
+        let currentCounts = ["fresh", "detached"].contains(evidence)
+        let expectedCounts = currentCounts
+            ? "Assigned directory: 3 changed files · +24 / −2 lines vs HEAD. Includes 1 untracked and 1 binary files; their lines and submodule contents are excluded."
+            : "Assigned directory: Current counts unavailable"
+        #expect(pinned.gitChanges == (currentCounts ? changes : nil))
+        #expect(SidebarPresentation.assignedGitTitle == "Assigned directory")
+        #expect(SidebarPresentation.assignedGitChangesDescription(pinned.gitChanges) == expectedCounts)
+        #expect(tooltip.contains(expectedHelp))
+        for lines in [hover.lines, pinned.lines, details.lines] {
+            let git = lines.filter { ["Branch", "Worktree", "Git evidence", "Last verified location", "Git changes"].contains($0.title) }
+            #expect(!git.isEmpty)
+            #expect(git.allSatisfy { $0.value.hasPrefix("Assigned directory: ") && $0.help == expectedHelp })
+            #expect(git.allSatisfy { tooltip.contains("\($0.title): \($0.value)") })
+            #expect(git.first { $0.title == "Git changes" }?.value == expectedCounts)
+            #expect(lines.first { $0.title == "Surface directory" } == .init(
+                title: "Surface directory", value: "/synthetic/independent-host-report",
+                help: "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory."
+            ))
+            if verified && evidence != "stale" {
+                #expect(git.first { $0.title == "Worktree" }?.value == "Assigned directory: assigned-worktree")
+                #expect(git.first { $0.title == "Branch" }?.value ==
+                    (evidence == "detached" ? nil : "Assigned directory: assigned-branch"))
+                #expect(git.first { $0.title == "Git evidence" }?.value.hasPrefix("Assigned directory: Verified ") == true)
+            } else {
+                #expect(!git.contains { ["Branch", "Worktree"].contains($0.title) })
+                if evidence == "absent" {
+                    #expect(!git.contains { $0.title == "Git evidence" })
+                } else {
+                    let status = evidence == "stale" ? "Stale" : "Unavailable"
+                    #expect(git.first { $0.title == "Git evidence" }?.value.hasPrefix("Assigned directory: \(status) · ") == true)
+                }
+            }
+            #expect(!git.contains { $0.value.contains("/synthetic/independent-host-report") })
+        }
+        if evidence == "stale" {
+            let expectedLocation = "Assigned directory: Not current Git state: assigned-branch · assigned-worktree"
+            for lines in [hover.lines, details.lines] {
+                #expect(lines.first { $0.title == "Last verified location" }?.value == expectedLocation)
+            }
+            #expect(tooltip.contains("Last verified location: \(expectedLocation)"))
+        } else {
+            #expect(!tooltip.contains("Last verified location"))
+        }
     }
 
     @Test func directoryUpdatesFollowExactMovedSurfaceWithoutReusingCapturedPlacement() throws {
@@ -318,8 +396,9 @@ struct SidebarAgentHoverTests {
         #expect(result.lines.contains(.init(title: "Model", value: "model")))
         #expect(!result.lines.contains { $0.value == "old-branch" || $0.value == "not-current" })
         #expect(result.lines.contains(.init(title: "Last verified location",
-                                           value: "Not current Git state: old-branch · not-current")))
-        #expect(result.lines.contains { $0.title == "Git evidence" && $0.value.hasPrefix("Stale") })
+                                           value: "Assigned directory: Not current Git state: old-branch · not-current",
+                                           help: SidebarPresentation.assignedGitHelp)))
+        #expect(result.lines.contains { $0.title == "Git evidence" && $0.value.hasPrefix("Assigned directory: Stale") })
         #expect(result.lines.filter { $0.copyableSessionID != nil } == [.sessionID(fixtures.sessionID)])
         #expect(!result.lines.contains { $0.copyableSessionID == node.id || $0.copyableSessionID == node.runId })
         let withoutObservedSession = try #require(card(.managed(node.id, generation: 2), sessions: [], nodes: [node]))
