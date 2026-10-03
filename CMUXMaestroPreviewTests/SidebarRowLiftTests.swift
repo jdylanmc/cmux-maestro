@@ -406,9 +406,10 @@ struct SidebarRowLiftTests {
         ])]
         row.presenter.present = { menu, _, _ in
             presentations += 1
-            // Stand-in menu event window differs from the captured owner; no actual menu tracking is claimed.
-            sampled = sampledMenuEvent(eventType, window: foreign, timestamp: ProcessInfo.processInfo.systemUptime)
+            // Owner-window sampler evidence only; actual nil/menu-window event ownership is not inferred.
+            sampled = sampledMenuEvent(eventType, window: window, timestamp: ProcessInfo.processInfo.systemUptime)
             guard sampled != nil else { Issue.record("Expected a native menu input event"); return }
+            #expect(sampled?.window === window)
             switch boundary {
             case .close:
                 row.presenter.menuDidClose(menu)
@@ -428,7 +429,7 @@ struct SidebarRowLiftTests {
         #expect(actions == (boundary == .action ? 1 : 0))
         #expect(row.anchor.keyboardFocused == keyboardReturn && row.anchor.keyboardInteraction == keyboardReturn)
         #expect(sibling.anchor.keyboardInteraction == keyboardReturn && !sibling.anchor.keyboardFocused)
-        #expect(foreignRow.anchor.keyboardFocused, "Menu-window identity cannot redirect state to an unrelated owner")
+        #expect(foreignRow.anchor.keyboardFocused, "Owner-window menu input cannot alter an unrelated window")
         #expect(window.firstResponder === row.title && foreign.firstResponder === foreignRow.title)
         #expect(row.title.focusRingType == .exterior && !window.isVisible && !foreign.isVisible)
     }
@@ -456,9 +457,13 @@ struct SidebarRowLiftTests {
             completedMenu = menu
             sampled = sampledMenuEvent(.leftMouseUp, window: foreign, timestamp: ProcessInfo.processInfo.systemUptime)
             guard sampled != nil else { Issue.record("Expected a current event"); return }
+            #expect(sampled?.window === foreign)
             row.presenter.menuDidClose(NSMenu(title: "Unrelated menu"))
             #expect(reads == 0 && row.anchor.keyboardFocused)
-            sampled = sampledMenuEvent(.leftMouseUp, window: foreign, timestamp: 0)
+            row.presenter.menuDidClose(menu)
+            #expect(row.anchor.keyboardFocused && foreignRow.anchor.keyboardFocused,
+                    "A newer event from an ordinary foreign window is not evidence of this menu's input")
+            sampled = sampledMenuEvent(.leftMouseUp, window: window, timestamp: 0)
             guard sampled != nil else { Issue.record("Expected a stale event"); return }
             row.presenter.menuDidClose(menu)
             #expect(row.anchor.keyboardFocused && foreignRow.anchor.keyboardFocused)
@@ -466,13 +471,13 @@ struct SidebarRowLiftTests {
         row.presenter.show()
         let oldMenu = try #require(completedMenu)
         let readsAfterReturn = reads
-        sampled = try #require(sampledMenuEvent(.leftMouseUp, window: foreign, timestamp: ProcessInfo.processInfo.systemUptime))
+        sampled = try #require(sampledMenuEvent(.leftMouseUp, window: window, timestamp: ProcessInfo.processInfo.systemUptime))
         row.presenter.menuDidClose(oldMenu)
         #expect(reads == readsAfterReturn && row.anchor.keyboardFocused)
 
         foreignRow.presenter.currentMenuEvent = { sampled }
         foreignRow.presenter.present = { menu, _, _ in
-            sampled = sampledMenuEvent(.rightMouseUp, window: window, timestamp: ProcessInfo.processInfo.systemUptime)
+            sampled = sampledMenuEvent(.rightMouseUp, window: foreign, timestamp: ProcessInfo.processInfo.systemUptime)
             guard sampled != nil else { Issue.record("Expected a different owner's current event"); return }
             row.presenter.menuDidClose(oldMenu)
             #expect(row.anchor.keyboardFocused && foreignRow.anchor.keyboardFocused && reads == readsAfterReturn)
