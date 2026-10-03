@@ -207,6 +207,33 @@ struct SidebarRowLiftTests {
         NotificationCenter.default.post(name: NSWindow.didUpdateNotification, object: window)
         try #require(anchor.keyboardFocused)
         let originalBounds = anchor.bounds
+        anchor.frame = .zero
+        anchor.refreshKeyboardFocus()
+        #expect(anchor.frame.isEmpty && !anchor.keyboardFocused)
+        #expect(presenter.focusedControls == [control], "Zero frame suppresses decoration, not the control's focus token")
+        anchor.frame = frame
+        try #require(anchor.bounds == originalBounds)
+        anchor.refreshKeyboardFocus()
+        try #require(anchor.keyboardFocused)
+
+        anchor.bounds = .zero
+        anchor.refreshKeyboardFocus()
+        #expect(anchor.bounds.isEmpty && !anchor.keyboardFocused)
+        #expect(presenter.focusedControls == [control])
+        anchor.bounds = originalBounds
+        try #require(anchor.frame == frame)
+        anchor.refreshKeyboardFocus()
+        try #require(anchor.keyboardFocused)
+
+        root.isHidden = true
+        anchor.refreshKeyboardFocus()
+        #expect(anchor.isHiddenOrHasHiddenAncestor && !anchor.keyboardFocused)
+        #expect(presenter.focusedControls == [control])
+        root.isHidden = false
+        try #require(!anchor.isHiddenOrHasHiddenAncestor && anchor.window === window)
+        anchor.refreshKeyboardFocus()
+        try #require(anchor.keyboardFocused)
+
         // Clip through the ancestor without changing the row's own coordinate space or attachment.
         anchor.setFrameOrigin(NSPoint(x: root.bounds.maxX + 1, y: frame.minY))
         try #require(!root.bounds.intersects(root.convert(anchor.bounds, from: anchor)))
