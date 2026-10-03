@@ -16,6 +16,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Give full interactive agent, terminal and browser rows one subtle hover or
+  keyboard-focus lift, preserving selection and control outlines, with an
+  immediate equivalent under Reduce Motion (#115).
 - Match internal-task headings to the approved prototype without inline
   completeness diagnostics, preserving counts, task visibility and detail hints.
 - Show internal Copilot tasks as compact, non-interactive lines with

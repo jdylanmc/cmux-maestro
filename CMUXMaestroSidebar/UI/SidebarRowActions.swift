@@ -24,6 +24,8 @@ final class SidebarRowMenuPresenter: NSObject {
     var dismissPreview: () -> Void = {}
     var preview: (() -> Bool)?
     var focusChanged: (Bool) -> Void = { _ in }
+    var liftFocusChanged: (Bool) -> Void = { _ in }
+    var liftEligible = false
     var present: (NSMenu, NSPoint, NSView) -> Void = { menu, point, view in
         menu.popUp(positioning: nil, at: point, in: view)
     }
@@ -83,22 +85,64 @@ final class SidebarRowMenuPresenter: NSObject {
         dismissPreview = {}
         preview = nil
         focusChanged = { _ in }
+        liftFocusChanged = { _ in }
+        liftEligible = false
     }
 }
 
 final class SidebarRowMenuAnchorView: NSView {
     var presenter: SidebarRowMenuPresenter?
     private var monitor: Any?
+    private(set) var keyboardInteraction = false
+    private(set) var keyboardFocused = false
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
-        guard window != nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) { [weak self] event in
-            guard let self, self.handles(event) else { return event }
+        NotificationCenter.default.removeObserver(self)
+        keyboardInteraction = false
+        setKeyboardFocused(false)
+        guard let window else { return }
+        for name in [NSWindow.didUpdateNotification, NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(refreshKeyboardFocus), name: name, object: window)
+        }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .rightMouseDown, .leftMouseDown, .otherMouseDown]) { [weak self] event in
+            guard let self else { return event }
+            self.observeInput(event)
+            guard self.handles(event) else { return event }
             self.presenter?.show(at: self.convert(event.locationInWindow, from: nil))
             return nil
         }
+    }
+
+    func observeInput(_ event: NSEvent) {
+        guard presenter?.liftEligible == true, let window, event.window === window else { return }
+        if event.type == .keyDown {
+            keyboardInteraction = true
+        } else if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
+            keyboardInteraction = false
+        }
+        refreshKeyboardFocus()
+    }
+
+    @objc func refreshKeyboardFocus() {
+        guard presenter?.liftEligible == true, keyboardInteraction,
+              let window, window.isKeyWindow,
+              let control = window.firstResponder as? NSView,
+              control !== window.contentView, !control.isHiddenOrHasHiddenAncestor,
+              control.window === window, !visibleRect.isEmpty else {
+            setKeyboardFocused(false)
+            return
+        }
+        let controlRect = convert(control.bounds, from: control)
+        setKeyboardFocused(!controlRect.isEmpty && bounds.contains(controlRect)
+                           && !visibleRect.intersection(controlRect).isEmpty)
+    }
+
+    private func setKeyboardFocused(_ focused: Bool) {
+        guard keyboardFocused != focused else { return }
+        keyboardFocused = focused
+        presenter?.liftFocusChanged(focused)
     }
 
     func handles(_ event: NSEvent) -> Bool {
@@ -115,6 +159,9 @@ final class SidebarRowMenuAnchorView: NSView {
 
     func detach() {
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+        NotificationCenter.default.removeObserver(self)
+        keyboardInteraction = false
+        setKeyboardFocused(false)
         if presenter?.anchor === self { presenter?.detach() }
         presenter = nil
     }
@@ -142,44 +189,62 @@ extension EnvironmentValues {
 }
 
 extension View {
-    func sidebarRowActions(title: String, groups: [SidebarRowActionGroup]) -> some View {
-        SidebarRowActions(title: title, groups: groups) { self }
+    func sidebarRowActions(title: String, groups: [SidebarRowActionGroup], liftEligible: Bool = false) -> some View {
+        SidebarRowActions(title: title, groups: groups, liftEligible: liftEligible) { self }
     }
 }
 
 struct SidebarRowActions<Content: View>: View {
     let title: String
     let groups: [SidebarRowActionGroup]
+    var liftEligible = false
     @ViewBuilder var content: Content
     @State private var presenter = SidebarRowMenuPresenter()
     @State private var hovered = false
     @State private var focused = false
+    @State private var keyboardFocused = false
 
     var body: some View {
         HStack(spacing: 2) {
             content
             ZStack {
                 Color.clear
-                if hovered || focused {
-                    Button { presenter.show() } label: {
-                        Image(systemName: "ellipsis").font(.caption2)
-                            .frame(width: 24, height: 24)
+                if hovered || focused || keyboardFocused {
+                    if liftEligible {
+                        overflowButton.buttonStyle(.plain)
+                    } else {
+                        overflowButton.buttonStyle(.borderless)
                     }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Actions for \(title)")
-                    .help("Actions for \(title); Shift-F10 on the row")
                 }
             }
             .frame(width: 24, height: 24)
         }
         .environment(\.sidebarRowMenu, configuredPresenter)
+        .background {
+            if liftEligible {
+                SidebarRowLiftSurface(lifted: SidebarRowLiftStyle.isLifted(
+                    eligible: liftEligible, hovered: hovered, keyboardFocused: keyboardFocused
+                ))
+            }
+        }
         .background(SidebarRowMenuAnchor(presenter: presenter))
         .onHover { hovered = $0 }
+    }
+
+    private var overflowButton: some View {
+        Button { presenter.show() } label: {
+            Image(systemName: "ellipsis").font(.caption2)
+                .frame(width: 24, height: 24)
+        }
+        .accessibilityLabel("Actions for \(title)")
+        .help("Actions for \(title); Shift-F10 on the row")
     }
 
     private var configuredPresenter: SidebarRowMenuPresenter {
         presenter.groups = groups
         presenter.focusChanged = { focused = $0 }
+        presenter.liftEligible = liftEligible
+        presenter.liftFocusChanged = { keyboardFocused = $0 }
         return presenter
     }
 }

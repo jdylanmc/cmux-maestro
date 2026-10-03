@@ -22,6 +22,32 @@ metadata, installer transactions, SDK-fetch concurrency, compiled-hook and
 sandbox checks. Validation hosts do not open installation windows or permit
 plugin changes. No new test framework is required.
 
+### Single-row lift (#115)
+
+The existing row-action container explicitly opts full interactive managed
+agents, agent sessions, terminals and browsers into one decorative surface.
+Headers, utility rows, retained context, observed-only children, internal-task
+text/disclosure and metadata/copy controls stay outside that opt-in.
+
+The shared native treatment uses a 4% semantic highlight and two softened
+semantic shadows (2.5/5-point radii, 1/4-point vertical offsets, 10%/6% opacity).
+Its transparent interior preserves the existing selected and activity
+backgrounds. Only the decoration fades, with 160ms ease-out; Reduce Motion
+applies the same surface immediately. Row geometry, hit testing, per-control
+focus rings, navigation, menus and ownership do not change.
+
+Keyboard lift observes window-local keyboard/pointer input and the first
+responder inside the row. It neither moves focus nor invokes an action.
+Pointer input clears keyboard lift independently of selection; moving between
+icon, title, disclosure and overflow retains one row surface.
+
+`SidebarRowLiftStyleTests` covers the eligibility and hover/focus predicate.
+Native interaction, appearance and geometry require the hosted integrated
+suite and candidate-specific `sidebar-layout-offscreen` artifacts. An unsigned
+build or a frozen browser reference is not native visual acceptance. The
+authoring environment prohibits local GUI execution; no local GUI RED/GREEN
+or installed-sidebar acceptance is implied.
+
 ### Setup fixture readiness
 
 Process-cleanup tests wait for the injected clock's first post-`posix_spawn`
