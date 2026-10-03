@@ -37,10 +37,11 @@ struct CLIIntegrationGuideRenderingTests {
                 await model.recheck()
                 var copies = 0
                 var copySucceeds = false
+                // Enable assistive output in this synthetic host, not in system preferences.
                 let host = NSHostingView(rootView: CLIIntegrationSettingsView(model: model, copyCommand: {
                     copies += 1
                     return copySucceeds
-                }))
+                }).environment(\.accessibilityEnabled, true))
                 let window = makeWindow(host: host, dark: dark)
                 defer { window.contentView = nil; window.close() }
                 let prefix = "cli-guide-\(name)-\(dark ? "dark" : "light")"
@@ -88,8 +89,25 @@ struct CLIIntegrationGuideRenderingTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(3)))
-    func nativeRecheckDrivesCheckingChangedStatusAndRetry() async throws {
+    @Test func nativeRecheckDrivesCheckingChangedStatusAndRetry() async throws {
+        // The same 180-second action deadline starts after the AppKit scope is acquired.
+        // A test-level TimeLimitTrait also counts time queued behind unrelated native tests.
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await exerciseNativeRecheck() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(180))
+                throw NativeActionDeadlineExceeded()
+            }
+            defer { group.cancelAll() }
+            try await group.next()
+        }
+    }
+
+    private struct NativeActionDeadlineExceeded: Error, CustomStringConvertible {
+        var description: String { "Native Re-check exceeded 180 seconds after acquiring the AppKit scope" }
+    }
+
+    private func exerciseNativeRecheck() async throws {
         for dark in [false, true] {
             let reader = ControlledReader(initial: result(.missing))
             let model = CLIIntegrationGuideModel(read: { await reader.read() })
@@ -97,7 +115,7 @@ struct CLIIntegrationGuideRenderingTests {
             let host = NSHostingView(rootView: CLIIntegrationSettingsView(model: model, copyCommand: {
                 Issue.record("Re-check must never invoke Copy")
                 return false
-            }))
+            }).environment(\.accessibilityEnabled, true))
             let window = makeWindow(host: host, dark: dark)
             defer { window.contentView = nil; window.close() }
             await renderTurn(host, window: window)
@@ -122,7 +140,7 @@ struct CLIIntegrationGuideRenderingTests {
                     let checking = try element("cli-integration-checking", in: host, window: window)
                     #expect(checking.text.contains("Checking guide content..."))
                     #expect(try !element("cli-integration-recheck", in: host, window: window).enabled)
-                    #expect(!accessibilityNodes(host, window: window).contains {
+                    #expect(!accessibilityNodes(from: host).contains {
                         $0.identifier?.hasPrefix("cli-integration-status-") == true
                     })
                     try capture(host, named: prefix + "-checking")
@@ -264,7 +282,15 @@ struct CLIIntegrationGuideRenderingTests {
     }
 
     private func descendants(_ view: NSView) -> [NSView] {
-        view.subviews.flatMap { [$0] + descendants($0) }
+        var views: [NSView] = []
+        var pending = view.subviews
+        while !pending.isEmpty, views.count < 4_096 {
+            let next = pending.removeLast()
+            views.append(next)
+            pending += next.subviews
+        }
+        #expect(pending.isEmpty, "Synthetic view hierarchy exceeded the inspection bound")
+        return views
     }
 
     // SwiftUI may expose Objective-C accessibility selectors without declaring the full
@@ -286,29 +312,101 @@ struct CLIIntegrationGuideRenderingTests {
                 .compactMap { $0 }.joined(separator: "\n")
         }
         var children: [NSObject] {
-            ((object as AnyObject).accessibilityChildren?() ?? [])?.compactMap { $0 as? NSObject } ?? []
+            let children = (object as AnyObject).accessibilityChildren?() ?? []
+            return NSAccessibility.unignoredChildren(from: children).compactMap { $0 as? NSObject }
         }
         func press() -> Bool { (object as AnyObject).accessibilityPerformPress?() ?? false }
     }
 
     private func element(_ id: String, in host: NSView, window: NSWindow) throws -> NativeElement {
-        let nodes = accessibilityNodes(host, window: window)
-        let diagnostic = nodes.map { "\(type(of: $0.object)): \($0.identifier ?? "-") \($0.text)" }
-            .joined(separator: "\n")
-        return try #require(nodes.first { $0.identifier == id }, "Missing \(id). Native AX tree:\n\(diagnostic)")
+        try #require(host.window === window)
+        let nodes = accessibilityNodes(from: host)
+        let match = nodes.first { $0.identifier == id }
+        if match == nil {
+            print("Exposed host AX tree:\n\(diagnostic(nodes))")
+            let raw = ([host] + descendants(host)).map { NativeElement(object: $0) }
+            print("Raw views (diagnostics only):\n\(diagnostic(raw))")
+        }
+        return try #require(match, "Missing \(id) from the exposed host AX tree")
     }
 
-    private func accessibilityNodes(_ host: NSView, window: NSWindow) -> [NativeElement] {
+    private func diagnostic(_ nodes: [NativeElement]) -> String {
+        nodes.map { "\(type(of: $0.object)): \($0.identifier ?? "-") \($0.text.prefix(256))" }
+            .joined(separator: "\n")
+    }
+
+    private func accessibilityNodes(from root: NSObject) -> [NativeElement] {
         var nodes: [NativeElement] = []
-        var pending: [NSObject] = [window, host] + descendants(host)
-        var visited = Set<ObjectIdentifier>()
-        while let object = pending.popLast(), nodes.count < 4_096 {
+        var pending = NativeElement(object: root).children
+        var visited: Set<ObjectIdentifier> = [ObjectIdentifier(root)]
+        while !pending.isEmpty, visited.count < 4_096 {
+            let object = pending.removeLast()
             guard visited.insert(ObjectIdentifier(object)).inserted else { continue }
             let node = NativeElement(object: object)
             nodes.append(node)
             pending += node.children
         }
-        #expect(pending.isEmpty, "Synthetic accessibility tree exceeded the inspection bound")
+        #expect(pending.isEmpty, "Exposed accessibility tree exceeded the inspection bound")
         return nodes
+    }
+
+    @Test func accessibilityAcceptanceExcludesOmittedAndIgnoredRawControls() throws {
+        let host = ExposureFixtureView(frame: NSRect(x: 0, y: 0, width: 600, height: 350))
+        host.setAccessibilityElement(true)
+        host.setAccessibilityRole(.group)
+        let window = makeWindow(host: host, dark: false)
+        defer { window.contentView = nil; window.close() }
+        let buttons = (0..<3).map { index in
+            let button = ExposureFixtureButton(
+                frame: NSRect(x: 20, y: CGFloat(20 + index * 40), width: 180, height: 28)
+            )
+            button.title = "Synthetic action"
+            button.setAccessibilityIdentifier("guide-oracle-action")
+            button.setAccessibilityLabel("Synthetic action")
+            button.setAccessibilityElement(true)
+            host.addSubview(button)
+            return button
+        }
+        let omitted = buttons[0], ignored = buttons[1], exposed = buttons[2]
+        ignored.setAccessibilityElement(false)
+        host.exposedChildren = [ignored]
+        window.contentView?.layoutSubtreeIfNeeded()
+        #expect(omitted.isAccessibilityElement() && exposed.isAccessibilityElement())
+        #expect(!ignored.isAccessibilityElement())
+
+        // Correct labels, frames and working actions on raw objects are insufficient.
+        for button in [omitted, ignored] {
+            let raw = NativeElement(object: button)
+            #expect(raw.identifier == "guide-oracle-action")
+            #expect(raw.text.contains("Synthetic action"))
+            #expect(raw.enabled && raw.role == NSAccessibility.Role.button.rawValue)
+            let frame = try #require(raw.frame)
+            #expect(frame.width > 0 && frame.height > 0)
+            #expect(raw.press())
+            #expect(button.presses == 1)
+            #expect(descendants(host).contains { $0 === button })
+        }
+        #expect(!accessibilityNodes(from: host).contains { $0.identifier == "guide-oracle-action" })
+
+        host.exposedChildren = [ignored, exposed]
+        let accepted = accessibilityNodes(from: host).filter { $0.identifier == "guide-oracle-action" }
+        try #require(accepted.count == 1)
+        #expect(accepted[0].object === exposed)
+        #expect(accepted[0].press())
+        #expect(exposed.presses == 1)
+        #expect(omitted.presses == 1 && ignored.presses == 1)
+    }
+
+    private final class ExposureFixtureView: NSView {
+        var exposedChildren: [NSView] = []
+        override func accessibilityChildren() -> [Any]? { exposedChildren }
+    }
+
+    private final class ExposureFixtureButton: NSButton {
+        var presses = 0
+        override func accessibilityPerformPress() -> Bool {
+            presses += 1
+            return true
+        }
     }
 }
