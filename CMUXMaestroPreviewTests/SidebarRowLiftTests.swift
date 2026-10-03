@@ -194,7 +194,7 @@ struct SidebarRowLiftTests {
             let rest = try capture(mounted.host)
             let eligible = anchors.filter { $0.presenter?.liftEligible == true }
             try #require(!eligible.isEmpty)
-            for anchor in eligible { anchor.presenter?.liftFocusChanged(true) }
+            for anchor in anchors { anchor.presenter?.hoverChanged(true) }
             await Task.yield()
             mounted.host.layoutSubtreeIfNeeded()
             let lifted = try capture(mounted.host)
@@ -222,7 +222,25 @@ struct SidebarRowLiftTests {
             #expect(controls.allSatisfy { !$0.isBordered && $0.focusRingType == .exterior })
             #expect(iconControls.allSatisfy { !$0.isBordered && $0.focusRingType == .exterior })
             #expect(anchors.map { $0.presenter?.menu().items.map(\.title) } == menuBefore)
-            for anchor in eligible { anchor.presenter?.liftFocusChanged(false) }
+            for anchor in eligible { anchor.presenter?.hoverChanged(true) }
+            await Task.yield()
+            #expect(differences(lifted, try capture(mounted.host)) == 0,
+                    "Repeated hover input cannot add or restart another surface")
+            for anchor in eligible {
+                anchor.presenter?.liftFocusChanged(true)
+                anchor.presenter?.hoverChanged(false)
+            }
+            await Task.yield()
+            #expect(differences(lifted, try capture(mounted.host)) == 0,
+                    "Keyboard-only focus must retain the same row elevation after the pointer leaves")
+            for anchor in eligible {
+                anchor.presenter?.hoverChanged(true)
+                anchor.presenter?.liftFocusChanged(false)
+            }
+            await Task.yield()
+            #expect(differences(lifted, try capture(mounted.host)) == 0,
+                    "Losing keyboard focus while still hovered must not drop or double the lift")
+            for anchor in anchors { anchor.presenter?.hoverChanged(false) }
             await Task.yield()
             mounted.host.layoutSubtreeIfNeeded()
             let restored = try capture(mounted.host)
