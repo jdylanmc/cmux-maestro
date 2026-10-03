@@ -255,6 +255,68 @@ struct SidebarRowLiftTests {
         #expect(!window.isVisible && !foreign.isVisible)
     }
 
+    @Test(arguments: [NSEvent.EventType.leftMouseDown, .rightMouseDown, .otherMouseDown], FocusTarget.allCases)
+    func pointerDuringIneligibilityCannotReviveKeyboardLift(
+        _ pointerType: NSEvent.EventType, focusTarget: FocusTarget
+    ) throws {
+        let window = KeyboardWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120),
+                                    styleMask: .borderless, backing: .buffered, defer: false)
+        let foreign = KeyboardWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120),
+                                     styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        foreign.isReleasedWhenClosed = false
+        let root = NSView(frame: window.contentLayoutRect)
+        let anchor = SidebarRowMenuAnchorView(frame: NSRect(x: 0, y: 0, width: 240, height: 46))
+        let title = SidebarTitleNativeButton(frame: NSRect(x: 40, y: 8, width: 180, height: 30))
+        let icon = SidebarIconNativeButton()
+        icon.frame = NSRect(x: 8, y: 10, width: 24, height: 24)
+        let unrelated = SidebarTitleNativeButton(frame: NSRect(x: 40, y: 70, width: 180, height: 30))
+        let presenter = SidebarRowMenuPresenter()
+        presenter.liftEligible = true
+        presenter.anchor = anchor
+        anchor.presenter = presenter
+        let views: [NSView] = [anchor, title, icon, unrelated]
+        for view in views { root.addSubview(view) }
+        window.contentView = root
+        defer { anchor.detach(); window.contentView = nil; window.close(); foreign.close() }
+        let frames = root.subviews.map(\.frame)
+        let control: NSView
+        switch focusTarget {
+        case .title: control = title
+        case .icon: control = icon
+        case .explicit: control = unrelated
+        }
+        try #require(window.makeFirstResponder(control))
+        let token = UUID()
+        if focusTarget == .explicit { presenter.controlFocusChanged(token, focused: true) }
+        let tokens = presenter.focusedControls
+        anchor.observeInput(try keyEvent(window))
+        try #require(anchor.keyboardFocused && window.firstResponder === control)
+        presenter.liftEligible = false
+        anchor.refreshKeyboardFocus()
+        #expect(!anchor.keyboardFocused)
+        let ineligibleModality = anchor.keyboardInteraction
+        anchor.observeInput(try keyEvent(foreign))
+        anchor.observeInput(try pointerEvent(foreign, type: pointerType, point: .zero))
+        #expect(!anchor.keyboardFocused && anchor.keyboardInteraction == ineligibleModality,
+                "Foreign input cannot change this row's remembered modality")
+        anchor.observeInput(try pointerEvent(window, type: pointerType, point: NSPoint(x: 280, y: 110)))
+        #expect(!anchor.keyboardFocused && !anchor.keyboardInteraction)
+        presenter.liftEligible = true
+        anchor.refreshKeyboardFocus()
+        #expect(!anchor.keyboardFocused && !anchor.keyboardInteraction,
+                "Reusing the same row cannot restore pre-pointer keyboard modality")
+        anchor.observeInput(try keyEvent(foreign))
+        #expect(!anchor.keyboardFocused)
+        anchor.observeInput(try keyEvent(window))
+        #expect(anchor.keyboardFocused, "Only fresh same-window keyboard input restores the lift")
+        anchor.observeInput(try pointerEvent(foreign, type: pointerType, point: .zero))
+        #expect(anchor.keyboardFocused)
+        #expect(window.firstResponder === control && presenter.focusedControls == tokens)
+        #expect(anchor.presenter === presenter && presenter.anchor === anchor)
+        #expect(root.subviews.map(\.frame) == frames && !window.isVisible && !foreign.isVisible)
+    }
+
     @Test(arguments: Appearance.allCases, [240, 350])
     func productionRowsPreserveGeometryAndPassiveStateAcrossNativeAppearances(
         appearance: Appearance, width: Int
@@ -648,6 +710,10 @@ struct SidebarRowLiftTests {
         var contrast: ColorSchemeContrast {
             self == .lightContrast || self == .darkContrast ? .increased : .standard
         }
+    }
+
+    enum FocusTarget: CaseIterable, Equatable, Sendable {
+        case title, icon, explicit
     }
 
     private struct Fixture {
