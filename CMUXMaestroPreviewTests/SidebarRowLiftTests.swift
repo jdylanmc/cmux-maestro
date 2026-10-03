@@ -96,10 +96,20 @@ struct SidebarRowLiftTests {
         anchor.refreshKeyboardFocus()
         #expect(!anchor.keyboardFocused)
         title.isHidden = false
+        print("row-lift115 unhidden-title: responderIsTitle=\(window.firstResponder === title), responder=\(String(describing: window.firstResponder)), controlRect=\(anchor.convert(title.bounds, from: title)), rowBounds=\(anchor.bounds), visible=\(anchor.visibleRect)")
+        // Showing a hidden control need not restore the responder AppKit resigned.
+        try #require(window.makeFirstResponder(title))
+        try #require(window.firstResponder === title)
+        anchor.refreshKeyboardFocus()
+        try #require(anchor.keyboardFocused)
         title.frame.origin.x = 150
+        try #require(window.firstResponder === title)
+        try #require(!anchor.bounds.contains(anchor.convert(title.bounds, from: title)))
         anchor.refreshKeyboardFocus()
         #expect(!anchor.keyboardFocused, "Partially overlapping controls are not contained by this row")
         title.frame.origin.x = 20
+        try #require(window.firstResponder === title)
+        try #require(anchor.bounds.contains(anchor.convert(title.bounds, from: title)))
         anchor.refreshKeyboardFocus()
         try #require(anchor.keyboardFocused)
         window.reportsKeyState = false
@@ -170,6 +180,7 @@ struct SidebarRowLiftTests {
         window.isReleasedWhenClosed = false
         foreign.isReleasedWhenClosed = false
         let root = NSView(frame: window.contentLayoutRect)
+        root.clipsToBounds = true
         let frame = NSRect(x: 0, y: 0, width: 200, height: 46)
         let anchor = SidebarRowMenuAnchorView(frame: frame)
         let presenter = SidebarRowMenuPresenter()
@@ -195,10 +206,17 @@ struct SidebarRowLiftTests {
         window.reportsKeyState = true
         NotificationCenter.default.post(name: NSWindow.didUpdateNotification, object: window)
         try #require(anchor.keyboardFocused)
-        anchor.frame = .zero
+        let originalBounds = anchor.bounds
+        // Clip through the ancestor without changing the row's own coordinate space or attachment.
+        anchor.setFrameOrigin(NSPoint(x: root.bounds.maxX + 1, y: frame.minY))
+        try #require(!root.bounds.intersects(root.convert(anchor.bounds, from: anchor)))
+        try #require(anchor.bounds == originalBounds && anchor.window === window && anchor.presenter === presenter)
+        try #require(anchor.visibleRect.isEmpty)
+        print("row-lift115 clipped-row: parent=\(root.bounds), rowInParent=\(root.convert(anchor.bounds, from: anchor)), rowBounds=\(anchor.bounds), visible=\(anchor.visibleRect), clips=\(root.clipsToBounds)")
         anchor.refreshKeyboardFocus()
-        #expect(anchor.visibleRect.isEmpty && !anchor.keyboardFocused)
+        #expect(!anchor.keyboardFocused && presenter.focusedControls == [control])
         anchor.frame = frame
+        try #require(!anchor.visibleRect.isEmpty && anchor.bounds == originalBounds)
         anchor.refreshKeyboardFocus()
         try #require(anchor.keyboardFocused)
         presenter.liftEligible = false
@@ -290,12 +308,15 @@ struct SidebarRowLiftTests {
             let iconFrames = iconControls.map { mounted.host.convert($0.bounds, from: $0) }
             let menuBefore = anchors.map { $0.presenter?.menu().items.map(\.title) }
             let rest = try capture(mounted.host)
+            let captureName = "\(appearance.rawValue)-\(width)-\(density.rawValue)"
+            try save(rest, name: "\(captureName)-rest")
             let eligible = anchors.filter { $0.presenter?.liftEligible == true }
             try #require(!eligible.isEmpty)
             for anchor in anchors { anchor.presenter?.hoverChanged(true) }
             await Task.yield()
             mounted.host.layoutSubtreeIfNeeded()
             let lifted = try capture(mounted.host)
+            try save(lifted, name: "\(captureName)-lift")
             #expect(differences(rest, lifted) > 0, "The production callback must change the rendered surface")
             #expect(titles(mounted.host).map(ObjectIdentifier.init) == controls.map(ObjectIdentifier.init))
             #expect(descendants(mounted.host).compactMap { $0 as? SidebarRowMenuAnchorView }.map(ObjectIdentifier.init)
@@ -322,26 +343,37 @@ struct SidebarRowLiftTests {
             #expect(anchors.map { $0.presenter?.menu().items.map(\.title) } == menuBefore)
             for anchor in eligible { anchor.presenter?.hoverChanged(true) }
             await Task.yield()
-            #expect(differences(lifted, try capture(mounted.host)) == 0,
+            let repeated = try capture(mounted.host)
+            try save(repeated, name: "\(captureName)-repeated")
+            diagnoseDifference(lifted, repeated, phase: "\(captureName)-repeated", host: mounted.host, anchors: anchors)
+            #expect(differences(lifted, repeated) == 0,
                     "Repeated hover input cannot add or restart another surface")
             for anchor in eligible {
                 anchor.presenter?.liftFocusChanged(true)
                 anchor.presenter?.hoverChanged(false)
             }
             await Task.yield()
-            #expect(differences(lifted, try capture(mounted.host)) == 0,
+            let keyboardOnly = try capture(mounted.host)
+            try save(keyboardOnly, name: "\(captureName)-keyboard")
+            diagnoseDifference(lifted, keyboardOnly, phase: "\(captureName)-keyboard", host: mounted.host, anchors: anchors)
+            #expect(differences(lifted, keyboardOnly) == 0,
                     "Keyboard-only focus must retain the same row elevation after the pointer leaves")
             for anchor in eligible {
                 anchor.presenter?.hoverChanged(true)
                 anchor.presenter?.liftFocusChanged(false)
             }
             await Task.yield()
-            #expect(differences(lifted, try capture(mounted.host)) == 0,
+            let hoverOnly = try capture(mounted.host)
+            try save(hoverOnly, name: "\(captureName)-hover-return")
+            diagnoseDifference(lifted, hoverOnly, phase: "\(captureName)-hover-return", host: mounted.host, anchors: anchors)
+            #expect(differences(lifted, hoverOnly) == 0,
                     "Losing keyboard focus while still hovered must not drop or double the lift")
             for anchor in anchors { anchor.presenter?.hoverChanged(false) }
             await Task.yield()
             mounted.host.layoutSubtreeIfNeeded()
             let restored = try capture(mounted.host)
+            try save(restored, name: "\(captureName)-restored")
+            diagnoseDifference(rest, restored, phase: "\(captureName)-restored", host: mounted.host, anchors: anchors)
             #expect(differences(rest, restored) == 0, "Leaving restores selected and resting appearance exactly")
             #expect(model.hierarchy == beforeHierarchy && model.copilot.tree == beforeTree)
             #expect(model.orchestration.snapshot == beforeManaged)
@@ -349,8 +381,6 @@ struct SidebarRowLiftTests {
             #expect(preferences.attention == beforeAttention && preferences.icons == beforeIcons)
             #expect(pinned(model, now: data.now) == beforePinned && model.navigation.status == .idle)
             #expect(!mounted.window.isVisible)
-            try save(rest, name: "\(appearance.rawValue)-\(width)-\(density.rawValue)-rest")
-            try save(lifted, name: "\(appearance.rawValue)-\(width)-\(density.rawValue)-lift")
         }
     }
 
@@ -493,7 +523,12 @@ struct SidebarRowLiftTests {
             NSPoint(x: rowFrame.midX, y: rowFrame.maxY + 12)
         ]
         try #require(points.allSatisfy(host.bounds.contains))
-        let hitTargets = points.map { host.hitTest($0).map(ObjectIdentifier.init) }
+        let hitParent = try #require(host.superview)
+        // NSView.hitTest receives superview coordinates, not the flipped hosting view's coordinates.
+        let hitPoints = points.map { host.convert($0, to: hitParent) }
+        try #require(hitPoints.map { host.convert($0, from: hitParent) } == points)
+        let hitTargets = hitPoints.map { host.hitTest($0).map(ObjectIdentifier.init) }
+        print("row-lift115 short-hit \(width)x\(height): hostFlipped=\(host.isFlipped), parentFlipped=\(hitParent.isFlipped), title=\(titleFrame), icon=\(iconFrame), hostPoints=\(points), parentPoints=\(hitPoints), hits=\(hitTargets)")
         #expect(hitTargets[0] == ObjectIdentifier(title))
         #expect(hitTargets[1] == ObjectIdentifier(icon))
         for hovered in [true, true, false] {
@@ -503,7 +538,8 @@ struct SidebarRowLiftTests {
             #expect(host.convert(title.bounds, from: title) == titleFrame)
             #expect(host.convert(icon.bounds, from: icon) == iconFrame)
             #expect(host.convert(anchor.bounds, from: anchor) == rowFrame)
-            #expect(points.map { host.hitTest($0).map(ObjectIdentifier.init) } == hitTargets,
+            #expect(host.superview === hitParent)
+            #expect(hitPoints.map { host.hitTest($0).map(ObjectIdentifier.init) } == hitTargets,
                     "The decorative shadow cannot enlarge or intercept existing hit targets")
         }
         #expect(activations == 0 && !window.isVisible)
@@ -705,6 +741,35 @@ struct SidebarRowLiftTests {
             }
         }
         return changed
+    }
+    private func diagnoseDifference(
+        _ lhs: NSBitmapImageRep, _ rhs: NSBitmapImageRep, phase: String,
+        host: NSView, anchors: [SidebarRowMenuAnchorView]
+    ) {
+        let changed = differences(lhs, rhs)
+        guard changed > 0 else { return }
+        guard lhs.pixelsWide == rhs.pixelsWide, lhs.pixelsHigh == rhs.pixelsHigh,
+              lhs.bitsPerPixel == rhs.bitsPerPixel, lhs.bitsPerPixel.isMultiple(of: 8),
+              let left = lhs.bitmapData, let right = rhs.bitmapData else {
+            Issue.record("Diagnostic captures require equal geometry and byte-aligned native storage")
+            return
+        }
+        let bytesPerPixel = lhs.bitsPerPixel / 8
+        var bounds = NSRect.null
+        for y in 0..<lhs.pixelsHigh {
+            for x in 0..<lhs.pixelsWide {
+                if (0..<bytesPerPixel).contains(where: {
+                    left[y * lhs.bytesPerRow + x * bytesPerPixel + $0]
+                        != right[y * rhs.bytesPerRow + x * bytesPerPixel + $0]
+                }) {
+                    bounds = bounds.union(NSRect(x: x, y: y, width: 1, height: 1))
+                }
+            }
+        }
+        print("row-lift115 \(phase): changedBytes=\(changed), bitmapBounds=\(bounds), bitmapSize=\(lhs.pixelsWide)x\(lhs.pixelsHigh), hostBounds=\(host.bounds), hostFlipped=\(host.isFlipped), key=\(host.window?.isKeyWindow == true), responder=\(String(describing: host.window?.firstResponder))")
+        for (index, anchor) in anchors.enumerated() {
+            print("row-lift115 \(phase) anchor[\(index)]: rect=\(host.convert(anchor.bounds, from: anchor)), eligible=\(anchor.presenter?.liftEligible == true), keyboardInput=\(anchor.keyboardInteraction), keyboardFocused=\(anchor.keyboardFocused), explicitControls=\(anchor.presenter?.focusedControls.count ?? 0)")
+        }
     }
     private func pixel(_ bitmap: NSBitmapImageRep, at point: NSPoint, bounds: NSRect) throws -> NSColor {
         let x = Int((point.x - bounds.minX) * Double(bitmap.pixelsWide) / bounds.width)
