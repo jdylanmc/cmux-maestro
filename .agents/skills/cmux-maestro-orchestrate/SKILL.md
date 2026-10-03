@@ -176,6 +176,26 @@ peer discovery/send and genuine envelope-sender replies, human-interactive chat,
 uncertainty and no input fallback. A genuine available coordinator address is
 included; no slash skill or startup acknowledgement is required.
 
+Both coordinator and worker launch assignments receive milestone-only handoff
+guidance: candidate ready, review complete, blocking failure, or decision needed.
+Keep routine progress and detailed investigation in existing delivery artifacts,
+not discovery broadcasts or automatic acknowledgements. A compact handoff gives
+the outcome, exact candidate commit when applicable, complete evidence location,
+and recipient action; never invent a pre-candidate commit or truncate findings.
+After dispatch or while awaiting workers or CI, finish the bounded decision turn
+and resume on supported completion or native-message events. No long idle
+synchronous waits, repetitive self-prompts, polling chatter or heartbeat traffic.
+Missing wake support is a recorded limitation and pending next action, not
+permission to add a timer or claim completion.
+Before new instructions, reconcile pending updates with the current candidate
+and authoritative artifacts. Preserve unresolved blockers/findings and their
+provenance until evidence resolves them; do not replay obsolete instructions or
+use "latest wins" to erase findings. Independent implementation, acceptance,
+Roast, rubber-duck, CI and non-author merge gates remain intact. This changes
+guidance, not scheduling, permissions, receipts or fire-and-forget semantics.
+The separately distributed `/maestro` guide expands this messaging discipline;
+the launch wrapper applies it without requiring that guide to be installed.
+
 Native bindings exist before creation. The CLI-owned adapter joins its exact
 session and independently records its exec-preserved PID/start, verified
 ancestry, surface and generation, before or after caller attachment. Hooks
