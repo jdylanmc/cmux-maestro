@@ -134,6 +134,36 @@ A reply is another ordinary fire-and-forget message, not a protocol
 acknowledgement. Do not reply to every message automatically, echo receipts,
 poll for a response, or loop on replies.
 
+## Milestone handoffs for delegated work
+
+Send only actionable milestones: **candidate ready**, **review complete**,
+**blocking failure**, or **decision needed**. Keep routine progress and detailed
+investigation in existing delivery artifacts, not discovery broadcasts or
+automatic acknowledgements. This discipline applies to delegated coordination;
+it does not replace a human's explicitly requested peer message.
+
+Keep each handoff compact: outcome, exact candidate commit when applicable,
+evidence location, and required recipient action. Do not invent a commit before
+a candidate exists. Reference complete findings in accessible artifacts instead
+of silently truncating them or splitting oversized messages into multiple sends.
+An evidence pointer is not recipient acceptance.
+
+After dispatch or while awaiting workers or CI, finish the bounded decision turn.
+Resume on supported completion or native-message events; do not hold long idle
+synchronous waits, create repetitive self-prompts, polling chatter or heartbeat
+traffic. If no supported wake event is available, record that limitation and the
+pending next action rather than inventing a timer or claiming completion.
+Copilot still owns prompt scheduling; this is guidance, not a new wait service.
+
+Before issuing new instructions, reconcile pending updates against the current
+candidate and authoritative delivery artifacts. Preserve every unresolved
+blocker/review finding with its source and candidate provenance until evidence
+resolves it. A newer candidate or message alone does not resolve an older finding.
+Do not replay obsolete intermediate instructions or use "latest wins" to erase
+findings. Keep independent implementation, acceptance, Roast, rubber-duck, CI,
+and non-author merge gates; messages neither satisfy these gates nor expand
+permissions. No automatic retry, acknowledgement or receipt protocol is added.
+
 ## Permissions, failures and lifecycle boundaries
 
 - Normal launches add **no tool grants**. Copilot may ask the human for native
