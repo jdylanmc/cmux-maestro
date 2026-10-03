@@ -24,6 +24,7 @@ final class SidebarRowMenuPresenter: NSObject {
     var dismissPreview: () -> Void = {}
     var preview: (() -> Bool)?
     var focusChanged: (Bool) -> Void = { _ in }
+    var hoverChanged: (Bool) -> Void = { _ in }
     var liftFocusChanged: (Bool) -> Void = { _ in }
     var liftEligible = false
     var present: (NSMenu, NSPoint, NSView) -> Void = { menu, point, view in
@@ -85,6 +86,7 @@ final class SidebarRowMenuPresenter: NSObject {
         dismissPreview = {}
         preview = nil
         focusChanged = { _ in }
+        hoverChanged = { _ in }
         liftFocusChanged = { _ in }
         liftEligible = false
     }
@@ -228,7 +230,7 @@ struct SidebarRowActions<Content: View>: View {
             }
         }
         .background(SidebarRowMenuAnchor(presenter: presenter))
-        .onHover { hovered = $0 }
+        .onHover { presenter.hoverChanged($0) }
     }
 
     private var overflowButton: some View {
@@ -243,6 +245,7 @@ struct SidebarRowActions<Content: View>: View {
     private var configuredPresenter: SidebarRowMenuPresenter {
         presenter.groups = groups
         presenter.focusChanged = { focused = $0 }
+        presenter.hoverChanged = { hovered = $0 }
         presenter.liftEligible = liftEligible
         presenter.liftFocusChanged = { keyboardFocused = $0 }
         return presenter
