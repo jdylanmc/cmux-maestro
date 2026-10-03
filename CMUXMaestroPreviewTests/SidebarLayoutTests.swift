@@ -589,6 +589,12 @@ struct SidebarLayoutTests {
         #expect(!rowActions.contains(".animation("))
         #expect(!rowActions.contains("withAnimation"))
         #expect(!rowActions.contains(".phaseAnimator"))
+        let controlFocus = try String(
+            contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarRowControlFocus.swift"), encoding: .utf8
+        )
+        #expect(!controlFocus.contains(".animation("))
+        #expect(!controlFocus.contains("withAnimation"))
+        #expect(!controlFocus.contains(".phaseAnimator"))
         #expect(view.contains("@Environment(\\.accessibilityReduceMotion)"))
         #expect(SidebarBranchSummary(sessions: [], complete: false).incomplete)
         #expect(view.contains("model.navigation.permissionSummary"))
@@ -598,6 +604,7 @@ struct SidebarLayoutTests {
         for forbidden in [".offset(", ".scaleEffect(", ".rotationEffect("] {
             #expect(!lift.contains(forbidden))
             #expect(!rowActions.contains(forbidden))
+            #expect(!controlFocus.contains(forbidden))
         }
     }
 
