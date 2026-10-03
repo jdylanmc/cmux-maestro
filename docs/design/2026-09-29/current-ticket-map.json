@@ -1,0 +1,944 @@
+{
+  "observedAt": "2026-10-03T03:09:13Z",
+  "repository": "jdylanmc/cmux-maestro",
+  "source": "Authenticated GitHub issue list; exact issue identities from the frozen review plus current reconciliation. Labels and state are observations, not dispatch approval.",
+  "scope": "Current ticket-state overlay; frozen September files are unchanged historical evidence. Parent/dependency relations are not revalidated here.",
+  "h8": {
+    "status": "ACCEPTED",
+    "source": "https://github.com/jdylanmc/cmux-maestro/issues/119#issuecomment-5964812464",
+    "acceptedBaseline": "6ac288de5425f3b1cb535b73315fb6ce60d0ed45"
+  },
+  "issues": [
+    {
+      "number": 10,
+      "title": "Integrate the Copilot adapter with provider-neutral snapshots",
+      "state": "CLOSED",
+      "updatedAt": "2026-10-03T02:50:38Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/10",
+      "labels": [
+        "implementation",
+        "parity",
+        "ready-for-agent"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 39,
+      "title": "Native Workspace view: window, workspace, pane, and surface hierarchy",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:32:08Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/39",
+      "labels": [
+        "enhancement",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S05",
+        "S06"
+      ]
+    },
+    {
+      "number": 42,
+      "title": "Beats: recurring cron prompts for exact agent sessions",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:32:10Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/42",
+      "labels": [],
+      "reviewStates": [
+        "S37",
+        "S38"
+      ]
+    },
+    {
+      "number": 43,
+      "title": "Native sidebar context menus and shared item actions",
+      "state": "CLOSED",
+      "updatedAt": "2026-09-26T19:14:39Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/43",
+      "labels": [
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S24",
+        "S25",
+        "S26",
+        "S50"
+      ]
+    },
+    {
+      "number": 44,
+      "title": "Sidebar surface movement: drag/drop and accessible Move actions",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:30:10Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/44",
+      "labels": [
+        "cosmetic",
+        "needs-info"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 45,
+      "title": "Workspace backlog shortcut and explicit URL configuration",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:33:16Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/45",
+      "labels": [
+        "cosmetic",
+        "needs-info"
+      ],
+      "reviewStates": [
+        "S26"
+      ]
+    },
+    {
+      "number": 46,
+      "title": "Pinned active-window details and supported diagnostics",
+      "state": "CLOSED",
+      "updatedAt": "2026-09-26T22:20:58Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/46",
+      "labels": [
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S03",
+        "S10",
+        "S12",
+        "S13",
+        "S14",
+        "S15"
+      ]
+    },
+    {
+      "number": 48,
+      "title": "Retire stale provider-child history without closing live chats",
+      "state": "OPEN",
+      "updatedAt": "2026-10-03T02:50:49Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/48",
+      "labels": [
+        "cosmetic",
+        "ready-for-human"
+      ],
+      "reviewStates": [
+        "S07",
+        "S27",
+        "S51",
+        "S56"
+      ]
+    },
+    {
+      "number": 49,
+      "title": "Sidebar icon picker: font search, colors, and resets",
+      "state": "CLOSED",
+      "updatedAt": "2026-09-26T16:11:13Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/49",
+      "labels": [
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S16",
+        "S17",
+        "S18"
+      ]
+    },
+    {
+      "number": 50,
+      "title": "Per-agent pets in pinned details and hover cards",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:33:03Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/50",
+      "labels": [
+        "cosmetic",
+        "needs-info"
+      ],
+      "reviewStates": [
+        "S19",
+        "S20"
+      ]
+    },
+    {
+      "number": 51,
+      "title": "Agent tags: separate human editing and agent self-assignment",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:33:05Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/51",
+      "labels": [
+        "ready-for-agent",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S21",
+        "S22",
+        "S23",
+        "S45"
+      ]
+    },
+    {
+      "number": 52,
+      "title": "Workspace hover cards independent of pinned active-window details",
+      "state": "CLOSED",
+      "updatedAt": "2026-09-26T16:11:20Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/52",
+      "labels": [
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S09",
+        "S52"
+      ]
+    },
+    {
+      "number": 55,
+      "title": "CLI Integration polish: installed-skill status and guided updates",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:33:10Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/55",
+      "labels": [
+        "ready-for-agent",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S32",
+        "S33",
+        "S34",
+        "S35"
+      ]
+    },
+    {
+      "number": 57,
+      "title": "Cosmetic overhaul: prototype-led sidebar design and personalization",
+      "state": "OPEN",
+      "updatedAt": "2026-10-03T02:51:05Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/57",
+      "labels": [
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S01"
+      ]
+    },
+    {
+      "number": 58,
+      "title": "Global sidebar projections: Worktrees, Sub-agents, and Workspace",
+      "state": "OPEN",
+      "updatedAt": "2026-10-02T16:06:16Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/58",
+      "labels": [
+        "cosmetic",
+        "needs-info"
+      ],
+      "reviewStates": [
+        "S01",
+        "S04",
+        "S06",
+        "S07",
+        "S44",
+        "S45",
+        "S46",
+        "S47",
+        "S52"
+      ]
+    },
+    {
+      "number": 59,
+      "title": "Authoritative worktree membership and freshness metadata",
+      "state": "OPEN",
+      "updatedAt": "2026-10-03T02:51:00Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/59",
+      "labels": [
+        "cosmetic",
+        "needs-info"
+      ],
+      "reviewStates": [
+        "S44"
+      ]
+    },
+    {
+      "number": 60,
+      "title": "PM-driven child terminal cleanup",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:32:12Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/60",
+      "labels": [
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S27",
+        "S28",
+        "S29"
+      ]
+    },
+    {
+      "number": 61,
+      "title": "Managed worker startup expires before background terminal executes runtime",
+      "state": "CLOSED",
+      "updatedAt": "2026-10-01T12:10:40Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/61",
+      "labels": [
+        "bug"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 67,
+      "title": "Inherit the active CMUX theme palette in sidebar UI",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:30:12Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/67",
+      "labels": [
+        "needs-info"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 70,
+      "title": "Browser sidebar favicons: navigation-aware native website icons",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:30:14Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/70",
+      "labels": [
+        "needs-info"
+      ],
+      "reviewStates": [
+        "S12",
+        "S13",
+        "S14",
+        "S15",
+        "S18",
+        "S25"
+      ]
+    },
+    {
+      "number": 73,
+      "title": "Agent hover cards: current worktree and provenance",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:32:52Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/73",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "reviewStates": [
+        "S03",
+        "S49"
+      ]
+    },
+    {
+      "number": 74,
+      "title": "Agent hover cards: observed model and availability",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:32:54Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/74",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "reviewStates": [
+        "S03"
+      ]
+    },
+    {
+      "number": 75,
+      "title": "Agent hover cards: owned localhost application ports",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:30:06Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/75",
+      "labels": [
+        "needs-info"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 76,
+      "title": "Agent hover cards: copy session ID beside its GUID",
+      "state": "CLOSED",
+      "updatedAt": "2026-09-26T22:20:56Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/76",
+      "labels": [],
+      "reviewStates": [
+        "S03"
+      ]
+    },
+    {
+      "number": 77,
+      "title": "Agent hover cards: current working directory",
+      "state": "CLOSED",
+      "updatedAt": "2026-09-29T21:10:36Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/77",
+      "labels": [],
+      "reviewStates": [
+        "S03",
+        "S49"
+      ]
+    },
+    {
+      "number": 78,
+      "title": "Agent hover cards: owned background processes",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:30:04Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/78",
+      "labels": [
+        "needs-info"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 79,
+      "title": "Agent hover cards: context usage and window size",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:30:08Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/79",
+      "labels": [
+        "needs-info"
+      ],
+      "reviewStates": [
+        "S03"
+      ]
+    },
+    {
+      "number": 80,
+      "title": "Agent hover cards: changed files and green/red Git counts",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:33:01Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/80",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "reviewStates": [
+        "S03"
+      ]
+    },
+    {
+      "number": 81,
+      "title": "Use home-relative paths in Maestro UI",
+      "state": "CLOSED",
+      "updatedAt": "2026-09-26T17:17:55Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/81",
+      "labels": [],
+      "reviewStates": []
+    },
+    {
+      "number": 83,
+      "title": "Fermata mode: toggle CMUX Keep Mac Awake",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:30:16Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/83",
+      "labels": [
+        "needs-info"
+      ],
+      "reviewStates": [
+        "S02",
+        "S36"
+      ]
+    },
+    {
+      "number": 84,
+      "title": "Sidebar header: compact icon shortcuts and Settings access",
+      "state": "CLOSED",
+      "updatedAt": "2026-09-26T17:17:56Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/84",
+      "labels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "reviewStates": [
+        "S02",
+        "S32",
+        "S33",
+        "S34",
+        "S35"
+      ]
+    },
+    {
+      "number": 85,
+      "title": "Open a directory as a new workspace from the sidebar",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:30:18Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/85",
+      "labels": [
+        "enhancement",
+        "cosmetic",
+        "needs-info"
+      ],
+      "reviewStates": [
+        "S02",
+        "S30",
+        "S31"
+      ]
+    },
+    {
+      "number": 86,
+      "title": "Host Beats and Taskboard as reusable movable content tabs",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:29:59Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/86",
+      "labels": [
+        "enhancement",
+        "cosmetic",
+        "needs-info"
+      ],
+      "reviewStates": [
+        "S41",
+        "S42",
+        "S43"
+      ]
+    },
+    {
+      "number": 87,
+      "title": "Taskboard follow-up: cross-session overview in a content tab",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:33:20Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/87",
+      "labels": [
+        "enhancement",
+        "ready-for-agent",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S41"
+      ]
+    },
+    {
+      "number": 88,
+      "title": "Workspace hover follow-up: activate only over the name text",
+      "state": "CLOSED",
+      "updatedAt": "2026-09-26T17:17:55Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/88",
+      "labels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "reviewStates": [
+        "S09"
+      ]
+    },
+    {
+      "number": 90,
+      "title": "Close one owned child terminal through CMUX",
+      "state": "CLOSED",
+      "updatedAt": "2026-10-01T20:46:24Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/90",
+      "labels": [
+        "enhancement",
+        "cosmetic",
+        "needs-info"
+      ],
+      "reviewStates": [
+        "S28"
+      ]
+    },
+    {
+      "number": 91,
+      "title": "Clean up owned child terminals with explicit descendant scope",
+      "state": "OPEN",
+      "updatedAt": "2026-10-02T00:42:58Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/91",
+      "labels": [
+        "enhancement",
+        "ready-for-agent",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S29"
+      ]
+    },
+    {
+      "number": 93,
+      "title": "Beats: manage and run schedules through /maestro",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:29:57Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/93",
+      "labels": [
+        "enhancement",
+        "cosmetic",
+        "needs-info"
+      ],
+      "reviewStates": [
+        "S37",
+        "S40"
+      ]
+    },
+    {
+      "number": 94,
+      "title": "Beats: human management in a reusable content tab",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:33:33Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/94",
+      "labels": [
+        "enhancement",
+        "ready-for-agent",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S37",
+        "S38",
+        "S39",
+        "S40"
+      ]
+    },
+    {
+      "number": 95,
+      "title": "Beats: reconcile PM child cleanup with retained definitions",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:33:35Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/95",
+      "labels": [
+        "enhancement",
+        "ready-for-agent",
+        "cosmetic"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 96,
+      "title": "Close the exact tab of an already-ended Copilot session",
+      "state": "CLOSED",
+      "updatedAt": "2026-09-26T19:15:22Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/96",
+      "labels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 97,
+      "title": "Exit an idle Copilot session and close its CMUX tab",
+      "state": "CLOSED",
+      "updatedAt": "2026-09-26T19:15:26Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/97",
+      "labels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 98,
+      "title": "Confirm and interrupt active Copilot before exit and tab closure",
+      "state": "CLOSED",
+      "updatedAt": "2026-09-26T19:15:29Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/98",
+      "labels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 100,
+      "title": "Agent hover cards: field coverage and trustworthy session details",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:32:15Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/100",
+      "labels": [
+        "enhancement",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S10",
+        "S44",
+        "S48"
+      ]
+    },
+    {
+      "number": 101,
+      "title": "Sidebar structure and projections",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:30:25Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/101",
+      "labels": [
+        "enhancement",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S01"
+      ]
+    },
+    {
+      "number": 102,
+      "title": "Agent personalization",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:32:19Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/102",
+      "labels": [
+        "enhancement",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S16",
+        "S19",
+        "S21"
+      ]
+    },
+    {
+      "number": 103,
+      "title": "Header and quick actions",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:32:22Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/103",
+      "labels": [
+        "enhancement",
+        "cosmetic"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 104,
+      "title": "Utility content views",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:32:24Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/104",
+      "labels": [
+        "enhancement",
+        "cosmetic"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 105,
+      "title": "Details and previews",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:30:20Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/105",
+      "labels": [
+        "enhancement",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S09",
+        "S13",
+        "S15",
+        "S48",
+        "S53",
+        "S55"
+      ]
+    },
+    {
+      "number": 106,
+      "title": "Sidebar row actions",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:30:23Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/106",
+      "labels": [
+        "enhancement",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S24",
+        "S50"
+      ]
+    },
+    {
+      "number": 107,
+      "title": "Workspace hierarchy: verify live topology transitions and integrated acceptance",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:32:38Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/107",
+      "labels": [
+        "enhancement",
+        "cosmetic",
+        "ready-for-human"
+      ],
+      "reviewStates": [
+        "S05"
+      ]
+    },
+    {
+      "number": 108,
+      "title": "Workspace hierarchy: render the native pane and surface outline",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:32:35Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/108",
+      "labels": [
+        "enhancement",
+        "ready-for-agent",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S05"
+      ]
+    },
+    {
+      "number": 109,
+      "title": "Workspace hierarchy: integrate stock CMUX pane topology into Maestro",
+      "state": "OPEN",
+      "updatedAt": "2026-10-03T02:50:58Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/109",
+      "labels": [
+        "enhancement",
+        "ready-for-agent",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S05"
+      ]
+    },
+    {
+      "number": 110,
+      "title": "Workspace hierarchy: establish the authoritative host/SDK contract",
+      "state": "OPEN",
+      "updatedAt": "2026-10-03T02:50:55Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/110",
+      "labels": [
+        "enhancement",
+        "ready-for-agent",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S05"
+      ]
+    },
+    {
+      "number": 111,
+      "title": "Restore the green working spinner on live agent rows",
+      "state": "CLOSED",
+      "updatedAt": "2026-10-03T02:50:40Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/111",
+      "labels": [
+        "bug",
+        "cosmetic",
+        "ready-for-human"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 112,
+      "title": "Labels + copy value: reveal field actions on label hover and keyboard focus",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:29:47Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/112",
+      "labels": [
+        "accessibility",
+        "enhancement",
+        "ready-for-agent",
+        "cosmetic"
+      ],
+      "reviewStates": [
+        "S03",
+        "S10",
+        "S11",
+        "S49",
+        "S54",
+        "S55"
+      ]
+    },
+    {
+      "number": 114,
+      "title": "Adopt dedicated Copilot observer hook-file registration",
+      "state": "CLOSED",
+      "updatedAt": "2026-09-30T20:49:29Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/114",
+      "labels": [
+        "enhancement",
+        "needs-triage"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 115,
+      "title": "Sidebar row hover: one subtle card lift with keyboard-focus parity",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T02:33:25Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/115",
+      "labels": [
+        "accessibility",
+        "enhancement",
+        "ready-for-agent",
+        "cosmetic"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 119,
+      "title": "Foundational hardening: stable runtime before cosmetic expansion",
+      "state": "CLOSED",
+      "updatedAt": "2026-10-03T02:51:07Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/119",
+      "labels": [
+        "enhancement",
+        "needs-triage"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 121,
+      "title": "Oversized tool-completion event blocks fresh session-state projection",
+      "state": "CLOSED",
+      "updatedAt": "2026-10-03T02:50:42Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/121",
+      "labels": [
+        "bug",
+        "needs-triage"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 127,
+      "title": "Stabilize native viewport fixtures against late scroller settlement",
+      "state": "OPEN",
+      "updatedAt": "2026-10-03T02:50:48Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/127",
+      "labels": [],
+      "reviewStates": []
+    },
+    {
+      "number": 131,
+      "title": "Distinguish internal Copilot tasks from interactive agent tabs",
+      "state": "CLOSED",
+      "updatedAt": "2026-10-03T02:50:45Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/131",
+      "labels": [
+        "ready-for-agent"
+      ],
+      "reviewStates": [
+        "S04",
+        "S07",
+        "S08",
+        "S44",
+        "S47",
+        "S56"
+      ]
+    },
+    {
+      "number": 132,
+      "title": "Keep long-identity action menus within the viewport",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:29:43Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/132",
+      "labels": [
+        "accessibility",
+        "ready-for-agent",
+        "cosmetic"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 133,
+      "title": "Design progressive disclosure for long History and diagnostic values",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:29:44Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/133",
+      "labels": [
+        "cosmetic",
+        "needs-info"
+      ],
+      "reviewStates": []
+    },
+    {
+      "number": 134,
+      "title": "Publish the approved sidebar reference and review evidence",
+      "state": "OPEN",
+      "updatedAt": "2026-09-30T15:29:45Z",
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/134",
+      "labels": [
+        "cosmetic",
+        "needs-info"
+      ],
+      "reviewStates": []
+    }
+  ]
+}

@@ -1,0 +1,676 @@
+{
+  "capturedAt": "2026-09-30T01:37:38.988Z",
+  "sourceTreeSha256": "cd2b10cb2355406c28b844199b0716a7c576de6161bc4cc836dc5096674b7158",
+  "browser": "154.0.8037.58",
+  "viewport": {
+    "width": 1512,
+    "height": 1080
+  },
+  "scale": 1,
+  "motion": "reduce",
+  "synthetic": true,
+  "scope": "All identified sidebar controls, primary detail/hover types, configuration dialogs, utility views and principal normal/error/stress states; not every possible state combination.",
+  "images": [
+    {
+      "id": "S01",
+      "file": "images/s01-worktrees.png",
+      "caption": "Default Worktrees projection, pinned active agent and review stage.",
+      "tickets": [
+        57,
+        58,
+        101
+      ],
+      "classification": "current-design",
+      "sha256": "dd58638c4dc31ae3e530c7af83d2a766755964ed76b24afa803df5dfb7f2cd92"
+    },
+    {
+      "id": "S02",
+      "file": "images/s02-header.png",
+      "caption": "Header actions and one global grouping selector.",
+      "tickets": [
+        83,
+        84,
+        85
+      ],
+      "classification": "current-design",
+      "sha256": "44e5e904a1e378cdec1b9ea8c9d623d3783a8481cf312d34df9426b70d094b0a"
+    },
+    {
+      "id": "S03",
+      "file": "images/s03-pinned-agent.png",
+      "caption": "Pinned agent identity, state, model, counters and six copyable fields; synthetic values.",
+      "tickets": [
+        46,
+        73,
+        74,
+        76,
+        77,
+        79,
+        80,
+        112
+      ],
+      "classification": "current-design",
+      "sha256": "05e68b4abe6c2bdc1809ed95d8fe7f99af53e37b28828f3256675b984cb7b576"
+    },
+    {
+      "id": "S04",
+      "file": "images/s04-subagents.png",
+      "caption": "Interactive spawn ancestry and separately rendered internal activity.",
+      "tickets": [
+        58,
+        131
+      ],
+      "classification": "current-design",
+      "sha256": "9dcef85cbc057918e2b3a5960a503ac1a91fa0cde42fed10a49804faa342769f"
+    },
+    {
+      "id": "S05",
+      "file": "images/s05-native-workspace.png",
+      "caption": "Workspace/pane/surface hierarchy includes every real synthetic tab.",
+      "tickets": [
+        39,
+        107,
+        108,
+        109,
+        110
+      ],
+      "classification": "current-design",
+      "sha256": "877a1c709a1629fd5d30d5f6c0d54847d76db0ad79d6ff7241012c844f674c87"
+    },
+    {
+      "id": "S06",
+      "file": "images/s06-pane-collapsed.png",
+      "caption": "Native-pane disclosure hides presentation, not tabs or sessions.",
+      "tickets": [
+        39,
+        58
+      ],
+      "classification": "current-design",
+      "sha256": "729a21de98ced1cbb06412b1d620789bc138c317f6e810ec74089a19b6bb0cf3"
+    },
+    {
+      "id": "S07",
+      "file": "images/s07-workspace-eye.png",
+      "caption": "Workspace-local eye reveals idle internal tasks; legacy finished-chat behavior remains separate.",
+      "tickets": [
+        48,
+        58,
+        131
+      ],
+      "classification": "current-design",
+      "sha256": "4817a2acc54253285b9c751cb77c3c0477a5fadee0608c8ab6db86606eda1de5"
+    },
+    {
+      "id": "S08",
+      "file": "images/s08-internal-tasks-collapsed.png",
+      "caption": "Internal-task disclosure retains summary indicators without closing child chats.",
+      "tickets": [
+        131
+      ],
+      "classification": "current-design",
+      "sha256": "c8f4078d3a0bc348ffff738f030fd0ba2b3d5924ce80474099c4a7815bd1c5b0"
+    },
+    {
+      "id": "S09",
+      "file": "images/s09-workspace-preview.png",
+      "caption": "Name-triggered passive workspace preview and agent counts.",
+      "tickets": [
+        52,
+        88,
+        105
+      ],
+      "classification": "current-design",
+      "sha256": "4f9dd2593ac15bf6cfd2d2bff61ae9afc44546a3cbf94830ce6d13544931218c"
+    },
+    {
+      "id": "S10",
+      "file": "images/s10-agent-preview.png",
+      "caption": "Passive hovered-agent details remain independent from the pinned active subject.",
+      "tickets": [
+        46,
+        100,
+        112
+      ],
+      "classification": "current-design",
+      "sha256": "a933ade41548d5e227700832e554527b67549b8283e36890d0a46a6793cc2e20"
+    },
+    {
+      "id": "S11",
+      "file": "images/s11-copy-keyboard-focus.png",
+      "caption": "Keyboard focus exposes the raw-value copy action beside its label.",
+      "tickets": [
+        112
+      ],
+      "classification": "current-design",
+      "sha256": "dca9198f4880d8aec3306b8195daf69d94020a44a68db3778817eb2ec05e05de"
+    },
+    {
+      "id": "S12",
+      "file": "images/s12-pinned-browser.png",
+      "caption": "browser selection updates pinned details without inventing agent fields.",
+      "tickets": [
+        46,
+        70
+      ],
+      "classification": "current-design",
+      "sha256": "a182e4c0180568e91b1139434c44c20f9b8772b1167e03b73d9ae73d0505963d"
+    },
+    {
+      "id": "S13",
+      "file": "images/s13-preview-browser.png",
+      "caption": "browser preview uses the same bounded hover container.",
+      "tickets": [
+        46,
+        70,
+        105
+      ],
+      "classification": "current-design",
+      "sha256": "25bfcdfe0c002d3945da7ce1c5c7a19f39aa787307065a515ec9ceedf320c22d"
+    },
+    {
+      "id": "S14",
+      "file": "images/s14-pinned-terminal.png",
+      "caption": "terminal selection updates pinned details without inventing agent fields.",
+      "tickets": [
+        46,
+        70
+      ],
+      "classification": "current-design",
+      "sha256": "f50304c136ed95b4b3ca8cfba45ad7203d7b51d5fa4a9ab5aad33c7d155ceb35"
+    },
+    {
+      "id": "S15",
+      "file": "images/s15-preview-terminal.png",
+      "caption": "terminal preview uses the same bounded hover container.",
+      "tickets": [
+        46,
+        70,
+        105
+      ],
+      "classification": "current-design",
+      "sha256": "8187ab250edbd5ac75d8c89e2a8bd1b1e11429f4c240200f4484936c15915a7d"
+    },
+    {
+      "id": "S16",
+      "file": "images/s16-agent-icon-picker.png",
+      "caption": "Human identity-icon choice, palette and preference resets.",
+      "tickets": [
+        49,
+        102
+      ],
+      "classification": "current-design",
+      "sha256": "44d33287a8e52355677c0cb6507178ba4291944d8b21c25dd11f6d0a9e0185a0"
+    },
+    {
+      "id": "S17",
+      "file": "images/s17-icon-search.png",
+      "caption": "Icon search narrows the choice without changing the agent.",
+      "tickets": [
+        49
+      ],
+      "classification": "current-design",
+      "sha256": "b4cc5c8d7d1cbf0e44cc5a671045e89358a842248336292260f17006cf073da3"
+    },
+    {
+      "id": "S18",
+      "file": "images/s18-browser-appearance.png",
+      "caption": "Browser icon/custom-color/website-favicon choice is presentation; live favicon sourcing is not demonstrated.",
+      "tickets": [
+        49,
+        70
+      ],
+      "classification": "current-design",
+      "sha256": "8e7c40d22435317153da84d24544f1047fc14a2197e8710896c1c4f58b992682"
+    },
+    {
+      "id": "S19",
+      "file": "images/s19-pet-picker.png",
+      "caption": "Per-agent pet selection and resets; geometric placeholders, not licensed Codex artwork.",
+      "tickets": [
+        50,
+        102
+      ],
+      "classification": "current-design",
+      "sha256": "51baafb2ae3c1cd238c08326484daa8dfe389143d75b4c8bb53d82f2bfddc649"
+    },
+    {
+      "id": "S20",
+      "file": "images/s20-pet-hidden.png",
+      "caption": "Human pet visibility preference is independent of identity and selection.",
+      "tickets": [
+        50
+      ],
+      "classification": "current-design",
+      "sha256": "b26efd6340cc423cb952121e566f90dd863f754c6a8e08a7bd1410ae233b7b49"
+    },
+    {
+      "id": "S21",
+      "file": "images/s21-tag-editor.png",
+      "caption": "Human assignment edits preserve agent-owned tags.",
+      "tickets": [
+        51,
+        102
+      ],
+      "classification": "current-design",
+      "sha256": "71b3eda922af088ce2fee41b5cb4b7abba1379720db138ff5f3402408cf7f02d"
+    },
+    {
+      "id": "S22",
+      "file": "images/s22-tag-validation.png",
+      "caption": "Invalid normalized tags produce an explicit error without replacing saved tags.",
+      "tickets": [
+        51
+      ],
+      "classification": "current-design",
+      "sha256": "6cdd1559bc6d4fa979ed07251c7c7a5ebe71a32d55a6a800dcdee2111a6c6e7f"
+    },
+    {
+      "id": "S23",
+      "file": "images/s23-tag-color.png",
+      "caption": "Human-only slug-wide color override; ownership remains separate from color.",
+      "tickets": [
+        51
+      ],
+      "classification": "current-design",
+      "sha256": "cab13a4c624e832c5217cc99f4259188f7c2454973be8be608daa9b2dac336c3"
+    },
+    {
+      "id": "S24",
+      "file": "images/s24-agent-menu.png",
+      "caption": "Shared item-action menu; historical exit entries are not reapproved by the visual lock.",
+      "tickets": [
+        43,
+        106
+      ],
+      "classification": "current-design",
+      "sha256": "67cc8b55e0ced369dd2d59a0dd05faa44446902e6702df1e6b4b5792e942325a"
+    },
+    {
+      "id": "S25",
+      "file": "images/s25-browser-menu.png",
+      "caption": "Shared item-action menu; historical exit entries are not reapproved by the visual lock.",
+      "tickets": [
+        43,
+        70
+      ],
+      "classification": "current-design",
+      "sha256": "2e7b303c3ad9b6d8ac6ee184fc52d7e4d3b824de7c7c9413850bed3f534dc724"
+    },
+    {
+      "id": "S26",
+      "file": "images/s26-workspace-menu.png",
+      "caption": "Shared item-action menu; historical exit entries are not reapproved by the visual lock.",
+      "tickets": [
+        43,
+        45
+      ],
+      "classification": "current-design",
+      "sha256": "11c6a045b7955d48240616336aaf9c16c633f7ac5d56c068fe03b7c1a41ce419"
+    },
+    {
+      "id": "S27",
+      "file": "images/s27-history.png",
+      "caption": "Completed-activity history. Historical exit/dismiss text conflicts with newer lifecycle policy and is not current native authority.",
+      "tickets": [
+        48,
+        60
+      ],
+      "classification": "legacy-demo-policy",
+      "sha256": "217845351788e5ce3da64d7946868d63df5a855eeaea87104cfee051f8e4de81"
+    },
+    {
+      "id": "S28",
+      "file": "images/s28-legacy-exit-confirmation.png",
+      "caption": "Existing simulated exit confirmation; current #60 policy, not this dialog, governs native cleanup.",
+      "tickets": [
+        60,
+        90
+      ],
+      "classification": "legacy-demo-policy",
+      "sha256": "8172fd7548540f0af518636d67c499159e6d4d19694de2e42c5242e5ad30683f"
+    },
+    {
+      "id": "S29",
+      "file": "images/s29-legacy-descendant-scope.png",
+      "caption": "Synthetic parent-only/descendant scope dialog; no live cleanup operation.",
+      "tickets": [
+        60,
+        91
+      ],
+      "classification": "legacy-demo-policy",
+      "sha256": "da768a2a6f28af7ea117e6577b91ab7035f854a86924d528e9d73d62f0e23a23"
+    },
+    {
+      "id": "S30",
+      "file": "images/s30-directory-entry.png",
+      "caption": "Directory shortcut uses example-path entry in the POC; native chooser/creation requires host support.",
+      "tickets": [
+        85
+      ],
+      "classification": "current-design",
+      "sha256": "be02031794515c7ee96488278743652db7824d31429a32a2c9942783fb64017c"
+    },
+    {
+      "id": "S31",
+      "file": "images/s31-directory-validation.png",
+      "caption": "Ambiguous relative path is rejected explicitly.",
+      "tickets": [
+        85
+      ],
+      "classification": "current-design",
+      "sha256": "f36db7ab271fd805a9537ce16573d18ed01090540e8d5579e31f2a245a5bab04"
+    },
+    {
+      "id": "S32",
+      "file": "images/s32-settings-matching.png",
+      "caption": "CLI Integration matching state is simulated; no installed content or readiness is inspected.",
+      "tickets": [
+        55,
+        84
+      ],
+      "classification": "current-design",
+      "sha256": "6d449b3cd00214f3355bfb9e4d434868ea3152d50045d4113d52cdda93db2813"
+    },
+    {
+      "id": "S33",
+      "file": "images/s33-settings-missing.png",
+      "caption": "CLI Integration missing state is simulated; no installed content or readiness is inspected.",
+      "tickets": [
+        55,
+        84
+      ],
+      "classification": "current-design",
+      "sha256": "9da54fe23fcf28ebc96ac6370c4ce662fd88e1eb419a67ffe35547fd6eef160f"
+    },
+    {
+      "id": "S34",
+      "file": "images/s34-settings-different.png",
+      "caption": "CLI Integration different state is simulated; no installed content or readiness is inspected.",
+      "tickets": [
+        55,
+        84
+      ],
+      "classification": "current-design",
+      "sha256": "7772f0a50f12b7842fda306d09655b934ab846f17b5bbbc1d5107556753787a1"
+    },
+    {
+      "id": "S35",
+      "file": "images/s35-settings-unreadable.png",
+      "caption": "CLI Integration unreadable state is simulated; no installed content or readiness is inspected.",
+      "tickets": [
+        55,
+        84
+      ],
+      "classification": "current-design",
+      "sha256": "4a572a561b125402f7cb92703007c073bd7b457c952a8299a32bf47dcf0b1f7b"
+    },
+    {
+      "id": "S36",
+      "file": "images/s36-fermata-on.png",
+      "caption": "Fermata toggles the synthetic awake preference, not operating-system power state.",
+      "tickets": [
+        83
+      ],
+      "classification": "current-design",
+      "sha256": "c054dedac658c8af68994c8d6dedd23df84ad64954544f39a1bb1aaa181efda4"
+    },
+    {
+      "id": "S37",
+      "file": "images/s37-beats-editor.png",
+      "caption": "Exact target, cron and prompt editor. Queue/recovery semantics in this older mock remain subordinate to #42.",
+      "tickets": [
+        42,
+        93,
+        94
+      ],
+      "classification": "legacy-demo-policy",
+      "sha256": "282119cf3b8907f366a745d12a3022bbcc2cb17be9190e099b8627bd960f98d7"
+    },
+    {
+      "id": "S38",
+      "file": "images/s38-cron-builder.png",
+      "caption": "Friendly controls populate one cron expression; target timezone follows the confirmed #42 policy, not stale helper copy.",
+      "tickets": [
+        42,
+        94
+      ],
+      "classification": "legacy-demo-policy",
+      "sha256": "b32c3a1017fc5990d31c69a308cb2eb02d490dbfe59b55eb3fd55dcf257e82f8"
+    },
+    {
+      "id": "S39",
+      "file": "images/s39-cron-weekly.png",
+      "caption": "Weekly cron-builder controls.",
+      "tickets": [
+        94
+      ],
+      "classification": "legacy-demo-policy",
+      "sha256": "82fd9c2bc83d94b344ec9c75e266f95fdb1eb9c37ca73d02f2e2a158fc3eeb6a"
+    },
+    {
+      "id": "S40",
+      "file": "images/s40-beats-diagnostics.png",
+      "caption": "Manual simulation and diagnostics distinguish demo availability and delivery; not a live scheduler.",
+      "tickets": [
+        93,
+        94
+      ],
+      "classification": "legacy-demo-policy",
+      "sha256": "c90d3cc891c699e182990d9d147ffdded4843130d2d97fe9550f5c0c6c166f1a"
+    },
+    {
+      "id": "S41",
+      "file": "images/s41-taskboard.png",
+      "caption": "First viewport of the cross-workspace status overview; stress data tests card density without claiming every long record is visible.",
+      "tickets": [
+        86,
+        87
+      ],
+      "classification": "current-design",
+      "sha256": "39cae41f694adbaa3144cba961d57f2a7bca569707f1f9ff0e9e64d6f09659da"
+    },
+    {
+      "id": "S42",
+      "file": "images/s42-utility-move.png",
+      "caption": "Utility views move independently of agents and schedules.",
+      "tickets": [
+        86
+      ],
+      "classification": "current-design",
+      "sha256": "83115472831bde35fa8e82f03a6359bc6409f0de2a47be047209dc9d334f3801"
+    },
+    {
+      "id": "S43",
+      "file": "images/s43-utility-move-after-reorder.png",
+      "caption": "Known mismatch: pane positions reorder while Move labels retain hardcoded left/right text.",
+      "tickets": [
+        86
+      ],
+      "classification": "demonstrated-defect",
+      "sha256": "46f62681ac41dc9633b25208ade08ddcfa74581bef999e95e350ab6ed6dd15cd"
+    },
+    {
+      "id": "S44",
+      "file": "images/s44-stress-overview.png",
+      "caption": "Overload fixture exercises all row types, long identities, metadata, counters and deep/wide trees.",
+      "tickets": [
+        58,
+        59,
+        100,
+        131
+      ],
+      "classification": "current-design",
+      "sha256": "9f2d2fbe3cfe9eca99a77b42e4c5dc8a03cc84184b76e7a2274650b1dee50657"
+    },
+    {
+      "id": "S45",
+      "file": "images/s45-stress-icon-card-start.png",
+      "caption": "All visible agents belong to one icon-only scrolling card; no tags or grid.",
+      "tickets": [
+        58,
+        51
+      ],
+      "classification": "current-design",
+      "sha256": "f37d2169a7677a438070dae6efa0f287633a55a806d9bb4be4875e9b753ff39c"
+    },
+    {
+      "id": "S46",
+      "file": "images/s46-stress-icon-card-end.png",
+      "caption": "End of the same icon card; local scrolling exposes later participants.",
+      "tickets": [
+        58
+      ],
+      "classification": "current-design",
+      "sha256": "3fa825cc89b953549c6ee616dad5b295954220eaf6830da8022f0b9ba6eb73d8"
+    },
+    {
+      "id": "S47",
+      "file": "images/s47-stress-nested-tasks.png",
+      "caption": "Deep internal-task ancestry at 280px retains a fixed right edge and narrower indentation.",
+      "tickets": [
+        58,
+        131
+      ],
+      "classification": "current-design",
+      "sha256": "727b3e9ee737a48187febc4f90ee6f1b1b6caf6c8f2fe20763752005e14fad3e"
+    },
+    {
+      "id": "S48",
+      "file": "images/s48-stress-hover-top.png",
+      "caption": "Long names and histories wrap in the hover; density remains a review concern.",
+      "tickets": [
+        100,
+        105
+      ],
+      "classification": "current-design",
+      "sha256": "189c81b02852ff36281b951c41e300f8f1d483b630450c651825644fe4ce85b4"
+    },
+    {
+      "id": "S49",
+      "file": "images/s49-stress-hover-bottom.png",
+      "caption": "Raw paths and owned tags remain available without horizontal hover scrolling.",
+      "tickets": [
+        73,
+        77,
+        112
+      ],
+      "classification": "current-design",
+      "sha256": "43ed920b17d8fb402219a682433f94bec5052df68255abe18d2f6c75f4d4395a"
+    },
+    {
+      "id": "S50",
+      "file": "images/s50-stress-menu-overflow.png",
+      "caption": "Known long-name action-menu overflow; the approved hover fix does not cover this menu.",
+      "tickets": [
+        43,
+        106
+      ],
+      "classification": "demonstrated-defect",
+      "sha256": "53b2a0643588f88a18b2be6d8de7f6c29a6b74120d4a0871c48defc0ee097c33"
+    },
+    {
+      "id": "S51",
+      "file": "images/s51-stress-history-overflow.png",
+      "caption": "History still overflows and requires extensive scrolling under paragraph-scale outcomes.",
+      "tickets": [
+        48
+      ],
+      "classification": "demonstrated-defect",
+      "sha256": "7bbb71631346378c529d0eebcc688ede495a40e2f5b5f213f7aad05fe3d49fd8"
+    },
+    {
+      "id": "S52",
+      "file": "images/s52-long-workspace-name.png",
+      "caption": "Workspace header remains contained with a paragraph-length name; full value belongs in details.",
+      "tickets": [
+        52,
+        58
+      ],
+      "classification": "current-design",
+      "sha256": "278eea8df534c2c76813b000e9452a3bfa7e884d020c2eaae11b9b7bec841e1d"
+    },
+    {
+      "id": "S53",
+      "file": "images/s53-preview-subject-scroll.png",
+      "caption": "Independent finding: a new preview subject inherits the previous subject's scroll position.",
+      "tickets": [
+        105
+      ],
+      "classification": "demonstrated-defect",
+      "sha256": "9f4d09f8a51b604134fbb4b848c7736e3f723dd42e956ab155a4ecda67979458"
+    },
+    {
+      "id": "S54",
+      "file": "images/s54-pointer-dismisses-keyboard-preview.png",
+      "caption": "Independent finding: pointer departure can hide a preview whose copy control has keyboard focus.",
+      "tickets": [
+        112
+      ],
+      "classification": "demonstrated-defect",
+      "sha256": "67dc9ffc8624230b3d82cf64b1241daba19a4a3d0d7bd6be87f5f9044417ef16"
+    },
+    {
+      "id": "S55",
+      "file": "images/s55-preview-dialog-return.png",
+      "caption": "Independent finding: closing a preview-originated dialog loses the visible keyboard return target.",
+      "tickets": [
+        112,
+        105
+      ],
+      "classification": "demonstrated-defect",
+      "sha256": "dd58638c4dc31ae3e530c7af83d2a766755964ed76b24afa803df5dfb7f2cd92"
+    },
+    {
+      "id": "S56",
+      "file": "images/s56-filtered-parent-dismissal.png",
+      "caption": "Independent finding: dismissing the last outcome can filter its finished parent and leave focus on the document body; the real tab stays open.",
+      "tickets": [
+        131,
+        48
+      ],
+      "classification": "demonstrated-defect",
+      "sha256": "a28cce8f748698bf968f06ec79b0297029d633124563a1fc4d2a561b1e105cea"
+    }
+  ],
+  "observations": {
+    "utilityPaneLabels": {
+      "actualPaneOrder": [
+        2,
+        1
+      ],
+      "labels": [
+        "Pane 1 · left",
+        "Pane 2 · right"
+      ]
+    },
+    "previewSubjectScroll": {
+      "subject": "stress-agent-3",
+      "scrollTop": 5473,
+      "headingTop": -5420,
+      "active": "stress-root"
+    },
+    "pointerDismissesKeyboardPreview": {
+      "hidden": true,
+      "focused": "BODY"
+    },
+    "previewDialogReturn": {
+      "focused": "BODY",
+      "data": {},
+      "active": "implementer"
+    },
+    "filteredParentDismissal": {
+      "focused": "BODY",
+      "ownerRows": 0,
+      "realTabOpen": true,
+      "active": "implementer",
+      "sessionsClosed": {}
+    }
+  },
+  "errors": [],
+  "limits": [
+    "No native host/provider execution or installation.",
+    "No VoiceOver/manual assistive-technology validation.",
+    "Legacy Beats/exit screenshots do not override current tracker policy.",
+    "The final dismissal repro adds one in-memory synthetic task; no source file changes."
+  ]
+}
