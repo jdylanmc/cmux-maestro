@@ -79,7 +79,12 @@ only assignments observed while opted in update it, and a nil observer performs
 no bookkeeping. Tests own the bounded history and mark
 events inside the original captures. Recording changes execution timing, so
 correlation or a passing instrumented capture alone cannot establish the cause.
-Normal builds contain neither this observer nor its bookkeeping.
+Normal builds contain neither this observer nor its bookkeeping. The native
+title now owns one persistent hosting controller/view: label updates install
+leading-aligned content, actual native bounds determine its display, and finite
+size proposals use the controller's public `sizeThatFits(in:)` API. Ideal-size
+queries retain `fittingSize`. Measurement no longer installs a proposed width
+into the displayed root; no duplicate measuring host or width rounding is used.
 
 `mountedTitleMeasurementOrderDoesNotChangeDisplayedPixels` is a separate
 controlled diagnostic, not a sizing repair. On the same mounted blocked-session
@@ -88,9 +93,12 @@ sequence for compact and comfortable density. It saves each full-title capture
 without masks or tolerances and checks repeat stability, reversibility and
 order independence. Exact identities, native/backing geometry, model state,
 focus and inactive keyboard lift must remain unchanged. A bounded per-step
-trace must retain every event; extra root assignments during capture invalidate
-the isolation. A red order-independence assertion is causal evidence only if
-those controls pass. The original six-phase acceptance captures and their
+trace must retain every event; root assignments during measurement or capture
+invalidate the isolation. The pre-repair hosted diagnostic demonstrated stable,
+reversible status-icon pixel changes with proposal order, not title-text
+movement or the cause of every full-row failure. The regression keeps the same
+proposal sequences and exact image comparisons while requiring measurements
+to leave the displayed root unchanged. The original six-phase captures and their
 diagnostic coverage/overflow assertions remain unchanged.
 
 `SidebarRowLiftNativeInputTests` adds hosted-only native menu-cancellation

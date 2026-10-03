@@ -573,9 +573,15 @@ struct SidebarRowLiftTests {
             try #require(title.measurementObserver == nil)
             title.measurementObserver = { trace.append($0) }
             defer { title.measurementObserver = nil }
+            title.recordMeasurement(.snapshot)
+            let originalRoot = try #require(trace.observations.last)
             for (index, order) in [orderA, orderA, orderB, orderB, orderA].enumerated() {
                 trace.reset()
-                for width in order { _ = title.measure(width: width) }
+                for width in order {
+                    let size = title.measure(width: width)
+                    #expect(size.width.isFinite && size.height.isFinite && size.height >= 24)
+                    if width.isFinite { #expect(size.width == width) }
+                }
                 title.recordMeasurement(.snapshot)
                 let endpoint = try #require(trace.observations.last)
                 trace.inCapture = true
@@ -590,11 +596,13 @@ struct SidebarRowLiftTests {
                 }
                 try #require(trace.observedCount == trace.observations.count, "Diagnostic trace overflow; result is inconclusive")
                 try #require(trace.captureAssignments == 0, "Capture changed the intervention; result is inconclusive")
-                try #require(endpoint.hasInstalledRoot && endpoint.event == .snapshot)
-                let expectedEndpoint = index == 2 || index == 3 ? nil : finite.last
-                try #require(endpoint.installedRootWidth == expectedEndpoint)
-                try #require(trace.observations.filter { $0.event == .rootAssigned }.count == order.count,
-                             "Only the explicit proposal sequence may assign the measured root")
+                try #require(endpoint.event == .snapshot && endpoint.hasInstalledRoot == originalRoot.hasInstalledRoot
+                             && endpoint.installedRootWidth == originalRoot.installedRootWidth)
+                try #require(trace.observations.allSatisfy { $0.event != .rootAssigned },
+                             "Sizing proposals must not assign the displayed root")
+                try #require(trace.observations.filter { $0.event == .measureBegin }.map(\.proposedWidth)
+                             == order.map { Optional($0) },
+                             "Every explicit proposal must reach the production sizing method in order")
                 try #require(titles(mounted.host).first { $0.accessibilityLabel() == label } === title)
                 try #require(ObjectIdentifier(title.hosting) == hostingID)
                 try #require([title.frame, title.bounds, title.hosting.frame, title.hosting.bounds,
