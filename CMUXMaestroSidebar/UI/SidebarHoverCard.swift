@@ -661,8 +661,20 @@ extension EnvironmentValues {
 
 /// The title is one native keyboard target; entering its preview never presses it.
 final class SidebarTitleNativeButton: NSButton {
-    let hosting = NSHostingView(rootView: AnyView(EmptyView()))
-    var labelContent = AnyView(EmptyView())
+    private let hostingController = NSHostingController(rootView: AnyView(EmptyView()))
+    var hosting: NSView { hostingController.view }
+    var labelContent = AnyView(EmptyView()) {
+        didSet {
+            hostingController.rootView = AnyView(labelContent.frame(maxWidth: .infinity, alignment: .leading))
+            #if CMUX_VALIDATION
+            if measurementObserver != nil {
+                installedRootWidth = nil
+                hasInstalledRoot = true
+            }
+            recordMeasurement(.rootAssigned)
+            #endif
+        }
+    }
     var activate: () -> Void = {}
     var preview = SidebarPreviewInteraction()
     var showActions: (() -> Void)?
@@ -790,16 +802,10 @@ final class SidebarTitleNativeButton: NSButton {
         #if CMUX_VALIDATION
         recordMeasurement(.measureBegin, proposedWidth: proposedWidth, normalizedWidth: width)
         #endif
-        hosting.rootView = AnyView(labelContent.frame(width: width, alignment: .leading))
-        #if CMUX_VALIDATION
-        // This records the completed source assignment, not SwiftUI's private rendered geometry.
-        if measurementObserver != nil {
-            installedRootWidth = width
-            hasInstalledRoot = true
-        }
-        recordMeasurement(.rootAssigned, proposedWidth: proposedWidth, normalizedWidth: width)
-        #endif
-        let size = hosting.fittingSize
+        // Sizing proposals must not replace the root displayed at the actual native bounds.
+        let size = width.map {
+            hostingController.sizeThatFits(in: CGSize(width: $0, height: .greatestFiniteMagnitude))
+        } ?? hosting.fittingSize
         #if CMUX_VALIDATION
         recordMeasurement(.measureEnd, proposedWidth: proposedWidth, normalizedWidth: width, fittingSize: size)
         #endif
@@ -837,7 +843,6 @@ struct SidebarTitleButton<Label: View>: NSViewRepresentable {
         button.toolTip = hint
         button.localFocusID = localFocusID
         if let localFocusID { localFocus?.register(button, id: localFocusID) }
-        _ = button.measure(width: button.bounds.width > 0 ? button.bounds.width : nil)
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: SidebarTitleNativeButton, context: Context) -> CGSize? {
         #if CMUX_VALIDATION
