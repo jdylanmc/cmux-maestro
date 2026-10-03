@@ -1347,6 +1347,7 @@ private struct ManagedNodeRow: View {
                 .help("Dismiss this failed result from the sidebar. Does not close its terminal or stop anything.")
                 .accessibilityLabel("Dismiss failed result for \(node.label)")
                 .accessibilityIdentifier("dismiss-managed-\(node.id)-\(node.generation)")
+                .modifier(SidebarRowControlFocus())
             }
         }
         .frame(minHeight: density.rowHeight)
@@ -2971,6 +2972,7 @@ private struct ExpandButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(expanded ? "Collapse" : "Expand") \(label)")
+        .modifier(SidebarRowControlFocus())
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         .accessibilityHint(expanded
             ? "Hides branch details, keeping running, blocked and attention summaries. Does not dismiss or acknowledge work."

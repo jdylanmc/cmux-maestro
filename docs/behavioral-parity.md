@@ -56,8 +56,10 @@ backgrounds. Only the decoration fades, with 160ms ease-out; Reduce Motion
 applies the same surface immediately. Row geometry, hit testing, per-control
 focus rings, navigation, menus and ownership do not change.
 
-Keyboard lift observes window-local keyboard/pointer input and the first
-responder inside the row. It neither moves focus nor invokes an action.
+Keyboard lift observes window-local keyboard/pointer input, native title/icon
+responders inside the row, and explicit SwiftUI `FocusState` from the row's
+disclosure, overflow and dismiss controls. It does not depend on SwiftUI's
+private hosting-responder geometry. It neither moves focus nor invokes an action.
 Pointer input clears keyboard lift independently of selection; moving between
 icon, title, disclosure and overflow retains one row surface.
 

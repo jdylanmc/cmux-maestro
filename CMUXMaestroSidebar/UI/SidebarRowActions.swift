@@ -27,6 +27,7 @@ final class SidebarRowMenuPresenter: NSObject {
     var hoverChanged: (Bool) -> Void = { _ in }
     var liftFocusChanged: (Bool) -> Void = { _ in }
     var liftEligible = false
+    private(set) var focusedControls: Set<UUID> = []
     var present: (NSMenu, NSPoint, NSView) -> Void = { menu, point, view in
         menu.popUp(positioning: nil, at: point, in: view)
     }
@@ -80,6 +81,12 @@ final class SidebarRowMenuPresenter: NSObject {
         present(menu(), point ?? NSPoint(x: anchor.bounds.minX, y: anchor.bounds.maxY), anchor)
     }
 
+    func controlFocusChanged(_ id: UUID, focused: Bool) {
+        if focused { focusedControls.insert(id) }
+        else { focusedControls.remove(id) }
+        (anchor as? SidebarRowMenuAnchorView)?.refreshKeyboardFocus()
+    }
+
     func detach() {
         anchor = nil
         groups = []
@@ -89,6 +96,7 @@ final class SidebarRowMenuPresenter: NSObject {
         hoverChanged = { _ in }
         liftFocusChanged = { _ in }
         liftEligible = false
+        focusedControls.removeAll()
     }
 }
 
@@ -129,8 +137,15 @@ final class SidebarRowMenuAnchorView: NSView {
 
     @objc func refreshKeyboardFocus() {
         guard presenter?.liftEligible == true, keyboardInteraction,
-              let window, window.isKeyWindow,
-              let control = window.firstResponder as? NSView,
+              let window, window.isKeyWindow, !visibleRect.isEmpty else {
+            setKeyboardFocused(false)
+            return
+        }
+        if presenter?.focusedControls.isEmpty == false {
+            setKeyboardFocused(true)
+            return
+        }
+        guard let control = window.firstResponder as? NSView,
               control !== window.contentView, !control.isHiddenOrHasHiddenAncestor,
               control.window === window, !visibleRect.isEmpty else {
             setKeyboardFocused(false)
@@ -240,6 +255,7 @@ struct SidebarRowActions<Content: View>: View {
         }
         .accessibilityLabel("Actions for \(title)")
         .help("Actions for \(title); Shift-F10 on the row")
+        .modifier(SidebarRowControlFocus())
     }
 
     private var configuredPresenter: SidebarRowMenuPresenter {
