@@ -246,6 +246,11 @@ struct SidebarRowActions<Content: View>: View {
         }
         .background(SidebarRowMenuAnchor(presenter: presenter))
         .onHover { presenter.hoverChanged($0) }
+        .onDisappear {
+            hovered = false
+            focused = false
+            keyboardFocused = false
+        }
     }
 
     private var overflowButton: some View {
