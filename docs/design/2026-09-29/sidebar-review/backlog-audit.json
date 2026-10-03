@@ -1,0 +1,2615 @@
+{
+  "verifiedAt": "2026-09-30T02:40:24.808996+00:00",
+  "repository": "jdylanmc/cmux-maestro",
+  "epic": 57,
+  "reviewedInScope": 54,
+  "openInScope": 45,
+  "updatedIssues": 44,
+  "readinessCounts": {
+    "parent": 10,
+    "closed": 9,
+    "needs-info": 14,
+    "ready-for-human": 4,
+    "ready-for-agent": 16,
+    "context": 1
+  },
+  "readyDefinition": "A self-contained bounded specification, subject to explicit upstream contracts, #119/H8 and separately authorized native acceptance. Not dispatch or a claim that every dependency is presently available.",
+  "sourceTreeSha256": "cd2b10cb2355406c28b844199b0716a7c576de6161bc4cc836dc5096674b7158",
+  "archiveSha256": "4b54c765a550f3081fc88ccd57a6cbfa701d83bb59ee8e868ec122f3b5d8093a",
+  "nativeSourceCommit": "5a8ec0eb65bbee3a4685ae07daeb1b7e86a7047d",
+  "screenshotStates": 56,
+  "nativeGraphPreserved": true,
+  "existingDependenciesPreserved": true,
+  "stateAssignmentsMilestonesPreserved": true,
+  "structuralChangesApplied": false,
+  "gitPublicationPerformed": false,
+  "knownLimits": [
+    "Not all tickets are implementation-ready: 14 retain specific input/contract gaps and four need human decisions.",
+    "Ready-for-agent is specification readiness, subject to existing accepted inputs, #119/H8 and separately authorized native acceptance.",
+    "Current locked reference and 56-state evidence are local/uncommitted; remote visual acceptance awaits publication.",
+    "P1-P9 / G1-G9 are documented proposals, not created/split/merged/closed issues.",
+    "No native app changes or live host/provider acceptance were performed."
+  ],
+  "items": [
+    {
+      "number": 39,
+      "role": "tracking parent",
+      "readiness": "parent",
+      "scope": "Authoritative native Workspace topology and integrated acceptance; retain the approved four-gate delivery, not a fifth implementation.",
+      "criteria": [
+        "Keep #110 -> #109 -> #108 -> #107 and the existing consumers' dependencies. Source declarations, SDK fixtures and HTML screenshots do not replace integrated host evidence.",
+        "Native Workspace always retains real open tabs. Its eye may reveal idle internal tasks under #131; it never hides real surfaces. The old disabled/semantically-on eye wording is superseded only for this task control.",
+        "Internal tasks may be subordinate content beneath their owning tab, never additional surface/pane entities. Reuse #131 rather than inventing another provider model.",
+        "Use compact bounded headings and rows, independent disclosures, exact selection versus focus, and explicit older-host/unavailable fallback."
+      ],
+      "verification": [
+        "Require the existing A-D evidence matrix, exact host/SDK/Maestro versions, and separately authorized disposable native transition tests.",
+        "Check ordinary and 280/350/460 logical-width layouts, long names, all real tabs, and subordinate task disclosure."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [
+        "scripts/fetch-sdk.sh",
+        "CMUXMaestroSidebar/Hierarchy/HierarchySnapshot.swift"
+      ],
+      "title": "Native Workspace view: window, workspace, pane, and surface hierarchy",
+      "baselineUpdatedAt": "2026-09-26T18:51:03Z",
+      "baselineBodySha256": "089763654f2671481a6223404686ce60e789067ae6685ef93d044c58fa8c89cf",
+      "existingBlockedBy": [],
+      "existingChildren": [
+        110,
+        109,
+        108,
+        107
+      ],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement"
+      ],
+      "targetBodySha256": "9a2dcd26b7138dca783cea967c3d9bda2359625e9cff0f087086b8ac1d941a22",
+      "verificationReceipt": {
+        "number": 39,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/39",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:08Z",
+        "bodySha256": "9a2dcd26b7138dca783cea967c3d9bda2359625e9cff0f087086b8ac1d941a22",
+        "labels": [
+          "cosmetic",
+          "enhancement"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 42,
+      "role": "tracking parent",
+      "readiness": "parent",
+      "scope": "Canonical Beats policy and integration parent. #93 owns runtime/self-management, #94 human management and #95 cleanup composition.",
+      "criteria": [
+        "Preserve local-time recurrence, one handoff attempt per occurrence, no per-Beat pending bound, no catch-up/retries/queue management, and exact assignment.",
+        "Preserve retained definitions, paused relaunch, human repair/first-enable, delete-or-keep on confirmed end and valid paused Run now.",
+        "The locked POC's UTC, pending-count, cancel-before-edit and exit examples remain historical, not requirements. No native scheduler is implemented by a screenshot.",
+        "Keep #94 blocked by #93/#86 and #95 blocked by #93/#91; do not add an ordering between #94 and #95."
+      ],
+      "verification": [
+        "Reconcile runtime, manager and cleanup evidence against the existing policy table; do not dispatch the parent as another implementation."
+      ],
+      "gaps": [
+        "#93 still needs an approved CMUX-lifetime clock/store/management contract. The visual refresh does not resolve it."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Beats: recurring cron prompts for exact agent sessions",
+      "baselineUpdatedAt": "2026-09-26T19:14:37Z",
+      "baselineBodySha256": "8db1cac681572c3640247eed526a915160d57b565ae4e7c2b86fc25d57009417",
+      "existingBlockedBy": [],
+      "existingChildren": [
+        93,
+        94,
+        95
+      ],
+      "existingLabels": [],
+      "apply": true,
+      "targetLabels": [],
+      "targetBodySha256": "7543cdeac1c039bdbe086032d33419206dc7de66d1138f0073ace7b0321c6351",
+      "verificationReceipt": {
+        "number": 42,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/42",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:10Z",
+        "bodySha256": "7543cdeac1c039bdbe086032d33419206dc7de66d1138f0073ace7b0321c6351",
+        "labels": [],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 43,
+      "title": "Native sidebar context menus and shared item actions",
+      "role": "historical delivery",
+      "readiness": "closed",
+      "disposition": "keep-closed",
+      "reason": "Preserve delivered state/history. New acceptance or POC defects do not reopen this ticket.",
+      "baselineUpdatedAt": "2026-09-26T19:14:39Z",
+      "apply": false,
+      "verificationReceipt": {
+        "number": 43,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/43",
+        "state": "closed",
+        "updatedAt": "2026-09-26T19:14:39Z",
+        "bodySha256": "57f081536c2e9b47b86ac65d117e1fe3624da1e305abc5a5df63074ad33c4f58",
+        "labels": [
+          "cosmetic"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 44,
+      "role": "implementation leaf",
+      "readiness": "needs-info",
+      "scope": "Sibling-only sidebar ordering, with presentation order separate from actual native placement.",
+      "criteria": [
+        "Keep the approved workspace/worktree/family/pane/row matrix and reject cross-container sidebar drops.",
+        "Collapsed horizontal icon cards use the same exact sibling identities and ordering; scroll is not reparenting or tab movement.",
+        "Preserve subtree membership, active selection, local keyboard focus, preferences, attention and native request/result distinctions.",
+        "Do not substitute an unverified host reorder API or optimistic local order for authoritative native pane/surface results."
+      ],
+      "verification": [
+        "Test pointer and keyboard first/last moves, icon-card scrolling, rejected targets, hidden/removed members, persistence and host refusal."
+      ],
+      "gaps": [
+        "The supported typed native pane/surface reorder operation and its outcome/reconciliation contract are not established by #39's read-topology work alone.",
+        "Decide the smallest permitted host-operation slice before native mutation implementation; projection-only ordering can be proposed separately."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Sidebar surface movement: drag/drop and accessible Move actions",
+      "baselineUpdatedAt": "2026-09-26T16:11:02Z",
+      "baselineBodySha256": "d45ac1effb4f4d4dcfc90a28d4ceac4888023755ca6b9d445e54d8aceb1d92c3",
+      "existingBlockedBy": [
+        39,
+        58
+      ],
+      "existingChildren": [],
+      "existingLabels": [
+        "cosmetic"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "needs-info"
+      ],
+      "targetBodySha256": "bc46194ef6a4f449f8d6da7356c9b17cc10018bc542f51c1a718b09f1449b716",
+      "verificationReceipt": {
+        "number": 44,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/44",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:42Z",
+        "bodySha256": "bc46194ef6a4f449f8d6da7356c9b17cc10018bc542f51c1a718b09f1449b716",
+        "labels": [
+          "cosmetic",
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 45,
+      "role": "implementation leaf",
+      "readiness": "needs-info",
+      "scope": "One explicitly configured backlog URL per exact workspace; lightweight header/menu navigation only.",
+      "criteria": [
+        "Keep the arrow beside the workspace eye and before overflow, with independent hit targets and keyboard access.",
+        "Never infer URL/tracker from names, branches or directories; represent missing configuration and open failures explicitly.",
+        "Never commandeer an unrelated browser tab or turn this into an embedded tracker."
+      ],
+      "verification": [
+        "Test two identically named workspaces with different bindings, missing/invalid configuration, declined/failed opening and keyboard activation."
+      ],
+      "gaps": [
+        "Dylan must select the opening destination: new CMUX browser surface or system browser.",
+        "Document the durable workspace-to-URL binding and behavior when a workspace identity is replaced."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Workspace backlog shortcut and explicit URL configuration",
+      "baselineUpdatedAt": "2026-09-26T16:11:05Z",
+      "baselineBodySha256": "6f6c4d71a8b2ec5216b05bfa043ce727954f68485592d5b358ab20d4fc462f9b",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "cosmetic"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "needs-info"
+      ],
+      "targetBodySha256": "9cd6109592fb09cb9bedcc3c1261998b5210d9f7d52efc22a9cf9aae761d153f",
+      "verificationReceipt": {
+        "number": 45,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/45",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:16Z",
+        "bodySha256": "9cd6109592fb09cb9bedcc3c1261998b5210d9f7d52efc22a9cf9aae761d153f",
+        "labels": [
+          "cosmetic",
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 46,
+      "title": "Pinned active-window details and supported diagnostics",
+      "role": "historical delivery",
+      "readiness": "closed",
+      "disposition": "keep-closed",
+      "reason": "Preserve delivered state/history. New acceptance or POC defects do not reopen this ticket.",
+      "baselineUpdatedAt": "2026-09-26T22:20:58Z",
+      "apply": false,
+      "verificationReceipt": {
+        "number": 46,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/46",
+        "state": "closed",
+        "updatedAt": "2026-09-26T22:20:58Z",
+        "bodySha256": "b6f795e24f7787cb5df901daf2ee77967a42c281b55a7e2f0d6c6a29b3a7560b",
+        "labels": [
+          "cosmetic"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 48,
+      "role": "consolidation decision",
+      "readiness": "ready-for-human",
+      "scope": "Historical stale-child report whose internal-task distinction and relevance policy are now specified by #131; prevent competing implementations.",
+      "criteria": [
+        "The outline-ghost requirement is superseded: internal tasks have no identity icon.",
+        "#131's state-driven internal-task rules supersede timer expiry for that category: idle/unknown/cancelled hide by default, finished outcomes remain until exact dismissal, attention and necessary ancestry win.",
+        "Carry exact session/child/outcome identity, incomplete-history handling, renewed-work recovery and real-tab preservation into #131's shared relevance implementation.",
+        "Do not infer session death from absence or revive provider-specific exit controls. Non-subagent skill/shell history must not silently acquire subagent semantics."
+      ],
+      "verification": [
+        "Recheck the original reported case against merged #117/#120/#122/#123/#126 rather than assume the old root cause persists.",
+        "Before closing as superseded, verify every still-relevant safeguard is owned in #131 and any genuinely separate history defect has an explicit owner."
+      ],
+      "gaps": [
+        "Proposed merge/supersession into #131 needs approval. This pass does not close #48, delete its evidence or dispatch a duplicate renderer."
+      ],
+      "disposition": "propose-consolidation",
+      "sources": [
+        "CMUXMaestroPreview/CopilotShared/CopilotSnapshotAdapter.swift",
+        "CMUXMaestroPreview/CopilotShared/CopilotEventReducer.swift"
+      ],
+      "title": "Retire stale provider-child history without closing live chats",
+      "baselineUpdatedAt": "2026-09-26T19:14:44Z",
+      "baselineBodySha256": "6fdb2039871c42a803ef7a6f9d1164c598b1c5ecdf5b25a6d7b9668832b58c57",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "cosmetic"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "ready-for-human"
+      ],
+      "targetBodySha256": "867841e639ba86f548cbdd217d008d99e4363a16cb2915af65fe013eeac21807",
+      "verificationReceipt": {
+        "number": 48,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/48",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:46Z",
+        "bodySha256": "867841e639ba86f548cbdd217d008d99e4363a16cb2915af65fe013eeac21807",
+        "labels": [
+          "cosmetic",
+          "ready-for-human"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 49,
+      "title": "Sidebar icon picker: font search, colors, and resets",
+      "role": "historical delivery",
+      "readiness": "closed",
+      "disposition": "keep-closed",
+      "reason": "Preserve delivered state/history. New acceptance or POC defects do not reopen this ticket.",
+      "baselineUpdatedAt": "2026-09-26T16:11:13Z",
+      "apply": false,
+      "verificationReceipt": {
+        "number": 49,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/49",
+        "state": "closed",
+        "updatedAt": "2026-09-26T16:11:13Z",
+        "bodySha256": "5f56a67c1a6f0cfb67ddde1e12b18afc31a255e1966ebf7417087151f347a230",
+        "labels": [
+          "cosmetic"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 50,
+      "role": "implementation leaf",
+      "readiness": "needs-info",
+      "scope": "Per-session pets in pinned/hover details, independent from tab identity icons and internal tasks.",
+      "criteria": [
+        "Preserve human override, distinct default/agent-selection resets, hide/show, exact-session persistence and independent hovered/pinned subjects.",
+        "No pets for bare terminals, browsers or internal tasks. Preserve keyboard, Reduce Motion and narrow/short layout behavior.",
+        "The POC's original geometric pets are placeholders; visual approval does not license Codex artwork or select a production animation map."
+      ],
+      "verification": [
+        "Test preference precedence, model updates, movement/replacement, hidden state and hovered-versus-active isolation; bind any shipped assets to explicit provenance/rights."
+      ],
+      "gaps": [
+        "Asset-specific Codex catalog rights and the selected distributable assets remain unverified.",
+        "Select/document supported status animation and fallback behavior before production asset integration."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Per-agent pets in pinned details and hover cards",
+      "baselineUpdatedAt": "2026-09-26T16:11:15Z",
+      "baselineBodySha256": "ec251646f73a34b7e17e0236dc062ad8d9e6d93dfd73482059d9cb81c7ec5519",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "cosmetic"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "needs-info"
+      ],
+      "targetBodySha256": "77293b9a5a4549757a0cc0bed9e48e299eb54b69aed36e2ce496dc6994769fe3",
+      "verificationReceipt": {
+        "number": 50,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/50",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:03Z",
+        "bodySha256": "77293b9a5a4549757a0cc0bed9e48e299eb54b69aed36e2ce496dc6994769fe3",
+        "labels": [
+          "cosmetic",
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 51,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Shared normalized-slug tag colors and distinct human/agent assignment authority, with the new collapsed-card exception.",
+      "criteria": [
+        "Remove tags entirely from collapsed worktree icon cards. RF-04's one-tag/+N experiment is superseded by RF-06.",
+        "Keep compact title-inline tags in expanded rows and full ownership/color interactions in details; preserve Taskboard/Beats/History tag consumers.",
+        "Use one versioned canonicalization/color registry and independent assignment sets. Agents may change only their own assignment, never human colors or another actor's tags.",
+        "Preserve existing data when choosing documented production limits; report invalid or unavailable writes, never silently truncate.",
+        "Keep deterministic shared colors and actual foreground/background contrast >=4.5:1. Theme changes must not overwrite human overrides."
+      ],
+      "verification": [
+        "Test normalization collisions, both-owner removal, exact actor/session authorization, concurrent/shared persistence, all consumers, resets and long labels.",
+        "Assert zero tag chips in collapsed icon cards and unchanged tags in expanded/detail views."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [],
+      "title": "Agent tags: separate human editing and agent self-assignment",
+      "baselineUpdatedAt": "2026-09-26T16:11:18Z",
+      "baselineBodySha256": "faf52369aa6761a9107481fcbc8f963a78e956e301a01930ab0a5e8833082138",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "cosmetic"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "c6efc6efc61922a331d83f192122017c8e7986211ae4199db4c2c4dd5febc967",
+      "verificationReceipt": {
+        "number": 51,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/51",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:05Z",
+        "bodySha256": "c6efc6efc61922a331d83f192122017c8e7986211ae4199db4c2c4dd5febc967",
+        "labels": [
+          "cosmetic",
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 52,
+      "title": "Workspace hover cards independent of pinned active-window details",
+      "role": "historical delivery",
+      "readiness": "closed",
+      "disposition": "keep-closed",
+      "reason": "Preserve delivered state/history. New acceptance or POC defects do not reopen this ticket.",
+      "baselineUpdatedAt": "2026-09-26T16:11:20Z",
+      "apply": false,
+      "verificationReceipt": {
+        "number": 52,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/52",
+        "state": "closed",
+        "updatedAt": "2026-09-26T16:11:20Z",
+        "bodySha256": "2cafcc524a4df6a6eb27963dc5af1330a6ea2b57cd2e0393e07bbd464388f198",
+        "labels": [
+          "cosmetic"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 55,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Polish the delivered CLI Integration surface's read-only guide-content status and explicit human-run command path.",
+      "criteria": [
+        "Reuse #56's delivered settings/copy flow; do not rebuild runtime registration or global skill installation.",
+        "Distinguish missing, unreadable, different and matching content. Matching means matches this build, not unverified upstream freshness.",
+        "Keep guide-content status separate from installed/loaded observer hooks, observation health and native messaging readiness.",
+        "Use explicit Re-check, accurate supported-agent coverage and truthful clipboard/read errors. No command execution or terminal takeover.",
+        "The POC scenario selector and top lab controls are not production settings."
+      ],
+      "verification": [
+        "Exercise all four statuses, denied/unreadable paths, copied command fidelity, retry, accessible feedback and no automatic installation."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [
+        "scripts/fetch-sdk.sh"
+      ],
+      "title": "CLI Integration polish: installed-skill status and guided updates",
+      "baselineUpdatedAt": "2026-09-26T16:11:23Z",
+      "baselineBodySha256": "8e15be277abf51ca4da0c7a4200126d0a4d597a14f21735d8d57e5f3b8ebc074",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "cosmetic"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "0506b85ddcee656cf2c4534c97f80fc11431f65d4aa8ced113ae3967e62876f7",
+      "verificationReceipt": {
+        "number": 55,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/55",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:10Z",
+        "bodySha256": "0506b85ddcee656cf2c4534c97f80fc11431f65d4aa8ced113ae3967e62876f7",
+        "labels": [
+          "cosmetic",
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 57,
+      "role": "epic / priority gate",
+      "readiness": "parent",
+      "scope": "Current approved visual target, implementation ownership and integrated acceptance for the visual overhaul.",
+      "criteria": [
+        "Preserve #119's explicit hardening-first/H8 gate. Specification readiness is not dispatch, installation, merge or acceptance of the stable baseline.",
+        "Use the September 29 internal-task, fixed-right-edge, containment, disclosure and icon-card contract. RF-06 supersedes RF-04; no ghost identity glyph or collapsed tag grid.",
+        "Keep topology, worktree identity, provider task ancestry, visual order, attention, and actual native focus/lifetime distinct.",
+        "Maintain #42/#60 as current Beats/cleanup policy; historical POC simulations cannot reopen superseded shutdown or queue behavior.",
+        "Track #131 as related approved scope pending native-parent attachment review. Closed deliveries remain closed; grouping parents are not parallel implementation assignments."
+      ],
+      "verification": [
+        "Use the 56-state review matrix and focused regression cases plus native version-bound acceptance on authorized resources.",
+        "Every leaf needs a single outcome, explicit inputs/dependencies, acceptance and verification; unresolved source/route/product decisions stay visible."
+      ],
+      "gaps": [
+        "Publish/attach the newly locked source and screenshots before claiming remote visual acceptance; current artifacts are local, not a merged/public reference.",
+        "Four POC interaction defects and remaining menu/history/density/identity limitations are excluded from the approved target's correctness guarantees."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Cosmetic overhaul: prototype-led sidebar design and personalization",
+      "baselineUpdatedAt": "2026-09-27T02:05:28Z",
+      "baselineBodySha256": "92809bf30acf9f94bf3a299777e8c7092bb2a10ecb22854ec5adacc7cfb2d669",
+      "existingBlockedBy": [
+        61
+      ],
+      "existingChildren": [
+        55,
+        48,
+        60,
+        61,
+        81,
+        42,
+        100,
+        101,
+        102,
+        103,
+        67,
+        104,
+        105,
+        106,
+        112,
+        115
+      ],
+      "existingLabels": [
+        "cosmetic"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic"
+      ],
+      "targetBodySha256": "ef22daec8424e219d1b41e640af2c0cf0430507463ed07932054ce082eaf2488",
+      "verificationReceipt": {
+        "number": 57,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/57",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:05Z",
+        "bodySha256": "ef22daec8424e219d1b41e640af2c0cf0430507463ed07932054ce082eaf2488",
+        "labels": [
+          "cosmetic"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 58,
+      "role": "implementation leaf / shared composition",
+      "readiness": "ready-for-agent",
+      "scope": "One current-window three-way selector and shared Worktrees/Sub-agents composition, consuming authoritative topology and worktree evidence.",
+      "criteria": [
+        "Keep #39/#59 prerequisites and reuse their accepted outputs; no new topology probe or inferred worktree identity.",
+        "Collapsed worktree cards contain all observed visible interactive-agent icons in one horizontally scrollable row. No tags, grid, names or four-item cutoff; scrollbar is local to that card.",
+        "Preserve state cues, accessible full identity, pointer/keyboard previews, exact selection, sibling reordering, expansion and local scroll position through rerender/selection.",
+        "#131 owns the non-interactive task component and state policy; compose it beneath exact parents without inventing tabs or duplicating that policy.",
+        "Keep the main sidebar and hover cards horizontally contained; branch labels ellipsize, counts remain visible, and full names/values remain accessible.",
+        "Counts refer to observed data and explicitly preserve existing incomplete/omitted evidence; do not convert the stress fixture into authorization to raise runtime bounds."
+      ],
+      "verification": [
+        "Test all three projections and current-window isolation, known/unknown/stale/non-repository inputs, same-title identities, independent disclosure and migration.",
+        "Exercise 280/350/460 logical widths, 12-level internal trees, long labels, 61 chat / 172 internal-task synthetic stress inputs and explicit truncation beyond production bounds.",
+        "Verify exact identity and focus/attention neutrality; #111's narrow indicator delivery remains separate."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [],
+      "title": "Global sidebar projections: Worktrees, Sub-agents, and Workspace",
+      "baselineUpdatedAt": "2026-09-26T19:16:58Z",
+      "baselineBodySha256": "da0890d3c141597e43f2a1242744a8235bc03e7cf3f6533b0703c3d008f905a7",
+      "existingBlockedBy": [
+        39,
+        59
+      ],
+      "existingChildren": [
+        111
+      ],
+      "existingLabels": [
+        "cosmetic"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "0fef5d9b615f099f7c85add4f4b5a4d5219a5ab8a84ef5295fbd4ecbe07fe5c9",
+      "verificationReceipt": {
+        "number": 58,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/58",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:40Z",
+        "bodySha256": "0fef5d9b615f099f7c85add4f4b5a4d5219a5ab8a84ef5295fbd4ecbe07fe5c9",
+        "labels": [
+          "cosmetic",
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 59,
+      "role": "contract and producer leaf",
+      "readiness": "needs-info",
+      "scope": "One authoritative worktree identity/provenance contract for grouping and diagnostics, not a display-name heuristic.",
+      "criteria": [
+        "Preserve opaque identity, same-name/branch separation, detached HEAD, freshness, invalidation and explicit unknown/non-repository distinctions.",
+        "Current CMUX Surface directory metadata is not verified agent/tool cwd. PR #130's truthful source labels must not be undone by the mock's Working directory caption.",
+        "Keep collection bounded outside the sidebar and publish sanitized observations; no broad path/probe grants."
+      ],
+      "verification": [
+        "Specify and test rename/recreation lifetime, session/directory changes, true negative repository evidence, missing/denied/malformed/timeouts and unmanaged coverage."
+      ],
+      "gaps": [
+        "Select the source that can truthfully establish current agent worktree rather than launch/assigned/surface directory.",
+        "Approve/document key lifetime, negative-evidence and unsupported-coverage semantics before consumers treat them as current identity."
+      ],
+      "disposition": "update",
+      "sources": [
+        "CMUXMaestroSidebar/Hierarchy/HierarchySnapshot.swift"
+      ],
+      "title": "Authoritative worktree membership and freshness metadata",
+      "baselineUpdatedAt": "2026-09-26T16:11:33Z",
+      "baselineBodySha256": "b822c99d878e881552791d7e191b217fff86cbcc551cd994f6e8225f81881f60",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "cosmetic"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "needs-info"
+      ],
+      "targetBodySha256": "2c9c92421c63d8cb933f9f23339e53a4a3de74cdfcb46d680b63109c13ebf67e",
+      "verificationReceipt": {
+        "number": 59,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/59",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:44Z",
+        "bodySha256": "2c9c92421c63d8cb933f9f23339e53a4a3de74cdfcb46d680b63109c13ebf67e",
+        "labels": [
+          "cosmetic",
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 60,
+      "role": "tracking parent",
+      "readiness": "parent",
+      "scope": "Framework-neutral PM cleanup of exact owned child terminals, not a new human sidebar exit feature.",
+      "criteria": [
+        "Preserve #90 as single-target leaf and #91 as descendant composition; #95 handles Beats consequences.",
+        "Do not revive #96/#97/#98, provider /exit/abort choreography, forced process termination, or old POC human-exit dialogs.",
+        "CMUX owns normal close confirmation/refusal and last-tab behavior; harness owns its own persistence/cleanup. Accepted close is not confirmed removal or task success.",
+        "Keep exact ownership, launch leases, resource bounds and per-target uncertain outcomes."
+      ],
+      "verification": [
+        "Require route-specific identity/result evidence from children and separately authorized disposable host acceptance."
+      ],
+      "gaps": [
+        "#90's supported PM entry point/host outcome contract remains unresolved."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "PM-driven child terminal cleanup",
+      "baselineUpdatedAt": "2026-09-26T19:14:51Z",
+      "baselineBodySha256": "c7afe09799661b1fb6e49e24dcb2f251c49b2567fd410d156b416bf3176503ee",
+      "existingBlockedBy": [],
+      "existingChildren": [
+        90,
+        91
+      ],
+      "existingLabels": [
+        "cosmetic"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic"
+      ],
+      "targetBodySha256": "a04aa16b18d6b0a86a42fe834399227043f761babd5c1ff24a96e3eda2e527c7",
+      "verificationReceipt": {
+        "number": 60,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/60",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:12Z",
+        "bodySha256": "a04aa16b18d6b0a86a42fe834399227043f761babd5c1ff24a96e3eda2e527c7",
+        "labels": [
+          "cosmetic"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 61,
+      "role": "runtime prerequisite",
+      "readiness": "context",
+      "scope": "Preserve the existing runtime startup blocker and its owners; it is not a visual implementation item.",
+      "criteria": [
+        "Keep #57's existing blocker relationship. Do not retell retracted provider-startup timing as cause or claim the POC proves startup repaired.",
+        "Merged reliability changes and open PR #129 are delivery context, not permission to close the issue or modify live launches."
+      ],
+      "verification": [
+        "Use the owning runtime track's current launch/lease/native acceptance evidence."
+      ],
+      "gaps": [],
+      "disposition": "keep-context",
+      "sources": [],
+      "title": "Managed worker startup expires before background terminal executes runtime",
+      "baselineUpdatedAt": "2026-09-26T23:29:30Z",
+      "baselineBodySha256": "3e0666199263bb1eba700e32a7ddff1f05a7f2fdd17363207d70aeeff790eb0d",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "bug"
+      ],
+      "apply": false,
+      "verificationReceipt": {
+        "number": 61,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/61",
+        "state": "open",
+        "updatedAt": "2026-09-26T23:29:30Z",
+        "bodySha256": "3e0666199263bb1eba700e32a7ddff1f05a7f2fdd17363207d70aeeff790eb0d",
+        "labels": [
+          "bug"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 67,
+      "role": "host-contract / implementation leaf",
+      "readiness": "needs-info",
+      "scope": "Inherit a supported semantic CMUX/Ghostty palette with an explicit older-host fallback.",
+      "criteria": [
+        "Keep native fallback distinct from actual custom terminal-theme inheritance. No theme-name lookup table or settings scraping.",
+        "Preserve human icon colors, native favicons and shared tag overrides/contrast.",
+        "Apply semantic surfaces/text/selection/borders consistently to rows, icon cards, previews and utility content without adding a competing theme preference."
+      ],
+      "verification": [
+        "Verify at least two arbitrary palettes, live changes with popovers open, absent/revoked/older-host data and contrast."
+      ],
+      "gaps": [
+        "The pinned SDK still lacks the accepted palette route. A typed bounded host-to-extension contract and authorized host/SDK change scope are required first."
+      ],
+      "disposition": "update",
+      "sources": [
+        "scripts/fetch-sdk.sh"
+      ],
+      "title": "Inherit the active CMUX theme palette in sidebar UI",
+      "baselineUpdatedAt": "2026-09-26T16:11:42Z",
+      "baselineBodySha256": "0a23c52157f0b28d8a358aade715843e8cffa5b3611e76c9796ddaa4290792fc",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [],
+      "apply": true,
+      "targetLabels": [
+        "needs-info"
+      ],
+      "targetBodySha256": "6a2aca5cc1a02db52723f446b61c6951775a814fad95ab9b738a281f4673fb3c",
+      "verificationReceipt": {
+        "number": 67,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/67",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:07Z",
+        "bodySha256": "6a2aca5cc1a02db52723f446b61c6951775a814fad95ab9b738a281f4673fb3c",
+        "labels": [
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 70,
+      "role": "host-contract / implementation leaf",
+      "readiness": "needs-info",
+      "scope": "Browser-only navigation-aware website favicon mode, separate from completed font-icon picker #49.",
+      "criteria": [
+        "Preserve native favicon colors, stable browser identity and explicit human font-icon overrides.",
+        "Invalidate on navigation/replacement; missing/delayed/stale/malformed favicon falls back to browser default, never the previous site's image.",
+        "Do not add third-party favicon requests, sidebar network entitlement, settings scraping or automatic host upgrades."
+      ],
+      "verification": [
+        "Test navigation identity changes, stale responses, fallback, persistence, exact target and keyboard picker access in the actual supported host."
+      ],
+      "gaps": [
+        "An accepted typed current-navigation/favicon producer route is not present in the inspected pin; establish it before implementation."
+      ],
+      "disposition": "update",
+      "sources": [
+        "scripts/fetch-sdk.sh"
+      ],
+      "title": "Browser sidebar favicons: navigation-aware native website icons",
+      "baselineUpdatedAt": "2026-09-26T16:11:44Z",
+      "baselineBodySha256": "86bdfbfe097960fe6e7c9b8a7f5466f5921411c3351e098881725feb8fc92b85",
+      "existingBlockedBy": [
+        49
+      ],
+      "existingChildren": [],
+      "existingLabels": [],
+      "apply": true,
+      "targetLabels": [
+        "needs-info"
+      ],
+      "targetBodySha256": "6946dafc1f8241883196e3b8d1821b9a0687893a64fc3dddc6b321bae9400607",
+      "verificationReceipt": {
+        "number": 70,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/70",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:08Z",
+        "bodySha256": "6946dafc1f8241883196e3b8d1821b9a0687893a64fc3dddc6b321bae9400607",
+        "labels": [
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 73,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Render #59's accepted worktree/provenance observation in shared hover/pinned details; no second collector.",
+      "criteria": [
+        "Preserve verified/current, last-known/stale, confirmed non-repository and unavailable states, with branch/detached context.",
+        "Never infer membership from title, branch, ancestry, pane or parent. Preserve exact generation and parent-only context.",
+        "Use #81 home-relative display, unchanged permitted raw values and current truthful directory source labels.",
+        "Long locations wrap in details without horizontal scrolling; normal sidebar stays compact."
+      ],
+      "verification": [
+        "After #59 is accepted and available, test identical names, detached HEAD, rebinding/invalidation, failures, wrapping and passive subject isolation."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [
+        "CMUXMaestroSidebar/Hierarchy/HierarchySnapshot.swift"
+      ],
+      "title": "Agent hover cards: current worktree and provenance",
+      "baselineUpdatedAt": "2026-09-26T16:11:47Z",
+      "baselineBodySha256": "cc5b92b7c16dc77ab17cd28cc473a09df9749840dc209111290288d72235f6ae",
+      "existingBlockedBy": [
+        59,
+        81
+      ],
+      "existingChildren": [],
+      "existingLabels": [],
+      "apply": true,
+      "targetLabels": [
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "717ff10de2e46eb6c3153af07c2d24790662506054a386a487ecca36a6cf255d",
+      "verificationReceipt": {
+        "number": 73,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/73",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:52Z",
+        "bodySha256": "717ff10de2e46eb6c3153af07c2d24790662506054a386a487ecca36a6cf255d",
+        "labels": [
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 74,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Use actual exact-session/child model observations with truthful availability, not launch-default inference.",
+      "criteria": [
+        "Reuse existing model observations; preserve current versus last-reported status and explicit unavailable state.",
+        "Do not borrow the parent's model for an internal child or the active model for another preview.",
+        "Keep compact textual model information in details; no model badges or pets are invented for non-interactive tasks."
+      ],
+      "verification": [
+        "Test reported model changes, absent child model, stale/ambiguous/replaced owners, pinned-versus-hover isolation and provider identifiers."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [
+        "CMUXMaestroPreview/CopilotShared/CopilotSnapshotAdapter.swift",
+        "CMUXMaestroSidebar/UI/SidebarPresentation.swift"
+      ],
+      "title": "Agent hover cards: observed model and availability",
+      "baselineUpdatedAt": "2026-09-26T16:11:50Z",
+      "baselineBodySha256": "badc53816109ed2bc26d4cabf023da13551c171ba89df0da2ca643e14dd6bcad",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [],
+      "apply": true,
+      "targetLabels": [
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "dc66da5aef23499b488c623311ae7d3f4a2867f98531ec49bee72698bd9bdad7",
+      "verificationReceipt": {
+        "number": 74,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/74",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:54Z",
+        "bodySha256": "dc66da5aef23499b488c623311ae7d3f4a2867f98531ec49bee72698bd9bdad7",
+        "labels": [
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 75,
+      "role": "data-source / implementation leaf",
+      "readiness": "needs-info",
+      "scope": "Inspect and copy exact-agent-owned loopback endpoints; no automatic requests/navigation or global listener listing.",
+      "criteria": [
+        "Keep IPv4/IPv6 and port validity, exact owner/process generation, disappearance/reuse invalidation and unknown protocol explicit.",
+        "Initial scope is inspection/copy. An Open destination is a separate product choice, not a hidden implementation requirement.",
+        "Reuse #78's eventual bounded ownership evidence rather than creating a second process inventory."
+      ],
+      "verification": [
+        "Test wrong-owner exclusion, PID/port reuse, stale/incomplete/denied source, unsupported protocol and raw copy without network effects."
+      ],
+      "gaps": [
+        "Select and prove the bounded authoritative listener/process ownership producer. The POC does not supply it.",
+        "Proposed shared ownership sequencing with #78 is not yet a recorded new dependency edge."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Agent hover cards: owned localhost application ports",
+      "baselineUpdatedAt": "2026-09-26T16:11:53Z",
+      "baselineBodySha256": "dd0d7531db8b5c410a749c66b91241edf09c59f6736a2090dbb7109b18b26bf3",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [],
+      "apply": true,
+      "targetLabels": [
+        "needs-info"
+      ],
+      "targetBodySha256": "bb97b63e627f081833c6060987b19a701570d6b22b232e5b93216549592020bf",
+      "verificationReceipt": {
+        "number": 75,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/75",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:56Z",
+        "bodySha256": "bb97b63e627f081833c6060987b19a701570d6b22b232e5b93216549592020bf",
+        "labels": [
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 76,
+      "title": "Agent hover cards: copy session ID beside its GUID",
+      "role": "historical delivery",
+      "readiness": "closed",
+      "disposition": "keep-closed",
+      "reason": "Preserve delivered state/history. New acceptance or POC defects do not reopen this ticket.",
+      "baselineUpdatedAt": "2026-09-26T22:20:56Z",
+      "apply": false,
+      "verificationReceipt": {
+        "number": 76,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/76",
+        "state": "closed",
+        "updatedAt": "2026-09-26T22:20:56Z",
+        "bodySha256": "fb185bff73d6b846a0d96fa70a2af4151fb20a10e0bbc9a4464eae6d0d523f75",
+        "labels": [],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 77,
+      "title": "Agent hover cards: current working directory",
+      "role": "historical delivery",
+      "readiness": "closed",
+      "disposition": "keep-closed",
+      "reason": "Preserve delivered state/history. New acceptance or POC defects do not reopen this ticket.",
+      "baselineUpdatedAt": "2026-09-29T21:10:36Z",
+      "apply": false,
+      "verificationReceipt": {
+        "number": 77,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/77",
+        "state": "closed",
+        "updatedAt": "2026-09-29T21:10:36Z",
+        "bodySha256": "3f39067c247b7d9fd72e55650fa1f9572ed8419a13ad587c458dd70d36230844",
+        "labels": [],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 78,
+      "role": "data-source / implementation leaf",
+      "readiness": "needs-info",
+      "scope": "Bounded sanitized inspection of exact-agent-owned background processes, without process control.",
+      "criteria": [
+        "PID/name matches alone are not ownership. Preserve generation, descendants/detached work and incomplete/unknown observations.",
+        "No raw command lines, prompts, environment, credentials, unrelated machine processes or kill/restart actions.",
+        "Publish through the existing permitted sanitized boundary, not a new daemon or sidebar transport."
+      ],
+      "verification": [
+        "Prove authoritative ownership through exit/PID reuse/detachment/session replacement, permissions and source limits."
+      ],
+      "gaps": [
+        "An accepted producer/ownership lifetime contract for real owned OS processes is missing; shared source research should also cover #75's listener consumer."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Agent hover cards: owned background processes",
+      "baselineUpdatedAt": "2026-09-26T16:12:02Z",
+      "baselineBodySha256": "9008448f932e6555c3cda00d5b7cff7c1eb8bebe68e50b34f58e63f377f9d384",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [],
+      "apply": true,
+      "targetLabels": [
+        "needs-info"
+      ],
+      "targetBodySha256": "dde4dd45e994a54300814850152612b606a4c4c99a4954e5ef087ee0ff54fc16",
+      "verificationReceipt": {
+        "number": 78,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/78",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:58Z",
+        "bodySha256": "dde4dd45e994a54300814850152612b606a4c4c99a4954e5ef087ee0ff54fc16",
+        "labels": [
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 79,
+      "role": "data-source / implementation leaf",
+      "readiness": "needs-info",
+      "scope": "Authoritative current-context usage and compatible capacity, not billed-token totals or marketing estimates.",
+      "criteria": [
+        "Expose used tokens/capacity with units only when the same exact context provides both; derive percentage only then.",
+        "Preserve model/compaction/reset changes, stale/unsupported/missing capacity and explicit parent context.",
+        "No raw transcript inspection, launch-setting estimate or expanded transport/permission."
+      ],
+      "verification": [
+        "Verify actual provider fields and units, identity isolation, compaction/model changes, missing capacity and zero-versus-unavailable."
+      ],
+      "gaps": [
+        "A version-pinned supported usage/capacity source is not established. Existing model metadata and synthetic percentages are insufficient."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Agent hover cards: context usage and window size",
+      "baselineUpdatedAt": "2026-09-26T16:12:04Z",
+      "baselineBodySha256": "c7816351a8c98f5a03d9870f338e195b937a97180c5e6fead9003a041125bfc2",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [],
+      "apply": true,
+      "targetLabels": [
+        "needs-info"
+      ],
+      "targetBodySha256": "1a5b6fcd6551e31abb0db706b72f4fdf6d11fb0c916c08106ff01a3802d163f4",
+      "verificationReceipt": {
+        "number": 79,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/79",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:00Z",
+        "bodySha256": "1a5b6fcd6551e31abb0db706b72f4fdf6d11fb0c916c08106ff01a3802d163f4",
+        "labels": [
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 80,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Shared coherent Git counts with semantic green additions/red deletions, reusing existing collection and comparison semantics.",
+      "criteria": [
+        "Consume one fresh permitted snapshot for the exact represented tree; preserve comparison-base, untracked and binary semantics.",
+        "Missing/stale values are not zero; assigned-directory evidence must not be relabeled verified current agent cwd.",
+        "Wrap large counts in hover/pinned details and keep text/signs accessible independently of color; tag colors do not recolor Git semantics."
+      ],
+      "verification": [
+        "Test count/basis coherence, unknown/stale snapshots, subject changes, large values at narrow widths, theme contrast and passive behavior."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [
+        "CMUXMaestroSidebar/UI/SidebarPresentation.swift"
+      ],
+      "title": "Agent hover cards: changed files and green/red Git counts",
+      "baselineUpdatedAt": "2026-09-26T16:12:07Z",
+      "baselineBodySha256": "08443371f76865b40361bb46fcb9d06d0f8ee1d107513e36cab09e666aa27cd3",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [],
+      "apply": true,
+      "targetLabels": [
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "75ab98ef772abed019920d09de409e5dddc1a73e7d714360bb45263ba39a082f",
+      "verificationReceipt": {
+        "number": 80,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/80",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:01Z",
+        "bodySha256": "75ab98ef772abed019920d09de409e5dddc1a73e7d714360bb45263ba39a082f",
+        "labels": [
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 81,
+      "title": "Use home-relative paths in Maestro UI",
+      "role": "historical delivery",
+      "readiness": "closed",
+      "disposition": "keep-closed",
+      "reason": "Preserve delivered state/history. New acceptance or POC defects do not reopen this ticket.",
+      "baselineUpdatedAt": "2026-09-26T17:17:55Z",
+      "apply": false,
+      "verificationReceipt": {
+        "number": 81,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/81",
+        "state": "closed",
+        "updatedAt": "2026-09-26T17:17:55Z",
+        "bodySha256": "00272016257a98639d44349888c815bab189041d051918868c0b4829d21d40f1",
+        "labels": [],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 83,
+      "role": "host-contract / implementation leaf",
+      "readiness": "needs-info",
+      "scope": "Read and explicitly toggle CMUX's actual Keep Mac Awake state using the final header Fermata control.",
+      "criteria": [
+        "Preserve external-state synchronization, pending/unknown/unsupported/refused outcomes and actual host lifetime/scope.",
+        "Do not port the mock's saved Boolean, launch caffeinate, add a timer/service, write OS power settings or auto-enable on work.",
+        "Keep keyboard label/help and state understandable without color alone."
+      ],
+      "verification": [
+        "Verify both directions, external host changes, denial/missing capability, startup truthfulness and no session/focus effects."
+      ],
+      "gaps": [
+        "Select the permitted typed read/write/notification contract and its supported host/SDK versions before implementing the toggle."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Fermata mode: toggle CMUX Keep Mac Awake",
+      "baselineUpdatedAt": "2026-09-26T16:12:12Z",
+      "baselineBodySha256": "46e7ecfbda77a79c8d81ced41cfea3f96c0614e0206cedec89c3ef241f941855",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [],
+      "apply": true,
+      "targetLabels": [
+        "needs-info"
+      ],
+      "targetBodySha256": "d29ce09ff1382cf3e31011cd1365e18f61c3fc2a44da33a16dfa02be0973707d",
+      "verificationReceipt": {
+        "number": 83,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/83",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:12Z",
+        "bodySha256": "d29ce09ff1382cf3e31011cd1365e18f61c3fc2a44da33a16dfa02be0973707d",
+        "labels": [
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 84,
+      "title": "Sidebar header: compact icon shortcuts and Settings access",
+      "role": "historical delivery",
+      "readiness": "closed",
+      "disposition": "keep-closed",
+      "reason": "Preserve delivered state/history. New acceptance or POC defects do not reopen this ticket.",
+      "baselineUpdatedAt": "2026-09-26T17:17:56Z",
+      "apply": false,
+      "verificationReceipt": {
+        "number": 84,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/84",
+        "state": "closed",
+        "updatedAt": "2026-09-26T17:17:56Z",
+        "bodySha256": "14f3d1b4a7f66a5d53647b3d93dfcc39d090fb1d5b821edc182f71003823bd8e",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "needs-triage"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 85,
+      "role": "host-contract / implementation leaf",
+      "readiness": "needs-info",
+      "scope": "Explicit native directory selection and host-confirmed creation of one new workspace/terminal.",
+      "criteria": [
+        "Reuse header #84, topology/identity #39 and path display #81; the POC text field is not a prescribed native chooser.",
+        "Cancel without effects; preserve all existing tabs/drafts. Report unsupported/denied/non-directory/partial results honestly.",
+        "Use the exact permitted directory as initial cwd; never guess identity from a basename or silently adopt an existing agent."
+      ],
+      "verification": [
+        "Test cancel, Unicode/spaces/root/home, duplicate submissions, duplicate-directory policy, refusal/partial creation and actual host cwd."
+      ],
+      "gaps": [
+        "Confirm the permitted chooser/create-workspace route and required grants.",
+        "Resolve duplicate-directory and partial-recovery policy against approved native prior art before coding it."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Open a directory as a new workspace from the sidebar",
+      "baselineUpdatedAt": "2026-09-26T16:12:17Z",
+      "baselineBodySha256": "5830497087ac7928406b80827432e11450145db6e0296571d048d34a395a2153",
+      "existingBlockedBy": [
+        39,
+        84,
+        81
+      ],
+      "existingChildren": [],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement",
+        "needs-info"
+      ],
+      "targetBodySha256": "ba03c89bef8d428ba947e74e04c3f50e083c597c48988ca29b27d5eeaeb9c512",
+      "verificationReceipt": {
+        "number": 85,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/85",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:14Z",
+        "bodySha256": "ba03c89bef8d428ba947e74e04c3f50e083c597c48988ca29b27d5eeaeb9c512",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 86,
+      "role": "host-contract / implementation leaf",
+      "readiness": "needs-info",
+      "scope": "One supported reusable native content-tab host for Beats/Taskboard, with exact view identity and draft/state lifetime.",
+      "criteria": [
+        "Keep utility tabs distinct from sidebar modes, sessions and schedule ownership.",
+        "Reopen/reveal without silent duplicates; moving/closing never changes agents, schedules or targets.",
+        "Derive pane destination descriptions from current destination topology or omit left/right. S43 reproduces the old mock's stale labels.",
+        "Preserve native focus/selection, keyboard access and explicit failed/unsupported creation or movement."
+      ],
+      "verification": [
+        "Prove create/reuse/background coexistence, refusal/rollback, move/close/reopen, draft preservation, replaced identities and pane reorder."
+      ],
+      "gaps": [
+        "Choose and approve the supported content-surface route; a browser mock is not ExtensionKit hosting proof.",
+        "Define reuse scope across windows, restoration and unsaved-draft close behavior before implementation."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Host Beats and Taskboard as reusable movable content tabs",
+      "baselineUpdatedAt": "2026-09-26T19:14:54Z",
+      "baselineBodySha256": "2d1b93c800d59a4b7a99570ee5c5a3562e67ad01c0ff9f5160a0a744818e8660",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement",
+        "needs-info"
+      ],
+      "targetBodySha256": "cc71edd7bb19c41a49991b65385df17eb2c0c5acfcdb4f8e6414f55fb863714a",
+      "verificationReceipt": {
+        "number": 86,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/86",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:19Z",
+        "bodySha256": "cc71edd7bb19c41a49991b65385df17eb2c0c5acfcdb4f8e6414f55fb863714a",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 87,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Preserve Taskboard as a reusable content view over supported exact sessions, not another sidebar grouping mode.",
+      "criteria": [
+        "Consume #86's accepted host/lifetime contract and existing state/evidence; do not add a collector or scheduler.",
+        "Initial scope is supported workspaces of the current native window; broader multi-window aggregation requires a separate decision.",
+        "Interactive sessions are peer cards. If internal task activity is represented, it is subordinate and non-interactive under #131, never a fabricated peer chat.",
+        "Preserve Needs you/Working/Idle/Done/Unknown, incomplete evidence, accessible exact-chat actions and tags; task completion is not exit.",
+        "Long names/history must not make later cards or controls unreachable; use the stress fixture as a failure case, not production data."
+      ],
+      "verification": [
+        "After #86, test same-name sessions, unavailable/replaced binding, cross-workspace context, protected attention, narrow/long content and no lifecycle/Beat effects."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [],
+      "title": "Taskboard follow-up: cross-session overview in a content tab",
+      "baselineUpdatedAt": "2026-09-26T19:14:56Z",
+      "baselineBodySha256": "9c4a27ea152008762534579abf058c8bda4198dd7a1417ffa894ce622d613c4d",
+      "existingBlockedBy": [
+        86
+      ],
+      "existingChildren": [],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement",
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "4c72be88ead63395dbbd33de2632ff8bbeb65e30f5b699ec3986730a39815e32",
+      "verificationReceipt": {
+        "number": 87,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/87",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:20Z",
+        "bodySha256": "4c72be88ead63395dbbd33de2632ff8bbeb65e30f5b699ec3986730a39815e32",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 88,
+      "title": "Workspace hover follow-up: activate only over the name text",
+      "role": "historical delivery",
+      "readiness": "closed",
+      "disposition": "keep-closed",
+      "reason": "Preserve delivered state/history. New acceptance or POC defects do not reopen this ticket.",
+      "baselineUpdatedAt": "2026-09-26T17:17:55Z",
+      "apply": false,
+      "verificationReceipt": {
+        "number": 88,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/88",
+        "state": "closed",
+        "updatedAt": "2026-09-26T17:17:55Z",
+        "bodySha256": "be02f4ec1730669c3c1ae1c895461c5a25705a81a165b3ac690657a6f8582d2c",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "needs-triage"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 90,
+      "role": "host-contract / implementation leaf",
+      "readiness": "needs-info",
+      "scope": "One exact PM-owned child terminal close through normal CMUX behavior; no provider-specific shutdown choreography.",
+      "criteria": [
+        "Retain approved task/run authority, fresh private ownership, active launch leases and resource bounds.",
+        "Respect host confirmation/refusal/pinning/last-tab semantics; revalidate exact target with no selected/focused fallback.",
+        "Keep request/acceptance/confirmed removal/refusal/pending/unknown separate; do not release uncertain resources or infer task success.",
+        "Do not revive #96/#97/#98, /exit/session.abort, terminal input, force-kill or a human sidebar exit menu."
+      ],
+      "verification": [
+        "Prove the selected real route's target exactness, repurposing/movement, cancellation/lost callback, host-created replacement and explicit fresh retry on separately approved disposable resources."
+      ],
+      "gaps": [
+        "Supported PM control entry point, exact close/outcome route and repurposed ownership handling remain unresolved."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Close one owned child terminal through CMUX",
+      "baselineUpdatedAt": "2026-09-26T19:15:30Z",
+      "baselineBodySha256": "22ee351ded73422ba55ad4a4993591f4971bf549db0cbb267e28239f351e0877",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement",
+        "needs-info"
+      ],
+      "targetBodySha256": "21c8383f01d20b8f7ac3d7350424ea0d11ae0d2a781f21b24572ad761434ff2a",
+      "verificationReceipt": {
+        "number": 90,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/90",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:27Z",
+        "bodySha256": "21c8383f01d20b8f7ac3d7350424ea0d11ae0d2a781f21b24572ad761434ff2a",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 91,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Compose #90's accepted single-target cleanup into an explicitly authorized descendant plan with per-target results.",
+      "criteria": [
+        "Use authoritative private ownership/spawn records, not visible task children/worktree membership or labels.",
+        "Target-only preserves descendants; subtree scope is explicit, bounded and freshly checked. New/changed targets cannot silently enlarge the request.",
+        "Keep mixed success/refusal/pending/unknown results and uncertain resource accounting; no provider shutdown or forced fallback.",
+        "Reuse #90's admitted operation and selected result contract; no second control path or human sidebar modal."
+      ],
+      "verification": [
+        "After #90 is accepted and available, test cross-worktree descendants, unrelated peers, appearance/end/rebinding races, partial failures and preserved survivors."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [],
+      "title": "Clean up owned child terminals with explicit descendant scope",
+      "baselineUpdatedAt": "2026-09-26T19:15:01Z",
+      "baselineBodySha256": "244e6639b17ac275d3d23414f87a7ab6fe65a745adace549188b99a9bcedbc89",
+      "existingBlockedBy": [
+        90
+      ],
+      "existingChildren": [],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement",
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "b7e78f0a0925e2dac19bfcef035ea23725d863164cee53cb43c6cb7e4681d5e1",
+      "verificationReceipt": {
+        "number": 91,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/91",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:29Z",
+        "bodySha256": "b7e78f0a0925e2dac19bfcef035ea23725d863164cee53cb43c6cb7e4681d5e1",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 93,
+      "role": "runtime / management leaf",
+      "readiness": "needs-info",
+      "scope": "The approved agent-managed Beats slice through existing /maestro, not a skill-owned clock or a provider queue manager.",
+      "criteria": [
+        "Preserve every settled #42 timing, binding, lifetime/recovery and actor-authority policy.",
+        "One CMUX-bound runtime/store and shared management contract must serve #94/#95 without waiting for their full interfaces.",
+        "Baseline end/recovery safety belongs in this coherent delivery; do not split out an unsafe runtime that loses definitions or bypasses human recovery.",
+        "No new standalone daemon, terminal injection, unsupported provider extension, retries, receipts or queue editing."
+      ],
+      "verification": [
+        "Use version-bound source/contract evidence and deterministic fake-clock tests, then separately authorized exact-session handoff/draft-preservation and restart/end cases."
+      ],
+      "gaps": [
+        "Select the permitted CMUX-lifetime clock/runtime, one store, shared human/exact-self operations, cron dialect and minimal human repair/first-enable surface.",
+        "Proposed split: a bounded contract/feasibility prerequisite first; retain #93 as the coherent implementation after that gate."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Beats: manage and run schedules through /maestro",
+      "baselineUpdatedAt": "2026-09-26T19:15:03Z",
+      "baselineBodySha256": "421439cfdf14910b3a17a127633c7a77d655eb3c4bb897e0d9cf82655ddf6e3f",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement",
+        "needs-info"
+      ],
+      "targetBodySha256": "fe4d3420015ae7f4b81d4528a688a94e55ddc0a40df1775441fad324fb3abe97",
+      "verificationReceipt": {
+        "number": 93,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/93",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:31Z",
+        "bodySha256": "fe4d3420015ae7f4b81d4528a688a94e55ddc0a40df1775441fad324fb3abe97",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "needs-info"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 94,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Human Beats manager using the accepted #93 shared operations/store and #86 content/draft/lifetime contract.",
+      "criteria": [
+        "Implement exact accessible-session selection, shared create/edit/pause/resume/delete/Run now, concurrent updates and clear unsupported/failure states.",
+        "Use local-time runtime cron policy; wand edits the same expression. Do not copy UTC, one-pending, cancel-before-edit or queue controls from the historical mock.",
+        "Expose retained/recovery-paused state, existing-session repair, human first recurring enable and delete/keep; valid paused Run now never resumes recurrence.",
+        "Preserve prompts/drafts on view switches/moves, exact target and actor authority, and pending human decisions without inventing another store."
+      ],
+      "verification": [
+        "Only after accepted #93/#86 inputs, test cross-entry-point changes, stale/replaced/deleted definitions, cron/helper equivalence, recovery, draft handling, keyboard and native host composition."
+      ],
+      "gaps": [
+        "Execution remains blocked by existing #93/#86 edges; their accepted operation/hosting contracts must be available, not merely closed tickets or green unmerged branches."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Beats: human management in a reusable content tab",
+      "baselineUpdatedAt": "2026-09-26T19:15:06Z",
+      "baselineBodySha256": "e48898517b0a1312be08ac5dee02fb2042b1407d0073cd4df966bb9a477442c8",
+      "existingBlockedBy": [
+        93,
+        86
+      ],
+      "existingChildren": [],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement",
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "c4fb6311db875670d3cda37fc0ec925c9f6a4c8ff25a7f721bba6ef9403f671f",
+      "verificationReceipt": {
+        "number": 94,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/94",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:33Z",
+        "bodySha256": "c4fb6311db875670d3cda37fc0ec925c9f6a4c8ff25a7f721bba6ef9403f671f",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 95,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Compose authoritative target-end observations from PM cleanup with #93's existing retained-definition/human-choice policy.",
+      "criteria": [
+        "A close request or accepted/removed host surface is not universally provider-end proof. Apply end handling only on accepted authoritative evidence.",
+        "Reuse #93's human-choice/repair/recovery surface; PM cleanup authority never grants deletion, repair or first recurring enable.",
+        "Preserve target-only survivors, late Beat edits/replacements, partial results, disconnection and whole-app relaunch retention.",
+        "No provider-specific shutdown, queue manipulation, second store or duplicated baseline end handler."
+      ],
+      "verification": [
+        "After accepted #93/#91 inputs, cover confirmed end before/after host result, refusal/pending/unknown, mixed subtree outcomes, exact attachment races and human delete/keep."
+      ],
+      "gaps": [
+        "Existing #93/#91 dependencies remain. If #93 has not established unattended human-choice delivery, that prerequisite has not passed; do not invent a new default here."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Beats: reconcile PM child cleanup with retained definitions",
+      "baselineUpdatedAt": "2026-09-26T19:15:10Z",
+      "baselineBodySha256": "d9bb2e0bb6316c92a07e9cb4cb69ce3f1ba02bfd7e19611e6cb5920e9ffb9ce3",
+      "existingBlockedBy": [
+        93,
+        91
+      ],
+      "existingChildren": [],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement",
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "788d6b1b6495d501419b40b3fcbfec05b20eeb309ab2d13bac8fe937b74f01d5",
+      "verificationReceipt": {
+        "number": 95,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/95",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:35Z",
+        "bodySha256": "788d6b1b6495d501419b40b3fcbfec05b20eeb309ab2d13bac8fe937b74f01d5",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 100,
+      "role": "tracking parent",
+      "readiness": "parent",
+      "scope": "Field-coverage aggregation with one shared identity/provenance contract; not another collector or UI implementation.",
+      "criteria": [
+        "Keep the existing native children #73, #74, #75, #76, #77, #78, #79, #80 and their delivery boundaries; do not dispatch this parent in parallel with them.",
+        "Current child state and readiness come from the reviewed work map, not historical 'all remain open' publication text.",
+        "Use the September 29 target where this surface changed; do not reopen closed children or infer native capabilities from the POC."
+      ],
+      "verification": [
+        "Parent completion requires its applicable child and integration evidence, not an additional competing implementation."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [],
+      "title": "Agent hover cards: field coverage and trustworthy session details",
+      "baselineUpdatedAt": "2026-09-26T22:20:59Z",
+      "baselineBodySha256": "377800c9ff1926c7751c6b512f37866da4d1068aa980ee0b6673231d18f56e7e",
+      "existingBlockedBy": [],
+      "existingChildren": [
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80
+      ],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement"
+      ],
+      "targetBodySha256": "3ea44e47da9f87603e48e4f7a8098b70a7f8d05db8aa258f1426985045f1dd79",
+      "verificationReceipt": {
+        "number": 100,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/100",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:15Z",
+        "bodySha256": "3ea44e47da9f87603e48e4f7a8098b70a7f8d05db8aa258f1426985045f1dd79",
+        "labels": [
+          "cosmetic",
+          "enhancement"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 101,
+      "role": "tracking parent",
+      "readiness": "parent",
+      "scope": "Structure/projection aggregation; native topology, worktree identity, ancestry and order remain distinct.",
+      "criteria": [
+        "Keep the existing native children #39, #44, #58, #59 and their delivery boundaries; do not dispatch this parent in parallel with them.",
+        "Current child state and readiness come from the reviewed work map, not historical 'all remain open' publication text.",
+        "Use the September 29 target where this surface changed; do not reopen closed children or infer native capabilities from the POC."
+      ],
+      "verification": [
+        "Parent completion requires its applicable child and integration evidence, not an additional competing implementation."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [],
+      "title": "Sidebar structure and projections",
+      "baselineUpdatedAt": "2026-09-26T19:15:12Z",
+      "baselineBodySha256": "1fd6468c94f5a5715b94683c6dae45181d4a805581b5e2b95bd5e1c440927805",
+      "existingBlockedBy": [],
+      "existingChildren": [
+        39,
+        44,
+        58,
+        59
+      ],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement"
+      ],
+      "targetBodySha256": "11a8075dbca2a8dab8b0da725d0037fdf171aa637ac3477b3afcb2419403cd6c",
+      "verificationReceipt": {
+        "number": 101,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/101",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:17Z",
+        "bodySha256": "11a8075dbca2a8dab8b0da725d0037fdf171aa637ac3477b3afcb2419403cd6c",
+        "labels": [
+          "cosmetic",
+          "enhancement"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 102,
+      "role": "tracking parent",
+      "readiness": "parent",
+      "scope": "Personalization aggregation preserving independent icon, pet and tag ownership contracts.",
+      "criteria": [
+        "Keep the existing native children #49, #50, #51 and their delivery boundaries; do not dispatch this parent in parallel with them.",
+        "Current child state and readiness come from the reviewed work map, not historical 'all remain open' publication text.",
+        "Use the September 29 target where this surface changed; do not reopen closed children or infer native capabilities from the POC."
+      ],
+      "verification": [
+        "Parent completion requires its applicable child and integration evidence, not an additional competing implementation."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [],
+      "title": "Agent personalization",
+      "baselineUpdatedAt": "2026-09-26T16:12:56Z",
+      "baselineBodySha256": "0464ff12d308fe6cb593215df7205c797a482244198836429b31bc6e8b9a8a5c",
+      "existingBlockedBy": [],
+      "existingChildren": [
+        49,
+        50,
+        51
+      ],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement"
+      ],
+      "targetBodySha256": "2838ebb6f91960e92ecb4219913dd00ffb6c0e4fb0dcedba417e9d1fa736cf9c",
+      "verificationReceipt": {
+        "number": 102,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/102",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:19Z",
+        "bodySha256": "2838ebb6f91960e92ecb4219913dd00ffb6c0e4fb0dcedba417e9d1fa736cf9c",
+        "labels": [
+          "cosmetic",
+          "enhancement"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 103,
+      "role": "tracking parent",
+      "readiness": "parent",
+      "scope": "Header/actions aggregation; placement is separate from host feature implementation.",
+      "criteria": [
+        "Keep the existing native children #84, #83, #85 and their delivery boundaries; do not dispatch this parent in parallel with them.",
+        "Current child state and readiness come from the reviewed work map, not historical 'all remain open' publication text.",
+        "Use the September 29 target where this surface changed; do not reopen closed children or infer native capabilities from the POC."
+      ],
+      "verification": [
+        "Parent completion requires its applicable child and integration evidence, not an additional competing implementation."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [],
+      "title": "Header and quick actions",
+      "baselineUpdatedAt": "2026-09-26T16:12:59Z",
+      "baselineBodySha256": "816e5aedcf4d8d5beba336539aeec9e4e30b8bf9fbb1e35a07ce37c62b6fdc2c",
+      "existingBlockedBy": [],
+      "existingChildren": [
+        84,
+        83,
+        85
+      ],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement"
+      ],
+      "targetBodySha256": "a1239bbb04c5d4da9c477692aa9c88b129e1b19aba39c870ff1e244a405f90b1",
+      "verificationReceipt": {
+        "number": 103,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/103",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:22Z",
+        "bodySha256": "a1239bbb04c5d4da9c477692aa9c88b129e1b19aba39c870ff1e244a405f90b1",
+        "labels": [
+          "cosmetic",
+          "enhancement"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 104,
+      "role": "tracking parent",
+      "readiness": "parent",
+      "scope": "Utility hosting, Taskboard and browser-favicon aggregation, preserving the approved existing grouping.",
+      "criteria": [
+        "Keep the existing native children #86, #87, #70 and their delivery boundaries; do not dispatch this parent in parallel with them.",
+        "Current child state and readiness come from the reviewed work map, not historical 'all remain open' publication text.",
+        "Use the September 29 target where this surface changed; do not reopen closed children or infer native capabilities from the POC."
+      ],
+      "verification": [
+        "Parent completion requires its applicable child and integration evidence, not an additional competing implementation."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [],
+      "title": "Utility content views",
+      "baselineUpdatedAt": "2026-09-26T16:13:02Z",
+      "baselineBodySha256": "d7093456130babcc7aa2ff4d5ae866d2176054afd6a8bef90ce6a9c5a3858090",
+      "existingBlockedBy": [],
+      "existingChildren": [
+        86,
+        87,
+        70
+      ],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement"
+      ],
+      "targetBodySha256": "2225a1faae0761442af4d9fbdebde65cfb361b3cd9a71484983a5e703e55beef",
+      "verificationReceipt": {
+        "number": 104,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/104",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:24Z",
+        "bodySha256": "2225a1faae0761442af4d9fbdebde65cfb361b3cd9a71484983a5e703e55beef",
+        "labels": [
+          "cosmetic",
+          "enhancement"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 105,
+      "role": "tracking / acceptance decision",
+      "readiness": "ready-for-human",
+      "scope": "Delivered details/workspace-preview containers plus integration ownership for specifically scoped follow-ups.",
+      "criteria": [
+        "#46/#52/#88 are all closed. Do not reopen or rebuild their containers from old POC limitations.",
+        "#112 remains the direct epic child for label/copy work shared with #100. R2/R3 extend its keyboard acceptance.",
+        "R1 needs a targeted shared-preview subject/scroll follow-up, not another field collector or a broad container rewrite.",
+        "Decide whether to close this grouping as delivered or attach a newly approved focused follow-up; no new native child or closure is performed by this review."
+      ],
+      "verification": [
+        "Reconcile closed-child evidence, exact independent subjects and the proposed preview follow-up before parent closure."
+      ],
+      "gaps": [],
+      "disposition": "propose-parent-disposition",
+      "sources": [],
+      "title": "Details and previews",
+      "baselineUpdatedAt": "2026-09-26T22:21:01Z",
+      "baselineBodySha256": "ed09be4f66da772ce6b1afb19ce42c44e13f6791309b21cd3303d1633f755bae",
+      "existingBlockedBy": [],
+      "existingChildren": [
+        46,
+        52,
+        88
+      ],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement",
+        "ready-for-human"
+      ],
+      "targetBodySha256": "609c905364e69855dce50f931c47b52773fbe7debd0f8f7486a66c446a142b24",
+      "verificationReceipt": {
+        "number": 105,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/105",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:26Z",
+        "bodySha256": "609c905364e69855dce50f931c47b52773fbe7debd0f8f7486a66c446a142b24",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "ready-for-human"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 106,
+      "role": "tracking parent",
+      "readiness": "parent",
+      "scope": "Action/menu/backlog aggregation; completed menu infrastructure is not another implementation assignment.",
+      "criteria": [
+        "Keep the existing native children #43, #45 and their delivery boundaries; do not dispatch this parent in parallel with them.",
+        "Current child state and readiness come from the reviewed work map, not historical 'all remain open' publication text.",
+        "Use the September 29 target where this surface changed; do not reopen closed children or infer native capabilities from the POC."
+      ],
+      "verification": [
+        "Parent completion requires its applicable child and integration evidence, not an additional competing implementation."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [],
+      "title": "Sidebar row actions",
+      "baselineUpdatedAt": "2026-09-26T19:15:15Z",
+      "baselineBodySha256": "00bd4b80e08b4a527a8e68e4175952c53be3f37174f1748b41c4877b86915d0e",
+      "existingBlockedBy": [],
+      "existingChildren": [
+        43,
+        45
+      ],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement"
+      ],
+      "targetBodySha256": "fdc41d1b566e9077bc29484b184de0a688e68c586a756866bb9a11f7598bad76",
+      "verificationReceipt": {
+        "number": 106,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/106",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:29Z",
+        "bodySha256": "fdc41d1b566e9077bc29484b184de0a688e68c586a756866bb9a11f7598bad76",
+        "labels": [
+          "cosmetic",
+          "enhancement"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 107,
+      "role": "native acceptance gate",
+      "readiness": "ready-for-human",
+      "scope": "Integrated real-host topology and visual acceptance after #108, not a parallel renderer implementation.",
+      "criteria": [
+        "Preserve every D1-D6 identity/transition/failure/evidence gate and the transitive #110/#109 contracts.",
+        "Native Workspace keeps all real tabs while the eye may reveal idle internal tasks; old globally-disabled eye wording is superseded.",
+        "Match the current internal-task, icon-card, containment and accessibility target without importing diagnostic lab chrome.",
+        "No live test begins without an identified compatible build and explicit disposable resource/cleanup scope."
+      ],
+      "verification": [
+        "Obtain the authorized host/build/resources, then run the version-bound transition matrix and reconcile all A-D evidence. No screenshots-only pass."
+      ],
+      "gaps": [
+        "#108 remains open. Exact host/build and disposable live-test authorization are not supplied by this backlog review."
+      ],
+      "disposition": "update",
+      "sources": [],
+      "title": "Workspace hierarchy: verify live topology transitions and integrated acceptance",
+      "baselineUpdatedAt": "2026-09-26T18:50:39Z",
+      "baselineBodySha256": "d2fbfbfc90ffcc16c316729dc5f8e8760ac84f466f53ceb0bf2a5f9892ef243a",
+      "existingBlockedBy": [
+        108
+      ],
+      "existingChildren": [],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement",
+        "ready-for-human"
+      ],
+      "targetBodySha256": "17f207e06ba90fc72443daec67371a6895e3ee2e835d891d3ed1fdadc98c5fbf",
+      "verificationReceipt": {
+        "number": 107,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/107",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:38Z",
+        "bodySha256": "17f207e06ba90fc72443daec67371a6895e3ee2e835d891d3ed1fdadc98c5fbf",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "ready-for-human"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 108,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Render the authoritative native Workspace outline after #109, reusing shared rows and task presentation.",
+      "criteria": [
+        "Preserve window/workspace/pane/surface identities, independent disclosures, selection-versus-focus and older-host fallback.",
+        "Every actual open surface stays reachable. Workspace eye changes only idle internal-task visibility; no real-surface filtering.",
+        "Use #131 subordinate internal tasks under actual owning tabs without adding native surfaces/counts.",
+        "Keep narrow/long content contained, truthful errors, keyboard paths and current compact reference; selector #58 and mutation #44 remain separate."
+      ],
+      "verification": [
+        "After #109, cover live data mapping/invalidations, exact navigation, all open tabs, independent disclosures, task eye/collapse, long names and compatibility before #107 acceptance."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [],
+      "title": "Workspace hierarchy: render the native pane and surface outline",
+      "baselineUpdatedAt": "2026-09-26T18:50:39Z",
+      "baselineBodySha256": "268dff2d6e192f82d2c6dbe0efe88f7c80c1d729eca82f16ee3f6203a2f03e4f",
+      "existingBlockedBy": [
+        109
+      ],
+      "existingChildren": [],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement",
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "713d195a43e78846d86c716287c25ec60f1a828e99ed34f2a85eb7f431fa1840",
+      "verificationReceipt": {
+        "number": 108,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/108",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:35Z",
+        "bodySha256": "713d195a43e78846d86c716287c25ec60f1a828e99ed34f2a85eb7f431fa1840",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 109,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Implement or consume the typed authoritative topology contract selected and approved by #110.",
+      "criteria": [
+        "Keep B1-B5 coherent stable identities, ordered membership, current-window boundaries, per-pane selection versus active focus and update/invalidation semantics.",
+        "Preserve permission filtering and explicit old/missing/invalid-data fallback; never fabricate panes from ancestry/names.",
+        "Use supported upstream capability when present; cross-repository host/SDK changes require the explicit selected scope.",
+        "Do not implement new sidebar grouping, reordering control, utility hosting or process cleanup here."
+      ],
+      "verification": [
+        "Require accepted #110 contract/version evidence on the delivery base, producer-to-consumer mapping/serialization tests and actual supported consumer evidence."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [],
+      "title": "Workspace hierarchy: expose authoritative pane topology through the typed SDK",
+      "baselineUpdatedAt": "2026-09-26T18:50:40Z",
+      "baselineBodySha256": "b3a91ba9cc8c396d0c34c0496a07f0c6add7787cf13e25537ac6e77862373926",
+      "existingBlockedBy": [
+        110
+      ],
+      "existingChildren": [],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement",
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "79013e7b9ba98d63d1144f526aa73805aecc2866932fae0d3822a9df24e3b010",
+      "verificationReceipt": {
+        "number": 109,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/109",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:33Z",
+        "bodySha256": "79013e7b9ba98d63d1144f526aa73805aecc2866932fae0d3822a9df24e3b010",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 110,
+      "role": "read-only research gate",
+      "readiness": "ready-for-agent",
+      "scope": "Execute the already approved bounded source/capability investigation for authoritative pane topology.",
+      "criteria": [
+        "Start with the current pinned SDK and host sources, not the stale starting-commit assumption or closed-unmerged #47.",
+        "Produce A1-A5 version-pinned capability matrix, identity/update/permission/fallback contract and explicit pass/blocked handoff.",
+        "Source research is the immediately executable scope. A material unresolved runtime question yields a proposed disposable PoC, not an automatically run experiment.",
+        "Human acceptance of material contract/host changes remains a gate before #109; a blocked research result is valid but not a passed implementation prerequisite."
+      ],
+      "verification": [
+        "Check producer/transport/consumer evidence for every required field; report exact missing APIs/owners and evidence limits."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [
+        "scripts/fetch-sdk.sh",
+        "CMUXMaestroSidebar/Hierarchy/HierarchySnapshot.swift"
+      ],
+      "title": "Workspace hierarchy: establish the authoritative host/SDK contract",
+      "baselineUpdatedAt": "2026-09-26T18:50:39Z",
+      "baselineBodySha256": "debd52c80e5cf6b5143122c58e76ee75f1def764b795945562b352b8406ff5dc",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "cosmetic",
+        "enhancement",
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "dd98cff02c94edeb4f6c5b2bf178853ca4004c3b35ea915df4fcf9c7c2de1add",
+      "verificationReceipt": {
+        "number": 110,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/110",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:31Z",
+        "bodySha256": "dd98cff02c94edeb4f6c5b2bf178853ca4004c3b35ea915df4fcf9c7c2de1add",
+        "labels": [
+          "cosmetic",
+          "enhancement",
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 111,
+      "role": "delivered-fix acceptance decision",
+      "readiness": "ready-for-human",
+      "scope": "Consolidate existing masking/spinner delivery evidence before deciding closure; do not start the same implementation again.",
+      "criteria": [
+        "PR #117 merged on 2026-09-28; #120/#122/#123/#126 and #128 provide related continuity/reader/identity/test context, not automatic satisfaction of all six original gates.",
+        "Keep the original exact-session, real working-to-nonworking, motion/Reduce Motion and safety acceptance requirements.",
+        "Review the recorded installed evidence and identify any genuinely unmet gate; close only with justified acceptance, not from HTML animation or source presence.",
+        "#58's broad projections remain open independently."
+      ],
+      "verification": [
+        "Build an original-gate-to-evidence matrix from #117 and existing scoped native acceptance; request only missing evidence."
+      ],
+      "gaps": [
+        "Closure is proposed, not executed; broader #119 stability acceptance remains open."
+      ],
+      "disposition": "propose-evidence-close",
+      "sources": [],
+      "title": "Restore the green working spinner on live agent rows",
+      "baselineUpdatedAt": "2026-09-26T22:54:55Z",
+      "baselineBodySha256": "3691d9706edbf29ef78e3587ac814e82f0a729df4978bfc9cfa76bd99864a7bc",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "bug",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "bug",
+        "cosmetic",
+        "ready-for-human"
+      ],
+      "targetBodySha256": "f748896da0d832437a8b7fedf61dddb6d915e0989e2a248ca9d3a0fdff237a6f",
+      "verificationReceipt": {
+        "number": 111,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/111",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:50Z",
+        "bodySha256": "f748896da0d832437a8b7fedf61dddb6d915e0989e2a248ca9d3a0fdff237a6f",
+        "labels": [
+          "bug",
+          "cosmetic",
+          "ready-for-human"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 112,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Implement the approved shared label-owned raw-value copy interaction, including newly reproduced focus-transition acceptance.",
+      "criteria": [
+        "Preserve six-field scope, explicit permitted raw values, unavailable actions, parent context and injected clipboard effects.",
+        "Retain PR #130/#77's truthful Surface directory / Parent surface directory labels when that is the actual source; never turn them into verified agent cwd merely to match the mock.",
+        "Wrap full values without horizontal hover/pinned scrolling and preserve narrow/short access.",
+        "Keep keyboard-focused preview controls alive when the pointer leaves their origin; delayed dismissal must recheck focus.",
+        "Capture a visible exact origin before opening a preview action dialog and restore it on close/completion, including scrolled icon-card origins.",
+        "Do not reopen #76 or silently count passing POC happy-path tests as native keyboard/VoiceOver acceptance."
+      ],
+      "verification": [
+        "Test all existing raw-value/identity/error cases plus R2 pointer departure during keyboard copy and R3 preview-originated dialog return, with clipboard isolation."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [
+        "CMUXMaestroSidebar/Hierarchy/HierarchySnapshot.swift",
+        "CMUXMaestroSidebar/UI/SidebarHoverCard.swift"
+      ],
+      "title": "Labels + copy value: reveal field actions on label hover and keyboard focus",
+      "baselineUpdatedAt": "2026-09-26T22:21:38Z",
+      "baselineBodySha256": "60ca58f494b9e71d497dab8526f947f3e9f658b61d92667be29a05ea4cc2f37a",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "accessibility",
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "accessibility",
+        "cosmetic",
+        "enhancement",
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "e136c4021701e29cb4d96329edba289df6cc2a1275ff17154decae41b1935c12",
+      "verificationReceipt": {
+        "number": 112,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/112",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:23Z",
+        "bodySha256": "e136c4021701e29cb4d96329edba289df6cc2a1275ff17154decae41b1935c12",
+        "labels": [
+          "accessibility",
+          "cosmetic",
+          "enhancement",
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 115,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Apply the already approved single shared row lift to full interactive agent/terminal/browser rows only.",
+      "criteria": [
+        "Preserve the 4%-reference lightening, softened shadow and 160ms ease-out, mapped to supported native semantic styling.",
+        "No nested icon/title card, translation/reflow or stuck pointer-selection lift. Preserve keyboard outlines and static Reduce Motion equivalent.",
+        "Exclude internal-task text rows/disclosure summaries, collapsed icon cards, group headers, utility rows and metadata/copy controls.",
+        "Preserve all exact state/selection, menus, drag/disclosure, tags and passive behavior; do not invent theme infrastructure or new permissions."
+      ],
+      "verification": [
+        "Reuse the published September 26 captures; test all included/excluded row kinds and focus/hover transitions under native styling.",
+        "This is cosmetic-only: #119/H8 explicitly holds dispatch until baseline acceptance."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [],
+      "title": "Sidebar row hover: one subtle card lift with keyboard-focus parity",
+      "baselineUpdatedAt": "2026-09-26T23:33:07Z",
+      "baselineBodySha256": "16e76c132d54eea8d7e153c88f5da11f0fe180bd6ace72eec3e656fc2e7a4bb8",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [
+        "accessibility",
+        "enhancement",
+        "cosmetic",
+        "needs-triage"
+      ],
+      "apply": true,
+      "targetLabels": [
+        "accessibility",
+        "cosmetic",
+        "enhancement",
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "5e93cdc3a7f84f33d7f0b61b393baa22c3139d4d5536ffd49a3f3e74f7cecac0",
+      "verificationReceipt": {
+        "number": 115,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/115",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:33:25Z",
+        "bodySha256": "5e93cdc3a7f84f33d7f0b61b393baa22c3139d4d5536ffd49a3f3e74f7cecac0",
+        "labels": [
+          "accessibility",
+          "cosmetic",
+          "enhancement",
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": true
+      }
+    },
+    {
+      "number": 131,
+      "role": "implementation leaf",
+      "readiness": "ready-for-agent",
+      "scope": "Implement the now-approved internal Copilot task category in shared native presentation using existing provider-neutral observations; the HTML design phase is complete.",
+      "criteria": [
+        "Classify genuine provider subagents using their explicit kind/parent evidence, not names, nesting, missing surface data, skills or shell events. Real terminal-backed children retain real interactive tab identity.",
+        "Reuse AgentChildWork state/detail, terminal-event identity and attention. Idle/failed/cancelled are preserved by stateDetail; treating every generic unknown as the same state is incorrect.",
+        "Render one connector-linked text line per internal task, no identity/ghost/avatar icon or fabricated own-chat/pet/move/exit target. State marks are distinct and accessible; only working animates.",
+        "Keep a common right/status edge through nesting. At the 280/350/460 reference widths, retain useful text; root-count/disclosure must not consume unbounded indentation.",
+        "Use one shared state-based relevance/outcome policy: hide idle/unknown/cancelled by default, reveal idle only via workspace eye, retain finished/failed outcomes until exact dismissal, protect attention and necessary ancestry. No retention clock for these outcomes.",
+        "Persist per-parent internal-task disclosure under exact session identity. Collapsed summaries retain observed working/attention information and honest incomplete counts.",
+        "New work/outcomes can return; stale dismiss actions cannot hide new results. If filtering removes the focused owner/control, restore visible local sidebar focus without activating another tab (R4).",
+        "Attach tasks beneath their owning tab in supported projections without counting them as native tabs or changing ownership/selection. Supply a reusable consumer for #58; do not fabricate missing pane/worktree data or create another runtime.",
+        "Preserve #48's still-relevant exact identity, incomplete history and no-session-close safeguards in this implementation. Do not dispatch a competing ghost/timer implementation from that older report."
+      ],
+      "verification": [
+        "Test all state/detail combinations, false subagent classification, exact outcome reuse/races, attention/ancestry, independent collapse across views/reload and focus fallback.",
+        "Exercise wide/deep/long synthetic data and explicit producer incompleteness at production bounds; do not raise runtime limits to match the 172-task fixture.",
+        "Verify pointer/keyboard accessibility, Reduce Motion, complete-name access and real-surface preservation; separately authorize any installed-native acceptance."
+      ],
+      "gaps": [],
+      "disposition": "update",
+      "sources": [
+        "CMUXMaestroPreview/CopilotShared/CopilotSnapshotAdapter.swift",
+        "CMUXMaestroPreview/CopilotShared/CopilotEventReducer.swift",
+        "CMUXMaestroSidebar/UI/SidebarPresentation.swift"
+      ],
+      "title": "Distinguish internal Copilot tasks from interactive agent tabs",
+      "baselineUpdatedAt": "2026-09-29T22:36:47Z",
+      "baselineBodySha256": "fa12a0f45cba91e5730f2649da355257c6221aa4668efc7ebc2e134de7f323c6",
+      "existingBlockedBy": [],
+      "existingChildren": [],
+      "existingLabels": [],
+      "apply": true,
+      "targetLabels": [
+        "ready-for-agent"
+      ],
+      "targetBodySha256": "a6efe306b0a054df746f6ea5cef3705b2e1a77623f2e1ebfe33586dd8e3c2c08",
+      "verificationReceipt": {
+        "number": 131,
+        "url": "https://github.com/jdylanmc/cmux-maestro/issues/131",
+        "state": "open",
+        "updatedAt": "2026-09-30T02:32:48Z",
+        "bodySha256": "a6efe306b0a054df746f6ea5cef3705b2e1a77623f2e1ebfe33586dd8e3c2c08",
+        "labels": [
+          "ready-for-agent"
+        ],
+        "protectedMetadataUnchanged": true,
+        "dependenciesUnchanged": true,
+        "childrenUnchanged": null
+      }
+    }
+  ],
+  "untouchedContextVerified": [
+    {
+      "number": 10,
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/10",
+      "state": "open",
+      "updatedAt": "2026-09-22T15:38:07Z",
+      "bodySha256": "84ceefa71b66f4ae8e24a5d78dd81865822695389baef356477f83fb1b197d1a",
+      "labels": [
+        "implementation",
+        "parity",
+        "ready-for-agent"
+      ],
+      "protectedMetadataUnchanged": true,
+      "dependenciesUnchanged": true,
+      "childrenUnchanged": null
+    },
+    {
+      "number": 18,
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/18",
+      "state": "open",
+      "updatedAt": "2026-09-22T15:38:09Z",
+      "bodySha256": "1eded2b4bb122baef3365382a541d3c7435f1042e819590e6a3f069b3429223a",
+      "labels": [
+        "implementation",
+        "parity",
+        "ready-for-agent"
+      ],
+      "protectedMetadataUnchanged": true,
+      "dependenciesUnchanged": true,
+      "childrenUnchanged": null
+    },
+    {
+      "number": 38,
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/38",
+      "state": "open",
+      "updatedAt": "2026-09-22T15:38:10Z",
+      "bodySha256": "245174783045f7ddb8706b60a837175441ff586283a3d271c28f6b424f06a183",
+      "labels": [
+        "enhancement"
+      ],
+      "protectedMetadataUnchanged": true,
+      "dependenciesUnchanged": true,
+      "childrenUnchanged": null
+    },
+    {
+      "number": 63,
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/63",
+      "state": "open",
+      "updatedAt": "2026-09-23T13:25:04Z",
+      "bodySha256": "43860a9204d6b04d6dd0b65d4c58cf20f256f23a93b59dcad78233e9816d1168",
+      "labels": [
+        "bug"
+      ],
+      "protectedMetadataUnchanged": true,
+      "dependenciesUnchanged": true,
+      "childrenUnchanged": null
+    },
+    {
+      "number": 64,
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/64",
+      "state": "open",
+      "updatedAt": "2026-09-23T13:37:55Z",
+      "bodySha256": "53c94d33370099d02b70dcd56766f9511a9d37de98102dcbd6c4a09617fb23ee",
+      "labels": [],
+      "protectedMetadataUnchanged": true,
+      "dependenciesUnchanged": true,
+      "childrenUnchanged": null
+    },
+    {
+      "number": 118,
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/118",
+      "state": "closed",
+      "updatedAt": "2026-09-28T01:04:33Z",
+      "bodySha256": "a78f92e3b7b870688d648d7b6ad86d5cec0e59a8d04064e24097723527d74b78",
+      "labels": [
+        "enhancement",
+        "needs-triage"
+      ],
+      "protectedMetadataUnchanged": true,
+      "dependenciesUnchanged": true,
+      "childrenUnchanged": null
+    },
+    {
+      "number": 119,
+      "url": "https://github.com/jdylanmc/cmux-maestro/issues/119",
+      "state": "open",
+      "updatedAt": "2026-09-29T09:35:06Z",
+      "bodySha256": "dc56d7f4525ce774ffc88f9b8561ec25cc5267e20b93c6cafe5eb17783e9ab0e",
+      "labels": [
+        "enhancement",
+        "needs-triage"
+      ],
+      "protectedMetadataUnchanged": true,
+      "dependenciesUnchanged": true,
+      "childrenUnchanged": null
+    }
+  ]
+}

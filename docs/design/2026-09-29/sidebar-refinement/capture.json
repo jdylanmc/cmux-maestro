@@ -1,0 +1,199 @@
+{
+  "approvedDate": "2026-09-29",
+  "approval": {
+    "by": "Dylan McCurry",
+    "at": "2026-09-29T21:03:48.855-04:00",
+    "basis": "Explicit human approval during the HTML POC review"
+  },
+  "scope": "Reviewed sidebar refinement: internal tasks, state marks, containment, per-parent disclosure and horizontal icon-only worktree cards",
+  "activeRefinements": [
+    "RF-01",
+    "RF-02",
+    "RF-03",
+    "RF-05",
+    "RF-06"
+  ],
+  "supersededRefinements": [
+    "RF-04"
+  ],
+  "capturedAt": "2026-09-30T01:11:32.539Z",
+  "sourceState": "Uncommitted worktree bytes; sourceFiles and archive identify the frozen revision",
+  "worktreeBase": "4db44ccfb947664f278da2a1c48d505a4fad8ad1",
+  "synthetic": true,
+  "nativeIntegration": false,
+  "trackerPublication": false,
+  "browser": "154.0.8037.58",
+  "viewport": {
+    "width": 1512,
+    "height": 1080
+  },
+  "scale": 2,
+  "locale": "en-US",
+  "timezone": "UTC",
+  "motion": {
+    "working": {
+      "animation": "working-spin",
+      "duration": "1s",
+      "color": "rgb(122, 219, 161)"
+    },
+    "reduced": "none",
+    "stillImages": "reduce"
+  },
+  "fixture": {
+    "tabs": 65,
+    "agents": 61,
+    "tasks": 172
+  },
+  "strip": {
+    "viewport": 277,
+    "content": 928,
+    "count": 21,
+    "tags": 0,
+    "rows": 1,
+    "scrollStart": 0,
+    "scrollEnd": 651
+  },
+  "nestedGeometry": [
+    {
+      "left": 108,
+      "right": 340,
+      "nameWidth": 175,
+      "stateRight": 316
+    },
+    {
+      "left": 116,
+      "right": 340,
+      "nameWidth": 167,
+      "stateRight": 316
+    },
+    {
+      "left": 124,
+      "right": 340,
+      "nameWidth": 159,
+      "stateRight": 316
+    },
+    {
+      "left": 132,
+      "right": 340,
+      "nameWidth": 151,
+      "stateRight": 316
+    },
+    {
+      "left": 140,
+      "right": 340,
+      "nameWidth": 143,
+      "stateRight": 316
+    },
+    {
+      "left": 148,
+      "right": 340,
+      "nameWidth": 135,
+      "stateRight": 316
+    },
+    {
+      "left": 156,
+      "right": 340,
+      "nameWidth": 127,
+      "stateRight": 316
+    },
+    {
+      "left": 164,
+      "right": 340,
+      "nameWidth": 119,
+      "stateRight": 316
+    },
+    {
+      "left": 172,
+      "right": 340,
+      "nameWidth": 111,
+      "stateRight": 316
+    },
+    {
+      "left": 180,
+      "right": 340,
+      "nameWidth": 103,
+      "stateRight": 316
+    },
+    {
+      "left": 188,
+      "right": 340,
+      "nameWidth": 95,
+      "stateRight": 316
+    },
+    {
+      "left": 196,
+      "right": 340,
+      "nameWidth": 87,
+      "stateRight": 316
+    }
+  ],
+  "hoverMetrics": {
+    "width": 278,
+    "contentWidth": 278,
+    "height": 1054,
+    "contentHeight": 6983,
+    "scrollLeft": 0
+  },
+  "sourceFiles": {
+    "index.html": "ac7c427c7d770158a604658f65d4936f398a09539170692f330f5f635b17aca7",
+    "app.js": "2c4d254ef98769a6881bf19fbe8534ef940bd4756f5ea66db7847a45ab672c37",
+    "beats.js": "cada248e9c4d187626d4385aba3338a1c44c59462ab0f4716557ec35997e06ab",
+    "style.css": "1bc8d7fd4ade95bcd87ff6aedf30c1990a15ea15c53a5cc9fa4b7862e575fdb6",
+    "native-refinement.css": "0fed3ff3e783842708d218d9c1288d7d33a6ff848fab6b157e0e37ebba014422",
+    "serve.py": "a34621d30332ce05fec743235c7d723bf981dc0514c8a2327bd49d35c42c64f0",
+    "package.json": "aea782ca89d7d40eaf8629e676ffa3acf405c05734f79626f0e2906681c1f364",
+    "package-lock.json": "afebfd132a4491498526aa7b29b4eb7e86eeced73ea23e7fcef312fe71d2853e",
+    "verify.cjs": "cbef686e8bbd095a944ffc2f50da662a2bd3e932c5e4b7421f4d8ebb1919ef84",
+    "verify-beats.cjs": "6073e4567947d17bc7bfad1399d9a3865395c2def3e481a06f6f75f5a3d81a13",
+    "verify-sidebar.cjs": "da86db3cadbe02eea97e3bb6dfa9df232f7f09fb4dfc6b47f3ed4319a7f9f073",
+    "verify-tags.cjs": "d03df93616631bcd998104bb19815f8d8d833877dfdf1c3f288ee8a619fbf498",
+    "verify-copy.cjs": "4f0971dc3022b1fa7ce2026d48869c8a7d110db2a16cfb46a2955abf82b0a4ee",
+    "verify-lift.cjs": "b48a3fcf3a0db2c8da8c1d8849fd327d1052b15f49f5a951839252ba8a164283",
+    "verify-tasks.cjs": "1472410b23df224eb810bc54798e562e3f49c2b1e55b8970fefcc66020301d43",
+    "verify-stress.cjs": "fdf13b6a8a3819abe11db8eea8d4a91f27356cf527c320d26f9fe5080483102b",
+    "verify-rapid-fire.cjs": "10a3aeec1ab019064d6e20317829b1c918e2482065956805f0f28acd7d2644c3"
+  },
+  "images": [
+    {
+      "file": "images/overview.png",
+      "caption": "Readable default fixture; design-lab stage is review tooling, not production UI.",
+      "sha256": "40654d7218c1257783b4c76ef0d9e4af2a7aad64357ab7ff07f1d7ed7a646a23"
+    },
+    {
+      "file": "images/internal-tasks.png",
+      "caption": "Internal activity has connector-linked text and state marks, not independent chat icons.",
+      "sha256": "6493287c78487c567bebc652edca0ebd3ff90a248005b52f9d09022e8b76d77a"
+    },
+    {
+      "file": "images/icon-card-start.png",
+      "caption": "All participants are available in one icon-only row; this is the beginning of the card.",
+      "sha256": "5bbc0474088acf0abdee86b0df0f6bfcc153cb959f8931cc696d22d7467e6c34"
+    },
+    {
+      "file": "images/icon-card-end.png",
+      "caption": "The same card scrolled to later icons; the outer sidebar does not scroll sideways.",
+      "sha256": "9c56241bdd575f262296f5d196301dcb7fc388cf3dd437bee6b4864e510f4166"
+    },
+    {
+      "file": "images/collapsed-tasks.png",
+      "caption": "Per-parent collapse retains working/attention counts and all 65 real fixture tabs.",
+      "sha256": "a59f9050502e0fa9c6905830d529ec0f09d8b61e0f11ac94efcd46ffec472296"
+    },
+    {
+      "file": "images/nested-tasks.png",
+      "caption": "Twelve internal-task levels retain a shared right edge; only the left edge indents.",
+      "sha256": "356a90ff38d847bea00adaf2a2c3a7e1e5dc49ad60ba3796e77eaced3ac09e4f"
+    },
+    {
+      "file": "images/wrapped-hover.png",
+      "caption": "Keyboard-open hover uses the same wrapped preview; long metadata remains readable with vertical scrolling only.",
+      "sha256": "f8058266ec26ebc7801a8a71813b7830f3b0bd7b75fd214a6750c58649277577"
+    },
+    {
+      "file": "images/narrow-sidebar.png",
+      "caption": "The readable default sidebar remains contained at 280px.",
+      "sha256": "19ab9378fe7cbecf6fb9ffdd6a775a85a23b4f4f60dcf9c2cd778c1f3a0a79e7"
+    }
+  ],
+  "errors": []
+}

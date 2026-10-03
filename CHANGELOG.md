@@ -10,9 +10,10 @@ Notable changes are recorded using Keep a Changelog categories.
   private ownership and launch guards. Return request acceptance without waiting
   for removal, retrying, shutting down the provider, or releasing capacity; inherit
   CMUX's socket confirmation bypass and last-terminal refusal (#90).
-- Versioned September 25 visual-design reference, reproducible browser
-  prototype, focused screenshots, and visual-backlog audit for #57. This
-  documents the approved target; it does not ship native behavior.
+- Versioned visual-design references for #57, including the frozen September
+  29 prototype, approved contract, 56-state synthetic review gallery and
+  current ticket handoff (#134). Preserve earlier evidence and distinguish
+  the approved target from native delivery and current feature readiness.
 
 ### Changed
 
