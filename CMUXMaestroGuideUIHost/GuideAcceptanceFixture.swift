@@ -252,7 +252,8 @@ final class GuideAcceptanceFixture {
             copies: copies, minimalPresses: presentation.minimalPresses,
             readerCalls: await reader.calls, pendingRead: await reader.hasPending, checking: model.isChecking,
             observationInstalled: observationInstalled, observationFired: observationFired, actions: actions,
-            recheck: stageIndex == 0 ? nil : try presentation.element("cli-integration-recheck").record,
+            recheck: stageIndex == 1 || (caseName == "recheck" && stageIndex > 0)
+                ? try presentation.element("cli-integration-recheck").record : nil,
             controls: try presentation.controlObservation(), image: image)
         try checkTime()
         let data = try JSONEncoder().encode(host)

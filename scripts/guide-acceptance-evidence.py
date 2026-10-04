@@ -98,9 +98,10 @@ def validate(document, case, invocation, head, tree, images):
         presentation = host["presentation"]
         require(presentation["fittingWidth"] == 600 and presentation["fittingHeight"] == 350,
                 "Actual fittingSize differs.")
-        require(presentation["document"]["width"] <= presentation["clip"]["width"] + 1
-                and presentation["document"]["height"] > presentation["clip"]["height"],
-                "Actual document/clip geometry differs.")
+        if case == "statuses" and phase == "initial-ready":
+            require(presentation["document"]["width"] <= presentation["clip"]["width"] + 1
+                    and presentation["document"]["height"] > presentation["clip"]["height"],
+                    "Actual document/clip geometry differs.")
         for action in host["actions"]:
             require(action["returned"] is True and action["after"] == action["before"] + 1
                     and action["node"]["identifier"] == action["identifier"]

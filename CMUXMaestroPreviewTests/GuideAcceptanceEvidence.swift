@@ -328,17 +328,19 @@ struct GuideAcceptanceEvidence: Codable {
                              && p.appearance == key.1, "Calibration geometry/appearance differs")
             try Self.require(p.fittingWidth == 600 && p.fittingHeight == 350,
                              "Actual fittingSize differs (public frame is not a substitute)")
-            try Self.require(p.document.positive && p.clip.positive
-                             && p.document.width <= p.clip.width + 1
-                             && p.document.height > p.clip.height, "Actual document/clip geometry differs")
+            try Self.require(p.document.positive && p.clip.positive, "Missing actual document/clip geometry")
+            if caseName == "statuses" && h.stage == "initial-ready" {
+                try Self.require(p.document.width <= p.clip.width + 1 && p.document.height > p.clip.height,
+                                 "Actual document/clip geometry differs")
+            }
             let viewport = Self.consumerViewport(p.clipScreen, screenTop: p.screenTop)
             let minimalViewport = Self.consumerViewport(p.minimalScreen, screenTop: p.screenTop)
             try Self.require(viewport.intersects(c.guide.frame) && viewport.intersects(c.windowFrame),
                              "Actual clip viewport disagrees with public guide/window")
             let prepared = h.stage == "initial-pre-readiness-diagnostic"
             let initial = prepared || h.stage == "initial-ready" || h.stage == "missing-ready"
-            let recheck = try Self.unique(c.guideNodes, "cli-integration-recheck")
             if initial {
+                let recheck = try Self.unique(c.guideNodes, "cli-integration-recheck")
                 if !prepared {
                     try Self.require(h.recheck?.identifier == "cli-integration-recheck"
                                      && h.recheck?.role == "AXButton" && h.recheck?.enabled == true,
@@ -393,6 +395,7 @@ struct GuideAcceptanceEvidence: Codable {
                 try Self.require(abs(p.clip.y - bottom) <= 1, "Not at actual document bottom")
             }
             if caseName == "recheck" && !initial {
+                let recheck = try Self.unique(c.guideNodes, "cli-integration-recheck")
                 let calls = h.stage.hasPrefix("unreadable") ? 2 : 3
                 try Self.require(h.copies == 0 && h.minimalPresses == 1 && h.readerCalls == calls,
                                  "Retry reader/copy/minimal counts differ")

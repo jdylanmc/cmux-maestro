@@ -197,6 +197,16 @@ class GuideAcceptanceParserTests(unittest.TestCase):
         self.assertEqual(len(records), 48)
         self.assertEqual(len({item["sha256"] for item in records}), 1, "Legitimate equal hashes must be accepted.")
 
+    def test_scrolled_copy_stages_do_not_require_offscreen_recheck_to_remain_exposed(self):
+        for record in self.documents["statuses"]["stages"]:
+            if record["host"]["stage"] in ("scrolled-bottom", "copy-failure", "copy-success"):
+                record["host"]["recheck"] = None
+                record["consumer"]["guideNodes"] = [
+                    node for node in record["consumer"]["guideNodes"] if node["identifier"] != "cli-integration-recheck"
+                ]
+        result = self.swift("statuses")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_each_missing_or_duplicate_stage_fails_actual_swift_validator(self):
         for case, original in copy.deepcopy(self.documents).items():
             for index in range(len(original["stages"])):
