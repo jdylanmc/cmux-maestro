@@ -118,7 +118,9 @@ struct SidebarNavigationTests {
     @Test
     func rapidClicksIgnoreLateResponsesAndKeepLastExplicitTarget() async {
         let recorder = SidebarHostRecorder()
-        let model = SidebarConnectionModel()
+        // Response ordering must not race the unrelated wall-clock selection deadline.
+        let navigation = SidebarNavigation(timeout: { try await sidebarFrozenExpiry(0) })
+        let model = SidebarConnectionModel(navigation: navigation)
         model.update(context: context(recorder: recorder))
         model.navigation.select(.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA))
         await sidebarEventually { recorder.actions.count == 1 }
@@ -130,6 +132,29 @@ struct SidebarNavigationTests {
         await Task.yield()
         #expect(model.navigation.status == .selected)
         #expect(recorder.actions[1] == .selectSurface(workspaceID: fixtures.workspaceB, surfaceID: fixtures.surfaceB))
+    }
+
+    @Test
+    func injectedNavigationTimeoutRejectsLateHostSuccess() async {
+        let (ticks, deadline) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        defer { deadline.finish() }
+        let navigation = SidebarNavigation(timeout: {
+            for await _ in ticks { return }
+            try Task.checkCancellation()
+        })
+        let recorder = SidebarHostRecorder()
+        let model = SidebarConnectionModel(navigation: navigation)
+        model.update(context: context(recorder: recorder))
+        var successes = 0
+        model.navigation.select(.workspace(fixtures.workspaceA)) { successes += 1 }
+        await sidebarEventually { recorder.actions.count == 1 }
+        #expect(model.navigation.status == .selecting)
+        deadline.yield(())
+        await sidebarEventually { model.navigation.status == .timedOut }
+        recorder.reply(0, .accepted)
+        await Task.yield()
+        #expect(model.navigation.status == .timedOut)
+        #expect(successes == 0)
     }
 
     @Test
