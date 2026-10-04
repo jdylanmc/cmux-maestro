@@ -319,6 +319,26 @@ struct SidebarInternalTaskTests {
         #expect(preferences.attention.acknowledged.isEmpty)
     }
 
+    @Test(arguments: [-1.001, -1, 0, 8, 8.001, 9, 60], [false, true])
+    func dismissalRevalidatesEnvelopeAndSessionClocks(_ age: TimeInterval, _ sessionClock: Bool) throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let observedAt = sessionClock ? now.addingTimeInterval(-age) : now
+        let snapshot = CopilotSnapshotAdapter.snapshot(fixtures.snapshot(sessions: [
+            fixtures.session(children: [task("result", state: .completed)], now: observedAt)
+        ], now: observedAt), workspaceBySurface: fixtures.topology().workspaceBySurface)
+        var tree = SidebarCopilotTree.project(snapshot, onto: fixtures.topology(), now: observedAt)
+        let outcome = key("result")
+        try #require(tree.dismissibleOutcomes == [outcome])
+        tree.generatedAt = sessionClock ? now : now.addingTimeInterval(-age)
+        let expected = age >= -1 && age <= 8
+        #expect(preferences.dismissInternalTask(outcome, in: tree, now: now) == expected)
+        #expect(preferences.history.dismissed == (expected ? [outcome] : []))
+        #expect(fixture.preferences().history.dismissed == (expected ? [outcome] : []))
+        #expect(preferences.attention.acknowledged.isEmpty)
+    }
+
     @Test func independentDisclosureAndWorkspaceEyesMergeAndSurviveReload() throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
