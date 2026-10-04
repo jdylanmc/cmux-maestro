@@ -233,6 +233,11 @@ record = {
 }
 with open(os.environ["FAKE_COPILOT_CALLS"], "a") as stream:
     stream.write(json.dumps(record) + "\n")
+if os.environ.get("FAKE_WRITER_GATE"):
+    subprocess.run(
+        [sys.executable, str(Path(os.environ["FAKE_CMUX_STATE"]).parent / "fixture-writer.py")],
+        check=True,
+    )
 if os.environ.get("FAKE_PROVIDER_BARRIER"):
     marker = Path(os.environ["FAKE_PROVIDER_BARRIER"])
     marker.with_suffix(".ready").write_text("ready")
@@ -455,6 +460,28 @@ if "[AFTER_RESULT_BOOKKEEPING]" in prompt:
 raise SystemExit(exit_code)
 '''
 
+FAKE_WRITER = r'''
+import json, os, subprocess, time
+from pathlib import Path
+
+gate = Path(os.environ["FAKE_WRITER_GATE"])
+start = subprocess.run(
+    ["/bin/ps", "-o", "lstart=", "-p", str(os.getpid())],
+    capture_output=True, text=True, check=True,
+).stdout.strip()
+(gate / "ready").write_text(json.dumps({"pid": os.getpid(), "start": start}))
+try:
+    deadline = time.monotonic() + 15
+    while not (gate / "release").exists():
+        if time.monotonic() >= deadline:
+            raise SystemExit("fixture writer gate expired")
+        time.sleep(0.01)
+    (Path(os.environ["FAKE_CMUX_STATE"]).parent / "late-publication").write_text("published")
+    (gate / "published").write_text("published")
+finally:
+    (gate / "exited").write_text("exited")
+'''
+
 
 class Harness:
     def __init__(self, interactive=False, legacy=False):
@@ -485,6 +512,7 @@ class Harness:
         )
         self.cmux.write_text(FAKE_CMUX)
         self.copilot.write_text(FAKE_COPILOT)
+        (self.path / "fixture-writer.py").write_text(FAKE_WRITER)
         self.cmux.chmod(0o755)
         self.copilot.chmod(0o755)
         self.env = os.environ.copy()
@@ -663,6 +691,36 @@ class Harness:
             if descriptor is not None:
                 os.close(descriptor)
         self.temp.cleanup()
+
+
+class HarnessTeardownTests(unittest.TestCase):
+    def test_close_preserves_sandbox_when_orphan_writer_cannot_quiesce(self):
+        h = Harness()
+        with tempfile.TemporaryDirectory() as directory:
+            gate = Path(directory)
+            h.env["FAKE_WRITER_GATE"] = str(gate)
+            writer = None
+            try:
+                h.spawn()
+                deadline = time.monotonic() + 6
+                while not (gate / "ready").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue((gate / "ready").exists())
+                writer = json.loads((gate / "ready").read_text())
+                with self.assertRaisesRegex(AssertionError, "quiescence"):
+                    h.close()
+                self.assertTrue(h.path.is_dir())
+                self.assertTrue(CONTROLLER_API["process_observation"](writer))
+                self.assertFalse(h.temp._finalizer.alive)
+            finally:
+                (gate / "release").write_text("release")
+                if writer:
+                    deadline = time.monotonic() + 6
+                    while (CONTROLLER_API["process_observation"](writer) is not False
+                           and time.monotonic() < deadline):
+                        time.sleep(0.01)
+                    self.assertFalse(CONTROLLER_API["process_observation"](writer))
+                h.close()
 
 
 class OrchestratorTests(unittest.TestCase):
