@@ -462,7 +462,8 @@ class BuildMetadataTests(unittest.TestCase):
         steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
         for title, name, path in (
             ("Upload integrated test scope evidence", "integrated-test-scope-evidence",
-             ".build/tests/scoped-results/**/*.json"),
+             "|\n            .build/tests/scoped-results/**/*.json\n"
+             "            .build/tests/scoped-results/**/*.txt"),
             ("Upload synthetic sidebar layout renders", "sidebar-layout-offscreen",
              ".build/layout-validation/offscreen/*.png"),
         ):

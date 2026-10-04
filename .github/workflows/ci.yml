@@ -39,7 +39,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: integrated-test-scope-evidence
-          path: .build/tests/scoped-results/**/*.json
+          path: |
+            .build/tests/scoped-results/**/*.json
+            .build/tests/scoped-results/**/*.txt
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
