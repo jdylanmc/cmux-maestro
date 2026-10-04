@@ -565,7 +565,7 @@ class BuildMetadataTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(destination.exists())
 
-    def test_ci_preserves_all_fourteen_validation_commands_without_new_conditions(self):
+    def _workflow_with_plain_integrated_command(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
         hosted_step = (
@@ -581,10 +581,13 @@ class BuildMetadataTests(unittest.TestCase):
             "          ./scripts/test.sh\n"
         )
         self.assertEqual(workflow.count(hosted_step), 1)
-        workflow = workflow.replace(hosted_step, (
+        return workflow.replace(hosted_step, (
             "      - name: Run integrated Swift tests\n"
             "        run: ./scripts/test.sh\n"
         ))
+
+    def test_ci_preserves_all_fourteen_validation_commands_without_new_conditions(self):
+        workflow = self._workflow_with_plain_integrated_command()
         self.assertEqual(re.findall(r"^        run: (.+)$", workflow, re.MULTILINE), [
             "node --test scripts/test-skill-overrides.mjs",
             "node scripts/check-skill-overrides.mjs",
@@ -609,8 +612,7 @@ class BuildMetadataTests(unittest.TestCase):
         self.assertNotIn("continue-on-error", workflow)
 
     def test_ci_documentation_tracks_the_guarded_validation_commands(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0]
+        workflow = self._workflow_with_plain_integrated_command()
         commands = re.findall(r"^        run: (.+)$", workflow, re.MULTILINE)
         policy = (ROOT / "docs/agents/merge-policy.md").read_text()
         section = policy.split("## Actual CI and formatting gates", 1)[1]
@@ -703,8 +705,7 @@ class BuildMetadataTests(unittest.TestCase):
                 ])
 
     def test_ci_collects_final_metadata_diagnostics_after_both_producers(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
+        workflow = self._workflow_with_plain_integrated_command()
         steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
         uploads = [(index, step) for index, step in enumerate(steps)
                    if "          name: integrated-test-scope-evidence\n" in step]
