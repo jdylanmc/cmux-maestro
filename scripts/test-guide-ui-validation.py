@@ -352,25 +352,110 @@ class GuideUIValidationTests(unittest.TestCase):
             }
             if name == metadata.GUIDE_TESTS:
                 settings["TEST_TARGET_NAME"] = metadata.GUIDE_HOST
+            else:
+                settings["ENABLE_DEBUG_DYLIB"] = "YES"
             rows.append({"target": name, "buildSettings": settings})
         return rows
 
     def build_products(self):
         products = self.directory / "derived/Build/Products/Debug"
         runner = products / (metadata.GUIDE_TESTS + "-Runner.app")
-        for bundle, identifier, package in (
-            (products / (metadata.GUIDE_HOST + ".app"), self.product_identifier, "APPL"),
-            (runner, metadata.BASE_ID + ".Validation.Tests.GuideUITests.xctrunner", "APPL"),
+        for bundle, identifier, package, executable in (
+            (products / (metadata.GUIDE_HOST + ".app"), self.product_identifier, "APPL", metadata.GUIDE_HOST),
+            (runner, metadata.BASE_ID + ".Validation.Tests.GuideUITests.xctrunner", "APPL",
+             metadata.GUIDE_TESTS + "-Runner"),
             (runner / "Contents/PlugIns" / (metadata.GUIDE_TESTS + ".xctest"),
-             metadata.BASE_ID + ".Validation.Tests.GuideUITests", "BNDL"),
+             metadata.BASE_ID + ".Validation.Tests.GuideUITests", "BNDL", metadata.GUIDE_TESTS),
         ):
-            binary = bundle / "Contents/MacOS/synthetic"
+            binary = bundle / "Contents/MacOS" / executable
             binary.parent.mkdir(parents=True)
             binary.write_text("Synthetic non-executable fixture bytes, never launched.")
             binary.chmod(0o700)
+            if executable == metadata.GUIDE_HOST:
+                for name in (metadata.GUIDE_HOST + ".debug.dylib", "__preview.dylib"):
+                    (binary.parent / name).write_text("Synthetic split-debug library, never launched: " + name)
             (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps({
-                "CFBundleIdentifier": identifier, "CFBundleExecutable": "synthetic", "CFBundlePackageType": package,
+                "CFBundleIdentifier": identifier, "CFBundleExecutable": executable, "CFBundlePackageType": package,
             }))
+
+    def test_product_inventory_binds_every_supported_code_file(self):
+        self.build_products()
+        products = self.directory / "derived/Build/Products/Debug"
+        baseline = metadata.verify_guide_ui_products(products)
+        expected = [
+            [metadata.GUIDE_HOST, metadata.GUIDE_HOST + ".debug.dylib", "__preview.dylib"],
+            [metadata.GUIDE_TESTS + "-Runner"], [metadata.GUIDE_TESTS],
+        ]
+        for record, names in zip(baseline, expected):
+            self.assertEqual(record["codeFiles"], [
+                {"path": "Contents/MacOS/" + name,
+                 "sha256": hashlib.sha256((products / record["product"] / "Contents/MacOS" / name).read_bytes()).hexdigest()}
+                for name in names
+            ])
+            for name in names:
+                binary = products / record["product"] / "Contents/MacOS" / name
+                original = binary.read_bytes()
+                binary.write_bytes(original + b"changed")
+                self.assertNotEqual(metadata.verify_guide_ui_products(products), baseline)
+                binary.write_bytes(original)
+
+    def test_product_inventory_rejects_missing_redirected_and_unbound_code(self):
+        self.build_products()
+        products = self.directory / "derived/Build/Products/Debug"
+        host = products / (metadata.GUIDE_HOST + ".app")
+        baseline = metadata.verify_guide_ui_products(products)
+        for bundle in (host, products / (metadata.GUIDE_TESTS + "-Runner.app"),
+                       products / (metadata.GUIDE_TESTS + "-Runner.app") / "Contents/PlugIns"
+                       / (metadata.GUIDE_TESTS + ".xctest")):
+            for binary in sorted((bundle / "Contents/MacOS").iterdir()):
+                original = binary.read_bytes()
+                mode = binary.stat().st_mode
+                replacement = self.directory / "redirected-code"
+                replacement.write_bytes(original)
+                replacement.chmod(mode)
+                for fault in ("missing", "external-symlink", "internal-symlink"):
+                    with self.subTest(binary=str(binary.relative_to(products)), fault=fault):
+                        binary.unlink()
+                        if fault == "external-symlink":
+                            binary.symlink_to(replacement)
+                        elif fault == "internal-symlink":
+                            binary.symlink_to(bundle / "Contents/Info.plist")
+                        try:
+                            with self.assertRaises((ValueError, OSError)):
+                                metadata.verify_guide_ui_products(products)
+                        finally:
+                            if binary.is_symlink():
+                                binary.unlink()
+                            binary.write_bytes(original)
+                            binary.chmod(mode)
+                replacement.unlink()
+        for relative in ("Contents", "Contents/MacOS", "Contents/Info.plist"):
+            path = host / relative
+            replacement = self.directory / "redirected-component"
+            path.rename(replacement)
+            path.symlink_to(replacement)
+            try:
+                with self.subTest(component=relative), self.assertRaises(ValueError):
+                    metadata.verify_guide_ui_products(products)
+            finally:
+                path.unlink()
+                replacement.rename(path)
+        extra = host / "Contents/MacOS/unbound.dylib"
+        extra.write_bytes(b"unbound implementation")
+        try:
+            with self.assertRaises(ValueError):
+                metadata.verify_guide_ui_products(products)
+        finally:
+            extra.unlink()
+        info_path = host / "Contents/Info.plist"
+        info = plistlib.loads(info_path.read_bytes())
+        for executable in ("../elsewhere", "/elsewhere", ".", "", "another-executable"):
+            with self.subTest(executable=executable):
+                info_path.write_bytes(plistlib.dumps({**info, "CFBundleExecutable": executable}))
+                with self.assertRaises(ValueError):
+                    metadata.verify_guide_ui_products(products)
+        info_path.write_bytes(plistlib.dumps(info))
+        self.assertEqual(metadata.verify_guide_ui_products(products), baseline)
 
     def runner(self, command, **kwargs):
         self.commands.append(command)
@@ -450,12 +535,17 @@ class GuideUIValidationTests(unittest.TestCase):
                        "GITHUB_EVENT_NAME": "push", "GITHUB_EVENT_PATH": str(event),
                        "TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_INVOCATION": "stale"}
         original_runner = self.runner
+        timestamp_cases = tuple(f"{case}-timestamps-{order}" for case in acceptance.PRODUCERS
+                                for order in ("chronological", "equal", "reversed", "adjacent-swapped"))
+        positive_faults = (None, "compile-only", "PR-good",
+                           *[fault for fault in timestamp_cases if fault.endswith(("-chronological", "-equal"))])
         for fault in (None, "dirty-before", "dirty-after", "head-after", "missing-stage",
                       "extra-case", "native-exit", "compile-only", "PR-good", "PR-wrong-parent",
                       "attachment-duplicate", "attachment-wrong-url", "attachment-missing-stage",
                       "attachment-payload-drift", "attachment-wrong-config", "attachment-late",
                       "export-statuses", "export-recheck", "export-both",
-                      "PR-export-statuses", "PR-export-recheck", "PR-export-both"):
+                      "PR-export-statuses", "PR-export-recheck", "PR-export-both",
+                      "product-mutated", "product-missing", "product-redirected", *timestamp_cases):
             self.directory = base / ("scopes-" + invocation) / "guide-acceptance"
             status_reads = 0
             head_reads = 0
@@ -512,6 +602,19 @@ class GuideUIValidationTests(unittest.TestCase):
                         attachments[-1]["configurationName"] = "Other configuration"
                     elif fault == "attachment-late":
                         attachments[0]["timestamp"] += 181
+                    elif (fault or "").startswith(case + "-timestamps-"):
+                        order = fault.removeprefix(case + "-timestamps-")
+                        if order == "equal":
+                            for item in attachments:
+                                item["timestamp"] = attachments[0]["timestamp"]
+                        elif order == "reversed":
+                            timestamps = [item["timestamp"] for item in attachments[1:]][::-1]
+                            for item, timestamp in zip(attachments[1:], timestamps):
+                                item["timestamp"] = timestamp
+                        elif order == "adjacent-swapped":
+                            middle = len(attachments) // 2
+                            left, right = attachments[middle:middle + 2]
+                            left["timestamp"], right["timestamp"] = right["timestamp"], left["timestamp"]
                     (export / "manifest.json").write_text(json.dumps([{
                         "testIdentifier": identity.split("/", 1)[1],
                         "testIdentifierURL": "test://com.apple.xcode/CMUXMaestroPreview/"
@@ -525,6 +628,14 @@ class GuideUIValidationTests(unittest.TestCase):
                 response = original_runner(command, **kwargs)
                 if "test-without-building" in command:
                     response.returncode = 65 if fault == "native-exit" else 0
+                    binary = (self.directory / "derived/Build/Products/Debug" / (metadata.GUIDE_HOST + ".app")
+                              / "Contents/MacOS" / (metadata.GUIDE_HOST + ".debug.dylib"))
+                    if fault == "product-mutated":
+                        binary.write_bytes(binary.read_bytes() + b"changed after build")
+                    elif fault in ("product-missing", "product-redirected"):
+                        binary.unlink()
+                        if fault == "product-redirected":
+                            binary.symlink_to(binary.parent / "__preview.dylib")
                 if command[:4] == ["xcrun", "xcresulttool", "get", "test-results"]:
                     if command[4] == "summary":
                         response.stdout = json.dumps({"result": "Passed", "totalTestCount": 2, "passedTests": 2,
@@ -565,17 +676,68 @@ class GuideUIValidationTests(unittest.TestCase):
                             self.assertIn("synthetic export failure",
                                           (self.directory / ("export-" + case + "-stderr.log")).read_text())
                     self.assertEqual(len(list((self.directory / "images").glob("*.png"))), 48)
-                self.assertEqual(result, 0 if fault in (None, "compile-only", "PR-good") else 1)
+                self.assertEqual(result, 0 if fault in positive_faults else 1)
+                if fault in timestamp_cases:
+                    case = fault.split("-timestamps-", 1)[0]
+                    export = self.directory / ("attachments-" + case)
+                    manifest = json.loads((export / "manifest.json").read_text())
+                    stages = manifest[0]["attachments"][1:]
+                    self.assertEqual(len(stages), 50 if case == "statuses" else 12)
+                    self.assertTrue((self.directory / ("export-" + case + ".log")).is_file())
+                    if fault not in positive_faults:
+                        self.assertEqual(receipt["nativeResult"], "failed")
+                        self.assertNotIn("verifiedTestIdentities", receipt)
+                        self.assertFalse((self.directory / "image-manifest.json").exists())
+                        self.assertFalse((self.directory / (case + ".json")).exists())
+                        with self.assertRaisesRegex(ValueError, "chronolog"):
+                            acceptance.extract(export, case, self.directory,
+                                               identifier_path=probe.scopes.identifier_path)
+                    else:
+                        self.assertEqual(len(acceptance.validate_all(self.directory, invocation, "a" * 40, "a" * 40)), 48)
                 if export_fault.startswith("export-"):
                     self.assertEqual(receipt["nativeResult"], "failed")
                     self.assertNotIn("verifiedTestIdentities", receipt)
                     self.assertFalse((self.directory / "image-manifest.json").exists())
                 if fault is None:
+                    self.assertEqual(receipt["schemaVersion"], 2)
+                    self.assertEqual(receipt["productsAfter"], receipt["products"])
                     self.assertEqual(receipt["verifiedTestIdentities"], sorted(acceptance.PRODUCERS.values()))
                     native = next(i for i, command in enumerate(self.commands) if "test-without-building" in command)
                     self.assertEqual({arg for arg in self.commands[native] if arg.startswith("-only-testing:")},
                                      {"-only-testing:" + identity.removesuffix("()") for identity in acceptance.PRODUCERS.values()})
                     self.assertEqual(self.environments[native]["TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_INVOCATION"], invocation)
+                    context = {"exitCode": 0, "output": str(self.directory), "invocation": invocation,
+                               "head": "a" * 40, "tree": "a" * 40,
+                               "environment": {"CMUX_GUIDE_ACCEPTANCE_" + case.upper() + "_SHA256":
+                                               hashlib.sha256((self.directory / (case + ".json")).read_bytes()).hexdigest()
+                                               for case in acceptance.PRODUCERS}}
+                    probe.scopes.revalidate_guide_acceptance(context, runner)
+                    for record in receipt["products"]:
+                        for item in record["codeFiles"]:
+                            binary = self.directory / "derived/Build/Products/Debug" / record["product"] / item["path"]
+                            original = binary.read_bytes()
+                            for mutation in ("changed", "missing", "redirected"):
+                                with self.subTest(product=record["product"], code=item["path"], mutation=mutation):
+                                    if mutation == "changed":
+                                        binary.write_bytes(original + b"integrated mutation")
+                                    else:
+                                        binary.unlink()
+                                        if mutation == "redirected":
+                                            binary.symlink_to(binary.parent.parent / "Info.plist")
+                                    try:
+                                        with self.assertRaises((ValueError, OSError)):
+                                            probe.scopes.revalidate_guide_acceptance(context, runner)
+                                    finally:
+                                        if binary.is_symlink():
+                                            binary.unlink()
+                                        binary.write_bytes(original)
+                                        binary.chmod(0o700)
+                    old_receipt = {**receipt, "schemaVersion": 1}
+                    (self.directory / "evidence.json").write_text(json.dumps(old_receipt))
+                    with self.assertRaisesRegex(ValueError, "receipt"):
+                        probe.scopes.revalidate_guide_acceptance(context, runner)
+                    (self.directory / "evidence.json").write_text(json.dumps(receipt))
+                    probe.scopes.revalidate_guide_acceptance(context, runner)
                 if fault == "compile-only":
                     self.assertFalse(any("test-without-building" in command for command in self.commands))
             shutil.rmtree(self.directory)
@@ -760,6 +922,13 @@ class GuideUIValidationTests(unittest.TestCase):
                 metadata.verify_guide_ui_settings(rows)
         with self.assertRaises(ValueError):
             metadata.verify_guide_ui_settings(self.settings() + [self.settings()[0]])
+
+    def test_host_settings_require_the_supported_split_debug_layout(self):
+        for value in (None, "", "NO"):
+            rows = self.settings()
+            rows[0]["buildSettings"]["ENABLE_DEBUG_DYLIB"] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                metadata.verify_guide_ui_settings(rows)
 
     def test_scheme_is_additive_and_not_archived_or_in_original_test_action(self):
         schemes = ROOT / "CMUXMaestroPreview.xcodeproj/xcshareddata/xcschemes"
