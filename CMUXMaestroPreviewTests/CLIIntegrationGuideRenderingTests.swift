@@ -363,15 +363,27 @@ struct CLIIntegrationGuideRenderingTests {
             window.contentViewController = container
             window.center()
             print("Guide calibration before presentation: \(observation)")
-            let activated = app.setActivationPolicy(.regular)
-            if !activated { close() }
-            try #require(activated, "Could not apply the validation app's public activation policy")
+            do {
+                if app.activationPolicy() != .regular {
+                    let changed = app.setActivationPolicy(.regular)
+                    print("Guide calibration policy change: returned=\(changed) actual=\(app.activationPolicy().rawValue)")
+                    try #require(changed, "Could not apply the validation app's public activation policy")
+                } else {
+                    print("Guide calibration policy change: skipped; already regular")
+                }
+                try #require(app.activationPolicy() == .regular,
+                             "Calibration requires the actual regular activation policy")
+            } catch {
+                close()
+                throw error
+            }
             window.makeKeyAndOrderFront(nil)
             app.activate()
         }
 
         var isPresented: Bool {
             NSApplication.shared.isRunning && NSApplication.shared.isActive
+                && NSApplication.shared.activationPolicy() == .regular
                 && window.isVisible && window.isKeyWindow && window.occlusionState.contains(.visible)
                 && window.contentViewController === container && window.contentView === container.view
                 && guide.parent === container && minimal.parent === container
@@ -402,7 +414,14 @@ struct CLIIntegrationGuideRenderingTests {
             minimal.removeFromParent()
             let app = NSApplication.shared
             if !wasActive { app.deactivate() }
-            #expect(app.setActivationPolicy(originalActivationPolicy))
+            if app.activationPolicy() != originalActivationPolicy {
+                let restored = app.setActivationPolicy(originalActivationPolicy)
+                print("Guide calibration policy restore: returned=\(restored) actual=\(app.activationPolicy().rawValue)")
+                #expect(restored, "Could not restore the validation app's original activation policy")
+            } else {
+                print("Guide calibration policy restore: skipped; original policy unchanged")
+            }
+            #expect(app.activationPolicy() == originalActivationPolicy)
             #expect(!window.isVisible)
         }
     }

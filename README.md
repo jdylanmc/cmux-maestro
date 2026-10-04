@@ -274,6 +274,10 @@ checks its compilation, bundle and both environment predicates independently
 before AppKit access, refusing presentation outside the allowed venue.
 Their public AppKit presentation calibrates an ordinary SwiftUI button and
 the unchanged guide in separate hosting controllers in the same synthetic window.
+It preserves an already-regular activation policy, verifies the actual policy
+before and during readiness, and restores it only when it differs from the
+saved original. Required policy changes must succeed; skipped setters are not
+reported as successful calls.
 Exact exposed-root readiness and actions share one 180-second budget per active
 test case, not per control or appearance. A passing minimal control with a failing
 guide narrows investigation to composition; both failing leaves the host/query
