@@ -318,6 +318,9 @@ Fresh acceptance requires clean source before and after execution, exact source
 inventory/hashes, built product namespaces/hashes, attributable push or PR
 synthetic-merge parents, exact native identities/counts/exits, ordered complete
 stages, original validator/control executions and all 48 image provenance/hashes.
+The integrated runner disables Python bytecode writes before importing its guide
+producer, so loading validation helpers cannot dirty the source checkout.
+The clean-source gate still rejects existing untracked or modified files.
 Native attachment timestamps must be nondecreasing in required stage-ordinal
 order through the final attachment; equal-resolution timestamps are valid.
 Guide receipt schema 2 binds the existing split-debug host layout: the host

@@ -15,6 +15,7 @@ import uuid
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
+sys.dont_write_bytecode = True
 TARGET = "CMUXMaestroPreviewTests"
 TEST = "CopilotSetupTests/concurrentSupervisionDoesNotOccupyCooperativeExecutor()"
 SELECTOR = TARGET + "/" + TEST
