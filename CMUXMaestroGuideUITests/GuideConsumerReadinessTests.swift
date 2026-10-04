@@ -106,7 +106,8 @@ final class GuideConsumerReadinessTests: XCTestCase {
             add(diagnostic)
             _ = try remaining()
             let subjectWindow = try unique(app.windows.matching(NSPredicate(
-                format: "label == %@", "Synthetic CLI guide validation"
+                format: "identifier == %@ AND title == %@",
+                "guide-validation-window", "Synthetic CLI guide validation"
             )))
             window = subjectWindow
             try require(subjectWindow.frame.width > 0 && subjectWindow.frame.height > 0,
@@ -116,20 +117,22 @@ final class GuideConsumerReadinessTests: XCTestCase {
 
             try begin("minimal")
             let counter = try exact(subjectWindow, "guide-validation-minimal-count")
-            try wait(counter, NSPredicate(format: "label == %@", "Synthetic minimal count: 0"))
+            try require(counter.elementType == .staticText, "Minimal counter is not public static text.")
+            try wait(counter, NSPredicate(format: "value == %@", "Synthetic minimal count: 0"))
             let button = try exact(minimalRoot, "guide-validation-minimal-button")
             try require(button.elementType == .button, "Minimal element is not a public button.")
             try wait(button, NSPredicate(format: "enabled == true AND hittable == true"))
             try require(button.frame.width > 0 && button.frame.height > 0, "Minimal button has no frame.")
             button.click()
             _ = try remaining()
-            try wait(counter, NSPredicate(format: "label == %@", "Synthetic minimal count: 1"))
+            try wait(counter, NSPredicate(format: "value == %@", "Synthetic minimal count: 1"))
             record("passed")
 
             try begin("visibility-discriminator")
             let clippedRoot = try exact(subjectWindow, "guide-validation-clipped-root")
             let clipped = try exact(clippedRoot, "guide-validation-clipped-button")
-            let clippedViewport = clippedRoot.frame.intersection(subjectWindow.frame)
+            // The exposed group follows its offscreen child, not the SwiftUI clipping rectangle.
+            let clippedViewport = subjectWindow.frame
             try require(clippedViewport.width > 0 && clippedViewport.height > 0,
                         "Clipped fixture has no initial viewport.")
             try require(clipped.elementType == .button && clipped.isEnabled && clipped.label == "Re-check"
@@ -139,14 +142,15 @@ final class GuideConsumerReadinessTests: XCTestCase {
                         "Negative control must be query-visible but fully clipped and non-hittable.")
             try require(!isReadyRecheck(clipped, in: clippedViewport),
                         "Readiness oracle accepted a clipped, non-hittable control.")
-            try require(counter.label == "Synthetic minimal count: 1", "Negative probe unexpectedly invoked a button.")
+            try require(counter.value as? String == "Synthetic minimal count: 1",
+                        "Negative probe unexpectedly invoked a button.")
             record("passed")
 
             try begin("guide-root")
             let guide = try exact(subjectWindow, "guide-validation-real-guide-root")
             try require(guide.frame.width > 0 && guide.frame.height > 0, "Guide root has no frame.")
-            let scroll = try unique(guide.scrollViews)
-            let viewport = scroll.frame.intersection(guide.frame).intersection(subjectWindow.frame)
+            try require(guide.elementType == .scrollView, "Identified guide root is not the public scroll view.")
+            let viewport = guide.frame.intersection(subjectWindow.frame)
             try require(viewport.width > 0 && viewport.height > 0, "Guide has no initial scroll viewport.")
             record("passed")
 
@@ -164,7 +168,9 @@ final class GuideConsumerReadinessTests: XCTestCase {
                             "Real guide status lacks expected accessible text: \(path)")
             }
             let copyCounter = try exact(subjectWindow, "guide-validation-copy-count")
-            try require(copyCounter.label == "Synthetic copy count: 0", "Initial probe unexpectedly invoked Copy.")
+            try require(copyCounter.elementType == .staticText, "Copy counter is not public static text.")
+            try require(copyCounter.value as? String == "Synthetic copy count: 0",
+                        "Initial probe unexpectedly invoked Copy.")
             let screenshot = XCTAttachment(screenshot: guide.screenshot())
             screenshot.name = "real-guide-initial-identifiers"
             screenshot.lifetime = .keepAlways
