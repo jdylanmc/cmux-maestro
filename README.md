@@ -323,7 +323,14 @@ unsigned runner readiness are unproved until hosted execution. Apple documents
 that UI testing may itself generate an OS permission prompt; an unanswered prompt
 or signing/Helper failure is not a pass. Separate `guide-ui-consumer-probe`
 artifacts retain source hashes, phase logs and the complete xcresult with failure
-screenshots. Text logs redact checkout/home paths; framework-owned xcresult may
+screenshots. Before the unchanged exact window query, one public XCTest
+application-hierarchy attachment captures at most 16,384 characters and records
+whether it was truncated. It diagnoses missing window exposure without selecting
+another window, changing the query, or extending the deadline. Result validation
+checks the exact test plan independently from the project/target URL and
+reconciles XCTest's empty-argument method spelling with its reported identifier;
+missing or mismatched identities remain failures.
+Text logs redact checkout/home paths; framework-owned xcresult may
 contain the disposable runner's build paths. Neither a screenshot nor a new
 probe pass establishes full native guide acceptance.
 

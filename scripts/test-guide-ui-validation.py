@@ -219,6 +219,30 @@ class GuideUIValidationTests(unittest.TestCase):
                 setattr(self, key, original)
                 shutil.rmtree(self.directory)
 
+    def test_explicit_project_requires_attributable_urls_and_exact_plan(self):
+        document = json.loads(self.runner(["xcrun", "xcresulttool", "get", "test-results", "tests"],
+                                          env={}).stdout)
+        selected = probe.scopes.cases(document, expected_plan=probe.SCHEME,
+                                      expected_project="CMUXMaestroPreview")
+        self.assertEqual([case.identity for case in selected], [probe.TEST_IDENTITY])
+        for mutation in ("bundle-url", "case-url", "method-name", "duplicate-plan", "invalid-plan"):
+            altered = copy.deepcopy(document)
+            bundle = altered["testNodes"][0]["children"][0]
+            case = bundle["children"][0]
+            if mutation == "bundle-url":
+                del bundle["nodeIdentifierURL"]
+            elif mutation == "case-url":
+                del case["nodeIdentifierURL"]
+            elif mutation == "method-name":
+                case["name"] = "otherMethod()"
+            elif mutation == "duplicate-plan":
+                altered["testNodes"].append(copy.deepcopy(altered["testNodes"][0]))
+            else:
+                altered["testNodes"] = ["invalid"]
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                probe.scopes.cases(altered, expected_plan=probe.SCHEME,
+                                   expected_project="CMUXMaestroPreview")
+
     def test_wrong_built_namespace_prevents_execution(self):
         self.product_identifier = metadata.BASE_ID
         result, evidence = self.execute()

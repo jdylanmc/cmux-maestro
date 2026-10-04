@@ -135,7 +135,8 @@ def run(compile_only, output, *, runner=subprocess.run, environment=None):
                 "xcrun", "xcresulttool", "get", "test-results", kind,
                 "--path", str(output / "probe.xcresult"), "--compact",
             ]))
-        selected = scopes.cases(documents["tests"])
+        selected = scopes.cases(documents["tests"], expected_plan=SCHEME,
+                                expected_project="CMUXMaestroPreview")
         scopes.reconcile(documents["summary"], selected)
         metadata.require(len(selected) == 1 and selected[0].identity == TEST_IDENTITY
                          and selected[0].status == "Passed" and selected[0].executions == ((None, "Passed"),)

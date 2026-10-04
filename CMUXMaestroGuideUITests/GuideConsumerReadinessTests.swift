@@ -97,6 +97,14 @@ final class GuideConsumerReadinessTests: XCTestCase {
             record("passed")
 
             try begin("window-root")
+            let hierarchy = app.debugDescription
+            let diagnostic = XCTAttachment(string:
+                "Public synthetic application hierarchy; truncated=\(hierarchy.count > 16_384)\n"
+                    + String(hierarchy.prefix(16_384)))
+            diagnostic.name = "window-root-public-hierarchy"
+            diagnostic.lifetime = .keepAlways
+            add(diagnostic)
+            _ = try remaining()
             let subjectWindow = try unique(app.windows.matching(NSPredicate(
                 format: "label == %@", "Synthetic CLI guide validation"
             )))

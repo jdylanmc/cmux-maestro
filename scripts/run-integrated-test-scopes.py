@@ -129,12 +129,18 @@ def identifier_path(value):
     return unquote(parsed.path).strip("/")
 
 
-def cases(document):
+def cases(document, *, expected_plan=None, expected_project=None):
     require(isinstance(document, dict), "Invalid xcresult test document.")
     require(isinstance(document.get("testNodes"), list), "Missing xcresult test tree.")
+    if expected_plan is not None:
+        require(len(document["testNodes"]) == 1
+                and isinstance(document["testNodes"][0], dict)
+                and document["testNodes"][0].get("nodeType") == "Test Plan"
+                and document["testNodes"][0].get("name") == expected_plan,
+                "Unexpected test plan.")
     result = []
 
-    def visit(node, bundle=None, plan=None, bundle_path=None):
+    def visit(node, bundle=None, plan=None, bundle_path=None, ui_bundle=False):
         require(isinstance(node, dict), "Invalid xcresult test node.")
         if node.get("nodeType") == "Test Plan":
             require(isinstance(node.get("name"), str) and node["name"], "Missing test plan name.")
@@ -142,7 +148,11 @@ def cases(document):
         if node.get("nodeType") in ("Unit test bundle", "UI test bundle"):
             require(isinstance(node.get("name"), str), "Invalid test bundle name.")
             bundle = node["name"].removesuffix(".xctest")
-            bundle_path = (plan + "/" if plan else "") + bundle
+            ui_bundle = node["nodeType"] == "UI test bundle"
+            project = expected_project if expected_project is not None else plan
+            bundle_path = (project + "/" if project else "") + bundle
+            require(expected_project is None or node.get("nodeIdentifierURL"),
+                    "Missing test bundle project URL.")
             if node.get("nodeIdentifierURL"):
                 require(identifier_path(node["nodeIdentifierURL"]) == bundle_path,
                         "Test bundle URL disagrees with its plan/target ancestry.")
@@ -150,10 +160,14 @@ def cases(document):
             identifier = node.get("nodeIdentifier")
             url = node.get("nodeIdentifierURL")
             require(bundle and bundle_path, "A test case has no attributable target.")
+            require(expected_project is None or url, "Missing test case project URL.")
             if url:
                 path = identifier_path(url)
                 require(path.startswith(bundle_path + "/"), "Test URL is outside its plan/target ancestry.")
                 local = path[len(bundle_path) + 1:]
+                if (ui_bundle and not local.endswith("()")
+                        and node.get("name") == local.rsplit("/", 1)[-1] + "()"):
+                    local += "()"
                 require(identifier is None or identifier in (local, bundle + "/" + local),
                         "Test identifier and URL disagree.")
                 identity = bundle + "/" + local
@@ -170,7 +184,7 @@ def cases(document):
         require(node.get("nodeType") in ("Test Plan", "Unit test bundle", "UI test bundle", "Test Suite") + STRUCTURE,
                 "Execution node appeared outside a logical test.")
         for child in children(node):
-            visit(child, bundle, plan, bundle_path)
+            visit(child, bundle, plan, bundle_path, ui_bundle)
 
     for node in document["testNodes"]:
         visit(node)
