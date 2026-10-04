@@ -16,6 +16,10 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
     private var lastSample: ContinuousClock.Instant?
     private var finished = false
     private var samplerPID: Int32?
+    private var metadataPID: Int32?
+    private var metadataReadiness: ProcessObservation?
+    private var runnerMetadataReturned = false
+    private var outerTaskValueReceived = false
 
     init(directory: URL, testIdentity: String = MetadataProcessTestWatchdog.test,
          limit: Duration = .seconds(30),
@@ -55,6 +59,29 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         condition.unlock()
     }
 
+    func metadataPIDReady(_ pid: Int32) {
+        condition.lock()
+        metadataPID = pid
+        condition.unlock()
+        // The observer remains armed while the test thread queries the OS.
+        let observation = Self.observeProcess(pid)
+        condition.lock()
+        metadataReadiness = observation
+        condition.unlock()
+    }
+
+    func metadataCallReturned() {
+        condition.lock()
+        runnerMetadataReturned = true
+        condition.unlock()
+    }
+
+    func taskValueReceived() {
+        condition.lock()
+        outerTaskValueReceived = true
+        condition.unlock()
+    }
+
     private func observe() {
         condition.lock()
         while !finished, ContinuousClock.now < deadline {
@@ -65,7 +92,9 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         let report = Report(
             test: testIdentity, pid: getpid(), phase: phase, deadlineSamples: samples,
             lastSampleAge: lastSample.map { String(describing: $0.duration(to: .now)) },
-            sampleStatus: "pending", sample: nil)
+            sampleStatus: "pending", sample: nil,
+            metadataPID: metadataPID, metadataReadiness: metadataReadiness,
+            runnerMetadataReturned: runnerMetadataReturned, outerTaskValueReceived: outerTaskValueReceived)
         condition.unlock()
         diagnose(report)
     }
@@ -78,9 +107,142 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         let lastSampleAge: String?
         var sampleStatus: String
         var sample: String?
+        var sampleReadError: String?
         var samplerPID: Int32?
         var samplerReaped: Bool?
         var samplerSignalError: Int32?
+        var metadataPID: Int32?
+        var metadataReadiness: ProcessObservation?
+        var metadataAtStall: ProcessObservation?
+        var runnerMetadataReturned: Bool
+        var outerTaskValueReceived: Bool
+    }
+
+    struct ProcessRecord: Encodable, Sendable {
+        let pid: UInt32
+        let parent: UInt32
+        let group: UInt32
+        var startSeconds: UInt64
+        let startMicroseconds: UInt64
+        let status: UInt32
+
+        func sameIdentity(as other: Self) -> Bool {
+            pid == other.pid && group == other.group && startSeconds == other.startSeconds
+                && startMicroseconds == other.startMicroseconds
+        }
+    }
+
+    struct ProcessObservation: Encodable, Sendable {
+        var state: String
+        var queryBytes: Int32?
+        var queryError: Int32?
+        var process: ProcessRecord?
+        var groupState: String?
+        var groupBytes: Int32?
+        var members: [ProcessRecord]?
+        var childWait: ChildWaitObservation?
+    }
+
+    struct ChildWaitObservation: Encodable, Sendable {
+        let result: Int32
+        let error: Int32
+        let pid: Int32
+        let code: Int32
+        let status: Int32
+    }
+
+    // Sequential numeric observations only, never a quiescence verdict or a
+    // signaling authority. A missing/reused anchor forbids group enumeration.
+    static func observeProcess(
+        _ pid: Int32, expected: ProcessRecord? = nil, memberLimit: Int = 64
+    ) -> ProcessObservation {
+        guard pid > 1, pid != getpid(), pid != getpgrp() else {
+            return ProcessObservation(state: "invalid-owned-pid")
+        }
+        guard (1...64).contains(memberLimit) else {
+            return ProcessObservation(state: "invalid-member-limit")
+        }
+        var observation = readProcess(pid)
+        guard let anchor = observation.process else {
+            if let expected, expected.pid == UInt32(pid), expected.group == UInt32(pid),
+               expected.parent == UInt32(getpid()) {
+                // Darwin may hide an unreaped zombie from proc_pidinfo. This
+                // non-consuming child query adds evidence, not start-identity
+                // validation: the overall state stays unknown; no group read.
+                var info = siginfo_t()
+                errno = 0
+                let result = waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT)
+                observation.childWait = ChildWaitObservation(
+                    result: result, error: errno, pid: info.si_pid, code: info.si_code, status: info.si_status)
+            }
+            return observation
+        }
+        if let expected {
+            guard anchor.sameIdentity(as: expected) else {
+                return ProcessObservation(state: "identity-changed")
+            }
+        } else if anchor.parent != UInt32(getpid()) || anchor.group != UInt32(pid) {
+            return ProcessObservation(state: "ownership-unconfirmed")
+        }
+        guard anchor.group == UInt32(pid) else {
+            return ProcessObservation(state: "ownership-unconfirmed")
+        }
+        var pids = [Int32](repeating: 0, count: memberLimit)
+        let capacity = Int32(pids.count * MemoryLayout<Int32>.size)
+        errno = 0
+        let count = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(pid), &pids, capacity)
+        let queryError = errno
+        observation.groupBytes = count
+        guard count > 0, count < capacity, count % Int32(MemoryLayout<Int32>.size) == 0 else {
+            observation.groupState = "unknown-enumeration"
+            observation.queryError = queryError
+            return observation
+        }
+        let members = pids.prefix(Int(count) / MemoryLayout<Int32>.size).filter { $0 > 0 }.sorted()
+        guard members.contains(pid) else {
+            observation.groupState = "unknown-missing-anchor"
+            return observation
+        }
+        var records: [ProcessRecord] = []
+        for member in members {
+            let current = readProcess(member)
+            guard let record = current.process, record.group == anchor.group else {
+                observation.groupState = "unknown-member"
+                observation.queryError = current.queryError
+                return observation
+            }
+            records.append(record)
+        }
+        let after = readProcess(pid)
+        guard let current = after.process else {
+            observation.groupState = "unknown-anchor-after-enumeration"
+            observation.queryError = after.queryError
+            return observation
+        }
+        guard current.sameIdentity(as: anchor) else {
+            observation.groupState = "identity-changed-after-enumeration"
+            return observation
+        }
+        observation.groupState = "sequential-observation"
+        observation.members = records
+        return observation
+    }
+
+    private static func readProcess(_ pid: Int32) -> ProcessObservation {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        errno = 0
+        let count = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
+        let queryError = errno
+        guard count == size, info.pbi_pid == UInt32(pid) else {
+            return ProcessObservation(state: "unknown-pid-query", queryBytes: count, queryError: queryError)
+        }
+        return ProcessObservation(
+            state: info.pbi_status == 5 ? "exited-unreaped" : "living",
+            queryBytes: count,
+            process: ProcessRecord(pid: info.pbi_pid, parent: info.pbi_ppid, group: info.pbi_pgid,
+                                   startSeconds: info.pbi_start_tvsec, startMicroseconds: info.pbi_start_tvusec,
+                                   status: info.pbi_status))
     }
 
     private func save(_ report: Report) {
@@ -101,7 +263,20 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
             _exit(124)
         }
         var report = initial
+        if report.metadataPID != nil {
+            report.metadataAtStall = ProcessObservation(state: "pending")
+        }
         save(report)
+        if let pid = report.metadataPID {
+            // This query runs outside the condition, inside the existing hard
+            // diagnostic bound. Never adopt a PID whose readiness was unknown.
+            if let expected = report.metadataReadiness?.process {
+                report.metadataAtStall = Self.observeProcess(pid, expected: expected)
+            } else {
+                report.metadataAtStall = ProcessObservation(state: "unknown-readiness")
+            }
+            save(report)
+        }
         Self.log("Metadata test stalled: phase=\(report.phase) deadlineSamples=\(report.deadlineSamples) report=\(directory.path)/stall.json")
         let sampleURL = directory.appendingPathComponent("sample.txt")
         do {
@@ -118,7 +293,13 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
                 report.samplerReaped = status != nil
                 report.sampleStatus = "timed-out/" + (status.map(Self.exitDescription) ?? "reap-unconfirmed")
             }
-            report.sample = try String(contentsOf: sampleURL, encoding: .utf8)
+            save(report)
+            do {
+                report.sample = try String(contentsOf: sampleURL, encoding: .utf8)
+            } catch {
+                report.sampleReadError = String(describing: error)
+                Self.log("Metadata stall sample read failed: \(error)")
+            }
         } catch {
             report.sampleStatus = "failed: \(error)"
             Self.log("Metadata stall sampling failed: \(error)")
