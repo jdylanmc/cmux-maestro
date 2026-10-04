@@ -13,16 +13,21 @@ final class SidebarConnectionModel {
     private(set) var hierarchy: HierarchySnapshot = .empty
     let copilot: SidebarCopilotPolling
     let orchestration: SidebarOrchestrationPolling
-    let navigation = SidebarNavigation()
+    let navigation: SidebarNavigation
     private var latestSequence: UInt64?
 
-    init(copilot: SidebarCopilotPolling? = nil, orchestration: SidebarOrchestrationPolling? = nil) {
+    init(
+        copilot: SidebarCopilotPolling? = nil,
+        orchestration: SidebarOrchestrationPolling? = nil,
+        navigation: SidebarNavigation? = nil
+    ) {
         if let copilot {
             self.copilot = copilot
         } else {
             self.copilot = SidebarCopilotPolling()
         }
         self.orchestration = orchestration ?? SidebarOrchestrationPolling()
+        self.navigation = navigation ?? SidebarNavigation()
     }
 
     func acceptSnapshot(sequence: UInt64) -> Bool {

@@ -36,7 +36,8 @@ struct MetadataWatchdogProbe {
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: sampler.path)
         }
         let watchdog = try MetadataProcessTestWatchdog(
-            directory: directory, limit: .seconds(mode == "complete" ? 0.3 : 2),
+            directory: directory, testIdentity: "MetadataWatchdogProbe/\(mode)",
+            limit: .seconds(mode == "complete" ? 0.3 : 2),
             samplerExecutable: sampler)
         if mode == "complete" {
             watchdog.begin("completed-negative-control")

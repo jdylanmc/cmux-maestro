@@ -21,6 +21,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Guide native Maestro coordinators and workers to send compact milestone-only
+  handoffs, yield between decisions, and reconcile current-candidate evidence
+  without losing unresolved findings. Preserve fire-and-forget messaging and
+  independent delivery gates (#142).
 - Match internal-task headings to the approved prototype without inline
   completeness diagnostics, preserving counts, task visibility and detail hints.
 - Show internal Copilot tasks as compact, non-interactive lines with

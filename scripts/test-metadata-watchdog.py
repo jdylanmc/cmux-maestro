@@ -63,6 +63,7 @@ def main():
                 require(time.monotonic() < deadline, f"Finite probe child {child} did not exit.")
                 time.sleep(0.05)
             print(f"Exact sampler {report['samplerPID']} reaped/absent; finite child {child} absent.", flush=True)
+            require(report["test"] == "MetadataWatchdogProbe/" + mode, report)
             require(report["phase"] == "negative-control/" + mode, report)
             require(report["deadlineSamples"] >= (2 if mode == "polling-clock" else 1), report)
             require(report["samplerReaped"] is True, report)

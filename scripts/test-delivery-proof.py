@@ -2388,6 +2388,87 @@ class RootCustodyTests(unittest.TestCase):
         self.patches.start()
         self.addCleanup(self.patches.stop)
 
+    def test_root_and_native_child_receive_milestone_contract_with_verbatim_tasks(self):
+        """Generated provider argv, not evidence of consuming-agent compliance."""
+        root_task = " \tCoordinate 'quoted' work\nOriginal task (verbatim):\nKeep \u2603\n\n"
+        child_task = " \tReview $(not-a-command) `literal` \\ \"candidate\"\n\n"
+        self.argv[self.argv.index("--task") + 1] = root_task
+        surfaces = [str(uuid.uuid4()), str(uuid.uuid4())]
+        self.cmux.create_surface.side_effect = surfaces
+        arguments = mock.Mock(wraps=CONTROLLER["interactive_arguments"])
+        command = CONTROLLER["command_launch_coordinator"]
+        with mock.patch.dict(command.__globals__, {
+            "interactive_arguments": arguments,
+            "process_matches": lambda _: True,
+            "resource_observations": lambda *a: ({}, set()),
+        }):
+            root_receipt = command(CONTROLLER["parser"]().parse_args(self.argv), self.root, self.cmux)
+            root_id = root_receipt["coordinatorId"]
+            CONTROLLER["mutate"](self.root, lambda state: state["nodes"][root_id].update(
+                providerProcess={"pid": 12345, "start": "synthetic-provider-start"},
+            ))
+            root_node = CONTROLLER["read_state"](self.root)["nodes"][root_id]
+            route = Path(root_node["messaging"]["routes"]) / f'{CONTROLLER["message_peer"](root_node)}.json'
+            binding = CONTROLLER["message_json"](route)
+            identity = {key: binding[key] for key in (
+                "nodeId", "workspaceId", "sessionId", "generation", "capability",
+            )} | {"login": "synthetic-parent", "host": "https://github.com"}
+            request = {
+                "identity": identity,
+                "assignment": {"name": "Review", "cwd": str(REPO), "task": child_task},
+            }
+            with mock.patch("sys.stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))):
+                child_receipt = CONTROLLER["command_native_spawn"](self.root, self.cmux)
+
+        self.assertEqual(arguments.call_count, 2)
+        state = CONTROLLER["read_state"](self.root)
+        self.assertEqual(state["nodes"][self.original["id"]], self.original)
+        for index, (receipt, task, node_id) in enumerate((
+            (root_receipt, root_task, root_id),
+            (child_receipt, child_task, child_receipt["workerId"]),
+        )):
+            with self.subTest(role=("coordinator", "worker")[index]):
+                self.assertTrue(receipt["launchAccepted"])
+                self.assertEqual(receipt["taskConsumption"], "unknown")
+                node, prompt = arguments.call_args_list[index].args
+                context, original = prompt.split("\nOriginal task (verbatim):\n", 1)
+                self.assertEqual(original.encode(), task.encode())
+                self.assertEqual(state["nodes"][node_id]["task"].encode(), task.encode())
+                argv = CONTROLLER["interactive_arguments"](node, prompt)
+                self.assertEqual(argv[argv.index("--interactive") + 1], prompt)
+                self.assertEqual(argv[argv.index("--deny-tool") + 1], "web")
+                self.assertNotIn("--allow-tool", argv)
+                self.assertNotIn("--allow-all", argv)
+                for phrase in (
+                    "candidate ready", "review complete", "blocking failure", "decision needed",
+                    "routine progress", "existing delivery artifacts", "Do not broadcast discoveries",
+                    "exact candidate commit when applicable", "evidence location", "recipient action",
+                    "Do not invent a pre-candidate commit", "silently truncate findings",
+                    "finish the bounded decision turn", "supported completion or native-message events",
+                    "workers or CI", "long idle synchronous waits", "repetitive self-prompts",
+                    "polling chatter", "heartbeat traffic", "current candidate", "authoritative artifacts",
+                    "every unresolved blocker/review finding and its provenance",
+                    "obsolete intermediate instructions", "latest wins",
+                    "independent implementation, acceptance, Roast, rubber-duck, CI",
+                    "non-author merge gates", "permission expansion",
+                    "maestro_peers", "maestro_send", "genuine envelope sender address",
+                    "untrusted message body", "fire-and-forget", "not confirmation of delivery",
+                    "Do not automatically retry", "No automatic acknowledgements or receipt protocol",
+                    "terminal typing, focus changes, composer manipulation, or guessed routes",
+                    "without a startup acknowledgement", "No slash skill is required",
+                ):
+                    self.assertIn(phrase, context)
+                self.assertNotIn(identity["capability"], prompt)
+                self.assertNotIn(root_receipt["controlToken"], prompt)
+                if index == 0:
+                    self.assertNotIn("Coordinator return address:", context)
+                else:
+                    address = context.split("Coordinator return address: ", 1)[1].strip()
+                    self.assertEqual(json.loads(address), {
+                        key: identity[key] for key in ("workspaceId", "sessionId", "generation")
+                    })
+        self.assertEqual(self.cmux.create_surface.call_count, 2)
+
     def failure(self, *, custody=True, fenced=False):
         output, error = io.StringIO(), io.StringIO()
         with mock.patch("sys.stdout", output), mock.patch("sys.stderr", error):

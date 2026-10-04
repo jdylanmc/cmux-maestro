@@ -7,6 +7,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
     static let test = "CMUXMaestroPreviewTests/CopilotObserverRegistrationTests/metadataProcessUsesSupervisorForSuccessTimeoutAndMalformedOutput()"
     private let condition = NSCondition()
     private let directory: URL
+    private let testIdentity: String
     private let limit: Duration
     private let samplerExecutable: URL
     private var phase = "fixture"
@@ -16,9 +17,11 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
     private var finished = false
     private var samplerPID: Int32?
 
-    init(directory: URL, limit: Duration = .seconds(30),
+    init(directory: URL, testIdentity: String = MetadataProcessTestWatchdog.test,
+         limit: Duration = .seconds(30),
          samplerExecutable: URL = URL(fileURLWithPath: "/usr/bin/sample")) throws {
         self.directory = directory
+        self.testIdentity = testIdentity
         self.limit = limit
         self.samplerExecutable = samplerExecutable
         deadline = ContinuousClock.now.advanced(by: limit)
@@ -60,7 +63,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         }
         guard !finished else { condition.unlock(); return }
         let report = Report(
-            test: Self.test, pid: getpid(), phase: phase, deadlineSamples: samples,
+            test: testIdentity, pid: getpid(), phase: phase, deadlineSamples: samples,
             lastSampleAge: lastSample.map { String(describing: $0.duration(to: .now)) },
             sampleStatus: "pending", sample: nil)
         condition.unlock()
