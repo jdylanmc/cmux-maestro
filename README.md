@@ -1597,9 +1597,9 @@ return, missing stack or outer probe timeout fails validation. The sampler-fault
 control must fail after killing and reaping its exact child while preserving
 partial output; it does not stand in for real stack-collection acceptance.
 
-The rapid-navigation response-ordering fixture injects a cancellation-aware,
+The navigation response-ordering fixtures inject a cancellation-aware,
 non-expiring deadline through the connection model's navigation dependency.
-Unrelated hosted main-actor delays must not turn that ordering check into a
+Unrelated hosted main-actor delays must not turn those ordering checks into a
 wall-clock timeout test. A separate injected-deadline control requires timeout
 and rejection of late host success; the existing real-delay timeout test remains.
 Default connection construction still uses the unchanged ten-second production

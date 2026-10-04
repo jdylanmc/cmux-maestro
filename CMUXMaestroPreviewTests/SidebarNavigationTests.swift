@@ -8,7 +8,7 @@ struct SidebarNavigationTests {
 
     @Test func seenCallbackRunsOnlyAfterSuccessfulCurrentNavigation() async {
         let recorder = SidebarHostRecorder()
-        let model = SidebarConnectionModel()
+        let model = responseOrderingModel()
         model.update(context: context(recorder: recorder))
         let target = SidebarNavigationTarget.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA)
         var seen = 0
@@ -60,7 +60,7 @@ struct SidebarNavigationTests {
     @Test
     func navigationUsesTypedHostAndCurrentWorkspaceAfterSurfaceMove() async {
         let recorder = SidebarHostRecorder()
-        let model = SidebarConnectionModel()
+        let model = responseOrderingModel()
         model.update(context: context(recorder: recorder, moved: true))
         #expect(model.hierarchy.windowID == fixtures.windowID)
         model.navigation.select(.surface(workspaceID: fixtures.workspaceB, surfaceID: fixtures.surfaceA))
@@ -103,7 +103,7 @@ struct SidebarNavigationTests {
     @Test
     func staleTargetReplyCannotOverrideTopologyChange() async {
         let recorder = SidebarHostRecorder()
-        let model = SidebarConnectionModel()
+        let model = responseOrderingModel()
         model.update(context: context(recorder: recorder))
         model.navigation.select(.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA))
         await sidebarEventually { recorder.actions.count == 1 }
@@ -118,9 +118,7 @@ struct SidebarNavigationTests {
     @Test
     func rapidClicksIgnoreLateResponsesAndKeepLastExplicitTarget() async {
         let recorder = SidebarHostRecorder()
-        // Response ordering must not race the unrelated wall-clock selection deadline.
-        let navigation = SidebarNavigation(timeout: { try await sidebarFrozenExpiry(0) })
-        let model = SidebarConnectionModel(navigation: navigation)
+        let model = responseOrderingModel()
         model.update(context: context(recorder: recorder))
         model.navigation.select(.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA))
         await sidebarEventually { recorder.actions.count == 1 }
@@ -160,7 +158,7 @@ struct SidebarNavigationTests {
     @Test
     func hostRejectionsCancellationAndDisconnectNeverExposeRawText() async {
         let recorder = SidebarHostRecorder()
-        let model = SidebarConnectionModel()
+        let model = responseOrderingModel()
         model.update(context: context(recorder: recorder))
         let target = SidebarNavigationTarget.workspace(fixtures.workspaceA)
         model.navigation.select(target)
@@ -184,7 +182,7 @@ struct SidebarNavigationTests {
     @Test
     func permissionRevocationAndHideInvalidatePendingNavigation() async {
         let recorder = SidebarHostRecorder()
-        let model = SidebarConnectionModel()
+        let model = responseOrderingModel()
         model.update(context: context(recorder: recorder))
         let target = SidebarNavigationTarget.workspace(fixtures.workspaceA)
         model.navigation.select(target)
@@ -473,6 +471,11 @@ struct SidebarNavigationTests {
                 ),
             ]
         )
+    }
+
+    // Response ordering must not race the unrelated wall-clock selection deadline.
+    private func responseOrderingModel() -> SidebarConnectionModel {
+        SidebarConnectionModel(navigation: SidebarNavigation(timeout: { try await sidebarFrozenExpiry(0) }))
     }
 
     private func context(
