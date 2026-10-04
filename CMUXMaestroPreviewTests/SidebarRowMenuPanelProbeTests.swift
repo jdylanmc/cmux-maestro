@@ -212,6 +212,107 @@ struct SidebarRowMenuPanelProbeTests {
 
     @MainActor
     private final class Probe {
+        // Temporary value-only provenance: never used to match, accept, or recover input.
+        struct InputDiagnostic {
+            let sampledAt: TimeInterval
+            let event: ObjectIdentifier
+            let type: UInt
+            let timestamp: TimeInterval
+            let window: ObjectIdentifier?
+            let windowNumber: Int
+            let modifierFlags: UInt
+            let locationInWindow: NSPoint?
+            let locationAvailability: String
+            let key: (code: UInt16, isRepeat: Bool)?
+            let mouse: (number: Int, button: Int, clicks: Int, pressure: Float)?
+            let eventWindow: WindowDiagnostic?
+            let owner: WindowDiagnostic
+            let foreign: WindowDiagnostic
+            let panel: WindowDiagnostic
+
+            init(_ event: NSEvent, fixture: Fixture, panel: Panel) {
+                sampledAt = ProcessInfo.processInfo.systemUptime
+                self.event = ObjectIdentifier(event)
+                type = event.type.rawValue
+                timestamp = event.timestamp
+                let window = event.window
+                self.window = window.map { ObjectIdentifier($0) }
+                windowNumber = event.windowNumber
+                modifierFlags = event.modifierFlags.rawValue
+                switch event.type {
+                case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+                     .otherMouseDown, .otherMouseUp:
+                    locationInWindow = event.locationInWindow
+                    locationAvailability = "mouse-window-base-or-screen-if-window-nil"
+                    mouse = (event.eventNumber, event.buttonNumber, event.clickCount, event.pressure)
+                    key = nil
+                case .keyDown, .keyUp:
+                    // AppKit documents locationInWindow as undefined for non-mouse events.
+                    locationInWindow = nil
+                    locationAvailability = "undefined-for-non-mouse"
+                    key = (event.keyCode, event.isARepeat)
+                    mouse = nil
+                default:
+                    locationInWindow = nil
+                    locationAvailability = "not-sampled-for-this-type"
+                    key = nil
+                    mouse = nil
+                }
+                let point = locationInWindow
+                eventWindow = window.map { WindowDiagnostic($0, point: point) }
+                owner = WindowDiagnostic(fixture.owner, point: point)
+                foreign = WindowDiagnostic(fixture.foreign, point: point)
+                self.panel = WindowDiagnostic(panel, point: point)
+            }
+        }
+
+        struct WindowDiagnostic {
+            let window: ObjectIdentifier
+            let number: Int
+            let frame: NSRect
+            let contentRect: NSRect
+            let content: ObjectIdentifier?
+            let contentFrame: NSRect?
+            let contentBounds: NSRect?
+            let contentFlipped: Bool?
+            let contentBoundsInWindow: NSRect?
+            let contentBoundsOnScreen: NSRect?
+            let screen: ObjectIdentifier?
+            let screenFrame: NSRect?
+            let screenVisibleFrame: NSRect?
+            let backingScale: CGFloat
+            let windowBaseOriginOnScreen: NSPoint
+            // These interpret the sampled mouse point in each named window, not inferred event ownership.
+            let pointInContent: NSPoint?
+            let pointOnScreen: NSPoint?
+            let pointScreenRoundTrip: NSPoint?
+
+            init(_ window: NSWindow, point: NSPoint?) {
+                self.window = ObjectIdentifier(window)
+                number = window.windowNumber
+                frame = window.frame
+                contentRect = window.contentRect(forFrameRect: window.frame)
+                let content = window.contentView
+                self.content = content.map { ObjectIdentifier($0) }
+                contentFrame = content?.frame
+                contentBounds = content?.bounds
+                contentFlipped = content?.isFlipped
+                let boundsInWindow = content.map { $0.convert($0.bounds, to: nil) }
+                contentBoundsInWindow = boundsInWindow
+                contentBoundsOnScreen = boundsInWindow.map { window.convertToScreen($0) }
+                let screen = window.screen
+                self.screen = screen.map { ObjectIdentifier($0) }
+                screenFrame = screen?.frame
+                screenVisibleFrame = screen?.visibleFrame
+                backingScale = window.backingScaleFactor
+                windowBaseOriginOnScreen = window.convertPoint(toScreen: .zero)
+                pointInContent = point.flatMap { content?.convert($0, from: nil) }
+                let screenPoint = point.map { window.convertPoint(toScreen: $0) }
+                pointOnScreen = screenPoint
+                pointScreenRoundTrip = screenPoint.map { window.convertPoint(fromScreen: $0) }
+            }
+        }
+
         struct State {
             let ownerKeyboard: Bool
             let siblingKeyboard: Bool
@@ -244,6 +345,7 @@ struct SidebarRowMenuPanelProbeTests {
             let panel: ObjectIdentifier
             let ownedVisible: Bool
             let before: State
+            let diagnostic: InputDiagnostic
             var after: State?
             var route = "pass"
         }
@@ -254,6 +356,8 @@ struct SidebarRowMenuPanelProbeTests {
         private var monitor: Any?
         private var observers: [NSObjectProtocol] = []
         private var postedEvent: NSEvent?
+        private var suppliedDiagnostic: InputDiagnostic?
+        private var beforePostDiagnostic: InputDiagnostic?
         private var continuation: CheckedContinuation<Void, Never>?
         private var deadlineTask: Task<Void, Never>?
         private var dispatchCompletionTask: Task<Void, Never>?
@@ -360,6 +464,7 @@ struct SidebarRowMenuPanelProbeTests {
         }
 
         func postAndAwait(_ event: NSEvent) async {
+            suppliedDiagnostic = InputDiagnostic(event, fixture: fixture, panel: panel)
             guard active, showReturned, posts == 0, !failed else {
                 fail("Cannot post completion without one successfully opened live panel")
                 return
@@ -368,6 +473,7 @@ struct SidebarRowMenuPanelProbeTests {
                 self.continuation = continuation
                 postedEvent = event
                 posts += 1
+                beforePostDiagnostic = InputDiagnostic(event, fixture: fixture, panel: panel)
                 NSApp.postEvent(event, atStart: false)
                 let limit = ContinuousClock.now.advanced(by: .seconds(2))
                 completionDeadline = limit
@@ -411,7 +517,8 @@ struct SidebarRowMenuPanelProbeTests {
                 timestamp: event.timestamp, location: event.locationInWindow,
                 keyCode: event.type == .keyDown || event.type == .keyUp ? event.keyCode : nil,
                 postedObject: event === postedEvent, panel: ObjectIdentifier(panel),
-                ownedVisible: ownedVisible, before: State(fixture)
+                ownedVisible: ownedVisible, before: State(fixture),
+                diagnostic: InputDiagnostic(event, fixture: fixture, panel: panel)
             ))
             defer { trace[index].after = State(fixture) }
             guard event === postedEvent else {
@@ -555,6 +662,8 @@ struct SidebarRowMenuPanelProbeTests {
         }
 
         func report(_ completion: Completion) {
+            print("row-menu-panel-probe supplied: \(completion.rawValue); \(String(describing: suppliedDiagnostic))")
+            print("row-menu-panel-probe before-post: \(completion.rawValue); \(String(describing: beforePostDiagnostic))")
             for record in trace {
                 print("row-menu-panel-probe trace: \(completion.rawValue); \(record)")
             }
