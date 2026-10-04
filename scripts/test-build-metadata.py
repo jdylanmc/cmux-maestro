@@ -89,6 +89,14 @@ class RowInputVenueTests(unittest.TestCase):
         counts = row_input.validate_results(*self.report())
         self.assertEqual(counts["passedTests"], 6)
 
+    def test_nested_foreign_or_duplicate_plan_cannot_supply_required_cases(self):
+        for name in ("UnapprovedPlan", "CMUXMaestroRowInput"):
+            summary, tests = self.report()
+            root = tests["testNodes"][0]
+            root["children"] = [{"nodeType": "Test Plan", "name": name, "children": root["children"]}]
+            with self.subTest(nestedPlan=name), self.assertRaises(ValueError):
+                row_input.validate_results(summary, tests)
+
     def test_failed_hosted_cases_are_observed_but_never_accepted(self):
         summary, tests = self.report(status="Failed")
         selected = row_input.observed_cases(tests)
