@@ -1582,6 +1582,13 @@ The required artifact names and missing-file failure behavior remain unchanged.
 This exposes a
 blocked boundary; it does not establish or repair the cause of a prior CI hang.
 Production timeouts, cleanup and all original assertions remain unchanged.
+The separate metadata-cancellation test uses the same per-phase diagnostic bound,
+with its test identity and launch-delay argument retained. It distinguishes
+startup, PID publication, cancellation/owned-process completion and exit checks
+without advancing the fixture's frozen clock or changing its three-second PID
+publication deadline. A diagnostic timeout fails the host; it is not a retry or
+a cancellation pass. The prior stalled run did not capture these boundaries, so
+its underlying cause remains unproven.
 `test-copilot-setup.sh` also runs disposable Foundation-only controls: successful
 disarming, a stalled injected clock, continued polling of a frozen clock, and
 a real stuck sampler that writes partial output before ignoring termination.
@@ -1589,6 +1596,14 @@ Both stalled controls must fail with sampled actual-runner stacks; an unexpected
 return, missing stack or outer probe timeout fails validation. The sampler-fault
 control must fail after killing and reaping its exact child while preserving
 partial output; it does not stand in for real stack-collection acceptance.
+
+The navigation response-ordering fixtures inject a cancellation-aware,
+non-expiring deadline through the connection model's navigation dependency.
+Unrelated hosted main-actor delays must not turn those ordering checks into a
+wall-clock timeout test. A separate injected-deadline control requires timeout
+and rejection of late host success; the existing real-delay timeout test remains.
+Default connection construction still uses the unchanged ten-second production
+deadline.
 
 Focused history/preference diagnostics after building the validation products
 (not a full-suite pass):

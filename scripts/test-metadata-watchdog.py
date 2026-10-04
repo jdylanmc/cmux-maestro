@@ -38,6 +38,7 @@ def main():
         else:
             require(result.returncode == 124, output.read_text())
             report = json.loads((case / "stall.json").read_text())
+            require(report["test"] == "MetadataWatchdogProbe/" + mode, report)
             require(report["phase"] == "negative-control/" + mode, report)
             require(report["deadlineSamples"] >= (2 if mode == "polling-clock" else 1), report)
             require(report["samplerReaped"] is True, report)

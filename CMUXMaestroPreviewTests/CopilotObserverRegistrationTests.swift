@@ -2102,6 +2102,12 @@ struct CopilotObserverRegistrationTests {
 
     @Test(arguments: [Duration.zero, .seconds(4)])
     func cancellingMetadataStopsItsOwnedProcessBeforeReturning(launchDelay: Duration) async throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let watchdog = try MetadataProcessTestWatchdog(
+            directory: repository.appendingPathComponent(
+                ".build/tests/scoped-results/metadata-diagnostics/\(UUID().uuidString)"),
+            testIdentity: "CMUXMaestroPreviewTests/CopilotObserverRegistrationTests/cancellingMetadataStopsItsOwnedProcessBeforeReturning(launchDelay:)/\(launchDelay)")
+        defer { watchdog.finish() }
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let server = fixture.directory.appendingPathComponent("metadata-waiter")
         let ready = fixture.directory.appendingPathComponent("metadata.pid")
@@ -2110,7 +2116,11 @@ struct CopilotObserverRegistrationTests {
         try fixture.write(Data(command.utf8), to: server)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: server.path)
         let clock = SetupDeadlineClock()
-        let runner = LocalCopilotSetupRunner(terminationGrace: 0.02, deadlineNow: { clock.now() })
+        let runner = LocalCopilotSetupRunner(terminationGrace: 0.02, deadlineNow: {
+            _ = watchdog.now()
+            return clock.now()
+        })
+        watchdog.begin("startup/\(launchDelay)")
         let task = Task {
             defer { clock.finishStartup() }
             do { try await Task.sleep(for: launchDelay) }
@@ -2122,30 +2132,36 @@ struct CopilotObserverRegistrationTests {
         do {
             let started = await clock.waitForStartup()
             if !started {
+                watchdog.begin("startup-failed-cancellation")
                 task.cancel()
                 let stopped = await task.value
                 Issue.record("Metadata did not spawn; result=\(stopped)")
                 return
             }
+            watchdog.begin("pid-publication")
             let deadline = ContinuousClock.now.advanced(by: .seconds(3))
             while !FileManager.default.fileExists(atPath: ready.path), ContinuousClock.now < deadline {
                 try await Task.sleep(for: .milliseconds(10))
             }
             let readyExists = FileManager.default.fileExists(atPath: ready.path)
             if !readyExists {
+                watchdog.begin("missing-pid-cancellation")
                 task.cancel()
                 let stopped = await task.value
                 Issue.record("Metadata writer was not ready after spawn; result=\(stopped); sampled=\(clock.wasSampled)")
             }
             try #require(readyExists)
             let pid = try #require(Int32(String(contentsOf: ready, encoding: .utf8)))
+            watchdog.begin("cancel-and-await-owned-process")
             task.cancel()
             guard case .failed(.cancelled) = await task.value else {
                 Issue.record("Expected metadata cancellation"); return
             }
+            watchdog.begin("verify-owned-process-exit")
             #expect(HookProcess.current(pid) == nil)
             #expect(kill(pid, 0) == -1 && errno == ESRCH)
         } catch {
+            watchdog.begin("error-cancellation")
             task.cancel()
             _ = await task.value
             throw error

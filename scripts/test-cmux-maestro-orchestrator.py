@@ -46,6 +46,16 @@ lock_path = state_path.with_suffix(".lock")
 lock_path.parent.mkdir(parents=True, exist_ok=True)
 lock = open(lock_path, "a+")
 fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+def record_process(process):
+    start = subprocess.run(
+        ["/bin/ps", "-o", "lstart=", "-p", str(process.pid)],
+        capture_output=True, text=True, check=False,
+    ).stdout.strip()
+    if start:
+        state.setdefault("processes", []).append({"pid": process.pid, "start": start})
+    elif process.poll() is None:
+        raise SystemExit("cannot establish fixture process identity")
+    state["pids"].append(process.pid)
 try:
     if state_path.exists():
         state = json.loads(state_path.read_text())
@@ -152,7 +162,7 @@ os.execv(sys.argv[1], sys.argv[1:])
             )
             if terminal is not None:
                 os.close(terminal)
-            state["pids"].append(process.pid)
+            record_process(process)
             state["buffers"][surface] = bootstrap
     elif command == "list-pane-surfaces":
         if value("--pane") != state["pane"]:
@@ -185,7 +195,7 @@ os.execv(sys.argv[1], sys.argv[1:])
             stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
             env=env, start_new_session=True,
         )
-        state["pids"].append(process.pid)
+        record_process(process)
         result = {"ok": True}
     elif command == "reorder-surface":
         surface = value("--surface")
@@ -230,9 +240,19 @@ record = {
     "cwd": os.getcwd(),
     "pinnedSubscription": os.environ.get("COPILOT_GITHUB_TOKEN") == "synthetic-work-token",
     "gitTokenUnchanged": os.environ.get("GH_TOKEN") == "synthetic-personal-token",
+    "pid": os.getpid(),
+    "start": subprocess.run(
+        ["/bin/ps", "-o", "lstart=", "-p", str(os.getpid())],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip(),
 }
 with open(os.environ["FAKE_COPILOT_CALLS"], "a") as stream:
     stream.write(json.dumps(record) + "\n")
+if os.environ.get("FAKE_WRITER_GATE"):
+    subprocess.run(
+        [sys.executable, str(Path(os.environ["FAKE_CMUX_STATE"]).parent / "fixture-writer.py")],
+        check=True, start_new_session=True,
+    )
 if os.environ.get("FAKE_PROVIDER_BARRIER"):
     marker = Path(os.environ["FAKE_PROVIDER_BARRIER"])
     marker.with_suffix(".ready").write_text("ready")
@@ -455,11 +475,71 @@ if "[AFTER_RESULT_BOOKKEEPING]" in prompt:
 raise SystemExit(exit_code)
 '''
 
+FAKE_WRITER = r'''
+import json, os, subprocess, time
+from pathlib import Path
+
+gate = Path(os.environ["FAKE_WRITER_GATE"])
+start = subprocess.run(
+    ["/bin/ps", "-o", "lstart=", "-p", str(os.getpid())],
+    capture_output=True, text=True, check=True,
+).stdout.strip()
+(gate / "ready").write_text(json.dumps({"pid": os.getpid(), "start": start}))
+try:
+    deadline = time.monotonic() + 15
+    while not (gate / "release").exists():
+        if time.monotonic() >= deadline:
+            raise SystemExit("fixture writer gate expired")
+        time.sleep(0.01)
+    (Path(os.environ["FAKE_CMUX_STATE"]).parent / "late-publication").write_text("published")
+    (gate / "published").write_text("published")
+finally:
+    (gate / "exited").write_text("exited")
+'''
+
+# Loaded only by Python processes in this disposable fixture. Descendants
+# inherit the same open-file description, including across shell exec/fork.
+FAKE_PROCESS_LIFETIME = r'''
+import fcntl, os, subprocess, sys
+
+try:
+    path = os.environ["FAKE_PROCESS_LIFETIME"]
+    inherited = os.environ.get("FAKE_PROCESS_LIFETIME_FD")
+    if inherited is None:
+        descriptor = os.open(path, os.O_RDONLY)
+        fcntl.flock(descriptor, fcntl.LOCK_SH)
+    else:
+        descriptor = int(inherited)
+        actual, expected = os.fstat(descriptor), os.stat(path)
+        if (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino):
+            raise RuntimeError("fixture lifetime descriptor changed")
+    if os.pread(descriptor, 1, 0) != b"1":
+        raise RuntimeError("fixture is closing")
+except (KeyError, OSError, ValueError, RuntimeError) as error:
+    print(f"Fixture process admission failed: {error}", file=sys.stderr, flush=True)
+    os._exit(70)
+
+os.environ["FAKE_PROCESS_LIFETIME_FD"] = str(descriptor)
+original_popen = subprocess.Popen
+class FixturePopen(original_popen):
+    def __init__(self, *args, **kwargs):
+        kwargs["pass_fds"] = tuple(set(kwargs.get("pass_fds", ())) | {descriptor})
+        if kwargs.get("env") is not None:
+            kwargs["env"] = {
+                **kwargs["env"], "FAKE_PROCESS_LIFETIME_FD": str(descriptor),
+            }
+        super().__init__(*args, **kwargs)
+subprocess.Popen = FixturePopen
+'''
+
 
 class Harness:
     def __init__(self, interactive=False, legacy=False):
         self.temp = tempfile.TemporaryDirectory()
         self.path = Path(self.temp.name).resolve()
+        self.closed = False
+        self.lifetime = open(self.path / "process-lifetime", "w+b", buffering=0)
+        self.lifetime.write(b"1")
         self.root = self.path / "orchestration"
         self.workspace = "00000000-0000-4000-8000-000000000001"
         self.pane = "00000000-0000-4000-8000-000000000002"
@@ -485,6 +565,8 @@ class Harness:
         )
         self.cmux.write_text(FAKE_CMUX)
         self.copilot.write_text(FAKE_COPILOT)
+        (self.path / "fixture-writer.py").write_text(FAKE_WRITER)
+        (self.path / "sitecustomize.py").write_text(FAKE_PROCESS_LIFETIME)
         self.cmux.chmod(0o755)
         self.copilot.chmod(0o755)
         self.env = os.environ.copy()
@@ -504,7 +586,10 @@ class Harness:
             "TEST_ROOT_SURFACE": self.surface,
             "CMUX_WORKSPACE_ID": self.workspace,
             "CMUX_SURFACE_ID": self.surface,
+            "FAKE_PROCESS_LIFETIME": str(self.path / "process-lifetime"),
+            "PYTHONPATH": str(self.path) + os.pathsep + self.env.get("PYTHONPATH", ""),
         })
+        self.env.pop("FAKE_PROCESS_LIFETIME_FD", None)
         if interactive:
             self.terminal_master, self.terminal_slave = pty.openpty()
             self.env["FAKE_PTY_SLAVE"] = os.ttyname(self.terminal_slave)
@@ -530,9 +615,12 @@ class Harness:
         command = [
             sys.executable, str(self.driver), *args,
         ]
-        completed = subprocess.run(
-            command, env=env or self.env, text=True, capture_output=True, timeout=timeout,
-        )
+        with open(self.lifetime.name, "rb") as lifetime:
+            fcntl.flock(lifetime, fcntl.LOCK_SH)
+            completed = subprocess.run(
+                command, env={**(env or self.env), "FAKE_PROCESS_LIFETIME_FD": str(lifetime.fileno())},
+                pass_fds=(lifetime.fileno(),), text=True, capture_output=True, timeout=timeout,
+            )
         if check and completed.returncode:
             runtime_logs = "\n".join(
                 f"{path.name}:\n{path.read_text(errors='replace')}"
@@ -550,11 +638,14 @@ class Harness:
         return result
 
     def start(self, *args, env=None):
-        return subprocess.Popen(
-            [sys.executable, str(self.driver), *args],
-            env=env or self.env, text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
+        with open(self.lifetime.name, "rb") as lifetime:
+            fcntl.flock(lifetime, fcntl.LOCK_SH)
+            return subprocess.Popen(
+                [sys.executable, str(self.driver), *args],
+                env={**(env or self.env), "FAKE_PROCESS_LIFETIME_FD": str(lifetime.fileno())},
+                pass_fds=(lifetime.fileno(),), text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
 
     def finish(self, process, *, timeout=15, check=True):
         stdout, stderr = process.communicate(timeout=timeout)
@@ -641,28 +732,143 @@ class Harness:
         self.cmux_state.write_text(json.dumps(data))
 
     def close(self):
-        if self.cmux_state.exists():
-            pids = self.cmux_data().get("pids", [])
-            for pid in pids:
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            deadline = time.monotonic() + 3
-            for pid in pids:
-                while time.monotonic() < deadline:
+        if self.closed:
+            return
+        # Failure must retain evidence even when this Harness is garbage collected.
+        self.temp._finalizer.detach()
+        os.pwrite(self.lifetime.fileno(), b"0", 0)
+        try:
+            processes = []
+            if self.cmux_state.exists():
+                processes.extend(self.cmux_data().get("processes", []))
+            processes.extend({"pid": call["pid"], "start": call["start"]} for call in self.calls())
+            stopped = set()
+            for process in processes:
+                if not process["start"]:
+                    raise AssertionError(f"Fixture process identity unavailable; preserved {self.path}")
+                identity = (process["pid"], process["start"])
+                if identity in stopped:
+                    continue
+                stopped.add(identity)
+                if CONTROLLER_API["process_observation"](process) is True:
                     try:
-                        os.kill(pid, 0)
+                        os.kill(process["pid"], signal.SIGTERM)
                     except ProcessLookupError:
-                        break
+                        pass
+            deadline = time.monotonic() + 3
+            while True:
+                try:
+                    fcntl.flock(self.lifetime, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise AssertionError(f"Fixture process quiescence unavailable; preserved {self.path}")
                     time.sleep(0.02)
-        self.drain_stop.set()
-        if self.drain_thread is not None:
-            self.drain_thread.join()
-        for descriptor in (self.terminal_master, self.terminal_slave):
-            if descriptor is not None:
-                os.close(descriptor)
-        self.temp.cleanup()
+        finally:
+            self.drain_stop.set()
+            if self.drain_thread is not None:
+                self.drain_thread.join()
+            for name in ("terminal_master", "terminal_slave"):
+                descriptor = getattr(self, name)
+                if descriptor is not None:
+                    os.close(descriptor)
+                    setattr(self, name, None)
+        shutil.rmtree(self.path)
+        self.lifetime.close()
+        self.closed = True
+
+
+class HarnessTeardownTests(unittest.TestCase):
+    def test_close_preserves_sandbox_when_orphan_writer_cannot_quiesce(self):
+        for interactive in (False, True):
+            with self.subTest(interactive=interactive):
+                self.assert_preserves_sandbox(interactive)
+
+    def assert_preserves_sandbox(self, interactive):
+        h = Harness(interactive=interactive)
+        with tempfile.TemporaryDirectory() as directory:
+            gate = Path(directory)
+            h.env["FAKE_WRITER_GATE"] = str(gate)
+            writer = None
+            try:
+                h.spawn()
+                deadline = time.monotonic() + 6
+                while not (gate / "ready").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue((gate / "ready").exists())
+                writer = json.loads((gate / "ready").read_text())
+                with self.assertRaisesRegex(AssertionError, "quiescence"):
+                    h.close()
+                self.assertTrue(h.path.is_dir())
+                self.assertTrue(CONTROLLER_API["process_observation"](writer))
+                self.assertFalse(h.temp._finalizer.alive)
+                if interactive:
+                    self.assertFalse(h.drain_thread.is_alive())
+                    self.assertIsNone(h.terminal_master)
+                    self.assertIsNone(h.terminal_slave)
+            finally:
+                (gate / "release").write_text("release")
+                if writer:
+                    deadline = time.monotonic() + 6
+                    while (CONTROLLER_API["process_observation"](writer) is not False
+                           and time.monotonic() < deadline):
+                        time.sleep(0.01)
+                    self.assertFalse(CONTROLLER_API["process_observation"](writer))
+                h.close()
+
+    def test_close_waits_for_descendant_publication_before_removing_sandbox(self):
+        h = Harness()
+        with tempfile.TemporaryDirectory() as directory:
+            gate = Path(directory)
+            h.env["FAKE_WRITER_GATE"] = str(gate)
+            closer = None
+            errors = []
+            cleanup_reached = threading.Event()
+            original_cleanup = shutil.rmtree
+
+            def cleanup(path, *args, **kwargs):
+                self.assertEqual(Path(path), h.path)
+                cleanup_reached.set()
+                self.assertTrue((gate / "published").exists())
+                original_cleanup(path, *args, **kwargs)
+
+            def close():
+                try:
+                    h.close()
+                except Exception as error:
+                    errors.append(error)
+
+            try:
+                h.spawn()
+                deadline = time.monotonic() + 6
+                while not (gate / "ready").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue((gate / "ready").exists())
+                roots = h.cmux_data()["processes"]
+                providers = h.calls()
+                with patch("shutil.rmtree", cleanup):
+                    closer = threading.Thread(target=close)
+                    closer.start()
+                    deadline = time.monotonic() + 2
+                    while any(CONTROLLER_API["process_observation"](item) is not False
+                              for item in roots + providers) and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(all(CONTROLLER_API["process_observation"](item) is False
+                                        for item in roots + providers))
+                    self.assertFalse(cleanup_reached.is_set())
+                    self.assertTrue(h.path.is_dir())
+                    (gate / "release").write_text("release")
+                    closer.join(timeout=6)
+                    self.assertFalse(closer.is_alive())
+                    self.assertEqual(errors, [])
+                    self.assertTrue(cleanup_reached.is_set())
+                    self.assertFalse(h.path.exists())
+            finally:
+                (gate / "release").write_text("release")
+                if closer is not None:
+                    closer.join(timeout=6)
+                    self.assertFalse(closer.is_alive())
+                h.close()
 
 
 class OrchestratorTests(unittest.TestCase):
