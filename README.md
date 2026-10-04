@@ -312,12 +312,24 @@ Each full native case has one shared 180-second budget, including all scenarios,
 actions, captures, observations and application teardown. Successful termination
 is checked immediately against that same deadline before final elapsed evidence;
 subsequent validation and attachments retain their final deadline checks.
+Public-consumer predicates are evaluated immediately before installing a wait;
+already-ready observations do not incur the predicate waiter's initial delay.
+Pending observations still use the remaining shared budget. Both immediate
+evaluation and normally returning waits are checked for late completion.
 Synchronous public operations are not claimed to be preemptible.
+The synthetic exposure control supplies an explicit unignored navigation order
+and leaf buttons, while retaining raw omitted/ignored controls and the host's
+unignored-child traversal. Complete public snapshots must still contain exactly
+one exposed positive control; the consumer never filters duplicate controls.
 
 Fresh acceptance requires clean source before and after execution, exact source
 inventory/hashes, built product namespaces/hashes, attributable push or PR
 synthetic-merge parents, exact native identities/counts/exits, ordered complete
 stages, original validator/control executions and all 48 image provenance/hashes.
+Parent provenance comes from the exact checkout commit's raw Git object, with
+replacement objects disabled and its tree cross-checked. This works at a
+depth-one boundary where revision traversal suppresses parents; PR parent order
+must still equal the actual event's base then candidate, never event data alone.
 The integrated runner disables Python bytecode writes before importing its guide
 producer, so loading validation helpers cannot dirty the source checkout.
 Preview-test child processes apply the same policy before importing their test
@@ -338,6 +350,10 @@ Identical legitimate pixel hashes are allowed. Failed native production still
 runs the integrated suite; missing evidence fails the original validators.
 Both attachment exports are attempted and retained, but either nonzero exit
 rejects acceptance even when the exported files otherwise look complete.
+Each exporter uses its supported default schema rather than a version spelling
+that differs across Xcode releases. The exact test URL selector and strict
+manifest, payload, identity and timestamp checks remain mandatory; an unknown
+output shape fails, without a schema retry or fallback.
 The existing integrated artifact retains the producer logs, xcresult and images;
 the original image artifact receives only the freshly verified guide images.
 Compilation and mocked parser negatives do **not** verify native AXPress

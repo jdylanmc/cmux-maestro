@@ -437,11 +437,16 @@ final class GuideAcceptanceFixture {
             let before = try NativeNode.nodes(from: exposure).filter {
                 $0.record.identifier == "guide-acceptance-oracle-action"
             }.count
+            try Evidence.require(exposure.accessibilityChildrenInNavigationOrder()?.isEmpty == true,
+                                 "Ignored control leaked into native navigation")
             exposure.exposed = [ignored, exposed]
             let after = try NativeNode.nodes(from: exposure).filter {
                 $0.record.identifier == "guide-acceptance-oracle-action"
             }
             try Evidence.require(after.count == 1 && after[0].object === exposed, "Fixture exposure boundary differs")
+            let navigation = exposure.accessibilityChildrenInNavigationOrder() ?? []
+            try Evidence.require(navigation.count == 1 && navigation.first as? NSView === exposed,
+                                 "Native child and navigation exposure disagree")
             let record = after[0].record
             let callsBefore = exposed.effects
             let returned = after[0].press()
@@ -616,11 +621,17 @@ final class GuideAcceptanceFixture {
     private final class ExposureView: NSView {
         var exposed: [NSView] = []
         override func accessibilityChildren() -> [Any]? { exposed }
+        // AppKit's default navigation projection otherwise discovers raw NSButton/cell descendants.
+        override func accessibilityChildrenInNavigationOrder() -> [any NSAccessibilityElementProtocol]? {
+            NSAccessibility.unignoredChildren(from: exposed).compactMap { $0 as? any NSAccessibilityElementProtocol }
+        }
     }
 
     private final class ExposureButton: NSButton {
         private(set) var presses = 0
         private(set) var effects = 0
+        override func accessibilityChildren() -> [Any]? { [] }
+        override func accessibilityChildrenInNavigationOrder() -> [any NSAccessibilityElementProtocol]? { [] }
         override func accessibilityPerformPress() -> Bool { presses += 1; return true }
     }
 }

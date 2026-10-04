@@ -687,9 +687,10 @@ class GuideUIValidationTests(unittest.TestCase):
 
             def runner(command, **kwargs):
                 nonlocal status_reads, head_reads
-                if command[:2] == ["git", "show"]:
-                    return subprocess.CompletedProcess(command, 0,
-                                                       stdout=("e" if fault == "PR-wrong-parent" else "d") * 40 + " " + "c" * 40)
+                if command[:4] == ["git", "--no-replace-objects", "cat-file", "commit"]:
+                    return subprocess.CompletedProcess(command, 0, stdout=(
+                        "tree " + "a" * 40 + "\nparent " + ("e" if fault == "PR-wrong-parent" else "d") * 40
+                        + "\nparent " + "c" * 40 + "\nauthor Fixture <fixture@example.invalid> 0 +0000\n\nFixture\n"))
                 if command[:2] == ["git", "status"]:
                     status_reads += 1
                     return subprocess.CompletedProcess(command, 0, stdout=(

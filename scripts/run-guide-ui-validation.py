@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import uuid
@@ -110,7 +111,16 @@ def run(compile_only, output, *, acceptance=False, invocation=None, runner=subpr
                              "Checkout differs from the actual workflow commit.")
             event = acceptance_evidence.load(Path(environment["GITHUB_EVENT_PATH"]))
             event_name = environment.get("GITHUB_EVENT_NAME")
-            parents = command("source-parents", ["git", "show", "-s", "--format=%P", "HEAD"]).strip().split()
+            commit = command("source-parents", [
+                "git", "--no-replace-objects", "cat-file", "commit", evidence["sourceHead"]
+            ])
+            headers = commit.partition("\n\n")[0].splitlines()
+            metadata.require(headers and headers[0] == "tree " + evidence["sourceTree"]
+                             and sum(line.startswith("tree ") for line in headers) == 1,
+                             "Raw commit tree differs from the observed checkout tree.")
+            parents = [line.removeprefix("parent ") for line in headers if line.startswith("parent ")]
+            metadata.require(all(re.fullmatch(r"[0-9a-f]{40}", parent) for parent in parents),
+                             "Malformed raw commit parent header.")
             if event_name == "push":
                 metadata.require(event["after"] == evidence["sourceHead"], "Push candidate differs.")
                 candidate = evidence["sourceHead"]
@@ -189,7 +199,7 @@ def run(compile_only, output, *, acceptance=False, invocation=None, runner=subpr
             for case, identity in acceptance_evidence.PRODUCERS.items():
                 export = output / ("attachments-" + case)
                 result = command("export-" + case, ["xcrun", "xcresulttool", "export", "attachments",
-                                          "--schema-version", "0.4.0", "--path", str(output / "probe.xcresult"),
+                                          "--path", str(output / "probe.xcresult"),
                                           "--output-path", str(export), "--test-id",
                                           acceptance_evidence.case_url(documents["tests"], identity,
                                                                        identifier_path=scopes.identifier_path)],

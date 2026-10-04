@@ -28,7 +28,11 @@ struct GuideAcceptanceEvidence: Codable {
 
     static func waitForObservation(remaining: () throws -> Double, evaluate: () -> Bool,
                                    pending: (Double) throws -> Bool) throws {
-        let completed = try pending(remaining())
+        _ = try remaining()
+        let ready = evaluate()
+        let timeout = try remaining()
+        if ready { return }
+        let completed = try pending(timeout)
         _ = try remaining()
         try require(completed, "Native acceptance observation did not arrive")
     }
