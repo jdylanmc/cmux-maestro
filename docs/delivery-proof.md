@@ -314,6 +314,17 @@ with mocked native sessions/launcher processes, and remove their own fixtures.
 No dependencies are added. Repository CI's other declared checks remain
 unchanged and belong to the parent’s complete validation pass.
 
+The orchestrator suite uses fake CMUX/Copilot processes in temporary roots.
+Its fixture-only Python startup hook carries a shared lifetime descriptor
+through subprocesses and shell execution. Teardown closes fixture admission,
+signals only recorded PID/start identities, and requires exclusive lifetime
+ownership before deleting the root. A writer that outlives the existing
+three-second shutdown budget causes an explicit failure and preserves the
+sandbox, including against automatic temporary-directory cleanup. Do not remove
+a preserved root until its exact fixture processes have stopped. New fixture
+launch paths must preserve the lifetime descriptor and startup hook; neither
+is installed into real CMUX or Copilot sessions.
+
 Parent validation before the permission correction: **all 9 declared repository
 CI command steps passed on first attempts**, including **45/45** orchestrator
 tests and **7 Python + 7 Node** proof tests. The earlier worker-only 44/45 result
