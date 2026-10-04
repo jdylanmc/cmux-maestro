@@ -2126,7 +2126,9 @@ struct CopilotObserverRegistrationTests {
             do { try await Task.sleep(for: launchDelay) }
             catch is CancellationError { return CopilotMetadataResult.failed(.cancelled) }
             catch { Issue.record(error); return CopilotMetadataResult.failed(.unavailable) }
-            return await runner.metadata(executable: server, path: "/usr/bin:/bin")
+            let result = await runner.metadata(executable: server, path: "/usr/bin:/bin")
+            watchdog.metadataCallReturned()
+            return result
         }
         defer { task.cancel() }
         do {
@@ -2135,6 +2137,7 @@ struct CopilotObserverRegistrationTests {
                 watchdog.begin("startup-failed-cancellation")
                 task.cancel()
                 let stopped = await task.value
+                watchdog.taskValueReceived()
                 Issue.record("Metadata did not spawn; result=\(stopped)")
                 return
             }
@@ -2148,13 +2151,17 @@ struct CopilotObserverRegistrationTests {
                 watchdog.begin("missing-pid-cancellation")
                 task.cancel()
                 let stopped = await task.value
+                watchdog.taskValueReceived()
                 Issue.record("Metadata writer was not ready after spawn; result=\(stopped); sampled=\(clock.wasSampled)")
             }
             try #require(readyExists)
             let pid = try #require(Int32(String(contentsOf: ready, encoding: .utf8)))
+            watchdog.metadataPIDReady(pid)
             watchdog.begin("cancel-and-await-owned-process")
             task.cancel()
-            guard case .failed(.cancelled) = await task.value else {
+            let result = await task.value
+            watchdog.taskValueReceived()
+            guard case .failed(.cancelled) = result else {
                 Issue.record("Expected metadata cancellation"); return
             }
             watchdog.begin("verify-owned-process-exit")
@@ -2164,6 +2171,7 @@ struct CopilotObserverRegistrationTests {
             watchdog.begin("error-cancellation")
             task.cancel()
             _ = await task.value
+            watchdog.taskValueReceived()
             throw error
         }
     }
