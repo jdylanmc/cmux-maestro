@@ -821,7 +821,9 @@ extension SidebarRowMenuPanelProbeTests {
         private var postedAt: ContinuousClock.Instant?
         private var shownAt: TimeInterval?
         private var sequence = 0
-        private var lifetimeInvalid = false
+        private var lifecycle: Ownership.Lifecycle
+        private let foreignContent: NSView?
+        private let panelContent = NSView(frame: NSRect(x: 0, y: 0, width: 180, height: 60))
         private var pointerReceiver: PointerReceiver?
         private(set) var active = false
         private(set) var showReturned = false
@@ -845,12 +847,17 @@ extension SidebarRowMenuPanelProbeTests {
         init(fixture: Fixture, completion: Completion) {
             self.fixture = fixture
             self.completion = completion
+            foreignContent = fixture.foreign.contentView
+            lifecycle = Ownership.Lifecycle(
+                owner: ObjectIdentifier(fixture.owner), foreign: ObjectIdentifier(fixture.foreign),
+                panel: ObjectIdentifier(panel)
+            )
             precondition(Self.nextToken < Int64.max, "Companion token space exhausted")
             token = Self.nextToken
             Self.nextToken += 1
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
-            panel.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 180, height: 60))
+            panel.contentView = panelContent
             if completion == .foreignPointerCancel {
                 let receiver = PointerReceiver(frame: NSRect(x: 340, y: 240, width: 20, height: 20))
                 receiver.received = { [weak self] event in self?.receivedForeignPointer(event) }
@@ -875,17 +882,19 @@ extension SidebarRowMenuPanelProbeTests {
         }
 
         private var lifetime: Ownership.Lifetime {
-            guard !lifetimeInvalid, fixture.anchor.window === fixture.owner,
-                  fixture.sibling.window === fixture.owner, fixture.foreignAnchor.window === fixture.foreign,
-                  fixture.title.window === fixture.owner,
-                  !panel.canBecomeKey, !panel.canBecomeMain, !panel.isKeyWindow, !panel.isMainWindow else {
-                return .invalid
-            }
-            if active, panel.parent === fixture.owner, panel.isVisible,
-               fixture.owner.childWindows?.contains(where: { $0 === panel }) == true { return .visible }
-            if !active, closes == 1, panel.parent == nil, !panel.isVisible,
-               fixture.owner.childWindows?.contains(where: { $0 === panel }) != true { return .closed }
-            return .invalid
+            lifecycle.sample(
+                fixtureIntact: NSApp.isActive && fixture.owner.isVisible && fixture.foreign.isVisible
+                    && fixture.owner.contentView === fixture.root
+                    && foreignContent != nil && fixture.foreign.contentView === foreignContent
+                    && panel.contentView === panelContent
+                    && fixture.anchor.window === fixture.owner && fixture.sibling.window === fixture.owner
+                    && fixture.foreignAnchor.window === fixture.foreign && fixture.title.window === fixture.owner
+                    && !panel.canBecomeKey && !panel.canBecomeMain && !panel.isKeyWindow && !panel.isMainWindow,
+                panelVisibleAttached: active && panel.parent === fixture.owner && panel.isVisible
+                    && fixture.owner.childWindows?.contains(where: { $0 === panel }) == true,
+                panelHiddenDetached: !active && closes == 1 && panel.parent == nil && !panel.isVisible
+                    && fixture.owner.childWindows?.contains(where: { $0 === panel }) != true
+            )
         }
 
         private func sample(_ event: NSEvent) -> Ownership.Sample {
@@ -975,10 +984,14 @@ extension SidebarRowMenuPanelProbeTests {
             }
             let center = NotificationCenter.default
             for window in [fixture.owner, fixture.foreign, panel] {
+                let identity = ObjectIdentifier(window)
                 observers.append(center.addObserver(
                     forName: NSWindow.willCloseNotification, object: window, queue: .main
                 ) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.lifecycleEnded("fixture-window-close") }
+                    MainActor.assumeIsolated {
+                        guard let self, self.lifecycle.windowClosed(identity) else { return }
+                        self.lifecycleEnded("fixture-window-close")
+                    }
                 })
             }
             observers.append(center.addObserver(
@@ -1130,9 +1143,8 @@ extension SidebarRowMenuPanelProbeTests {
         private func receivedForeignPointer(_ event: NSEvent) {
             let received = sample(event)
             guard completion == .foreignPointerCancel, event.window === fixture.foreign,
-                  completionObserved, ownership?.consumed == true, foreignReceipts == 0,
-                  received.lifetime == .closed, received.elapsed >= .zero, received.elapsed < .seconds(2),
-                  ownership?.ownsPayload(received) == true else {
+                  completionObserved,
+                  ownership?.canReceiveAfterClose(received, previousReceipts: foreignReceipts) == true else {
                 fail("Foreign content received input without exact accepted companion provenance")
                 return
             }
@@ -1140,9 +1152,8 @@ extension SidebarRowMenuPanelProbeTests {
         }
 
         private func lifecycleEnded(_ reason: String) {
-            guard active else { return }
-            lifetimeInvalid = true
-            fail("Companion lifetime ended without completion: \(reason)")
+            guard lifecycle.invalidate() else { return }
+            fail("Companion fixture lifetime ended: \(reason)")
             close(reason)
             finish()
         }
@@ -1155,16 +1166,18 @@ extension SidebarRowMenuPanelProbeTests {
             closes += 1
             active = false
             if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
-            observers.forEach(NotificationCenter.default.removeObserver)
-            observers.removeAll()
             if panel.parent === fixture.owner {
                 fixture.owner.removeChildWindow(panel)
             } else {
-                lifetimeInvalid = true
+                _ = lifecycle.invalidate()
                 fail("Exact companion panel lost its parent")
             }
             panel.orderOut(nil)
+            // Retain fixture observers: reentrant owner/foreign close or resignation is never expected.
+            lifecycle.beginPanelClose()
             panel.close()
+            lifecycle.endPanelClose()
+            if lifecycle.invalidated { fail("Companion panel closed with an invalid fixture lifetime") }
         }
 
         private func fail(_ message: String) {
@@ -1210,6 +1223,9 @@ extension SidebarRowMenuPanelProbeTests {
             dispatchTask = nil
             finish()
             _ = takeBackInput()
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers.removeAll()
+            lifecycle.stopObserving()
             pointerReceiver?.received = nil
             pointerReceiver?.removeFromSuperview()
             pointerReceiver = nil

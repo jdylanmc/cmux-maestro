@@ -7,6 +7,60 @@ nonisolated struct SidebarPanelInputOwnership {
     enum Lifetime: Equatable { case visible, closed, invalid }
     enum Cleanup: Equatable { case removeAndFail, retainAndFail, unrelated }
 
+    /// Shared by native lifecycle callbacks and pure transition controls, through final recovery.
+    struct Lifecycle {
+        let owner: ObjectIdentifier
+        let foreign: ObjectIdentifier
+        let panel: ObjectIdentifier
+        private(set) var observing = true
+        private(set) var invalidated = false
+        private var closingPanel = false
+        private var expectedPanelCloseObserved = false
+        private var panelClosed = false
+
+        mutating func beginPanelClose() {
+            if closingPanel || panelClosed || !observing { invalidated = true }
+            closingPanel = true
+        }
+
+        mutating func endPanelClose() {
+            if !closingPanel || !expectedPanelCloseObserved { invalidated = true }
+            closingPanel = false
+            panelClosed = true
+        }
+
+        /// Only one exact panel notification inside our close call is expected, never fixture loss.
+        mutating func windowClosed(_ window: ObjectIdentifier) -> Bool {
+            guard observing else { return false }
+            if window == panel, closingPanel, !expectedPanelCloseObserved {
+                expectedPanelCloseObserved = true
+                return false
+            }
+            guard window == owner || window == foreign || window == panel else { return false }
+            return invalidate()
+        }
+
+        mutating func invalidate() -> Bool {
+            guard observing else { return false }
+            invalidated = true
+            return true
+        }
+
+        mutating func sample(fixtureIntact: Bool, panelVisibleAttached: Bool,
+                             panelHiddenDetached: Bool) -> Lifetime {
+            if !fixtureIntact { invalidated = true }
+            guard observing, !invalidated, !closingPanel else { return .invalid }
+            if !panelClosed, panelVisibleAttached { return .visible }
+            if panelClosed, panelHiddenDetached { return .closed }
+            invalidated = true
+            return .invalid
+        }
+
+        mutating func stopObserving() {
+            observing = false
+        }
+    }
+
     struct Scope: Equatable {
         var caseID: UUID
         var fixture: ObjectIdentifier
@@ -88,6 +142,11 @@ nonisolated struct SidebarPanelInputOwnership {
         guard canAccept(sample) else { return false }
         consumed = true
         return true
+    }
+
+    func canReceiveAfterClose(_ sample: Sample, previousReceipts: Int) -> Bool {
+        consumed && !recovered && previousReceipts == 0 && sample.lifetime == .closed
+            && sample.elapsed >= .zero && sample.elapsed < .seconds(2) && ownsPayload(sample)
     }
 
     /// Recovery may run after the deadline/close, but can never become dispatch acceptance.

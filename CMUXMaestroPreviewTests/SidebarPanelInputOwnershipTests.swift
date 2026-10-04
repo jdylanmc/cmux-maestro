@@ -180,6 +180,130 @@ nonisolated struct SidebarPanelInputOwnershipTests {
         check(removed == [4], "only exact queued ownership removed")
         check(kept == [0, 1, 2, 3, 5, 6], "unrelated and ambiguous queue ordering preserved")
         check(failuresReported == 5, "ambiguity and recovery explicitly fail")
+
+        // Exercise the same state used by native notifications/sampling, not injected lifetime labels.
+        let lifecycle = Ownership.Lifecycle(owner: ids[1], foreign: ids[6], panel: ids[2])
+        var foreignScope = scope
+        foreignScope.window = ids[6]
+        foreignScope.windowNumber = 48
+        let foreignPointer = Ownership(
+            token: 99, scope: foreignScope, kind: .leftMouseDown, shownAt: 100,
+            expectedPoint: point, expectedScreenPoint: screen
+        )
+        var foreignInput = valid
+        foreignInput.scope = foreignScope
+        func sample(_ state: inout Ownership.Lifecycle, closed: Bool,
+                    fixtureIntact: Bool = true, panelIntact: Bool = true) -> Ownership.Sample {
+            var result = foreignInput
+            result.lifetime = state.sample(
+                fixtureIntact: fixtureIntact,
+                panelVisibleAttached: !closed && panelIntact,
+                panelHiddenDetached: closed && panelIntact
+            )
+            return result
+        }
+        func close(_ state: inout Ownership.Lifecycle) {
+            state.beginPanelClose()
+            check(!state.windowClosed(ids[2]), "only our exact panel close is expected")
+            state.endPanelClose()
+        }
+        var normal = lifecycle
+        var accepted = foreignPointer
+        check(accepted.accept(sample(&normal, closed: false)), "lifecycle visible acceptance")
+        close(&normal)
+        let closed = sample(&normal, closed: true)
+        check(normal.observing && !normal.invalidated && closed.lifetime == .closed,
+              "normal panel close retains valid fixture observation")
+        check(accepted.canReceiveAfterClose(closed, previousReceipts: 0), "normal post-close receipt")
+        check(!accepted.canReceiveAfterClose(closed, previousReceipts: 1), "duplicate post-close receipt")
+        check(!foreignPointer.canReceiveAfterClose(closed, previousReceipts: 0), "receipt requires prior acceptance")
+        check(!foreignPointer.canAccept(closed), "normal closed fixture never authorizes acceptance")
+        pending = foreignPointer
+        check(pending.cleanup(closed) == .removeAndFail, "normal close permits failure-only recovery")
+        check(pending.cleanup(closed) == .retainAndFail, "normal close duplicate recovery retained")
+        check(!pending.canAccept(foreignInput), "post-close recovery cannot become acceptance")
+        var acceptedThenRecovered = accepted
+        check(acceptedThenRecovered.cleanup(closed) == .removeAndFail, "accepted duplicate recovered as failure")
+        check(!acceptedThenRecovered.canReceiveAfterClose(closed, previousReceipts: 0),
+              "recovery cannot become post-close receipt")
+        var lateReceipt = closed
+        lateReceipt.elapsed = .seconds(2)
+        check(!accepted.canReceiveAfterClose(lateReceipt, previousReceipts: 0), "post-close receipt deadline")
+        lateReceipt = closed
+        lateReceipt.tag = 98
+        check(!accepted.canReceiveAfterClose(lateReceipt, previousReceipts: 0), "post-close receipt exact payload")
+
+        // Both notification orders inside reentrant panel.close must latch loss, as must later loss.
+        for timing in ["before-panel-notification", "after-panel-notification", "after-close"] {
+            for loss in ["owner-close", "foreign-close", "app-resign", "panel-focus"] {
+                var state = lifecycle
+                state.beginPanelClose()
+                if timing != "before-panel-notification" {
+                    _ = state.windowClosed(ids[2])
+                }
+                if timing == "after-close" { state.endPanelClose() }
+                switch loss {
+                case "owner-close":
+                    check(state.windowClosed(ids[1]), "\(timing) owner notification invalidates")
+                case "foreign-close":
+                    check(state.windowClosed(ids[6]), "\(timing) foreign notification invalidates")
+                default:
+                    check(state.invalidate(), "\(timing) \(loss) invalidates")
+                }
+                if timing == "before-panel-notification" { _ = state.windowClosed(ids[2]) }
+                if timing != "after-close" { state.endPanelClose() }
+                let lost = sample(&state, closed: true)
+                let label = "\(timing) \(loss)"
+                check(state.observing && state.invalidated && lost.lifetime == .invalid, label + " latched")
+                check(!accepted.canReceiveAfterClose(lost, previousReceipts: 0), label + " receipt rejected")
+                pending = foreignPointer
+                check(!pending.accept(lost), label + " acceptance rejected")
+                check(pending.cleanup(lost) == .retainAndFail, label + " recovery retained")
+                check(pending.cleanup(lost) == .retainAndFail && !pending.recovered,
+                      label + " duplicate retained without recovery")
+            }
+        }
+        for closedPanel in [false, true] {
+            for loss in ["fixture-detach-or-replacement", "panel-detach-or-replacement"] {
+                var state = lifecycle
+                if closedPanel { close(&state) }
+                let lost = sample(&state, closed: closedPanel,
+                                  fixtureIntact: loss != "fixture-detach-or-replacement",
+                                  panelIntact: loss != "panel-detach-or-replacement")
+                let label = "\(closedPanel ? "closed" : "visible") \(loss)"
+                check(lost.lifetime == .invalid, label + " derived invalid")
+                check(sample(&state, closed: closedPanel).lifetime == .invalid, label + " stays invalid")
+                check(!accepted.canReceiveAfterClose(lost, previousReceipts: 0), label + " receipt rejected")
+                pending = foreignPointer
+                check(!pending.accept(lost), label + " acceptance rejected")
+                check(pending.cleanup(lost) == .retainAndFail, label + " recovery retained")
+            }
+        }
+        var unexpected = lifecycle
+        check(unexpected.windowClosed(ids[2]), "unrequested panel close invalidates")
+        check(sample(&unexpected, closed: false).lifetime == .invalid, "unexpected close stays invalid")
+        unexpected = normal
+        check(unexpected.windowClosed(ids[2]), "post-close duplicate panel notification invalidates")
+        check(sample(&unexpected, closed: true).lifetime == .invalid, "duplicate close stays invalid")
+        unexpected = lifecycle
+        unexpected.beginPanelClose()
+        _ = unexpected.windowClosed(ids[2])
+        check(unexpected.windowClosed(ids[2]), "reentrant duplicate panel notification invalidates")
+        unexpected.endPanelClose()
+        check(sample(&unexpected, closed: true).lifetime == .invalid, "reentrant duplicate stays invalid")
+        unexpected = lifecycle
+        unexpected.beginPanelClose()
+        unexpected.endPanelClose()
+        check(sample(&unexpected, closed: true).lifetime == .invalid, "missing close notification invalidates")
+        var unrelatedLifecycle = normal
+        check(!unrelatedLifecycle.windowClosed(ids[7]), "unrelated window notification ignored")
+        check(sample(&unrelatedLifecycle, closed: true).lifetime == .closed, "unrelated window preserves lifetime")
+        for var state in [lifecycle, normal, unexpected] {
+            state.stopObserving()
+            check(!state.observing && !state.windowClosed(ids[1]) && !state.invalidate(),
+                  "final stop disables callbacks, including early failure")
+            check(sample(&state, closed: true).lifetime == .invalid, "final stop cannot authorize input")
+        }
         withExtendedLifetime(objects) {}
         return failures
     }
