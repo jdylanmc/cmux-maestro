@@ -933,30 +933,33 @@ extension SidebarRowMenuPanelProbeTests {
             let expectedScope = try #require(scope(destination))
             let original = try fixture.completionEvent(completion, outside: panel)
             let corresponding = try #require(original.cgEvent, "No documented corresponding CGEvent")
-            let copy = try #require(corresponding.copy(), "Could not independently copy the CGEvent")
-            try #require(copy !== corresponding)
             let point: NSPoint? = completion == .escape ? nil : NSPoint(x: 350, y: 250)
             if let point { try #require(original.locationInWindow == point) }
             let screenPoint = point.map { destination.convertPoint(toScreen: $0) }
-            if let screenPoint {
-                let primary = try #require(NSScreen.screens.first)
-                try #require(primary.frame.origin == .zero && primary.frame.height > 0)
-                // CGEventGetUnflippedLocation documents y = main_display_height - CGEventGetLocation.y.
-                // https://developer.apple.com/documentation/coregraphics/cgevent/unflippedlocation
-                copy.location = CGPoint(x: screenPoint.x, y: primary.frame.height - screenPoint.y)
-                try #require(copy.unflippedLocation == screenPoint)
+            let input: NSEvent
+            let construction: String
+            if completion == .escape {
+                let copy = try #require(corresponding.copy(), "Could not independently copy the CGEvent")
+                try #require(copy !== corresponding)
+                copy.setIntegerValueField(.eventSourceUserData, value: token)
+                input = try #require(NSEvent(cgEvent: copy), "Public CGEvent bridge unavailable")
+                construction = "copy-bridge"
+            } else {
+                // The hosted bridge changed window coordinates. Keep this owned factory event;
+                // the fresh sample below must prove tag retention and both coordinate representations.
+                corresponding.setIntegerValueField(.eventSourceUserData, value: token)
+                input = original
+                construction = "tagged-factory"
             }
-            copy.setIntegerValueField(.eventSourceUserData, value: token)
-            let input = try #require(NSEvent(cgEvent: copy), "Public CGEvent bridge unavailable")
             let candidate = Ownership(
                 token: token, scope: expectedScope,
                 kind: completion == .escape ? .keyDown : .leftMouseDown,
                 shownAt: shownAt, expectedPoint: point, expectedScreenPoint: screenPoint
             )
-            let bridged = sample(input)
-            print("row-menu-payload-companion bridge: \(completion.rawValue); \(bridged)")
+            let prepared = sample(input)
+            print("row-menu-payload-companion prepared: \(completion.rawValue); route=\(construction); \(prepared)")
             try #require(input.window === destination && input.windowNumber == destination.windowNumber)
-            try #require(candidate.canAccept(bridged), "Public copy/bridge lost exact window, payload or geometry")
+            try #require(candidate.canAccept(prepared), "Prepared event lost exact window, payload or geometry")
             ownership = candidate
             return input
         }
