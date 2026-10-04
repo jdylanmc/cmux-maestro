@@ -286,6 +286,39 @@ not identify which presentation operation caused it. Native
 acceptance still requires the actual hosted results. For local compilation
 without opening windows, use `./scripts/test-copilot-setup.sh --compile-only`.
 
+A separate additive `guide-ui-consumer-probe` CI job builds the validation-only
+`CMUXMaestroGuideUIHost` app and public XCTest UI target. It compiles the same
+unchanged guide view, command, model and reader sources as production, with a
+fixed synthetic Missing read closure and an injected copy sink; it does not
+read installed guides, write a pasteboard, or include setup/runtime components.
+One ordinary minimal button must move its separately labeled synthetic counter
+from 0 to 1 after one exact public click. Only then does the test require the
+unique real-guide root, Re-check button and both initial status identifiers/text.
+Fixture diagnostics never substitute for guide content; there is no whole-app
+guide fallback. This readiness probe does not replace the existing tests,
+their failures, the eleven original commands, or the full guide action matrix.
+
+`./scripts/test-guide-ui-validation.sh --compile-only` builds both new targets
+without launching an app or test. Without that flag, the wrapper refuses outside
+the original `GITHUB_ACTIONS=true` / `RUNNER_ENVIRONMENT=github-hosted` venue,
+forwards those values through `TEST_RUNNER_`, verifies exact built namespaces,
+then invokes `test-without-building` once. It accepts no extra xcodebuild options.
+Builds use full Xcode and the existing unsigned policy; the project still needs
+the pinned SDK from `./scripts/fetch-sdk.sh`, though neither new target links it.
+
+Launch, window/root, minimal and guide phases share a single 180-second
+active-case deadline for explicit waits. Synchronous XCTest launch, query and
+click calls cannot be preempted by that deadline. No custom watchdog, forced
+cleanup, retries, permission changes or prompt responses are added; ordinary
+XCTest lifecycle handling remains framework-owned. Xcode Helper permission and
+unsigned runner readiness are unproved until hosted execution. Apple documents
+that UI testing may itself generate an OS permission prompt; an unanswered prompt
+or signing/Helper failure is not a pass. Separate `guide-ui-consumer-probe`
+artifacts retain source hashes, phase logs and the complete xcresult with failure
+screenshots. Text logs redact checkout/home paths; framework-owned xcresult may
+contain the disposable runner's build paths. Neither a screenshot nor a new
+probe pass establishes full native guide acceptance.
+
 On the next explicit **Enable Copilot Integration**, setup removes only its old
 `Copilot/plugin/skills/maestro/SKILL.md` copy, if present, using owner-checked,
 non-symlink traversal. It preserves other skills and files, including lifecycle,

@@ -540,6 +540,7 @@ class BuildMetadataTests(unittest.TestCase):
 
     def test_ci_preserves_all_eleven_validation_commands_without_new_conditions(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
         self.assertEqual(re.findall(r"^        run: (.+)$", workflow, re.MULTILINE), [
             "python3 scripts/test-cmux-maestro-orchestrator.py",
             "python3 scripts/test-delivery-proof.py",
@@ -871,8 +872,16 @@ class BuildMetadataTests(unittest.TestCase):
             str(ROOT / "CMUXMaestroPreview.xcodeproj/project.pbxproj"),
         ]))
         objects = project["objects"]
+        metadata.verify_guide_ui_project(project)
         for target in objects.values():
             if target.get("isa") != "PBXNativeTarget":
+                continue
+            if target["name"] in (metadata.GUIDE_HOST, metadata.GUIDE_TESTS):
+                for config_id in objects[target["buildConfigurationList"]]["buildConfigurations"]:
+                    settings = objects[config_id]["buildSettings"]
+                    ending = ".GuideHost" if target["name"] == metadata.GUIDE_HOST else ".GuideUITests"
+                    self.assertEqual(settings["PRODUCT_BUNDLE_IDENTIFIER"],
+                                     metadata.BASE_ID + ".Validation.Tests" + ending)
                 continue
             for config_id in objects[target["buildConfigurationList"]]["buildConfigurations"]:
                 settings = objects[config_id]["buildSettings"]

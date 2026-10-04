@@ -46,6 +46,8 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feat
     "$ROOT/CMUXMaestroPreview/Integration/CopilotObserverRegistration.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/MaestroAppLifecycle.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/WorkerLaunchSettings.swift" \
+    "$ROOT/CMUXMaestroPreview/Integration/CLIIntegrationGuide.swift" \
+    "$ROOT/CMUXMaestroPreview/Integration/CLIIntegrationSettingsView.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/CLIIntegrationGuideReader.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/CLIIntegrationGuideModel.swift" \
     -emit-module-path "$OUTPUT/CMUXMaestroPreview.swiftmodule" \

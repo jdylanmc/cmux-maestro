@@ -49,3 +49,26 @@ jobs:
         run: ./scripts/test-copilot-hook.sh
       - name: Verify shared file traversal under narrow sandbox grants
         run: ./scripts/test-copilot-sandbox.sh
+
+  guide-ui-consumer-probe:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify additive UI probe contracts
+        run: python3 scripts/test-guide-ui-validation.py
+      - name: Fetch pinned project SDK
+        run: ./scripts/fetch-sdk.sh
+      - name: Probe public UI consumer with synthetic host
+        run: ./scripts/test-guide-ui-validation.sh
+      - name: Upload separate public UI probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guide-ui-consumer-probe
+          path: |
+            .build/guide-ui-validation/run-*/evidence.json
+            .build/guide-ui-validation/run-*/*.log
+            .build/guide-ui-validation/run-*/probe.xcresult
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
