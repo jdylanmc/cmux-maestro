@@ -36,9 +36,45 @@ class RowInputVenueTests(unittest.TestCase):
         methods = row_input.METHODS if methods is None else methods
         entries = [(f"RowInputUITests/{name}()", status) for name in methods]
         summary, tests = IntegratedTestScopeTests.report(entries)
-        tests["testNodes"][0]["nodeType"] = "UI test bundle"
-        tests["testNodes"][0]["name"] = row_input.TARGET
+        bundle = tests["testNodes"][0]
+        bundle.update(nodeType="UI test bundle", name=row_input.TARGET,
+                      nodeIdentifierURL="test://com.apple.xcode/CMUXMaestroPreview/" + row_input.TARGET)
+        for node in bundle["children"]:
+            node["nodeIdentifierURL"] = bundle["nodeIdentifierURL"] + "/" + node["nodeIdentifier"].removesuffix("()")
+        suite = {"nodeType": "Test Suite", "name": "RowInputUITests",
+                 "nodeIdentifierURL": bundle["nodeIdentifierURL"] + "/RowInputUITests",
+                 "children": bundle["children"]}
+        bundle["children"] = [suite]
+        tests["testNodes"] = [{"nodeType": "Test Plan", "name": "CMUXMaestroRowInput", "children": [bundle]}]
         return summary, tests
+
+    @staticmethod
+    def bundle(tests):
+        return tests["testNodes"][0]["children"][0]
+
+    def test_project_plan_target_suite_and_method_remain_independently_bound(self):
+        for level in ("plan", "bundle", "suite", "case"):
+            for field in ("name", "nodeIdentifierURL"):
+                if level == "plan" and field == "nodeIdentifierURL":
+                    continue
+                summary, tests = self.report()
+                bundle = self.bundle(tests)
+                suite = bundle["children"][0]
+                node = {"plan": tests["testNodes"][0], "bundle": bundle,
+                        "suite": suite, "case": suite["children"][0]}[level]
+                if level == "case" and field == "name":
+                    field = "nodeIdentifier"
+                node[field] += "-foreign"
+                with self.subTest(level=level, field=field), self.assertRaises(ValueError):
+                    row_input.validate_results(summary, tests)
+        for level in ("bundle", "suite", "case"):
+            summary, tests = self.report()
+            bundle = self.bundle(tests)
+            suite = bundle["children"][0]
+            node = {"bundle": bundle, "suite": suite, "case": suite["children"][0]}[level]
+            del node["nodeIdentifierURL"]
+            with self.subTest(missingURL=level), self.assertRaises(ValueError):
+                row_input.validate_results(summary, tests)
 
     def settings(self):
         return [{"target": name, "buildSettings": {
@@ -84,7 +120,7 @@ class RowInputVenueTests(unittest.TestCase):
             with self.subTest(methods=methods), self.assertRaises(ValueError):
                 row_input.validate_results(*self.report(methods))
         summary, tests = self.report()
-        tests["testNodes"][0]["name"] = "CMUXMaestroPreviewTests"
+        self.bundle(tests)["name"] = "CMUXMaestroPreviewTests"
         with self.assertRaises(ValueError):
             row_input.validate_results(summary, tests)
 
@@ -93,13 +129,15 @@ class RowInputVenueTests(unittest.TestCase):
             with self.subTest(status=status), self.assertRaises(ValueError):
                 row_input.validate_results(*self.report(status=status))
         summary, tests = self.report()
-        tests["testNodes"][0]["children"].append(tests["testNodes"][0]["children"][0])
+        suite = self.bundle(tests)["children"][0]
+        suite["children"].append(suite["children"][0])
         with self.assertRaises(ValueError):
             row_input.validate_results(summary, tests)
 
     def test_repetition_and_miscount_are_rejected(self):
         summary, tests = self.report()
-        tests["testNodes"][0]["children"][0]["children"] = [{"nodeType": "Repetition", "result": "Passed"}]
+        self.bundle(tests)["children"][0]["children"][0]["children"] = [
+            {"nodeType": "Repetition", "result": "Passed"}]
         with self.assertRaises(ValueError):
             row_input.validate_results(summary, tests)
         summary, tests = self.report()
