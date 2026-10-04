@@ -203,6 +203,7 @@ def extract(export, case, output, *, identifier_path):
     require(len(value["stages"]) == expected_count, "Incomplete final stage attachment.")
     stage_attachments = [a for a in attachments if a["suggestedHumanReadableName"].startswith("guide-stage-")]
     require(len(stage_attachments) == expected_count, "Missing/extra native stage attachments.")
+    previous_timestamp = None
     for ordinal, record in enumerate(value["stages"]):
         matches = named("guide-stage-" + str(ordinal))
         require(len(matches) == 1, "Missing/duplicate native stage attachment.")
@@ -211,6 +212,9 @@ def extract(export, case, output, *, identifier_path):
         require(all(stage[key] == attachment[key] for key in ("deviceId", "configurationName", "deviceName"))
                 and 0 <= attachment["timestamp"] - stage["timestamp"] < 180,
                 "Native attachment device/configuration/timing differs.")
+        require(previous_timestamp is None or previous_timestamp <= stage["timestamp"],
+                "Native stage attachment chronology decreases.")
+        previous_timestamp = stage["timestamp"]
     destination = output / (case + ".json")
     require(not destination.exists(), "Refusing reused acceptance output.")
     destination.write_text(json.dumps(value, separators=(",", ":")) + "\n")

@@ -318,6 +318,17 @@ Fresh acceptance requires clean source before and after execution, exact source
 inventory/hashes, built product namespaces/hashes, attributable push or PR
 synthetic-merge parents, exact native identities/counts/exits, ordered complete
 stages, original validator/control executions and all 48 image provenance/hashes.
+Native attachment timestamps must be nondecreasing in required stage-ordinal
+order through the final attachment; equal-resolution timestamps are valid.
+Guide receipt schema 2 binds the existing split-debug host layout: the host
+executable, its `.debug.dylib` implementation and `__preview.dylib`, plus the
+runner and test-bundle executables. The resolved host must have
+`ENABLE_DEBUG_DYLIB=YES`; validation does not change that build setting.
+Each code file has an exact bundle-relative path and SHA-256, checked before
+and after native acceptance and again after integrated validation. Missing,
+changed, symlink-redirected or extra code in these `Contents/MacOS` directories
+fails closed. This bounded inventory does not hash SDK/system frameworks.
+Old executable-only receipts cannot be upgraded or reused for acceptance.
 Identical legitimate pixel hashes are allowed. Failed native production still
 runs the integrated suite; missing evidence fails the original validators.
 Both attachment exports are attempted and retained, but either nonzero exit

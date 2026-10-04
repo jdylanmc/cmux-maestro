@@ -459,7 +459,7 @@ class GuideUIValidationTests(unittest.TestCase):
 
     def runner(self, command, **kwargs):
         self.commands.append(command)
-        self.environments.append(kwargs["env"])
+        self.environments.append(kwargs.get("env", {}))
         output, code = "", 0
         if command[:2] == ["git", "rev-parse"]:
             output = "a" * 40
@@ -735,6 +735,13 @@ class GuideUIValidationTests(unittest.TestCase):
                     old_receipt = {**receipt, "schemaVersion": 1}
                     (self.directory / "evidence.json").write_text(json.dumps(old_receipt))
                     with self.assertRaisesRegex(ValueError, "receipt"):
+                        probe.scopes.revalidate_guide_acceptance(context, runner)
+                    incomplete = copy.deepcopy(receipt)
+                    for record in incomplete["products"]:
+                        record["executableSHA256"] = record.pop("codeFiles")[0]["sha256"]
+                    incomplete["productsAfter"] = incomplete["products"]
+                    (self.directory / "evidence.json").write_text(json.dumps(incomplete))
+                    with self.assertRaisesRegex(ValueError, "products"):
                         probe.scopes.revalidate_guide_acceptance(context, runner)
                     (self.directory / "evidence.json").write_text(json.dumps(receipt))
                     probe.scopes.revalidate_guide_acceptance(context, runner)

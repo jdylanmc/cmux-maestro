@@ -29,6 +29,7 @@ SANDBOX_KEY = "com.apple.security.app-sandbox"
 READ_KEY = "com.apple.security.temporary-exception.files.home-relative-path.read-only"
 GUIDE_HOST = "CMUXMaestroGuideUIHost"
 GUIDE_TESTS = "CMUXMaestroGuideUITests"
+GUIDE_RECEIPT_SCHEMA = 2
 GUIDE_SHARED_SOURCES = [
     "CMUXMaestroPreview/Integration/CLIIntegrationGuide.swift",
     "CMUXMaestroPreview/Integration/CLIIntegrationSettingsView.swift",
@@ -180,32 +181,47 @@ def verify_guide_ui_settings(rows):
             require(settings.get("TEST_TARGET_NAME") == GUIDE_HOST, "Wrong UI host association.")
             require(not settings.get("TEST_HOST") and not settings.get("BUNDLE_LOADER"),
                     "Guide consumer must not be an in-process unit test.")
+        else:
+            require(settings.get("ENABLE_DEBUG_DYLIB") == "YES",
+                    "Guide host requires the verified split-debug implementation layout.")
 
 
 def verify_guide_ui_products(products):
+    require(not Path(products).is_symlink(), "Guide products directory must not be redirected.")
     products = Path(products).resolve()
     host = products / (GUIDE_HOST + ".app")
     runner = products / (GUIDE_TESTS + "-Runner.app")
     test = runner / "Contents/PlugIns" / (GUIDE_TESTS + ".xctest")
     records = []
-    for bundle, ending, package in (
-        (host, ".GuideHost", "APPL"), (runner, ".GuideUITests.xctrunner", "APPL"),
-        (test, ".GuideUITests", "BNDL"),
+    def required_file(path):
+        relative = path.relative_to(products)
+        require(all(not (products / parent).is_symlink() for parent in (relative, *relative.parents)),
+                "Guide product path must not contain symlinks: " + str(relative))
+        require(path.is_file(), "Required guide product file missing: " + str(relative))
+        return path
+
+    for bundle, ending, package, executable, code_names in (
+        (host, ".GuideHost", "APPL", GUIDE_HOST, (GUIDE_HOST, GUIDE_HOST + ".debug.dylib", "__preview.dylib")),
+        (runner, ".GuideUITests.xctrunner", "APPL", GUIDE_TESTS + "-Runner", (GUIDE_TESTS + "-Runner",)),
+        (test, ".GuideUITests", "BNDL", GUIDE_TESTS, (GUIDE_TESTS,)),
     ):
-        require(not bundle.is_symlink() and bundle.resolve().is_relative_to(products),
-                "Guide product is outside the exact built products directory.")
-        info = plist(bundle / "Contents/Info.plist")
+        info = plist(required_file(bundle / "Contents/Info.plist"))
         identifier = BASE_ID + ".Validation.Tests" + ending
         require(info.get("CFBundleIdentifier") == identifier, "Built guide bundle identifier differs.")
         require(info.get("CFBundlePackageType") == package, "Built guide package type differs.")
-        executable = info.get("CFBundleExecutable")
-        require(isinstance(executable, str) and executable not in ("", ".", "..") and "/" not in executable,
-                "Invalid guide executable.")
-        binary = bundle / "Contents/MacOS" / executable
-        require(binary.is_file() and not binary.is_symlink() and os.access(binary, os.X_OK),
-                "Guide executable missing.")
+        require(info.get("CFBundleExecutable") == executable, "Built guide executable name differs.")
+        code_files = []
+        for name in code_names:
+            binary = required_file(bundle / "Contents/MacOS" / name)
+            require(0 < binary.stat().st_size <= 67_108_864, "Guide code file empty or oversized.")
+            if name == executable:
+                require(os.access(binary, os.X_OK), "Guide executable is not executable.")
+            code_files.append({"path": str(binary.relative_to(bundle)),
+                               "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()})
+        require({path.name for path in (bundle / "Contents/MacOS").iterdir()} == set(code_names),
+                "Guide product has unbound code files.")
         records.append({"product": str(bundle.relative_to(products)), "bundleIdentifier": identifier,
-                        "executableSHA256": hashlib.sha256(binary.read_bytes()).hexdigest()})
+                        "codeFiles": code_files})
     host_info = plist(host / "Contents/Info.plist")
     require(not any(key.startswith("CMUXMaestro") for key in host_info), "Synthetic host has a production bridge.")
     require(not (host / "Contents/Extensions").exists() and not (host / "Contents/Helpers").exists(),

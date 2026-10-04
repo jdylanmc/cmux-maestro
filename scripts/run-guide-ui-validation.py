@@ -49,7 +49,7 @@ def run(compile_only, output, *, acceptance=False, invocation=None, runner=subpr
     build_env = build_environment(environment)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
-    evidence = {"schemaVersion": 1, "scheme": SCHEME, "compileOnly": compile_only,
+    evidence = {"schemaVersion": metadata.GUIDE_RECEIPT_SCHEMA, "scheme": SCHEME, "compileOnly": compile_only,
                 "mode": "acceptance" if acceptance else "readiness",
                 "phases": [], "nativeResult": "not-run",
                 "limits": "180s shared explicit-wait deadline; synchronous XCUI calls are not preemptible. "
@@ -239,7 +239,7 @@ def run(compile_only, output, *, acceptance=False, invocation=None, runner=subpr
                                      and evidence["sourceAfter"]["tree"] == evidence["sourceTree"]
                                      and not evidence["sourceAfter"]["dirty"] and after == evidence["sourceSHA256"]
                                      and products_after == evidence["products"],
-                                     "Acceptance source changed during execution.")
+                                     "Acceptance source or products changed during execution.")
             except (ValueError, OSError, subprocess.CalledProcessError) as error:
                 evidence["error"] = redact(str(error))
                 evidence["nativeResult"] = "failed"

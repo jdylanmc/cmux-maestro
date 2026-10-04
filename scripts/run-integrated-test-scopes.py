@@ -386,8 +386,10 @@ def revalidate_guide_acceptance(context, runner):
     module = guide_module()
     output = Path(context["output"])
     receipt = module.acceptance_evidence.load(output / "evidence.json")
-    require(receipt["nativeResult"] == "passed" and receipt["mode"] == "acceptance"
-            and receipt["compileOnly"] is False and receipt["sourceDirty"] is False,
+    require(receipt["schemaVersion"] == module.metadata.GUIDE_RECEIPT_SCHEMA
+            and receipt["nativeResult"] == "passed" and receipt["mode"] == "acceptance"
+            and receipt["compileOnly"] is False and receipt["sourceDirty"] is False
+            and receipt["productsAfter"] == receipt["products"],
             "Full fresh native acceptance receipt required.")
     root = Path(__file__).resolve().parents[1]
     for args, expected in ((["git", "rev-parse", "HEAD"], context["head"]),
