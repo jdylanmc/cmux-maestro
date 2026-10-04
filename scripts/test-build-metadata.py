@@ -711,14 +711,38 @@ class BuildMetadataTests(unittest.TestCase):
         self.assertEqual(len(uploads), 1, "One final upload must collect both diagnostic producers.")
         upload_index, upload = uploads[0]
         for command in ("./scripts/test.sh", "./scripts/test-copilot-setup.sh"):
-            with self.subTest(producer=command):
-                producers = [index for index, step in enumerate(steps) if f"        run: {command}\n" in step]
-                self.assertEqual(len(producers), 1)
-                self.assertLess(producers[0], upload_index, "An earlier upload cannot retain later partial diagnostics.")
+            producers = [index for index, step in enumerate(steps) if f"        run: {command}\n" in step]
+            self.assertEqual(len(producers), 1, f"Expected one diagnostic producer: {command}")
+            self.assertLess(producers[0], upload_index, "An earlier upload cannot retain later partial diagnostics.")
         setup = (ROOT / "scripts/test-copilot-setup.sh").read_text()
         self.assertIn('OUTPUT="$ROOT/.build/setup-tests"', setup)
         self.assertIn('--results-root "$OUTPUT/metadata-watchdog"', setup)
         self.assertIn("            .build/setup-tests/metadata-watchdog/\n", upload)
+
+    def test_ci_final_diagnostics_reject_missing_duplicate_and_late_producers(self):
+        self.test_ci_collects_final_metadata_diagnostics_after_both_producers()
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        setup = (
+            "      - name: Verify Settings guide and setup process isolation\n"
+            "        run: ./scripts/test-copilot-setup.sh\n"
+        )
+        mutations = [
+            workflow.replace("          ./scripts/test.sh\n", ""),
+            workflow.replace(setup, ""),
+            workflow.replace(setup, setup + setup),
+            workflow.replace(setup, "") + setup,
+            workflow.replace("            .build/setup-tests/metadata-watchdog/\n", ""),
+        ]
+        original_read = Path.read_text
+        for index, altered in enumerate(mutations):
+            def read_text(path, *args, **kwargs):
+                if path == ROOT / ".github/workflows/ci.yml":
+                    return altered
+                return original_read(path, *args, **kwargs)
+
+            with self.subTest(mutation=index), patch.object(Path, "read_text", read_text):
+                with self.assertRaises(AssertionError):
+                    self.test_ci_collects_final_metadata_diagnostics_after_both_producers()
 
     def test_app_bridge_markers_are_wired_as_input_plist_in_both_configurations(self):
         project = json.loads(subprocess.check_output([
