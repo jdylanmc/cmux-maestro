@@ -51,6 +51,17 @@ final class GuideConsumerReadinessTests: XCTestCase {
         func exact(_ root: XCUIElement, _ identifier: String) throws -> XCUIElement {
             try unique(root.descendants(matching: .any).matching(identifier: identifier))
         }
+        func hasVisibleGeometry(_ element: XCUIElement, in viewport: CGRect) -> Bool {
+            let frame = element.frame
+            let intersection = viewport.intersection(frame)
+            return !frame.isInfinite && !viewport.isInfinite
+                && frame.width > 0 && frame.height > 0
+                && intersection.width > 0 && intersection.height > 0
+        }
+        func isReadyRecheck(_ element: XCUIElement, in viewport: CGRect) -> Bool {
+            element.elementType == .button && element.isEnabled && element.label == "Re-check"
+                && element.isHittable && hasVisibleGeometry(element, in: viewport)
+        }
 
         do {
             record("started")
@@ -107,17 +118,38 @@ final class GuideConsumerReadinessTests: XCTestCase {
             try wait(counter, NSPredicate(format: "label == %@", "Synthetic minimal count: 1"))
             record("passed")
 
+            try begin("visibility-discriminator")
+            let clippedRoot = try exact(subjectWindow, "guide-validation-clipped-root")
+            let clipped = try exact(clippedRoot, "guide-validation-clipped-button")
+            let clippedViewport = clippedRoot.frame.intersection(subjectWindow.frame)
+            try require(clippedViewport.width > 0 && clippedViewport.height > 0,
+                        "Clipped fixture has no initial viewport.")
+            try require(clipped.elementType == .button && clipped.isEnabled && clipped.label == "Re-check"
+                        && clipped.frame.width > 0 && clipped.frame.height > 0,
+                        "Clipped fixture must expose the attributes accepted by the old Re-check oracle.")
+            try require(!clipped.isHittable && !hasVisibleGeometry(clipped, in: clippedViewport),
+                        "Negative control must be query-visible but fully clipped and non-hittable.")
+            try require(!isReadyRecheck(clipped, in: clippedViewport),
+                        "Readiness oracle accepted a clipped, non-hittable control.")
+            try require(counter.label == "Synthetic minimal count: 1", "Negative probe unexpectedly invoked a button.")
+            record("passed")
+
             try begin("guide-root")
             let guide = try exact(subjectWindow, "guide-validation-real-guide-root")
             try require(guide.frame.width > 0 && guide.frame.height > 0, "Guide root has no frame.")
+            let scroll = try unique(guide.scrollViews)
+            let viewport = scroll.frame.intersection(guide.frame).intersection(subjectWindow.frame)
+            try require(viewport.width > 0 && viewport.height > 0, "Guide has no initial scroll viewport.")
             record("passed")
 
             try begin("guide-identifiers")
             let recheck = try exact(guide, "cli-integration-recheck")
-            try require(recheck.elementType == .button && recheck.isEnabled && recheck.label == "Re-check",
-                        "Real guide Re-check attributes differ.")
+            try require(isReadyRecheck(recheck, in: viewport),
+                        "Real guide Re-check must be enabled, hittable and intersect the initial viewport.")
             for path in [".agents/skills/maestro/SKILL.md", ".copilot/skills/maestro/SKILL.md"] {
                 let status = try exact(guide, "cli-integration-status-" + path)
+                try require(hasVisibleGeometry(status, in: viewport),
+                            "Real guide status must intersect the initial viewport: \(path)")
                 let text = status.label + "\n" + (status.value as? String ?? "")
                 try require(text.contains("Missing") && text.contains("~/" + path)
                             && text.contains("No guide found at this location."),

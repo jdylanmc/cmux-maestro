@@ -39,6 +39,20 @@ struct GuideValidationContent: View {
             .accessibilityIdentifier("guide-validation-real-guide-root")
         }
         .padding(16)
+        .overlay(alignment: .topLeading) {
+            // Overlay keeps this fully clipped negative control out of the guide's layout.
+            VStack {
+                Button(action: { minimalCount += 1 }) {
+                    Text(verbatim: "Re-check")
+                }
+                .accessibilityIdentifier("guide-validation-clipped-button")
+                .offset(y: 1_000)
+            }
+            .frame(width: 180, height: 28)
+            .clipped()
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("guide-validation-clipped-root")
+        }
         .preferredColorScheme(.light)
     }
 }

@@ -294,6 +294,14 @@ read installed guides, write a pasteboard, or include setup/runtime components.
 One ordinary minimal button must move its separately labeled synthetic counter
 from 0 to 1 after one exact public click. Only then does the test require the
 unique real-guide root, Re-check button and both initial status identifiers/text.
+Re-check must also be enabled and hittable with positive geometry intersecting
+the initial guide scroll viewport and window; both status rows must have positive
+viewport-intersecting geometry. Partial intersection is sufficient: this does
+not require all guide content to fit, and the probe never scrolls to find it.
+A separate, fully clipped synthetic Re-check button must remain query-visible
+with the old accepted type/label/enabled attributes but be non-hittable and
+rejected by the same readiness predicate. Its overlay does not resize the guide.
+Missing negative-control exposure fails the probe rather than skipping it.
 Fixture diagnostics never substitute for guide content; there is no whole-app
 guide fallback. This readiness probe does not replace the existing tests,
 their failures, the eleven original commands, or the full guide action matrix.
