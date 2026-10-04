@@ -297,13 +297,13 @@ def read_result(bundle, directory, scope, runner):
 
 def hosted_test_environment(inherited):
     environment = dict(inherited)
-    require(environment.get("GITHUB_ACTIONS") == "true",
-            "GitHub-hosted native tests require outer GITHUB_ACTIONS=true.")
-    require(environment.get("RUNNER_ENVIRONMENT") == "github-hosted",
-            "GitHub-hosted native tests require outer RUNNER_ENVIRONMENT=github-hosted.")
-    # xcodebuild(1) forwards these to test runners with TEST_RUNNER_ stripped.
     for name in ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT"):
-        environment["TEST_RUNNER_" + name] = environment[name]
+        environment.pop("TEST_RUNNER_" + name, None)
+    if (environment.get("GITHUB_ACTIONS") == "true"
+            and environment.get("RUNNER_ENVIRONMENT") == "github-hosted"):
+        # xcodebuild(1) forwards these to test runners with TEST_RUNNER_ stripped.
+        for name in ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT"):
+            environment["TEST_RUNNER_" + name] = environment[name]
     return environment
 
 
@@ -316,9 +316,10 @@ def run(command, directory, runner=subprocess.run):
     evidence = {"candidateSelector": SELECTOR, "selectorVerifiedByHostedResult": False,
                 "testBodyOrDeadlineChanged": False, "wholeSuiteSerialized": False,
                 "guideCalibrationVenue": {
-                    "GITHUB_ACTIONS": test_environment["GITHUB_ACTIONS"],
-                    "RUNNER_ENVIRONMENT": test_environment["RUNNER_ENVIRONMENT"],
-                    "forwarding": "xcodebuild TEST_RUNNER_",
+                    "GITHUB_ACTIONS": test_environment.get("GITHUB_ACTIONS"),
+                    "RUNNER_ENVIRONMENT": test_environment.get("RUNNER_ENVIRONMENT"),
+                    "forwarding": ("xcodebuild TEST_RUNNER_"
+                                   if "TEST_RUNNER_GITHUB_ACTIONS" in test_environment else None),
                 },
                 "optionalBenchmark": {"identity": BENCHMARK_SELECTOR, "environmentVariable": BENCHMARK_FLAG,
                                       "environmentValue": benchmark_flag, "enabled": benchmark_enabled}}

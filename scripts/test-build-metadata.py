@@ -58,9 +58,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
             scope = Path(command[command.index("--path") + 1]).stem
             values = isolated if scope == "isolated" else remaining
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(values[0 if command[4] == "summary" else 1]))
-        with patch("builtins.print"), patch.dict(os.environ, {
-            "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted"
-        }):
+        with patch("builtins.print"), patch.dict(os.environ):
             if benchmark_flag is None:
                 os.environ.pop(BENCHMARK_FLAG, None)
             else:
@@ -70,6 +68,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
 
     def test_hosted_venue_forwarding_uses_original_values_for_both_test_actions(self):
         with patch.dict(os.environ, {
+            "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
             "TEST_RUNNER_GITHUB_ACTIONS": "stale",
             "TEST_RUNNER_RUNNER_ENVIRONMENT": "self-hosted",
             "TEST_RUNNER_UNRELATED": "preserved",
@@ -93,26 +92,44 @@ class IntegratedTestScopeTests(unittest.TestCase):
             "forwarding": "xcodebuild TEST_RUNNER_",
         })
 
-    def test_local_or_nonhosted_venue_refuses_before_any_build_or_test(self):
-        for index, outer in enumerate((
+    def test_local_or_nonhosted_venue_strips_aliases_without_excluding_existing_actions(self):
+        for outer in (
             {}, {"GITHUB_ACTIONS": "true"}, {"RUNNER_ENVIRONMENT": "github-hosted"},
             {"GITHUB_ACTIONS": "false", "RUNNER_ENVIRONMENT": "github-hosted"},
             {"GITHUB_ACTIONS": "TRUE", "RUNNER_ENVIRONMENT": "github-hosted"},
             {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted"},
             {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "__CURRENT_VALUE__"},
-        )):
+        ):
             with self.subTest(outer=outer), patch.dict(os.environ, {
                 **outer, "TEST_RUNNER_GITHUB_ACTIONS": "true",
                 "TEST_RUNNER_RUNNER_ENVIRONMENT": "github-hosted",
+                "TEST_RUNNER_UNRELATED": "preserved",
             }, clear=True):
                 original = dict(os.environ)
-                def runner(*args, **kwargs):
-                    self.fail("An invalid venue must not invoke a build, test or result extractor")
-                destination = self.directory / f"results-{index}"
-                with self.assertRaisesRegex(ValueError, "GitHub-hosted"):
-                    scopes.run(["xcodebuild"], destination, runner)
-                self.assertFalse(destination.exists())
+                result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                                self.report([("OtherSuite/test()", "Passed")]))
+                self.assertEqual(result, 0)
                 self.assertEqual(dict(os.environ), original)
+                commands = [command for command in self.commands if command[0] == "xcodebuild"]
+                self.assertEqual(len(commands), 3)
+                self.assertIn("build-for-testing", commands[0])
+                self.assertIn("-only-testing:" + scopes.SELECTOR, commands[1])
+                self.assertIn("-skip-testing:" + scopes.SELECTOR, commands[2])
+                self.assertIsNone(self.build_environments[0])
+                for environment in self.build_environments[1:]:
+                    self.assertNotIn("TEST_RUNNER_GITHUB_ACTIONS", environment)
+                    self.assertNotIn("TEST_RUNNER_RUNNER_ENVIRONMENT", environment)
+                    self.assertEqual(environment.get("GITHUB_ACTIONS"), outer.get("GITHUB_ACTIONS"))
+                    self.assertEqual(environment.get("RUNNER_ENVIRONMENT"), outer.get("RUNNER_ENVIRONMENT"))
+                    self.assertEqual(environment["TEST_RUNNER_UNRELATED"], "preserved")
+                self.assertEqual(evidence["guideCalibrationVenue"], {
+                    "GITHUB_ACTIONS": outer.get("GITHUB_ACTIONS"),
+                    "RUNNER_ENVIRONMENT": outer.get("RUNNER_ENVIRONMENT"),
+                    "forwarding": None,
+                })
+                shutil.rmtree(self.directory / "results")
+                self.commands.clear()
+                self.build_environments.clear()
 
     def test_verified_one_test_then_full_complement_without_serialization(self):
         result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
