@@ -442,11 +442,15 @@ class GuideUIValidationTests(unittest.TestCase):
         for fault in (None, "dirty-before", "dirty-after", "head-after", "missing-stage",
                       "extra-case", "native-exit", "compile-only", "PR-good", "PR-wrong-parent",
                       "attachment-duplicate", "attachment-wrong-url", "attachment-missing-stage",
-                      "attachment-payload-drift", "attachment-wrong-config", "attachment-late"):
+                      "attachment-payload-drift", "attachment-wrong-config", "attachment-late",
+                      "export-statuses", "export-recheck", "export-both",
+                      "PR-export-statuses", "PR-export-recheck", "PR-export-both"):
             self.directory = base / ("scopes-" + invocation) / "guide-acceptance"
             status_reads = 0
             head_reads = 0
-            environment["GITHUB_EVENT_NAME"] = "pull_request" if fault in ("PR-good", "PR-wrong-parent") else "push"
+            exports = []
+            export_fault = (fault or "").removeprefix("PR-")
+            environment["GITHUB_EVENT_NAME"] = "pull_request" if (fault or "").startswith("PR-") else "push"
             event.write_text(json.dumps({"pull_request": {"head": {"sha": "c" * 40}, "base": {"sha": "d" * 40}}}
                                        if environment["GITHUB_EVENT_NAME"] == "pull_request" else {"after": "a" * 40}))
 
@@ -503,7 +507,10 @@ class GuideUIValidationTests(unittest.TestCase):
                                              + ("Wrong/test" if fault == "attachment-wrong-url" else identity.removesuffix("()")),
                         "attachments": attachments
                     }]))
-                    return subprocess.CompletedProcess(command, 0, stdout="")
+                    code = 65 if export_fault in ("export-" + case, "export-both") else 0
+                    exports.append((case, code))
+                    return subprocess.CompletedProcess(command, code, stdout="complete synthetic export\n",
+                                                       stderr="synthetic export failure\n" if code else "")
                 response = original_runner(command, **kwargs)
                 if "test-without-building" in command:
                     response.returncode = 65 if fault == "native-exit" else 0
@@ -529,7 +536,29 @@ class GuideUIValidationTests(unittest.TestCase):
             with self.subTest(fault=fault), patch.object(self, "runner", side_effect=runner):
                 result, receipt = self.execute(fault == "compile-only", environment,
                                                acceptance_mode=True, invocation=invocation)
+                if export_fault.startswith("export-"):
+                    self.assertEqual(exports, [
+                        (case, 65 if export_fault in ("export-" + case, "export-both") else 0)
+                        for case in acceptance.PRODUCERS
+                    ], "Both exporters must run exactly once even after the first fails.")
+                    for case, code in exports:
+                        export = self.directory / ("attachments-" + case)
+                        self.assertTrue((export / "manifest.json").is_file())
+                        document = json.loads((export / "observed.json").read_text())
+                        self.assertEqual(len(document["stages"]), 50 if case == "statuses" else 12)
+                        phase = next(item for item in receipt["phases"] if item["name"] == "export-" + case)
+                        self.assertEqual(phase["exitCode"], code)
+                        self.assertEqual(phase["state"], "failed" if code else "passed")
+                        self.assertTrue((self.directory / ("export-" + case + ".log")).is_file())
+                        if code:
+                            self.assertIn("synthetic export failure",
+                                          (self.directory / ("export-" + case + "-stderr.log")).read_text())
+                    self.assertEqual(len(list((self.directory / "images").glob("*.png"))), 48)
                 self.assertEqual(result, 0 if fault in (None, "compile-only", "PR-good") else 1)
+                if export_fault.startswith("export-"):
+                    self.assertEqual(receipt["nativeResult"], "failed")
+                    self.assertNotIn("verifiedTestIdentities", receipt)
+                    self.assertFalse((self.directory / "image-manifest.json").exists())
                 if fault is None:
                     self.assertEqual(receipt["verifiedTestIdentities"], sorted(acceptance.PRODUCERS.values()))
                     native = next(i for i, command in enumerate(self.commands) if "test-without-building" in command)

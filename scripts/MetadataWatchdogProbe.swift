@@ -7,19 +7,30 @@ struct MetadataWatchdogProbe {
     static func main() async throws {
         guard CommandLine.arguments.count == 3 else { exit(2) }
         let mode = CommandLine.arguments[1]
-        guard ["complete", "stalled-clock", "polling-clock", "sampler-timeout"].contains(mode) else { exit(2) }
+        guard ["complete", "stalled-clock", "polling-clock", "sampler-timeout",
+               "sampler-exit-no-output", "sampler-exit-with-output", "sampler-timeout-no-output"]
+            .contains(mode) else { exit(2) }
         let directory = URL(fileURLWithPath: CommandLine.arguments[2])
         var sampler = URL(fileURLWithPath: "/usr/bin/sample")
-        if mode == "sampler-timeout" {
+        if mode.hasPrefix("sampler-") {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             sampler = directory.appendingPathComponent("stuck-sampler")
             let pidFile = CopilotPluginManifest.shellQuoted(directory.appendingPathComponent("sampler.pid").path)
+            let behavior: String
+            switch mode {
+            case "sampler-exit-no-output":
+                behavior = "exit 17"
+            case "sampler-exit-with-output":
+                behavior = "printf 'synthetic-exit-17-sample\\n' > \"$5\"\nexit 17"
+            case "sampler-timeout-no-output":
+                behavior = "trap '' TERM\nexec /bin/sleep 10"
+            default:
+                behavior = "printf 'partial-sample-before-stall\\n' > \"$5\"\ntrap '' TERM\nexec /bin/sleep 10"
+            }
             let script = """
             #!/bin/sh
-            printf 'partial-sample-before-stall\\n' > "$5"
             printf '%s' $$ > \(pidFile)
-            trap '' TERM
-            exec /bin/sleep 10
+            \(behavior)
             """
             try Data((script + "\n").utf8).write(to: sampler)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: sampler.path)
