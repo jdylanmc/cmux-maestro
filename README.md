@@ -320,6 +320,8 @@ synthetic-merge parents, exact native identities/counts/exits, ordered complete
 stages, original validator/control executions and all 48 image provenance/hashes.
 The integrated runner disables Python bytecode writes before importing its guide
 producer, so loading validation helpers cannot dirty the source checkout.
+Preview-test child processes apply the same policy before importing their test
+fixtures, preserving source cleanliness across the preceding CI steps.
 The clean-source gate still rejects existing untracked or modified files.
 Native attachment timestamps must be nondecreasing in required stage-ordinal
 order through the final attachment; equal-resolution timestamps are valid.

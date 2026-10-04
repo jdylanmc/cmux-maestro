@@ -316,6 +316,7 @@ class LocalPreviewTests(unittest.TestCase):
         os.mkfifo(gate, 0o600)
         code = """
 import importlib.util,json,os,pathlib,sys,time
+sys.dont_write_bytecode = True
 spec=importlib.util.spec_from_file_location('fixture',sys.argv[1])
 tests=importlib.util.module_from_spec(spec); spec.loader.exec_module(tests)
 home,source,provider=map(pathlib.Path,sys.argv[2:5])
@@ -550,6 +551,7 @@ else:
         before = self.integration_snapshot()
         code = """
 import importlib.util, pathlib, sys
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('install_tests', sys.argv[1])
 tests = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tests)
@@ -656,6 +658,7 @@ with installer.locked():
         before = self.integration_snapshot()
         code = """
 import importlib.util, os, pathlib, sys
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('install_tests', sys.argv[1])
 tests = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tests)
