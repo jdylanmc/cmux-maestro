@@ -47,6 +47,81 @@ class GuideModuleImportTests(unittest.TestCase):
             self.assertEqual([str(path.relative_to(root)) for path in root.rglob("*.pyc")], [])
 
 
+class GuideSourceParentTests(unittest.TestCase):
+    """Actual disposable Git objects and shallow boundary; no native build or execution."""
+
+    def test_shallow_and_full_real_parents_bind_exact_order_tree_and_workflow(self):
+        with tempfile.TemporaryDirectory(prefix="cmux-guide-parents-") as directory:
+            root = Path(directory)
+            origin = root / "origin"
+            environment = {**os.environ, "GIT_AUTHOR_NAME": "Fixture", "GIT_COMMITTER_NAME": "Fixture",
+                           "GIT_AUTHOR_EMAIL": "fixture@example.invalid", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+
+            def git(repo, *args, input=None):
+                return subprocess.check_output(["git", "-C", str(repo), *args], input=input,
+                                               text=True, stderr=subprocess.PIPE, env=environment).strip()
+
+            origin.mkdir()
+            git(origin, "init", "--quiet")
+            tree = git(origin, "mktree", input="")
+            base = git(origin, "commit-tree", tree, input="base\n")
+            candidate = git(origin, "commit-tree", tree, "-p", base, input="candidate\n")
+            merge = git(origin, "commit-tree", tree, "-p", base, "-p", candidate, input="merge\n")
+            git(origin, "update-ref", "refs/heads/fixture", merge)
+            git(origin, "symbolic-ref", "HEAD", "refs/heads/fixture")
+            shallow = root / "shallow"
+            subprocess.run(["git", "clone", "--quiet", "--depth", "1", "--branch", "fixture",
+                            origin.as_uri(), str(shallow)], check=True, capture_output=True, text=True)
+            self.assertEqual(git(shallow, "rev-parse", "--is-shallow-repository"), "true")
+            self.assertEqual(git(shallow, "show", "-s", "--format=%P", "HEAD"), "")
+            self.assertEqual(git(origin, "show", "-s", "--format=%P", "HEAD").split(), [base, candidate])
+            for repository in (origin, shallow):
+                for fault in (None, "reversed", "wrong-base", "wrong-candidate", "workflow", "tree"):
+                    with self.subTest(shallow=repository == shallow, fault=fault):
+                        invocation = str(uuid.uuid4())
+                        output = root / ("scopes-" + invocation) / "guide-acceptance"
+                        event = root / "event.json"
+                        parents = [base, candidate]
+                        if fault == "reversed":
+                            parents.reverse()
+                        elif fault == "wrong-base":
+                            parents[0] = "e" * 40
+                        elif fault == "wrong-candidate":
+                            parents[1] = "f" * 40
+                        event.write_text(json.dumps({"pull_request": {
+                            "base": {"sha": parents[0]}, "head": {"sha": parents[1]}}}))
+                        commands = []
+
+                        def runner(command, **kwargs):
+                            commands.append(command)
+                            if command[0] != "git":
+                                raise subprocess.CalledProcessError(91, command)
+                            result = subprocess.run(command, cwd=repository, env=kwargs["env"], text=True,
+                                                    capture_output=True)
+                            if fault == "tree" and command == ["git", "rev-parse", "HEAD^{tree}"]:
+                                result.stdout = "d" * 40
+                            return result
+
+                        with patch("builtins.print"):
+                            result = probe.run(False, output, acceptance=True, invocation=invocation, runner=runner,
+                                               environment={
+                                                   "DEVELOPER_DIR": probe.DEVELOPER, "GITHUB_ACTIONS": "true",
+                                                   "RUNNER_ENVIRONMENT": "github-hosted",
+                                                   "GITHUB_SHA": "a" * 40 if fault == "workflow" else merge,
+                                                   "GITHUB_EVENT_NAME": "pull_request", "GITHUB_EVENT_PATH": str(event)})
+                        receipt = json.loads((output / "evidence.json").read_text())
+                        self.assertEqual(result, 1, "Preflight-only fixture must stop before build.")
+                        self.assertEqual(receipt["nativeResult"], "not-run")
+                        if fault is None:
+                            self.assertEqual(receipt.get("sourceAttribution"), {
+                                "event": "pull_request", "workflowHead": merge,
+                                "candidate": candidate, "checkoutParents": [base, candidate]})
+                            self.assertEqual(commands[-1][0], "/usr/bin/plutil")
+                        else:
+                            self.assertNotIn("sourceAttribution", receipt)
+                            self.assertTrue(all(command[0] == "git" for command in commands))
+
+
 class GuideAcceptanceParserTests(unittest.TestCase):
     """Deliberately fabricated parser inputs, never represented as native observations."""
 
@@ -227,6 +302,40 @@ class GuideAcceptanceParserTests(unittest.TestCase):
                                  {"terminationCalls": 1, "elapsed": after, "terminated": True})
                 if expected_exit:
                     self.assertIn("180-second entire native acceptance case exceeded", result.stderr)
+
+    def test_observation_wait_evaluates_ready_immediately_and_preserves_pending_deadline_failure(self):
+        for mode, code, evaluations, waits, elapsed in (
+            ("ready", 0, 1, 0, 179), ("pending", 0, 1, 1, 179.5), ("false", 1, 1, 1, 179.5),
+            ("expired", 1, 0, 0, 180), ("late-ready", 1, 1, 0, 180),
+            ("late-pending", 1, 1, 1, 180), ("cancelled", 1, 1, 1, 179),
+        ):
+            with self.subTest(mode=mode):
+                result = subprocess.run([str(self.binary), "--observation-control", mode],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, code, result.stderr)
+                expected = dict(evaluations=evaluations, waits=waits, elapsed=elapsed)
+                if waits:
+                    expected["timeout"] = 1
+                self.assertEqual(json.loads(result.stdout), expected)
+                if mode in ("expired", "late-ready", "late-pending"):
+                    self.assertIn("180-second entire native acceptance case exceeded", result.stderr)
+                elif mode == "false":
+                    self.assertIn("Native acceptance observation did not arrive", result.stderr)
+                elif mode == "cancelled":
+                    self.assertIn("CancellationError", result.stderr)
+
+    def test_public_exposure_rejects_recorded_duplicate_shape_despite_valid_host_counts(self):
+        for case, document in self.documents.items():
+            original = copy.deepcopy(document)
+            for labels in (["Exposed", "Ignored", "Ignored"], ["Exposed", "Exposed"], ["Ignored"], []):
+                with self.subTest(case=case, labels=labels):
+                    self.documents[case] = copy.deepcopy(original)
+                    for stage in self.documents[case]["stages"]:
+                        stage["consumer"]["controlNodes"] = [
+                            self.node("guide-acceptance-oracle-action", label=label, y=20) for label in labels
+                        ]
+                    self.assertNotEqual(self.swift(case).returncode, 0)
+            self.documents[case] = original
 
     def test_scrolled_copy_stages_do_not_require_offscreen_recheck_to_remain_exposed(self):
         for record in self.documents["statuses"]["stages"]:
@@ -557,7 +666,7 @@ class GuideUIValidationTests(unittest.TestCase):
         original_runner = self.runner
         timestamp_cases = tuple(f"{case}-timestamps-{order}" for case in acceptance.PRODUCERS
                                 for order in ("chronological", "equal", "reversed", "adjacent-swapped"))
-        positive_faults = (None, "compile-only", "PR-good",
+        positive_faults = (None, "compile-only", "PR-good", "hosted-schema-spelling",
                            *[fault for fault in timestamp_cases if fault.endswith(("-chronological", "-equal"))])
         for fault in (None, "dirty-before", "dirty-after", "head-after", "missing-stage",
                       "extra-case", "native-exit", "compile-only", "PR-good", "PR-wrong-parent",
@@ -565,7 +674,8 @@ class GuideUIValidationTests(unittest.TestCase):
                       "attachment-payload-drift", "attachment-wrong-config", "attachment-late",
                       "export-statuses", "export-recheck", "export-both",
                       "PR-export-statuses", "PR-export-recheck", "PR-export-both",
-                      "product-mutated", "product-missing", "product-redirected", *timestamp_cases):
+                      "product-mutated", "product-missing", "product-redirected", "hosted-schema-spelling",
+                      "attachment-unknown-shape", *timestamp_cases):
             self.directory = base / ("scopes-" + invocation) / "guide-acceptance"
             status_reads = 0
             head_reads = 0
@@ -641,10 +751,16 @@ class GuideUIValidationTests(unittest.TestCase):
                                              + ("Wrong/test" if fault == "attachment-wrong-url" else identity.removesuffix("()")),
                         "attachments": attachments
                     }]))
+                    if fault == "attachment-unknown-shape":
+                        (export / "manifest.json").write_text(json.dumps({"unknownSchema": attachments}))
                     code = 65 if export_fault in ("export-" + case, "export-both") else 0
+                    if fault == "hosted-schema-spelling" and "--schema-version" in command:
+                        code = 1
                     exports.append((case, code))
                     return subprocess.CompletedProcess(command, code, stdout="complete synthetic export\n",
-                                                       stderr="synthetic export failure\n" if code else "")
+                                                       stderr=("Unknown schema version provided: 0.4.0\n"
+                                                               if fault == "hosted-schema-spelling" and code
+                                                               else "synthetic export failure\n" if code else ""))
                 response = original_runner(command, **kwargs)
                 if "test-without-building" in command:
                     response.returncode = 65 if fault == "native-exit" else 0

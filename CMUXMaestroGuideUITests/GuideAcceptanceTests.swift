@@ -28,10 +28,12 @@ final class GuideAcceptanceTests: XCTestCase {
             return value
         }
         func wait(_ object: Any, _ predicate: NSPredicate) throws {
-            let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: object)],
-                                       timeout: try remaining())
-            _ = try remaining()
-            try Evidence.require(result == .completed, "Native acceptance observation did not arrive")
+            try Evidence.waitForObservation(remaining: remaining, evaluate: {
+                predicate.evaluate(with: object)
+            }, pending: { timeout in
+                XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: object)],
+                               timeout: timeout) == .completed
+            })
         }
         func unique(_ query: XCUIElementQuery) throws -> XCUIElement {
             try wait(query, NSPredicate(format: "count == 1"))
