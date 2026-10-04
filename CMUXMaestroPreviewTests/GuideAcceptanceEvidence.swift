@@ -9,6 +9,23 @@ struct GuideAcceptanceEvidence: Codable {
         let description: String
     }
 
+    /// Shared by the real producer and non-GUI controls of normally returning teardown.
+    struct Finalization {
+        private(set) var terminated = false
+
+        mutating func terminate(_ action: () -> Void) {
+            if !terminated {
+                terminated = true
+                action()
+            }
+        }
+
+        mutating func finish(remaining: () throws -> Double, terminate action: () -> Void) throws {
+            terminate(action)
+            _ = try remaining()
+        }
+    }
+
     struct Rect: Codable, Equatable {
         var x: Double
         var y: Double

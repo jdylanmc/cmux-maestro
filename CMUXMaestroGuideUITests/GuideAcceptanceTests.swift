@@ -69,7 +69,8 @@ final class GuideAcceptanceTests: XCTestCase {
         ]
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         var stages: [Evidence.Stage] = []
-        defer { app.terminate() }
+        var finalization = Evidence.Finalization()
+        defer { finalization.terminate { app.terminate() } }
         do {
             app.launch()
             _ = try remaining()
@@ -166,6 +167,7 @@ final class GuideAcceptanceTests: XCTestCase {
             // Closing the final observed window precedes reading this fixed completion artifact.
             let completion = try JSONDecoder().decode(Evidence.Completion.self,
                 from: Data(contentsOf: output.appendingPathComponent(caseName + "-completion.json")))
+            try finalization.finish(remaining: remaining) { app.terminate() }
             var evidence = Evidence(schemaVersion: 1, invocation: invocation, producer: producer,
                                     sourceHead: head, sourceTree: tree, elapsed: ProcessInfo.processInfo.systemUptime - started,
                                     stages: stages, completion: completion)
@@ -183,15 +185,22 @@ final class GuideAcceptanceTests: XCTestCase {
             failure.name = "guide-acceptance-failure"
             failure.lifetime = .keepAlways
             add(failure)
-            let abort = app.buttons.matching(identifier: "guide-acceptance-abort")
-            if abort.count == 1 && abort.element.isHittable {
-                abort.element.click()
-                let time = max(0, deadline - ProcessInfo.processInfo.systemUptime)
-                let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 0"),
-                    object: app.windows.matching(identifier: "guide-acceptance-window"))
-                let result = XCTWaiter.wait(for: [closed], timeout: time)
-                if result != .completed {
-                    XCTFail("Synthetic failure cleanup was not observed within the original case budget.")
+            if !finalization.terminated && ProcessInfo.processInfo.systemUptime < deadline {
+                let abort = app.buttons.matching(identifier: "guide-acceptance-abort")
+                if abort.count == 1 && abort.element.isHittable
+                    && ProcessInfo.processInfo.systemUptime < deadline {
+                    abort.element.click()
+                    let time = max(0, deadline - ProcessInfo.processInfo.systemUptime)
+                    let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 0"),
+                        object: app.windows.matching(identifier: "guide-acceptance-window"))
+                    let result = XCTWaiter.wait(for: [closed], timeout: time)
+                    if result != .completed {
+                        let cleanup = XCTAttachment(string:
+                            "Synthetic failure cleanup was not observed within the original case budget; original error: \(error)")
+                        cleanup.name = "guide-acceptance-cleanup-failure"
+                        cleanup.lifetime = .keepAlways
+                        add(cleanup)
+                    }
                 }
             }
             throw error

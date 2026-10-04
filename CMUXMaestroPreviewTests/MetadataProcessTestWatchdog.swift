@@ -75,6 +75,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         let lastSampleAge: String?
         var sampleStatus: String
         var sample: String?
+        var sampleReadError: String?
         var samplerPID: Int32?
         var samplerReaped: Bool?
         var samplerSignalError: Int32?
@@ -115,7 +116,13 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
                 report.samplerReaped = status != nil
                 report.sampleStatus = "timed-out/" + (status.map(Self.exitDescription) ?? "reap-unconfirmed")
             }
-            report.sample = try String(contentsOf: sampleURL, encoding: .utf8)
+            save(report)
+            do {
+                report.sample = try String(contentsOf: sampleURL, encoding: .utf8)
+            } catch {
+                report.sampleReadError = String(describing: error)
+                Self.log("Metadata stall sample read failed: \(error)")
+            }
         } catch {
             report.sampleStatus = "failed: \(error)"
             Self.log("Metadata stall sampling failed: \(error)")

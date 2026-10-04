@@ -309,8 +309,10 @@ without opening windows, use `./scripts/test-copilot-setup.sh --compile-only`.
 The native wrapper's closed `--acceptance` mode selects exactly the two producers;
 default mode explicitly selects only the unchanged readiness case below.
 Each full native case has one shared 180-second budget, including all scenarios,
-actions, captures and observations. Synchronous public operations are checked
-after returning, not claimed to be preemptible.
+actions, captures, observations and application teardown. Successful termination
+is checked immediately against that same deadline before final elapsed evidence;
+subsequent validation and attachments retain their final deadline checks.
+Synchronous public operations are not claimed to be preemptible.
 
 Fresh acceptance requires clean source before and after execution, exact source
 inventory/hashes, built product namespaces/hashes, attributable push or PR
@@ -318,6 +320,8 @@ synthetic-merge parents, exact native identities/counts/exits, ordered complete
 stages, original validator/control executions and all 48 image provenance/hashes.
 Identical legitimate pixel hashes are allowed. Failed native production still
 runs the integrated suite; missing evidence fails the original validators.
+Both attachment exports are attempted and retained, but either nonzero exit
+rejects acceptance even when the exported files otherwise look complete.
 The existing integrated artifact retains the producer logs, xcresult and images;
 the original image artifact receives only the freshly verified guide images.
 Compilation and mocked parser negatives do **not** verify native AXPress
@@ -1705,6 +1709,9 @@ The sampler gets three seconds, then its exact unreaped child PID is killed and
 given one second to reap. A separate five-second hard bound signals any still-owned
 sampler and fails the test host even if diagnostic work stalls; unconfirmed
 cleanup remains explicit, never a success. Diagnostics
+preserve the observed sampler exit/timeout and reap state separately from an
+optional `sampleReadError`; a missing sample cannot erase that process outcome.
+The host still fails with exit 124. Diagnostics
 under `.build/tests/scoped-results/metadata-diagnostics/` are included in the
 existing scope-evidence artifact, including partial samples. Its final upload
 runs after both integrated and standalone setup tests, and also retains the
@@ -1720,6 +1727,9 @@ Both stalled controls must fail with sampled actual-runner stacks; an unexpected
 return, missing stack or outer probe timeout fails validation. The sampler-fault
 control must fail after killing and reaping its exact child while preserving
 partial output; it does not stand in for real stack-collection acceptance.
+Three additional finite fake-sampler controls distinguish exit 17 without output,
+exit 17 with output, and timeout without output. Missing-file controls require
+both the original process outcome and an explicit sample-read failure.
 
 Focused history/preference diagnostics after building the validation products
 (not a full-suite pass):

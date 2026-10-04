@@ -185,14 +185,18 @@ def run(compile_only, output, *, acceptance=False, invocation=None, runner=subpr
         scopes.reconcile(documents["summary"], selected)
         expected = set(acceptance_evidence.PRODUCERS.values()) if acceptance else {TEST_IDENTITY}
         if acceptance:
+            export_exits = {}
             for case, identity in acceptance_evidence.PRODUCERS.items():
                 export = output / ("attachments-" + case)
-                command("export-" + case, ["xcrun", "xcresulttool", "export", "attachments",
+                result = command("export-" + case, ["xcrun", "xcresulttool", "export", "attachments",
                                           "--schema-version", "0.4.0", "--path", str(output / "probe.xcresult"),
                                           "--output-path", str(export), "--test-id",
                                           acceptance_evidence.case_url(documents["tests"], identity,
                                                                        identifier_path=scopes.identifier_path)],
                         allow_failure=True)
+                export_exits[case] = result.returncode
+            metadata.require(all(code == 0 for code in export_exits.values()),
+                             "Native attachment export failed: " + str(export_exits))
             for case in acceptance_evidence.PRODUCERS:
                 acceptance_evidence.extract(output / ("attachments-" + case), case, output,
                                             identifier_path=scopes.identifier_path)

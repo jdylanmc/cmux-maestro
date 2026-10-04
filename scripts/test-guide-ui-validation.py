@@ -197,6 +197,17 @@ class GuideAcceptanceParserTests(unittest.TestCase):
         self.assertEqual(len(records), 48)
         self.assertEqual(len({item["sha256"] for item in records}), 1, "Legitimate equal hashes must be accepted.")
 
+    def test_normally_returning_teardown_spends_same_deadline_and_runs_exactly_once(self):
+        for after, expected_exit in ((179.5, 0), (180, 1), (181, 1)):
+            with self.subTest(before=179, after=after):
+                result = subprocess.run([str(self.binary), "--finalization-control", "179", str(after)],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, expected_exit, result.stderr)
+                self.assertEqual(json.loads(result.stdout),
+                                 {"terminationCalls": 1, "elapsed": after, "terminated": True})
+                if expected_exit:
+                    self.assertIn("180-second entire native acceptance case exceeded", result.stderr)
+
     def test_scrolled_copy_stages_do_not_require_offscreen_recheck_to_remain_exposed(self):
         for record in self.documents["statuses"]["stages"]:
             if record["host"]["stage"] in ("scrolled-bottom", "copy-failure", "copy-success"):
