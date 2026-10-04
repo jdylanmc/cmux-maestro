@@ -1936,7 +1936,12 @@ both events to that receiver.
 
 Each invocation preserves source hashes, command logs, six-case counts and the
 complete xcresult (including snapshot/render attachments) under
-`.build/row-input/`, uploaded as `row-input-xcuitest-evidence`. Compilation is not
+`.build/row-input/`, uploaded as `row-input-xcuitest-evidence`. Result attribution
+checks the `CMUXMaestroRowInput` plan separately from the
+`CMUXMaestroPreview` project in XCTest identifier URLs, retaining exact target,
+suite, method and execution-count checks. Version 2 fixture snapshots expose the
+first lifetime invalidation and current attachment/visibility checks without
+clearing invalidation or weakening the required `live` assertion. Compilation is not
 native acceptance. Hosted results and independent review must establish the new
 venue and any future replacement of unsupported older oracles; this addition
 does not waive their failures, prove all native invalidation interleavings, or

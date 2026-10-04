@@ -89,6 +89,23 @@ class RowInputVenueTests(unittest.TestCase):
         counts = row_input.validate_results(*self.report())
         self.assertEqual(counts["passedTests"], 6)
 
+    def test_failed_hosted_cases_are_observed_but_never_accepted(self):
+        summary, tests = self.report(status="Failed")
+        selected = row_input.observed_cases(tests)
+        self.assertEqual(len(selected), 6)
+        self.assertTrue(all(case.status == "Failed" and case.executions == ((None, "Failed"),)
+                            for case in selected))
+        self.assertEqual(scopes.reconcile(summary, selected)["failedTests"], 6)
+        with self.assertRaisesRegex(ValueError, "must each pass once"):
+            row_input.validate_results(summary, tests)
+
+    def test_only_empty_xctest_argument_suffix_is_normalized(self):
+        summary, tests = self.report()
+        case = self.bundle(tests)["children"][0]["children"][0]
+        case["nodeIdentifier"] = case["nodeIdentifier"].removesuffix("()") + "(foreign:)"
+        with self.assertRaisesRegex(ValueError, "identifier and URL disagree"):
+            row_input.validate_results(summary, tests)
+
     def test_extraction_failure_preserves_full_stderr_in_uploaded_artifacts(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         job = workflow.split("\n  row-input:\n", 1)[1].split("\n  validate:\n", 1)[0]

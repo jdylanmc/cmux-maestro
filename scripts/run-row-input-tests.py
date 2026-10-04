@@ -41,8 +41,13 @@ def require_hosted(environment):
                      "UI execution requires GitHub-hosted macOS; no UI access was attempted.")
 
 
+def observed_cases(document):
+    return scopes.cases(document, expected_project="CMUXMaestroPreview",
+                        expected_plan="CMUXMaestroRowInput", strict_suite=True)
+
+
 def validate_results(summary, document):
-    selected = scopes.cases(document)
+    selected = observed_cases(document)
     counts = scopes.reconcile(summary, selected)
     expected = {f"{TARGET}/RowInputUITests/{method}" for method in METHODS}
     metadata.require({case.identity.removesuffix("()") for case in selected} == expected,
@@ -131,7 +136,7 @@ def run(build_only):
         code = execute("test-without-building", [*command, "test-without-building",
                                                 "-resultBundlePath", str(bundle)], environment=environment)
         summary, tests = scopes.read_result(bundle, directory, "row-input", subprocess.run)
-        selected = scopes.cases(tests)
+        selected = observed_cases(tests)
         evidence["observedCounts"] = scopes.reconcile(summary, selected)
         evidence["observedCases"] = [{"identity": case.identity, "status": case.status,
                                       "executions": case.executions} for case in selected]

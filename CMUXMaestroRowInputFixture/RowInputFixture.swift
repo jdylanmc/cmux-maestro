@@ -18,6 +18,8 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
     private var inputs: [RowInputEvidence.Input] = []
     private var overflow = false
     private var invalidated = false
+    private var firstInvalidation: RowInputEvidence.Invalidation?
+    private var setupComplete = false
 
     init(caseID: UUID) { self.caseID = caseID }
 
@@ -65,6 +67,7 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
               owner.makeFirstResponder(title) else {
             fatalError("Production fixture title was not attached as a native responder")
         }
+        setupComplete = true
     }
 
     private func makeWindow(id: String, origin: CGPoint) -> RowInputWindow {
@@ -137,7 +140,7 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
               candidate.items.contains(where: { item in
                   item.submenu?.items.contains(where: { $0.target === presenter }) == true
               }) else { return }
-        guard menu == nil else { invalidated = true; return }
+        guard menu == nil else { invalidate(.overlappingMenu); return }
         menu = candidate
         opens += 1
     }
@@ -148,13 +151,26 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
         menu = nil
     }
 
-    @objc private func windowClosed(_ notification: Notification) { invalidated = true }
-    @objc private func lifetimeEnded(_ notification: Notification) { invalidated = true }
+    private func invalidate(_ reason: RowInputEvidence.Invalidation.Reason) {
+        invalidated = true
+        if firstInvalidation == nil {
+            firstInvalidation = .init(reason: reason, uptime: ProcessInfo.processInfo.systemUptime,
+                                      setupComplete: setupComplete, applicationActive: NSApp.isActive,
+                                      ownerKey: owner.isKeyWindow)
+        }
+    }
+
+    @objc private func windowClosed(_ notification: Notification) { invalidate(.windowClosed) }
+    @objc private func lifetimeEnded(_ notification: Notification) {
+        invalidate(notification.name == NSApplication.didResignActiveNotification
+                   ? .applicationResigned : .screenParametersChanged)
+    }
 
     private func snapshot() -> String {
         var live = !invalidated && NSApp.isActive && owner.isVisible && foreign.isVisible
             && ownerReceiver.superview === owner.contentView && foreignReceiver.superview === foreign.contentView
             && evidenceView.window === owner
+        var failedRowIDs: [String] = []
         let rows = hosts.compactMap { entry -> RowInputEvidence.Row? in
             let found = controls(in: entry.view)
             guard found.anchors.count == 1, found.titles.count == 1,
@@ -165,6 +181,7 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
                   entry.view.superview === window.contentView,
                   !anchor.visibleRect.isEmpty, !title.visibleRect.isEmpty else {
                 live = false
+                failedRowIDs.append(entry.id)
                 return nil
             }
             return .init(id: entry.id, windowNumber: window.windowNumber,
@@ -175,7 +192,14 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
                          frame: anchor.convert(anchor.bounds, to: nil), titleFrame: title.convert(title.bounds, to: nil))
         }
         let evidence = RowInputEvidence(
-            version: 1, caseID: caseID, live: live && rows.count == 3, rows: rows,
+            version: 2, caseID: caseID, live: live && rows.count == 3,
+            lifetime: .init(invalidated: invalidated, firstInvalidation: firstInvalidation,
+                            applicationActive: NSApp.isActive, ownerVisible: owner.isVisible,
+                            foreignVisible: foreign.isVisible,
+                            ownerReceiverAttached: ownerReceiver.superview === owner.contentView,
+                            foreignReceiverAttached: foreignReceiver.superview === foreign.contentView,
+                            evidenceAttached: evidenceView.window === owner, failedRowIDs: failedRowIDs),
+            rows: rows,
             ownerFrame: owner.frame, foreignFrame: foreign.frame, ownerKey: owner.isKeyWindow,
             opens: opens, closes: closes, tracking: menu != nil, actions: actions,
             activations: activations, dismissals: dismissals,
