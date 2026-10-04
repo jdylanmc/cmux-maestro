@@ -1562,6 +1562,34 @@ Enabled runs require its exact identity with one nonparameterized passed
 execution; an absent benchmark also fails coverage. No other optional-test
 exception is inferred.
 
+The metadata supervision regression has a test-only, executor-independent
+30-second bound for each subcase. A stall records the subcase, real deadline
+sample count/age and a one-second all-thread sample before exiting the test
+host unsuccessfully. The 30 seconds is a diagnostic capture budget, not a new
+provider deadline: it exceeds twice the observed 12.002-second passing integrated
+test, leaving contention headroom while the original 2-second and 0.1-second
+subcase deadlines still determine their results. Progress never renews the
+diagnostic budget; hosted behavior still needs verification.
+The sampler gets three seconds, then its exact unreaped child PID is killed and
+given one second to reap. A separate five-second hard bound signals any still-owned
+sampler and fails the test host even if diagnostic work stalls; unconfirmed
+cleanup remains explicit, never a success. Diagnostics
+under `.build/tests/scoped-results/metadata-diagnostics/` are included in the
+existing scope-evidence artifact, including partial samples. Its final upload
+runs after both integrated and standalone setup tests, and also retains the
+complete `.build/setup-tests/metadata-watchdog/` control evidence directory.
+The required artifact names and missing-file failure behavior remain unchanged.
+This exposes a
+blocked boundary; it does not establish or repair the cause of a prior CI hang.
+Production timeouts, cleanup and all original assertions remain unchanged.
+`test-copilot-setup.sh` also runs disposable Foundation-only controls: successful
+disarming, a stalled injected clock, continued polling of a frozen clock, and
+a real stuck sampler that writes partial output before ignoring termination.
+Both stalled controls must fail with sampled actual-runner stacks; an unexpected
+return, missing stack or outer probe timeout fails validation. The sampler-fault
+control must fail after killing and reaping its exact child while preserving
+partial output; it does not stand in for real stack-collection acceptance.
+
 Focused history/preference diagnostics after building the validation products
 (not a full-suite pass):
 

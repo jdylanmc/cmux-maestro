@@ -38,11 +38,18 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feat
     "$ROOT/CMUXMaestroPreviewTests/CopilotHookTests.swift" \
     "$ROOT/CMUXMaestroPreviewTests/CopilotSetupTests.swift" \
     "$ROOT/CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift" \
+    "$ROOT/CMUXMaestroPreviewTests/MetadataProcessTestWatchdog.swift" \
     "$ROOT/CMUXMaestroPreviewTests/MaestroAppLifecycleTests.swift" \
     "$ROOT/CMUXMaestroPreviewTests/SidebarAppKitTestScope.swift" \
     "$ROOT/CMUXMaestroPreviewTests/WorkerLaunchSettingsTests.swift" \
     "$ROOT/scripts/CopilotSetupTestMain.swift" -o "$OUTPUT/setup-tests"
+xcrun swiftc -g -parse-as-library \
+    -I "$OUTPUT" -L "$OUTPUT" -lCMUXMaestroPreview \
+    "$ROOT/CMUXMaestroPreviewTests/MetadataProcessTestWatchdog.swift" \
+    "$ROOT/scripts/MetadataWatchdogProbe.swift" -o "$OUTPUT/metadata-watchdog-probe"
 if [[ "${1:-}" == "--compile-only" ]]; then
     exit 0
 fi
+python3 "$ROOT/scripts/test-metadata-watchdog.py" \
+    --probe "$OUTPUT/metadata-watchdog-probe" --results-root "$OUTPUT/metadata-watchdog"
 "$OUTPUT/setup-tests"
