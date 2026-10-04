@@ -437,6 +437,8 @@ final class GuideAcceptanceFixture {
             let before = try NativeNode.nodes(from: exposure).filter {
                 $0.record.identifier == "guide-acceptance-oracle-action"
             }.count
+            try Evidence.require(exposure.accessibilityChildren()?.isEmpty == true,
+                                 "Ignored control leaked into public children")
             try Evidence.require(exposure.accessibilityChildrenInNavigationOrder()?.isEmpty == true,
                                  "Ignored control leaked into native navigation")
             exposure.exposed = [ignored, exposed]
@@ -444,6 +446,9 @@ final class GuideAcceptanceFixture {
                 $0.record.identifier == "guide-acceptance-oracle-action"
             }
             try Evidence.require(after.count == 1 && after[0].object === exposed, "Fixture exposure boundary differs")
+            let children = exposure.accessibilityChildren() ?? []
+            try Evidence.require(children.count == 1 && children.first as? NSView === exposed,
+                                 "Public children did not expose the exact positive control")
             let navigation = exposure.accessibilityChildrenInNavigationOrder() ?? []
             try Evidence.require(navigation.count == 1 && navigation.first as? NSView === exposed,
                                  "Native child and navigation exposure disagree")
@@ -620,10 +625,12 @@ final class GuideAcceptanceFixture {
 
     private final class ExposureView: NSView {
         var exposed: [NSView] = []
-        override func accessibilityChildren() -> [Any]? { exposed }
-        // AppKit's default navigation projection otherwise discovers raw NSButton/cell descendants.
+        // Clients receive AXChildren directly; the host traversal's later unignored pass cannot repair it.
+        override func accessibilityChildren() -> [Any]? {
+            NSAccessibility.unignoredChildren(from: exposed)
+        }
         override func accessibilityChildrenInNavigationOrder() -> [any NSAccessibilityElementProtocol]? {
-            NSAccessibility.unignoredChildren(from: exposed).compactMap { $0 as? any NSAccessibilityElementProtocol }
+            accessibilityChildren()?.compactMap { $0 as? any NSAccessibilityElementProtocol }
         }
     }
 

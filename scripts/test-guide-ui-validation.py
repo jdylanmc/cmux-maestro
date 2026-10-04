@@ -327,14 +327,19 @@ class GuideAcceptanceParserTests(unittest.TestCase):
     def test_public_exposure_rejects_recorded_duplicate_shape_despite_valid_host_counts(self):
         for case, document in self.documents.items():
             original = copy.deepcopy(document)
-            for labels in (["Exposed", "Ignored", "Ignored"], ["Exposed", "Exposed"], ["Ignored"], []):
+            for labels in (["Exposed", "Ignored", "Ignored"], ["Exposed", "Ignored"],
+                           ["Exposed", "Exposed"], ["Ignored"], []):
                 with self.subTest(case=case, labels=labels):
                     self.documents[case] = copy.deepcopy(original)
                     for stage in self.documents[case]["stages"]:
                         stage["consumer"]["controlNodes"] = [
                             self.node("guide-acceptance-oracle-action", label=label, y=20) for label in labels
                         ]
-                    self.assertNotEqual(self.swift(case).returncode, 0)
+                    result = self.swift(case)
+                    self.assertNotEqual(result.returncode, 0)
+                    message = ("Consumer accepted a raw omitted/ignored node" if labels == ["Ignored"] else
+                               "Missing/duplicate exposed identifier: guide-acceptance-oracle-action")
+                    self.assertIn(message, result.stderr)
             self.documents[case] = original
 
     def test_scrolled_copy_stages_do_not_require_offscreen_recheck_to_remain_exposed(self):

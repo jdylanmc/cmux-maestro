@@ -317,10 +317,15 @@ already-ready observations do not incur the predicate waiter's initial delay.
 Pending observations still use the remaining shared budget. Both immediate
 evaluation and normally returning waits are checked for late completion.
 Synchronous public operations are not claimed to be preemptible.
-The synthetic exposure control supplies an explicit unignored navigation order
-and leaf buttons, while retaining raw omitted/ignored controls and the host's
-unignored-child traversal. Complete public snapshots must still contain exactly
-one exposed positive control; the consumer never filters duplicate controls.
+The synthetic exposure control returns unignored children from its public
+`accessibilityChildren()` getter and uses that same projection for navigation.
+Filtering only inside the host's traversal or navigation getter does not remove
+ignored objects from the public children attribute. The raw omitted/ignored
+controls, their attributes/actions, and leaf buttons remain intact. Complete
+public snapshots must still contain exactly one exposed positive control; the
+consumer never filters duplicate controls. Local parser checks reject both the
+recorded two-node and earlier three-node failures; only fresh hosted snapshots
+can establish that the public projection is repaired.
 
 Fresh acceptance requires clean source before and after execution, exact source
 inventory/hashes, built product namespaces/hashes, attributable push or PR
