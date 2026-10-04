@@ -24,6 +24,7 @@ else
         "$ROOT/CMUXMaestroPreviewTests/CopilotHookTests.swift"
         "$ROOT/CMUXMaestroPreviewTests/CopilotSetupTests.swift"
         "$ROOT/CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift"
+        "$ROOT/CMUXMaestroPreviewTests/MetadataProcessTestWatchdog.swift"
         "$ROOT/CMUXMaestroPreviewTests/MaestroAppLifecycleTests.swift"
         "$ROOT/CMUXMaestroPreviewTests/SidebarAppKitTestScope.swift"
         "$ROOT/CMUXMaestroPreviewTests/WorkerLaunchSettingsTests.swift"
@@ -59,7 +60,17 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feat
     -external-plugin-path "$TOOLCHAIN/lib/swift/host/plugins/testing#$TOOLCHAIN/bin/swift-plugin-server" \
     -Xlinker -rpath -Xlinker "$FRAMEWORKS" \
     "${TEST_SOURCES[@]}" -o "$OUTPUT/setup-tests"
+if [[ "${1:-}" != "--guide-only" ]]; then
+    xcrun swiftc -g -parse-as-library \
+        -I "$OUTPUT" -L "$OUTPUT" -lCMUXMaestroPreview \
+        "$ROOT/CMUXMaestroPreviewTests/MetadataProcessTestWatchdog.swift" \
+        "$ROOT/scripts/MetadataWatchdogProbe.swift" -o "$OUTPUT/metadata-watchdog-probe"
+fi
 if [[ "${1:-}" == "--compile-only" ]]; then
     exit 0
+fi
+if [[ "${1:-}" != "--guide-only" ]]; then
+    python3 "$ROOT/scripts/test-metadata-watchdog.py" \
+        --probe "$OUTPUT/metadata-watchdog-probe" --results-root "$OUTPUT/metadata-watchdog"
 fi
 "$OUTPUT/setup-tests"

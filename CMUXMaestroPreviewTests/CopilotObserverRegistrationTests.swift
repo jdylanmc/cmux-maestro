@@ -2058,6 +2058,10 @@ struct CopilotObserverRegistrationTests {
     }
 
     @Test func metadataProcessUsesSupervisorForSuccessTimeoutAndMalformedOutput() async throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let watchdog = try MetadataProcessTestWatchdog(directory: repository.appendingPathComponent(
+            ".build/tests/scoped-results/metadata-diagnostics/\(UUID().uuidString)"))
+        defer { watchdog.finish() }
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let server = fixture.directory.appendingPathComponent("metadata-server")
         let responses = fixture.directory.appendingPathComponent("responses")
@@ -2076,18 +2080,21 @@ struct CopilotObserverRegistrationTests {
             try fixture.write(Data("#!/bin/sh\n\(body)\n".utf8), to: server)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: server.path)
         }
+        watchdog.begin("success")
         try script("/bin/cat \(CopilotPluginManifest.shellQuoted(responses.path))\n/bin/cat >/dev/null")
-        let runner = LocalCopilotSetupRunner(timeout: 2)
+        let runner = LocalCopilotSetupRunner(timeout: 2, deadlineNow: { watchdog.now() })
         guard case .value(let metadata) = await runner.metadata(executable: server, path: "/usr/bin:/bin") else {
             Issue.record("Expected bounded metadata response"); return
         }
         #expect(metadata.supported)
+        watchdog.begin("malformed-output")
         try script("printf 'Content-Length: 999999\\r\\n\\r\\n'\n/bin/cat >/dev/null")
         guard case .failed(.unavailable) = await runner.metadata(executable: server, path: "/usr/bin:/bin") else {
             Issue.record("Oversized metadata must fail closed"); return
         }
+        watchdog.begin("timeout-cleanup")
         try script("trap '' TERM\n/bin/sleep 10 &\nwait")
-        let short = LocalCopilotSetupRunner(timeout: 0.1, terminationGrace: 0.02)
+        let short = LocalCopilotSetupRunner(timeout: 0.1, terminationGrace: 0.02, deadlineNow: { watchdog.now() })
         guard case .failed(.timedOut) = await short.metadata(executable: server, path: "/usr/bin:/bin") else {
             Issue.record("Metadata must retain supervised deadline"); return
         }

@@ -34,21 +34,24 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
-      - name: Upload integrated test scope evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: integrated-test-scope-evidence
-          path: .build/tests/scoped-results/**/*.json
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 14
       - name: Verify Settings guide and setup process isolation
         run: ./scripts/test-copilot-setup.sh
       - name: Verify compiled hooks fail open
         run: ./scripts/test-copilot-hook.sh
       - name: Verify shared file traversal under narrow sandbox grants
         run: ./scripts/test-copilot-sandbox.sh
+      - name: Upload integrated test scope evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integrated-test-scope-evidence
+          path: |
+            .build/tests/scoped-results/**/*.json
+            .build/tests/scoped-results/**/*.txt
+            .build/setup-tests/metadata-watchdog/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   guide-ui-consumer-probe:
     runs-on: macos-latest

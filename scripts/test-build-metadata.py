@@ -563,10 +563,13 @@ class BuildMetadataTests(unittest.TestCase):
 
     def test_ci_always_uploads_json_evidence_and_retains_required_png_artifact(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
         steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
         for title, name, path in (
             ("Upload integrated test scope evidence", "integrated-test-scope-evidence",
-             ".build/tests/scoped-results/**/*.json"),
+             "|\n            .build/tests/scoped-results/**/*.json\n"
+             "            .build/tests/scoped-results/**/*.txt\n"
+             "            .build/setup-tests/metadata-watchdog/"),
             ("Upload synthetic sidebar layout renders", "sidebar-layout-offscreen",
              ".build/layout-validation/offscreen/*.png"),
         ):
@@ -583,6 +586,24 @@ class BuildMetadataTests(unittest.TestCase):
                     "          if-no-files-found: error\n"
                     "          retention-days: 14\n"
                 ])
+
+    def test_ci_collects_final_metadata_diagnostics_after_both_producers(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
+        steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
+        uploads = [(index, step) for index, step in enumerate(steps)
+                   if "          name: integrated-test-scope-evidence\n" in step]
+        self.assertEqual(len(uploads), 1, "One final upload must collect both diagnostic producers.")
+        upload_index, upload = uploads[0]
+        for command in ("./scripts/test.sh", "./scripts/test-copilot-setup.sh"):
+            with self.subTest(producer=command):
+                producers = [index for index, step in enumerate(steps) if f"        run: {command}\n" in step]
+                self.assertEqual(len(producers), 1)
+                self.assertLess(producers[0], upload_index, "An earlier upload cannot retain later partial diagnostics.")
+        setup = (ROOT / "scripts/test-copilot-setup.sh").read_text()
+        self.assertIn('OUTPUT="$ROOT/.build/setup-tests"', setup)
+        self.assertIn('--results-root "$OUTPUT/metadata-watchdog"', setup)
+        self.assertIn("            .build/setup-tests/metadata-watchdog/\n", upload)
 
     def test_app_bridge_markers_are_wired_as_input_plist_in_both_configurations(self):
         project = json.loads(subprocess.check_output([

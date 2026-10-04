@@ -337,7 +337,9 @@ struct SidebarLayoutRenderingTests {
             let viewport = scroll.contentView.bounds
             let changedStyle: NSScroller.Style = style == .overlay ? .legacy : .overlay
             scroll.scrollerStyle = changedStyle
-            try await Task.sleep(for: .milliseconds(20))
+            // Sample this applied input before yielding to a later native recommendation.
+            try #require(scroll.scrollerStyle == changedStyle)
+            scroll.tile()
             host.layoutSubtreeIfNeeded()
             #expect(scroll.scrollerStyle == changedStyle)
             #expect(style == .overlay

@@ -384,20 +384,32 @@ struct SidebarCopilotTreeTests {
     @Test
     func hideShowDropsLateResultAndCooperativeCancellationAllowsNewTopology() async {
         let harness = SidebarReadHarness()
-        let poller = SidebarCopilotPolling(read: neutralRead { try await harness.read($0) })
+        let clock = CopilotReaderTestClock()
+        let poller = SidebarCopilotPolling(
+            read: neutralRead { try await harness.read($0) },
+            pause: { try await sidebarFrozenExpiry(0) },
+            expiryPause: sidebarFrozenExpiry,
+            now: { clock.now() }
+        )
         poller.update(topology: fixtures.topology(), connected: true)
         poller.setVisible(true)
         await sidebarEventually { await harness.callCount == 1 }
         poller.setVisible(false)
         poller.setVisible(true)
-        await harness.succeed(0, with: fixtures.snapshot(sessions: [fixtures.session()]))
+        await harness.succeed(0, with: fixtures.snapshot(
+            sessions: [fixtures.session(now: clock.now())], now: clock.now()
+        ))
         await sidebarEventually { await harness.callCount == 2 }
         #expect(poller.tree.sessions.isEmpty)
-        await harness.succeed(1, with: fixtures.snapshot(sessions: [fixtures.session()]))
+        await harness.succeed(1, with: fixtures.snapshot(
+            sessions: [fixtures.session(now: clock.now())], now: clock.now()
+        ))
         await sidebarEventually { poller.tree.sessions.count == 1 }
         poller.setVisible(false)
         #expect(poller.tree.availability == .hidden)
         await sidebarEventually { !poller.isReading }
+        #expect(await harness.callCount == 2)
+        await harness.finishPending()
 
         let cooperative = SidebarCancellationHarness()
         let next = SidebarCopilotPolling(read: neutralRead { try await cooperative.read($0) })
