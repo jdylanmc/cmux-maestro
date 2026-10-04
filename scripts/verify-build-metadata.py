@@ -19,6 +19,10 @@ PROFILES = {
     "unsigned": (".Validation.Unsigned", BASE_ID + ".validation.unsigned.sidebar"),
     "tests": (".Validation.Tests", BASE_ID + ".validation.tests.sidebar"),
 }
+ROW_INPUT_TARGETS = {
+    "CMUXMaestroRowInputFixture": BASE_ID + ".Validation.RowInputFixture",
+    "CMUXMaestroRowInputUITests": BASE_ID + ".Validation.RowInputUITests",
+}
 ORCHESTRATION_READ_PATH = "/Library/Application Support/CMUXMaestroPreview/Orchestration/observer/"
 READ_PATHS = [
     "/Library/Application Support/CMUXMaestroPreview/Copilot/",
@@ -229,6 +233,49 @@ def verify_guide_ui_products(products):
     resources = host / "Contents/Resources"
     require(not resources.exists() or not list(resources.iterdir()), "Synthetic host has unexpected resources.")
     return records
+
+
+def verify_row_input_settings(rows):
+    targets = {row["target"]: row["buildSettings"] for row in rows}
+    for name, identifier in ROW_INPUT_TARGETS.items():
+        require(name in targets, f"Missing row input target: {name}.")
+        settings = targets[name]
+        require(settings.get("PRODUCT_BUNDLE_IDENTIFIER") == identifier,
+                "Row input target escaped its fixed validation namespace.")
+        require(settings.get("CODE_SIGNING_ALLOWED") == "NO"
+                and settings.get("CODE_SIGNING_REQUIRED") == "NO"
+                and settings.get("SKIP_INSTALL") == "YES",
+                "Row input targets must remain unsigned and non-installable.")
+        require(settings.get("ENABLE_APP_SANDBOX") == "NO", "Unexpected row input sandbox profile.")
+    fixture = targets["CMUXMaestroRowInputFixture"]
+    conditions = fixture.get("SWIFT_ACTIVE_COMPILATION_CONDITIONS", "")
+    require("CMUX_VALIDATION" in (conditions.split() if isinstance(conditions, str) else conditions),
+            "Row fixture must compile validation-only observations.")
+    require(targets["CMUXMaestroRowInputUITests"].get("TEST_TARGET_NAME") == "CMUXMaestroRowInputFixture",
+            "UI tests must target only the isolated fixture.")
+
+
+def verify_row_input_products(products):
+    products = Path(products)
+    app = products / "CMUXMaestroRowInputFixture.app"
+    tests = products / "CMUXMaestroRowInputUITests-Runner.app/Contents/PlugIns/CMUXMaestroRowInputUITests.xctest"
+    for name, path, kind in (
+        ("CMUXMaestroRowInputFixture", app, "APPL"),
+        ("CMUXMaestroRowInputUITests", tests, "BNDL"),
+    ):
+        info = plist(path / "Contents/Info.plist")
+        require(info.get("CFBundleIdentifier") == ROW_INPUT_TARGETS[name]
+                and info.get("CFBundlePackageType") == kind, "Invalid built row input product identity.")
+        require(info.get("CFBundleExecutable") == name, "Unexpected row input executable.")
+        require((path / "Contents/MacOS" / name).is_file(), "Row input binary missing.")
+    require(not (app / "Contents/Extensions").exists() and not (app / "Contents/Helpers").exists(),
+            "The row fixture must not embed the production extension or installer helpers.")
+    runner = products / "CMUXMaestroRowInputUITests-Runner.app"
+    info = plist(runner / "Contents/Info.plist")
+    require(info.get("CFBundleIdentifier") == ROW_INPUT_TARGETS["CMUXMaestroRowInputUITests"] + ".xctrunner"
+            and info.get("CFBundlePackageType") == "APPL"
+            and info.get("CFBundleExecutable") == "CMUXMaestroRowInputUITests-Runner",
+            "UI runner escaped its validation namespace.")
 
 
 def verify_orchestration_resources(app, *, required=True):

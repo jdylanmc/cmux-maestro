@@ -20,6 +20,18 @@
 		D15500000000000000000107 = {isa = PBXBuildFile; fileRef = C06100000000000000000201; };
 		D15500000000000000000108 = {isa = PBXBuildFile; fileRef = C06100000000000000000204; };
 		D15500000000000000000109 = {isa = PBXBuildFile; fileRef = D15500000000000000000209; };
+		F14100000000000000000101 = {isa = PBXBuildFile; fileRef = C01000000000000000000011; };
+		F14100000000000000000102 = {isa = PBXBuildFile; fileRef = C01000000000000000000012; };
+		F14100000000000000000103 = {isa = PBXBuildFile; fileRef = C06100000000000000000201; };
+		F14100000000000000000104 = {isa = PBXBuildFile; fileRef = C06100000000000000000202; };
+		F14100000000000000000105 = {isa = PBXBuildFile; fileRef = C06100000000000000000203; };
+		F14100000000000000000106 = {isa = PBXBuildFile; fileRef = C08100000000000000000003; };
+		F14100000000000000000107 = {isa = PBXBuildFile; fileRef = C06100000000000000000204; };
+		F14100000000000000000108 = {isa = PBXBuildFile; fileRef = C06100000000000000000205; };
+		F14100000000000000000109 = {isa = PBXBuildFile; fileRef = C06100000000000000000206; };
+		F14100000000000000000110 = {isa = PBXBuildFile; fileRef = C06100000000000000000207; };
+		F14100000000000000000111 = {isa = PBXBuildFile; fileRef = C09300000000000000000003; };
+		F14100000000000000000112 = {isa = PBXBuildFile; productRef = C0DE47000000000000000002; };
 		C01000000000000000000001 /* AgentSessionSnapshot.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C01000000000000000000011; };
 		C01000000000000000000002 /* AgentSessionSnapshot.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C01000000000000000000011; };
 		C01000000000000000000003 /* CopilotSnapshotAdapter.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C01000000000000000000012; };
@@ -96,6 +108,7 @@
 			remoteGlobalIDString = D15500000000000000000001;
 			remoteInfo = CMUXMaestroGuideUIHost;
 		};
+		F14100000000000000000001 = {isa = PBXContainerItemProxy; containerPortal = A3685BE12FCA3AEE00009F1B; proxyType = 1; remoteGlobalIDString = F14100000000000000000010; remoteInfo = CMUXMaestroRowInputFixture; };
 		C06100000000000000000003 /* Helper Proxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = A3685BE12FCA3AEE00009F1B;
@@ -156,6 +169,8 @@
 		D15500000000000000000210 = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = CMUXMaestroGuideUIHost/GuideUIValidation.xcconfig; sourceTree = SOURCE_ROOT; };
 		D15500000000000000000211 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CMUXMaestroGuideUIHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D15500000000000000000212 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CMUXMaestroGuideUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F14100000000000000000002 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CMUXMaestroRowInputFixture.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F14100000000000000000003 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CMUXMaestroRowInputUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C01000000000000000000011 /* AgentSessionSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/Domain/AgentSessionSnapshot.swift; sourceTree = SOURCE_ROOT; };
 		C01000000000000000000012 /* CopilotSnapshotAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/CopilotSnapshotAdapter.swift; sourceTree = SOURCE_ROOT; };
 		C05700000000000000000011 /* SidebarRowActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarRowActions.swift; sourceTree = SOURCE_ROOT; };
@@ -208,6 +223,11 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		F14100000000000000000004 = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (Info.plist, Extension/CMUXMaestroSidebarExtension.swift, );
+			target = F14100000000000000000010;
+		};
 		E11400000000000000000001 /* Exceptions for "CMUXMaestroPreview" folder in "CMUXMaestroPreview" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -225,6 +245,9 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		F14100000000000000000005 = {isa = PBXFileSystemSynchronizedRootGroup; path = CMUXMaestroRowInputFixture; sourceTree = "<group>"; };
+		F14100000000000000000006 = {isa = PBXFileSystemSynchronizedRootGroup; path = CMUXMaestroRowInputUITests; sourceTree = "<group>"; };
+		F14100000000000000000007 = {isa = PBXFileSystemSynchronizedRootGroup; path = CMUXMaestroRowInputSupport; sourceTree = "<group>"; };
 		C06100000000000000000006 /* CMUXMaestroCopilotHook */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = CMUXMaestroCopilotHook;
@@ -246,6 +269,7 @@
 		A3685C252FCA3B2500009F1B /* CMUXMaestroSidebar */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
+				F14100000000000000000004 /* Validation fixture excludes the extension entry point */,
 				A3685C292FCA3B2500009F1B /* Exceptions for "CMUXMaestroSidebar" folder in "CMUXMaestroSidebar" target */,
 			);
 			path = CMUXMaestroSidebar;
@@ -256,6 +280,8 @@
 /* Begin PBXFrameworksBuildPhase section */
 		D15500000000000000000303 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		D15500000000000000000304 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		F14100000000000000000008 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (F14100000000000000000112, ); runOnlyForDeploymentPostprocessing = 0; };
+		F14100000000000000000009 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		C06100000000000000000007 /* Hook Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -310,6 +336,9 @@
 			isa = PBXGroup;
 			children = (
 				D15500000000000000000005 /* Guide UI validation */,
+				F14100000000000000000005,
+				F14100000000000000000006,
+				F14100000000000000000007,
 				C05400000000000000000004 /* adapter.mjs */,
 				C05400000000000000000005 /* extension.mjs */,
 				C09300000000000000000003 /* CopilotAssetEnvelope.swift */,
@@ -346,6 +375,8 @@
 			children = (
 				D15500000000000000000211 /* CMUXMaestroGuideUIHost.app */,
 				D15500000000000000000212 /* CMUXMaestroGuideUITests.xctest */,
+				F14100000000000000000002,
+				F14100000000000000000003,
 				A3685BE92FCA3AEE00009F1B /* CMUXMaestroPreview.app */,
 				A3685BF62FCA3AF000009F1B /* CMUXMaestroPreviewTests.xctest */,
 				A3685C242FCA3B2500009F1B /* CMUX Maestro Preview Extension.appex */,
@@ -413,6 +444,31 @@
 			name = CMUXMaestroGuideUITests;
 			productName = CMUXMaestroGuideUITests;
 			productReference = D15500000000000000000212;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		F14100000000000000000010 /* CMUXMaestroRowInputFixture */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F14100000000000000000020;
+			buildPhases = (F14100000000000000000012, F14100000000000000000008, );
+			buildRules = ();
+			dependencies = ();
+			fileSystemSynchronizedGroups = (F14100000000000000000005, F14100000000000000000007, A3685C252FCA3B2500009F1B, );
+			name = CMUXMaestroRowInputFixture;
+			packageProductDependencies = (C0DE47000000000000000002, );
+			productName = CMUXMaestroRowInputFixture;
+			productReference = F14100000000000000000002;
+			productType = "com.apple.product-type.application";
+		};
+		F14100000000000000000011 /* CMUXMaestroRowInputUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F14100000000000000000021;
+			buildPhases = (F14100000000000000000013, F14100000000000000000009, );
+			buildRules = ();
+			dependencies = (F14100000000000000000014, );
+			fileSystemSynchronizedGroups = (F14100000000000000000006, F14100000000000000000007, );
+			name = CMUXMaestroRowInputUITests;
+			productName = CMUXMaestroRowInputUITests;
+			productReference = F14100000000000000000003;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 		C06100000000000000000004 /* CMUXMaestroCopilotHook */ = {
@@ -515,6 +571,10 @@
 						CreatedOnToolsVersion = 26.5;
 						TestTargetID = D15500000000000000000001;
 					};
+					F14100000000000000000011 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = F14100000000000000000010;
+					};
 					A3685BE82FCA3AEE00009F1B = {
 						CreatedOnToolsVersion = 26.5;
 					};
@@ -546,6 +606,8 @@
 			targets = (
 				D15500000000000000000001 /* CMUXMaestroGuideUIHost */,
 				D15500000000000000000002 /* CMUXMaestroGuideUITests */,
+				F14100000000000000000010,
+				F14100000000000000000011,
 				A3685BE82FCA3AEE00009F1B /* CMUXMaestroPreview */,
 				A3685BF52FCA3AF000009F1B /* CMUXMaestroPreviewTests */,
 				A3685C232FCA3B2500009F1B /* CMUXMaestroSidebar */,
@@ -618,6 +680,20 @@
 			files = (D15500000000000000000109, D14400000000000000000102, D14400000000000000000104, );
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F14100000000000000000012 = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F14100000000000000000101, F14100000000000000000102,
+				F14100000000000000000103, F14100000000000000000104,
+				F14100000000000000000105, F14100000000000000000106,
+				F14100000000000000000107, F14100000000000000000108,
+				F14100000000000000000109, F14100000000000000000110,
+				F14100000000000000000111,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F14100000000000000000013 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		C06100000000000000000009 /* Hook Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -703,6 +779,7 @@
 			target = D15500000000000000000001;
 			targetProxy = D15500000000000000000003;
 		};
+		F14100000000000000000014 = {isa = PBXTargetDependency; target = F14100000000000000000010; targetProxy = F14100000000000000000001; };
 		C06100000000000000000012 /* Helper Dependency */ = {
 			isa = PBXTargetDependency;
 			target = C06100000000000000000004;
@@ -758,6 +835,70 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview.Validation.Tests.GuideUITests;
 				PRODUCT_NAME = CMUXMaestroGuideUITests;
 				TEST_TARGET_NAME = CMUXMaestroGuideUIHost;
+			};
+			name = Release;
+		};
+		F14100000000000000000016 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview.Validation.RowInputFixture;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) CMUX_VALIDATION";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		F14100000000000000000017 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview.Validation.RowInputFixture;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) CMUX_VALIDATION";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		F14100000000000000000018 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview.Validation.RowInputUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = CMUXMaestroRowInputFixture;
+			};
+			name = Debug;
+		};
+		F14100000000000000000019 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview.Validation.RowInputUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = CMUXMaestroRowInputFixture;
 			};
 			name = Release;
 		};
@@ -1125,6 +1266,8 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		F14100000000000000000020 = {isa = XCConfigurationList; buildConfigurations = (F14100000000000000000016, F14100000000000000000017, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+		F14100000000000000000021 = {isa = XCConfigurationList; buildConfigurations = (F14100000000000000000018, F14100000000000000000019, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
 		C06100000000000000000008 /* Hook configuration list */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (C06100000000000000000013, C06100000000000000000014, );

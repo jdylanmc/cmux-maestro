@@ -79,6 +79,13 @@ CI also requires the synthetic sidebar layout render artifact
 Visual delivery review uses applicable renders and acceptance evidence, not
 merely a successful artifact upload.
 
+The separate required `row-input` job also runs `./scripts/test-row-input.sh`
+against its validation-only application and XCUITest target. All six named
+cases must pass once with complete `row-input-xcuitest-evidence`; this supplements,
+not replaces, the eleven-command integrated gate or its unresolved native tests.
+Local `--build-only` compilation is permitted without UI execution and is not
+hosted acceptance.
+
 The formatting gate is `git diff --check` on the actual candidate diff
 (`git diff --check origin/main...HEAD` for a committed branch after refreshing
 the remote base). **No dedicated linter currently exists**; do not invent a

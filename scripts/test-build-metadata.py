@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 import uuid
@@ -21,8 +22,133 @@ spec.loader.exec_module(metadata)
 scope_spec = importlib.util.spec_from_file_location("integrated_scopes", ROOT / "scripts/run-integrated-test-scopes.py")
 scopes = importlib.util.module_from_spec(scope_spec)
 scope_spec.loader.exec_module(scopes)
+row_spec = importlib.util.spec_from_file_location("row_input", ROOT / "scripts/run-row-input-tests.py")
+row_input = importlib.util.module_from_spec(row_spec)
+row_spec.loader.exec_module(row_input)
 BENCHMARK_TEST = "CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()"
 BENCHMARK_FLAG = "CMUX_MAESTRO_READER_BENCHMARK"
+
+
+class RowInputVenueTests(unittest.TestCase):
+    def report(self, methods=None, status="Passed"):
+        methods = row_input.METHODS if methods is None else methods
+        entries = [(f"RowInputUITests/{name}()", status) for name in methods]
+        summary, tests = IntegratedTestScopeTests.report(entries)
+        tests["testNodes"][0]["nodeType"] = "UI test bundle"
+        tests["testNodes"][0]["name"] = row_input.TARGET
+        return summary, tests
+
+    def settings(self):
+        return [{"target": name, "buildSettings": {
+            "PRODUCT_BUNDLE_IDENTIFIER": identifier,
+            "CODE_SIGNING_ALLOWED": "NO", "CODE_SIGNING_REQUIRED": "NO",
+            "SKIP_INSTALL": "YES", "ENABLE_APP_SANDBOX": "NO",
+            "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG CMUX_VALIDATION",
+            "TEST_TARGET_NAME": "CMUXMaestroRowInputFixture",
+        }} for name, identifier in metadata.ROW_INPUT_TARGETS.items()]
+
+    def test_exact_six_ui_cases_pass_once(self):
+        counts = row_input.validate_results(*self.report())
+        self.assertEqual(counts["passedTests"], 6)
+
+    def test_zero_missing_extra_and_wrong_target_cannot_pass(self):
+        for methods in (set(), set(list(row_input.METHODS)[1:]), row_input.METHODS | {"testUnapproved"}):
+            with self.subTest(methods=methods), self.assertRaises(ValueError):
+                row_input.validate_results(*self.report(methods))
+        summary, tests = self.report()
+        tests["testNodes"][0]["name"] = "CMUXMaestroPreviewTests"
+        with self.assertRaises(ValueError):
+            row_input.validate_results(summary, tests)
+
+    def test_failed_skipped_expected_failure_and_duplicate_are_not_success(self):
+        for status in ("Failed", "Skipped", "Expected Failure"):
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                row_input.validate_results(*self.report(status=status))
+        summary, tests = self.report()
+        tests["testNodes"][0]["children"].append(tests["testNodes"][0]["children"][0])
+        with self.assertRaises(ValueError):
+            row_input.validate_results(summary, tests)
+
+    def test_repetition_and_miscount_are_rejected(self):
+        summary, tests = self.report()
+        tests["testNodes"][0]["children"][0]["children"] = [{"nodeType": "Repetition", "result": "Passed"}]
+        with self.assertRaises(ValueError):
+            row_input.validate_results(summary, tests)
+        summary, tests = self.report()
+        summary["passedTests"] -= 1
+        with self.assertRaises(ValueError):
+            row_input.validate_results(summary, tests)
+
+    def test_nonhosted_refuses_before_any_subprocess_or_ui_access(self):
+        for environment in ({}, {"GITHUB_ACTIONS": "true"}, {"RUNNER_ENVIRONMENT": "github-hosted"},
+                            {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted"}):
+            with self.subTest(environment=environment), patch.dict(os.environ, environment, clear=True), \
+                    patch.object(row_input.subprocess, "run") as run, \
+                    patch.object(row_input.subprocess, "check_output") as output:
+                with self.assertRaises(ValueError):
+                    row_input.run(False)
+                run.assert_not_called()
+                output.assert_not_called()
+        row_input.require_hosted({"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted"})
+
+    def test_fixed_namespace_and_noninstallation_settings(self):
+        metadata.verify_row_input_settings(self.settings())
+        for index in (0, 1):
+            for key, value in (
+                ("PRODUCT_BUNDLE_IDENTIFIER", metadata.BASE_ID),
+                ("CODE_SIGNING_ALLOWED", "YES"), ("CODE_SIGNING_REQUIRED", "YES"),
+                ("SKIP_INSTALL", "NO"), ("ENABLE_APP_SANDBOX", "YES"),
+            ):
+                rows = self.settings()
+                rows[index]["buildSettings"][key] = value
+                with self.subTest(index=index, key=key), self.assertRaises(ValueError):
+                    metadata.verify_row_input_settings(rows)
+        for rows in ([], self.settings()[:1], self.settings()[1:]):
+            with self.assertRaises(ValueError):
+                metadata.verify_row_input_settings(rows)
+        rows = self.settings()
+        rows[0]["buildSettings"]["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = "DEBUG"
+        with self.assertRaises(ValueError):
+            metadata.verify_row_input_settings(rows)
+        rows = self.settings()
+        rows[1]["buildSettings"]["TEST_TARGET_NAME"] = "CMUXMaestroPreview"
+        with self.assertRaises(ValueError):
+            metadata.verify_row_input_settings(rows)
+
+    def test_built_product_namespace_rejects_production_ids_and_embedded_helpers(self):
+        with tempfile.TemporaryDirectory(prefix="row-input-metadata-") as temporary:
+            products = Path(temporary)
+            fixture = products / "CMUXMaestroRowInputFixture.app"
+            runner = products / "CMUXMaestroRowInputUITests-Runner.app"
+            tests = runner / "Contents/PlugIns/CMUXMaestroRowInputUITests.xctest"
+            bundles = [
+                (fixture, "CMUXMaestroRowInputFixture", metadata.ROW_INPUT_TARGETS["CMUXMaestroRowInputFixture"], "APPL"),
+                (tests, "CMUXMaestroRowInputUITests", metadata.ROW_INPUT_TARGETS["CMUXMaestroRowInputUITests"], "BNDL"),
+                (runner, "CMUXMaestroRowInputUITests-Runner",
+                 metadata.ROW_INPUT_TARGETS["CMUXMaestroRowInputUITests"] + ".xctrunner", "APPL"),
+            ]
+            for path, executable, identifier, kind in bundles:
+                (path / "Contents/MacOS").mkdir(parents=True, exist_ok=True)
+                (path / "Contents/MacOS" / executable).write_text("metadata-only fixture; never executed")
+                (path / "Contents/Info.plist").write_bytes(plistlib.dumps({
+                    "CFBundleIdentifier": identifier, "CFBundlePackageType": kind, "CFBundleExecutable": executable,
+                }))
+            metadata.verify_row_input_products(products)
+            for path, _, _, _ in bundles:
+                info = path / "Contents/Info.plist"
+                original = info.read_bytes()
+                value = plistlib.loads(original)
+                value["CFBundleIdentifier"] = metadata.BASE_ID
+                info.write_bytes(plistlib.dumps(value))
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    metadata.verify_row_input_products(products)
+                info.write_bytes(original)
+            for directory in ("Helpers", "Extensions"):
+                path = fixture / "Contents" / directory
+                path.mkdir()
+                with self.subTest(directory=directory), self.assertRaises(ValueError):
+                    metadata.verify_row_input_products(products)
+                path.rmdir()
 
 
 class IntegratedTestScopeTests(unittest.TestCase):
@@ -588,6 +714,19 @@ class BuildMetadataTests(unittest.TestCase):
 
     def test_ci_preserves_all_fourteen_validation_commands_without_new_conditions(self):
         workflow = self._workflow_with_plain_integrated_command()
+        self.assertNotIn("continue-on-error", workflow)
+        self.assertEqual(workflow.count("\n  validate:\n"), 1)
+        self.assertEqual(workflow.count("\n  row-input:\n"), 1)
+        row_job, workflow = workflow.split("\n  validate:\n")
+        self.assertIn("\n    runs-on: macos-latest\n", row_job)
+        self.assertNotIn("\n    if:", row_job)
+        self.assertNotIn("\n    needs:", row_job)
+        row_steps = re.findall(r"^      - .*?(?=^      - |\Z)", row_job, re.MULTILINE | re.DOTALL)
+        row_runs = [step for step in row_steps if "\n        run:" in step]
+        self.assertEqual([step.splitlines()[1] for step in row_runs], [
+            "        run: ./scripts/fetch-sdk.sh", "        run: ./scripts/test-row-input.sh",
+        ])
+        self.assertTrue(all(len(step.splitlines()) == 2 for step in row_runs))
         self.assertEqual(re.findall(r"^        run: (.+)$", workflow, re.MULTILINE), [
             "node --test scripts/test-skill-overrides.mjs",
             "node scripts/check-skill-overrides.mjs",
@@ -1046,6 +1185,13 @@ class BuildMetadataTests(unittest.TestCase):
                 continue
             for config_id in objects[target["buildConfigurationList"]]["buildConfigurations"]:
                 settings = objects[config_id]["buildSettings"]
+                if target["name"] in metadata.ROW_INPUT_TARGETS:
+                    self.assertEqual(settings["PRODUCT_BUNDLE_IDENTIFIER"],
+                                     metadata.ROW_INPUT_TARGETS[target["name"]])
+                    self.assertEqual(settings["CODE_SIGNING_ALLOWED"], "NO")
+                    self.assertEqual(settings["CODE_SIGNING_REQUIRED"], "NO")
+                    self.assertEqual(settings["SKIP_INSTALL"], "YES")
+                    continue
                 self.assertEqual(settings["CMUX_BUNDLE_ID_SUFFIX"], "")
                 if target["name"] != "CMUXMaestroPreviewTests":
                     self.assertEqual(settings["CURRENT_PROJECT_VERSION"], metadata.APP_BUILD_VERSION)
