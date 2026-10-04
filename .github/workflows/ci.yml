@@ -21,6 +21,7 @@ jobs:
           path: |
             .build/row-input/**/evidence.json
             .build/row-input/**/*.log
+            .build/row-input/**/*.error
             .build/row-input/**/row-input-*.json
             .build/row-input/**/row-input.xcresult/**
           include-hidden-files: true
