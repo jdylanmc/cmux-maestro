@@ -18,6 +18,12 @@ nonisolated struct SidebarPanelInputOwnership {
         private var expectedPanelCloseObserved = false
         private var panelClosed = false
 
+        init(owner: ObjectIdentifier, foreign: ObjectIdentifier, panel: ObjectIdentifier) {
+            self.owner = owner
+            self.foreign = foreign
+            self.panel = panel
+        }
+
         mutating func beginPanelClose() {
             if closingPanel || panelClosed || !observing { invalidated = true }
             closingPanel = true
