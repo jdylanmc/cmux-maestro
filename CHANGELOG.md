@@ -62,7 +62,10 @@ Notable changes are recorded using Keep a Changelog categories.
   enqueue, preserving timeout, cancellation and process-cleanup checks.
 - Stabilize offscreen focus-layout fixtures with owned overlay/legacy-equivalent
   content widths, retaining real-native scroller coverage and detection of
-  genuine geometry changes (#127).
+  genuine geometry changes (#127). Sample applied native style transitions
+  before later recommendations, isolate cross-process observation from AppKit
+  rendering, and control lifecycle-fixture clocks without changing production
+  timing or test deadlines.
 - Automatically omit unneeded old managed registrations when an exact current
   replacement is verified. Preserve ancestors and original-session context
   needed by work or unresolved attention, without deleting records or closing
