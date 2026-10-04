@@ -1575,7 +1575,11 @@ given one second to reap. A separate five-second hard bound signals any still-ow
 sampler and fails the test host even if diagnostic work stalls; unconfirmed
 cleanup remains explicit, never a success. Diagnostics
 under `.build/tests/scoped-results/metadata-diagnostics/` are included in the
-existing scope-evidence artifact, including partial samples. This exposes a
+existing scope-evidence artifact, including partial samples. Its final upload
+runs after both integrated and standalone setup tests, and also retains the
+complete `.build/setup-tests/metadata-watchdog/` control evidence directory.
+The required artifact names and missing-file failure behavior remain unchanged.
+This exposes a
 blocked boundary; it does not establish or repair the cause of a prior CI hang.
 Production timeouts, cleanup and all original assertions remain unchanged.
 `test-copilot-setup.sh` also runs disposable Foundation-only controls: successful
