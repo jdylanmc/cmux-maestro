@@ -39,6 +39,10 @@ class GuideUIValidationTests(unittest.TestCase):
         self.build_exit = 0
         self.test_status = "Passed"
         self.identity = probe.TEST_IDENTITY.split("/", 1)[1]
+        self.plan = probe.SCHEME
+        self.project_name = "CMUXMaestroPreview"
+        self.bundle_name = metadata.GUIDE_TESTS
+        self.url_identity = None
         self.product_identifier = metadata.BASE_ID + ".Validation.Tests.GuideHost"
 
     def tearDown(self):
@@ -107,9 +111,15 @@ class GuideUIValidationTests(unittest.TestCase):
                     "expectedFailures": 0,
                 })
             else:
+                bundle_url = "test://com.apple.xcode/" + self.project_name + "/" + self.bundle_name
                 output = json.dumps({"testNodes": [{
-                    "nodeType": "UI test bundle", "name": metadata.GUIDE_TESTS, "children": [{
+                    "nodeType": "Test Plan", "name": self.plan, "children": [{
+                    "nodeType": "UI test bundle", "name": self.bundle_name,
+                    "nodeIdentifierURL": bundle_url, "children": [{
                         "nodeType": "Test Case", "nodeIdentifier": self.identity, "result": self.test_status,
+                        "name": self.identity.split("/")[-1],
+                        "nodeIdentifierURL": bundle_url + "/" + (self.url_identity or self.identity.removesuffix("()")),
+                    }],
                     }],
                 }]})
         return subprocess.CompletedProcess(command, code, stdout=output)
@@ -193,6 +203,21 @@ class GuideUIValidationTests(unittest.TestCase):
         result, evidence = self.execute()
         self.assertEqual(result, 1)
         self.assertEqual(evidence["nativeResult"], "failed")
+
+    def test_plan_project_target_and_method_identity_remain_independent_guards(self):
+        for key, value in (
+            ("plan", "OtherPlan"), ("project_name", "OtherProject"),
+            ("bundle_name", "OtherTarget"), ("url_identity", "OtherSuite/testWrong"),
+            ("url_identity", self.identity.removesuffix("()") + "(value:)"),
+        ):
+            with self.subTest(key=key, value=value):
+                original = getattr(self, key)
+                setattr(self, key, value)
+                result, evidence = self.execute()
+                self.assertEqual(result, 1)
+                self.assertEqual(evidence["nativeResult"], "failed")
+                setattr(self, key, original)
+                shutil.rmtree(self.directory)
 
     def test_wrong_built_namespace_prevents_execution(self):
         self.product_identifier = metadata.BASE_ID
