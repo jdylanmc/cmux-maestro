@@ -181,7 +181,8 @@ struct SidebarAttentionCoordinationTests {
         #expect(a.attention == .init(acknowledged: [evidence.key("a")]))
     }
 
-    @Test func separateProcessesMergeAcknowledgeResetAndAutomaticallyReprojectWithBlockers() async throws {
+    @Test(SidebarAppKitTestScope())
+    func separateProcessesMergeAcknowledgeResetAndAutomaticallyReprojectWithBlockers() async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
         let preferences = fixture.preferences()
