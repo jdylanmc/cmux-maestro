@@ -243,6 +243,44 @@ class GuideUIValidationTests(unittest.TestCase):
                 probe.scopes.cases(altered, expected_plan=probe.SCHEME,
                                    expected_project="CMUXMaestroPreview")
 
+    def test_both_ui_url_spellings_require_matching_method_metadata(self):
+        for spelling in (None, self.identity):
+            with self.subTest(spelling=spelling):
+                self.url_identity = spelling
+                result, evidence = self.execute()
+                self.assertEqual(result, 0)
+                self.assertEqual(evidence["verifiedTestIdentity"], probe.TEST_IDENTITY)
+                shutil.rmtree(self.directory)
+
+    def test_strict_ui_wrapper_rejects_missing_or_contradictory_method_metadata(self):
+        original_runner = self.runner
+        for spelling in (None, self.identity):
+            self.url_identity = spelling
+            for field in ("nodeIdentifier", "name"):
+                for value in (None, "", 123, "Wrong()", "omit-field"):
+                    def altered_runner(command, **kwargs):
+                        response = original_runner(command, **kwargs)
+                        if command[0] == "xcrun" and command[4] == "tests":
+                            document = json.loads(response.stdout)
+                            case = document["testNodes"][0]["children"][0]["children"][0]
+                            if value == "omit-field":
+                                del case[field]
+                            else:
+                                case[field] = value
+                            response.stdout = json.dumps(document)
+                        return response
+
+                    with self.subTest(spelling=spelling, field=field, value=value):
+                        try:
+                            with patch.object(self, "runner", side_effect=altered_runner):
+                                result, evidence = self.execute()
+                            self.assertEqual(result, 1)
+                            self.assertEqual(evidence["nativeResult"], "failed")
+                            self.assertNotIn("verifiedTestIdentity", evidence)
+                        finally:
+                            if self.directory.exists():
+                                shutil.rmtree(self.directory)
+
     def test_wrong_built_namespace_prevents_execution(self):
         self.product_identifier = metadata.BASE_ID
         result, evidence = self.execute()

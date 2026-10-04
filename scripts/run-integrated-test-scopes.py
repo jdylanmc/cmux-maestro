@@ -161,6 +161,12 @@ def cases(document, *, expected_plan=None, expected_project=None):
             url = node.get("nodeIdentifierURL")
             require(bundle and bundle_path, "A test case has no attributable target.")
             require(expected_project is None or url, "Missing test case project URL.")
+            strict_ui = expected_project is not None and ui_bundle
+            if strict_ui:
+                require(isinstance(identifier, str) and identifier,
+                        "Missing UI test method identifier.")
+                require(isinstance(node.get("name"), str) and node["name"],
+                        "Missing UI test method name.")
             if url:
                 path = identifier_path(url)
                 require(path.startswith(bundle_path + "/"), "Test URL is outside its plan/target ancestry.")
@@ -168,6 +174,9 @@ def cases(document, *, expected_plan=None, expected_project=None):
                 if (ui_bundle and not local.endswith("()")
                         and node.get("name") == local.rsplit("/", 1)[-1] + "()"):
                     local += "()"
+                if strict_ui:
+                    require(node["name"] == local.rsplit("/", 1)[-1],
+                            "UI test method name and URL disagree.")
                 require(identifier is None or identifier in (local, bundle + "/" + local),
                         "Test identifier and URL disagree.")
                 identity = bundle + "/" + local
