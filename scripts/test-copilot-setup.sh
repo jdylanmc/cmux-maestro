@@ -32,7 +32,10 @@ else
     )
 fi
 if [[ "${1:-}" == "--compile-only" ]]; then
-    TEST_SOURCES+=("$ROOT/CMUXMaestroPreviewTests/CLIIntegrationGuideRenderingTests.swift")
+    TEST_SOURCES+=(
+        "$ROOT/CMUXMaestroPreviewTests/CLIIntegrationGuideRenderingTests.swift"
+        "$ROOT/CMUXMaestroPreviewTests/GuideAcceptanceEvidence.swift"
+    )
 fi
 xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feature InferSendableFromCaptures \
     -default-isolation MainActor \

@@ -47,7 +47,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
         ]}]}
         return summary, tests
 
-    def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0, benchmark_flag=None):
+    def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0, benchmark_flag=None, guide_exit=0):
         def runner(command, **kwargs):
             self.commands.append(command)
             if command[0] == "xcodebuild":
@@ -58,13 +58,40 @@ class IntegratedTestScopeTests(unittest.TestCase):
             scope = Path(command[command.index("--path") + 1]).stem
             values = isolated if scope == "isolated" else remaining
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(values[0 if command[4] == "summary" else 1]))
-        with patch("builtins.print"), patch.dict(os.environ):
+        # These fixtures isolate the existing partition/count policy, not native guide execution.
+        with patch("builtins.print"), patch.dict(os.environ), \
+                patch.object(scopes, "produce_guide_acceptance", return_value={"exitCode": guide_exit, "environment": {}}), \
+                patch.object(scopes, "revalidate_guide_acceptance",
+                             side_effect=ValueError("Synthetic native producer failed") if guide_exit else None), \
+                patch.object(scopes, "validate_original_guide_cases"):
             if benchmark_flag is None:
                 os.environ.pop(BENCHMARK_FLAG, None)
             else:
                 os.environ[BENCHMARK_FLAG] = benchmark_flag
             result = scopes.run(["xcodebuild", "-scheme", "CMUXMaestroPreview"], self.directory / "results", runner)
         return result, json.loads((self.directory / "results/coverage.json").read_text())
+
+    def test_native_producer_failure_preserves_both_original_integrated_actions(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                        self.report([("OtherSuite/test()", "Passed")]), guide_exit=65)
+        self.assertEqual(result, 1)
+        self.assertEqual(evidence["guideAcceptance"]["exitCode"], 65)
+        self.assertIn("guideAcceptanceError", evidence)
+        self.assertEqual(sum("test-without-building" in command for command in self.commands), 2)
+        self.assertEqual(evidence["remainingCounts"]["passedTests"], 1)
+        for environment in self.build_environments[1:]:
+            self.assertFalse(any(key.startswith("TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_") for key in environment))
+
+    def test_stale_acceptance_aliases_never_reach_original_validators(self):
+        original = {
+            "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+            "CMUX_GUIDE_ACCEPTANCE_DIRECTORY": "/prior/invocation",
+            "TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_INVOCATION": "stale",
+            "TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_STATUSES_SHA256": "stale",
+        }
+        actual = scopes.hosted_test_environment(original)
+        self.assertFalse(any("GUIDE_ACCEPTANCE" in key for key in actual))
+        self.assertIn("TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_INVOCATION", original)
 
     def test_hosted_venue_forwarding_uses_original_values_for_both_test_actions(self):
         with patch.dict(os.environ, {
@@ -569,6 +596,9 @@ class BuildMetadataTests(unittest.TestCase):
             ("Upload integrated test scope evidence", "integrated-test-scope-evidence",
              "|\n            .build/tests/scoped-results/**/*.json\n"
              "            .build/tests/scoped-results/**/*.txt\n"
+             "            .build/tests/scoped-results/**/guide-acceptance/*.log\n"
+             "            .build/tests/scoped-results/**/guide-acceptance/probe.xcresult\n"
+             "            .build/tests/scoped-results/**/guide-acceptance/images/*.png\n"
              "            .build/setup-tests/metadata-watchdog/"),
             ("Upload synthetic sidebar layout renders", "sidebar-layout-offscreen",
              ".build/layout-validation/offscreen/*.png"),

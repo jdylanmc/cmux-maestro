@@ -264,7 +264,28 @@ The isolated non-GUI reader/model checks can run with
 suites retain their full coverage.
 
 The guide rendering/action tests require the isolated GitHub-hosted validation
-app. The integrated test runner removes stale `TEST_RUNNER_` aliases for
+venue. The two original `CLIIntegrationGuideRenderingTests` acceptance methods
+remain executed Swift Testing tests, now independently validating typed native
+observations rather than dispatching actions in the integrated app. Two distinct
+`GuideAcceptanceTests` XCTest methods produce those observations in the dedicated
+guide host **before** the original validators, within the same fresh integrated
+invocation. The three original resource/exposure/no-op controls are unchanged.
+This approved producer/validator split does not equate a passing result flag
+with behavioral evidence.
+
+Acceptance uses the original 600x414 AppKit composition (600x350 real guide and
+600x64 minimal subject), explicit accessibility environment, five statuses in
+both appearances, failure/success Copy attempts, and both complete Re-check
+transitions per appearance. Public snapshots independently identify the exposed
+subjects. Fixed synthetic controls dispatch `accessibilityPerformPress()` on
+the real node found through bounded unignored accessibility traversal; its
+actual Boolean return **and** effect are required. Clicks on the guide, raw-view
+AX lookup, direct model-action substitutes, and fallback dispatch are not used.
+Exact fittingSize/document/clip measurements and 48 original-named `cacheDisplay`
+PNGs remain host observations, not screenshot or frame approximations. Synthetic
+Copy/readers never access installed guides or the general pasteboard.
+
+The integrated test runner removes stale `TEST_RUNNER_` aliases for
 `GITHUB_ACTIONS` and `RUNNER_ENVIRONMENT` from its copied test environment.
 It forwards their original outer values through xcodebuild's documented
 `TEST_RUNNER_` mechanism only when both identify the exact GitHub-hosted venue.
@@ -285,6 +306,23 @@ boundary unresolved, not a proven production defect. A changed host passing does
 not identify which presentation operation caused it. Native
 acceptance still requires the actual hosted results. For local compilation
 without opening windows, use `./scripts/test-copilot-setup.sh --compile-only`.
+The native wrapper's closed `--acceptance` mode selects exactly the two producers;
+default mode explicitly selects only the unchanged readiness case below.
+Each full native case has one shared 180-second budget, including all scenarios,
+actions, captures and observations. Synchronous public operations are checked
+after returning, not claimed to be preemptible.
+
+Fresh acceptance requires clean source before and after execution, exact source
+inventory/hashes, built product namespaces/hashes, attributable push or PR
+synthetic-merge parents, exact native identities/counts/exits, ordered complete
+stages, original validator/control executions and all 48 image provenance/hashes.
+Identical legitimate pixel hashes are allowed. Failed native production still
+runs the integrated suite; missing evidence fails the original validators.
+The existing integrated artifact retains the producer logs, xcresult and images;
+the original image artifact receives only the freshly verified guide images.
+Compilation and mocked parser negatives do **not** verify native AXPress
+capability or the complete matrix. Those remain unverified until reviewed
+exact-source hosted execution passes.
 
 A separate additive `guide-ui-consumer-probe` CI job builds the validation-only
 `CMUXMaestroGuideUIHost` app and public XCTest UI target. It compiles the same

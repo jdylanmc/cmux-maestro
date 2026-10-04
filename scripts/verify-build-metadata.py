@@ -40,8 +40,14 @@ GUIDE_SHARED_SOURCES = [
 GUIDE_HOST_SOURCES = [
     "CMUXMaestroGuideUIHost/GuideValidationApp.swift",
     "CMUXMaestroGuideUIHost/GuideValidationContent.swift",
+    "CMUXMaestroGuideUIHost/GuideAcceptanceFixture.swift",
+    "CMUXMaestroPreviewTests/GuideAcceptanceEvidence.swift",
 ] + GUIDE_SHARED_SOURCES
-GUIDE_TEST_SOURCES = ["CMUXMaestroGuideUITests/GuideConsumerReadinessTests.swift"]
+GUIDE_TEST_SOURCES = [
+    "CMUXMaestroGuideUITests/GuideConsumerReadinessTests.swift",
+    "CMUXMaestroGuideUITests/GuideAcceptanceTests.swift",
+    "CMUXMaestroPreviewTests/GuideAcceptanceEvidence.swift",
+]
 
 
 def require(condition, message):

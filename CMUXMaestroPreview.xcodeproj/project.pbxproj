@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D14400000000000000000101 = {isa = PBXBuildFile; fileRef = D14400000000000000000201; };
+		D14400000000000000000102 = {isa = PBXBuildFile; fileRef = D14400000000000000000202; };
+		D14400000000000000000103 = {isa = PBXBuildFile; fileRef = D14400000000000000000203; };
+		D14400000000000000000104 = {isa = PBXBuildFile; fileRef = D14400000000000000000203; };
 		D15500000000000000000101 = {isa = PBXBuildFile; fileRef = D15500000000000000000201; };
 		D15500000000000000000102 = {isa = PBXBuildFile; fileRef = D15500000000000000000202; };
 		D15500000000000000000103 = {isa = PBXBuildFile; fileRef = D15500000000000000000203; };
@@ -136,6 +140,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		D14400000000000000000201 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroGuideUIHost/GuideAcceptanceFixture.swift; sourceTree = SOURCE_ROOT; };
+		D14400000000000000000202 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroGuideUITests/GuideAcceptanceTests.swift; sourceTree = SOURCE_ROOT; };
+		D14400000000000000000203 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreviewTests/GuideAcceptanceEvidence.swift; sourceTree = SOURCE_ROOT; };
 		D15500000000000000000201 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroGuideUIHost/GuideValidationApp.swift; sourceTree = SOURCE_ROOT; };
 		D15500000000000000000202 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroGuideUIHost/GuideValidationContent.swift; sourceTree = SOURCE_ROOT; };
 		D15500000000000000000203 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/Integration/CLIIntegrationGuide.swift; sourceTree = SOURCE_ROOT; };
@@ -278,6 +285,9 @@
 		D15500000000000000000005 /* Guide UI validation */ = {
 			isa = PBXGroup;
 			children = (
+				D14400000000000000000201,
+				D14400000000000000000202,
+				D14400000000000000000203,
 				D15500000000000000000201,
 				D15500000000000000000202,
 				D15500000000000000000203,
@@ -590,13 +600,13 @@
 		D15500000000000000000301 /* Guide host sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = (D15500000000000000000101, D15500000000000000000102, D15500000000000000000103, D15500000000000000000104, D15500000000000000000105, D15500000000000000000106, D15500000000000000000107, D15500000000000000000108, );
+			files = (D15500000000000000000101, D15500000000000000000102, D15500000000000000000103, D15500000000000000000104, D15500000000000000000105, D15500000000000000000106, D15500000000000000000107, D15500000000000000000108, D14400000000000000000101, D14400000000000000000103, );
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		D15500000000000000000302 /* Guide UI test sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = (D15500000000000000000109, );
+			files = (D15500000000000000000109, D14400000000000000000102, D14400000000000000000104, );
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		C06100000000000000000009 /* Hook Sources */ = {

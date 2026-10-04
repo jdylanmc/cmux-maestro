@@ -4,9 +4,12 @@ import argparse
 from collections import Counter
 from dataclasses import dataclass
 import json
+import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import uuid
 from typing import Optional
@@ -320,6 +323,9 @@ def read_result(bundle, directory, scope, runner):
 
 def hosted_test_environment(inherited):
     environment = dict(inherited)
+    for name in list(environment):
+        if name.startswith(("CMUX_GUIDE_ACCEPTANCE_", "TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_")):
+            environment.pop(name)
     for name in ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT"):
         environment.pop("TEST_RUNNER_" + name, None)
     if (environment.get("GITHUB_ACTIONS") == "true"
@@ -328,6 +334,77 @@ def hosted_test_environment(inherited):
         for name in ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT"):
             environment["TEST_RUNNER_" + name] = environment[name]
     return environment
+
+
+def guide_module():
+    path = Path(__file__).resolve().with_name("run-guide-ui-validation.py")
+    spec = importlib.util.spec_from_file_location("integrated_guide_producer", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def produce_guide_acceptance(directory, runner):
+    module = guide_module()
+    invocation = directory.name.removeprefix("scopes-")
+    output = directory / "guide-acceptance"
+    code = module.run(False, output, acceptance=True, invocation=invocation, runner=runner)
+    receipt = module.acceptance_evidence.load(output / "evidence.json")
+    context = {"exitCode": code, "output": str(output), "invocation": invocation,
+               "head": receipt.get("sourceHead"), "tree": receipt.get("sourceTree"),
+               "environment": {}}
+    if not code:
+        context["environment"] = {
+            "CMUX_GUIDE_ACCEPTANCE_DIRECTORY": str(output),
+            "CMUX_GUIDE_ACCEPTANCE_INVOCATION": invocation,
+            "CMUX_GUIDE_ACCEPTANCE_HEAD": context["head"],
+            "CMUX_GUIDE_ACCEPTANCE_TREE": context["tree"],
+            **{"CMUX_GUIDE_ACCEPTANCE_" + case.upper() + "_SHA256":
+               hashlib.sha256((output / (case + ".json")).read_bytes()).hexdigest()
+               for case in module.acceptance_evidence.PRODUCERS},
+        }
+        # Only newly validated guide images enter the existing mandatory artifact.
+        images = module.acceptance_evidence.validate_all(output, invocation, context["head"], context["tree"])
+        destination = Path(__file__).resolve().parents[1] / ".build/layout-validation/offscreen"
+        destination.mkdir(parents=True, exist_ok=True)
+        for image in images:
+            shutil.copyfile(output / "images" / image["name"], destination / image["name"])
+    return context
+
+
+def validate_original_guide_cases(tests):
+    expected = set(guide_module().acceptance_evidence.ORIGINALS)
+    observed = [case for case in cases(tests) if case.identity in expected]
+    require({case.identity for case in observed} == expected and len(observed) == len(expected)
+            and all(case.status == "Passed" and not case.parameterized
+                    and case.executions == ((None, "Passed"),) for case in observed),
+            "Both original guide validators and all three original controls must execute and pass once.")
+
+
+def revalidate_guide_acceptance(context, runner):
+    require(context["exitCode"] == 0, "Native guide acceptance producer failed.")
+    module = guide_module()
+    output = Path(context["output"])
+    receipt = module.acceptance_evidence.load(output / "evidence.json")
+    require(receipt["nativeResult"] == "passed" and receipt["mode"] == "acceptance"
+            and receipt["compileOnly"] is False and receipt["sourceDirty"] is False,
+            "Full fresh native acceptance receipt required.")
+    root = Path(__file__).resolve().parents[1]
+    for args, expected in ((["git", "rev-parse", "HEAD"], context["head"]),
+                           (["git", "rev-parse", "HEAD^{tree}"], context["tree"]),
+                           (["git", "status", "--porcelain"], "")):
+        result = runner(args, cwd=root, check=True, capture_output=True, text=True)
+        require(result.stdout.strip() == expected, "Integrated source changed after native production.")
+    require({path: hashlib.sha256((root / path).read_bytes()).hexdigest()
+             for path in receipt["sourceSHA256"]} == receipt["sourceSHA256"],
+            "Integrated source inventory mutated.")
+    require(module.metadata.verify_guide_ui_products(output / "derived/Build/Products/Debug") == receipt["products"],
+            "Native producer products mutated during integrated validation.")
+    for case in module.acceptance_evidence.PRODUCERS:
+        require(hashlib.sha256((output / (case + ".json")).read_bytes()).hexdigest()
+                == context["environment"]["CMUX_GUIDE_ACCEPTANCE_" + case.upper() + "_SHA256"],
+                "Acceptance document mutated during original validation.")
+    module.acceptance_evidence.validate_all(output, context["invocation"], context["head"], context["tree"])
 
 
 def run(command, directory, runner=subprocess.run):
@@ -356,6 +433,15 @@ def run(command, directory, runner=subprocess.run):
     save()
     if build.returncode:
         return build.returncode
+    try:
+        guide = produce_guide_acceptance(directory, runner)
+        evidence["guideAcceptance"] = guide
+        for name, value in guide["environment"].items():
+            test_environment["TEST_RUNNER_" + name] = value
+    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as error:
+        guide = {"exitCode": 1, "environment": {}}
+        evidence["guideAcceptanceError"] = str(error)
+    save()
     isolated_bundle = directory / "isolated.xcresult"
     isolated = runner([*command, "test-without-building", "-only-testing:" + SELECTOR,
                        "-resultBundlePath", str(isolated_bundle)], check=False, env=test_environment)
@@ -385,9 +471,15 @@ def run(command, directory, runner=subprocess.run):
         print("Remaining hosted test tree: " + json.dumps(tests), flush=True)
         evidence["remainingCounts"] = validate_remaining(
             remaining_summary, tests, benchmark_enabled=benchmark_enabled, isolated_excluded=bool(selection))
+        validate_original_guide_cases(tests)
     except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         evidence["remainingValidationError"] = str(error)
-    success = (evidence["selectorVerifiedByHostedResult"] and not isolated.returncode and not remaining.returncode
+    try:
+        revalidate_guide_acceptance(guide, runner)
+    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as error:
+        evidence["guideAcceptanceError"] = str(error)
+    success = ("guideAcceptanceError" not in evidence and guide["exitCode"] == 0
+               and evidence["selectorVerifiedByHostedResult"] and not isolated.returncode and not remaining.returncode
                and "remainingValidationError" not in evidence
                and isolated_summary is not None and isolated_summary.get("result") == "Passed"
                and remaining_summary is not None and remaining_summary.get("result") == "Passed"
@@ -419,7 +511,7 @@ def main():
     validate_arguments(command)
     args.results_root.mkdir(parents=True, exist_ok=True)
     # The runner owns only this new evidence directory; no stale xcresult can pass.
-    directory = args.results_root / ("scopes-" + uuid.uuid4().hex)
+    directory = args.results_root.resolve() / ("scopes-" + str(uuid.uuid4()))
     return run(command, directory)
 
 

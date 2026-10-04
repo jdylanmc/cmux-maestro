@@ -20,7 +20,7 @@ struct CLIIntegrationGuideRenderingTests {
     }
 
     @Test func syntheticStatusesRetainNativeSizeScrollingAndAccessibleActions() async throws {
-        try await withNativeActionDeadline { try await exerciseSyntheticStatuses() }
+        try GuideAcceptanceEvidence.validateCurrentInvocation("statuses")
     }
 
     private func exerciseSyntheticStatuses() async throws {
@@ -96,9 +96,7 @@ struct CLIIntegrationGuideRenderingTests {
     }
 
     @Test func nativeRecheckDrivesCheckingChangedStatusAndRetry() async throws {
-        // The same 180-second action deadline starts after the AppKit scope is acquired.
-        // A test-level TimeLimitTrait also counts time queued behind unrelated native tests.
-        try await withNativeActionDeadline { try await exerciseNativeRecheck() }
+        try GuideAcceptanceEvidence.validateCurrentInvocation("recheck")
     }
 
     private func withNativeActionDeadline(

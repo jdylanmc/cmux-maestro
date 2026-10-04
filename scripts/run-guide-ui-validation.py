@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One additive public UI consumer probe; no local presentation or retry."""
+"""Closed readiness/full-acceptance public UI consumers; no local presentation or retry."""
 
 import argparse
 import hashlib
@@ -22,6 +22,9 @@ SCOPE_SPEC = importlib.util.spec_from_file_location("integrated_scopes", ROOT / 
 scopes = importlib.util.module_from_spec(SCOPE_SPEC)
 SCOPE_SPEC.loader.exec_module(scopes)
 TEST_IDENTITY = "CMUXMaestroGuideUITests/GuideConsumerReadinessTests/testMinimalEventThenRealGuideIdentifiers()"
+ACCEPTANCE_SPEC = importlib.util.spec_from_file_location("guide_acceptance", ROOT / "scripts/guide-acceptance-evidence.py")
+acceptance_evidence = importlib.util.module_from_spec(ACCEPTANCE_SPEC)
+ACCEPTANCE_SPEC.loader.exec_module(acceptance_evidence)
 
 
 def build_environment(environment):
@@ -41,12 +44,13 @@ def test_environment(environment, host):
     return result
 
 
-def run(compile_only, output, *, runner=subprocess.run, environment=None):
+def run(compile_only, output, *, acceptance=False, invocation=None, runner=subprocess.run, environment=None):
     environment = dict(os.environ if environment is None else environment)
     build_env = build_environment(environment)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     evidence = {"schemaVersion": 1, "scheme": SCHEME, "compileOnly": compile_only,
+                "mode": "acceptance" if acceptance else "readiness",
                 "phases": [], "nativeResult": "not-run",
                 "limits": "180s shared explicit-wait deadline; synchronous XCUI calls are not preemptible. "
                           "No custom watchdog, retries, permission changes or prompt responses."}
@@ -96,6 +100,38 @@ def run(compile_only, output, *, runner=subprocess.run, environment=None):
         evidence["sourceHead"] = command("source-head", ["git", "rev-parse", "HEAD"]).strip()
         evidence["sourceTree"] = command("source-tree", ["git", "rev-parse", "HEAD^{tree}"]).strip()
         evidence["sourceDirty"] = bool(command("source-status", ["git", "status", "--porcelain"]).strip())
+        if acceptance and not compile_only:
+            metadata.require(not evidence["sourceDirty"], "Acceptance requires clean source, not a dirty-source receipt.")
+            metadata.require(invocation is not None and str(uuid.UUID(invocation)) == invocation
+                             and output.name == "guide-acceptance"
+                             and output.parent.name == "scopes-" + invocation,
+                             "Acceptance must belong to this fresh integrated invocation.")
+            metadata.require(environment.get("GITHUB_SHA") == evidence["sourceHead"],
+                             "Checkout differs from the actual workflow commit.")
+            event = acceptance_evidence.load(Path(environment["GITHUB_EVENT_PATH"]))
+            event_name = environment.get("GITHUB_EVENT_NAME")
+            parents = command("source-parents", ["git", "show", "-s", "--format=%P", "HEAD"]).strip().split()
+            if event_name == "push":
+                metadata.require(event["after"] == evidence["sourceHead"], "Push candidate differs.")
+                candidate = evidence["sourceHead"]
+            elif event_name == "pull_request":
+                request = event["pull_request"]
+                candidate = request["head"]["sha"]
+                metadata.require(parents == [request["base"]["sha"], candidate],
+                                 "PR checkout is not the exact current base/candidate synthetic merge.")
+            else:
+                raise ValueError("Acceptance requires attributable push or pull_request source.")
+            evidence["sourceAttribution"] = {"event": event_name, "workflowHead": environment["GITHUB_SHA"],
+                                             "candidate": candidate, "checkoutParents": parents}
+            evidence["invocation"] = invocation
+            (output / "images").mkdir()
+            for key, value in {
+                "CMUX_GUIDE_ACCEPTANCE_DIRECTORY": str(output),
+                "CMUX_GUIDE_ACCEPTANCE_INVOCATION": invocation,
+                "CMUX_GUIDE_ACCEPTANCE_HEAD": evidence["sourceHead"],
+                "CMUX_GUIDE_ACCEPTANCE_TREE": evidence["sourceTree"],
+            }.items():
+                forwarded["TEST_RUNNER_" + key] = value
         project = json.loads(command("project-membership", [
             "/usr/bin/plutil", "-convert", "json", "-o", "-",
             str(ROOT / "CMUXMaestroPreview.xcodeproj/project.pbxproj")
@@ -107,6 +143,13 @@ def run(compile_only, output, *, runner=subprocess.run, environment=None):
             "CMUXMaestroGuideUIHost/GuideUIValidation.xcconfig",
             "scripts/run-guide-ui-validation.py", "scripts/test-guide-ui-validation.sh",
             "scripts/verify-build-metadata.py", "scripts/run-integrated-test-scopes.py",
+            "scripts/guide-acceptance-evidence.py", "scripts/test-guide-ui-validation.py",
+            "scripts/GuideAcceptanceParserMain.swift",
+            "scripts/test-copilot-setup.sh", "scripts/test-build-metadata.py",
+            "CMUXMaestroPreviewTests/CLIIntegrationGuideRenderingTests.swift",
+            "CMUXMaestroPreviewTests/SidebarAppKitTestScope.swift",
+            "scripts/test.sh", "scripts/write-guide-reference.py", "skills/maestro/SKILL.md",
+            "CMUXMaestroPreview.xcodeproj/xcshareddata/xcschemes/CMUXMaestroPreview.xcscheme",
             ".github/workflows/ci.yml",
         })
         evidence["sourceInventory"] = inventory
@@ -128,6 +171,8 @@ def run(compile_only, output, *, runner=subprocess.run, environment=None):
         execution = command("test-without-building", build + [
             "test-without-building", "-resultBundlePath", str(output / "probe.xcresult"),
             "-parallel-testing-enabled", "NO",
+            *["-only-testing:" + identity.removesuffix("()") for identity in
+              (acceptance_evidence.PRODUCERS.values() if acceptance else [TEST_IDENTITY])],
         ], env=forwarded, allow_failure=True)
         documents = {}
         for kind in ("summary", "tests"):
@@ -138,14 +183,33 @@ def run(compile_only, output, *, runner=subprocess.run, environment=None):
         selected = scopes.cases(documents["tests"], expected_plan=SCHEME,
                                 expected_project="CMUXMaestroPreview")
         scopes.reconcile(documents["summary"], selected)
-        metadata.require(len(selected) == 1 and selected[0].identity == TEST_IDENTITY
-                         and selected[0].status == "Passed" and selected[0].executions == ((None, "Passed"),)
-                         and not selected[0].parameterized, "Expected exactly one passing public UI probe execution.")
+        expected = set(acceptance_evidence.PRODUCERS.values()) if acceptance else {TEST_IDENTITY}
+        if acceptance:
+            for case, identity in acceptance_evidence.PRODUCERS.items():
+                export = output / ("attachments-" + case)
+                command("export-" + case, ["xcrun", "xcresulttool", "export", "attachments",
+                                          "--schema-version", "0.4.0", "--path", str(output / "probe.xcresult"),
+                                          "--output-path", str(export), "--test-id",
+                                          acceptance_evidence.case_url(documents["tests"], identity,
+                                                                       identifier_path=scopes.identifier_path)],
+                        allow_failure=True)
+            for case in acceptance_evidence.PRODUCERS:
+                acceptance_evidence.extract(output / ("attachments-" + case), case, output,
+                                            identifier_path=scopes.identifier_path)
+        metadata.require({case.identity for case in selected} == expected and len(selected) == len(expected)
+                         and all(case.status == "Passed" and case.executions == ((None, "Passed"),)
+                                 and not case.parameterized for case in selected),
+                         "Expected exactly the selected native producer executions, all passed once.")
         metadata.require(execution.returncode == 0, "Public UI test command failed despite reported test result.")
-        evidence["verifiedTestIdentity"] = TEST_IDENTITY
+        if acceptance:
+            images = acceptance_evidence.validate_all(output, invocation, evidence["sourceHead"], evidence["sourceTree"])
+            (output / "image-manifest.json").write_text(json.dumps(images, indent=2) + "\n")
+            evidence["verifiedTestIdentities"] = sorted(expected)
+        else:
+            evidence["verifiedTestIdentity"] = TEST_IDENTITY
         evidence["nativeResult"] = "passed"
         return 0
-    except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         if evidence["phases"] and evidence["phases"][-1]["state"] == "started":
             evidence["phases"][-1]["state"] = "failed"
         evidence["error"] = redact(str(error))
@@ -154,6 +218,29 @@ def run(compile_only, output, *, runner=subprocess.run, environment=None):
         print("Guide UI validation failed: " + redact(str(error)), file=sys.stderr)
         return 1
     finally:
+        if "sourceSHA256" in evidence:
+            try:
+                after = {path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+                         for path in evidence["sourceSHA256"]}
+                evidence["sourceAfter"] = {
+                    "head": command("source-head-after", ["git", "rev-parse", "HEAD"]).strip(),
+                    "tree": command("source-tree-after", ["git", "rev-parse", "HEAD^{tree}"]).strip(),
+                    "dirty": bool(command("source-status-after", ["git", "status", "--porcelain"]).strip()),
+                    "sha256": after,
+                }
+                if acceptance and not compile_only:
+                    products_after = metadata.verify_guide_ui_products(products)
+                    evidence["productsAfter"] = products_after
+                    metadata.require(evidence["sourceAfter"]["head"] == evidence["sourceHead"]
+                                     and evidence["sourceAfter"]["tree"] == evidence["sourceTree"]
+                                     and not evidence["sourceAfter"]["dirty"] and after == evidence["sourceSHA256"]
+                                     and products_after == evidence["products"],
+                                     "Acceptance source changed during execution.")
+            except (ValueError, OSError, subprocess.CalledProcessError) as error:
+                evidence["error"] = redact(str(error))
+                evidence["nativeResult"] = "failed"
+                save()
+                return 1
         save()
         print("Guide UI evidence: " + str(output.relative_to(ROOT) if output.is_relative_to(ROOT) else output))
 
@@ -161,8 +248,12 @@ def run(compile_only, output, *, runner=subprocess.run, environment=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--compile-only", action="store_true", help="Build both targets without launching tests or apps.")
+    parser.add_argument("--acceptance", action="store_true", help="Select only the two full native acceptance producers.")
     arguments = parser.parse_args()
-    return run(arguments.compile_only, ROOT / ".build/guide-ui-validation" / ("run-" + uuid.uuid4().hex))
+    invocation = str(uuid.uuid4())
+    output = (ROOT / ".build/tests/scoped-results" / ("scopes-" + invocation) / "guide-acceptance"
+              if arguments.acceptance else ROOT / ".build/guide-ui-validation" / ("run-" + uuid.uuid4().hex))
+    return run(arguments.compile_only, output, acceptance=arguments.acceptance, invocation=invocation)
 
 
 if __name__ == "__main__":
