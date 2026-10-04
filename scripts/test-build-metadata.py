@@ -30,6 +30,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.directory = ROOT / ".build/metadata-tests" / str(uuid.uuid4())
         self.directory.mkdir(parents=True)
         self.commands = []
+        self.build_environments = []
 
     def tearDown(self):
         shutil.rmtree(self.directory)
@@ -50,19 +51,68 @@ class IntegratedTestScopeTests(unittest.TestCase):
         def runner(command, **kwargs):
             self.commands.append(command)
             if command[0] == "xcodebuild":
+                self.build_environments.append(kwargs.get("env"))
                 code = (isolated_exit if any(arg.startswith("-only-testing:") for arg in command)
                         else remaining_exit if "test-without-building" in command else 0)
                 return subprocess.CompletedProcess(command, code)
             scope = Path(command[command.index("--path") + 1]).stem
             values = isolated if scope == "isolated" else remaining
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(values[0 if command[4] == "summary" else 1]))
-        with patch("builtins.print"), patch.dict(os.environ):
+        with patch("builtins.print"), patch.dict(os.environ, {
+            "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted"
+        }):
             if benchmark_flag is None:
                 os.environ.pop(BENCHMARK_FLAG, None)
             else:
                 os.environ[BENCHMARK_FLAG] = benchmark_flag
             result = scopes.run(["xcodebuild", "-scheme", "CMUXMaestroPreview"], self.directory / "results", runner)
         return result, json.loads((self.directory / "results/coverage.json").read_text())
+
+    def test_hosted_venue_forwarding_uses_original_values_for_both_test_actions(self):
+        with patch.dict(os.environ, {
+            "TEST_RUNNER_GITHUB_ACTIONS": "stale",
+            "TEST_RUNNER_RUNNER_ENVIRONMENT": "self-hosted",
+            "TEST_RUNNER_UNRELATED": "preserved",
+        }):
+            original = dict(os.environ)
+            result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                            self.report([("OtherSuite/test()", "Passed")]))
+            self.assertEqual(dict(os.environ), original)
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.build_environments), 3)
+        self.assertIsNone(self.build_environments[0])
+        for environment in self.build_environments[1:]:
+            self.assertIsNotNone(environment)
+            self.assertEqual(environment["GITHUB_ACTIONS"], "true")
+            self.assertEqual(environment["RUNNER_ENVIRONMENT"], "github-hosted")
+            for name in ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT"):
+                self.assertEqual(environment["TEST_RUNNER_" + name], environment[name])
+            self.assertEqual(environment["TEST_RUNNER_UNRELATED"], "preserved")
+        self.assertEqual(evidence["guideCalibrationVenue"], {
+            "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+            "forwarding": "xcodebuild TEST_RUNNER_",
+        })
+
+    def test_local_or_nonhosted_venue_refuses_before_any_build_or_test(self):
+        for index, outer in enumerate((
+            {}, {"GITHUB_ACTIONS": "true"}, {"RUNNER_ENVIRONMENT": "github-hosted"},
+            {"GITHUB_ACTIONS": "false", "RUNNER_ENVIRONMENT": "github-hosted"},
+            {"GITHUB_ACTIONS": "TRUE", "RUNNER_ENVIRONMENT": "github-hosted"},
+            {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted"},
+            {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "__CURRENT_VALUE__"},
+        )):
+            with self.subTest(outer=outer), patch.dict(os.environ, {
+                **outer, "TEST_RUNNER_GITHUB_ACTIONS": "true",
+                "TEST_RUNNER_RUNNER_ENVIRONMENT": "github-hosted",
+            }, clear=True):
+                original = dict(os.environ)
+                def runner(*args, **kwargs):
+                    self.fail("An invalid venue must not invoke a build, test or result extractor")
+                destination = self.directory / f"results-{index}"
+                with self.assertRaisesRegex(ValueError, "GitHub-hosted"):
+                    scopes.run(["xcodebuild"], destination, runner)
+                self.assertFalse(destination.exists())
+                self.assertEqual(dict(os.environ), original)
 
     def test_verified_one_test_then_full_complement_without_serialization(self):
         result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),

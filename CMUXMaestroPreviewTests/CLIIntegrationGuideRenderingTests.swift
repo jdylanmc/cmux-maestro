@@ -320,11 +320,19 @@ struct CLIIntegrationGuideRenderingTests {
             let validationBuild = false
             #endif
             let environment = ProcessInfo.processInfo.environment
-            try #require(validationBuild
-                         && Bundle.main.bundleIdentifier == "com.jdylanmc.CMUXMaestroPreview.Validation.Tests"
-                         && environment["GITHUB_ACTIONS"] == "true"
-                         && environment["RUNNER_ENVIRONMENT"] == "github-hosted",
-                         "Presented guide calibration requires the isolated GitHub-hosted validation app")
+            let bundleIdentifier = Bundle.main.bundleIdentifier
+            let githubActions = environment["GITHUB_ACTIONS"]
+            let runnerEnvironment = environment["RUNNER_ENVIRONMENT"]
+            print("Guide calibration venue: validationBuild=\(validationBuild) "
+                  + "bundle=\(String(reflecting: bundleIdentifier)) "
+                  + "GITHUB_ACTIONS=\(String(reflecting: githubActions)) "
+                  + "RUNNER_ENVIRONMENT=\(String(reflecting: runnerEnvironment))")
+            try #require(validationBuild, "Presented guide calibration requires CMUX_VALIDATION")
+            try #require(bundleIdentifier == "com.jdylanmc.CMUXMaestroPreview.Validation.Tests",
+                         "Presented guide calibration requires the exact isolated validation app")
+            try #require(githubActions == "true", "Presented guide calibration requires GITHUB_ACTIONS=true")
+            try #require(runnerEnvironment == "github-hosted",
+                         "Presented guide calibration requires RUNNER_ENVIRONMENT=github-hosted")
             let app = NSApplication.shared
             try #require(app.isRunning, "Calibration requires the validation app's running public lifecycle")
             originalActivationPolicy = app.activationPolicy()

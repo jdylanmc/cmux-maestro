@@ -295,13 +295,31 @@ def read_result(bundle, directory, scope, runner):
     return values
 
 
+def hosted_test_environment(inherited):
+    environment = dict(inherited)
+    require(environment.get("GITHUB_ACTIONS") == "true",
+            "GitHub-hosted native tests require outer GITHUB_ACTIONS=true.")
+    require(environment.get("RUNNER_ENVIRONMENT") == "github-hosted",
+            "GitHub-hosted native tests require outer RUNNER_ENVIRONMENT=github-hosted.")
+    # xcodebuild(1) forwards these to test runners with TEST_RUNNER_ stripped.
+    for name in ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT"):
+        environment["TEST_RUNNER_" + name] = environment[name]
+    return environment
+
+
 def run(command, directory, runner=subprocess.run):
     validate_arguments(command)
+    test_environment = hosted_test_environment(os.environ)
     directory.mkdir(parents=True, exist_ok=False)
     benchmark_flag = os.environ.get(BENCHMARK_FLAG)
     benchmark_enabled = benchmark_flag == "1"
     evidence = {"candidateSelector": SELECTOR, "selectorVerifiedByHostedResult": False,
                 "testBodyOrDeadlineChanged": False, "wholeSuiteSerialized": False,
+                "guideCalibrationVenue": {
+                    "GITHUB_ACTIONS": test_environment["GITHUB_ACTIONS"],
+                    "RUNNER_ENVIRONMENT": test_environment["RUNNER_ENVIRONMENT"],
+                    "forwarding": "xcodebuild TEST_RUNNER_",
+                },
                 "optionalBenchmark": {"identity": BENCHMARK_SELECTOR, "environmentVariable": BENCHMARK_FLAG,
                                       "environmentValue": benchmark_flag, "enabled": benchmark_enabled}}
     evidence_path = directory / "coverage.json"
@@ -316,7 +334,7 @@ def run(command, directory, runner=subprocess.run):
         return build.returncode
     isolated_bundle = directory / "isolated.xcresult"
     isolated = runner([*command, "test-without-building", "-only-testing:" + SELECTOR,
-                       "-resultBundlePath", str(isolated_bundle)], check=False)
+                       "-resultBundlePath", str(isolated_bundle)], check=False, env=test_environment)
     evidence["isolatedExitCode"] = isolated.returncode
     isolated_summary = None
     try:
@@ -334,7 +352,7 @@ def run(command, directory, runner=subprocess.run):
     remaining_bundle = directory / (scope + ".xcresult")
     selection = ["-skip-testing:" + SELECTOR] if evidence["selectorVerifiedByHostedResult"] else []
     remaining = runner([*command, "test-without-building", *selection,
-                        "-resultBundlePath", str(remaining_bundle)], check=False)
+                        "-resultBundlePath", str(remaining_bundle)], check=False, env=test_environment)
     evidence["remainingExitCode"] = remaining.returncode
     remaining_summary = None
     try:

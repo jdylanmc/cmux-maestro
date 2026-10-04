@@ -264,7 +264,12 @@ The isolated non-GUI reader/model checks can run with
 suites retain their full coverage.
 
 The guide rendering/action tests require the isolated GitHub-hosted validation
-app. Their public AppKit presentation calibrates an ordinary SwiftUI button and
+app. The integrated test runner refuses absent/non-hosted outer CI venue values
+before invoking its build or test actions, and forwards only verified original
+`GITHUB_ACTIONS` and `RUNNER_ENVIRONMENT` values through xcodebuild's documented
+`TEST_RUNNER_` mechanism. The native guard logs and checks its compilation,
+bundle and both environment predicates independently before AppKit access.
+Their public AppKit presentation calibrates an ordinary SwiftUI button and
 the unchanged guide in separate hosting controllers in the same synthetic window.
 Exact exposed-root readiness and actions share one 180-second budget per active
 test case, not per control or appearance. A passing minimal control with a failing
