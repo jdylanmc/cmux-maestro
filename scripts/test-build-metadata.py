@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import fnmatch
 import importlib.util
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -50,6 +52,32 @@ class RowInputVenueTests(unittest.TestCase):
     def test_exact_six_ui_cases_pass_once(self):
         counts = row_input.validate_results(*self.report())
         self.assertEqual(counts["passedTests"], 6)
+
+    def test_extraction_failure_preserves_full_stderr_in_uploaded_artifacts(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        job = workflow.split("\n  row-input:\n", 1)[1].split("\n  validate:\n", 1)[0]
+        patterns = [line.strip() for line in job.splitlines()
+                    if line.strip().startswith(".build/row-input/")]
+        message = "synthetic extractor failure:" + "X" * 5000 + ":TAIL_SENTINEL"
+        for failed_kind in ("summary", "tests"):
+            def extract(command, **kwargs):
+                if command[4] == failed_kind:
+                    raise subprocess.CalledProcessError(65, command, stderr=message)
+                return subprocess.CompletedProcess(command, 0, stdout="{}")
+
+            with self.subTest(kind=failed_kind), \
+                    tempfile.TemporaryDirectory(prefix="row-input-extraction-") as temporary:
+                directory = Path(temporary)
+                printed = io.StringIO()
+                with patch("sys.stderr", printed), self.assertRaises(subprocess.CalledProcessError) as failure:
+                    scopes.read_result(directory / "row-input.xcresult", directory, "row-input", extract)
+                self.assertEqual(failure.exception.returncode, 65)
+                error = directory / f"row-input-{failed_kind}.error"
+                self.assertEqual(error.read_text(), message)
+                self.assertNotIn("TAIL_SENTINEL", printed.getvalue())
+                artifact_path = f".build/row-input/run-fixture/{error.name}"
+                self.assertTrue(any(fnmatch.fnmatchcase(artifact_path, pattern) for pattern in patterns),
+                                f"Full extractor stderr is excluded from CI artifacts: {artifact_path}")
 
     def test_zero_missing_extra_and_wrong_target_cannot_pass(self):
         for methods in (set(), set(list(row_input.METHODS)[1:]), row_input.METHODS | {"testUnapproved"}):
