@@ -12,6 +12,7 @@ import struct
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 import uuid
@@ -25,6 +26,25 @@ probe = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(probe)
 metadata = probe.metadata
 acceptance = probe.acceptance_evidence
+
+
+class GuideModuleImportTests(unittest.TestCase):
+    def test_integrated_import_does_not_write_source_bytecode(self):
+        with tempfile.TemporaryDirectory(prefix="cmux-guide-import-") as directory:
+            root = Path(directory)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            for name in ("run-integrated-test-scopes.py", "run-guide-ui-validation.py",
+                         "verify-build-metadata.py", "guide-acceptance-evidence.py"):
+                shutil.copyfile(ROOT / "scripts" / name, scripts / name)
+            result = subprocess.run([
+                sys.executable, "-I", "-c",
+                "import runpy, sys; sys.dont_write_bytecode = False; "
+                "runpy.run_path(sys.argv[1])['guide_module']()",
+                str(scripts / "run-integrated-test-scopes.py"),
+            ], capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual([str(path.relative_to(root)) for path in root.rglob("*.pyc")], [])
 
 
 class GuideAcceptanceParserTests(unittest.TestCase):
