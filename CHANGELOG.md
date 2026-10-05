@@ -14,6 +14,10 @@ Notable changes are recorded using Keep a Changelog categories.
   29 prototype, approved contract, 56-state synthetic review gallery and
   current ticket handoff (#134). Preserve earlier evidence and distinguish
   the approved target from native delivery and current feature readiness.
+- Add label-owned copy actions for permitted raw session, observation,
+  child-history and path values in agent previews and pinned details,
+  preserving provenance, keyboard access and explicit clipboard feedback
+  (#112).
 
 ### Changed
 
