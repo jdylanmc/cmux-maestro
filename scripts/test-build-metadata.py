@@ -83,7 +83,19 @@ class RowInputVenueTests(unittest.TestCase):
             "SKIP_INSTALL": "YES", "ENABLE_APP_SANDBOX": "NO",
             "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG CMUX_VALIDATION",
             "TEST_TARGET_NAME": "CMUXMaestroRowInputFixture",
+            "INFOPLIST_KEY_LSUIElement": "YES",
         }} for name, identifier in metadata.ROW_INPUT_TARGETS.items()]
+
+    def test_row_fixture_must_be_an_accessory_before_launch(self):
+        for value in (None, "NO"):
+            rows = self.settings()
+            fixture = next(row["buildSettings"] for row in rows if row["target"] == "CMUXMaestroRowInputFixture")
+            if value is None:
+                fixture.pop("INFOPLIST_KEY_LSUIElement")
+            else:
+                fixture["INFOPLIST_KEY_LSUIElement"] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                metadata.verify_row_input_settings(rows)
 
     def test_exact_six_ui_cases_pass_once(self):
         counts = row_input.validate_results(*self.report())
@@ -223,8 +235,21 @@ class RowInputVenueTests(unittest.TestCase):
                 (path / "Contents/MacOS" / executable).write_text("metadata-only fixture; never executed")
                 (path / "Contents/Info.plist").write_bytes(plistlib.dumps({
                     "CFBundleIdentifier": identifier, "CFBundlePackageType": kind, "CFBundleExecutable": executable,
+                    **({"LSUIElement": True} if path == fixture else {}),
                 }))
             metadata.verify_row_input_products(products)
+            fixture_info = fixture / "Contents/Info.plist"
+            original_fixture_info = fixture_info.read_bytes()
+            for value in (None, False, "YES"):
+                value_info = plistlib.loads(original_fixture_info)
+                if value is None:
+                    value_info.pop("LSUIElement")
+                else:
+                    value_info["LSUIElement"] = value
+                fixture_info.write_bytes(plistlib.dumps(value_info))
+                with self.subTest(accessoryFlag=value), self.assertRaises(ValueError):
+                    metadata.verify_row_input_products(products)
+            fixture_info.write_bytes(original_fixture_info)
             for path, _, _, _ in bundles:
                 info = path / "Contents/Info.plist"
                 original = info.read_bytes()
