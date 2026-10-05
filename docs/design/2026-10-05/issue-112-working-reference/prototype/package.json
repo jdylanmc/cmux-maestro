@@ -5,9 +5,7 @@
     "test": "node verify-copy.cjs && node verify-issue-112.cjs && node verify-stress.cjs",
     "test:copy": "node verify-copy.cjs",
     "test:stress": "node verify-stress.cjs",
-    "test:rapid-fire": "node verify-rapid-fire.cjs",
-    "test:issue-112": "node verify-issue-112.cjs",
-    "test:copy": "node verify-copy.cjs"
+    "test:issue-112": "node verify-issue-112.cjs"
   },
   "devDependencies": {
     "playwright": "^1.56.1"
