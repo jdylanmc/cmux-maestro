@@ -34,6 +34,21 @@ only with evidence the objective began then. Label an unestablished start or
 cutoff unavailable. A known later observation may yield a labeled lower bound,
 never an invented exact duration.
 
+## Detect a stalled turn
+
+Before reading history, check the objective owner's latest turn. Did it fail
+(exhausted retries, disconnect, provider error, other runtime failure), finish
+normally, or leave the agent healthy but idle/waiting? Do not mistake healthy
+idle, dependency waits, or Joe-mode's queued continuation for failure.
+
+If the latest turn failed, lead with the error class and time. Say work stopped
+and needs a new human/controller turn. Set the snapshot cutoff to the failure,
+not report time. Do not imply work continued after the failure.
+
+Missing failure evidence does not prove the agent is running. If event history
+is partial, mark execution state **unverified**. Report only; never resume the
+task.
+
 ## Inspect once, within scope
 
 Read existing progress records and minimum live evidence to distinguish
@@ -65,6 +80,8 @@ Use the human's vocabulary; expand unfamiliar acronyms on first use. Start with
 the objective in no more than three sentences, then short completed/remaining
 bullets. Include:
 
+- **Execution state:** running, idle, halted (show error and time), or
+  unverified; lead with this when halted.
 - **Snapshot / elapsed:** timestamp and objective duration, or explicit limits.
 - **Completed / remaining:** concrete outcomes, blockers, and pending decisions.
 - **Tool calls:** this agent's objective-only count and coverage.

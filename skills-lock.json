@@ -347,7 +347,7 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/status-report/SKILL.md",
-      "computedHash": "8714b5d50e7a0f0ca1cc0b0255eb8c1c9b588f7a09ad04df11bfecfecfa26b60"
+      "computedHash": "e095349e44efef28fa46d72b02d95d8cabaa718e055fdbf652a90bb0632f0360"
     },
     "swiftui-design-principles": {
       "source": "arjitj2/swiftui-design-principles",
