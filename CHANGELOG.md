@@ -21,6 +21,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Attempt Copilot integration with stable CLI 1.x releases on protocol 3 instead
+  of an exact-release whitelist. Preserve source ownership, disabled-state
+  readback and transaction guards; report incompatible version/protocol pairs.
+
 - Constrain the working long-identity action-menu reference to the viewport,
   preserving complete accessible names and keyboard-reachable actions (#132).
 - Guide native Maestro coordinators and workers to send compact milestone-only

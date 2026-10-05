@@ -39,7 +39,14 @@ nonisolated struct CopilotSetupMetadata: Codable, Equatable, Sendable {
     let hooks: [Hook]
     let plugins: [Plugin]
 
-    var supported: Bool { ["1.0.88", "1.0.89"].contains(version) && protocolVersion == 3 }
+    var supported: Bool {
+        let components = version.split(separator: ".", omittingEmptySubsequences: false)
+        return protocolVersion == 3 && components.count == 3 && components[0] == "1"
+            && components.allSatisfy { component in
+                !component.isEmpty && (component.count == 1 || component.first != "0")
+                    && component.utf8.allSatisfy { (48...57).contains($0) }
+            }
+    }
 }
 
 nonisolated enum CopilotMetadataResult: Sendable {
@@ -237,7 +244,7 @@ nonisolated final class CopilotMetadataExchange: @unchecked Sendable {
                 method = "plugins.uninstall"
                 params = ["name": CopilotPluginManifest.name, "directSourceId": identity]
             case .disable(let identity):
-                guard status.version == "1.0.89", Self.validIdentity(identity) else { throw CopilotFileError.unsafePath }
+                guard Self.validIdentity(identity) else { throw CopilotFileError.unsafePath }
                 method = "plugins.list"
                 params = [:]
             }

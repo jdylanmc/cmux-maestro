@@ -571,7 +571,7 @@ nonisolated final class CopilotObserverRegistration: Sendable {
                isCancelled: @escaping @Sendable () -> Bool = { false }) throws -> Transaction {
         try validateHome()
         guard metadata.supported else {
-            throw CopilotRegistrationConflict("Observer setup is verified only for Copilot CLI 1.0.88 or 1.0.89, protocol 3.")
+            throw CopilotRegistrationConflict("Observer setup requires a stable Copilot CLI 1.x release using protocol 3.")
         }
         let settings = try readSettings()
         let others = try otherHooks()
@@ -617,9 +617,6 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         guard Set(pluginHooks.map(\.hookType)) == (legacyDiscovered ? Set(CopilotPluginManifest.events) : []),
               pluginHooks.count == (legacyDiscovered ? 3 : 0) else {
             throw CopilotRegistrationConflict("Provider discovery disagrees with the recognized installed plugin declarations.")
-        }
-        if !pluginEnabled, metadata.version != "1.0.89" {
-            throw CopilotRegistrationConflict("Disabled direct-plugin behavior has not been verified for this provider version.")
         }
         let fileDisabled = try owned.data.map { try CopilotSetupJSON.bool(CopilotSetupJSON.object($0)["disableAllHooks"]) } ?? false
         if owned.data != nil, !fileDisabled, installedKind == .legacy, pluginEnabled {
