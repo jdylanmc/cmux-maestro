@@ -172,8 +172,9 @@ struct SidebarClarityTests {
         #expect(SidebarPresentation.sessionStatus(session) ==
                 "State unavailable. Child history incomplete; missing work is not assumed finished")
         #expect(SidebarPresentation.activityTreatment(SidebarPresentation.sessionState(session), reduceMotion: false) == .none)
-        #expect(SidebarPresentation.sessionDetails(session).contains(.init(title: "Child history",
-            value: "Incomplete; missing work is not assumed finished")))
+        let history = SidebarPresentation.sessionDetails(session).first { $0.title == "Child history" }
+        #expect(history?.value == "Incomplete; missing work is not assumed finished")
+        #expect(history?.copyableValue == "incomplete")
     }
 
     @Test func focusedBorderUsesOnlyTheSelectedWorkspacesUniqueFocusedSurface() {

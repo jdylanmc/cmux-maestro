@@ -98,6 +98,133 @@ struct SidebarSessionCopyTests {
         }
     }
 
+    @Test func nativeCopyWritesExactRawStringsAndRejectsEmptyValuesWithoutClearingClipboard() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let raw = "/Users/example/repository/../workspace"
+        pasteboard.setString("previous", forType: .string)
+        #expect(SidebarSessionCopy.copy(raw, to: pasteboard))
+        #expect(pasteboard.string(forType: .string) == raw)
+        #expect(pasteboard.pasteboardItems?.count == 1)
+        #expect(!SidebarSessionCopy.copy("", to: pasteboard))
+        #expect(pasteboard.string(forType: .string) == raw)
+    }
+
+    @Test func copyableFieldKeepsActionOnLabelAndCopiesOnlyOnEnter() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let raw = "/synthetic/worktree/../project"
+        var writes: [String] = []
+        var focus: [Bool] = []
+        let frame = NSRect(x: 0, y: 0, width: 260, height: 90)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = NSHostingView(rootView: SidebarCopyableValue(
+            value: "~/project", label: "Workspace path", clipboardValue: raw,
+            copy: {
+                writes.append($0)
+                return SidebarSessionCopy.copy($0, to: pasteboard)
+            },
+            focusChanged: { focus.append($0) }
+        ))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        hosting.frame = frame
+        try await settle(hosting)
+
+        let button = try copyButton(in: hosting)
+        let buttonRect = hosting.convert(button.bounds, from: button)
+        #expect(button.accessibilityLabel() == "Copy workspace path")
+        let targetRect = button.accessibilityFrame()
+        #expect(targetRect.width >= 24 && targetRect.height >= 24)
+        #expect(abs(buttonRect.width - 24) < 0.5)
+        #expect(writes.isEmpty && pasteboard.string(forType: .string) == nil)
+        let fieldImage = try capture(hosting)
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let image = folder.appendingPathComponent("copy-field-label-owner.png")
+        try #require(fieldImage.representation(using: .png, properties: [:])).write(to: image)
+        let lines = try SidebarRenderingEvidence.recognizedLines(in: image, dark: false, naturalLanguage: true)
+        let labelIndex = try #require(lines.firstIndex(of: "Workspace path"))
+        let valueIndex = try #require(lines.firstIndex {
+            $0.localizedCaseInsensitiveContains("project") && !$0.localizedCaseInsensitiveContains("Workspace")
+        })
+        #expect(labelIndex < valueIndex)
+
+        #expect(window.makeFirstResponder(button))
+        try await settle(hosting)
+        #expect(focus == [true])
+        #expect(button.focusRingType == .exterior)
+        #expect(hosting.convert(button.bounds, from: button) == buttonRect)
+        #expect(writes.isEmpty)
+        let enter = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\r",
+            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36
+        ))
+        button.keyDown(with: enter)
+        try await settle(hosting)
+        #expect(writes == [raw])
+        #expect(pasteboard.string(forType: .string) == raw)
+    }
+
+    @Test func previewScrollResetsForANewSubjectButNotSameSubjectRefresh() async throws {
+        func card(_ id: String, _ title: String, _ prefix: String) -> SidebarHoverCard {
+            SidebarHoverCard(
+                data: .init(
+                    id: id, category: "Agent preview", title: title,
+                    lines: (0..<30).map { .init(title: "Field \($0)", value: "\(prefix)-value-\($0)") }
+                ),
+                close: {}, copyValue: { _ in false }
+            )
+        }
+        let frame = NSRect(x: 0, y: 0, width: 300, height: 260)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = NSHostingView(rootView: AnyView(card("subject-a", "Subject A", "a")))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        hosting.frame = frame
+        try await settle(hosting)
+        func recognizedText(_ filename: String) throws -> [String] {
+            let bitmap = try capture(hosting)
+            let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent(".build/layout-validation/offscreen")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let image = folder.appendingPathComponent(filename)
+            try #require(bitmap.representation(using: .png, properties: [:])).write(to: image)
+            return try SidebarRenderingEvidence.recognizedLines(in: image, dark: false, naturalLanguage: true)
+        }
+        func scrollView() throws -> NSScrollView {
+            try #require(views(in: hosting).compactMap { $0 as? NSScrollView }.first)
+        }
+        func scrollToBottom(_ scroll: NSScrollView) throws {
+            let document = try #require(scroll.documentView)
+            scroll.contentView.scroll(to: NSPoint(
+                x: 0, y: max(0, document.bounds.height - scroll.contentView.bounds.height)
+            ))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+
+        var scroll = try scrollView()
+        try scrollToBottom(scroll)
+        #expect(scroll.contentView.bounds.origin.y > 0)
+        hosting.rootView = AnyView(card("subject-b", "Subject B", "b"))
+        try await settle(hosting)
+        scroll = try scrollView()
+        #expect(scroll.contentView.bounds.origin.y == 0)
+        #expect(try recognizedText("preview-subject-b-top.png").contains("Subject B"))
+
+        try scrollToBottom(scroll)
+        #expect(scroll.contentView.bounds.origin.y > 0)
+        hosting.rootView = AnyView(card("subject-b", "Subject B", "refreshed"))
+        try await settle(hosting)
+        scroll = try scrollView()
+        #expect(scroll.contentView.bounds.origin.y > 0)
+        #expect(try recognizedText("preview-subject-b-refresh-bottom.png").contains("refreshed-value-29"))
+    }
+
     @Test func cardCopiesOwnAndParentValuesAndResetsFeedbackOnIdentityChange() async throws {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
@@ -108,11 +235,15 @@ struct SidebarSessionCopyTests {
                 data: .init(id: "same-card", category: "Agent preview", title: "Synthetic agent",
                             lines: [.sessionID(id, isParent: parent)]),
                 close: { Issue.record("Copy must not close the preview") },
-                copySessionID: {
-                    copies.append($0)
-                    return succeeds && SidebarSessionCopy.copy($0, to: pasteboard)
-                }
-            )
+                    copyValue: {
+                        guard let id = UUID(uuidString: $0) else {
+                            Issue.record("Session ID copy must preserve the exact UUID")
+                            return false
+                        }
+                        copies.append(id)
+                        return succeeds && SidebarSessionCopy.copy($0, to: pasteboard)
+                    }
+                )
         }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 260),
                               styleMask: .borderless, backing: .buffered, defer: false)
@@ -191,7 +322,10 @@ struct SidebarSessionCopyTests {
     @Test func standaloneControlResetsFeedbackWithoutIdentityOrSidebarDependencies() async throws {
         var copies = 0
         func value(_ text: String) -> SidebarCopyableValue {
-            SidebarCopyableValue(value: text, label: "Example value", copy: { copies += 1; return true })
+            SidebarCopyableValue(
+                value: text, label: "Example value", clipboardValue: text,
+                copy: { _ in copies += 1; return true }
+            )
         }
         let hosting = NSHostingView(rootView: value("first"))
         hosting.frame = NSRect(x: 0, y: 0, width: 224, height: 100)
@@ -215,7 +349,7 @@ struct SidebarSessionCopyTests {
 
     @Test func openingHoverExplicitPreviewAndRefreshingNeverCopy() throws {
         var copies = 0
-        let presenter = SidebarHoverPresenter(copySessionID: { _ in copies += 1; return true },
+        let presenter = SidebarHoverPresenter(copyValue: { _ in copies += 1; return true },
                                               showPanel: { _, _, _ in })
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 400, height: 400),
                               styleMask: .borderless, backing: .buffered, defer: false)
@@ -249,7 +383,7 @@ struct SidebarSessionCopyTests {
                 .sessionID(ownID, canCopy: false),
                 .init(title: "Worker ID", value: parentID.uuidString)
             ]),
-            close: {}, copySessionID: { _ in Issue.record("No copy action is available"); return false }
+            close: {}, copyValue: { _ in Issue.record("No copy action is available"); return false }
         ))
         hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 260)
         try await settle(hosting)
@@ -260,7 +394,7 @@ struct SidebarSessionCopyTests {
         let hosting = NSHostingView(rootView: SidebarHoverCard(
             data: .init(id: "negative-controls", category: "Agent preview", title: "Synthetic agent",
                         lines: [.sessionID(ownID)]),
-            close: {}, copySessionID: { _ in true }
+            close: {}, copyValue: { _ in true }
         ).background(Color(nsColor: .windowBackgroundColor)))
         hosting.frame = NSRect(x: 0, y: 0, width: 224, height: 260)
         try await settle(hosting)
@@ -303,7 +437,7 @@ struct SidebarSessionCopyTests {
 
     @Test func nativeFeedbackWrapsWithoutClippingOrTakingFocus() async throws {
         let hosting = NSHostingView(rootView: SidebarCopyableValue(
-            value: "Example", label: "Example value", copy: { false }
+            value: "Example", label: "Example value", clipboardValue: "raw-example", copy: { _ in false }
         ).background(Color(nsColor: .windowBackgroundColor)))
         hosting.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
         try await settle(hosting)
@@ -328,7 +462,7 @@ struct SidebarSessionCopyTests {
             let hosting = NSHostingView(rootView: SidebarHoverCard(
                 data: .init(id: "synthetic-parent", category: "Agent preview", title: "Synthetic child",
                             lines: [.sessionID(parentID, isParent: true)]),
-                close: {}, copySessionID: { _ in copies += 1; return succeeds }
+                close: {}, copyValue: { _ in copies += 1; return succeeds }
             ).environment(\.colorScheme, dark ? .dark : .light)
                 .background(Color(nsColor: .windowBackgroundColor)))
             window.contentView = hosting

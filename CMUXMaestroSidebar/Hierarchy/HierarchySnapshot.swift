@@ -69,6 +69,11 @@ extension HierarchyAvailability where Value == String? {
         case .available(let path): path.map(SidebarPathDisplay.text) ?? "No path shared"
         }
     }
+
+    var copyablePathValue: String? {
+        guard case .available(let path) = self, let path, !path.isEmpty else { return nil }
+        return path
+    }
 }
 
 enum SidebarPathDisplay {
