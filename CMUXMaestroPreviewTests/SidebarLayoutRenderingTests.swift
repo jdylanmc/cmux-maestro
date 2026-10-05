@@ -809,7 +809,8 @@ struct SidebarLayoutRenderingTests {
                     #expect(metrics.viewportHeight >= 80)
                     let text = try SidebarRenderingEvidence.recognizedLines(in: destination, dark: appearance == .dark)
                     #expect(text.contains { $0.contains("Active window") })
-                    #expect(Self.containsCoordinatorModel(text))
+                    #expect(text.contains { $0.contains("coordinator-model") },
+                            "Expected exact coordinator-model text in the rendered footer; OCR: \(text)")
                     #expect(!text.contains { $0.contains("CMUX connected") })
                     let image = try #require(NSBitmapImageRep(data: Data(contentsOf: destination)))
                     var painted = 0
@@ -894,27 +895,6 @@ struct SidebarLayoutRenderingTests {
                             "Must reject missing punctuation: \(unpunctuated)")
                 }
             }
-        }
-    }
-
-    @Test func coordinatorModelOCRRequiresBothWords() {
-        #expect(Self.containsCoordinatorModel(["coordinator-model"]))
-        #expect(Self.containsCoordinatorModel(["Coordinator model"]))
-        #expect(Self.containsCoordinatorModel(["Coordinator", "model"]))
-        #expect(!Self.containsCoordinatorModel(["Coordinator"]))
-        #expect(!Self.containsCoordinatorModel(["worker-model"]))
-        #expect(!Self.containsCoordinatorModel(["Coordinator", "worker model"]))
-    }
-
-    private static func containsCoordinatorModel(_ lines: [String]) -> Bool {
-        let normalized = lines.map { $0.lowercased().filter(\.isLetter) }
-        if normalized.contains(where: { $0.contains("coordinatormodel") }) {
-            return true
-        }
-        return normalized.indices.contains { index in
-            index + 1 < normalized.count
-                && normalized[index].hasSuffix("coordinator")
-                && normalized[index + 1].hasPrefix("model")
         }
     }
 
