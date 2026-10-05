@@ -280,25 +280,35 @@ struct SidebarCopilotTreeTests {
     @Test
     func pollingReplacesFullHistoryWithNewlyObservedActiveWork() async {
         let harness = SidebarReadHarness()
+        let clock = CopilotReaderTestClock()
         let history = (0..<SidebarCopilotTree.maximumNodes).map {
             fixtures.child("history-\($0)", state: .completed)
         }
+        // Replacement ordering must not race unrelated wall-clock expiry.
         let poller = SidebarCopilotPolling(
             read: neutralRead { try await harness.read($0) },
-            pause: { try await Task.sleep(for: .milliseconds(5)) }
+            pause: { try await Task.sleep(for: .milliseconds(5)) },
+            expiryPause: sidebarFrozenExpiry,
+            now: { clock.now() }
         )
         poller.update(topology: fixtures.topology(), connected: true)
         poller.setVisible(true)
         await sidebarEventually { await harness.callCount == 1 }
-        await harness.succeed(0, with: fixtures.snapshot(sessions: [fixtures.session(children: history)]))
+        await harness.succeed(0, with: fixtures.snapshot(
+            sessions: [fixtures.session(children: history, now: clock.now())], now: clock.now()
+        ))
         await sidebarEventually { await harness.callCount == 2 }
         #expect(poller.tree.knownRunningChildren == 0)
+        #expect(poller.tree.sessions.first?.nodes.count == SidebarCopilotTree.maximumNodes)
+        clock.advance(by: 1)
         let children = history + [
             fixtures.child("new-working", parent: "parent", state: .working),
             fixtures.child("new-blocked", parent: "parent", state: .blocked),
             fixtures.child("parent", state: .completed),
         ]
-        await harness.succeed(1, with: fixtures.snapshot(sessions: [fixtures.session(children: children)]))
+        await harness.succeed(1, with: fixtures.snapshot(
+            sessions: [fixtures.session(children: children, now: clock.now())], now: clock.now()
+        ))
         await sidebarEventually { poller.tree.knownRunningChildren == 1 }
         #expect(poller.tree.sessions.first?.nodes.contains { $0.id == "new-blocked" } == true)
         #expect(poller.tree.sessions.first?.nodes.first?.id == "parent")

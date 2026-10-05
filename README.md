@@ -1587,8 +1587,26 @@ with its test identity and launch-delay argument retained. It distinguishes
 startup, PID publication, cancellation/owned-process completion and exit checks
 without advancing the fixture's frozen clock or changing its three-second PID
 publication deadline. A diagnostic timeout fails the host; it is not a retry or
-a cancellation pass. The prior stalled run did not capture these boundaries, so
-its underlying cause remains unproven.
+a cancellation pass. At PID readiness it captures the exact direct child's
+PID, parent, process group, start identity and numeric state. At a stall it
+revalidates that identity before reading at most 64 members of that exact group.
+These are sequential observations, not an atomic snapshot or a quiescence
+verdict. Missing identities, failed queries and incomplete enumeration remain
+unknown; a changed identity prevents group inspection. If Darwin hides an
+exited child from `proc_pidinfo`, a non-consuming `waitid` observation can
+distinguish an exited child from `ECHILD`, but cannot revalidate its start
+identity or prove group cleanup. The watchdog never signals the metadata group.
+
+`runnerMetadataReturned` records the test task receiving the result of
+`await runner.metadata(...)`; it does not observe the private dispatch worker
+producing its result. `outerTaskValueReceived` separately records the outer
+test receiving `task.value`. Both flags are captured at the watchdog deadline,
+before the subsequent OS observations. False flags do not establish where a
+continuation is blocked. Observation runs outside locks with the existing
+watchdog and five-second diagnostic containment still armed. The prior stalled
+runs did not capture this evidence, so their underlying cause remains unproven.
+Sampler exit/signal/timeout and reap status are saved independently of a missing
+or unreadable sample file, whose error is retained as `sampleReadError`.
 `test-copilot-setup.sh` also runs disposable Foundation-only controls: successful
 disarming, a stalled injected clock, continued polling of a frozen clock, and
 a real stuck sampler that writes partial output before ignoring termination.
@@ -1596,6 +1614,11 @@ Both stalled controls must fail with sampled actual-runner stacks; an unexpected
 return, missing stack or outer probe timeout fails validation. The sampler-fault
 control must fail after killing and reaping its exact child while preserving
 partial output; it does not stand in for real stack-collection acceptance.
+Additional finite controls preserve nonzero sampler exits and timeouts with
+missing output, and distinguish living, exited-but-unreaped, and returned/reaped
+child contexts from the outer task completing. Changed-start and truncated-group
+controls query only newly owned fixture processes and must retain unknown states.
+Every stalled control still exits 124; successful disarming still exits zero.
 
 The navigation response-ordering fixtures inject a cancellation-aware,
 non-expiring deadline through the connection model's navigation dependency.

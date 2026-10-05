@@ -509,14 +509,15 @@ struct SidebarInternalTaskRenderingTests {
         let preferences = fixture.preferences()
         preferences.selectedMode = mode
         let data = SidebarTreeFixtures()
-        let now = Date()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
         let event = UUID()
         let child = CopilotChildWork(id: "result", parentID: nil, kind: .subagent, name: "Reviewed outcome",
                                     state: .completed, model: nil, terminalEvent: .init(id: event, timestamp: now))
         let model = await makeModel(data, children: [child], now: now, liveness: ownerAlive ? .alive : .dead)
         defer { model.setVisible(false) }
         let hierarchy = model.hierarchy
-        let mounted = mount(model, preferences, width: 280)
+        // This tests focus, not expiry: model, presentation and action share one instant.
+        let mounted = mount(model, preferences, width: 280, now: now, actionNow: { now })
         defer { mounted.window.contentView = nil; mounted.window.close() }
         try #require(!mounted.window.isVisible, "The fixture must start unordered")
         await sidebarEventually { names(mounted.host).count == 1 }
@@ -543,6 +544,44 @@ struct SidebarInternalTaskRenderingTests {
         #expect(mounted.window.isKeyWindow == wasKey && mounted.window.isMainWindow == wasMain)
         print("R4 \(mode.rawValue)/alive=\(ownerAlive): initial/order-before-action=false; after-dismiss=\(mounted.window.isVisible); local=\(focused.localFocusID ?? "none")")
         try capture(mounted.host, name: "internal-task-dismiss-\(mode.rawValue)-owner-\(ownerAlive)")
+    }
+
+    @Test(arguments: SidebarMode.allCases)
+    func frozenPresentationClockCannotAuthorizeStaleDismissal(_ mode: SidebarMode) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.selectedMode = mode
+        let data = SidebarTreeFixtures()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let event = UUID()
+        let child = CopilotChildWork(id: "result", parentID: nil, kind: .subagent, name: "Reviewed outcome",
+                                    state: .completed, model: nil, terminalEvent: .init(id: event, timestamp: now))
+        let model = await makeModel(data, children: [child], now: now)
+        defer { model.setVisible(false) }
+        let hierarchy = model.hierarchy
+        // Omit the action clock: frozen rendering must not grant mutation authority.
+        let mounted = mount(model, preferences, width: 280, now: now)
+        defer { mounted.window.contentView = nil; mounted.window.close() }
+        await sidebarEventually { names(mounted.host).count == 1 }
+        try #require(names(mounted.host).count == 1)
+        try #require(model.copilot.tree.dismissibleOutcomes == [
+            .init(sessionID: data.sessionID, childID: "result", eventID: event)
+        ])
+        let control = try #require(buttons(mounted.host).first { $0.localFocusID == "task-dismiss:\(data.sessionID):result" })
+        try #require(mounted.window.makeFirstResponder(control))
+        try #require(!mounted.window.isVisible)
+        let wasKey = mounted.window.isKeyWindow
+        let wasMain = mounted.window.isMainWindow
+        try #require(!SidebarCopilotTree.isFresh(now, now: Date()))
+        control.keyDown(with: keyEvent(window: mounted.window))
+        #expect(preferences.history.dismissed.isEmpty)
+        #expect(names(mounted.host).count == 1)
+        #expect(mounted.window.firstResponder === control)
+        #expect(model.navigation.status == .idle)
+        #expect(model.hierarchy == hierarchy)
+        #expect(!mounted.window.isVisible)
+        #expect(mounted.window.isKeyWindow == wasKey && mounted.window.isMainWindow == wasMain)
     }
 
     @Test func programmaticFocusRestorationDoesNotOpenTheKeyboardPreview() throws {
@@ -586,12 +625,14 @@ struct SidebarInternalTaskRenderingTests {
     }
     private func mount(
         _ model: SidebarConnectionModel, _ preferences: SidebarPreferences, width: Int, reduceMotion: Bool = false,
-        now: Date? = nil
+        now: Date? = nil, actionNow: (() -> Date)? = nil
     ) -> (window: NSWindow, host: NSView) {
         let frame = NSRect(x: 0, y: 0, width: width, height: 900)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let host = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
+        let view = actionNow.map { SidebarView(model: model, preferences: preferences, actionNow: $0) }
+            ?? SidebarView(model: model, preferences: preferences)
+        let host = NSHostingView(rootView: view
             .environment(\.sidebarPresentationNow, { now ?? Date() })
             .environment(\._accessibilityReduceMotion, reduceMotion)
             .background(Color(nsColor: .windowBackgroundColor)))

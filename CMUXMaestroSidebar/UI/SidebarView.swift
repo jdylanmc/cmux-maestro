@@ -416,6 +416,8 @@ struct SidebarView: View {
     private static let hostFooterClearance: CGFloat = 50
     let model: SidebarConnectionModel
     @Bindable private var preferences: SidebarPreferences
+    // Mutation freshness is independent of the display-only presentation clock.
+    private let actionNow: () -> Date
     @State private var showingHistory = false
     @State private var settingsStartInHistory = false
     @State private var unavailableHeaderAction: SidebarHeaderAction?
@@ -428,9 +430,13 @@ struct SidebarView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.sidebarPresentationNow) private var now
 
-    init(model: SidebarConnectionModel, preferences: SidebarPreferences) {
+    init(
+        model: SidebarConnectionModel, preferences: SidebarPreferences,
+        actionNow: @escaping () -> Date = { Date() }
+    ) {
         self.model = model
         self.preferences = preferences
+        self.actionNow = actionNow
     }
 
     var body: some View {
@@ -758,7 +764,7 @@ struct SidebarView: View {
     private func dismiss(_ outcome: SidebarDismissedOutcome) {
         if let session = model.copilot.tree.sessions.first(where: { $0.id == outcome.sessionID }),
            session.nodes.first(where: { $0.id == outcome.childID })?.isInternalTask == true {
-            guard preferences.dismissInternalTask(outcome, in: model.copilot.tree) else { return }
+            guard preferences.dismissInternalTask(outcome, in: model.copilot.tree, now: actionNow()) else { return }
             dismissedTaskOwner = (session.id, session.surfaceID, session.workspaceID)
             model.copilot.updateHistory(preferences.history)
             return
