@@ -30,6 +30,11 @@ The report is on demand and read-only. It may inspect existing progress and
 runtime information to describe the work, but it does not change tickets,
 direct subagents, or advance the underlying task.
 
+If the agent's last turn crashed (model/provider error, exhausted retries,
+disconnect), say so first. Do not imply work continued afterward. The user
+needs to know the agent stopped and needs a new turn. Report only; never
+restart the task.
+
 Use observable timing and activity to make how long the agent has been
 churning understandable. If a time, count, assignment, or ticket title cannot
 be established, explicitly mark that information unavailable rather than
