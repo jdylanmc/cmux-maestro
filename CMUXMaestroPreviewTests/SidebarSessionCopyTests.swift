@@ -169,6 +169,164 @@ struct SidebarSessionCopyTests {
         #expect(pasteboard.string(forType: .string) == raw)
     }
 
+    @Test func nativeLabelHoverUsesOnlyItsFieldHeaderAndDoesNotCopyOrShiftLayout() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.setString("previous", forType: .string)
+        let rawValues = ["/synthetic/workspace", "/synthetic/project"]
+        var writes: [String] = []
+        let frame = NSRect(x: 0, y: 0, width: 260, height: 120)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = NSHostingView(rootView: VStack(alignment: .leading, spacing: 4) {
+            SidebarCopyableValue(
+                value: "~/workspace", label: "Workspace path", clipboardValue: rawValues[0],
+                copy: {
+                    writes.append($0)
+                    return SidebarSessionCopy.copy($0, to: pasteboard)
+                }
+            )
+            SidebarCopyableValue(
+                value: "~/project", label: "Project path", clipboardValue: rawValues[1],
+                copy: {
+                    writes.append($0)
+                    return SidebarSessionCopy.copy($0, to: pasteboard)
+                }
+            )
+        }.frame(width: frame.width, height: frame.height, alignment: .topLeading))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        hosting.frame = frame
+        try await settle(hosting)
+
+        let buttons = views(in: hosting).compactMap { $0 as? NSButton }
+            .filter { $0.accessibilityIdentifier() == "hover-copy-value" }
+        let workspaceButton = try #require(buttons.first { $0.accessibilityLabel() == "Copy workspace path" })
+        let projectButton = try #require(buttons.first { $0.accessibilityLabel() == "Copy project path" })
+        let workspaceButtonRect = hosting.convert(workspaceButton.bounds, from: workspaceButton)
+        let projectButtonRect = hosting.convert(projectButton.bounds, from: projectButton)
+        let hoverViews = views(in: hosting).compactMap { $0 as? SidebarCopyableValueHoverView }
+        let workspaceHoverView = try #require(hoverViews.first {
+            hosting.convert($0.bounds, from: $0).contains(NSPoint(
+                x: workspaceButtonRect.minX - 2, y: workspaceButtonRect.midY
+            ))
+        })
+        let projectHoverView = try #require(hoverViews.first {
+            hosting.convert($0.bounds, from: $0).contains(NSPoint(
+                x: projectButtonRect.minX - 2, y: projectButtonRect.midY
+            ))
+        })
+        let workspaceTrackingArea = try #require(workspaceHoverView.trackingAreas.first)
+        let projectTrackingArea = try #require(projectHoverView.trackingAreas.first)
+        let workspaceTrackingRect = hosting.convert(workspaceTrackingArea.rect, from: workspaceHoverView)
+        let projectTrackingRect = hosting.convert(projectTrackingArea.rect, from: projectHoverView)
+        let workspaceLabelPoint = NSPoint(
+            x: (workspaceTrackingRect.minX + workspaceButtonRect.minX) / 2,
+            y: workspaceTrackingRect.midY
+        )
+        let projectLabelPoint = NSPoint(
+            x: (projectTrackingRect.minX + projectButtonRect.minX) / 2,
+            y: projectTrackingRect.midY
+        )
+        let workspaceValuePoint = NSPoint(
+            x: workspaceTrackingRect.minX + 12,
+            y: workspaceTrackingRect.midY + (hosting.isFlipped ? 21 : -21)
+        )
+        let projectValuePoint = NSPoint(
+            x: projectTrackingRect.minX + 12,
+            y: projectTrackingRect.midY + (hosting.isFlipped ? 21 : -21)
+        )
+        let blankPoint = NSPoint(x: hosting.bounds.maxX - 3, y: workspaceTrackingRect.midY)
+        let workspaceButtonPoint = NSPoint(x: workspaceButtonRect.midX, y: workspaceButtonRect.midY)
+
+        func isVisiblyPainted(_ view: NSView) -> Bool {
+            var ancestor: NSView? = view
+            while let current = ancestor {
+                if current.isHidden || current.alphaValue <= 0 ||
+                    current.layer?.isHidden == true || current.layer?.opacity == 0 {
+                    return false
+                }
+                ancestor = current.superview
+            }
+            return true
+        }
+
+        func enterExitEvent(_ type: NSEvent.EventType, at point: NSPoint) throws -> NSEvent {
+            try #require(NSEvent.enterExitEvent(
+                with: type, location: hosting.convert(point, to: nil), modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                trackingNumber: 0, userData: nil
+            ))
+        }
+
+        func movePointer(to point: NSPoint) throws {
+            let event = try #require(NSEvent.mouseEvent(
+                with: .mouseMoved, location: hosting.convert(point, to: nil),
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+            ))
+            window.sendEvent(event)
+        }
+
+        #expect(workspaceTrackingArea.options.contains(.mouseEnteredAndExited))
+        #expect(projectTrackingArea.options.contains(.mouseEnteredAndExited))
+        #expect(workspaceTrackingRect.contains(workspaceLabelPoint))
+        #expect(workspaceTrackingRect.contains(workspaceButtonPoint))
+        #expect(!workspaceTrackingRect.contains(workspaceValuePoint))
+        #expect(!projectTrackingRect.contains(projectValuePoint))
+        #expect(!workspaceTrackingRect.contains(blankPoint))
+        #expect(!workspaceTrackingRect.contains(projectLabelPoint))
+        #expect(!projectTrackingRect.contains(workspaceLabelPoint))
+        #expect(!isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        #expect(writes.isEmpty && pasteboard.string(forType: .string) == "previous")
+        let initialWorkspaceButtonRect = workspaceButtonRect
+        let initialProjectButtonRect = projectButtonRect
+        let initialWorkspaceHoverRect = workspaceTrackingRect
+
+        workspaceHoverView.mouseEntered(with: try enterExitEvent(.mouseEntered, at: workspaceButtonPoint))
+        try await settle(hosting)
+        #expect(!isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        workspaceHoverView.mouseExited(with: try enterExitEvent(.mouseExited, at: blankPoint))
+
+        for point in [workspaceValuePoint, projectValuePoint, blankPoint] {
+            try movePointer(to: point)
+            try await settle(hosting)
+            #expect(!isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        }
+
+        workspaceHoverView.mouseEntered(with: try enterExitEvent(.mouseEntered, at: workspaceLabelPoint))
+        try await settle(hosting)
+        #expect(isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        #expect(hosting.convert(workspaceButton.bounds, from: workspaceButton) == initialWorkspaceButtonRect)
+        #expect(hosting.convert(workspaceHoverView.bounds, from: workspaceHoverView) == initialWorkspaceHoverRect)
+        #expect(writes.isEmpty && pasteboard.string(forType: .string) == "previous")
+
+        try movePointer(to: workspaceButtonPoint)
+        try await settle(hosting)
+        #expect(workspaceTrackingRect.contains(workspaceButtonPoint))
+        #expect(isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        #expect(hosting.convert(workspaceButton.bounds, from: workspaceButton) == initialWorkspaceButtonRect)
+
+        workspaceHoverView.mouseExited(with: try enterExitEvent(.mouseExited, at: workspaceValuePoint))
+        try await settle(hosting)
+        #expect(!isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        for point in [workspaceValuePoint, projectValuePoint, blankPoint] {
+            try movePointer(to: point)
+            try await settle(hosting)
+            #expect(!isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        }
+        #expect(hosting.convert(projectButton.bounds, from: projectButton) == initialProjectButtonRect)
+        #expect(writes.isEmpty && pasteboard.string(forType: .string) == "previous")
+
+        projectHoverView.mouseEntered(with: try enterExitEvent(.mouseEntered, at: projectLabelPoint))
+        try await settle(hosting)
+        #expect(!isVisiblyPainted(workspaceButton) && isVisiblyPainted(projectButton))
+        projectHoverView.mouseExited(with: try enterExitEvent(.mouseExited, at: projectValuePoint))
+        try await settle(hosting)
+        #expect(!isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        #expect(writes.isEmpty && pasteboard.string(forType: .string) == "previous")
+    }
+
     @Test func previewScrollResetsForANewSubjectButNotSameSubjectRefresh() async throws {
         func card(_ id: String, _ title: String, _ prefix: String) -> SidebarHoverCard {
             SidebarHoverCard(

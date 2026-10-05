@@ -1,5 +1,9 @@
 import SwiftUI
 
+private enum SidebarCopyableValueLayout {
+    static let actionSize: CGFloat = 24
+}
+
 struct SidebarCopyableValue: View {
     let value: String
     let label: String
@@ -33,11 +37,13 @@ struct SidebarCopyableValue: View {
                         focusChanged($0)
                     }
                 )
-                .frame(width: 24, height: 24)
+                .frame(width: SidebarCopyableValueLayout.actionSize, height: SidebarCopyableValueLayout.actionSize)
                 .opacity(labelHovered || actionFocused ? 1 : 0)
             }
             .fixedSize(horizontal: true, vertical: false)
-            .onHover { labelHovered = $0 }
+            .background(SidebarCopyHoverAnchor(
+                isHovered: $labelHovered, actionWidth: SidebarCopyableValueLayout.actionSize
+            ))
             Text(value).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             if copied != nil {
@@ -50,6 +56,59 @@ struct SidebarCopyableValue: View {
         .onChange(of: value) { copied = nil }
         .onChange(of: clipboardValue) { copied = nil }
     }
+}
+
+private struct SidebarCopyHoverAnchor: NSViewRepresentable {
+    @Binding var isHovered: Bool
+    let actionWidth: CGFloat
+
+    func makeCoordinator() -> Coordinator { Coordinator(isHovered: $isHovered) }
+
+    func makeNSView(context: Context) -> SidebarCopyableValueHoverView {
+        SidebarCopyableValueHoverView()
+    }
+
+    func updateNSView(_ view: SidebarCopyableValueHoverView, context: Context) {
+        context.coordinator.isHovered = $isHovered
+        view.actionWidth = actionWidth
+        let coordinator = context.coordinator
+        view.hoverChanged = { [weak coordinator] in coordinator?.isHovered.wrappedValue = $0 }
+    }
+
+    final class Coordinator {
+        var isHovered: Binding<Bool>
+
+        init(isHovered: Binding<Bool>) {
+            self.isHovered = isHovered
+        }
+    }
+}
+
+final class SidebarCopyableValueHoverView: NSView {
+    var actionWidth: CGFloat = SidebarCopyableValueLayout.actionSize
+    var hoverChanged: (Bool) -> Void = { _ in }
+
+    private var labelRect: NSRect {
+        NSRect(x: bounds.minX, y: bounds.minY, width: max(0, bounds.width - actionWidth), height: bounds.height)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        guard !bounds.isEmpty else { return }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds, options: [.activeInActiveApp, .mouseEnteredAndExited], owner: self
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hoverChanged(labelRect.contains(convert(event.locationInWindow, from: nil)))
+    }
+
+    override func mouseExited(with event: NSEvent) { hoverChanged(false) }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func layout() { super.layout(); updateTrackingAreas() }
 }
 
 private struct SidebarCopyFeedback: NSViewRepresentable {
