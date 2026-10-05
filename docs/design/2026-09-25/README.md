@@ -83,9 +83,14 @@ direction being frozen:
    and Pane 2 "right." Its future host implementation must derive positions
    from the destination workspace or omit spatial descriptions (#86).
 
-The byte-exact prototype is retained as reviewed, rather than silently fixed
-after the human's visual approval. Screenshots of normal initial order do not
-demonstrate these exceptional transitions.
+`evidence/manifest.json` pins the original pre-#132 source snapshot approved on
+September 25; it is historical provenance, not a digest of the current working
+prototype. The working prototype has since received the explicitly authorized
+#132 correction for long-identity action-menu containment. This follow-up does
+not revise the original approval or turn its screenshots into evidence for the
+corrected source. The September 29 archive and its manifests remain separate
+immutable evidence. Screenshots of normal initial order do not demonstrate
+these exceptional transitions.
 
 ## Reproduce the visual target
 
@@ -132,14 +137,18 @@ Chrome channel; it does not install or open a shared interactive browser.
 - [Beats/header checks](evidence/verification-beats.json).
 - [Sidebar reorder/deep-layout checks](evidence/verification-sidebar.json).
 - [Shared tag-color/contrast checks](evidence/verification-tags.json).
+- [Long-identity menu checks](prototype/verify-menu.cjs): 70 checks in the
+  current working prototype; added after the original manifest snapshot.
 - [Frozen source/image digest manifest](evidence/manifest.json).
 - [Independent review](review.md), including coverage limits and follow-ups.
 
-The suite at this snapshot records 135 core, 57 Beats/header, 32 sidebar and
-35 tag checks. The measured eight-level name-row widths are 168px at a 280px
-sidebar and 238px at 350px; title-inline tags do not truncate the test name.
-The sampled automatic tag schemes exceeded 4.5:1, and all supplied human
-swatches were checked using rendered foreground/background colors.
+The pre-#132 suite at this snapshot recorded 135 core, 57 Beats/header, 32
+sidebar and 35 tag checks. The current working suite also runs the 70 #132
+menu-containment checks listed above. The measured eight-level name-row widths
+are 168px at a 280px sidebar and 238px at 350px; title-inline tags do not
+truncate the test name. The sampled automatic tag schemes exceeded 4.5:1, and
+all supplied human swatches were checked using rendered foreground/background
+colors.
 
 Static images cannot prove animation, drag/drop completion, permissions,
 native focus, ownership, queue delivery or real liveness. The browser tests
