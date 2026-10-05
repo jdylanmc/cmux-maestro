@@ -26,10 +26,10 @@ final class RowInputUITests: XCTestCase {
         ]
         application = app
         app.launch()
-        XCTAssertTrue(app.windows["row-input-owner"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.windows["row-input-foreign"].exists)
         app.activate()
-        XCTAssertEqual(app.state, .runningForeground)
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 2))
+        XCTAssertTrue(app.windows["row-input-owner"].exists)
+        XCTAssertTrue(app.windows["row-input-foreign"].exists)
         let initial = try sample("initial")
         XCTAssertEqual(initial.opens, 0)
         XCTAssertEqual(initial.closes, 0)

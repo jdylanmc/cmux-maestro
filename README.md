@@ -1953,10 +1953,12 @@ The fixture launches as an `LSUIElement` accessory application, without a Dock
 entry or application menu bar. This avoids adding a fixture icon to the Dock
 while measuring display geometry; its actual window activation, native context
 menus, input routes and unconditional screen-change invalidation remain required.
-After launch, XCUITest explicitly activates the exact fixture and requires its
-foreground state before the initial sample; the fixture's cooperative AppKit
-activation request alone is not proof of activation. This setup does not retry
-activation after input or clear any lifetime invalidation.
+After launch, XCUITest explicitly activates the exact fixture and uses its single
+two-second setup wait for foreground readiness, then checks both named windows
+before the initial sample. This replaces the window-existence wait rather than
+adding a second wait budget. The fixture's cooperative AppKit activation request
+alone is not proof of activation. This setup does not retry activation after
+input or clear any lifetime invalidation.
 Build settings, built metadata and fixture startup enforce this validation-only
 policy. The containing application and sidebar policies are unchanged.
 
