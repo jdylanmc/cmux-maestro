@@ -103,8 +103,10 @@ through the coordinated installer. Generated hooks use the **stable installed
 helper path**, never a staging or backup location. Manual moves outside the
 receipt-owned destination remain unsupported by the app installer.
 
-Observer setup is version-bound to **Copilot CLI 1.0.88 and 1.0.89, protocol 3**.
-Other versions or protocols remain unsupported. A
+Observer setup attempts **stable Copilot CLI 1.x releases using protocol 3**.
+Other major versions, prereleases and protocols remain unsupported. Compatibility
+still requires valid public metadata, exact-source identity and verified operation
+readback; the version range alone does not establish runtime compatibility. A
 conflicting `HOME` or `COPILOT_HOME` is rejected; this does not broaden the
 reader beyond standard `~/.copilot`. Setup rejects unsafe, symlinked,
 hard-linked, modified or foreign owned-target registration and ambiguous owned sources.
@@ -114,7 +116,7 @@ identity can depend on serialization, not just semantically equal JSON.
 
 Before changing an existing owned installation, setup submits its exact safe
 absolute source path to the public plugin-install RPC in a private disposable
-provider home. On the two supported versions, that source's returned identity
+provider home. On the originally tested 1.0.88 and 1.0.89 versions, that source's returned identity
 is home-independent. It must match the real provider's selection and any prior
 receipt before real-home changes. Legacy/name-derived receipts cannot authorize
 their own adoption. The request path, provider version/protocol and returned

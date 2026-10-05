@@ -1473,7 +1473,7 @@ struct CopilotObserverRegistrationTests {
         #expect(fixture.registration.health() == .missing)
     }
 
-    @Test(arguments: ["1.0.88", "1.0.89"])
+    @Test(arguments: ["1.0.88", "1.0.89", "1.0.91", "1.1.0"])
     func metadataParserEnforcesFramingAndOutputBound(version: String) throws {
         let exchange = try CopilotMetadataExchange()
         defer { exchange.closeAll() }
@@ -1609,7 +1609,7 @@ struct CopilotObserverRegistrationTests {
         try fixture.legacy()
         let known = try fixture.metadata(installed: true)
         for metadata in [
-            CopilotSetupMetadata(version: "1.0.90", protocolVersion: 3, hooks: known.hooks, plugins: known.plugins),
+            CopilotSetupMetadata(version: "2.0.0", protocolVersion: 3, hooks: known.hooks, plugins: known.plugins),
             CopilotSetupMetadata(version: "1.0.88", protocolVersion: 3, hooks: known.hooks,
                 plugins: [.init(name: CopilotPluginManifest.name, marketplace: "", enabled: false, directSourceId: "opaque")]),
             CopilotSetupMetadata(version: "1.0.88", protocolVersion: 3, hooks: known.hooks,
@@ -1622,10 +1622,15 @@ struct CopilotObserverRegistrationTests {
 
     @Test(arguments: [
         ("1.0.88", 3, true), ("1.0.89", 3, true),
-        ("1.0.87", 3, false), ("1.0.90", 3, false), ("2.0.0", 3, false),
+        ("1.0.0", 3, true), ("1.0.87", 3, true), ("1.0.90", 3, true),
+        ("1.0.91", 3, true), ("1.1.0", 3, true), ("1.99.123", 3, true),
+        ("0.9.0", 3, false), ("2.0.0", 3, false), ("10.0.0", 3, false),
+        ("1", 3, false), ("1.0", 3, false), ("1..0", 3, false), ("1.0.", 3, false),
+        ("1.0.0.1", 3, false), ("01.0.0", 3, false), ("1.00.0", 3, false),
+        ("1.0.-1", 3, false), ("1.0.91\n", 3, false), ("v1.0.91", 3, false),
         ("1.0.89-preview", 3, false), ("1.0.89", 2, false), ("1.0.89", 4, false),
     ])
-    func metadataAllowsOnlyExactTestedVersionProtocolPairs(version: String, protocolVersion: Int, expected: Bool) {
+    func metadataAllowsStableMajorOneWithSupportedProtocol(version: String, protocolVersion: Int, expected: Bool) {
         let metadata = CopilotSetupMetadata(version: version, protocolVersion: protocolVersion, hooks: [], plugins: [])
         #expect(metadata.supported == expected)
     }

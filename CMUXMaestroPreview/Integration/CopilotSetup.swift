@@ -854,7 +854,11 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         guard let executable else { throw CopilotFileError.missing }
         switch await runner.metadata(executable: executable, path: path, providerHome: registration.providerHome) {
         case .value(let value):
-            guard value.supported else { throw CopilotFileError.io }
+            guard value.supported else {
+                throw CopilotRegistrationConflict(
+                    "Observer setup requires a stable Copilot CLI 1.x release using protocol 3; "
+                    + "received \(value.version), protocol \(value.protocolVersion).")
+            }
             nativePluginStatus = value.plugins.first(where: { $0.name == CopilotPluginManifest.name })
                 .map { $0.enabled ? "enabled" : "disabled" } ?? "absent"
             return value

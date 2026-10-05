@@ -149,8 +149,10 @@ starts no metadata process. The existing command-line installer treats verified
 enabled, all/subset-disabled and unresolved-applicability completions as success
 while retaining explicit messages; real errors and usage retain nonzero exits.
 
-The tested setup compatibility boundary is **Copilot CLI 1.0.88 and 1.0.89,
-SDK protocol 3**. Other version/protocol pairs refuse before registration changes.
+Setup attempts **stable Copilot CLI 1.x releases using SDK protocol 3**, retaining
+public metadata, exact-source and operation-readback checks. Other major versions,
+prereleases and protocols refuse before registration changes. Historical live
+probes below cover 1.0.88 and 1.0.89, not every release admitted by the range.
 Setup uses only `status.get`, `hooks.discover` and `plugins.list` over a new,
 bounded public stdio connection. It sends no agent/session creation or model
 request, never attaches to an existing session and shuts the metadata process
@@ -387,8 +389,10 @@ provider mutation for no-ops and compatible external-resource-only updates.
 For a required payload replacement it records original state and mutation
 intent before the official operation, keeps dedicated staging inactive, and
 requires official `plugins.disable` plus exact-source readback before
-publication/commit. The disable RPC is version-gated to 1.0.89 and checks the
-selected identity before its name-based mutation. Install/update success alone
+publication/commit. The disable RPC is attempted on stable 1.x releases using
+protocol 3 and checks the selected identity before its name-based mutation.
+Unsupported operations or failed disabled-state readback still block publication.
+Install/update success alone
 does not prove preservation. Disabled legacy observer migration also disables
 the dedicated file; an existing dedicated file retains its independent choice.
 
