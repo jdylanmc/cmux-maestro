@@ -86,13 +86,14 @@ struct SidebarSessionCopyTests {
         view.layoutSubtreeIfNeeded()
     }
 
-    private func prepareVisibleRender(_ window: NSWindow, content: NSView) async throws {
-        window.orderFront(nil)
-        window.displayIfNeeded()
+    private func prepareOffscreenRender(_ window: NSWindow, content: NSView) async throws {
+        #expect(!window.isVisible && !window.isKeyWindow)
+        content.layoutSubtreeIfNeeded()
         content.displayIfNeeded()
         try await Task.sleep(for: .milliseconds(50))
-        #expect(window.isVisible)
-        #expect(!window.isKeyWindow)
+        content.layoutSubtreeIfNeeded()
+        content.displayIfNeeded()
+        #expect(!window.isVisible && !window.isKeyWindow)
     }
 
     @Test func nativeCopyWritesOnlyExactGUIDAndSupportsRepeatedCopies() {
@@ -128,19 +129,23 @@ struct SidebarSessionCopyTests {
         let frame = NSRect(x: 0, y: 0, width: 260, height: 90)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let hosting = NSHostingView(rootView: SidebarCopyableValue(
+        window.appearance = NSAppearance(named: .aqua)
+        let field = SidebarCopyableValue(
             value: "~/project", label: "Workspace path", clipboardValue: raw,
             copy: {
                 writes.append($0)
                 return SidebarSessionCopy.copy($0, to: pasteboard)
             },
             focusChanged: { focus.append($0) }
-        ))
+        )
+        let hosting = NSHostingView(rootView: field
+            .environment(\.colorScheme, .light)
+            .background(Color.white))
         window.contentView = hosting
         defer { window.contentView = nil; window.close() }
         hosting.frame = frame
         try await settle(hosting)
-        try await prepareVisibleRender(window, content: hosting)
+        try await prepareOffscreenRender(window, content: hosting)
 
         let button = try copyButton(in: hosting)
         let buttonRect = hosting.convert(button.bounds, from: button)
@@ -350,13 +355,18 @@ struct SidebarSessionCopyTests {
         let frame = NSRect(x: 0, y: 0, width: 300, height: 260)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let hosting = NSHostingView(rootView: AnyView(card("subject-a", "Subject A", "a")))
+        window.appearance = NSAppearance(named: .aqua)
+        func rendered(_ card: SidebarHoverCard) -> AnyView {
+            AnyView(card.environment(\.colorScheme, .light).background(Color.white))
+        }
+        let hosting = NSHostingView(rootView: rendered(card("subject-a", "Subject A", "a")))
         window.contentView = hosting
         defer { window.contentView = nil; window.close() }
         hosting.frame = frame
         try await settle(hosting)
-        try await prepareVisibleRender(window, content: hosting)
+        try await prepareOffscreenRender(window, content: hosting)
         func recognizedText(_ filename: String) throws -> [String] {
+            hosting.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
             hosting.displayIfNeeded()
             let bitmap = try capture(hosting)
@@ -383,7 +393,7 @@ struct SidebarSessionCopyTests {
         #expect(scroll.contentView.bounds.origin.y > 0)
         let subjectB = card("subject-b", "Subject B", "b")
         #expect(subjectB.data.id == "subject-b" && subjectB.data.title == "Subject B")
-        hosting.rootView = AnyView(subjectB)
+        hosting.rootView = rendered(subjectB)
         try await settle(hosting)
         scroll = try scrollView()
         #expect(scroll.contentView.bounds.origin.y == 0)
@@ -394,7 +404,7 @@ struct SidebarSessionCopyTests {
         let refreshedSubjectB = card("subject-b", "Subject B", "refreshed")
         #expect(refreshedSubjectB.data.id == subjectB.data.id)
         #expect(refreshedSubjectB.data.title == subjectB.data.title)
-        hosting.rootView = AnyView(refreshedSubjectB)
+        hosting.rootView = rendered(refreshedSubjectB)
         try await settle(hosting)
         scroll = try scrollView()
         #expect(scroll.contentView.bounds.origin.y > 0)
