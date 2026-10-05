@@ -79,6 +79,69 @@ const assert = require("node:assert/strict");
 
     await page.locator("#reset-demo").click();
     await page.locator("#stress-button").click();
+    await page.locator('[data-grouping="subagents"]').click();
+    const rowID = "stress-agent-3";
+    const rowOrigin = page.locator(`[data-row="${rowID}"] .row-main`);
+    const colorDialog = page.locator("#tag-color-dialog");
+    const focusTagColorFromRow = async () => {
+      await preview(rowID);
+      await rowOrigin.focus();
+      await page.locator("#hover-card").waitFor({ state: "visible" });
+      const trigger = page.locator("#hover-card [data-tag-color]").first();
+      let keyboardReachedTrigger = false;
+      for (let index = 0; index < 80; index++) {
+        if (await trigger.evaluate(element => element === document.activeElement)) {
+          keyboardReachedTrigger = true;
+          break;
+        }
+        await page.keyboard.press("Tab");
+      }
+      check("R3 expanded-row preview reaches the tag/color action by keyboard",
+        keyboardReachedTrigger);
+      check("R3 row preview records the exact originating row before opening the dialog",
+        await page.evaluate(id =>
+          hoverReturnFocus === document.querySelector(`[data-row="${id}"] .row-main`), rowID));
+      return trigger;
+    };
+
+    const rowSelectionBefore = await active();
+    const rowLifecycleBefore = await lifecycle();
+    const rowColorsBefore = await page.evaluate(() => JSON.stringify(state.tagColors));
+    const rowClipboardBefore = await page.evaluate(() => window.copyRequests.length);
+    await focusTagColorFromRow();
+    await page.keyboard.press("Enter");
+    await colorDialog.waitFor({ state: "visible" });
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector("#tag-color-dialog").open);
+    await page.waitForFunction(id =>
+      document.activeElement === document.querySelector(`[data-row="${id}"] .row-main`), rowID);
+    check("R3 cancel restores the exact expanded-row origin",
+      await rowOrigin.evaluate(element => element === document.activeElement));
+    check("R3 cancel preserves selection, lifecycle, color preferences and clipboard",
+      await active() === rowSelectionBefore && await lifecycle() === rowLifecycleBefore &&
+      await page.evaluate(() => JSON.stringify(state.tagColors)) === rowColorsBefore &&
+      await page.evaluate(() => window.copyRequests.length) === rowClipboardBefore);
+
+    await focusTagColorFromRow();
+    await page.keyboard.press("Enter");
+    await colorDialog.waitFor({ state: "visible" });
+    const rowTagSlug = (await page.locator("#tag-color-title").textContent()).replace(/^Color for /, "");
+    const rowChosenColor = await page.locator("#tag-color-options button").first().getAttribute("data-tag-swatch");
+    await page.locator("#tag-color-options button").first().click();
+    await colorDialog.locator('[data-close="tag-color-dialog"]').click();
+    await page.waitForFunction(id =>
+      document.activeElement === document.querySelector(`[data-row="${id}"] .row-main`), rowID);
+    check("R3 color completion restores the exact expanded-row origin",
+      await rowOrigin.evaluate(element => element === document.activeElement));
+    check("R3 completion changes only the selected color and preserves selection/lifecycle/clipboard",
+      await page.evaluate(({ slug, color }) => state.tagColors[slug] === color, {
+        slug: rowTagSlug, color: rowChosenColor
+      }) &&
+      await active() === rowSelectionBefore && await lifecycle() === rowLifecycleBefore &&
+      await page.evaluate(() => window.copyRequests.length) === rowClipboardBefore);
+
+    await page.locator("#reset-demo").click();
+    await page.locator("#stress-button").click();
     await page.evaluate(() => {
       state.grouping = "worktrees";
       state.workspaceCollapsed.stress = false;
@@ -100,7 +163,6 @@ const assert = require("node:assert/strict");
       return item.left >= area.left && item.right <= area.right;
     }, iconID);
     check("S55 target icon is visible after horizontal scrolling", iconVisible);
-    const colorDialog = page.locator("#tag-color-dialog");
     const focusTagColorFromIcon = async () => {
       await iconOrigin.hover();
       await page.locator("#hover-card").waitFor({ state: "visible" });
