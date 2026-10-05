@@ -10,6 +10,7 @@ enum RowInputFixtureMain {
         guard environment["GITHUB_ACTIONS"] == "true",
               environment["RUNNER_ENVIRONMENT"] == "github-hosted",
               Bundle.main.bundleIdentifier == "com.jdylanmc.CMUXMaestroPreview.Validation.RowInputFixture",
+              Bundle.main.object(forInfoDictionaryKey: "LSUIElement") as? Bool == true,
               let value = environment["CMUX_ROW_INPUT_CASE"], let caseID = UUID(uuidString: value) else {
             FileHandle.standardError.write(Data("Row input fixture requires the isolated hosted UI-test venue.\n".utf8))
             exit(78)

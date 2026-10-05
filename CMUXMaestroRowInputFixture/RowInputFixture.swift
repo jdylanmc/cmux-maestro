@@ -26,6 +26,9 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
     init(caseID: UUID) { self.caseID = caseID }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard NSApp.activationPolicy() == .accessory else {
+            fatalError("Validation fixture must launch without a Dock entry")
+        }
         // Placement derives from the hosted display; input always uses named AX elements.
         guard let screen = NSScreen.screens.first, screen.visibleFrame.width >= 820,
               screen.visibleFrame.height >= 460 else {
@@ -59,7 +62,6 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
                                                name: NSApplication.didResignActiveNotification, object: NSApp)
         NotificationCenter.default.addObserver(self, selector: #selector(lifetimeEnded(_:)),
                                                name: NSApplication.didChangeScreenParametersNotification, object: NSApp)
-        NSApp.setActivationPolicy(.regular)
         foreign.orderFront(nil)
         owner.makeKeyAndOrderFront(nil)
         NSApp.activate()

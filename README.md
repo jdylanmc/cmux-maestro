@@ -1949,6 +1949,13 @@ venue and any future replacement of unsupported older oracles; this addition
 does not waive their failures, prove all native invalidation interleavings, or
 prove the entire visual-feature contract.
 
+The fixture launches as an `LSUIElement` accessory application, without a Dock
+entry or application menu bar. This avoids adding a fixture icon to the Dock
+while measuring display geometry; its actual window activation, native context
+menus, input routes and unconditional screen-change invalidation remain required.
+Build settings, built metadata and fixture startup enforce this validation-only
+policy. The containing application and sidebar policies are unchanged.
+
 The metadata supervision regression has a test-only, executor-independent
 30-second bound for each subcase. A stall records the subcase, real deadline
 sample count/age and a one-second all-thread sample before exiting the test

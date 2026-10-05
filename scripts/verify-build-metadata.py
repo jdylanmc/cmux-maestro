@@ -248,6 +248,8 @@ def verify_row_input_settings(rows):
                 "Row input targets must remain unsigned and non-installable.")
         require(settings.get("ENABLE_APP_SANDBOX") == "NO", "Unexpected row input sandbox profile.")
     fixture = targets["CMUXMaestroRowInputFixture"]
+    require(fixture.get("INFOPLIST_KEY_LSUIElement") == "YES",
+            "Row fixture must launch as an accessory without changing the Dock.")
     conditions = fixture.get("SWIFT_ACTIVE_COMPILATION_CONDITIONS", "")
     require("CMUX_VALIDATION" in (conditions.split() if isinstance(conditions, str) else conditions),
             "Row fixture must compile validation-only observations.")
@@ -268,6 +270,8 @@ def verify_row_input_products(products):
                 and info.get("CFBundlePackageType") == kind, "Invalid built row input product identity.")
         require(info.get("CFBundleExecutable") == name, "Unexpected row input executable.")
         require((path / "Contents/MacOS" / name).is_file(), "Row input binary missing.")
+        if name == "CMUXMaestroRowInputFixture":
+            require(info.get("LSUIElement") is True, "Built row fixture must be an accessory from launch.")
     require(not (app / "Contents/Extensions").exists() and not (app / "Contents/Helpers").exists(),
             "The row fixture must not embed the production extension or installer helpers.")
     runner = products / "CMUXMaestroRowInputUITests-Runner.app"
