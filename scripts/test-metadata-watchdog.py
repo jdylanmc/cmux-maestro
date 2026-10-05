@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bounded Foundation-only controls of the metadata stall diagnostic, not a hang repair proof."""
 import argparse
+import errno
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,8 @@ import time
 import uuid
 
 MODES = ("complete", "stalled-clock", "polling-clock", "sampler-timeout",
-         "sampler-exit-no-output", "sampler-exit-with-output", "sampler-timeout-no-output")
+         "sampler-exit-no-output", "sampler-exit-with-output", "sampler-timeout-no-output",
+         "owned-living", "owned-result-before-task", "owned-task-received", "owned-exited")
 
 
 def require(condition, message):
@@ -65,13 +67,14 @@ def main():
             print(f"Exact sampler {report['samplerPID']} reaped/absent; finite child {child} absent.", flush=True)
             require(report["test"] == "MetadataWatchdogProbe/" + mode, report)
             require(report["phase"] == "negative-control/" + mode, report)
-            require(report["deadlineSamples"] >= (2 if mode == "polling-clock" else 1), report)
+            minimum_samples = 0 if mode == "owned-exited" else (2 if mode == "polling-clock" else 1)
+            require(report["deadlineSamples"] >= minimum_samples, report)
             require(report["samplerReaped"] is True, report)
-            if mode.startswith("sampler-"):
+            if mode.startswith(("sampler-", "owned-")):
                 timed_out = mode in ("sampler-timeout", "sampler-timeout-no-output")
                 require(report["sampleStatus"] == ("timed-out/signal-9" if timed_out else "exit-17"), report)
                 require(int((case / "sampler.pid").read_text()) == report["samplerPID"], report)
-                if mode.endswith("-no-output"):
+                if mode.endswith("-no-output") or mode.startswith("owned-"):
                     require(not (case / "sample.txt").exists(), report)
                     require(report.get("sample") is None, report)
                     require("sample.txt" in report.get("sampleReadError", ""), report)
@@ -86,6 +89,39 @@ def main():
                 require("LocalCopilotSetupRunner.execute" in report["sample"], report["sample"])
                 if mode == "stalled-clock":
                     require("MetadataWatchdogProbe" in report["sample"], report["sample"])
+            if mode.startswith("owned-"):
+                ready = report["metadataReadiness"]
+                current = report["metadataAtStall"]
+                require(report["metadataPID"] == child, report)
+                require(ready["state"] == "living", report)
+                require(ready["process"]["pid"] == ready["process"]["group"] == child, report)
+                require(ready["process"]["parent"] == report["pid"], report)
+                require(ready["groupState"] == "sequential-observation", report)
+                require(ready["process"]["startSeconds"] > 0, report)
+                returned = mode in ("owned-result-before-task", "owned-task-received")
+                require(report["runnerMetadataReturned"] is returned, report)
+                require(report["outerTaskValueReceived"] is (mode == "owned-task-received"), report)
+                if returned or mode == "owned-exited":
+                    require(current["state"] == "unknown-pid-query", report)
+                    require(current["queryBytes"] != ready["queryBytes"], report)
+                    require(current["queryError"] == errno.ESRCH, report)
+                    require(current.get("members") is None, report)
+                    wait = current["childWait"]
+                    if mode == "owned-exited":
+                        require(wait == {"result": 0, "error": 0, "pid": child, "code": 1, "status": 1}, report)
+                    else:
+                        require(wait["result"] == -1 and wait["error"] == errno.ECHILD, report)
+                else:
+                    require(current["state"] == "living", report)
+                    require(current["process"]["startSeconds"] == ready["process"]["startSeconds"], report)
+                    require(current["process"]["startMicroseconds"] == ready["process"]["startMicroseconds"], report)
+                    require(current["groupState"] == "sequential-observation", report)
+                if mode != "owned-exited":
+                    stale = json.loads((case / "stale-identity.json").read_text())
+                    require(stale == {"state": "identity-changed"}, stale)
+                    incomplete = json.loads((case / "incomplete-group.json").read_text())
+                    require(incomplete["groupState"] == "unknown-enumeration", incomplete)
+                    require(incomplete.get("members") is None, incomplete)
         print(f"Metadata watchdog {mode}: expected exit={result.returncode}; evidence={case}", flush=True)
 
 

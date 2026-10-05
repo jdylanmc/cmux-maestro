@@ -1641,36 +1641,93 @@ class OrchestratorTests(unittest.TestCase):
         cwd.mkdir()
         ready = self.h.path / "git-probe.ready"
         release = self.h.path / "git-probe.release"
+        entered = self.h.path / "git-probe.entered"
+        consumed = self.h.path / "git-probe.consumed"
         fake_git = self.h.path / "git-blocking"
         fake_git.write_text(
-            "#!/bin/sh\n"
-            f"touch '{ready}'\n"
-            f"while [ ! -e '{release}' ]; do sleep 0.02; done\n"
-            "case \"$*\" in\n"
-            f"  *show-toplevel*) printf '%s\\n' '{cwd}' ;;\n"
-            "  *symbolic-ref*) printf '%s\\n' 'branch-a' ;;\n"
-            "esac\n"
+            f"#!{sys.executable}\n"
+            "import fcntl, json, os, subprocess, sys\n"
+            "from pathlib import Path\n"
+            "start = subprocess.run(['/bin/ps', '-o', 'lstart=', '-p', str(os.getpid())],\n"
+            "                       capture_output=True, text=True, check=True).stdout.strip()\n"
+            f"ready = Path({str(ready)!r})\n"
+            "ready.with_suffix('.tmp').write_text(json.dumps({\n"
+            "    'pid': os.getpid(), 'ppid': os.getppid(), 'start': start,\n"
+            "}))\n"
+            "ready.with_suffix('.tmp').replace(ready)\n"
+            f"with open({str(release)!r}) as gate:\n"
+            "    fcntl.flock(gate, fcntl.LOCK_SH)\n"
+            f"Path({str(consumed)!r}).write_text('released')\n"
+            "if '--show-toplevel' in sys.argv:\n"
+            f"    print({str(cwd)!r})\n"
+            "elif 'symbolic-ref' in sys.argv:\n"
+            "    print('branch-a')\n"
         )
         fake_git.chmod(0o755)
+        # Pause only this register's real Popen context entry, before the probe
+        # deadline starts. Otherwise its one-second timeout could release a
+        # wrongly held state lock before a cold status CLI even starts.
+        driver = self.h.driver.read_text()
+        self.h.driver.write_text(driver.replace(
+            "raise SystemExit(api['main']())",
+            "import fcntl, subprocess\n"
+            "from pathlib import Path\n"
+            "class GatedGit(subprocess.Popen):\n"
+            "    def __enter__(self):\n"
+            "        process = super().__enter__()\n"
+            f"        if self.args[0] == {str(fake_git)!r}:\n"
+            f"            entered = Path({str(entered)!r})\n"
+            "            entered.with_suffix('.entering').write_text(str(self.pid))\n"
+            "            entered.with_suffix('.entering').replace(entered)\n"
+            f"            with open({str(release)!r}) as gate:\n"
+            "                fcntl.flock(gate, fcntl.LOCK_SH)\n"
+            "        return process\n"
+            "subprocess.Popen = GatedGit\n"
+            "raise SystemExit(api['main']())",
+        ))
         surface = "00000000-0000-4000-8000-000000000098"
         self.h.add_surface(surface)
         env = self.h.env.copy()
         env["CMUX_SURFACE_ID"] = surface
         env["CMUX_MAESTRO_GIT"] = str(fake_git)
-        registration = self.h.start(
-            "register", "--workspace", self.h.workspace, "--surface", surface,
-            "--cwd", str(cwd), "--name", "Blocking probe", env=env,
-        )
-        deadline = time.monotonic() + 3
-        while not ready.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        self.assertTrue(ready.exists())
-        started = time.monotonic()
-        self.h.run("status", "--actor-id", self.h.node, "--token", self.h.token)
-        self.assertLess(time.monotonic() - started, 1)
-        release.write_text("release")
-        completed = self.h.finish(registration, timeout=5)
+        with release.open("w") as gate:
+            fcntl.flock(gate, fcntl.LOCK_EX)
+            registration = self.h.start(
+                "register", "--workspace", self.h.workspace, "--surface", surface,
+                "--cwd", str(cwd), "--name", "Blocking probe", env=env,
+            )
+            try:
+                deadline = time.monotonic() + 3
+                while not (ready.exists() and entered.exists()) and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(ready.exists())
+                self.assertTrue(entered.exists())
+                probe = json.loads(ready.read_text())
+                self.assertEqual(probe["pid"], int(entered.read_text()))
+                self.assertEqual(probe["ppid"], registration.pid)
+                self.assertTrue(probe["start"])
+                self.assertIs(CONTROLLER_API["process_observation"](probe), True)
+                self.assertIsNone(registration.poll())
+                self.assertFalse(consumed.exists())
+                # Replace the cold-CLI <1s proxy with a nonblocking exclusive
+                # acquisition and actual status success before either gate opens.
+                with CONTROLLER_API["Store"](self.h.root) as store:
+                    self.assertIn(self.h.node, store.read()["nodes"])
+                status = self.h.run("status", "--actor-id", self.h.node, "--token", self.h.token)
+                self.assertEqual(status["returncode"], 0)
+                self.assertFalse(consumed.exists())
+                self.assertIs(CONTROLLER_API["process_observation"](probe), True)
+                self.assertIsNone(registration.poll())
+            finally:
+                fcntl.flock(gate, fcntl.LOCK_UN)
+                completed = self.h.finish(registration, timeout=5)
         self.assertEqual(completed["returncode"], 0)
+        self.assertTrue(consumed.exists())
+        registered = self.h.state()["nodes"][completed["coordinatorId"]]
+        self.assertEqual(registered["gitEvidenceStatus"], "verified")
+        self.assertEqual(registered["worktreeLabel"], cwd.name)
+        self.assertEqual(registered["branchLabel"], "branch-a")
+        self.assertIs(CONTROLLER_API["process_observation"](probe), False)
 
     def _register_with_cwd(self, cwd, surface, env=None):
         self.h.add_surface(surface)
