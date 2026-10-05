@@ -17,6 +17,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Constrain the working long-identity action-menu reference to the viewport,
+  preserving complete accessible names and keyboard-reachable actions (#132).
 - Guide native Maestro coordinators and workers to send compact milestone-only
   handoffs, yield between decisions, and reconcile current-candidate evidence
   without losing unresolved findings. Preserve fire-and-forget messaging and
