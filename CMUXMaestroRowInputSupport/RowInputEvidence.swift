@@ -2,6 +2,23 @@ import Foundation
 
 /// Bounded, read-only observations of the fixture's real production controls.
 struct RowInputEvidence: Codable {
+    struct Display: Codable {
+        let number: UInt32?
+        let frame: CGRect
+        let visibleFrame: CGRect
+        let backingScaleFactor: CGFloat
+        let colorProfileSHA256: String?
+    }
+
+    struct DisplayState: Codable {
+        let uptime: TimeInterval
+        let screens: [Display]
+        let ownerScreenNumber: UInt32?
+        let foreignScreenNumber: UInt32?
+        let ownerBackingScaleFactor: CGFloat
+        let foreignBackingScaleFactor: CGFloat
+    }
+
     struct Invalidation: Codable {
         enum Reason: String, Codable {
             case overlappingMenu, windowClosed, applicationResigned, screenParametersChanged
@@ -12,6 +29,7 @@ struct RowInputEvidence: Codable {
         let setupComplete: Bool
         let applicationActive: Bool
         let ownerKey: Bool
+        let displays: DisplayState
     }
 
     struct Lifetime: Codable {
@@ -24,6 +42,8 @@ struct RowInputEvidence: Codable {
         let foreignReceiverAttached: Bool
         let evidenceAttached: Bool
         let failedRowIDs: [String]
+        let displaysAtSetup: DisplayState?
+        let displaysAtSample: DisplayState
     }
 
     struct Row: Codable {

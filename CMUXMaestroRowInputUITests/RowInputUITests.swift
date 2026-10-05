@@ -170,7 +170,7 @@ final class RowInputUITests: XCTestCase {
         image.lifetime = .keepAlways
         add(image)
         let result = try JSONDecoder().decode(RowInputEvidence.self, from: Data(text.utf8))
-        XCTAssertEqual(result.version, 2)
+        XCTAssertEqual(result.version, 3)
         XCTAssertEqual(result.caseID, caseID)
         XCTAssertTrue(result.live)
         XCTAssertFalse(result.overflow)

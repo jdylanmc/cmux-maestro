@@ -1,3 +1,4 @@
+import CryptoKit
 import SwiftUI
 
 @MainActor
@@ -20,6 +21,7 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
     private var invalidated = false
     private var firstInvalidation: RowInputEvidence.Invalidation?
     private var setupComplete = false
+    private var displaysAtSetup: RowInputEvidence.DisplayState?
 
     init(caseID: UUID) { self.caseID = caseID }
 
@@ -67,6 +69,7 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
               owner.makeFirstResponder(title) else {
             fatalError("Production fixture title was not attached as a native responder")
         }
+        displaysAtSetup = displayState()
         setupComplete = true
     }
 
@@ -156,8 +159,33 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
         if firstInvalidation == nil {
             firstInvalidation = .init(reason: reason, uptime: ProcessInfo.processInfo.systemUptime,
                                       setupComplete: setupComplete, applicationActive: NSApp.isActive,
-                                      ownerKey: owner.isKeyWindow)
+                                      ownerKey: owner.isKeyWindow, displays: displayState())
         }
+    }
+
+    private func screenNumber(_ screen: NSScreen?) -> UInt32? {
+        (screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
+
+    private func displayState() -> RowInputEvidence.DisplayState {
+        let screens = NSScreen.screens
+        if screens.count > 8 { overflow = true }
+        let values = screens.prefix(8).map { screen -> RowInputEvidence.Display in
+            var profileHash: String?
+            if let profile = screen.colorSpace?.iccProfileData {
+                if profile.count > 1_048_576 {
+                    overflow = true
+                } else {
+                    profileHash = SHA256.hash(data: profile).map { String(format: "%02x", $0) }.joined()
+                }
+            }
+            return .init(number: screenNumber(screen), frame: screen.frame, visibleFrame: screen.visibleFrame,
+                         backingScaleFactor: screen.backingScaleFactor, colorProfileSHA256: profileHash)
+        }
+        return .init(uptime: ProcessInfo.processInfo.systemUptime, screens: values,
+                     ownerScreenNumber: screenNumber(owner.screen), foreignScreenNumber: screenNumber(foreign.screen),
+                     ownerBackingScaleFactor: owner.backingScaleFactor,
+                     foreignBackingScaleFactor: foreign.backingScaleFactor)
     }
 
     @objc private func windowClosed(_ notification: Notification) { invalidate(.windowClosed) }
@@ -192,13 +220,14 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
                          frame: anchor.convert(anchor.bounds, to: nil), titleFrame: title.convert(title.bounds, to: nil))
         }
         let evidence = RowInputEvidence(
-            version: 2, caseID: caseID, live: live && rows.count == 3,
+            version: 3, caseID: caseID, live: live && rows.count == 3,
             lifetime: .init(invalidated: invalidated, firstInvalidation: firstInvalidation,
                             applicationActive: NSApp.isActive, ownerVisible: owner.isVisible,
                             foreignVisible: foreign.isVisible,
                             ownerReceiverAttached: ownerReceiver.superview === owner.contentView,
                             foreignReceiverAttached: foreignReceiver.superview === foreign.contentView,
-                            evidenceAttached: evidenceView.window === owner, failedRowIDs: failedRowIDs),
+                            evidenceAttached: evidenceView.window === owner, failedRowIDs: failedRowIDs,
+                            displaysAtSetup: displaysAtSetup, displaysAtSample: displayState()),
             rows: rows,
             ownerFrame: owner.frame, foreignFrame: foreign.frame, ownerKey: owner.isKeyWindow,
             opens: opens, closes: closes, tracking: menu != nil, actions: actions,
