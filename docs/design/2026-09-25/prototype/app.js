@@ -498,7 +498,7 @@ function iconChoices(selected) {
 }
 function openContext(id, anchor) {
   const item = byId(id);
-  $("#context-content").innerHTML = `<div class="menu-label">${escapeHTML(item.name)}</div><button data-menu-focus="${id}">${item.kind === "agent" ? "Open existing chat" : "Focus window"}</button><button data-menu-icon="${id}">Choose icon & color…</button>${item.kind === "agent" ? `<button data-menu-pet="${id}">Choose pet…</button><button data-menu-tags="${id}">Edit your tags…</button><button data-dismiss="${id}">Exit session & close tab · simulated</button>${surfaces.some(child => child.parent === id && !state.dismissed[child.id]) ? `<button data-close-children="${id}">Direct orchestrator: close children…</button>` : ""}` : ""}<button data-menu-move="${id}">Move to pane ${paneFor(item) === 1 ? 2 : 1}</button><button data-close="context-menu">Cancel</button>`;
+  $("#context-content").innerHTML = `<div id="context-menu-title" class="menu-label">Actions for ${escapeHTML(item.name)}</div><button data-menu-focus="${id}">${item.kind === "agent" ? "Open existing chat" : "Focus window"}</button><button data-menu-icon="${id}">Choose icon & color…</button>${item.kind === "agent" ? `<button data-menu-pet="${id}">Choose pet…</button><button data-menu-tags="${id}">Edit your tags…</button><button data-dismiss="${id}">Exit session & close tab · simulated</button>${surfaces.some(child => child.parent === id && !state.dismissed[child.id]) ? `<button data-close-children="${id}">Direct orchestrator: close children…</button>` : ""}` : ""}<button data-menu-move="${id}">Move to pane ${paneFor(item) === 1 ? 2 : 1}</button><button data-close="context-menu">Cancel</button>`;
   const dialog = openDialog("context-menu");
   dialog.returnFocus = anchor.matches("button") ? anchor : anchor.querySelector(".row-main");
   place(dialog, anchor.getBoundingClientRect(), 218);
@@ -624,7 +624,12 @@ document.addEventListener("click", event => {
   if (d.move) { moveTab(d.move, paneFor(byId(d.move)) === 1 ? 2 : 1); return; }
   if (d.backlog) { const workspace = workspaces.find(w => w.id === d.backlog); notify(workspace.backlog ? `Demo shortcut: ${workspace.backlog}. No external tracker was opened.` : "No backlog configured for this workspace."); return; }
   if (d.workspaceMenu) {
-    $("#context-content").innerHTML = `<div class="menu-label">Workspace actions</div><button data-workspace-collapse="${d.workspaceMenu}" data-menu-dismiss>Collapse / expand</button><button data-workspace-reorder="${d.workspaceMenu}">Move ${state.workspaceOrder[0] === d.workspaceMenu ? "down" : "up"}</button><button data-backlog="${d.workspaceMenu}" data-menu-dismiss>Open backlog shortcut</button><button data-close="context-menu">Cancel</button>`;
+    const workspace = workspaces.find(item => item.id === d.workspaceMenu);
+    if (!workspace) {
+      notify("Workspace actions are no longer available.");
+      return;
+    }
+    $("#context-content").innerHTML = `<div id="context-menu-title" class="menu-label">Actions for ${escapeHTML(workspace.name)}</div><button data-workspace-collapse="${d.workspaceMenu}" data-menu-dismiss>Collapse / expand</button><button data-workspace-reorder="${d.workspaceMenu}">Move ${state.workspaceOrder[0] === d.workspaceMenu ? "down" : "up"}</button><button data-backlog="${d.workspaceMenu}" data-menu-dismiss>Open backlog shortcut</button><button data-close="context-menu">Cancel</button>`;
     place(openDialog("context-menu"), button.getBoundingClientRect(), 218); return;
   }
   if (d.workspaceReorder) {
