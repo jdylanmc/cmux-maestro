@@ -152,6 +152,7 @@ struct SidebarHoverTests {
             try send(49, to: panel)
             await sidebarEventually { copy.accessibilityValue() as? String == "Copied" }
             #expect(pasteboard.string(forType: .string) == fixture.sessionID.uuidString)
+            try #require(panel.isKeyWindow && panel.firstResponder === copy)
             let controls = descendants(try #require(panel.contentView)).compactMap { $0 as? NSButton }
                 .filter { ["hover-close", "hover-copy-value"].contains($0.accessibilityIdentifier()) && $0.canBecomeKeyView }
             let copyControls = controls.filter { $0.accessibilityIdentifier() == "hover-copy-value" }

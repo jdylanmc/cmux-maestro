@@ -207,7 +207,12 @@ private final class SidebarCopyNativeButton: NSButton {
     @objc private func copyValue() { activate() }
 
     override func keyDown(with event: NSEvent) {
-        if (event.keyCode == 36 || event.keyCode == 49),
+        if event.keyCode == 48,
+           event.modifierFlags.contains(.shift),
+           event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+           let window {
+            window.selectPreviousKeyView(self)
+        } else if (event.keyCode == 36 || event.keyCode == 49),
            event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
             if isEnabled && !event.isARepeat { performClick(nil) }
         } else {

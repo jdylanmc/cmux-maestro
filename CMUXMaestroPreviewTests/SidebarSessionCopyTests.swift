@@ -184,6 +184,36 @@ struct SidebarSessionCopyTests {
         #expect(pasteboard.string(forType: .string) == raw)
     }
 
+    @Test func copyableFieldShiftTabUsesThePreviousKeyLoop() async throws {
+        let frame = NSRect(x: 0, y: 0, width: 260, height: 90)
+        let panel = SidebarHoverPanel(
+            contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false
+        )
+        panel.isReleasedWhenClosed = false
+        panel.allowsKeyboard = true
+        var copied = false
+        var returned = false
+        let hosting = NSHostingView(rootView: SidebarCopyableValue(
+            value: "~/project", label: "Workspace path", clipboardValue: "/synthetic/project",
+            copy: { _ in copied = true; return true }
+        ).environment(\.colorScheme, .light).background(Color.white))
+        panel.contentView = hosting
+        defer { panel.contentView = nil; panel.close() }
+        hosting.frame = frame
+        try await settle(hosting)
+        let button = try copyButton(in: hosting)
+        panel.returnToOrigin = { returned = true }
+        #expect(panel.makeFirstResponder(button))
+        let shiftTab = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .shift, timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, characters: "\t",
+            charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48
+        ))
+        button.keyDown(with: shiftTab)
+        #expect(returned)
+        #expect(!copied)
+    }
+
     @Test func nativeLabelHoverUsesOnlyItsFieldHeaderAndDoesNotCopyOrShiftLayout() async throws {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
