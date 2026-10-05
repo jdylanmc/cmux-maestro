@@ -86,6 +86,15 @@ struct SidebarSessionCopyTests {
         view.layoutSubtreeIfNeeded()
     }
 
+    private func prepareVisibleRender(_ window: NSWindow, content: NSView) async throws {
+        window.orderFront(nil)
+        window.displayIfNeeded()
+        content.displayIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(window.isVisible)
+        #expect(!window.isKeyWindow)
+    }
+
     @Test func nativeCopyWritesOnlyExactGUIDAndSupportsRepeatedCopies() {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
@@ -131,6 +140,7 @@ struct SidebarSessionCopyTests {
         defer { window.contentView = nil; window.close() }
         hosting.frame = frame
         try await settle(hosting)
+        try await prepareVisibleRender(window, content: hosting)
 
         let button = try copyButton(in: hosting)
         let buttonRect = hosting.convert(button.bounds, from: button)
@@ -345,7 +355,10 @@ struct SidebarSessionCopyTests {
         defer { window.contentView = nil; window.close() }
         hosting.frame = frame
         try await settle(hosting)
+        try await prepareVisibleRender(window, content: hosting)
         func recognizedText(_ filename: String) throws -> [String] {
+            window.displayIfNeeded()
+            hosting.displayIfNeeded()
             let bitmap = try capture(hosting)
             let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent(".build/layout-validation/offscreen")
@@ -368,7 +381,9 @@ struct SidebarSessionCopyTests {
         var scroll = try scrollView()
         try scrollToBottom(scroll)
         #expect(scroll.contentView.bounds.origin.y > 0)
-        hosting.rootView = AnyView(card("subject-b", "Subject B", "b"))
+        let subjectB = card("subject-b", "Subject B", "b")
+        #expect(subjectB.data.id == "subject-b" && subjectB.data.title == "Subject B")
+        hosting.rootView = AnyView(subjectB)
         try await settle(hosting)
         scroll = try scrollView()
         #expect(scroll.contentView.bounds.origin.y == 0)
@@ -376,7 +391,10 @@ struct SidebarSessionCopyTests {
 
         try scrollToBottom(scroll)
         #expect(scroll.contentView.bounds.origin.y > 0)
-        hosting.rootView = AnyView(card("subject-b", "Subject B", "refreshed"))
+        let refreshedSubjectB = card("subject-b", "Subject B", "refreshed")
+        #expect(refreshedSubjectB.data.id == subjectB.data.id)
+        #expect(refreshedSubjectB.data.title == subjectB.data.title)
+        hosting.rootView = AnyView(refreshedSubjectB)
         try await settle(hosting)
         scroll = try scrollView()
         #expect(scroll.contentView.bounds.origin.y > 0)
