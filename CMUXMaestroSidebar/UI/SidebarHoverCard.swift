@@ -12,7 +12,8 @@ struct SidebarHoverCardData: Equatable {
 struct SidebarHoverCard: View {
     let data: SidebarHoverCardData
     let close: () -> Void
-    let copySessionID: (UUID) -> Bool
+    let copyValue: (String) -> Bool
+    var copyActionFocusChanged: (Bool) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -30,15 +31,11 @@ struct SidebarHoverCard: View {
                         Text(subtitle).font(.callout).fixedSize(horizontal: false, vertical: true)
                     }
                     ForEach(data.lines) { line in
-                        if let sessionID = line.copyableSessionID {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(line.title).font(.caption).foregroundStyle(.secondary)
-                                SidebarCopyableValue(value: line.value, label: line.title) {
-                                    copySessionID(sessionID)
-                                }
-                                .id(sessionID)
-                            }
-                            .accessibilityElement(children: .contain)
+                        if let clipboardValue = line.copyableValue {
+                            SidebarCopyableValue(
+                                value: line.value, label: line.title, clipboardValue: clipboardValue,
+                                copy: copyValue, focusChanged: copyActionFocusChanged
+                            )
                         } else {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(line.title).foregroundStyle(.secondary)
@@ -58,6 +55,7 @@ struct SidebarHoverCard: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .id(data.id)
             Text("Preview only").font(.caption2).foregroundStyle(.secondary)
         }
         .padding(14)
@@ -113,6 +111,7 @@ struct SidebarHoverState {
     private(set) var mode: Mode = .hidden
     private(set) var overAnchor = false
     private(set) var overCard = false
+    private(set) var copyActionFocused = false
     private var suppressed = false
 
     mutating func anchor(_ inside: Bool) {
@@ -120,13 +119,15 @@ struct SidebarHoverState {
         if !inside { suppressed = false }
     }
     mutating func card(_ inside: Bool) { overCard = inside }
+    mutating func copyAction(_ focused: Bool) { copyActionFocused = focused }
     var shouldOpen: Bool { mode == .hidden && overAnchor && !suppressed }
-    var shouldClose: Bool { mode == .hover && !overAnchor && !overCard }
+    var shouldClose: Bool { mode == .hover && !overAnchor && !overCard && !copyActionFocused }
     mutating func open(explicit: Bool) { mode = explicit ? .explicit : .hover }
     mutating func keyboard() { mode = .keyboard }
     mutating func dismiss() {
         mode = .hidden
         overCard = false
+        copyActionFocused = false
         suppressed = overAnchor
     }
 }
@@ -167,6 +168,7 @@ extension EnvironmentValues {
 final class SidebarHoverPanel: NSPanel {
     var allowsKeyboard = false
     var advanceFromPreview: () -> Void = {}
+    var returnToOrigin: () -> Void = {}
     override var canBecomeKey: Bool { allowsKeyboard }
     override var canBecomeMain: Bool { false }
 
@@ -186,6 +188,22 @@ final class SidebarHoverPanel: NSPanel {
         makeFirstResponder(controls[index])
     }
 
+    override func selectPreviousKeyView(_ sender: Any?) {
+        let controls = keyboardControls
+        guard allowsKeyboard, !controls.isEmpty else { super.selectPreviousKeyView(sender); return }
+        guard let index = controls.firstIndex(where: { $0 === firstResponder }), index > 0 else {
+            returnToOrigin()
+            return
+        }
+        let firstFieldAction = controls.firstIndex { $0.accessibilityIdentifier() == "hover-copy-value" }
+        if index == firstFieldAction {
+            returnToOrigin()
+            return
+        }
+        controls[index - 1].scrollToVisible(controls[index - 1].bounds)
+        makeFirstResponder(controls[index - 1])
+    }
+
     private var keyboardControls: [NSButton] {
         func visit(_ view: NSView) -> [NSButton] {
             if let button = view as? NSButton,
@@ -199,8 +217,24 @@ final class SidebarHoverPanel: NSPanel {
 
 enum SidebarSessionCopy {
     static func copy(_ id: UUID, to pasteboard: NSPasteboard = .general) -> Bool {
+        copy(id.uuidString, to: pasteboard)
+    }
+
+    static func copy(_ value: String, to pasteboard: NSPasteboard = .general) -> Bool {
+        guard !value.isEmpty else { return false }
         pasteboard.clearContents()
-        return pasteboard.setString(id.uuidString, forType: .string)
+        return pasteboard.setString(value, forType: .string)
+    }
+}
+
+private struct SidebarClipboardWriteKey: EnvironmentKey {
+    static let defaultValue: (String) -> Bool = { SidebarSessionCopy.copy($0) }
+}
+
+extension EnvironmentValues {
+    var sidebarClipboardWrite: (String) -> Bool {
+        get { self[SidebarClipboardWriteKey.self] }
+        set { self[SidebarClipboardWriteKey.self] = newValue }
     }
 }
 
@@ -219,17 +253,17 @@ final class SidebarHoverPresenter {
     private var eventMonitor: Any?
     private var windowObservers: [NSObjectProtocol] = []
     private var hosting: NSHostingView<AnyView>?
-    private let copySessionID: (UUID) -> Bool
+    private var copyValue: (String) -> Bool
     private let showPanel: (NSWindow, SidebarHoverPanel, Bool) -> Void
     var isMonitoring: Bool { eventMonitor != nil || !windowObservers.isEmpty }
 
-    init(copySessionID: @escaping (UUID) -> Bool = { SidebarSessionCopy.copy($0) },
+    init(copyValue: @escaping (String) -> Bool = { SidebarSessionCopy.copy($0) },
          showPanel: @escaping (NSWindow, SidebarHoverPanel, Bool) -> Void = { window, panel, explicit in
         window.addChildWindow(panel, ordered: .above)
         panel.orderFront(nil)
         if explicit { panel.makeKey() }
     }) {
-        self.copySessionID = copySessionID
+        self.copyValue = copyValue
         self.showPanel = showPanel
     }
 
@@ -244,6 +278,11 @@ final class SidebarHoverPresenter {
             if changed { updateContent() }
             position()
         }
+    }
+
+    func setCopyValue(_ copyValue: @escaping (String) -> Bool) {
+        self.copyValue = copyValue
+        if state.mode != .hidden { updateContent() }
     }
 
     func hoverAnchor(_ inside: Bool, nameOnly: Bool = false) {
@@ -295,10 +334,15 @@ final class SidebarHoverPresenter {
         closeTask?.cancel()
         guard state.shouldClose else { return }
         closeTask = Task { @MainActor [weak self] in
-            do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+            do { try await Task.sleep(for: .milliseconds(220)) } catch { return }
             guard let self, self.state.shouldClose else { return }
             self.dismiss(restoreFocus: false)
         }
+    }
+
+    func copyActionFocus(_ focused: Bool) {
+        state.copyAction(focused)
+        if !focused { scheduleClose() }
     }
 
     func open(explicit: Bool) {
@@ -324,6 +368,7 @@ final class SidebarHoverPresenter {
             self.dismiss(restoreFocus: true)
             parent.selectNextKeyView(origin)
         }
+        panel.returnToOrigin = { [weak self] in self?.dismiss(restoreFocus: true) }
         panel.allowsKeyboard = explicit
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
@@ -343,7 +388,8 @@ final class SidebarHoverPresenter {
         guard let panel, let data else { return }
         let content = SidebarHoverCard(
             data: data, close: { [weak self] in self?.dismiss(restoreFocus: true) },
-            copySessionID: copySessionID
+            copyValue: copyValue,
+            copyActionFocusChanged: { [weak self] in self?.copyActionFocus($0) }
         )
             .onHover { [weak self] in self?.hoverCard($0) }
         if let hosting {
@@ -390,8 +436,7 @@ final class SidebarHoverPresenter {
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .scrollWheel]) { [weak self] event in
             guard let self else { return event }
             if event.type == .keyDown {
-                if event.keyCode == 53 || (event.keyCode == 48 && event.modifierFlags.contains(.shift)
-                                          && self.state.mode == .explicit && event.window === self.panel) {
+                if event.keyCode == 53 {
                     let owned = self.state.mode == .explicit && event.window === self.panel
                     self.dismiss(restoreFocus: owned)
                     return owned ? nil : event
@@ -499,6 +544,7 @@ struct SidebarHoverRegion<Content: View>: View {
     @ViewBuilder let content: () -> Content
     @State private var presenter = SidebarHoverPresenter()
     @Environment(\.sidebarHoverGroup) private var group
+    @Environment(\.sidebarClipboardWrite) private var copyValue
 
     var body: some View {
         content()
@@ -513,6 +559,7 @@ struct SidebarHoverRegion<Content: View>: View {
             .background {
                 if !nameOnly { SidebarHoverAnchor(presenter: presenter, data: data, group: group) }
             }
+            .onAppear { presenter.setCopyValue(copyValue) }
             .onHover { if !nameOnly { presenter.hoverAnchor($0) } }
             .onDisappear { presenter.detach() }
     }

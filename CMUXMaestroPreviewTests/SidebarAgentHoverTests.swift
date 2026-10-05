@@ -10,12 +10,12 @@ struct SidebarAgentHoverTests {
 
     private func session(
         id: UUID? = nil, surface: UUID? = nil, name: String = "model",
-        liveness: AgentProcessLiveness = .alive
+        liveness: AgentProcessLiveness = .alive, childrenComplete: Bool = true
     ) -> SidebarCopilotSession {
         .init(
             id: id ?? fixtures.sessionID, workspaceID: fixtures.workspaceA,
             surfaceID: surface ?? fixtures.surfaceA, liveness: liveness, state: .working, model: name,
-            observedAt: now, nodes: [], childrenComplete: true, treeDegraded: false,
+            observedAt: now, nodes: [], childrenComplete: childrenComplete, treeDegraded: false,
             omittedChildrenCount: 0, omittedActiveChildrenCount: 0
         )
     }
@@ -116,14 +116,22 @@ struct SidebarAgentHoverTests {
         }
         let sharedValue = directory.flatMap { $0.isEmpty ? nil : $0 } ?? "No path shared"
         let expectedValue = granted ? sharedValue : "Path unavailable"
+        let copyConsumers: Set<String> = [
+            "session hover", "managed hover", "child hover", "session details",
+            "managed details", "child details", "session pinned", "managed pinned"
+        ]
         for (name, lines, parent) in consumers {
             let fields = lines.filter { $0.title.lowercased().contains("directory") }
-            #expect(fields == [.init(
-                title: parent ? "Parent surface directory" : "Surface directory", value: expectedValue,
-                help: parent
-                    ? "Reported by CMUX for the parent surface; no report time supplied. Not an independently reported child directory."
-                    : "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory."
-            )], "\(name) must retain exactly its source-qualified directory field, including grant/nil state")
+            let field = try #require(fields.first, "\(name) must retain its source-qualified directory field")
+            let expectedHelp = parent
+                ? "Reported by CMUX for the parent surface; no report time supplied. Not an independently reported child directory."
+                : "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory."
+            #expect(fields.count == 1 && field.title == (parent ? "Parent surface directory" : "Surface directory")
+                    && field.value == expectedValue && field.help == expectedHelp,
+                    "\(name) must retain its source-qualified directory field, including grant/nil state")
+            let expectedCopy = granted && copyConsumers.contains(name) && field.value == directory
+                ? directory.flatMap { $0.isEmpty ? nil : $0 } : nil
+            #expect(field.copyableValue == expectedCopy, "\(name) exposes only its exact permitted path value")
             #expect(!lines.contains { $0.value == "/synthetic/peer-only" })
         }
         #expect(paths.workingDirectory == (granted ? .available(directory) : .unavailable))
@@ -181,10 +189,11 @@ struct SidebarAgentHoverTests {
             #expect(git.allSatisfy { $0.value.hasPrefix("Assigned directory: ") && $0.help == expectedHelp })
             #expect(git.allSatisfy { tooltip.contains("\($0.title): \($0.value)") })
             #expect(git.first { $0.title == "Git changes" }?.value == expectedCounts)
-            #expect(lines.first { $0.title == "Surface directory" } == .init(
-                title: "Surface directory", value: "/synthetic/independent-host-report",
-                help: "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory."
-            ))
+            let surfaceDirectory = try #require(lines.first { $0.title == "Surface directory" })
+            #expect(surfaceDirectory.value == "/synthetic/independent-host-report")
+            #expect(surfaceDirectory.copyableValue == "/synthetic/independent-host-report")
+            #expect(surfaceDirectory.help ==
+                "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory.")
             if verified && evidence != "stale" {
                 #expect(git.first { $0.title == "Worktree" }?.value == "Assigned directory: assigned-worktree")
                 #expect(git.first { $0.title == "Branch" }?.value ==
@@ -327,10 +336,11 @@ struct SidebarAgentHoverTests {
         let ended = session(liveness: .dead)
         let hover = try #require(card(.session(ended.id), sessions: [ended], hierarchy: hierarchy))
         #expect(hover.notice == "Live session ownership is not confirmed.")
-        #expect(hover.lines.first { $0.title == "Surface directory" } == .init(
-            title: "Surface directory", value: "/synthetic/host-report",
-            help: "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory."
-        ))
+        let hostDirectory = try #require(hover.lines.first { $0.title == "Surface directory" })
+        #expect(hostDirectory.value == "/synthetic/host-report")
+        #expect(hostDirectory.copyableValue == "/synthetic/host-report")
+        #expect(hostDirectory.help ==
+            "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory.")
         let node = directoryNode(ended)
         let stale = try #require(card(.managed(node.id, generation: 2), sessions: [ended], hierarchy: hierarchy,
                                      nodes: [node], availability: .stale))
@@ -355,6 +365,42 @@ struct SidebarAgentHoverTests {
         #expect(card(.session(a.id), sessions: [a], hierarchy: fixtures.hierarchy(granted: false)) == nil)
         #expect(card(.session(a.id), sessions: [a], hierarchy: fixtures.hierarchy(moved: true)) == nil)
         #expect(card(.session(UUID()), sessions: [a]) == nil)
+    }
+
+    @Test func sessionPreviewExposesOnlyPermittedRawCopyValues() throws {
+        let observed = session(childrenComplete: false)
+        let hierarchy = directoryHierarchy("/synthetic/reported")
+        let result = try #require(card(.session(observed.id), sessions: [observed], hierarchy: hierarchy))
+        let copied = Dictionary(uniqueKeysWithValues: result.lines.compactMap { line in
+            line.copyableValue.map { (line.title, $0) }
+        })
+        let timestamp = ISO8601DateFormatter()
+        timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        #expect(copied == [
+            "Session ID": observed.id.uuidString,
+            "Observed": timestamp.string(from: observed.observedAt),
+            "Child history": "incomplete",
+            "Workspace path": "/synthetic/workspace",
+            "Project path": "/synthetic/project",
+            "Surface directory": "/synthetic/reported"
+        ])
+        #expect(result.lines.first { $0.title == "Observed" }?.value != copied["Observed"])
+        #expect(result.lines.allSatisfy {
+            !["Model", "State", "Process", "Known working children", "Child ID"].contains($0.title)
+                || $0.copyableValue == nil
+        })
+
+        let missingDirectory = try #require(card(
+            .session(observed.id), sessions: [observed], hierarchy: directoryHierarchy(nil)
+        ))
+        #expect(missingDirectory.lines.first { $0.title == "Surface directory" }?.copyableValue == nil)
+        let denied = try #require(card(
+            .session(observed.id), sessions: [observed], hierarchy: directoryHierarchy("/synthetic/hidden", granted: false)
+        ))
+        #expect(denied.lines.allSatisfy {
+            !["Workspace path", "Project path", "Surface directory"].contains($0.title)
+                || $0.copyableValue == nil
+        })
     }
 
     @Test func staleOrMissingAgentEvidenceCannotAdvertiseCurrentMetrics() throws {
@@ -449,7 +495,8 @@ struct SidebarAgentHoverTests {
             #expect(missing.lines.allSatisfy { $0.copyableSessionID == nil })
             #expect(!missing.lines.contains { $0.title == "Session ID" })
         }
-        #expect(SidebarDetailLine(title: "Session ID", value: fixtures.sessionID.uuidString).copyableSessionID == nil)
+        let untrustedID = SidebarDetailLine(title: "Session ID", value: fixtures.sessionID.uuidString)
+        #expect(untrustedID.copyableSessionID == nil && untrustedID.copyableValue == nil)
     }
 
     @Test func generatingAllPreviewSubjectsLeavesEvidenceAndPreferencesUnchanged() throws {

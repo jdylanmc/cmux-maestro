@@ -2428,6 +2428,7 @@ private struct CopilotWorkRow: View {
 struct SidebarInspector: View {
     let content: SidebarDetailContent?
     let close: () -> Void
+    var copyValue: (String) -> Bool = { SidebarSessionCopy.copy($0) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2447,9 +2448,9 @@ struct SidebarInspector: View {
                         if let notice = content.notice {
                             Text(notice).sidebarFont(.caption).foregroundStyle(.secondary)
                         }
-                        SidebarMetadataDetails(lines: content.lines.filter { $0.copyableSessionID == nil })
-                        ForEach(content.lines.filter { $0.copyableSessionID != nil }) { line in
-                            SidebarSessionDetail(line: line)
+                        SidebarMetadataDetails(lines: content.lines.filter { $0.copyableValue == nil })
+                        ForEach(content.lines.filter { $0.copyableValue != nil }) { line in
+                            SidebarSessionDetail(line: line, copyValue: copyValue)
                         }
                         if !content.otherActivity.isEmpty {
                             DisclosureGroup("Other activity (\(content.otherActivity.count))") {
@@ -2748,17 +2749,13 @@ struct SidebarMetadataDetails: View {
 
 private struct SidebarSessionDetail: View {
     let line: SidebarDetailLine
-    var showsTitle = true
-    var copySessionID: (UUID) -> Bool = { SidebarSessionCopy.copy($0) }
+    var copyValue: (String) -> Bool = { SidebarSessionCopy.copy($0) }
 
     var body: some View {
-        if let sessionID = line.copyableSessionID {
-            VStack(alignment: .leading, spacing: 1) {
-                if showsTitle { Text(line.title).sidebarFont(.caption2).foregroundStyle(.secondary) }
-                SidebarCopyableValue(value: line.value, label: line.title) {
-                    copySessionID(sessionID)
-                }
-            }
+        if let clipboardValue = line.copyableValue {
+            SidebarCopyableValue(
+                value: line.value, label: line.title, clipboardValue: clipboardValue, copy: copyValue
+            )
         }
     }
 }
@@ -2767,7 +2764,7 @@ struct SidebarPinnedFooter: View {
     let content: SidebarDetailContent
     var maximumHeight: CGFloat = 220
     let inspect: () -> Void
-    var copySessionID: (UUID) -> Bool = { SidebarSessionCopy.copy($0) }
+    var copyValue: (String) -> Bool = { SidebarSessionCopy.copy($0) }
     @State private var contentHeight: CGFloat = 80
 
     var body: some View {
@@ -2816,8 +2813,8 @@ struct SidebarPinnedFooter: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            ForEach(content.lines.filter { $0.copyableSessionID != nil }) { line in
-                SidebarSessionDetail(line: line, showsTitle: false, copySessionID: copySessionID)
+            ForEach(content.lines.filter { $0.copyableValue != nil }) { line in
+                SidebarSessionDetail(line: line, copyValue: copyValue)
             }
             if let notice = content.notice {
                 Text(notice).sidebarFont(.caption2).foregroundStyle(.secondary)
