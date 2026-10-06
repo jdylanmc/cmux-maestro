@@ -715,7 +715,20 @@ class Harness:
                 token = self.token if actor["id"] == self.node else self.cmux_data()["tokens"][actor["id"]]
                 self.run("status", "--actor-id", actor["id"], "--token", token, "--worker-id", node_id)
             time.sleep(0.05)
-        raise AssertionError(f"timed out waiting for node {node_id}: {node}")
+        runtime_log = "No exact runtime surface observed."
+        if node and node.get("surfaceId"):
+            try:
+                runtime_log = (self.path / f"runtime-{node['surfaceId']}.log").read_text(errors="replace")
+            except OSError as error:
+                runtime_log = f"Runtime log unavailable: {error}"
+        processes = {
+            "supervisorRunning": CONTROLLER_API["process_observation"]((node or {}).get("supervisor")),
+            "providerRunning": CONTROLLER_API["process_observation"]((node or {}).get("providerProcess")),
+        }
+        raise AssertionError(
+            f"timed out waiting for node {node_id}: {node}\n"
+            f"process observations: {json.dumps(processes)}\nruntime stdout/stderr:\n{runtime_log}"
+        )
 
     def calls(self):
         if not self.copilot_calls.exists():

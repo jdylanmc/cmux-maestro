@@ -208,8 +208,8 @@ Maestro roles. A failed launch is a blocker, not permission to change runtimes.
 
 Managed workers spawn descendants through the same native `maestro_spawn` tool.
 The adapter binds the actual sender; it is not supplied by the model. Respect the depth
-and 32-live-session workspace limit, including managed coordinators and retained resources;
-finishing an initial task does not release
+and the controller's `MAX_LIVE_WORKERS` workspace limit, including managed
+coordinators and retained resources; finishing an initial task does not release
 an open interactive session or terminal slot. Reuse an idle worker instead of retrying fanout
 failures in a loop.
 Capacity reconciliation requires CMUX's atomic `surface.list` workspace
