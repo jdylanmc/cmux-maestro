@@ -2404,30 +2404,30 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertIn("error", log.read_text())
                 self.assertEqual(self.h.calls(), [])
 
-    def test_pending_launches_hold_all_eight_resource_slots(self):
+    def test_pending_launches_hold_all_32_resource_slots(self):
         barrier = self.h.path / "runtime-lock"
         barrier.touch()
         latch = barrier.open()
         self.addCleanup(latch.close)
         fcntl.flock(latch.fileno(), fcntl.LOCK_EX)
         self.h.env.update(FAKE_RUNTIME_LOCK=str(barrier), CMUX_MAESTRO_STARTUP_SECONDS="0")
-        receipts = [self.h.spawn(label=f"Pending {index}") for index in range(8)]
+        receipts = [self.h.spawn(label=f"Pending {index}") for index in range(32)]
         self.assertTrue(all(item["startup"] == "pending" for item in receipts))
-        self.assertEqual(len(self.h.state()["launches"]), 8)
+        self.assertEqual(len(self.h.state()["launches"]), 32)
         before = set(self.h.cmux_data()["surfaces"])
         rejected = self.h.run("spawn", "--actor-id", self.h.node, "--token", self.h.token,
-                             "--name", "Ninth", "--cwd", str(REPO), "--task", "bounded",
+                             "--name", "33rd", "--cwd", str(REPO), "--task", "bounded",
                              check=False)
         self.assertEqual(rejected["returncode"], 2)
         self.assertIn("resource limit", rejected["stderr"])
         self.assertEqual(set(self.h.cmux_data()["surfaces"]), before)
         archived = self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token, check=False)
         self.assertEqual(archived["returncode"], 2)
-        self.assertEqual(len(self.h.state()["launches"]), 8)
+        self.assertEqual(len(self.h.state()["launches"]), 32)
         fcntl.flock(latch.fileno(), fcntl.LOCK_UN)
         for receipt in receipts:
             self.h.wait_node(receipt["workerId"], lambda node: node["phase"] == "reported-completed")
-        self.assertEqual(len(self.h.calls()), 8)
+        self.assertEqual(len(self.h.calls()), 32)
 
     def test_caller_exit_during_attachment_unblocks_child_without_execution(self):
         barrier = self.h.path / "attach-barrier"
@@ -2499,16 +2499,16 @@ class OrchestratorTests(unittest.TestCase):
             "register", "--workspace", self.h.workspace, "--surface", self.h.surface,
             "--name", "Replacement coordinator",
         )
-        for index in range(7):
+        for index in range(31):
             added = self.h.spawn(label=f"Capacity {index}")
             self.h.wait_node(added["workerId"], lambda node: node["availability"] == "idle")
         surfaces_before = set(self.h.cmux_data()["surfaces"])
-        ninth = self.h.run(
+        over_capacity = self.h.run(
             "spawn", "--actor-id", self.h.node, "--token", self.h.token,
             "--name", "Over capacity", "--cwd", str(REPO), "--task", "bounded",
             check=False,
         )
-        self.assertEqual(ninth["returncode"], 2)
+        self.assertEqual(over_capacity["returncode"], 2)
         self.assertEqual(set(self.h.cmux_data()["surfaces"]), surfaces_before)
 
     def test_archive_winning_before_spawn_creates_no_surface(self):
@@ -2539,7 +2539,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(failed_node["phase"], "launch-failed")
         self.assertIn(failed_node["surfaceId"], self.h.cmux_data()["surfaces"])
         self.assertEqual(state["launches"], {})
-        for index in range(7):
+        for index in range(31):
             worker = self.h.spawn(label=f"Capacity {index}")
             idle = self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
             self.assertTrue(CONTROLLER_API["process_matches"](idle))
@@ -2550,7 +2550,7 @@ class OrchestratorTests(unittest.TestCase):
         surfaces_before = set(self.h.cmux_data()["surfaces"])
         rejected = self.h.run(
             "spawn", "--actor-id", self.h.node, "--token", self.h.token,
-            "--name", "Ninth", "--cwd", str(REPO), "--task", "bounded",
+            "--name", "33rd", "--cwd", str(REPO), "--task", "bounded",
             check=False,
         )
         self.assertEqual(rejected["returncode"], 2)
@@ -2915,20 +2915,20 @@ class OrchestratorTests(unittest.TestCase):
         }
         self.assertEqual(projected, typed)
 
-    def test_completed_live_resources_reject_ninth_until_exact_resource_retired(self):
+    def test_completed_live_resources_reject_33rd_until_exact_resource_retired(self):
         workers = []
-        for index in range(8):
+        for index in range(32):
             worker = self.h.spawn(label=f"Worker {index}")
             self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
             workers.append(worker)
         surfaces_before = len(self.h.cmux_data()["surfaces"])
-        ninth = self.h.run(
+        over_capacity = self.h.run(
             "spawn", "--actor-id", self.h.node, "--token", self.h.token,
-            "--name", "Ninth", "--cwd", str(REPO), "--task", "ninth",
+            "--name", "33rd", "--cwd", str(REPO), "--task", "over capacity",
             check=False,
         )
-        self.assertEqual(ninth["returncode"], 2)
-        self.assertIn("Live worker resource limit", ninth["stderr"])
+        self.assertEqual(over_capacity["returncode"], 2)
+        self.assertIn("Live worker resource limit", over_capacity["stderr"])
         self.assertEqual(len(self.h.cmux_data()["surfaces"]), surfaces_before)
 
         first_node = self.h.state()["nodes"][workers[0]["workerId"]]
@@ -2936,7 +2936,7 @@ class OrchestratorTests(unittest.TestCase):
         self.h.wait_node(workers[0]["workerId"], lambda node: node["phase"] == "process-disappeared")
         still_rejected = self.h.run(
             "spawn", "--actor-id", self.h.node, "--token", self.h.token,
-            "--name", "Still ninth", "--cwd", str(REPO), "--task", "ninth",
+            "--name", "Still 33rd", "--cwd", str(REPO), "--task", "over capacity",
             check=False,
         )
         self.assertEqual(still_rejected["returncode"], 2)
@@ -3252,12 +3252,12 @@ class DirectLaunchTests(unittest.TestCase):
         self.assertNotEqual(refused["returncode"], 0)
         self.assertIn("uncertain", refused["stderr"])
 
-    def test_eight_unobserved_direct_sessions_refuse_ninth_without_new_terminal(self):
-        receipts = [self.h.spawn(label=f"Unobserved {index}") for index in range(8)]
+    def test_32_unobserved_direct_sessions_refuse_33rd_without_new_terminal(self):
+        receipts = [self.h.spawn(label=f"Unobserved {index}") for index in range(32)]
         self.assertTrue(all(item["launchAccepted"] and item["startup"] == "pending" for item in receipts))
         before = set(self.h.cmux_data()["surfaces"])
         refused = self.h.run("spawn", "--actor-id", self.h.node, "--token", self.h.token,
-                            "--name", "Ninth", "--cwd", str(self.h.path), "--task", "No",
+                            "--name", "33rd", "--cwd", str(self.h.path), "--task", "No",
                             check=False)
         self.assertIn("resource limit", refused["stderr"])
         self.assertNotEqual(refused["returncode"], 0)

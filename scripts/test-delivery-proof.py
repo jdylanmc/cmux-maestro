@@ -2156,7 +2156,7 @@ class LifecycleFailureTests(unittest.TestCase):
         self.state["retainedResources"] = [{
             "runId": str(uuid.uuid4()), "workspaceId": self.actor["workspaceId"],
             "surfaceId": str(uuid.uuid4()), "archivedAt": CONTROLLER["now"](),
-        } for _ in range(8)]
+        } for _ in range(32)]
         host, _ = self.census_host({item["surfaceId"] for item in self.state["retainedResources"]})
         self.cmux.workspace_surfaces.side_effect = host.workspace_surfaces
         before = copy.deepcopy(self.state)
@@ -2166,9 +2166,9 @@ class LifecycleFailureTests(unittest.TestCase):
                 "--surface", self.actor["surfaceId"], "--account", "synthetic",
             ] if command == "launch-coordinator" else [
                 command, "--actor-id", self.actor["id"], "--token", self.token,
-            ]) + ["--name", "Refused ninth", "--task", "Synthetic", "--cwd", str(REPO)]
+            ]) + ["--name", "Refused 33rd", "--task", "Synthetic", "--cwd", str(REPO)]
             function = CONTROLLER["command_" + command.replace("-", "_")]
-            forbidden = mock.Mock(side_effect=AssertionError("ninth resource launched"))
+            forbidden = mock.Mock(side_effect=AssertionError("33rd resource launched"))
             with self.subTest(command=command), mock.patch.dict(function.__globals__, {
                 "read_state": lambda *a, **k: copy.deepcopy(self.state),
                 "mutate": self.mutate, "require_current_surface": lambda *a: None,
@@ -2190,6 +2190,74 @@ class LifecycleFailureTests(unittest.TestCase):
                         function(CONTROLLER["parser"]().parse_args(argv), self.root, self.cmux)
             self.assertEqual(self.state, before)
             forbidden.assert_not_called()
+
+    def test_live_capacity_admits_32_and_refuses_33_including_roots_and_retained(self):
+        for command in ("launch-coordinator", "spawn"):
+            for retained_count in (0, 15, 30):
+                with self.subTest(command=command, retained=retained_count):
+                    actor = copy.deepcopy(self.actor)
+                    managed_root = {
+                        **copy.deepcopy(self.worker), "id": str(uuid.uuid4()),
+                        "parentId": None, "role": "coordinator",
+                        "runtimeProtocolVersion": 2, "launchMethod": "direct",
+                        "launchSettings": {"version": 1, "copilotAccount": "synthetic",
+                                           "model": "synthetic-model"},
+                    }
+                    managed_root["runId"] = managed_root["id"]
+                    nodes = {actor["id"]: actor}
+                    for index in range(31 - retained_count):
+                        node = copy.deepcopy(managed_root)
+                        if index:
+                            node.update(id=str(uuid.uuid4()), runId=str(uuid.uuid4()),
+                                        surfaceId=str(uuid.uuid4()), copilotSessionId=str(uuid.uuid4()))
+                            node["runId"] = node["id"]
+                        nodes[node["id"]] = node
+                    retained = [{
+                        "runId": str(uuid.uuid4()), "workspaceId": actor["workspaceId"],
+                        "surfaceId": str(uuid.uuid4()), "archivedAt": CONTROLLER["now"](),
+                    } for _ in range(retained_count)]
+                    self.state = {**CONTROLLER["empty_state"](),
+                                  "nodes": nodes, "retainedResources": retained}
+                    CONTROLLER["validate_state"](self.state)
+                    self.cmux.workspace_surfaces.return_value = {
+                        node["surfaceId"] for node in nodes.values()
+                    } | {item["surfaceId"] for item in retained}
+                    argv = ([
+                        command, "--workspace", actor["workspaceId"],
+                        "--surface", actor["surfaceId"], "--account", "synthetic",
+                    ] if command == "launch-coordinator" else [
+                        command, "--actor-id", managed_root["id"], "--token", self.token,
+                    ]) + ["--name", "Capacity boundary", "--task", "Synthetic", "--cwd", str(REPO)]
+                    function = CONTROLLER["command_" + command.replace("-", "_")]
+                    launcher = mock.Mock(return_value={"launchAccepted": True, "startup": "pending"})
+                    with mock.patch.dict(function.__globals__, {
+                        "read_state": lambda *a, **k: copy.deepcopy(self.state),
+                        "mutate": self.mutate, "require_current_surface": lambda *a: None,
+                        "authorize_native_spawn": lambda state, *_: state["nodes"][managed_root["id"]],
+                        "process_matches": lambda _: True,
+                        "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+                        "resolve_copilot_token": lambda _: None,
+                        "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+                        "messaging_configuration": lambda _: {
+                            "version": 1, "routes": "/synthetic/routes", "extension": "/synthetic/extension",
+                        },
+                        "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+                        "launch_reserved_session": launcher,
+                    }):
+                        args = CONTROLLER["parser"]().parse_args(argv)
+                        kwargs = {"native_identity": {"login": "synthetic"}} if command == "spawn" else {}
+                        result = function(args, self.root, self.cmux, **kwargs)
+                        self.assertTrue(result["launchAccepted"])
+                        launcher.assert_called_once()
+                        self.assertEqual(sum(CONTROLLER["has_managed_runtime"](node)
+                                             for node in self.state["nodes"].values())
+                                         + len(self.state["retainedResources"]), 32)
+                        self.assertEqual(len(self.state["launches"]), 1)
+                        before = copy.deepcopy(self.state)
+                        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "resource limit"):
+                            function(args, self.root, self.cmux, **kwargs)
+                        self.assertEqual(self.state, before)
+                        launcher.assert_called_once()
 
     def test_atomic_census_distinguishes_removed_and_surviving_exited_surface(self):
         observe = CONTROLLER["resource_observations"]
