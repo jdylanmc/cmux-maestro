@@ -27,6 +27,65 @@ CONTROLLER = runpy.run_path(str(REPO / "scripts/cmux-maestro-orchestrator.py"))
 MAX_LIVE_WORKERS = CONTROLLER["MAX_LIVE_WORKERS"]
 
 
+class StoreBudgetTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name).resolve()
+        self.ticks = 0
+        self.release_at = None
+        self.blocker = None
+        self.clock = SimpleNamespace(
+            monotonic=lambda: self.ticks * 0.05, sleep=self.advance,
+        )
+
+    def advance(self, seconds):
+        self.assertEqual(seconds, 0.05)
+        self.ticks += 1
+        if self.release_at is not None and self.ticks >= self.release_at:
+            self.blocker.__exit__(None, None, None)
+            self.release_at = None
+
+    def test_capacity_budget_allows_contended_reader_and_writer_to_acquire(self):
+        acquire = CONTROLLER["with_store"]
+        for read_only in (False, True):
+            with self.subTest(read_only=read_only):
+                self.ticks, self.release_at = 0, 60
+                with CONTROLLER["Store"](self.root) as self.blocker, mock.patch.dict(
+                    acquire.__globals__, {"time": self.clock, "MAX_LIVE_WORKERS": 4 * 8}
+                ):
+                    operation = mock.Mock(side_effect=lambda store: store.read())
+                    result = acquire(self.root, operation, wait=2, read_only=read_only)
+                self.assertEqual(result["nodes"], {})
+                operation.assert_called_once()
+                self.assertEqual(operation.call_args.args[0].read_only, read_only)
+                self.assertEqual(self.ticks, 60)
+
+    def test_capacity_budget_remains_bounded_and_preserves_zero_wait(self):
+        acquire = CONTROLLER["with_store"]
+        for capacity, multiplier in ((4, 1), (8, 1), (16, 2), (4 * 8, 4)):
+            for wait in (0, 1, 2):
+                with self.subTest(capacity=capacity, wait=wait):
+                    self.ticks, self.release_at = 0, None
+                    with CONTROLLER["Store"](self.root), mock.patch.dict(
+                        acquire.__globals__, {"time": self.clock, "MAX_LIVE_WORKERS": capacity}
+                    ):
+                        operation = mock.Mock()
+                        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "operation is active"):
+                            acquire(self.root, operation, wait=wait)
+                    operation.assert_not_called()
+                    self.assertAlmostEqual(self.clock.monotonic(), wait * multiplier)
+
+    def test_non_contention_failure_is_not_retried(self):
+        acquire = CONTROLLER["with_store"]
+        operation = mock.Mock(side_effect=CONTROLLER["OrchestrationError"]("Invalid synthetic state"))
+        with mock.patch.dict(acquire.__globals__, {"time": self.clock}):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "Invalid synthetic state"):
+                acquire(self.root, operation, wait=2)
+        operation.assert_called_once()
+        self.assertEqual(self.ticks, 0)
+
+
 class ProofTests(unittest.TestCase):
     def test_bounded_text_preserves_controls_unicode_and_byte_limits(self):
         validate = CONTROLLER["bounded_text"]
