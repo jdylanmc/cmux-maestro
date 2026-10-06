@@ -452,7 +452,8 @@ regressions exercise actual argument quoting and verbatim task wrapping,
 terminal I/O, the validated executable/PATH/cwd, acceptance with missing
 observations, native observation on either side of attachment, cancellation
 and ambiguous creation, exact generation/process identity, account/policy
-boundaries and both eight-resource limits. Native adapter tests exercise
+boundaries and both 32-resource admission paths, including managed roots and
+retained terminals. Native adapter tests exercise
 precreated bindings, exact session join and one independent observation,
 ordinary peer send/reply and no retries. Hooks remain observers; these fixtures
 do not claim hook delivery or prompt consumption.
@@ -480,8 +481,9 @@ previously gave each held runtime a ten-second synthetic barrier deadline
 while sequentially launching all eight and checking rejection/archive. Its
 first runtime could expire before release on hosted runners. That fixture now
 uses an owner-held kernel lock released after the admission assertions, not an
-elapsed-time assumption; the same eight reservations/ninth refusal and eight
-eventual results are required. No production or CI timeout was enlarged.
+elapsed-time assumption. The current capacity regression requires 32
+reservations, refusal of the 33rd, and 32 eventual results. No production or CI
+timeout was enlarged.
 
 Legacy report fixtures release their synthetic first-turn output after the
 launch receipt, keeping post-start protocol assertions separate from the
@@ -490,7 +492,7 @@ Fixture condition waits read committed control state under its shared lock;
 an atomically replaced `state.json` alone does not mean observer publication
 has finished or the writer has released ownership. The failed-attachment
 capacity fixture stops only its completed synthetic supervisors while retaining
-every terminal, and requires the actual eight-resource-limit error, not a busy
+every terminal, and requires the actual 32-resource-limit error, not a busy
 store error. Separate live-supervisor capacity and recovery cases remain intact.
 
 Fixtures are not installed workers, live provider readiness, visible native

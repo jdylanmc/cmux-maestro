@@ -562,7 +562,7 @@ under `~/.copilot/extensions/maestro/r/`; account credentials never enter these
 files or messaging tools. Addresses contain workspace/session UUIDs and generation,
 not secrets. Payloads are limited to 4 KiB UTF-8, frames to 8 KiB, registered
 participants to 128, and connections/pending native sends to eight per receiver.
-The eight-live-managed-session workspace limit includes managed coordinators
+The 32-live-managed-session workspace limit includes managed coordinators
 and retained resources. Routes use exclusive
 creation, are retired after exact provider exit (or closed-run archive), and cannot
 be rebound by clearing/resuming a conversation. Restart/clear/replaced-session,
