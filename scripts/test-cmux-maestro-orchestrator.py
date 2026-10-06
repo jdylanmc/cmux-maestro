@@ -24,6 +24,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 CONTROLLER = REPO / "scripts" / "cmux-maestro-orchestrator.py"
 CONTROLLER_API = runpy.run_path(str(CONTROLLER))
+MAX_LIVE_WORKERS = CONTROLLER_API["MAX_LIVE_WORKERS"]
 
 def legacy_fixture_launcher(original, api):
     def launch(root, cmux, identifier, *args):
@@ -779,6 +780,46 @@ class Harness:
 
 
 class HarnessTeardownTests(unittest.TestCase):
+    def test_wait_failure_preserves_assertion_and_captures_runtime_diagnostics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            harness = object.__new__(Harness)
+            harness.path = Path(directory)
+            harness.root = harness.path / "unused"
+            worker_id, surface_id = str(uuid.uuid4()), str(uuid.uuid4())
+            node = {
+                "id": worker_id, "surfaceId": surface_id, "phase": "process-disappeared",
+                "supervisor": {"pid": 12345, "start": "synthetic-start"},
+                "providerProcess": None,
+            }
+            log = harness.path / f"runtime-{surface_id}.log"
+            log.write_text("synthetic runtime failure: known discriminator\n")
+            with patch.dict(CONTROLLER_API, {
+                "read_state": lambda *a, **k: {"nodes": {worker_id: node}},
+                "process_observation": lambda process: False if process else None,
+            }), patch("time.monotonic", side_effect=[0, 0, 7]), patch("time.sleep"):
+                with self.assertRaises(AssertionError) as failure:
+                    harness.wait_node(worker_id, lambda current: current["phase"] == "reported-completed")
+            message = str(failure.exception)
+            self.assertIn(f"timed out waiting for node {worker_id}", message)
+            self.assertIn("process-disappeared", message)
+            self.assertIn("synthetic runtime failure: known discriminator", message)
+            self.assertIn('"supervisorRunning": false', message)
+            self.assertIn('"providerRunning": null', message)
+            self.assertTrue(log.exists(), "diagnostics must be captured before cleanup")
+
+    def test_successful_wait_does_not_collect_failure_diagnostics(self):
+        harness = object.__new__(Harness)
+        harness.root = Path("/unused")
+        node = {"phase": "reported-completed"}
+        with patch.dict(CONTROLLER_API, {
+            "read_state": lambda *a, **k: {"nodes": {"synthetic": node}},
+        }), patch.object(Path, "read_text") as read_log, patch.dict(CONTROLLER_API, {
+            "process_observation": unittest.mock.Mock(),
+        }):
+            self.assertIs(harness.wait_node("synthetic", lambda _: True), node)
+            read_log.assert_not_called()
+            CONTROLLER_API["process_observation"].assert_not_called()
+
     def test_close_preserves_sandbox_when_orphan_writer_cannot_quiesce(self):
         for interactive in (False, True):
             with self.subTest(interactive=interactive):
@@ -2404,30 +2445,30 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertIn("error", log.read_text())
                 self.assertEqual(self.h.calls(), [])
 
-    def test_pending_launches_hold_all_32_resource_slots(self):
+    def test_pending_launches_hold_all_live_resource_slots(self):
         barrier = self.h.path / "runtime-lock"
         barrier.touch()
         latch = barrier.open()
         self.addCleanup(latch.close)
         fcntl.flock(latch.fileno(), fcntl.LOCK_EX)
         self.h.env.update(FAKE_RUNTIME_LOCK=str(barrier), CMUX_MAESTRO_STARTUP_SECONDS="0")
-        receipts = [self.h.spawn(label=f"Pending {index}") for index in range(32)]
+        receipts = [self.h.spawn(label=f"Pending {index}") for index in range(MAX_LIVE_WORKERS)]
         self.assertTrue(all(item["startup"] == "pending" for item in receipts))
-        self.assertEqual(len(self.h.state()["launches"]), 32)
+        self.assertEqual(len(self.h.state()["launches"]), MAX_LIVE_WORKERS)
         before = set(self.h.cmux_data()["surfaces"])
         rejected = self.h.run("spawn", "--actor-id", self.h.node, "--token", self.h.token,
-                             "--name", "33rd", "--cwd", str(REPO), "--task", "bounded",
+                             "--name", "Over capacity", "--cwd", str(REPO), "--task", "bounded",
                              check=False)
         self.assertEqual(rejected["returncode"], 2)
         self.assertIn("resource limit", rejected["stderr"])
         self.assertEqual(set(self.h.cmux_data()["surfaces"]), before)
         archived = self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token, check=False)
         self.assertEqual(archived["returncode"], 2)
-        self.assertEqual(len(self.h.state()["launches"]), 32)
+        self.assertEqual(len(self.h.state()["launches"]), MAX_LIVE_WORKERS)
         fcntl.flock(latch.fileno(), fcntl.LOCK_UN)
         for receipt in receipts:
             self.h.wait_node(receipt["workerId"], lambda node: node["phase"] == "reported-completed")
-        self.assertEqual(len(self.h.calls()), 32)
+        self.assertEqual(len(self.h.calls()), MAX_LIVE_WORKERS)
 
     def test_caller_exit_during_attachment_unblocks_child_without_execution(self):
         barrier = self.h.path / "attach-barrier"
@@ -2499,7 +2540,7 @@ class OrchestratorTests(unittest.TestCase):
             "register", "--workspace", self.h.workspace, "--surface", self.h.surface,
             "--name", "Replacement coordinator",
         )
-        for index in range(31):
+        for index in range(MAX_LIVE_WORKERS - 1):
             added = self.h.spawn(label=f"Capacity {index}")
             self.h.wait_node(added["workerId"], lambda node: node["availability"] == "idle")
         surfaces_before = set(self.h.cmux_data()["surfaces"])
@@ -2539,7 +2580,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(failed_node["phase"], "launch-failed")
         self.assertIn(failed_node["surfaceId"], self.h.cmux_data()["surfaces"])
         self.assertEqual(state["launches"], {})
-        for index in range(31):
+        for index in range(MAX_LIVE_WORKERS - 1):
             worker = self.h.spawn(label=f"Capacity {index}")
             idle = self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
             self.assertTrue(CONTROLLER_API["process_matches"](idle))
@@ -2550,7 +2591,7 @@ class OrchestratorTests(unittest.TestCase):
         surfaces_before = set(self.h.cmux_data()["surfaces"])
         rejected = self.h.run(
             "spawn", "--actor-id", self.h.node, "--token", self.h.token,
-            "--name", "33rd", "--cwd", str(REPO), "--task", "bounded",
+            "--name", "Over capacity", "--cwd", str(REPO), "--task", "bounded",
             check=False,
         )
         self.assertEqual(rejected["returncode"], 2)
@@ -2915,16 +2956,16 @@ class OrchestratorTests(unittest.TestCase):
         }
         self.assertEqual(projected, typed)
 
-    def test_completed_live_resources_reject_33rd_until_exact_resource_retired(self):
+    def test_completed_live_resources_reject_over_capacity_until_exact_resource_retired(self):
         workers = []
-        for index in range(32):
+        for index in range(MAX_LIVE_WORKERS):
             worker = self.h.spawn(label=f"Worker {index}")
             self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
             workers.append(worker)
         surfaces_before = len(self.h.cmux_data()["surfaces"])
         over_capacity = self.h.run(
             "spawn", "--actor-id", self.h.node, "--token", self.h.token,
-            "--name", "33rd", "--cwd", str(REPO), "--task", "over capacity",
+            "--name", "Over capacity", "--cwd", str(REPO), "--task", "over capacity",
             check=False,
         )
         self.assertEqual(over_capacity["returncode"], 2)
@@ -2936,7 +2977,7 @@ class OrchestratorTests(unittest.TestCase):
         self.h.wait_node(workers[0]["workerId"], lambda node: node["phase"] == "process-disappeared")
         still_rejected = self.h.run(
             "spawn", "--actor-id", self.h.node, "--token", self.h.token,
-            "--name", "Still 33rd", "--cwd", str(REPO), "--task", "over capacity",
+            "--name", "Still over capacity", "--cwd", str(REPO), "--task", "over capacity",
             check=False,
         )
         self.assertEqual(still_rejected["returncode"], 2)
@@ -3252,12 +3293,12 @@ class DirectLaunchTests(unittest.TestCase):
         self.assertNotEqual(refused["returncode"], 0)
         self.assertIn("uncertain", refused["stderr"])
 
-    def test_32_unobserved_direct_sessions_refuse_33rd_without_new_terminal(self):
-        receipts = [self.h.spawn(label=f"Unobserved {index}") for index in range(32)]
+    def test_unobserved_direct_sessions_refuse_over_capacity_without_new_terminal(self):
+        receipts = [self.h.spawn(label=f"Unobserved {index}") for index in range(MAX_LIVE_WORKERS)]
         self.assertTrue(all(item["launchAccepted"] and item["startup"] == "pending" for item in receipts))
         before = set(self.h.cmux_data()["surfaces"])
         refused = self.h.run("spawn", "--actor-id", self.h.node, "--token", self.h.token,
-                            "--name", "33rd", "--cwd", str(self.h.path), "--task", "No",
+                            "--name", "Over capacity", "--cwd", str(self.h.path), "--task", "No",
                             check=False)
         self.assertIn("resource limit", refused["stderr"])
         self.assertNotEqual(refused["returncode"], 0)

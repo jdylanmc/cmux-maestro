@@ -24,6 +24,7 @@ import uuid
 REPO = Path(__file__).resolve().parents[1]
 PROOF = runpy.run_path(str(REPO / "scripts/delivery-proof/fixture.py"))
 CONTROLLER = runpy.run_path(str(REPO / "scripts/cmux-maestro-orchestrator.py"))
+MAX_LIVE_WORKERS = CONTROLLER["MAX_LIVE_WORKERS"]
 
 
 class ProofTests(unittest.TestCase):
@@ -2156,7 +2157,7 @@ class LifecycleFailureTests(unittest.TestCase):
         self.state["retainedResources"] = [{
             "runId": str(uuid.uuid4()), "workspaceId": self.actor["workspaceId"],
             "surfaceId": str(uuid.uuid4()), "archivedAt": CONTROLLER["now"](),
-        } for _ in range(32)]
+        } for _ in range(MAX_LIVE_WORKERS)]
         host, _ = self.census_host({item["surfaceId"] for item in self.state["retainedResources"]})
         self.cmux.workspace_surfaces.side_effect = host.workspace_surfaces
         before = copy.deepcopy(self.state)
@@ -2166,9 +2167,9 @@ class LifecycleFailureTests(unittest.TestCase):
                 "--surface", self.actor["surfaceId"], "--account", "synthetic",
             ] if command == "launch-coordinator" else [
                 command, "--actor-id", self.actor["id"], "--token", self.token,
-            ]) + ["--name", "Refused 33rd", "--task", "Synthetic", "--cwd", str(REPO)]
+            ]) + ["--name", "Over capacity", "--task", "Synthetic", "--cwd", str(REPO)]
             function = CONTROLLER["command_" + command.replace("-", "_")]
-            forbidden = mock.Mock(side_effect=AssertionError("33rd resource launched"))
+            forbidden = mock.Mock(side_effect=AssertionError("over-capacity resource launched"))
             with self.subTest(command=command), mock.patch.dict(function.__globals__, {
                 "read_state": lambda *a, **k: copy.deepcopy(self.state),
                 "mutate": self.mutate, "require_current_surface": lambda *a: None,
@@ -2191,9 +2192,9 @@ class LifecycleFailureTests(unittest.TestCase):
             self.assertEqual(self.state, before)
             forbidden.assert_not_called()
 
-    def test_live_capacity_admits_32_and_refuses_33_including_roots_and_retained(self):
+    def test_live_capacity_includes_roots_and_retained(self):
         for command in ("launch-coordinator", "spawn"):
-            for retained_count in (0, 15, 30):
+            for retained_count in (0, MAX_LIVE_WORKERS // 2 - 1, MAX_LIVE_WORKERS - 2):
                 with self.subTest(command=command, retained=retained_count):
                     actor = copy.deepcopy(self.actor)
                     managed_root = {
@@ -2205,7 +2206,7 @@ class LifecycleFailureTests(unittest.TestCase):
                     }
                     managed_root["runId"] = managed_root["id"]
                     nodes = {actor["id"]: actor}
-                    for index in range(31 - retained_count):
+                    for index in range(MAX_LIVE_WORKERS - 1 - retained_count):
                         node = copy.deepcopy(managed_root)
                         if index:
                             node.update(id=str(uuid.uuid4()), runId=str(uuid.uuid4()),
@@ -2251,7 +2252,7 @@ class LifecycleFailureTests(unittest.TestCase):
                         launcher.assert_called_once()
                         self.assertEqual(sum(CONTROLLER["has_managed_runtime"](node)
                                              for node in self.state["nodes"].values())
-                                         + len(self.state["retainedResources"]), 32)
+                                         + len(self.state["retainedResources"]), MAX_LIVE_WORKERS)
                         self.assertEqual(len(self.state["launches"]), 1)
                         before = copy.deepcopy(self.state)
                         with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "resource limit"):
