@@ -483,7 +483,7 @@ first runtime could expire before release on hosted runners. That fixture now
 uses an owner-held kernel lock released after the admission assertions, not an
 elapsed-time assumption. The current capacity regression requires the configured
 maximum reservations and eventual results, with any additional launch refused.
-No production or CI timeout was enlarged.
+That barrier repair did not enlarge a production or CI timeout.
 
 Legacy report fixtures release their synthetic first-turn output after the
 launch receipt, keeping post-start protocol assertions separate from the
@@ -495,11 +495,20 @@ stable file bytes under that lock, then decode and validate the immutable copy
 after releasing it. A gated validation regression proves a new writer can
 commit without changing the captured snapshot; malformed and invalid snapshots
 still fail. Read-modify-write operations keep their full exclusive transaction
-and existing wait bounds. Legacy runtime attachment/token reads share the
+and bounded acquisition waits. Legacy runtime attachment/token reads share the
 read lock until the exclusive startup mutation; private ticket guards and
 the attachment-file lease remain unchanged. Control-character checks retain
 their UTF-8 byte bounds and exact accepted/rejected characters without a
 per-character Python scan on every node's stored provider path.
+Lock-acquisition budgets scale by `max(1, MAX_LIVE_WORKERS / 8)`, preserving
+the original eight-session allowance as more runtimes contend for serialized
+durable writes; both ordinary and runtime acquisitions use that same knob.
+The 50ms retry interval, immediate zero-wait behavior, lock modes and failure
+on exhaustion remain unchanged; this does not extend launch/result deadlines
+or retry a non-contention failure. Deterministic clock tests use real contended
+locks to prove both successful acquisition and bounded refusal at several
+configured capacities. This capacity-scaled budget is an explicit policy
+change, not an inference that shorter critical sections alone fixed CI.
 The failed-attachment
 capacity fixture stops only its completed synthetic supervisors while retaining
 every terminal, and requires the actual configured resource-limit error, not a busy

@@ -1337,7 +1337,8 @@ class Store:
 
 
 def with_store(root, operation, *, wait=1, read_only=False):
-    deadline = time.monotonic() + wait
+    # Keep the original eight-session allowance per contender as capacity grows.
+    deadline = time.monotonic() + wait * max(1, MAX_LIVE_WORKERS / 8)
     while True:
         try:
             with Store(root, read_only=read_only) as store:

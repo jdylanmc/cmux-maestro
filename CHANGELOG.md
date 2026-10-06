@@ -26,7 +26,8 @@ Notable changes are recorded using Keep a Changelog categories.
   launch accounting or the 128-node and eight-level nesting limits. Validate
   immutable read snapshots outside the shared lock so readers do not block
   writers during decoding and validation, and share read-only runtime ticket
-  lookups; retain existing wait bounds and exclusive mutations.
+  lookups. Scale bounded lock-acquisition budgets with the same capacity knob,
+  retaining exclusive mutations, failure on exhaustion and launch/result deadlines.
 - Attempt Copilot integration with stable CLI 1.x releases on protocol 3 instead
   of an exact-release whitelist. Preserve source ownership, disabled-state
   readback and transaction guards; report incompatible version/protocol pairs.
