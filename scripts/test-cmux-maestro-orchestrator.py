@@ -952,6 +952,42 @@ class OrchestratorTests(unittest.TestCase):
         with store_type(self.h.root) as writer:
             writer.write(writer.read())
 
+    def test_snapshot_validation_does_not_block_a_new_writer(self):
+        validating, release = threading.Event(), threading.Event()
+        snapshots, errors = [], []
+        validate = CONTROLLER_API["validate_state"]
+
+        def held_validation(state):
+            if threading.current_thread() is reader:
+                validating.set()
+                if not release.wait(5):
+                    raise AssertionError("Snapshot validation fixture was not released")
+            return validate(state)
+
+        def read_snapshot():
+            try:
+                snapshots.append(CONTROLLER_API["read_state"](self.h.root))
+            except Exception as error:
+                errors.append(error)
+
+        reader = threading.Thread(target=read_snapshot)
+        with patch.dict(validate.__globals__, {"validate_state": held_validation}):
+            try:
+                reader.start()
+                self.assertTrue(validating.wait(3))
+                CONTROLLER_API["mutate"](
+                    self.h.root,
+                    lambda state: state["nodes"][self.h.node].update(label="New committed label"),
+                    wait=0,
+                )
+            finally:
+                release.set()
+                reader.join(timeout=6)
+        self.assertFalse(reader.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(snapshots[0]["nodes"][self.h.node]["label"], "Coordinator")
+        self.assertEqual(self.h.state()["nodes"][self.h.node]["label"], "New committed label")
+
     def test_attachment_lock_is_private_noninheritable_and_rejects_unsafe_files(self):
         identifier = str(uuid.uuid4())
         ticket = self.h.root / "control" / f"launch-{identifier}.json"
