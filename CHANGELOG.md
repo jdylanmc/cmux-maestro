@@ -23,7 +23,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 - Raise the per-workspace hard limit from 8 to 32 live managed sessions,
   including managed coordinators and retained resources, without changing
-  launch accounting or the 128-node and eight-level nesting limits.
+  launch accounting or the 128-node and eight-level nesting limits. Validate
+  immutable read snapshots outside the shared lock so readers do not block
+  writers during decoding and validation, and share read-only runtime ticket
+  lookups; retain existing wait bounds and exclusive mutations.
 - Attempt Copilot integration with stable CLI 1.x releases on protocol 3 instead
   of an exact-release whitelist. Preserve source ownership, disabled-state
   readback and transaction guards; report incompatible version/protocol pairs.

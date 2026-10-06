@@ -490,7 +490,17 @@ launch receipt, keeping post-start protocol assertions separate from the
 unchanged rejection of an already-failed first boundary during startup.
 Fixture condition waits read committed control state under its shared lock;
 an atomically replaced `state.json` alone does not mean observer publication
-has finished or the writer has released ownership. The failed-attachment
+has finished or the writer has released ownership. Snapshot reads copy bounded,
+stable file bytes under that lock, then decode and validate the immutable copy
+after releasing it. A gated validation regression proves a new writer can
+commit without changing the captured snapshot; malformed and invalid snapshots
+still fail. Read-modify-write operations keep their full exclusive transaction
+and existing wait bounds. Legacy runtime attachment/token reads share the
+read lock until the exclusive startup mutation; private ticket guards and
+the attachment-file lease remain unchanged. Control-character checks retain
+their UTF-8 byte bounds and exact accepted/rejected characters without a
+per-character Python scan on every node's stored provider path.
+The failed-attachment
 capacity fixture stops only its completed synthetic supervisors while retaining
 every terminal, and requires the actual configured resource-limit error, not a busy
 store error. Separate live-supervisor capacity and recovery cases remain intact.

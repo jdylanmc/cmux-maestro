@@ -415,7 +415,7 @@ def bounded_text(value, field, limit, *, empty=False):
         raise OrchestrationError(f"{field} contains invalid Unicode.")
     if len(encoded) > limit or "\0" in value:
         raise OrchestrationError(f"{field} exceeds its safe limit.")
-    if any(ord(character) < 32 and character not in "\n\t" for character in value):
+    if re.search(r"[\x01-\x08\x0b-\x1f]", value):
         raise OrchestrationError(f"{field} contains control characters.")
     return value.strip()
 
@@ -1136,14 +1136,17 @@ class Store:
         return descriptor
 
     def read(self):
-        payload = self._read_regular("state.json", MAX_BYTES)
+        return self._decode_state(self._read_regular("state.json", MAX_BYTES))
+
+    @staticmethod
+    def _decode_state(payload):
         if payload is None:
             return empty_state()
         try:
             state = json.loads(payload)
         except (json.JSONDecodeError, UnicodeDecodeError):
             raise OrchestrationError("Control state is malformed.")
-        self._normalize_candidate_state(state)
+        Store._normalize_candidate_state(state)
         validate_state(state)
         return state
 
@@ -1355,7 +1358,12 @@ def mutate(root, operation, *, wait=1):
 
 
 def read_state(root, *, wait=1):
-    return with_store(root, lambda store: json.loads(json.dumps(store.read())), wait=wait, read_only=True)
+    payload = with_store(
+        root, lambda store: store._read_regular("state.json", MAX_BYTES),
+        wait=wait, read_only=True,
+    )
+    # The copied bytes are immutable; validation need not keep writers waiting.
+    return Store._decode_state(payload)
 
 
 def remove_launch_credential(root, worker_id):
@@ -3199,7 +3207,9 @@ def command_runtime(args, root):
     start = process_start(pid)
     if not start:
         raise OrchestrationError("Cannot establish supervisor process identity.")
-    attachment = with_store(root, lambda store: store.launch_attachment(worker_id), wait=2)
+    attachment = with_store(
+        root, lambda store: store.launch_attachment(worker_id), wait=2, read_only=True
+    )
     try:
         # Wait for the bounded external create/attach transaction, not a model
         # reply. Kernel blocking holds no global lock and adds no polling loop.
@@ -3207,7 +3217,9 @@ def command_runtime(args, root):
     finally:
         os.close(attachment)
     if args.token is None:
-        args.token = with_store(root, lambda store: store.launch_token(worker_id), wait=2)
+        args.token = with_store(
+            root, lambda store: store.launch_token(worker_id), wait=2, read_only=True
+        )
 
     def started(state):
         node = authorize(state, worker_id, args.token)
