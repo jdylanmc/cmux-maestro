@@ -509,6 +509,11 @@ or retry a non-contention failure. Deterministic clock tests use real contended
 locks to prove both successful acquisition and bounded refusal at several
 configured capacities. This capacity-scaled budget is an explicit policy
 change, not an inference that shorter critical sections alone fixed CI.
+The pending-capacity fixture scales its bounded six-second result wait by the
+same factor: its old wait must not expire before an allowed runtime acquisition
+can finish. This synthetic allowance changes no production result deadline,
+still requires every exact completed report and provider call, and preserves
+simultaneous maximum reservations, over-cap refusal and archive protection.
 The failed-attachment
 capacity fixture stops only its completed synthetic supervisors while retaining
 every terminal, and requires the actual configured resource-limit error, not a busy

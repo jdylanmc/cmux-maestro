@@ -2550,7 +2550,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(len(self.h.state()["launches"]), MAX_LIVE_WORKERS)
         fcntl.flock(latch.fileno(), fcntl.LOCK_UN)
         for receipt in receipts:
-            self.h.wait_node(receipt["workerId"], lambda node: node["phase"] == "reported-completed")
+            self.h.wait_node(
+                receipt["workerId"], lambda node: node["phase"] == "reported-completed",
+                timeout=6 * max(1, MAX_LIVE_WORKERS / 8),
+            )
         self.assertEqual(len(self.h.calls()), MAX_LIVE_WORKERS)
 
     def test_caller_exit_during_attachment_unblocks_child_without_execution(self):
