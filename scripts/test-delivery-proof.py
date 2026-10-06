@@ -28,6 +28,27 @@ MAX_LIVE_WORKERS = CONTROLLER["MAX_LIVE_WORKERS"]
 
 
 class ProofTests(unittest.TestCase):
+    def test_bounded_text_preserves_controls_unicode_and_byte_limits(self):
+        validate = CONTROLLER["bounded_text"]
+        error = CONTROLLER["OrchestrationError"]
+        for code in range(256):
+            value = "x" + chr(code) + "y"
+            with self.subTest(code=code):
+                if code < 32 and code not in (9, 10):
+                    message = "safe limit" if code == 0 else "control characters"
+                    with self.assertRaisesRegex(error, message):
+                        validate(value, "Synthetic", 10)
+                else:
+                    self.assertEqual(validate(value, "Synthetic", 10), value)
+        self.assertEqual(validate(" \U0001f600 ", "Synthetic", 6), "\U0001f600")
+        with self.assertRaisesRegex(error, "safe limit"):
+            validate("\U0001f600", "Synthetic", 3)
+        with self.assertRaisesRegex(error, "invalid Unicode"):
+            validate("\ud800", "Synthetic", 10)
+        with self.assertRaisesRegex(error, "required"):
+            validate(" \t\n", "Synthetic", 10)
+        self.assertEqual(validate(" \t\n", "Synthetic", 10, empty=True), "")
+
     def setUp(self):
         source = Path(tempfile.mkdtemp(prefix="m61-", dir="/tmp")).resolve()
         self.addCleanup(shutil.rmtree, source)

@@ -988,6 +988,23 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(snapshots[0]["nodes"][self.h.node]["label"], "Coordinator")
         self.assertEqual(self.h.state()["nodes"][self.h.node]["label"], "New committed label")
 
+    def test_read_snapshot_still_rejects_malformed_and_invalid_state(self):
+        path = self.h.root / "control" / "state.json"
+        original = path.read_bytes()
+        try:
+            for payload, message in (
+                (b"{", "malformed"),
+                (b"\xff", "malformed"),
+                (b'{"version":1,"nodes":{"not-a-uuid":{}}}', "must be a UUID"),
+            ):
+                with self.subTest(payload=payload):
+                    path.write_bytes(payload)
+                    with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], message):
+                        CONTROLLER_API["read_state"](self.h.root)
+                    self.assertEqual(path.read_bytes(), payload)
+        finally:
+            path.write_bytes(original)
+
     def test_attachment_lock_is_private_noninheritable_and_rejects_unsafe_files(self):
         identifier = str(uuid.uuid4())
         ticket = self.h.root / "control" / f"launch-{identifier}.json"
@@ -1010,6 +1027,23 @@ class OrchestratorTests(unittest.TestCase):
             ticket.symlink_to(self.h.root / "control" / "state.json")
             with self.assertRaises(OSError):
                 store.launch_attachment(identifier)
+
+    def test_runtime_ticket_reads_share_lock_until_the_mutation_boundary(self):
+        identifier = str(uuid.uuid4())
+        ticket = self.h.root / "control" / f"launch-{identifier}.json"
+        ticket.write_text(json.dumps({"workerId": identifier, "token": "a" * 64}))
+        ticket.chmod(0o600)
+        args = CONTROLLER_API["parser"]().parse_args(["runtime", "--worker-id", identifier])
+        runtime = CONTROLLER_API["command_runtime"]
+
+        def mutation_boundary(*args, **kwargs):
+            raise RuntimeError("Reached exclusive mutation boundary")
+
+        with CONTROLLER_API["Store"](self.h.root, read_only=True), patch.dict(
+            runtime.__globals__, {"mutate": mutation_boundary}
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Reached exclusive mutation boundary"):
+                runtime(args, self.h.root)
 
     def test_wait_node_does_not_accept_an_intermediate_state_publication(self):
         published, release, blocked, done = (threading.Event() for _ in range(4))
