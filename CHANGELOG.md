@@ -6,6 +6,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Request optional per-launch model, context tier and reasoning effort using
+  bounded session-scoped capability evidence, with visible configured fallback
+  for unsupported preferences and refusal of unsafe or foreign evidence.
+  Configured arguments remain distinct from observed provider settings (#154).
 - Configure per-workspace launch capacity from 1 to 128 (default 32) through
   an authenticated coordinator CLI, with advisory usage/preflight and exact
   root, worker, retained-resource and pending-lease accounting. Preserve

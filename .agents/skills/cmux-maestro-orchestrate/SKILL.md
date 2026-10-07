@@ -127,8 +127,19 @@ Call native `maestro_spawn` with a complete first assignment:
 The adapter reads the invoking session's current account through
 `session.rpc.gitHubAuth.getStatus()` for each launch. Neither task text, repository
 authentication, saved account defaults, nor another session selects that account.
-Missing identity/API support refuses before terminal creation. Explicit model
-selection remains separate. Optional `allowTools` and `denyTools` arrays carry
+Missing account identity/API support refuses before terminal creation. Optional
+`model`, `contextTier`, and `reasoningEffort` request per-launch preferences on
+controllers/tools declaring these fields; do not send unsupported arguments to
+an older installed tool. Generic omission preserves configured launches without
+a model query or new flags. Explicit requests use the actual joined session's
+`model.list()` capability snapshot, bound to its account before and after lookup.
+Unsupported safe preferences warn and use available configured defaults;
+unavailable lookup retains the old configured launch with an explicit warning.
+Malformed/foreign evidence, account drift, missing credentials and resource or
+permission failures refuse; they are not preference fallback. Requested and
+configured selections are not observed child settings or a numeric token window.
+No role/name/task-text inference or persistent setting change is used.
+Optional `allowTools` and `denyTools` arrays carry
 exact authorized rules; `yolo: true` requires explicit human approval and a
 coordinator actor. A worker cannot escalate by launching another root.
 
@@ -172,8 +183,10 @@ launch, isolate provider settings, or claim actual restricted startup from flags
 
 Root startup and native child launch create exactly one unfocused terminal tab
 beside the caller and launch normal interactive Copilot with the supplied task.
-Managed children inherit the verified invoking account; no account or model
-fallback is allowed. No personal account or model is shipped as a project default. Input and
+Managed children inherit the verified invoking account; no account fallback is
+allowed. Optional preference fallback is bounded and explicit as above, never
+an arbitrary model substitution. No personal account or model is shipped as a
+project default. Input and
 output belong directly to that terminal: the human can type follow-ups, answer
 questions, and continue after the first task finishes. Copilot itself starts
 through CMUX's `surface.create` direct `initial_command`,
@@ -224,10 +237,15 @@ Maestro roles. A failed launch is a blocker, not permission to change runtimes.
 
 Managed workers spawn descendants through the same native `maestro_spawn` tool.
 The adapter binds the actual sender; it is not supplied by the model. Respect the depth
-and the controller's `MAX_LIVE_WORKERS` workspace limit, including managed
+and the controller's configured workspace limit, including managed
 coordinators and retained resources; finishing an initial task does not release
 an open interactive session or terminal slot. Reuse an idle worker instead of retrying fanout
-failures in a loop.
+failures in a loop. The #154 source defaults to 32 and permits an authenticated
+workspace coordinator to configure 1 through 128; the independent global
+128-node and depth bounds still apply. Verify installed support before using
+`capacity --workspace <exact-workspace-uuid>` for advisory preflight. A successful
+query reserves nothing; actual admission rechecks the latest limit and exact
+resources transactionally. A product ceiling is not the team's dispatch budget.
 Capacity reconciliation requires CMUX's atomic `surface.list` workspace
 snapshot, not separate pane inventories that can miss a moving terminal.
 Unavailable or malformed inventory blocks launch without freeing resource slots.
