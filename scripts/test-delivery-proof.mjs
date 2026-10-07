@@ -725,9 +725,8 @@ test("native close forwards explicit subtree scope once and preserves complete p
   const descendant = { workerId: randomUUID(), workspaceId: own.workspaceId,
     surfaceId: randomUUID(), sessionId: randomUUID(), generation: 3 };
   const result = { ok: true, scope: "subtree", results: [
-    { ...descendant, outcome: "unknown", attempted: true, removal: "unconfirmed", reason: "host-failure" },
-    { ...target, outcome: "accepted", attempted: true, closeAccepted: true,
-      removal: "unconfirmed", reason: "accepted" },
+    { ...descendant, attempted: true, closeAccepted: false, removal: "unconfirmed", error: "host-failure" },
+    { ...target, attempted: true, closeAccepted: true, removal: "unconfirmed" },
   ] };
   const requests = [];
   const controller = new AbortController();

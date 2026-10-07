@@ -1415,12 +1415,10 @@ finally:
         self.assertEqual(len(result["results"]), 2)
         for actual, target in zip(result["results"], (grandchild_target, self.target)):
             self.assertEqual({key: actual[key] for key in target}, target)
-            self.assertEqual(actual["outcome"], "accepted")
             self.assertIs(actual["attempted"], True)
             self.assertIs(actual["closeAccepted"], True)
             self.assertEqual(actual["removal"], "unconfirmed")
-            self.assertTrue(actual["reason"].isascii())
-            self.assertLessEqual(len(actual["reason"]), 32)
+            self.assertNotIn("error", actual)
         self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
         self.assertEqual(CONTROLLER["read_state"](self.root), self.state)
         self.assertNotIn(self.token, json.dumps(result))
