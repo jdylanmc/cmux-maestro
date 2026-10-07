@@ -459,6 +459,24 @@ struct SidebarAgentHoverTests {
         #expect(result.lines.filter { $0.copyableSessionID != nil } == [.sessionID(root.id)])
     }
 
+    @Test func managedPreviewWithExactCurrentSessionWithoutModelExplicitlyReportsUnavailable() throws {
+        let observed = SidebarCopilotSession(
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .alive, state: .working, model: nil, observedAt: now, nodes: [],
+            childrenComplete: true, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        let node = directoryNode(observed)
+
+        let result = try #require(card(
+            .managed(node.id, generation: node.generation), sessions: [observed], nodes: [node]
+        ))
+
+        #expect(result.title == node.label)
+        #expect(result.notice == nil)
+        #expect(result.lines.filter { $0.title == "Model" }.map(\.value) == ["Unavailable"])
+        #expect(result.lines.filter { $0.copyableSessionID != nil } == [.sessionID(observed.id)])
+    }
+
     @Test func managedPreviewRejectsAReplacedGenerationAndShowsOnlyVerifiedMetrics() throws {
         let node = SidebarOrchestrationNode(
             id: UUID(), runId: UUID(), parentId: nil, role: "worker", label: "Managed agent",
