@@ -634,6 +634,7 @@ class ProofTests(unittest.TestCase):
 
     def test_native_spawn_inherits_live_account_not_saved_account(self):
         state, _ = self.lifecycle_state()
+        self.node["permissionMode"] = "default"
         spawn = CONTROLLER["command_spawn"]
         identity = self.native_identity()
         args = CONTROLLER["parser"]().parse_args([
