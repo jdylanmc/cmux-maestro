@@ -1376,6 +1376,56 @@ finally:
         self.assertTrue(self.invoke()["closeAccepted"])
         self.cmux.run.assert_called_once()
 
+    def test_subtree_closes_cross_worktree_descendant_before_root_without_touching_survivors(self):
+        self.child["workingDirectory"] = str(self.home / "parent-worktree")
+        self.grandchild["workingDirectory"] = str(self.home / "descendant-worktree")
+        self.sibling["workingDirectory"] = self.child["workingDirectory"]
+        self.grandchild["providerProcess"] = {
+            "pid": 12347, "start": self.child["providerProcess"]["start"],
+        }
+        self.starts[12347] = self.grandchild["providerProcess"]["start"]
+        self.parents[12347] = 1
+        source = self.source(self.grandchild)
+        source.mkdir(mode=0o700)
+        (source / "inuse.12347.lock").touch(mode=0o600)
+        for node in (self.child, self.grandchild, self.sibling):
+            CONTROLLER["bind_messaging"](node)
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        grandchild_target = {
+            "workerId": self.grandchild["id"], "workspaceId": self.grandchild["workspaceId"],
+            "surfaceId": self.grandchild["surfaceId"], "sessionId": self.grandchild["copilotSessionId"],
+            "generation": 1,
+        }
+        requests = []
+        def accept(*arguments, **_kwargs):
+            self.assertEqual(arguments[:2], ("rpc", "surface.close"))
+            request = json.loads(arguments[2])
+            requests.append(request)
+            return request
+        self.cmux.run.side_effect = accept
+
+        result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+
+        self.assertEqual(requests, [
+            {"workspace_id": self.grandchild["workspaceId"], "surface_id": self.grandchild["surfaceId"]},
+            {"workspace_id": self.child["workspaceId"], "surface_id": self.child["surfaceId"]},
+        ])
+        self.assertEqual(result["scope"], "subtree")
+        self.assertEqual(len(result["results"]), 2)
+        for actual, target in zip(result["results"], (grandchild_target, self.target)):
+            self.assertEqual({key: actual[key] for key in target}, target)
+            self.assertEqual(actual["outcome"], "accepted")
+            self.assertIs(actual["attempted"], True)
+            self.assertIs(actual["closeAccepted"], True)
+            self.assertEqual(actual["removal"], "unconfirmed")
+            self.assertTrue(actual["reason"].isascii())
+            self.assertLessEqual(len(actual["reason"]), 32)
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+        self.assertEqual(CONTROLLER["read_state"](self.root), self.state)
+        self.assertNotIn(self.token, json.dumps(result))
+        self.assertNotIn(self.identity["capability"], json.dumps(result))
+
     def test_close_accepts_real_wrapper_with_separate_direct_source_owner(self):
         with self.owned_source_wrapper() as (wrapper, owner_pid):
             source = self.source(self.child)

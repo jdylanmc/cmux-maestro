@@ -718,6 +718,44 @@ test("native close supplies private invoking identity and one explicit target wi
   assert.deepEqual(f.sends, []);
 });
 
+test("native close forwards explicit subtree scope once and preserves complete per-target outcomes", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  const target = { workerId: f.bindings[1].nodeId, ...managedAddress(f.bindings[1]), surfaceId: randomUUID() };
+  const descendant = { workerId: randomUUID(), workspaceId: own.workspaceId,
+    surfaceId: randomUUID(), sessionId: randomUUID(), generation: 3 };
+  const result = { ok: true, scope: "subtree", results: [
+    { ...descendant, outcome: "unknown", attempted: true, removal: "unconfirmed", reason: "host-failure" },
+    { ...target, outcome: "accepted", attempted: true, closeAccepted: true,
+      removal: "unconfirmed", reason: "accepted" },
+  ] };
+  const requests = [];
+  const controller = new AbortController();
+  let close;
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: { ...own, controller: "/synthetic/controller" },
+    signal: controller.signal,
+    joinSession: async ({ tools }) => {
+      close = tools.find(tool => tool.name === "maestro_close");
+      return { sessionId: own.sessionId };
+    },
+    closeChild: async (...args) => { requests.push(args); return result; },
+  });
+  t.after(() => adapter.close());
+
+  const output = await close.handler({ target, scope: "subtree" }, { sessionId: own.sessionId });
+
+  assert.deepEqual(requests, [[{
+    identity: { nodeId: own.nodeId, ...managedAddress(own), capability: own.capability },
+    target, scope: "subtree",
+  }, "/synthetic/controller", controller.signal]]);
+  assert.deepEqual(JSON.parse(output), result);
+  assert.deepEqual(close.parameters.properties.scope.enum, ["target-only", "subtree"]);
+  assert.deepEqual(close.parameters.required, ["target"]);
+  assert.equal(output.includes(own.capability), false);
+  assert.deepEqual(f.sends, []);
+});
+
 test("native close rejects public peer addresses, forged authority, broad targets and wrong invocations before ingress", async (t) => {
   const f = await managedFixture(t);
   const own = f.bindings[0];
