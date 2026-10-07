@@ -1732,6 +1732,8 @@ finally:
             )
 
         self.assertEqual(code, 0, stderr.getvalue())
+        self.assertIsNone(CONTROLLER["CLOSE_DEADLINE"].get())
+        self.assertEqual(CONTROLLER["close_timeout"](15), 15)
         self.assertLessEqual(elapsed, 45.000001, "all ancestry, source and host work must fit the bounded pass")
         self.assertLess(elapsed, 60, "adapter deadline must retain response-serialization headroom")
         self.assertTrue(deadlines)
@@ -1835,6 +1837,8 @@ finally:
 
         self.cmux.run.assert_not_called()
         self.assertEqual(code, 2)
+        self.assertIsNone(CONTROLLER["CLOSE_DEADLINE"].get())
+        self.assertEqual(CONTROLLER["close_timeout"](15), 15)
         self.assertEqual(stdout.getvalue(), "")
         failure = json.loads(stderr.getvalue())
         self.assertIs(failure["ok"], False)

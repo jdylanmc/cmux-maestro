@@ -888,3 +888,73 @@ if (mode === "cancel") setTimeout(() => process.exit(5), 4000);
   }
   assert.equal(await fs.readFile(callsFile, "utf8"), "accepted\nrefused\nlost\ninvalid\ncancel\n");
 });
+
+test("native close subtree transport preserves complete output and treats overflow or cancellation as uncertain", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  const target = { workerId: f.bindings[1].nodeId, ...managedAddress(f.bindings[1]), surfaceId: randomUUID() };
+  const results = Array.from({ length: 127 }, (_, index) => ({
+    ...(index === 126 ? target : {
+      workerId: randomUUID(), workspaceId: own.workspaceId, surfaceId: randomUUID(),
+      sessionId: randomUUID(), generation: 1,
+    }),
+    outcome: index === 0 ? "unknown" : "not-attempted", attempted: index === 0,
+    reason: index === 0 ? "confirmation_required" : "budget-exhausted", removal: "unconfirmed",
+  }));
+  const complete = { ok: true, scope: "subtree", results };
+  assert.ok(Buffer.byteLength(JSON.stringify(complete)) < 65_536);
+  const executable = path.join(f.root, "subtree-controller.mjs");
+  const modeFile = path.join(f.root, "subtree-mode");
+  const callsFile = path.join(f.root, "subtree-calls");
+  await fs.writeFile(callsFile, "");
+  await fs.writeFile(executable, `#!${process.execPath}
+import { readFileSync, appendFileSync } from "node:fs";
+if (process.argv.slice(2).join() !== "native-close") process.exit(3);
+const request = JSON.parse(readFileSync(0, "utf8"));
+if (Object.keys(request).sort().join() !== "identity,scope,target" || request.scope !== "subtree") process.exit(4);
+const mode = readFileSync(${JSON.stringify(modeFile)}, "utf8");
+appendFileSync(${JSON.stringify(callsFile)}, mode + "\\n");
+if (mode === "complete") console.log(${JSON.stringify(JSON.stringify(complete))});
+if (mode === "overflow") console.log(JSON.stringify({ ok: true, scope: "subtree", results: [], private: "x".repeat(70_000) }));
+if (mode === "cancel") setTimeout(() => process.exit(5), 4000);
+`, { mode: 0o700 });
+  const abort = new AbortController();
+  let close;
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true,
+    expected: { ...own, controller: executable }, signal: abort.signal,
+    joinSession: async ({ tools }) => {
+      close = tools.find(tool => tool.name === "maestro_close").handler;
+      return { sessionId: own.sessionId };
+    },
+  });
+  t.after(() => adapter.close());
+  for (const mode of ["complete", "overflow", "cancel"]) {
+    await fs.writeFile(modeFile, mode);
+    const pending = close({ target, scope: "subtree" }, { sessionId: own.sessionId });
+    if (mode === "cancel") {
+      const deadline = Date.now() + 2000;
+      while (!(await fs.readFile(callsFile, "utf8")).endsWith("cancel\n")) {
+        assert.ok(Date.now() < deadline, "synthetic subtree controller did not receive request");
+        await delay(10);
+      }
+      abort.abort();
+    }
+    const output = await pending;
+    if (mode === "complete") {
+      assert.deepEqual(JSON.parse(output), complete);
+      assert.ok(Buffer.byteLength(output) <= 65_536);
+    } else {
+      assert.equal(output.resultType, "failure");
+      assert.match(output.textResultForLlm, /uncertain/);
+      assert.match(output.textResultForLlm, /No fallback or retry.*removal is unconfirmed/);
+      assert.equal(output.textResultForLlm.includes("private"), false);
+      assert.equal(output.textResultForLlm.includes("xxxx"), false);
+      assert.equal(output.textResultForLlm.includes("closeAccepted"), false);
+    }
+  }
+  assert.equal(await fs.readFile(callsFile, "utf8"), "complete\noverflow\ncancel\n");
+  assert.equal((await close({ target, scope: "subtree" }, { sessionId: own.sessionId })).resultType, "failure");
+  assert.equal(await fs.readFile(callsFile, "utf8"), "complete\noverflow\ncancel\n");
+  assert.deepEqual(f.sends, []);
+});
