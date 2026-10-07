@@ -2619,6 +2619,58 @@ class LifecycleFailureTests(unittest.TestCase):
                 launcher.assert_not_called()
                 self.assertEqual(self.state, initial)
 
+    def test_recorded_yolo_with_empty_explicit_allows_accepts_finite_child_narrowing(self):
+        initial = copy.deepcopy(self.state)
+        parent_id = self.worker["id"]
+        initial["nodes"][parent_id].update(
+            permissionMode="yolo", toolPolicy={"allow": [], "deny": ["web"]},
+        )
+        for rule in ("read", "shell(git status)"):
+            with self.subTest(rule=rule):
+                self.state = copy.deepcopy(initial)
+                self.mutations = 0
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                self.permission_spawn(parent_id, {"allowTools": [rule]}, launcher)
+                launcher.assert_called_once()
+                child = self.state["nodes"][launcher.call_args.args[2]]
+                self.assertEqual(child["permissionMode"], "default")
+                self.assertEqual(child["toolPolicy"], {"allow": [rule], "deny": ["web"]})
+                self.assertEqual(len(self.state["launches"]), 1)
+                self.assertEqual(len(self.state["nodes"]), 3)
+                arguments = CONTROLLER["interactive_arguments"]
+                with mock.patch.dict(arguments.__globals__, {"trusted_executable": lambda *_: "/synthetic/copilot"}):
+                    argv = arguments(child, "Synthetic")
+                self.assertNotIn("--allow-all", argv)
+                self.assertEqual(argv[argv.index("--allow-tool") + 1], rule)
+                self.assertEqual(argv[argv.index("--deny-tool") + 1], "web")
+
+    def test_recorded_yolo_finite_narrowing_keeps_denies_and_default_parent_escalation_guards(self):
+        initial = copy.deepcopy(self.state)
+        parent_id = self.worker["id"]
+        for mode, rule, denied, accepted in (
+            ("yolo", "read", ["web", "read"], True),
+            ("default", "read", ["web"], False),
+            ("yolo", "*", ["web"], False),
+        ):
+            with self.subTest(mode=mode, rule=rule, denied=denied):
+                self.state = copy.deepcopy(initial)
+                self.state["nodes"][parent_id].update(
+                    permissionMode=mode, toolPolicy={"allow": [], "deny": denied},
+                )
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                if accepted:
+                    self.permission_spawn(parent_id, {"allowTools": [rule]}, launcher)
+                    child = self.state["nodes"][launcher.call_args.args[2]]
+                    self.assertEqual(child["permissionMode"], "default")
+                    self.assertEqual(child["toolPolicy"], {"allow": [], "deny": denied})
+                    launcher.assert_called_once()
+                else:
+                    before = copy.deepcopy(self.state)
+                    with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                        self.permission_spawn(parent_id, {"allowTools": [rule]}, launcher)
+                    launcher.assert_not_called()
+                    self.assertEqual(self.state, before)
+
     def test_launch_arguments_preserve_inherited_yolo_denies_and_explicit_allows(self):
         node = {
             **self.worker, "copilotExecutable": "/synthetic/copilot",
