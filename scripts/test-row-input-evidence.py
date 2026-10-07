@@ -139,12 +139,70 @@ class EvidenceTests(unittest.TestCase):
     def test_original_record_and_byte_bounds_are_preserved(self):
         value = fixture(4)
         value["inputs"] = [copy.deepcopy(value["inputs"][0]) for _ in range(64)]
+        self.assertLess(len(json.dumps(value).encode()), 32_768)
         self.assertEqual(len(self.decode(value)["inputs"]), 64)
         value["inputs"].append(copy.deepcopy(value["inputs"][0]))
+        self.assertLess(len(json.dumps(value).encode()), 32_768)
         with self.assertRaises(ValueError):
             self.decode(value)
         with self.assertRaises(ValueError):
             schema.decode(b" " * 32_769)
+        payload = json.dumps(fixture(4)).encode()
+        padded = payload + b" " * (32_768 - len(payload))
+        self.assertEqual(schema.decode(padded), fixture(4))
+        with self.assertRaises(ValueError):
+            schema.decode(padded + b" ")
+
+    def test_common_root_row_and_legacy_input_types_are_validated(self):
+        for version in (3, 4):
+            for path, invalid in [
+                (("live",), "yes"), (("ownerFrame",), "not-a-rect"),
+                (("rows", 0, "windowNumber"), "not-a-number"),
+                (("opens",), True), (("caseID",), 1),
+                (("rows", 0, "focused"), "yes"), (("rows", 0, "id"), 1),
+                (("inputs", 0, "type"), "keyDown"), (("inputs", 0, "window"), 1),
+                (("inputs", 0, "timestamp"), "now"),
+            ]:
+                value = fixture(version)
+                parent = value
+                for key in path[:-1]:
+                    parent = parent[key]
+                parent[path[-1]] = invalid
+                with self.subTest(version=version, path=path), self.assertRaises(ValueError):
+                    self.decode(value)
+
+    def test_point_and_rect_shapes_reject_strings_boolean_and_nonfinite_coordinates(self):
+        for version in (3, 4):
+            for point in ["not-a-point", [True, 1], [0], [0, 1, 2], [0, float("nan")]]:
+                value = fixture(version)
+                value["inputs"][0]["type"] = 1
+                value["inputs"][0].pop("keyboard", None)
+                value["inputs"][0]["point"] = point
+                with self.subTest(version=version, point=point), self.assertRaises(ValueError):
+                    self.decode(value)
+            for rect in ["not-a-rect", [0, 1], [[0, 0]], [[0, 0], [1, False]], [[0, 0], [float("inf"), 1]]]:
+                value = fixture(version)
+                value["rows"][0]["frame"] = rect
+                with self.subTest(version=version, rect=rect), self.assertRaises(ValueError):
+                    self.decode(value)
+
+    def test_lifetime_display_and_optional_invalidation_types_are_not_opaque(self):
+        for version in (3, 4):
+            for mutation in [
+                {"invalidated": "no"}, {"failedRowIDs": [1]},
+                {"ownerVisible": 1}, {"displaysAtSample": {"uptime": "now"}},
+                {"firstInvalidation": {"reason": "invented"}},
+            ]:
+                value = fixture(version)
+                value["lifetime"].update(mutation)
+                with self.subTest(version=version, mutation=mutation), self.assertRaises(ValueError):
+                    self.decode(value)
+            value = fixture(version)
+            value["lifetime"]["displaysAtSample"]["screens"] = [{
+                "frame": "not-a-rect", "visibleFrame": [[0, 0], [400, 360]], "backingScaleFactor": 2,
+            }]
+            with self.assertRaises(ValueError):
+                self.decode(value)
 
 
 if __name__ == "__main__":
