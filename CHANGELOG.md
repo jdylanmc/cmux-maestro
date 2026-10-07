@@ -21,6 +21,13 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Raise the per-workspace hard limit from 8 to 32 live managed sessions,
+  including managed coordinators and retained resources, without changing
+  launch accounting or the 128-node and eight-level nesting limits. Validate
+  immutable read snapshots outside the shared lock so readers do not block
+  writers during decoding and validation, and share read-only runtime ticket
+  lookups. Scale bounded lock-acquisition budgets with the same capacity knob,
+  retaining exclusive mutations, failure on exhaustion and launch/result deadlines.
 - Attempt Copilot integration with stable CLI 1.x releases on protocol 3 instead
   of an exact-release whitelist. Preserve source ownership, disabled-state
   readback and transaction guards; report incompatible version/protocol pairs.
@@ -100,5 +107,5 @@ Notable changes are recorded using Keep a Changelog categories.
   not every Unknown agent or all of #118.
 - Preserve managed-session custody through failed startup and partial storage
   publication; allow safe failed or exited managed roots to archive without a
-  surviving tab, and keep moved terminals counted against the eight-resource
+  surviving tab, and keep moved terminals counted against the live-resource
   limit using atomic host inventory (#64).

@@ -24,9 +24,90 @@ import uuid
 REPO = Path(__file__).resolve().parents[1]
 PROOF = runpy.run_path(str(REPO / "scripts/delivery-proof/fixture.py"))
 CONTROLLER = runpy.run_path(str(REPO / "scripts/cmux-maestro-orchestrator.py"))
+MAX_LIVE_WORKERS = CONTROLLER["MAX_LIVE_WORKERS"]
+
+
+class StoreBudgetTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name).resolve()
+        self.ticks = 0
+        self.release_at = None
+        self.blocker = None
+        self.clock = SimpleNamespace(
+            monotonic=lambda: self.ticks * 0.05, sleep=self.advance,
+        )
+
+    def advance(self, seconds):
+        self.assertEqual(seconds, 0.05)
+        self.ticks += 1
+        if self.release_at is not None and self.ticks >= self.release_at:
+            self.blocker.__exit__(None, None, None)
+            self.release_at = None
+
+    def test_capacity_budget_allows_contended_reader_and_writer_to_acquire(self):
+        acquire = CONTROLLER["with_store"]
+        for read_only in (False, True):
+            with self.subTest(read_only=read_only):
+                self.ticks, self.release_at = 0, 60
+                with CONTROLLER["Store"](self.root) as self.blocker, mock.patch.dict(
+                    acquire.__globals__, {"time": self.clock, "MAX_LIVE_WORKERS": 4 * 8}
+                ):
+                    operation = mock.Mock(side_effect=lambda store: store.read())
+                    result = acquire(self.root, operation, wait=2, read_only=read_only)
+                self.assertEqual(result["nodes"], {})
+                operation.assert_called_once()
+                self.assertEqual(operation.call_args.args[0].read_only, read_only)
+                self.assertEqual(self.ticks, 60)
+
+    def test_capacity_budget_remains_bounded_and_preserves_zero_wait(self):
+        acquire = CONTROLLER["with_store"]
+        for capacity, multiplier in ((4, 1), (8, 1), (16, 2), (4 * 8, 4)):
+            for wait in (0, 1, 2):
+                with self.subTest(capacity=capacity, wait=wait):
+                    self.ticks, self.release_at = 0, None
+                    with CONTROLLER["Store"](self.root), mock.patch.dict(
+                        acquire.__globals__, {"time": self.clock, "MAX_LIVE_WORKERS": capacity}
+                    ):
+                        operation = mock.Mock()
+                        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "operation is active"):
+                            acquire(self.root, operation, wait=wait)
+                    operation.assert_not_called()
+                    self.assertAlmostEqual(self.clock.monotonic(), wait * multiplier)
+
+    def test_non_contention_failure_is_not_retried(self):
+        acquire = CONTROLLER["with_store"]
+        operation = mock.Mock(side_effect=CONTROLLER["OrchestrationError"]("Invalid synthetic state"))
+        with mock.patch.dict(acquire.__globals__, {"time": self.clock}):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "Invalid synthetic state"):
+                acquire(self.root, operation, wait=2)
+        operation.assert_called_once()
+        self.assertEqual(self.ticks, 0)
 
 
 class ProofTests(unittest.TestCase):
+    def test_bounded_text_preserves_controls_unicode_and_byte_limits(self):
+        validate = CONTROLLER["bounded_text"]
+        error = CONTROLLER["OrchestrationError"]
+        for code in range(256):
+            value = "x" + chr(code) + "y"
+            with self.subTest(code=code):
+                if code < 32 and code not in (9, 10):
+                    message = "safe limit" if code == 0 else "control characters"
+                    with self.assertRaisesRegex(error, message):
+                        validate(value, "Synthetic", 10)
+                else:
+                    self.assertEqual(validate(value, "Synthetic", 10), value)
+        self.assertEqual(validate(" \U0001f600 ", "Synthetic", 6), "\U0001f600")
+        with self.assertRaisesRegex(error, "safe limit"):
+            validate("\U0001f600", "Synthetic", 3)
+        with self.assertRaisesRegex(error, "invalid Unicode"):
+            validate("\ud800", "Synthetic", 10)
+        with self.assertRaisesRegex(error, "required"):
+            validate(" \t\n", "Synthetic", 10)
+        self.assertEqual(validate(" \t\n", "Synthetic", 10, empty=True), "")
+
     def setUp(self):
         source = Path(tempfile.mkdtemp(prefix="m61-", dir="/tmp")).resolve()
         self.addCleanup(shutil.rmtree, source)
@@ -2156,7 +2237,7 @@ class LifecycleFailureTests(unittest.TestCase):
         self.state["retainedResources"] = [{
             "runId": str(uuid.uuid4()), "workspaceId": self.actor["workspaceId"],
             "surfaceId": str(uuid.uuid4()), "archivedAt": CONTROLLER["now"](),
-        } for _ in range(8)]
+        } for _ in range(MAX_LIVE_WORKERS)]
         host, _ = self.census_host({item["surfaceId"] for item in self.state["retainedResources"]})
         self.cmux.workspace_surfaces.side_effect = host.workspace_surfaces
         before = copy.deepcopy(self.state)
@@ -2166,9 +2247,9 @@ class LifecycleFailureTests(unittest.TestCase):
                 "--surface", self.actor["surfaceId"], "--account", "synthetic",
             ] if command == "launch-coordinator" else [
                 command, "--actor-id", self.actor["id"], "--token", self.token,
-            ]) + ["--name", "Refused ninth", "--task", "Synthetic", "--cwd", str(REPO)]
+            ]) + ["--name", "Over capacity", "--task", "Synthetic", "--cwd", str(REPO)]
             function = CONTROLLER["command_" + command.replace("-", "_")]
-            forbidden = mock.Mock(side_effect=AssertionError("ninth resource launched"))
+            forbidden = mock.Mock(side_effect=AssertionError("over-capacity resource launched"))
             with self.subTest(command=command), mock.patch.dict(function.__globals__, {
                 "read_state": lambda *a, **k: copy.deepcopy(self.state),
                 "mutate": self.mutate, "require_current_surface": lambda *a: None,
@@ -2190,6 +2271,74 @@ class LifecycleFailureTests(unittest.TestCase):
                         function(CONTROLLER["parser"]().parse_args(argv), self.root, self.cmux)
             self.assertEqual(self.state, before)
             forbidden.assert_not_called()
+
+    def test_live_capacity_includes_roots_and_retained(self):
+        for command in ("launch-coordinator", "spawn"):
+            for retained_count in (0, MAX_LIVE_WORKERS // 2 - 1, MAX_LIVE_WORKERS - 2):
+                with self.subTest(command=command, retained=retained_count):
+                    actor = copy.deepcopy(self.actor)
+                    managed_root = {
+                        **copy.deepcopy(self.worker), "id": str(uuid.uuid4()),
+                        "parentId": None, "role": "coordinator",
+                        "runtimeProtocolVersion": 2, "launchMethod": "direct",
+                        "launchSettings": {"version": 1, "copilotAccount": "synthetic",
+                                           "model": "synthetic-model"},
+                    }
+                    managed_root["runId"] = managed_root["id"]
+                    nodes = {actor["id"]: actor}
+                    for index in range(MAX_LIVE_WORKERS - 1 - retained_count):
+                        node = copy.deepcopy(managed_root)
+                        if index:
+                            node.update(id=str(uuid.uuid4()), runId=str(uuid.uuid4()),
+                                        surfaceId=str(uuid.uuid4()), copilotSessionId=str(uuid.uuid4()))
+                            node["runId"] = node["id"]
+                        nodes[node["id"]] = node
+                    retained = [{
+                        "runId": str(uuid.uuid4()), "workspaceId": actor["workspaceId"],
+                        "surfaceId": str(uuid.uuid4()), "archivedAt": CONTROLLER["now"](),
+                    } for _ in range(retained_count)]
+                    self.state = {**CONTROLLER["empty_state"](),
+                                  "nodes": nodes, "retainedResources": retained}
+                    CONTROLLER["validate_state"](self.state)
+                    self.cmux.workspace_surfaces.return_value = {
+                        node["surfaceId"] for node in nodes.values()
+                    } | {item["surfaceId"] for item in retained}
+                    argv = ([
+                        command, "--workspace", actor["workspaceId"],
+                        "--surface", actor["surfaceId"], "--account", "synthetic",
+                    ] if command == "launch-coordinator" else [
+                        command, "--actor-id", managed_root["id"], "--token", self.token,
+                    ]) + ["--name", "Capacity boundary", "--task", "Synthetic", "--cwd", str(REPO)]
+                    function = CONTROLLER["command_" + command.replace("-", "_")]
+                    launcher = mock.Mock(return_value={"launchAccepted": True, "startup": "pending"})
+                    with mock.patch.dict(function.__globals__, {
+                        "read_state": lambda *a, **k: copy.deepcopy(self.state),
+                        "mutate": self.mutate, "require_current_surface": lambda *a: None,
+                        "authorize_native_spawn": lambda state, *_: state["nodes"][managed_root["id"]],
+                        "process_matches": lambda _: True,
+                        "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+                        "resolve_copilot_token": lambda _: None,
+                        "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+                        "messaging_configuration": lambda _: {
+                            "version": 1, "routes": "/synthetic/routes", "extension": "/synthetic/extension",
+                        },
+                        "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+                        "launch_reserved_session": launcher,
+                    }):
+                        args = CONTROLLER["parser"]().parse_args(argv)
+                        kwargs = {"native_identity": {"login": "synthetic"}} if command == "spawn" else {}
+                        result = function(args, self.root, self.cmux, **kwargs)
+                        self.assertTrue(result["launchAccepted"])
+                        launcher.assert_called_once()
+                        self.assertEqual(sum(CONTROLLER["has_managed_runtime"](node)
+                                             for node in self.state["nodes"].values())
+                                         + len(self.state["retainedResources"]), MAX_LIVE_WORKERS)
+                        self.assertEqual(len(self.state["launches"]), 1)
+                        before = copy.deepcopy(self.state)
+                        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "resource limit"):
+                            function(args, self.root, self.cmux, **kwargs)
+                        self.assertEqual(self.state, before)
+                        launcher.assert_called_once()
 
     def test_atomic_census_distinguishes_removed_and_surviving_exited_surface(self):
         observe = CONTROLLER["resource_observations"]
