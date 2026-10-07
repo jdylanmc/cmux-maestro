@@ -960,8 +960,8 @@ if (mode === "cancel") setTimeout(() => process.exit(5), 4000);
 });
 
 test("native close rejects unrepresentable captured generations before effects through the actual adapter roundtrip", async (t) => {
-  for (const generation of ["9007199254740993", "1" + "0".repeat(400)]) {
-    await t.test(`captured generation with ${generation.length} digits`, async (t) => {
+  for (const generation of ["9007199254740991", "9007199254740992", "9007199254740993", "1" + "0".repeat(400)]) {
+    await t.test(`captured generation ${generation.length === 16 ? generation : "10**400"}`, async (t) => {
       const packet = JSON.parse(execFileSync("python3", ["-B", "-c", `
 import io,json,runpy,sys
 from contextlib import redirect_stdout,redirect_stderr
@@ -1014,6 +1014,17 @@ process.exitCode=packet.code;
 
       const output = await close({ target: packet.target, scope: "subtree" }, { sessionId: own.sessionId });
 
+      if (generation === "9007199254740991") {
+        assert.equal(packet.effects, 2);
+        assert.equal(packet.unchanged, true);
+        assert.equal(packet.code, 0);
+        const receipt = JSON.parse(output);
+        assert.equal(receipt.results.length, 2);
+        assert.equal(String(receipt.results[0].generation), generation);
+        assert.deepEqual(receipt.results.map(item => item.outcome), ["accepted", "accepted"]);
+        assert.ok(receipt.results.every(item => item.attempted && item.removal === "unconfirmed"));
+        return;
+      }
       assert.equal(packet.effects, 0,
         `exact numeric identities must be representable before any host effect; actual adapter reply: ${
           typeof output === "string" ? output : JSON.stringify(output)}`);
