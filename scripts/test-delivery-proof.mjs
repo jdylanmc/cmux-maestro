@@ -666,6 +666,44 @@ test("native launch refuses unsupported account APIs without creating a terminal
   assert.equal(launches, 0);
 });
 
+test("native spawn carries optional caller launch preferences without changing omission or account identity", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  const requests = [];
+  let tools;
+  const receipt = { ok: true, launchAccepted: true, startup: "pending" };
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async options => {
+      tools = options.tools;
+      return {
+        sessionId: own.sessionId,
+        rpc: { gitHubAuth: { getStatus: async () => ({
+          isAuthenticated: true, host: "https://github.com", login: "verified-parent",
+        }) } },
+      };
+    },
+    launch: async request => { requests.push(request); return receipt; },
+  });
+  t.after(() => adapter.close());
+  const spawn = tools.find(tool => tool.name === "maestro_spawn").handler;
+  const assignment = { name: "Child", cwd: "/synthetic", task: "Bounded task" };
+  const invocation = { sessionId: own.sessionId };
+  assert.deepEqual(JSON.parse(await spawn(assignment, invocation)), receipt);
+  assert.deepEqual(requests[0].assignment, assignment);
+  const selected = {
+    ...assignment, model: "gpt-6.1-sol", contextTier: "long_context", reasoningEffort: "medium",
+  };
+  const result = await spawn(selected, invocation);
+  assert.equal(typeof result, "string", "supported optional inputs must reach the controller");
+  assert.deepEqual(JSON.parse(result), receipt);
+  assert.deepEqual(requests[1].assignment, selected);
+  assert.equal(requests[1].identity.login, "verified-parent");
+  assert.equal(result.includes(own.capability), false);
+  assert.equal((await spawn({ ...selected, login: "injected" }, invocation)).resultType, "failure");
+  assert.equal(requests.length, 2);
+});
+
 test("installed routes refuse stale generations, lost participation and wrong invocation", async (t) => {
   const f = await managedFixture(t);
   await f.launch(0);
