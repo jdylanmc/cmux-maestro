@@ -2228,6 +2228,12 @@ def command_native_close(root, cmux):
     if direct_process_identity(actor["providerProcess"]["pid"]) != actor["providerProcess"]:
         raise OrchestrationError("Close invoking provider identity changed.")
 
+    def subtree_result(identity, outcome, reason, *, attempted):
+        return {
+            **identity, "outcome": outcome, "reason": reason, "attempted": attempted,
+            "removal": "unconfirmed", **({"closeAccepted": True} if outcome == "accepted" else {}),
+        }
+
     def send_once(store, selected_identity=target_identity, *, direct=True):
         state = store.read()
         current, child = owned(state, selected_identity, direct=direct)
@@ -2248,6 +2254,8 @@ def command_native_close(root, cmux):
                 "workspace_id": child["workspaceId"], "surface_id": child["surfaceId"],
             }))
         except (OrchestrationError, OSError) as error:
+            if not direct:
+                return subtree_result(selected_identity, "unknown", "host-failure", attempted=True)
             detail = str(error)[:240] if isinstance(error, OrchestrationError) else type(error).__name__
             raise OrchestrationError(
                 f"Close request failed or is uncertain: {detail} No retry was made; removal is unconfirmed."
@@ -2259,9 +2267,13 @@ def command_native_close(root, cmux):
                     or canonical_uuid(result.get("surface_id"), "close reply surface") != child["surfaceId"]):
                 raise ValueError()
         except (OrchestrationError, ValueError) as error:
+            if not direct:
+                return subtree_result(selected_identity, "unknown", "unrecognized-reply", attempted=True)
             raise OrchestrationError(
                 "Close reply is unrecognized; removal is unconfirmed. No retry was made."
             ) from error
+        if not direct:
+            return subtree_result(selected_identity, "accepted", "accepted", attempted=True)
         return {**selected_identity, "closeAccepted": True, "removal": "unconfirmed"}
 
     if request.get("scope", "target-only") == "target-only":
@@ -2277,7 +2289,7 @@ def command_native_close(root, cmux):
         result = with_store(
             root, lambda store: send_once(store, selected, direct=False), wait=0,
         )
-        results.append({**result, "attempted": True, "outcome": "accepted", "reason": "accepted"})
+        results.append(result)
     return {"scope": "subtree", "results": results}
 
 
