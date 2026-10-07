@@ -2674,12 +2674,13 @@ class LifecycleFailureTests(unittest.TestCase):
                 self.assertEqual(child["toolPolicy"], {"allow": expected_allow, "deny": ["web"]})
 
     def test_native_spawn_preserves_optional_launch_selection_for_controller_resolution(self):
-        identity = {"login": "synthetic"}
+        identity = self.model_launch_identity()
         assignment = {
             "name": "Selected child", "cwd": str(REPO), "task": "Synthetic",
             "model": "gpt-6.1-sol", "contextTier": "long_context", "reasoningEffort": "medium",
         }
-        request = {"identity": identity, "assignment": assignment}
+        evidence = self.model_launch_capabilities(identity)
+        request = {"identity": identity, "assignment": assignment, "launchCapabilities": evidence}
         spawn = mock.Mock(return_value={"launchAccepted": True})
         native = CONTROLLER["command_native_spawn"]
         with mock.patch.dict(native.__globals__, {"command_spawn": spawn}), mock.patch(
@@ -2690,32 +2691,132 @@ class LifecycleFailureTests(unittest.TestCase):
         self.assertEqual(args.model, "gpt-6.1-sol")
         self.assertEqual(args.context_tier, "long_context")
         self.assertEqual(args.reasoning_effort, "medium")
+        self.assertEqual(args.launch_capabilities, evidence)
         self.assertEqual(spawn.call_args.kwargs["native_identity"], identity)
         self.assertTrue(args.require_pinned_launch_settings)
 
+    def model_launch_identity(self):
+        return {
+            "nodeId": self.worker["id"], "workspaceId": self.worker["workspaceId"],
+            "sessionId": self.worker["copilotSessionId"], "generation": 1,
+            "capability": "1" * 64, "login": "synthetic", "host": "https://github.com",
+        }
+
+    def model_launch_capabilities(self, identity):
+        return {
+            "version": 1, "sessionId": identity["sessionId"],
+            "account": {"login": identity["login"], "host": identity["host"]},
+            "source": "session-model-list",
+            "models": [
+                {"id": "synthetic-model", "contextTiers": ["default"],
+                 "reasoningEfforts": ["low", "medium"], "defaultReasoningEffort": "low"},
+                {"id": "gpt-6.1-sol", "contextTiers": ["default", "long_context"],
+                 "reasoningEfforts": ["medium", "high"], "defaultReasoningEffort": "medium"},
+            ],
+        }
+
+    def model_preference_spawn(self, identity, selected, evidence, launcher, credentials=None):
+        native = CONTROLLER["command_native_spawn"]
+        request = {"identity": identity, "assignment": {
+            "name": "Model fixture", "cwd": str(REPO), "task": "Synthetic", **selected,
+        }}
+        if evidence is not None:
+            request["launchCapabilities"] = evidence
+        with mock.patch.dict(native.__globals__, {
+            "read_state": lambda *a, **k: copy.deepcopy(self.state),
+            "mutate": self.mutate,
+            "authorize_native_spawn": lambda state, *_: state["nodes"][self.worker["id"]],
+            "process_matches": lambda _: True,
+            "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+            "resolve_copilot_token": credentials or (lambda _: None),
+            "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+            "messaging_configuration": lambda _: None,
+            "resource_observations": lambda *_: ({}, set()),
+            "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+            "launch_reserved_session": launcher,
+            "trusted_executable": lambda *_: "/synthetic/copilot",
+        }), mock.patch("sys.stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))):
+            receipt = native(self.root, self.cmux)
+            child = self.state["nodes"][launcher.call_args.args[2]]
+            return receipt, CONTROLLER["interactive_arguments"](child, "Synthetic task")
+
+    def test_unavailable_native_model_api_warns_and_retains_configured_launch_without_overrides(self):
+        self.state["nodes"][self.worker["id"]]["permissionMode"] = "default"
+        identity = self.model_launch_identity()
+        evidence = self.model_launch_capabilities(identity)
+        evidence.update(source="unavailable", models=[])
+        launcher = mock.Mock(return_value={"launchAccepted": True})
+        receipt, argv = self.model_preference_spawn(identity, {
+            "model": "gpt-6.1-sol", "contextTier": "long_context", "reasoningEffort": "medium",
+        }, evidence, launcher)
+        self.assertEqual(argv[argv.index("--model") + 1], "synthetic-model")
+        self.assertNotIn("--context", argv)
+        self.assertNotIn("--reasoning-effort", argv)
+        self.assertTrue(receipt.get("warnings"))
+
+    def test_native_model_selection_refuses_when_configured_fallback_is_unavailable(self):
+        self.state["nodes"][self.worker["id"]]["permissionMode"] = "default"
+        identity = self.model_launch_identity()
+        evidence = self.model_launch_capabilities(identity)
+        evidence["models"] = [evidence["models"][1]]
+        launcher, credentials = mock.Mock(), mock.Mock()
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "(?i)(configured|fallback).*(available|supported)"):
+            self.model_preference_spawn(identity, {"model": "unknown-model"}, evidence, launcher, credentials)
+        launcher.assert_not_called()
+        credentials.assert_not_called()
+        self.assertEqual(self.state["launches"], {})
+        self.assertEqual(len(self.state["nodes"]), 2)
+
+    def test_native_model_evidence_binding_and_malformed_inputs_refuse_before_effects(self):
+        self.state["nodes"][self.worker["id"]]["permissionMode"] = "default"
+        identity = self.model_launch_identity()
+        original = self.model_launch_capabilities(identity)
+        variants = [
+            ({**original, "sessionId": str(uuid.uuid4())}, {"model": "gpt-6.1-sol"}),
+            ({**original, "account": {**original["account"], "login": "wrong-account"}}, {"model": "gpt-6.1-sol"}),
+            ({**original, "account": {**original["account"], "host": "https://invalid.example"}}, {"model": "gpt-6.1-sol"}),
+            ({**original, "version": True}, {"model": "gpt-6.1-sol"}),
+            ({**original, "source": "unavailable"}, {"model": "gpt-6.1-sol"}),
+            ({**original, "models": [original["models"][0], original["models"][0]]}, {"model": "gpt-6.1-sol"}),
+            ({**original, "models": [
+                {**original["models"][0], "defaultReasoningEffort": "unsupported"},
+            ]}, {"model": "gpt-6.1-sol"}),
+            ({**original, "models": [
+                {**original["models"][0], "id": f"fixture-{index}"} for index in range(129)
+            ]}, {"model": "gpt-6.1-sol"}),
+            (original, {"model": "--allow-all"}),
+            (original, {"contextTier": 1_000_000}),
+            (original, {"reasoningEffort": {"medium": True}}),
+        ]
+        before = copy.deepcopy(self.state)
+        for evidence, selected in variants:
+            with self.subTest(evidence=evidence, selected=selected):
+                launcher, credentials = mock.Mock(), mock.Mock()
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "(?i)invalid|capabil|evidence|account|session|model|preference"):
+                    self.model_preference_spawn(identity, selected, evidence, launcher, credentials)
+                launcher.assert_not_called()
+                credentials.assert_not_called()
+                self.assertEqual(self.state, before)
+
     def test_optional_launch_preferences_reach_argv_or_warn_and_keep_configured_defaults(self):
-        help_text = (
-            "--model <model>\n"
-            "--context <tier> [possible values: default, long_context]\n"
-            "--reasoning-effort <level> [possible values: none, minimal, low, medium, high, xhigh, max]\n"
-            "  `model`: AI model to use for Copilot CLI\n"
-            '    - "synthetic-model"\n    - "gpt-6.1-sol"\n\n'
-        )
         initial_state = copy.deepcopy(self.state)
         initial_state["nodes"][self.worker["id"]]["permissionMode"] = "default"
         for selected, expected, warned in (
             ({"model": "gpt-6.1-sol", "contextTier": "long_context", "reasoningEffort": "medium"},
              {"--model": "gpt-6.1-sol", "--context": "long_context", "--reasoning-effort": "medium"}, False),
             ({"model": "unknown-model", "contextTier": "unknown-tier", "reasoningEffort": "unknown-effort"},
-             {"--model": "synthetic-model"}, True),
+             {"--model": "synthetic-model", "--context": "default", "--reasoning-effort": "low"}, True),
+            ({"model": "gpt-6.1-sol", "contextTier": "unknown-tier", "reasoningEffort": "unknown-effort"},
+             {"--model": "gpt-6.1-sol", "--context": "default", "--reasoning-effort": "medium"}, True),
         ):
             with self.subTest(selected=selected):
                 self.state = copy.deepcopy(initial_state)
                 self.mutations = 0
                 request = {
-                    "identity": {"login": "synthetic"},
+                    "identity": self.model_launch_identity(),
                     "assignment": {"name": "Selected child", "cwd": str(REPO), "task": "Synthetic", **selected},
                 }
+                request["launchCapabilities"] = self.model_launch_capabilities(request["identity"])
                 launcher = mock.Mock(return_value={"launchAccepted": True})
                 native = CONTROLLER["command_native_spawn"]
                 with mock.patch.dict(native.__globals__, {
@@ -2731,11 +2832,7 @@ class LifecycleFailureTests(unittest.TestCase):
                     "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
                     "launch_reserved_session": launcher,
                     "trusted_executable": lambda *_: "/synthetic/copilot",
-                }), mock.patch("sys.stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))), mock.patch(
-                    "subprocess.run", return_value=subprocess.CompletedProcess(
-                        ["/synthetic/copilot", "--help"], 0, stdout=help_text, stderr="",
-                    ),
-                ):
+                }), mock.patch("sys.stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))):
                     receipt = native(self.root, self.cmux)
                     child = self.state["nodes"][launcher.call_args.args[2]]
                     argv = CONTROLLER["interactive_arguments"](child, "Synthetic task")
@@ -2743,8 +2840,6 @@ class LifecycleFailureTests(unittest.TestCase):
                     self.assertIn(flag, argv)
                     self.assertEqual(argv[argv.index(flag) + 1], value)
                 if warned:
-                    self.assertNotIn("--context", argv)
-                    self.assertNotIn("--reasoning-effort", argv)
                     self.assertTrue(receipt.get("warnings"), "unsupported optional preferences must visibly warn")
                 else:
                     self.assertFalse(receipt.get("warnings"))
@@ -2948,6 +3043,35 @@ class RootCustodyTests(unittest.TestCase):
         })
         self.patches.start()
         self.addCleanup(self.patches.stop)
+
+    def test_existing_explicit_root_model_retains_precedence_without_a_joined_model_api(self):
+        launcher = mock.Mock(return_value={"launchAccepted": True})
+        command = CONTROLLER["command_launch_coordinator"]
+        with mock.patch.dict(command.__globals__, {"launch_reserved_session": launcher}):
+            command(CONTROLLER["parser"]().parse_args(self.argv + ["--model", "explicit-root-model"]),
+                    self.root, self.cmux)
+        node = CONTROLLER["read_state"](self.root)["nodes"][launcher.call_args.args[2]]
+        argv = CONTROLLER["interactive_arguments"](node, "Synthetic")
+        self.assertEqual(argv[argv.index("--model") + 1], "explicit-root-model")
+        self.assertNotIn("--context", argv)
+        self.assertNotIn("--reasoning-effort", argv)
+        self.cmux.create_surface.assert_not_called()
+
+    def test_new_root_preferences_without_joined_evidence_warn_and_preserve_explicit_model(self):
+        launcher = mock.Mock(return_value={"launchAccepted": True})
+        command = CONTROLLER["command_launch_coordinator"]
+        with mock.patch.dict(command.__globals__, {"launch_reserved_session": launcher}):
+            receipt = command(CONTROLLER["parser"]().parse_args(self.argv + [
+                "--model", "explicit-root-model", "--context-tier", "long_context",
+                "--reasoning-effort", "medium",
+            ]), self.root, self.cmux)
+        node = CONTROLLER["read_state"](self.root)["nodes"][launcher.call_args.args[2]]
+        argv = CONTROLLER["interactive_arguments"](node, "Synthetic")
+        self.assertEqual(argv[argv.index("--model") + 1], "explicit-root-model")
+        self.assertNotIn("--context", argv)
+        self.assertNotIn("--reasoning-effort", argv)
+        self.assertTrue(receipt.get("warnings"))
+        self.cmux.create_surface.assert_not_called()
 
     def test_root_and_native_child_receive_milestone_contract_with_verbatim_tasks(self):
         """Generated provider argv, not evidence of consuming-agent compliance."""
