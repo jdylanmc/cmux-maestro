@@ -138,21 +138,37 @@ call the private ingress yourself.
 
 ## Permissions and runtime ownership
 
-The safe default adds no Copilot tool grants. Pass each exact authorized rule
-in `allowTools` or `denyTools`; a new root's CLI uses `--allow-tool` and
-`--deny-tool`. Do not synthesize full parent-permission inheritance.
+Root and legacy defaults add no Copilot tool grants. Pass each exact authorized
+rule in `allowTools` or `denyTools`; a new root's CLI uses `--allow-tool` and
+`--deny-tool`. On controllers supporting #154, prospective native interactive
+children inherit the parent's explicit **recorded launch policy** when
+`allowTools` and `yolo` are omitted. Deny-only requests keep that recorded mode
+and allows while adding denies. Verify installed capability separately; source
+changes do not reconfigure existing sessions or authorize installation.
 
 These are Copilot policy arguments, not an operating-system sandbox. Never add
 `--allow-all`, a wildcard, all paths or URLs, or rights not explicitly approved
-for the task. The sole explicit broad-mode option is a **user-approved
+for the task. The sole new explicit broad-mode option is a **user-approved
 coordinator** `yolo: true` (or root `--yolo`); it supplies Copilot `--allow-all` while preserving
-explicit denies. Never add it by default or to solve a stalled permission prompt.
-Worker actors cannot request YOLO, including for descendants of a YOLO worker.
-There is no inferred full parent-permission inheritance. A general shell grant
-must also be caller-explicit and task-
-justified; it is never a default. Denies win. A descendant receives no additional
-grants by default and may request only a subset of its parent's explicit allows;
-inherited denies cannot be removed. Policies remain private.
+explicit denies. Never request a new broad grant by default or to solve a stalled
+permission prompt; recorded inheritance follows the qualified contract above.
+Worker actors cannot request YOLO, including for descendants of a YOLO worker;
+inheriting an explicit recorded parent YOLO mode is a separate source behavior.
+An explicit `allowTools` list (including `[]`) or `yolo: false` selects requested
+default mode without `--allow-all`; omitted allows still inherit. A native
+explicit YOLO request combined with a narrowing list refuses. Explicit tool
+rules remain bounded by the recorded parent allows; denies win and cannot be
+removed. Missing provenance or recorded-policy drift before reservation refuses.
+Do not synthesize shell/wildcard grants from tool visibility or task text.
+Policies remain private.
+
+Recorded/requested policy is **not a full current-provider permission snapshot**.
+Human changes can make it stale. Copilot's `defaultPermissionMode: "allow-all"`
+or `COPILOT_ALLOW_ALL` can elevate actual startup even without `--allow-all`;
+requested default mode does not prove manual mode. Partial mode/path getters
+do not establish complete current tool/deny/URL policy or atomic same-or-narrower
+admission. Report these limits, never invent an override, mutate policy after
+launch, isolate provider settings, or claim actual restricted startup from flags.
 
 Root startup and native child launch create exactly one unfocused terminal tab
 beside the caller and launch normal interactive Copilot with the supplied task.

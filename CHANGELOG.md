@@ -25,6 +25,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Inherit explicit recorded parent launch permissions for prospective native
+  children, preserving denies, narrowing and provenance/drift refusals. Current
+  provider-policy equivalence and actual restricted startup remain unverified
+  (#154).
 - Raise the default per-workspace limit from 8 to 32 live managed sessions,
   including managed coordinators and retained resources, without changing
   launch accounting or the 128-node and eight-level nesting limits. Validate

@@ -71,14 +71,20 @@ do not copy its source or history, modify it, or make this project depend on it.
   remain owned or retained. Interactive I/O belongs to the terminal, not a JSON
   capture loop; legacy turn I/O stays bounded while heartbeats and visible
   provider diagnostics continue. Never infer success or approve a prompt.
-- Keep Copilot tool policy explicit, bounded and private. Add no grants by
-  default; preserve denies and descendant non-escalation. Provider policy flags
+- Keep Copilot tool policy explicit, bounded and private. Root and legacy
+  defaults add no grants; prospective native interactive children inherit
+  explicit recorded parent launch policy, preserving denies and non-escalation.
+  Missing provenance or recorded-policy drift refuses. Explicit narrowing
+  selects requested default mode, not a proven actual manual startup.
+  Provider policy flags
   are not an operating-system sandbox or a lifecycle reporting channel.
   Explicit user-approved coordinator `spawn --yolo` (and the preserved proof
   alias `--delivery-proof-yolo`) may use Copilot `--allow-all`, preserving denies.
   Reject either YOLO request from a worker actor before credential resolution or
-  reservation. Do not infer full parent permissions, auto-answer prompts, or
-  change persistent Copilot settings; normal defaults add no grants.
+  reservation; inherited recorded YOLO is separate from an explicit worker
+  request. Do not infer full current provider permissions, auto-answer prompts,
+  or change persistent Copilot settings. Provider defaults/environment and
+  unobserved live changes remain explicit permission-verification limits.
 - Preserve exact workspace/surface/session/generation ownership and the
   controller's depth, node, size and concurrent-operation bounds.
 
