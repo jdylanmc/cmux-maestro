@@ -1387,6 +1387,7 @@ finally:
             mock.call.workspace_surfaces(self.actor["workspaceId"]),
             mock.call.run("rpc", "surface.close", json.dumps({
                 "workspace_id": self.target["workspaceId"], "surface_id": self.target["surfaceId"],
+                "force": True,
             })),
         ])
         self.assertEqual({file: file.read_bytes() for file in before}, before)
@@ -1434,8 +1435,8 @@ finally:
         result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
 
         self.assertEqual(requests, [
-            {"workspace_id": self.grandchild["workspaceId"], "surface_id": self.grandchild["surfaceId"]},
-            {"workspace_id": self.child["workspaceId"], "surface_id": self.child["surfaceId"]},
+            {"workspace_id": self.grandchild["workspaceId"], "surface_id": self.grandchild["surfaceId"], "force": True},
+            {"workspace_id": self.child["workspaceId"], "surface_id": self.child["surfaceId"], "force": True},
         ])
         self.assertEqual(result["scope"], "subtree")
         self.assertEqual(len(result["results"]), 2)
@@ -1487,6 +1488,7 @@ finally:
                 })
                 self.assertEqual(requests[-1], {
                     "workspace_id": self.child["workspaceId"], "surface_id": self.child["surfaceId"],
+                    "force": True,
                 })
                 self.assertEqual(len(result["results"]), 3)
                 self.assertEqual([item["surfaceId"] for item in result["results"]],
@@ -1556,6 +1558,7 @@ finally:
                 self.assertEqual(arguments[:2], ("rpc", "surface.close"))
                 self.assertEqual(json.loads(arguments[2]), {
                     "workspace_id": self.child["workspaceId"], "surface_id": self.child["surfaceId"],
+                    "force": True,
                 })
                 self.assertEqual(len(result["results"]), 2)
                 refused, accepted = result["results"]
@@ -2099,6 +2102,82 @@ finally:
                 self.assertEqual(
                     {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, after_change,
                 )
+
+    def test_initial_stock_close_selects_noninteractive_cmux065_branch_once(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        # v0.65.0 dda24fbd: Surface.swift:648 defaults omitted force to false;
+        # ControlSurfaceContext2.swift:606-610 refuses running processes unless force is true.
+        for scope in (None, "target-only", "subtree"):
+            with self.subTest(scope=scope):
+                surfaces = {node["surfaceId"] for node in self.state["nodes"].values()}
+                requests = []
+                def stock_host(*args, **kwargs):
+                    self.assertEqual(args[:2], ("rpc", "surface.close"))
+                    request = json.loads(args[2])
+                    requests.append(request)
+                    if len(surfaces) <= 1:
+                        raise CONTROLLER["OrchestrationError"]("invalid_state: Cannot close the last surface")
+                    force = request.get("force", False)
+                    if type(force) is not bool or force is not True:
+                        raise CONTROLLER["OrchestrationError"]("confirmation_required")
+                    surfaces.remove(request["surface_id"])
+                    return {key: request[key] for key in ("workspace_id", "surface_id")}
+                self.cmux.run.side_effect = stock_host
+                self.cmux.workspace_surfaces.side_effect = lambda _: set(surfaces)
+                before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+                request = {"identity": self.identity, "target": self.target}
+                if scope is not None:
+                    request["scope"] = scope
+
+                result = self.invoke(request)
+
+                targets = [descendant, self.child] if scope == "subtree" else [self.child]
+                if scope == "subtree":
+                    self.assertEqual([item["outcome"] for item in result["results"]], ["accepted", "accepted"])
+                self.assertEqual(requests, [{
+                    "workspace_id": node["workspaceId"], "surface_id": node["surfaceId"], "force": True,
+                } for node in targets])
+                self.assertTrue(all(type(item["force"]) is bool for item in requests))
+                if scope == "subtree":
+                    self.assertEqual([item["workerId"] for item in result["results"]],
+                                     [descendant["id"], self.child["id"]])
+                    self.assertTrue(all(item["attempted"] and item["removal"] == "unconfirmed"
+                                        for item in result["results"]))
+                else:
+                    self.assertEqual(result, {**self.target, "closeAccepted": True, "removal": "unconfirmed"})
+                self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_initial_noninteractive_close_does_not_bypass_stock_last_surface_refusal(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        self.cmux.workspace_surfaces.return_value.add(descendant["surfaceId"])
+        for scope in ("target-only", "subtree"):
+            with self.subTest(scope=scope):
+                requests = []
+                def last_surface(*args, **kwargs):
+                    request = json.loads(args[2])
+                    requests.append(request)
+                    # Stock v0.65.0 checks lastSurface before the force/confirmation branch.
+                    raise CONTROLLER["OrchestrationError"]("invalid_state: Cannot close the last surface")
+                self.cmux.run.side_effect = last_surface
+                before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+                request = {"identity": self.identity, "target": self.target, "scope": scope}
+                if scope == "target-only":
+                    with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "last surface"):
+                        self.invoke(request)
+                else:
+                    result = self.invoke(request)
+                    self.assertEqual([item["outcome"] for item in result["results"]], ["unknown", "unknown"])
+                    self.assertTrue(all(item["attempted"] and item["removal"] == "unconfirmed"
+                                        and "closeAccepted" not in item for item in result["results"]))
+                targets = [descendant, self.child] if scope == "subtree" else [self.child]
+                self.assertEqual(requests, [{
+                    "workspace_id": node["workspaceId"], "surface_id": node["surfaceId"], "force": True,
+                } for node in targets])
+                self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
 
     def test_close_accepts_real_wrapper_with_separate_direct_source_owner(self):
         with self.owned_source_wrapper() as (wrapper, owner_pid):
