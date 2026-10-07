@@ -70,6 +70,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Clean up failed orchestration-test fixture registration through the existing
+  quiescence protocol, retaining evidence and both errors when cleanup cannot
+  complete (#154).
 - Qualify managed Git labels, verification and change counts as evidence from
   the assigned directory, not Copilot's current `/cwd`, preserving stale and
   unavailable states and separate CMUX surface-directory reports (#119, #59).
