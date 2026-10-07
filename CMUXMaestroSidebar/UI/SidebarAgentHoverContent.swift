@@ -57,7 +57,7 @@ enum SidebarAgentHoverContent {
                 return .init(id: "child-\(sessionID)-\(childID)", category: "Agent preview", title: child.name,
                              notice: "Child observation is no longer current.")
             }
-            let allowed = Set(["Name", "Kind", "Model", "Ancestry", "Completion", "Child ID", "Parent session ID"])
+            let allowed = Set(["Name", "Kind", "Model", "Last reported model", "Ancestry", "Completion", "Child ID", "Parent session ID"])
             let retained = SidebarPresentation.retainedSessionIDs(tree, managed: managed.nodes, now: now).contains(sessionID)
             var lines = SidebarPresentation.nodeDetails(child, session: session).filter { allowed.contains($0.title) }
             lines += [
