@@ -2234,7 +2234,10 @@ def command_native_close(root, cmux):
             "removal": "unconfirmed", **({"closeAccepted": True} if outcome == "accepted" else {}),
         }
 
+    attempted = False
+
     def send_once(store, selected_identity=target_identity, *, direct=True):
+        nonlocal attempted
         state = store.read()
         current, child = owned(state, selected_identity, direct=direct)
         ancestors = [snapshot["nodes"][selected_identity["workerId"]]]
@@ -2250,6 +2253,7 @@ def command_native_close(root, cmux):
         # The existing lock fences controller changes, not host/provider changes.
         # Never write state or retry after crossing this external request boundary.
         try:
+            attempted = True
             result = cmux.run("rpc", "surface.close", json.dumps({
                 "workspace_id": child["workspaceId"], "surface_id": child["surfaceId"],
             }))
@@ -2286,9 +2290,16 @@ def command_native_close(root, cmux):
     } for node in reversed(descendants(snapshot, target))]
     results = []
     for selected in selection:
-        result = with_store(
-            root, lambda store: send_once(store, selected, direct=False), wait=0,
-        )
+        attempted = False
+        try:
+            result = with_store(
+                root, lambda store: send_once(store, selected, direct=False), wait=0,
+            )
+        except (OrchestrationError, OSError):
+            result = subtree_result(
+                selected, "unknown" if attempted else "refused",
+                "host-failure" if attempted else "admission-refused", attempted=attempted,
+            )
         results.append(result)
     return {"scope": "subtree", "results": results}
 
