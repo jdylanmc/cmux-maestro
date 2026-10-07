@@ -167,9 +167,10 @@ Worker actors cannot request YOLO, including for descendants of a YOLO worker;
 inheriting an explicit recorded parent YOLO mode is a separate source behavior.
 An explicit `allowTools` list (including `[]`) or `yolo: false` selects requested
 default mode without `--allow-all`; omitted allows still inherit. A native
-explicit YOLO request combined with a narrowing list refuses. Explicit tool
-rules remain bounded by the recorded parent allows; denies win and cannot be
-removed. Missing provenance or recorded-policy drift before reservation refuses.
+explicit YOLO request combined with a narrowing list refuses. Default-mode parents enforce literal allow-subset checks. Verified recorded
+YOLO permits bounded finite child rules without redundant parent allows;
+wildcard/broad-rule rejection remains. Denies win and cannot be removed.
+Missing provenance or recorded-policy drift before reservation refuses.
 Do not synthesize shell/wildcard grants from tool visibility or task text.
 Policies remain private.
 

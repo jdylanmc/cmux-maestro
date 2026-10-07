@@ -78,6 +78,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Allow bounded finite child narrowing from recorded YOLO without redundant
+  parent allow rules, preserving denies, default-parent and escalation guards
+  (#154).
 - Clean up failed orchestration-test fixture registration through the existing
   quiescence protocol, retaining evidence and both errors when cleanup cannot
   complete (#154).
