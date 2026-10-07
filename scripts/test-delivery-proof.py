@@ -2566,6 +2566,65 @@ class LifecycleFailureTests(unittest.TestCase):
         self.assertEqual(spawn.call_args.kwargs["native_identity"], identity)
         self.assertTrue(args.require_pinned_launch_settings)
 
+    def test_optional_launch_preferences_reach_argv_or_warn_and_keep_configured_defaults(self):
+        help_text = (
+            "--model <model>\n"
+            "--context <tier> [possible values: default, long_context]\n"
+            "--reasoning-effort <level> [possible values: none, minimal, low, medium, high, xhigh, max]\n"
+            "  `model`: AI model to use for Copilot CLI\n"
+            '    - "synthetic-model"\n    - "gpt-6.1-sol"\n\n'
+        )
+        initial_state = copy.deepcopy(self.state)
+        initial_state["nodes"][self.worker["id"]]["permissionMode"] = "default"
+        for selected, expected, warned in (
+            ({"model": "gpt-6.1-sol", "contextTier": "long_context", "reasoningEffort": "medium"},
+             {"--model": "gpt-6.1-sol", "--context": "long_context", "--reasoning-effort": "medium"}, False),
+            ({"model": "unknown-model", "contextTier": "unknown-tier", "reasoningEffort": "unknown-effort"},
+             {"--model": "synthetic-model"}, True),
+        ):
+            with self.subTest(selected=selected):
+                self.state = copy.deepcopy(initial_state)
+                self.mutations = 0
+                request = {
+                    "identity": {"login": "synthetic"},
+                    "assignment": {"name": "Selected child", "cwd": str(REPO), "task": "Synthetic", **selected},
+                }
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                native = CONTROLLER["command_native_spawn"]
+                with mock.patch.dict(native.__globals__, {
+                    "read_state": lambda *a, **k: copy.deepcopy(self.state),
+                    "mutate": self.mutate,
+                    "authorize_native_spawn": lambda state, *_: state["nodes"][self.worker["id"]],
+                    "process_matches": lambda _: True,
+                    "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+                    "resolve_copilot_token": lambda _: None,
+                    "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+                    "messaging_configuration": lambda _: None,
+                    "resource_observations": lambda *_: ({}, set()),
+                    "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+                    "launch_reserved_session": launcher,
+                    "trusted_executable": lambda *_: "/synthetic/copilot",
+                }), mock.patch("sys.stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))), mock.patch(
+                    "subprocess.run", return_value=subprocess.CompletedProcess(
+                        ["/synthetic/copilot", "--help"], 0, stdout=help_text, stderr="",
+                    ),
+                ):
+                    receipt = native(self.root, self.cmux)
+                    child = self.state["nodes"][launcher.call_args.args[2]]
+                    argv = CONTROLLER["interactive_arguments"](child, "Synthetic task")
+                for flag, value in expected.items():
+                    self.assertIn(flag, argv)
+                    self.assertEqual(argv[argv.index(flag) + 1], value)
+                if warned:
+                    self.assertNotIn("--context", argv)
+                    self.assertNotIn("--reasoning-effort", argv)
+                    self.assertTrue(receipt.get("warnings"), "unsupported optional preferences must visibly warn")
+                else:
+                    self.assertFalse(receipt.get("warnings"))
+                for value in selected.values():
+                    if value.startswith("unknown"):
+                        self.assertNotIn(value, argv)
+
     def test_atomic_census_distinguishes_removed_and_surviving_exited_surface(self):
         observe = CONTROLLER["resource_observations"]
         for present in (True, False):
