@@ -2447,6 +2447,66 @@ class LifecycleFailureTests(unittest.TestCase):
         self.assertEqual(self.state["launches"], {})
         self.assertEqual(len(self.state["nodes"]), 2)
 
+    def test_native_child_inherits_verified_parent_permissions_without_explicit_yolo(self):
+        for role in ("coordinator", "worker"):
+            for mode in ("default", "yolo"):
+                with self.subTest(role=role, mode=mode):
+                    parent = copy.deepcopy(self.worker)
+                    parent.update(role=role, permissionMode=mode, toolPolicy={
+                        "allow": ["read", "shell(git status)"], "deny": ["web"],
+                    })
+                    if role == "coordinator":
+                        parent.update(parentId=None, runId=parent["id"], runtimeProtocolVersion=2,
+                                      launchSettings={"version": 1, "model": "synthetic-model"})
+                    self.state = {**CONTROLLER["empty_state"](), "nodes": {
+                        self.actor["id"]: copy.deepcopy(self.actor), parent["id"]: parent,
+                    }}
+                    CONTROLLER["validate_state"](self.state)
+                    spawn = CONTROLLER["command_spawn"]
+                    args = CONTROLLER["parser"]().parse_args([
+                        "spawn", "--actor-id", parent["id"], "--token", self.token,
+                        "--name", "Inherited permissions", "--task", "Synthetic",
+                        "--cwd", str(REPO),
+                    ])
+                    launcher = mock.Mock(return_value={"launchAccepted": True})
+                    with mock.patch.dict(spawn.__globals__, {
+                        "read_state": lambda *a, **k: copy.deepcopy(self.state),
+                        "mutate": self.mutate,
+                        "authorize_native_spawn": lambda state, *_: state["nodes"][parent["id"]],
+                        "process_matches": lambda _: True,
+                        "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+                        "resolve_copilot_token": lambda _: None,
+                        "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+                        "messaging_configuration": lambda _: None,
+                        "resource_observations": lambda *_: ({}, set()),
+                        "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+                        "launch_reserved_session": launcher,
+                    }):
+                        spawn(args, self.root, self.cmux, native_identity={"login": "synthetic"})
+                    child_id = launcher.call_args.args[2]
+                    child = self.state["nodes"][child_id]
+                    self.assertEqual(child["parentId"], parent["id"])
+                    self.assertEqual(child["permissionMode"], mode)
+                    self.assertEqual(child["toolPolicy"], parent["toolPolicy"])
+                    self.assertEqual(len(self.state["launches"]), 1)
+                    del self.state["launches"][child_id]
+                    del self.state["nodes"][child_id]
+
+    def test_launch_arguments_preserve_inherited_yolo_denies_and_explicit_allows(self):
+        node = {
+            **self.worker, "copilotExecutable": "/synthetic/copilot",
+            "workingDirectory": str(REPO), "permissionMode": "yolo",
+            "toolPolicy": {"allow": ["read"], "deny": ["web", "shell(rm)"]},
+        }
+        arguments = CONTROLLER["interactive_arguments"]
+        with mock.patch.dict(arguments.__globals__, {"trusted_executable": lambda *_: "/synthetic/copilot"}):
+            argv = arguments(node, "Synthetic task")
+        self.assertEqual(argv.count("--allow-all"), 1)
+        self.assertIn("--allow-tool", argv)
+        self.assertEqual(argv[argv.index("--allow-tool") + 1], "read")
+        self.assertEqual([argv[index + 1] for index, value in enumerate(argv) if value == "--deny-tool"],
+                         ["web", "shell(rm)"])
+
     def test_atomic_census_distinguishes_removed_and_surviving_exited_surface(self):
         observe = CONTROLLER["resource_observations"]
         for present in (True, False):
