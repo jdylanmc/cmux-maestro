@@ -66,6 +66,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Remove synthetic background-shell rows and their associated outcome notices,
+  preserving worker/task errors and distinct shell tool invocations (#155).
 - Qualify managed Git labels, verification and change counts as evidence from
   the assigned directory, not Copilot's current `/cwd`, preserving stale and
   unavailable states and separate CMUX surface-directory reports (#119, #59).
