@@ -1256,7 +1256,7 @@ enum SidebarPresentation {
             .init(title: "Icon color", value: session.iconColor ?? "theme"),
             .init(title: "Child ID", value: node.id)
         ]
-        if let model = node.model { result.insert(.init(title: "Model", value: model), at: 3) }
+        result.insert(.init(title: "Model", value: node.model ?? "Unavailable"), at: 3)
         if node.historyAncestor { result.append(.init(title: "History", value: "Kept for child context")) }
         if node.state.isTerminal {
             result.append(.init(title: "Completion", value: node.terminalTimestamp.map(date) ?? "Completion age unknown"))
