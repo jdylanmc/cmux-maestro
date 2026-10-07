@@ -1193,7 +1193,7 @@ struct SidebarClarityTests {
         let ended = node(state: .completed)
         let session = try #require(makeTree(nodes: [ended]).sessions.first)
         let details = SidebarPresentation.nodeDetails(ended, session: session)
-        #expect(!details.contains { $0.title == "Model" })
+        #expect(details.contains(.init(title: "Model", value: "Unavailable")))
         #expect(details.contains(.init(title: "Completion", value: "Completion age unknown")))
         #expect(!details.contains { $0.title == "Context usage" })
         let observed = SidebarCopilotNode(
