@@ -2197,7 +2197,7 @@ def command_native_close(root, cmux):
     except (UnicodeError, ValueError) as error:
         raise OrchestrationError("Native close request is invalid.") from error
 
-    def owned(state):
+    def owned(state, identity=target_identity, *, direct=True):
         actor = authorize_native_actor(state, request["identity"])
         if (actor["id"] != os.environ.get("CMUX_MAESTRO_WORKER_ID")
                 or actor["copilotSessionId"] != os.environ.get("SESSION_ID")
@@ -2206,8 +2206,8 @@ def command_native_close(root, cmux):
             raise OrchestrationError("Close does not match the invoking native session.")
         authorize(state, actor["id"], os.environ.get("CMUX_MAESTRO_CONTROL_TOKEN"))
         require_current_surface(actor["workspaceId"], actor["surfaceId"])
-        target = ensure_owned(state, actor, target_identity["workerId"], direct=True)
-        if any(target.get(field) != target_identity[key] for key, field in (
+        target = ensure_owned(state, actor, identity["workerId"], direct=direct)
+        if any(target.get(field) != identity[key] for key, field in (
             ("workspaceId", "workspaceId"), ("surfaceId", "surfaceId"),
             ("sessionId", "copilotSessionId"), ("generation", "generation"),
         )):
@@ -2228,10 +2228,13 @@ def command_native_close(root, cmux):
     if direct_process_identity(actor["providerProcess"]["pid"]) != actor["providerProcess"]:
         raise OrchestrationError("Close invoking provider identity changed.")
 
-    def send_once(store):
+    def send_once(store, selected_identity=target_identity, *, direct=True):
         state = store.read()
-        current, child = owned(state)
-        if not all(observation_matches(snapshot, state, node["id"]) for node in (actor, target)):
+        current, child = owned(state, selected_identity, direct=direct)
+        ancestors = [snapshot["nodes"][selected_identity["workerId"]]]
+        while ancestors[-1]["id"] != actor["id"]:
+            ancestors.append(snapshot["nodes"][ancestors[-1]["parentId"]])
+        if not all(observation_matches(snapshot, state, node["id"]) for node in ancestors):
             raise OrchestrationError("Close ownership changed during preflight.")
         require_close_source(current)
         require_close_source(child)
@@ -2259,9 +2262,23 @@ def command_native_close(root, cmux):
             raise OrchestrationError(
                 "Close reply is unrecognized; removal is unconfirmed. No retry was made."
             ) from error
-        return {**target_identity, "closeAccepted": True, "removal": "unconfirmed"}
+        return {**selected_identity, "closeAccepted": True, "removal": "unconfirmed"}
 
-    return with_store(root, send_once, wait=0)
+    if request.get("scope", "target-only") == "target-only":
+        return with_store(root, send_once, wait=0)
+
+    selection = [{
+        "workerId": node["id"], "workspaceId": node["workspaceId"],
+        "surfaceId": node.get("surfaceId"), "sessionId": node.get("copilotSessionId"),
+        "generation": node["generation"],
+    } for node in reversed(descendants(snapshot, target))]
+    results = []
+    for selected in selection:
+        result = with_store(
+            root, lambda store: send_once(store, selected, direct=False), wait=0,
+        )
+        results.append({**result, "attempted": True})
+    return {"scope": "subtree", "results": results}
 
 
 def command_spawn(args, root, cmux, *, native_identity=None):
