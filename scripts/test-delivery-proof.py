@@ -2,7 +2,7 @@
 """Fixture/launcher contracts only: never authenticates or launches a real provider."""
 
 import copy
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import io
 import hashlib
 import json
@@ -1333,11 +1333,14 @@ finally:
         self.parents[12347] = 12346
         return marker
 
-    def invoke(self, request=None, *, anchor=None, kill_error=ProcessLookupError, real_pids=()):
+    def invoke(self, request=None, *, anchor=None, kill_error=ProcessLookupError, real_pids=(),
+               before_process=None, clock=None, cli=False):
         close = CONTROLLER["command_native_close"]
         process_start = CONTROLLER["process_start"]
         run = subprocess.run
         def process_probe(arguments, **kwargs):
+            if before_process is not None:
+                before_process(arguments, **kwargs)
             if arguments[:2] == ["/bin/ps", "-o"] and int(arguments[-1]) not in real_pids:
                 pid = int(arguments[-1])
                 start = self.starts.get(pid)
@@ -1346,6 +1349,10 @@ finally:
                 elif arguments[2] == "ppid=,uid=,lstart=":
                     output = (f"{self.parents.get(pid, 1)} {self.process_uids.get(pid, os.getuid())} {start}\n"
                               if start else "")
+                elif arguments[2] == "ppid=":
+                    output = f"{self.parents.get(pid, 1)}\n"
+                elif arguments[2] == "lstart=":
+                    output = f"{start}\n" if start else ""
                 else:
                     raise AssertionError("Unexpected process probe")
                 return subprocess.CompletedProcess(arguments, 0, output, "")
@@ -1361,11 +1368,15 @@ finally:
                     "direct_process_identity": anchor or (lambda _: dict(self.actor["providerProcess"])),
                     "retire_messaging": mock.Mock(side_effect=AssertionError("close must preserve routes")),
                     "reconcile_resources": mock.Mock(side_effect=AssertionError("close must not reconcile")),
-                    "time": mock.Mock(wraps=time, sleep=mock.Mock(side_effect=AssertionError("close must not wait"))),
+                    "time": clock or mock.Mock(
+                        wraps=time, sleep=mock.Mock(side_effect=AssertionError("close must not wait")),
+                    ),
+                    "default_root": lambda: self.root,
+                    "Cmux": lambda: self.cmux,
                 }), \
                 mock.patch("os.kill", side_effect=kill_error), \
                 mock.patch("subprocess.run", side_effect=process_probe):
-            return close(self.root, self.cmux)
+            return CONTROLLER["main"](["native-close"]) if cli else close(self.root, self.cmux)
 
     def test_close_accepts_one_live_direct_child_and_preserves_every_record_and_route(self):
         before = {file: file.read_bytes() for directory in (self.root, self.routes)
@@ -1678,6 +1689,131 @@ finally:
         self.assertEqual([item["outcome"] for item in result["results"]], ["accepted", "refused", "refused"])
         self.assertEqual([item["attempted"] for item in result["results"]], [True, False, False])
         self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, after_change)
+
+    def test_subtree_bounds_real_process_and_host_timeouts_and_accounts_for_all_127_targets(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        self.state["nodes"].pop(self.sibling["id"])
+        selected = [self.child] + [self.add_close_descendant(self.child, 12400 + index) for index in range(126)]
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.assertEqual(len(self.state["nodes"]), 128)
+        self.parents[os.getpid()] = self.actor["providerProcess"]["pid"]
+        self.cmux = CONTROLLER["Cmux"].__new__(CONTROLLER["Cmux"])
+        self.cmux.executable = "/synthetic/cmux"
+        elapsed = 0.0
+        deadlines = []
+        host_requests = []
+        def spend(arguments, **kwargs):
+            nonlocal elapsed
+            timeout = kwargs["timeout"]
+            deadlines.append((elapsed, timeout, arguments))
+            duration = timeout if arguments[0] == "/synthetic/cmux" and arguments[5] == "surface.close" else 0.01
+            elapsed += min(duration, timeout)
+            if duration >= timeout:
+                raise subprocess.TimeoutExpired(arguments, timeout)
+        def host(arguments, **kwargs):
+            self.assertEqual(arguments[:5], ["/synthetic/cmux", "--json", "--id-format", "uuids", "rpc"])
+            self.assertEqual(arguments[5], "surface.list")
+            return subprocess.CompletedProcess(arguments, 0, json.dumps({
+                "workspace_id": self.actor["workspaceId"],
+                "surfaces": [{"id": node["surfaceId"]} for node in self.state["nodes"].values()],
+            }), "")
+        def observe(arguments, **kwargs):
+            if arguments[0] == "/synthetic/cmux" and arguments[5] == "surface.close":
+                host_requests.append(json.loads(arguments[6]))
+            spend(arguments, **kwargs)
+        clock = SimpleNamespace(monotonic=lambda: elapsed,
+                                sleep=mock.Mock(side_effect=AssertionError("subtree must not wait for locks")))
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch("subprocess.run", side_effect=host), redirect_stdout(stdout), redirect_stderr(stderr):
+            code = self.invoke(
+                {"identity": self.identity, "target": self.target, "scope": "subtree"},
+                anchor=CONTROLLER["direct_process_identity"], before_process=observe, clock=clock, cli=True,
+            )
+
+        self.assertEqual(code, 0, stderr.getvalue())
+        self.assertLessEqual(elapsed, 45.000001, "all ancestry, source and host work must fit the bounded pass")
+        self.assertLess(elapsed, 60, "adapter deadline must retain response-serialization headroom")
+        self.assertTrue(deadlines)
+        self.assertTrue(all(0 < timeout <= 5 for _, timeout, _ in deadlines))
+        self.assertTrue(all(start + timeout <= 45.000001 for start, timeout, _ in deadlines))
+        self.assertTrue(host_requests)
+        self.assertLess(len(host_requests), len(selected))
+        self.assertEqual(len({item["surface_id"] for item in host_requests}), len(host_requests))
+        wire = stdout.getvalue().encode("utf-8")
+        self.assertLessEqual(len(wire), 65_536)
+        self.assertEqual(stderr.getvalue(), "")
+        result = json.loads(wire)
+        self.assertIs(result["ok"], True)
+        self.assertEqual(result["scope"], "subtree")
+        self.assertEqual(len(result["results"]), 127)
+        actual = {item["workerId"]: item for item in result["results"]}
+        self.assertEqual(set(actual), {node["id"] for node in selected})
+        attempted = {item["surface_id"] for item in host_requests}
+        for node in selected:
+            item = actual[node["id"]]
+            self.assertEqual({key: item[key] for key in self.target}, {
+                "workerId": node["id"], "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
+                "sessionId": node["copilotSessionId"], "generation": node["generation"],
+            })
+            self.assertEqual(item["attempted"], node["surfaceId"] in attempted)
+            self.assertEqual(item["removal"], "unconfirmed")
+            self.assertNotIn("closeAccepted", item)
+            self.assertIn(item["outcome"], ("unknown", "refused", "not-attempted"))
+        skipped = [item for item in result["results"] if item["outcome"] == "not-attempted"]
+        self.assertTrue(skipped)
+        self.assertTrue(all(item["reason"] == "budget-exhausted" for item in skipped))
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_subtree_initial_snapshot_does_not_wait_the_capacity_scaled_store_budget(self):
+        elapsed = 0.0
+        def sleep(seconds):
+            nonlocal elapsed
+            elapsed += seconds
+        clock = SimpleNamespace(monotonic=lambda: elapsed, sleep=sleep)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with CONTROLLER["Store"](self.root), redirect_stdout(stdout), redirect_stderr(stderr):
+            code = self.invoke(
+                {"identity": self.identity, "target": self.target, "scope": "subtree"}, clock=clock, cli=True,
+            )
+
+        self.assertEqual(code, 2)
+        self.assertIn("operation is active", json.loads(stderr.getvalue())["error"])
+        self.assertEqual(elapsed, 0, "subtree must not inherit the capacity-scaled acquisition wait")
+        self.assertEqual(stdout.getvalue(), "")
+        self.cmux.run.assert_not_called()
+
+    def test_subtree_initial_ancestry_probe_budget_accounts_for_every_selected_target(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        chain = [os.getpid()] + list(range(22000, 22015)) + [12345]
+        for child, parent in zip(chain, chain[1:]):
+            self.parents[child] = parent
+        elapsed = 0.0
+        def slow_ancestry(arguments, **kwargs):
+            nonlocal elapsed
+            if arguments[:3] == ["/bin/ps", "-o", "ppid="]:
+                elapsed += min(2.9, kwargs["timeout"])
+                if kwargs["timeout"] < 2.9:
+                    raise subprocess.TimeoutExpired(arguments, kwargs["timeout"])
+        clock = SimpleNamespace(monotonic=lambda: elapsed,
+                                sleep=mock.Mock(side_effect=AssertionError("subtree must not wait")))
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = self.invoke(
+                {"identity": self.identity, "target": self.target, "scope": "subtree"},
+                anchor=CONTROLLER["direct_process_identity"], before_process=slow_ancestry, clock=clock, cli=True,
+            )
+
+        self.assertLessEqual(elapsed, 45.000001, "ancestry probes belong to the same bounded pass")
+        self.assertEqual(code, 0, stderr.getvalue())
+        result = json.loads(stdout.getvalue())
+        self.assertEqual({item["workerId"] for item in result["results"]}, {descendant["id"], self.child["id"]})
+        self.assertTrue(all(item["attempted"] is False for item in result["results"]))
+        self.assertTrue(all(item["outcome"] in ("refused", "not-attempted") for item in result["results"]))
+        self.assertTrue(all(item["removal"] == "unconfirmed" for item in result["results"]))
+        self.cmux.run.assert_not_called()
 
     def test_close_accepts_real_wrapper_with_separate_direct_source_owner(self):
         with self.owned_source_wrapper() as (wrapper, owner_pid):
