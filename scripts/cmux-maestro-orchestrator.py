@@ -282,6 +282,137 @@ def worker_launch_settings(root):
         raise OrchestrationError("Worker launch settings are unreadable; no default account was substituted.") from error
 
 
+CONTEXT_TIERS = {"default", "long_context"}
+REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+PREFERENCE_KEYS = {"model", "contextTier", "reasoningEffort"}
+
+
+def validate_launch_preferences(value):
+    if not isinstance(value, dict) or set(value) - PREFERENCE_KEYS:
+        raise OrchestrationError("Launch preference fields are invalid.")
+    for key, candidate in value.items():
+        if not isinstance(candidate, str):
+            raise OrchestrationError(f"Launch {key} preference is invalid.")
+        if key == "model":
+            validate_launch_settings({"version": 1, "model": candidate})
+        elif re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", candidate) is None:
+            raise OrchestrationError(f"Launch {key} preference is invalid.")
+    return value
+
+
+def requested_launch_preferences(args, *, include_model=True):
+    return validate_launch_preferences({
+        key: value for key, value in (
+            ("model", getattr(args, "model", None) if include_model else None),
+            ("contextTier", getattr(args, "context_tier", None)),
+            ("reasoningEffort", getattr(args, "reasoning_effort", None)),
+        ) if value is not None
+    })
+
+
+def validate_launch_capabilities(value, identity):
+    if (not isinstance(value, dict)
+            or set(value) != {"version", "sessionId", "account", "source", "models"}
+            or type(value["version"]) is not int or value["version"] != 1
+            or not isinstance(identity, dict)
+            or value["sessionId"] != identity.get("sessionId")
+            or value["account"] != {"login": identity.get("login"), "host": identity.get("host")}):
+        raise OrchestrationError("Launch capability evidence session/account binding is invalid.")
+    canonical_uuid(value["sessionId"], "launch capability session ID")
+    if value["source"] not in ("session-model-list", "unavailable"):
+        raise OrchestrationError("Launch capability evidence source is invalid.")
+    models = value["models"]
+    if not isinstance(models, list) or len(models) > 128 or (
+        value["source"] == "unavailable" and models
+    ):
+        raise OrchestrationError("Launch capability model list is invalid.")
+    ids = set()
+    for model in models:
+        if (not isinstance(model, dict)
+                or set(model) - {"id", "contextTiers", "reasoningEfforts", "defaultReasoningEffort"}
+                or not {"id", "contextTiers", "reasoningEfforts"}.issubset(model)):
+            raise OrchestrationError("Launch model capability fields are invalid.")
+        validate_launch_preferences({"model": model["id"]})
+        if model["id"] in ids:
+            raise OrchestrationError("Launch model capability IDs must be unique.")
+        ids.add(model["id"])
+        for field, supported in (("contextTiers", CONTEXT_TIERS), ("reasoningEfforts", REASONING_EFFORTS)):
+            values = model[field]
+            if (not isinstance(values, list) or len(values) > len(supported)
+                    or any(not isinstance(item, str) or item not in supported for item in values)
+                    or len(set(values)) != len(values)):
+                raise OrchestrationError("Launch model capability options are invalid.")
+        if "default" not in model["contextTiers"] or (
+            "defaultReasoningEffort" in model
+            and model["defaultReasoningEffort"] not in model["reasoningEfforts"]
+        ):
+            raise OrchestrationError("Launch model capability defaults are invalid.")
+    if len(json.dumps(value, separators=(",", ":")).encode()) > 32768:
+        raise OrchestrationError("Launch capability evidence exceeds its size bound.")
+    return value
+
+
+def validate_launch_selection(value):
+    if (not isinstance(value, dict)
+            or set(value) != {"requested", "configured", "source", "warnings", "observed"}
+            or value["source"] not in ("session-model-list", "unavailable")
+            or value["observed"] is not None):
+        raise OrchestrationError("Stored launch selection is invalid.")
+    validate_launch_preferences(value["requested"])
+    validate_launch_preferences(value["configured"])
+    if value["source"] == "unavailable" and set(value["configured"]) - {"model"}:
+        raise OrchestrationError("Unverified launch selection cannot configure optional context or effort.")
+    for key, supported in (("contextTier", CONTEXT_TIERS), ("reasoningEffort", REASONING_EFFORTS)):
+        if key in value["configured"] and value["configured"][key] not in supported:
+            raise OrchestrationError("Stored configured launch option is invalid.")
+    warnings = value["warnings"]
+    if not isinstance(warnings, list) or len(warnings) > 3:
+        raise OrchestrationError("Stored launch warnings exceed their bound.")
+    for warning in warnings:
+        bounded_text(warning, "launch warning", 512)
+
+
+def resolve_launch_preferences(requested, settings, capabilities=None, identity=None):
+    validate_launch_preferences(requested)
+    if capabilities is not None:
+        validate_launch_capabilities(capabilities, identity)
+    if not requested:
+        return None
+    configured = {"model": settings["model"]} if settings.get("model") is not None else {}
+    source = capabilities["source"] if capabilities is not None else "unavailable"
+    warnings = []
+    if source == "unavailable":
+        warnings.append("Model capability verification is unavailable; configured defaults retained without optional overrides.")
+    else:
+        models = {model["id"]: model for model in capabilities["models"]}
+        selected = requested.get("model", settings.get("model"))
+        if selected not in models:
+            if "model" in requested:
+                warnings.append("Requested model is unavailable; configured model retained.")
+            selected = settings.get("model")
+        if selected not in models:
+            raise OrchestrationError("Configured fallback model is not available in this session's model catalog.")
+        configured["model"] = selected
+        model = models[selected]
+        if "contextTier" in requested:
+            tier = requested["contextTier"]
+            if tier not in model["contextTiers"]:
+                warnings.append("Requested context tier is unsupported for the selected model; default tier retained.")
+                tier = "default"
+            configured["contextTier"] = tier
+        if "reasoningEffort" in requested:
+            effort = requested["reasoningEffort"]
+            if effort not in model["reasoningEfforts"]:
+                warnings.append("Requested reasoning effort is unsupported for the selected model; advertised or provider default retained.")
+                effort = model.get("defaultReasoningEffort")
+            if effort is not None:
+                configured["reasoningEffort"] = effort
+    selection = {"requested": requested, "configured": configured, "source": source,
+                 "warnings": warnings, "observed": None}
+    validate_launch_selection(selection)
+    return selection
+
+
 def command_launch_settings(root):
     settings = worker_launch_settings(root)
     account_pinned = settings.get("copilotAccount") is not None
@@ -847,6 +978,11 @@ def validate_state(state):
             raise OrchestrationError("Stored runtime protocol is unsupported.")
         if node.get("launchSettings") is not None:
             validate_launch_settings(node["launchSettings"])
+        if "launchSelection" in node:
+            validate_launch_selection(node["launchSelection"])
+            configured = node["launchSelection"]["configured"]
+            if "model" in configured and configured["model"] != (node.get("launchSettings") or {}).get("model"):
+                raise OrchestrationError("Stored launch selection does not match its configured model.")
         if ("copilotExecutable" in node) != ("launchPath" in node):
             raise OrchestrationError("Stored provider executable context is incomplete.")
         if "copilotExecutable" in node:
@@ -1806,6 +1942,7 @@ def command_launch_coordinator(args, root, cmux):
         "version": 1, "copilotAccount": args.account or settings.get("copilotAccount"),
         "model": args.model or settings.get("model"),
     })
+    selection = resolve_launch_preferences(requested_launch_preferences(args, include_model=False), settings)
     if not settings.get("copilotAccount") or not settings.get("model"):
         raise OrchestrationError("A managed coordinator requires an explicit account and configured model.")
     messaging = messaging_configuration(root)
@@ -1831,6 +1968,9 @@ def command_launch_coordinator(args, root, cmux):
         "coordinatorId": node["id"], "runId": node["runId"], "controlToken": token,
         "workspaceId": workspace, "sessionId": node["copilotSessionId"],
     }
+    if selection is not None:
+        node["launchSelection"] = selection
+        receipt.update(launchSelection=selection, warnings=selection["warnings"])
     reservation_prepared = False
     reservation_committed = False
 
@@ -2055,13 +2195,18 @@ def command_native_spawn(root, cmux):
         request = json.loads(raw)
     except (UnicodeError, ValueError) as error:
         raise OrchestrationError("Native launch request is invalid.") from error
-    if not isinstance(request, dict) or set(request) != {"identity", "assignment"}:
+    if (not isinstance(request, dict) or not {"identity", "assignment"}.issubset(request)
+            or set(request) - {"identity", "assignment", "launchCapabilities"}):
         raise OrchestrationError("Native launch request fields are invalid.")
     assignment = request["assignment"]
     if not isinstance(assignment, dict) or set(assignment) - {
-        "name", "cwd", "task", "allowTools", "denyTools", "yolo", "icon", "color"
+        "name", "cwd", "task", "allowTools", "denyTools", "yolo", "icon", "color",
+        "model", "contextTier", "reasoningEffort"
     } or not {"name", "cwd", "task"}.issubset(assignment):
         raise OrchestrationError("Native assignment fields are invalid.")
+    validate_launch_preferences({key: assignment[key] for key in PREFERENCE_KEYS if key in assignment})
+    if "launchCapabilities" in request:
+        validate_launch_capabilities(request["launchCapabilities"], request["identity"])
     if type(assignment.get("yolo", False)) is not bool:
         raise OrchestrationError("Native launch permission mode is invalid.")
     if any(not isinstance(assignment.get(key, []), list) for key in ("allowTools", "denyTools")):
@@ -2076,6 +2221,8 @@ def command_native_spawn(root, cmux):
         deny_tool=assignment.get("denyTools", []), yolo=assignment.get("yolo"),
         require_pinned_launch_settings=True, icon=assignment.get("icon"), color=assignment.get("color"),
         delivery_proof_fixture=None, delivery_proof_experimental=False, delivery_proof_yolo=False,
+        model=assignment.get("model"), context_tier=assignment.get("contextTier"),
+        reasoning_effort=assignment.get("reasoningEffort"), launch_capabilities=request.get("launchCapabilities"),
     )
     return command_spawn(args, root, cmux, native_identity=request["identity"])
 
@@ -2377,6 +2524,10 @@ def command_spawn(args, root, cmux, *, native_identity=None):
     launch_settings = worker_launch_settings(root)
     if native_identity is not None:
         launch_settings = {**launch_settings, "copilotAccount": native_identity["login"]}
+    selection = resolve_launch_preferences(
+        requested_launch_preferences(args), launch_settings,
+        getattr(args, "launch_capabilities", None), native_identity,
+    )
     if (args.require_pinned_launch_settings or proof is not None or messaging is not None
             or permission_mode == "yolo") and (
         launch_settings.get("copilotAccount") is None
@@ -2385,6 +2536,8 @@ def command_spawn(args, root, cmux, *, native_identity=None):
         raise OrchestrationError(
             "Pinned Maestro account and model settings are required; configure Agent launch settings before spawning."
         )
+    if selection is not None and "model" in selection["configured"]:
+        launch_settings = {**launch_settings, "model": selection["configured"]["model"]}
     # Check availability before creating a terminal; never persist the credential.
     copilot, launch_path = provider_launch_context(actor)
     resolve_copilot_token(launch_settings.get("copilotAccount"))
@@ -2451,6 +2604,8 @@ def command_spawn(args, root, cmux, *, native_identity=None):
         if messaging is not None:
             state["nodes"][identifier]["messaging"] = messaging
         state["nodes"][identifier]["permissionMode"] = permission_mode
+        if selection is not None:
+            state["nodes"][identifier]["launchSelection"] = selection
         state["launches"][identifier] = {
             "workerId": identifier, "runId": current["runId"],
             "sessionId": session_id, "generation": 1,
@@ -2459,9 +2614,11 @@ def command_spawn(args, root, cmux, *, native_identity=None):
         }
         current["lastControlAt"] = timestamp
     mutate(root, reserve)
-    return launch_reserved_session(
+    result = launch_reserved_session(
         root, cmux, identifier, session_id, worker_token, actor["workspaceId"], pane, cwd, label
     )
+    return ({**result, "launchSelection": selection, "warnings": selection["warnings"]}
+            if selection is not None else result)
 
 
 def launch_reserved_session(root, cmux, identifier, session_id, worker_token, workspace, pane, cwd, label):
@@ -2518,6 +2675,10 @@ def interactive_arguments(node, prompt):
     model = (node.get("launchSettings") or {}).get("model")
     if model is not None:
         arguments += ["--model", model]
+    configured = (node.get("launchSelection") or {}).get("configured", {})
+    for key, flag in (("contextTier", "--context"), ("reasoningEffort", "--reasoning-effort")):
+        if key in configured:
+            arguments += [flag, configured[key]]
     for rule in node["toolPolicy"]["allow"]:
         arguments += ["--allow-tool", rule]
     for rule in node["toolPolicy"]["deny"]:
@@ -3917,6 +4078,8 @@ def parser():
     coordinator.add_argument("--task", required=True)
     coordinator.add_argument("--account", help="Subscription for this new root; otherwise use the explicit coordinator setting")
     coordinator.add_argument("--model")
+    coordinator.add_argument("--context-tier")
+    coordinator.add_argument("--reasoning-effort")
     coordinator.add_argument("--allow-tool", action="append", default=[])
     coordinator.add_argument("--deny-tool", action="append", default=[])
     coordinator.add_argument("--yolo", action="store_true", help="Explicitly user-approved root permission mode")
@@ -3931,6 +4094,9 @@ def parser():
     spawn.add_argument("--allow-tool", action="append")
     spawn.add_argument("--deny-tool", action="append", default=[])
     spawn.add_argument("--require-pinned-launch-settings", action="store_true")
+    spawn.add_argument("--model")
+    spawn.add_argument("--context-tier")
+    spawn.add_argument("--reasoning-effort")
     spawn.add_argument("--yolo", action="store_true", default=None,
                        help="Explicit user-approved coordinator launch with --allow-all; preserves denies")
     spawn.add_argument("--delivery-proof-fixture", help="Opt in to one prepared disposable native-extension fixture")
