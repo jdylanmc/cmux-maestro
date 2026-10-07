@@ -1815,6 +1815,69 @@ finally:
         self.assertTrue(all(item["removal"] == "unconfirmed" for item in result["results"]))
         self.cmux.run.assert_not_called()
 
+    def test_subtree_rejects_unserializable_complete_plan_before_any_host_effect(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendants = [self.add_close_descendant(self.child, 12400 + index) for index in range(23)]
+        for node in descendants:
+            node["generation"] = 10 ** 3000
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.cmux.workspace_surfaces.return_value = {
+            node["surfaceId"] for node in self.state["nodes"].values()
+        }
+        self.cmux.run.side_effect = lambda *args, **kwargs: json.loads(args[2])
+        stdout, stderr = io.StringIO(), io.StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = self.invoke(
+                {"identity": self.identity, "target": self.target, "scope": "subtree"}, cli=True,
+            )
+
+        self.cmux.run.assert_not_called()
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        failure = json.loads(stderr.getvalue())
+        self.assertIs(failure["ok"], False)
+        self.assertRegex(failure["error"], r"(?i)(result|output|plan).*(bound|size|large)")
+        self.assertLessEqual(len(stderr.getvalue().encode("utf-8")), 65_536)
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_subtree_preserves_confirmation_required_without_acceptance_fallback_or_retry(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.cmux.workspace_surfaces.return_value.add(descendant["surfaceId"])
+        for failure in (
+            CONTROLLER["OrchestrationError"]("CMUX rpc failed: confirmation_required"),
+            {"ok": False, "error": {"code": "confirmation_required", "message": "synthetic private host detail"}},
+        ):
+            with self.subTest(failure=failure):
+                requests = []
+                def request(*args, **kwargs):
+                    target = json.loads(args[2])
+                    requests.append(target)
+                    if len(requests) == 1:
+                        if isinstance(failure, Exception):
+                            raise failure
+                        return failure
+                    return target
+                self.cmux.run.side_effect = request
+
+                result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+
+                self.assertEqual([item["surface_id"] for item in requests],
+                                 [descendant["surfaceId"], self.child["surfaceId"]])
+                blocked, accepted = result["results"]
+                self.assertIn(blocked["outcome"], ("unknown", "refused"))
+                self.assertIs(blocked["attempted"], True)
+                self.assertNotIn("closeAccepted", blocked)
+                self.assertEqual(blocked["reason"], "confirmation_required")
+                self.assertEqual(blocked["removal"], "unconfirmed")
+                self.assertEqual(accepted["outcome"], "accepted")
+                self.assertNotIn("synthetic", json.dumps(result))
+                self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
     def test_close_accepts_real_wrapper_with_separate_direct_source_owner(self):
         with self.owned_source_wrapper() as (wrapper, owner_pid):
             source = self.source(self.child)
