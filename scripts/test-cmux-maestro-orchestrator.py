@@ -987,6 +987,28 @@ class WorkspaceCapacityCLITests(unittest.TestCase):
         self.assertIn("authenticated coordinator", denied["stderr"])
         self.assertEqual(self.h.state().get("workspaceCapacity"), before)
 
+    def test_updating_full_configuration_map_preserves_other_workspaces(self):
+        limits = {str(uuid.uuid4()): 17 for _ in range(127)}
+        limits[self.h.workspace] = 32
+        self.h.change_state(lambda state: state.update(workspaceCapacity=limits))
+        self.assertEqual(self.configure(64)["capacity"]["limit"], 64)
+        expected = {**limits, self.h.workspace: 64}
+        self.assertEqual(self.h.state()["workspaceCapacity"], expected)
+        other = next(workspace for workspace in limits if workspace != self.h.workspace)
+        self.assertEqual(self.h.run("capacity", "--workspace", other)["capacity"]["limit"], 17)
+
+    def test_corrupt_persisted_capacity_refuses_without_repair_or_default(self):
+        path = self.h.root / "control" / "state.json"
+        original = self.h.state()
+        for invalid in (None, {self.h.workspace: 129}, {self.h.workspace: True}):
+            with self.subTest(invalid=invalid):
+                payload = json.dumps({**original, "workspaceCapacity": invalid}).encode()
+                path.write_bytes(payload)
+                result = self.capacity(check=False)
+                self.assertEqual(result["returncode"], 2)
+                self.assertIn("capacity", result["stderr"].lower())
+                self.assertEqual(path.read_bytes(), payload)
+
     def test_lowering_below_usage_keeps_exact_resources_and_refuses_new_launch(self):
         receipts = [self.h.spawn(label=f"Existing {index}") for index in range(2)]
         before = self.h.state()

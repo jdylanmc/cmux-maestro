@@ -6,6 +6,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Configure per-workspace launch capacity from 1 to 128 (default 32) through
+  an authenticated coordinator CLI, with advisory usage/preflight and exact
+  root, worker, retained-resource and pending-lease accounting. Preserve
+  existing lock budgets and independent node/depth bounds (#154).
 - Request one exact owned child-terminal close through stock CMUX, preserving
   private ownership and launch guards. Return request acceptance without waiting
   for removal, retrying, shutting down the provider, or releasing capacity; inherit
@@ -21,12 +25,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
-- Raise the per-workspace hard limit from 8 to 32 live managed sessions,
+- Raise the default per-workspace limit from 8 to 32 live managed sessions,
   including managed coordinators and retained resources, without changing
   launch accounting or the 128-node and eight-level nesting limits. Validate
   immutable read snapshots outside the shared lock so readers do not block
   writers during decoding and validation, and share read-only runtime ticket
-  lookups. Scale bounded lock-acquisition budgets with the same capacity knob,
+  lookups. Scale bounded lock-acquisition budgets against the fixed 32-session reference,
   retaining exclusive mutations, failure on exhaustion and launch/result deadlines.
 - Attempt Copilot integration with stable CLI 1.x releases on protocol 3 instead
   of an exact-release whitelist. Preserve source ownership, disabled-state
