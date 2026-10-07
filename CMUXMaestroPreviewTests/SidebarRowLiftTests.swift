@@ -991,13 +991,18 @@ struct SidebarRowLiftTests {
 
     @Test func metadataCopyRemainsAnExplicitUnliftedControl() async throws {
         var copies = 0
+        var copiedValue: String?
         let frame = NSRect(x: 0, y: 0, width: 280, height: 100)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let host = NSHostingView(rootView: SidebarCopyableValue(value: "synthetic-session", label: "Session ID") {
-            copies += 1
-            return true
-        })
+        let host = NSHostingView(rootView: SidebarCopyableValue(
+            value: "synthetic-session", label: "Session ID", clipboardValue: "synthetic-session-raw",
+            copy: { value in
+                copies += 1
+                copiedValue = value
+                return true
+            }
+        ))
         window.contentView = host
         defer { window.contentView = nil; window.close() }
         host.frame = frame
@@ -1007,12 +1012,14 @@ struct SidebarRowLiftTests {
         #expect(!descendants(host).contains { $0 is SidebarRowMenuAnchorView })
         try #require(window.makeFirstResponder(button))
         #expect(copies == 0, "Merely focusing metadata must not copy or acquire a row lift")
+        #expect(copiedValue == nil)
         button.performClick(nil)
         await sidebarEventually {
             host.layoutSubtreeIfNeeded()
             return button.accessibilityValue() as? String == "Copied"
         }
         #expect(copies == 1 && !window.isVisible)
+        #expect(copiedValue == "synthetic-session-raw")
         #expect(!descendants(host).contains { $0 is SidebarRowMenuAnchorView })
     }
 
