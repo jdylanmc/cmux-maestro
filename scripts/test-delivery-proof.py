@@ -2030,6 +2030,76 @@ finally:
         self.assertTrue(all("closeAccepted" not in item for item in result["results"]))
         self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
 
+    def test_subtree_worker_actor_session_loss_retains_accepted_result_and_refuses_remainder(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        coordinator = {
+            **copy.deepcopy(self.actor), "id": str(uuid.uuid4()),
+            "surfaceId": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
+        }
+        self.actor.update(role="worker", parentId=coordinator["id"])
+        self.state["nodes"][coordinator["id"]] = coordinator
+        actor_session = self.actor["copilotSessionId"]
+        self.persist()
+        self.cmux.workspace_surfaces.return_value = {
+            node["surfaceId"] for node in self.state["nodes"].values()
+        }
+        self.cmux.run.side_effect = lambda *args, **kwargs: json.loads(args[2])
+        captured = [{
+            "workerId": node["id"], "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
+            "sessionId": node["copilotSessionId"], "generation": node["generation"],
+        } for node in (descendant, self.child)]
+        acquire = CONTROLLER["with_store"]
+        for mode in ("unchanged", "null", "absent"):
+            with self.subTest(mode=mode):
+                self.actor["copilotSessionId"] = actor_session
+                self.persist()
+                self.cmux.run.reset_mock()
+                changed = False
+                after_change = {}
+                def acquire_then_change(root, operation, **kwargs):
+                    nonlocal changed
+                    result = acquire(root, operation, **kwargs)
+                    if self.cmux.run.call_count == 1 and not changed:
+                        changed = True
+                        if mode == "null":
+                            self.actor["copilotSessionId"] = None
+                        elif mode == "absent":
+                            self.actor.pop("copilotSessionId")
+                        self.persist()
+                        after_change.update({
+                            file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()
+                        })
+                    return result
+
+                with mock.patch.dict(CONTROLLER["command_native_close"].__globals__, {
+                    "with_store": acquire_then_change,
+                }):
+                    try:
+                        result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+                    finally:
+                        self.assertIsNone(CONTROLLER["CLOSE_DEADLINE"].get())
+
+                self.assertTrue(changed, "fixture must mutate only after the first host action's lock releases")
+                expected_attempts = 2 if mode == "unchanged" else 1
+                self.assertEqual(self.cmux.run.call_count, expected_attempts)
+                self.assertEqual([json.loads(call.args[2])["surface_id"] for call in self.cmux.run.call_args_list],
+                                 [target["surfaceId"] for target in captured[:expected_attempts]])
+                self.assertEqual(len(result["results"]), 2)
+                self.assertEqual([{key: item[key] for key in self.target} for item in result["results"]], captured)
+                self.assertEqual([item["outcome"] for item in result["results"]],
+                                 ["accepted", "accepted" if mode == "unchanged" else "refused"])
+                self.assertEqual([item["attempted"] for item in result["results"]], [True, mode == "unchanged"])
+                self.assertTrue(all(item["removal"] == "unconfirmed" for item in result["results"]))
+                self.assertIs(result["results"][0]["closeAccepted"], True)
+                if mode != "unchanged":
+                    self.assertNotIn("closeAccepted", result["results"][1])
+                    self.assertTrue(result["results"][1]["reason"].isascii())
+                    self.assertLessEqual(len(result["results"][1]["reason"]), 32)
+                self.assertEqual(
+                    {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, after_change,
+                )
+
     def test_close_accepts_real_wrapper_with_separate_direct_source_owner(self):
         with self.owned_source_wrapper() as (wrapper, owner_pid):
             source = self.source(self.child)
