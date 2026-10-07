@@ -85,12 +85,21 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
         window.isRestorable = false
         window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 360))
         window.observe = { [weak self, weak window] event in
-            guard let self, let window, event.window === window else { return }
-            guard [.keyDown, .keyUp, .leftMouseDown, .leftMouseUp].contains(event.type) else { return }
-            guard self.inputs.count < 64 else { self.overflow = true; return }
+            guard let self, let window, event.window === window else { return nil }
+            guard [.keyDown, .keyUp, .leftMouseDown, .leftMouseUp].contains(event.type) else { return nil }
+            guard self.inputs.count < 64 else { self.overflow = true; return nil }
             let mouse = event.type == .leftMouseDown || event.type == .leftMouseUp
-            self.inputs.append(.init(window: id, type: event.type.rawValue, timestamp: event.timestamp,
-                                     point: mouse ? event.locationInWindow : nil))
+            let before = self.responder(window.firstResponder)
+            let keyboard: RowInputEvidence.Keyboard? = mouse ? nil
+                : .init(keyCode: event.keyCode, modifierFlags: event.modifierFlags.rawValue)
+            let point = mouse ? event.locationInWindow : nil
+            return { [weak self, weak window] in
+                guard let self, let window else { return }
+                guard self.inputs.count < 64 else { self.overflow = true; return }
+                self.inputs.append(.init(window: id, type: event.type.rawValue, timestamp: event.timestamp,
+                                         point: point, keyboard: keyboard,
+                                         dispatch: .init(before: before, after: self.responder(window.firstResponder))))
+            }
         }
         return window
     }
@@ -137,6 +146,27 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
         }
         visit(view)
         return (anchors, titles)
+    }
+
+    private func responder(_ responder: NSResponder?) -> RowInputEvidence.Responder {
+        guard let responder else { return .init(kind: .none, control: nil, window: nil) }
+        for entry in hosts {
+            if controls(in: entry.view).titles.contains(where: { $0 === responder }),
+               let id = RowInputEvidence.Responder.Control(rawValue: "\(entry.id)-title") {
+                return .init(kind: .control, control: id, window: id.window)
+            }
+        }
+        for (view, id) in [
+            (ownerReceiver as NSView?, RowInputEvidence.Responder.Control.ownerReceiver),
+            (foreignReceiver as NSView?, .foreignReceiver),
+            (owner?.contentView, .ownerContent), (foreign?.contentView, .foreignContent)
+        ] where view === responder {
+            return .init(kind: .control, control: id, window: id.window)
+        }
+        let window = (responder as? NSView)?.window
+        let identity: RowInputEvidence.FixtureWindow? =
+            window === owner ? .owner : window === foreign ? .foreign : nil
+        return .init(kind: .other, control: nil, window: identity)
     }
 
     @objc private func menuBegan(_ notification: Notification) {
@@ -219,10 +249,12 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
                          eligible: presenter.liftEligible, focusedControls: presenter.focusedControls.count,
                          titleIsResponder: window.firstResponder === title,
                          exteriorFocusRing: title.focusRingType == .exterior, bordered: title.isBordered,
-                         frame: anchor.convert(anchor.bounds, to: nil), titleFrame: title.convert(title.bounds, to: nil))
+                         frame: anchor.convert(anchor.bounds, to: nil), titleFrame: title.convert(title.bounds, to: nil),
+                         keyView: .init(canBecomeKeyView: title.canBecomeKeyView,
+                                        nextValidKeyView: responder(title.nextValidKeyView)))
         }
         let evidence = RowInputEvidence(
-            version: 3, caseID: caseID, live: live && rows.count == 3,
+            version: 4, caseID: caseID, live: live && rows.count == 3,
             lifetime: .init(invalidated: invalidated, firstInvalidation: firstInvalidation,
                             applicationActive: NSApp.isActive, ownerVisible: owner.isVisible,
                             foreignVisible: foreign.isVisible,
@@ -256,8 +288,8 @@ final class RowInputFixture: NSObject, NSApplicationDelegate {
         for entry in hosts {
             for anchor in controls(in: entry.view).anchors { anchor.detach() }
         }
-        owner?.observe = { _ in }
-        foreign?.observe = { _ in }
+        owner?.observe = { _ in nil }
+        foreign?.observe = { _ in nil }
         evidenceView?.observe = { "fixture-stopped" }
     }
 

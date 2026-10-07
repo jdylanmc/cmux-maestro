@@ -171,8 +171,8 @@ final class RowInputUITests: XCTestCase {
         image.name = name + "-render"
         image.lifetime = .keepAlways
         add(image)
-        let result = try JSONDecoder().decode(RowInputEvidence.self, from: Data(text.utf8))
-        XCTAssertEqual(result.version, 3)
+        let result = try RowInputEvidence.decode(Data(text.utf8))
+        XCTAssertEqual(result.version, 4)
         XCTAssertEqual(result.caseID, caseID)
         XCTAssertTrue(result.live)
         XCTAssertFalse(result.overflow)
