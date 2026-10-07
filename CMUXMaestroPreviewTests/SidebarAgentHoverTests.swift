@@ -491,6 +491,71 @@ struct SidebarAgentHoverTests {
         #expect(result.lines.filter { $0.copyableSessionID != nil } == [.sessionID(parent.id, isParent: true)])
     }
 
+    @Test(arguments: ["denied", "stale-tree", "stale-session", "dead", "ambiguous", "duplicate", "replaced", "wrong-surface"])
+    func managedModelRefusesUnsafeObservationInsteadOfInventingAvailability(_ scenario: String) throws {
+        let observed = SidebarCopilotSession(
+            id: scenario == "replaced" ? fixtures.otherSessionID : fixtures.sessionID,
+            workspaceID: fixtures.workspaceA,
+            surfaceID: scenario == "wrong-surface" ? fixtures.surfaceB : fixtures.surfaceA,
+            liveness: scenario == "dead" ? .dead : scenario == "ambiguous" ? .ambiguous : .alive,
+            state: .working, model: "unsafe-model",
+            observedAt: scenario == "stale-session" ? now.addingTimeInterval(-9) : now,
+            nodes: [], childrenComplete: true, treeDegraded: false,
+            omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        let node = directoryNode(session())
+        let observations = SidebarCopilotTree(
+            availability: .ready, sessions: scenario == "duplicate" ? [observed, observed] : [observed],
+            issues: scenario == "denied" ? [.permissionDenied] : [],
+            generatedAt: scenario == "stale-tree" ? now.addingTimeInterval(-9) : now
+        )
+        let hover = try #require(SidebarAgentHoverContent.card(
+            for: .managed(node.id, generation: node.generation), hierarchy: fixtures.hierarchy(),
+            connected: true, tree: observations,
+            managed: .init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node]),
+            availability: .ready, now: now
+        ))
+        #expect(!hover.lines.contains { ["Model", "Last reported model"].contains($0.title) })
+        #expect(!hover.lines.contains { $0.value == "unsafe-model" })
+    }
+
+    @Test(arguments: [true, false])
+    func statusOnlyRetentionNeverResurrectsErasedRootOrChildModels(retainingStatus: Bool) throws {
+        var original = session(name: "erased-root-model")
+        original.nodes = [.init(id: "child", parentID: nil, depth: 0, kind: .subagent, name: "Review agent",
+                               state: .working, model: "erased-child-model", ancestryUnresolved: false, hasChildren: false)]
+        let retained = SidebarCopilotTree.statusOnly(original, retainingStatus: retainingStatus)
+        #expect(retained.model == nil && retained.nodes.first?.model == nil)
+        for target in [SidebarAgentHoverTarget.session(retained.id), .child(sessionID: retained.id, childID: "child")] {
+            let hover = try #require(card(target, sessions: [retained]))
+            #expect(hover.lines.filter { $0.title == "Last reported model" }.map(\.value) == ["Unavailable"])
+            #expect(!hover.lines.contains { $0.value == "erased-root-model" || $0.value == "erased-child-model" })
+            #expect(hover.lines.allSatisfy { $0.copyableSessionID == nil })
+        }
+    }
+
+    @Test(arguments: [
+        ("provider/model-v2:2026-10", "provider/model-v2:2026-10"),
+        ("  provider/\u{202E}model\t-v2  ", "provider/model-v2"),
+        (String(repeating: "x", count: 130), String(repeating: "x", count: 100))
+    ])
+    func observedProviderIdentifiersRemainAccurateWithinExistingSanitization(input: String, expected: String) throws {
+        let observation = CopilotSessionObservation(
+            sessionID: fixtures.sessionID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,
+            liveness: .alive, state: .working, model: input,
+            children: [.init(id: "child", parentID: nil, kind: .subagent, name: "Review agent",
+                             state: .working, model: input)], observedAt: now
+        )
+        let projected = SidebarCopilotTree.project(
+            fixtures.snapshot(sessions: [observation], now: now), onto: fixtures.topology(), now: now
+        )
+        for target in [SidebarAgentHoverTarget.session(fixtures.sessionID),
+                       .child(sessionID: fixtures.sessionID, childID: "child")] {
+            let hover = try #require(card(target, sessions: projected.sessions))
+            #expect(hover.lines.filter { $0.title == "Model" }.map(\.value) == [expected])
+        }
+    }
+
     @Test func managedPreviewRejectsAReplacedGenerationAndShowsOnlyVerifiedMetrics() throws {
         let node = SidebarOrchestrationNode(
             id: UUID(), runId: UUID(), parentId: nil, role: "worker", label: "Managed agent",
