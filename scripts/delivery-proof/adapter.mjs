@@ -295,6 +295,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
           required: ["workerId", "workspaceId", "surfaceId", "sessionId", "generation"],
           additionalProperties: false,
         },
+        scope: { type: "string", enum: ["target-only", "subtree"] },
       },
       required: ["target"],
       additionalProperties: false,
@@ -303,7 +304,9 @@ export async function start({ root, peer, joinSession, managed = false, expected
       try {
         signal?.throwIfAborted();
         requireCondition(session?.sessionId === own.sessionId && invocation?.sessionId === own.sessionId);
-        exactKeys(args, ["target"]);
+        requireCondition(args && typeof args === "object" && !Array.isArray(args));
+        exactKeys(args, "scope" in args ? ["target", "scope"] : ["target"]);
+        requireCondition(!("scope" in args) || ["target-only", "subtree"].includes(args.scope));
         exactKeys(args.target, ["workerId", "workspaceId", "surfaceId", "sessionId", "generation"]);
         for (const key of ["workerId", "workspaceId", "surfaceId", "sessionId"]) {
           requireCondition(typeof args.target[key] === "string" && UUID.test(args.target[key]));
@@ -320,6 +323,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
         const result = await closeChild({
           identity: { nodeId: own.nodeId, ...ownAddress, capability: own.capability },
           target: args.target,
+          ...("scope" in args ? { scope: args.scope } : {}),
         }, expected.controller, signal);
         return JSON.stringify(result);
       } catch (error) {

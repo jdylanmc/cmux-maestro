@@ -2182,7 +2182,10 @@ def command_native_close(root, cmux):
         if len(raw) > 8192:
             raise ValueError()
         request = json.loads(raw)
-        if not isinstance(request, dict) or set(request) != {"identity", "target"}:
+        if (not isinstance(request, dict)
+                or not {"identity", "target"}.issubset(request)
+                or set(request) - {"identity", "target", "scope"}
+                or request.get("scope", "target-only") not in ("target-only", "subtree")):
             raise ValueError()
         target_identity = request["target"]
         if (not isinstance(target_identity, dict) or set(target_identity) != {
