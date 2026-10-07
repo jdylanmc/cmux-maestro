@@ -442,6 +442,23 @@ struct SidebarAgentHoverTests {
         #expect(result.lines.filter { $0.copyableSessionID != nil } == [.sessionID(parent.id, isParent: true)])
     }
 
+    @Test func observedRootWithoutOwnModelExplicitlyReportsUnavailableInsteadOfChildModel() throws {
+        var root = SidebarCopilotSession(
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .alive, state: .working, model: nil, observedAt: now, nodes: [],
+            childrenComplete: true, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        root.nodes = [.init(id: "child", parentID: nil, depth: 0, kind: .subagent, name: "Review agent",
+                           state: .working, model: "child-only-model", ancestryUnresolved: false, hasChildren: false)]
+
+        let result = try #require(card(.session(root.id), sessions: [root]))
+
+        #expect(result.notice == nil)
+        #expect(result.lines.filter { $0.title == "Model" }.map(\.value) == ["Unavailable"])
+        #expect(!result.lines.contains { $0.value == "child-only-model" })
+        #expect(result.lines.filter { $0.copyableSessionID != nil } == [.sessionID(root.id)])
+    }
+
     @Test func managedPreviewRejectsAReplacedGenerationAndShowsOnlyVerifiedMetrics() throws {
         let node = SidebarOrchestrationNode(
             id: UUID(), runId: UUID(), parentId: nil, role: "worker", label: "Managed agent",
