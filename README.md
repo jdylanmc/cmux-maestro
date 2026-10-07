@@ -433,7 +433,9 @@ replacement identities never enter the pass. Its 45-second budget and five-secon
 target windows leave remaining targets explicitly not attempted; an oversized
 complete result plan or an unrepresentable numeric generation refuses before host
 effects, preserving the existing numeric wire without rounding identities.
-Missing captured sessions are refused individually. Pre-dispatch expiry is not
+Missing captured sessions are refused individually. Loss of the invoking worker's
+stored session between targets preserves prior results and refuses remaining
+targets without changing shared native authorization. Pre-dispatch expiry is not
 an attempt; malformed host text after dispatch remains unknown and does not erase
 prior results or stop valid remaining targets. The existing 60-second,
 65,536-byte adapter transport remains unchanged. Synthetic source/transport

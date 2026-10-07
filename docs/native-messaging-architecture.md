@@ -204,6 +204,12 @@ workspace and leases under each target lock. Never substitute replacements or
 expand with late children. No process exit, completion acknowledgement, new
 lifecycle state, capacity release, archive or automatic cleanup follows.
 
+Close-local admission explicitly refuses an absent/null stored worker-actor
+session before shared native authorization indexes it. Identity loss between
+targets retains earlier accepted results and refuses the remaining targets;
+capability, control-token and original-actor checks stay unchanged. Native spawn
+and observation authorization are not modified.
+
 The lock serializes controller changes only. PID/start precision and source
 marker freshness remain limited by their existing sources; markers are not an
 OS lock Maestro acquires or an authoritative host current-session assertion.
