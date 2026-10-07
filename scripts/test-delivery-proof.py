@@ -1259,6 +1259,21 @@ class NativeCloseTests(unittest.TestCase):
     def persist(self):
         CONTROLLER["with_store"](self.root, lambda store: store.write(self.state))
 
+    def add_close_descendant(self, parent, pid):
+        node = {
+            **copy.deepcopy(self.child), "id": str(uuid.uuid4()), "parentId": parent["id"],
+            "surfaceId": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
+            "providerProcess": {"pid": pid, "start": self.child["providerProcess"]["start"]},
+        }
+        self.state["nodes"][node["id"]] = node
+        self.starts[pid] = node["providerProcess"]["start"]
+        self.parents[pid] = 1
+        source = self.source(node)
+        source.mkdir(mode=0o700)
+        (source / f"inuse.{pid}.lock").touch(mode=0o600)
+        CONTROLLER["bind_messaging"](node)
+        return node
+
     @contextmanager
     def owned_source_wrapper(self):
         source = self.source(self.child)
@@ -1425,6 +1440,57 @@ finally:
         self.assertEqual(CONTROLLER["read_state"](self.root), self.state)
         self.assertNotIn(self.token, json.dumps(result))
         self.assertNotIn(self.identity["capability"], json.dumps(result))
+
+    def test_subtree_continues_valid_sibling_and_parent_after_one_unknown_host_result(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        left = self.add_close_descendant(self.child, 12347)
+        right = self.add_close_descendant(self.child, 12348)
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.cmux.workspace_surfaces.return_value = {
+            node["surfaceId"] for node in self.state["nodes"].values()
+        }
+        for failure in (
+            CONTROLLER["OrchestrationError"]("lastSurface"),
+            OSError("synthetic lost reply"),
+            {"ok": False, "error": "synthetic unrecognized response"},
+        ):
+            with self.subTest(failure=failure):
+                requests = []
+                def request(*arguments, **_kwargs):
+                    self.assertEqual(arguments[:2], ("rpc", "surface.close"))
+                    target = json.loads(arguments[2])
+                    requests.append(target)
+                    if len(requests) == 1:
+                        if isinstance(failure, Exception):
+                            raise failure
+                        return failure
+                    return target
+                self.cmux.run.side_effect = request
+
+                result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+
+                self.assertEqual(len(requests), 3, "one uncertain descendant must not abort or retry the pass")
+                self.assertEqual({item["surface_id"] for item in requests[:2]}, {
+                    left["surfaceId"], right["surfaceId"],
+                })
+                self.assertEqual(requests[-1], {
+                    "workspace_id": self.child["workspaceId"], "surface_id": self.child["surfaceId"],
+                })
+                self.assertEqual(len(result["results"]), 3)
+                self.assertEqual([item["surfaceId"] for item in result["results"]],
+                                 [item["surface_id"] for item in requests])
+                for index, item in enumerate(result["results"]):
+                    self.assertIs(item["attempted"], True)
+                    self.assertEqual(item["outcome"], "unknown" if index == 0 else "accepted")
+                    self.assertEqual(item["removal"], "unconfirmed")
+                    self.assertTrue(item["reason"].isascii())
+                    self.assertLessEqual(len(item["reason"]), 32)
+                    self.assertEqual(item.get("closeAccepted", False), index != 0)
+                self.assertEqual(
+                    {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before,
+                )
+                self.assertNotIn("synthetic", json.dumps(result))
 
     def test_close_accepts_real_wrapper_with_separate_direct_source_owner(self):
         with self.owned_source_wrapper() as (wrapper, owner_pid):
