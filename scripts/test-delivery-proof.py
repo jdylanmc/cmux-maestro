@@ -1492,6 +1492,115 @@ finally:
                 )
                 self.assertNotIn("synthetic", json.dumps(result))
 
+    def test_subtree_refuses_changed_captured_descendant_without_aborting_or_substituting(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        captured = copy.deepcopy(descendant)
+        target = {
+            "workerId": captured["id"], "workspaceId": captured["workspaceId"],
+            "surfaceId": captured["surfaceId"], "sessionId": captured["copilotSessionId"], "generation": 1,
+        }
+        marker = self.source(descendant) / "inuse.12347.lock"
+        for change in ("generation", "surface", "session", "parent", "missing", "process", "marker", "workspace"):
+            with self.subTest(change=change):
+                self.state["nodes"][captured["id"]] = copy.deepcopy(captured)
+                self.starts[12347] = captured["providerProcess"]["start"]
+                marker.touch(mode=0o600)
+                self.persist()
+                surfaces = {node["surfaceId"] for node in self.state["nodes"].values()}
+                self.cmux.workspace_surfaces.return_value = surfaces
+                self.cmux.run.reset_mock()
+                after_change = {}
+                def changed(_):
+                    current = self.state["nodes"][captured["id"]]
+                    if change == "generation":
+                        current["generation"] = 2
+                    elif change == "surface":
+                        current["surfaceId"] = str(uuid.uuid4())
+                        surfaces.add(current["surfaceId"])
+                    elif change == "session":
+                        current["copilotSessionId"] = str(uuid.uuid4())
+                    elif change == "parent":
+                        current["parentId"] = self.sibling["id"]
+                    elif change == "missing":
+                        self.state["nodes"].pop(captured["id"])
+                    elif change == "process":
+                        self.starts[12347] = "replacement-start"
+                    elif change == "marker":
+                        marker.unlink()
+                    elif change == "workspace":
+                        surfaces.remove(captured["surfaceId"])
+                    self.persist()
+                    after_change.update({
+                        file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()
+                    })
+                    return self.actor["providerProcess"]
+
+                result = self.invoke(
+                    {"identity": self.identity, "target": self.target, "scope": "subtree"}, anchor=changed,
+                )
+
+                self.cmux.run.assert_called_once()
+                arguments = self.cmux.run.call_args.args
+                self.assertEqual(arguments[:2], ("rpc", "surface.close"))
+                self.assertEqual(json.loads(arguments[2]), {
+                    "workspace_id": self.child["workspaceId"], "surface_id": self.child["surfaceId"],
+                })
+                self.assertEqual(len(result["results"]), 2)
+                refused, accepted = result["results"]
+                self.assertEqual({key: refused[key] for key in target}, target)
+                self.assertEqual(refused["outcome"], "refused")
+                self.assertIs(refused["attempted"], False)
+                self.assertNotIn("closeAccepted", refused)
+                self.assertEqual(refused["removal"], "unconfirmed")
+                self.assertTrue(refused["reason"])
+                self.assertTrue(refused["reason"].isascii())
+                self.assertLessEqual(len(refused["reason"]), 32)
+                self.assertEqual(accepted["workerId"], self.child["id"])
+                self.assertEqual(accepted["outcome"], "accepted")
+                self.assertEqual(
+                    {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, after_change,
+                )
+
+    def test_subtree_never_adds_a_child_that_appears_after_the_private_snapshot(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        after_change = {}
+        late = {}
+        def appeared(_):
+            late.update(self.add_close_descendant(descendant, 12348))
+            self.persist()
+            self.cmux.workspace_surfaces.return_value = {
+                node["surfaceId"] for node in self.state["nodes"].values()
+            }
+            after_change.update({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()})
+            return self.actor["providerProcess"]
+        self.cmux.run.side_effect = lambda *args, **kwargs: json.loads(args[2])
+
+        result = self.invoke(
+            {"identity": self.identity, "target": self.target, "scope": "subtree"}, anchor=appeared,
+        )
+
+        self.assertEqual([item["workerId"] for item in result["results"]], [descendant["id"], self.child["id"]])
+        self.assertEqual([json.loads(call.args[2])["surface_id"] for call in self.cmux.run.call_args_list],
+                         [descendant["surfaceId"], self.child["surfaceId"]])
+        self.assertNotIn(late["id"], json.dumps(result))
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, after_change)
+
+    def test_explicit_target_only_keeps_the_flat_receipt_and_all_descendant_records(self):
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.cmux.workspace_surfaces.return_value.add(descendant["surfaceId"])
+
+        result = self.invoke({"identity": self.identity, "target": self.target, "scope": "target-only"})
+
+        self.assertEqual(result, {**self.target, "closeAccepted": True, "removal": "unconfirmed"})
+        self.cmux.run.assert_called_once()
+        self.assertEqual(json.loads(self.cmux.run.call_args.args[2])["surface_id"], self.child["surfaceId"])
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
     def test_close_accepts_real_wrapper_with_separate_direct_source_owner(self):
         with self.owned_source_wrapper() as (wrapper, owner_pid):
             source = self.source(self.child)
