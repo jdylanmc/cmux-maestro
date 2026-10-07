@@ -793,6 +793,97 @@ class Harness:
 
 
 class HarnessTeardownTests(unittest.TestCase):
+    def test_constructor_registration_timeout_closes_owned_fixture_and_preserves_original_error(self):
+        h = object.__new__(Harness)
+        original_close = Harness.close
+        injected = subprocess.TimeoutExpired(["synthetic-registration"], 15)
+        try:
+            with patch("subprocess.run", side_effect=injected) as run, \
+                    patch("subprocess.Popen", side_effect=AssertionError("no process may start")) as popen, \
+                    patch.dict(CONTROLLER_API, {
+                        "process_observation": unittest.mock.Mock(side_effect=AssertionError("no process exists")),
+                    }), patch.object(Harness, "close", autospec=True, side_effect=original_close) as close:
+                with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                    h.__init__()
+                self.assertIs(caught.exception, injected)
+                self.assertEqual(run.call_count, 1)
+                self.assertEqual(run.call_args.args[0][2], "register")
+                self.assertEqual(run.call_args.kwargs["timeout"], 15)
+                popen.assert_not_called()
+                CONTROLLER_API["process_observation"].assert_not_called()
+                close.assert_called_once_with(h)
+                self.assertTrue(h.closed)
+                self.assertTrue(h.lifetime.closed)
+                self.assertFalse(h.temp._finalizer.alive)
+                self.assertFalse(h.path.exists())
+        finally:
+            h.close()
+
+    def test_constructor_retains_unquiesced_fixture_and_chains_cleanup_failure_to_original_error(self):
+        h = object.__new__(Harness)
+        original_close, original_flock = Harness.close, fcntl.flock
+        injected = subprocess.TimeoutExpired(["synthetic-registration"], 15)
+        secondary = []
+
+        def close(harness):
+            try:
+                original_close(harness)
+            except AssertionError as error:
+                secondary.append(error)
+                raise
+
+        def flock(file, operation):
+            if operation & fcntl.LOCK_EX:
+                raise BlockingIOError("synthetic unquiesced fixture")
+            return original_flock(file, operation)
+
+        try:
+            with patch("subprocess.run", side_effect=injected) as run, \
+                    patch("subprocess.Popen", side_effect=AssertionError("no process may start")) as popen, \
+                    patch.dict(CONTROLLER_API, {
+                        "process_observation": unittest.mock.Mock(side_effect=AssertionError("no process exists")),
+                    }), patch.object(Harness, "close", autospec=True, side_effect=close) as cleanup, \
+                    patch("fcntl.flock", side_effect=flock), \
+                    patch("time.monotonic", side_effect=[0, 4]), patch("time.sleep") as sleep:
+                with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                    h.__init__()
+                self.assertIs(caught.exception, injected)
+                self.assertEqual(run.call_count, 1)
+                popen.assert_not_called()
+                cleanup.assert_called_once_with(h)
+                self.assertEqual(len(secondary), 1)
+                self.assertIs(caught.exception.__cause__, secondary[0])
+                self.assertIn("quiescence", str(secondary[0]))
+                self.assertFalse(h.closed)
+                self.assertTrue(h.path.is_dir())
+                self.assertFalse(h.temp._finalizer.alive)
+                self.assertFalse(h.lifetime.closed)
+                self.assertEqual(os.pread(h.lifetime.fileno(), 1, 0), b"0")
+                sleep.assert_not_called()
+        finally:
+            h.close()
+
+    def test_constructor_success_keeps_fixture_active_without_cleanup(self):
+        h = object.__new__(Harness)
+        registration = {"coordinatorId": "synthetic", "controlToken": "synthetic"}
+        completed = subprocess.CompletedProcess(["synthetic-registration"], 0, json.dumps(registration), "")
+        try:
+            with patch("subprocess.run", return_value=completed) as run, \
+                    patch("subprocess.Popen", side_effect=AssertionError("no process may start")) as popen, \
+                    patch.object(Harness, "close", autospec=True) as close:
+                h.__init__()
+                self.assertEqual(h.registration, {**registration, "returncode": 0, "stderr": ""})
+                self.assertEqual(run.call_count, 1)
+                close.assert_not_called()
+                popen.assert_not_called()
+                self.assertFalse(h.closed)
+                self.assertTrue(h.path.is_dir())
+                self.assertTrue(h.temp._finalizer.alive)
+                self.assertFalse(h.lifetime.closed)
+                self.assertEqual(os.pread(h.lifetime.fileno(), 1, 0), b"1")
+        finally:
+            h.close()
+
     def test_wait_failure_preserves_assertion_and_captures_runtime_diagnostics(self):
         with tempfile.TemporaryDirectory() as directory:
             harness = object.__new__(Harness)
