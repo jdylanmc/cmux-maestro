@@ -418,10 +418,14 @@ Native `maestro_close` requests closure of one explicitly authorized, currently
 owned direct child using its exact `workerId`, `workspaceId`, `surfaceId`,
 `sessionId` and `generation`. It validates private native authority, process and
 session-source anchors, current workspace membership and launch fences, then
-sends one stock CMUX `surface.close`. No sidebar control or host change is
-involved. Inherit stock host refusals, including the last terminal; this is not
-UI-close parity. Observed CMUX 0.65 returned `confirmation_required`, contrary
-to the earlier bypass assumption; no force or confirmation fallback is used.
+sends one initial stock CMUX `surface.close` with documented Boolean
+`force: true`, selecting its noninteractive route. This is not a public toggle or
+an escalation after refusal. No sidebar control or host change is involved.
+Inherit stock host refusals, including the last terminal; this is not UI-close
+parity. Earlier CMUX 0.65 requests omitting the field returned
+`confirmation_required`; tagged source confirms the false default. The source
+contract is corrected, but installed/live proof remains separate. No retry,
+force-after-refusal or confirmation fallback is used.
 
 Omitted `scope` or `"scope": "target-only"` preserves that single-target contract.
 Explicit `"scope": "subtree"` captures the exact child's private descendants

@@ -12,7 +12,9 @@ Notable changes are recorded using Keep a Changelog categories.
   stock host refusals, including last-terminal refusal (#90).
 - Add explicitly authorized descendant-first subtree close with one fixed private
   selection, independent continuation after refusal or uncertainty, and complete
-  bounded per-target results. Preserve default target-only behavior, ancestry and
+  bounded per-target results. Select the stock host's documented noninteractive
+  branch on the initial admitted request, not as a retry or fallback. Preserve
+  default target-only receipt/scope, ancestry and
   resource accounting; refuse unrepresentable numeric identities before effects,
   preserve results after malformed host replies, and distinguish pre-dispatch
   refusal from unknown dispatched requests. Preserve prior results when an

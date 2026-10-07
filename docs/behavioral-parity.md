@@ -101,10 +101,14 @@ All eleven workflow commands remain required.
 
 The native adapter's `maestro_close` and controller's private `native-close`
 ingress admit one exact, currently owned direct interactive child, then request
-stock `surface.close` once. This inherits host behavior and last-terminal refusal,
-not UI confirmation/pinning parity. Actual CMUX 0.65 returned
-`confirmation_required`; that discrepancy remains explicit without force or
-confirmation manipulation. It never
+stock `surface.close` once with the documented initial Boolean `force: true`.
+This selects the noninteractive host route while retaining last-terminal
+refusal, not UI confirmation/pinning parity. Earlier CMUX 0.65 requests omitted
+the field and returned `confirmation_required`; tagged source confirms that
+false-default branch. Behavioral fixtures distinguish the published running-
+terminal confirmation and noninteractive branches, including stock refusal
+before force handling. This is source proof, not installed/live acceptance.
+No retry, force-after-refusal or confirmation manipulation follows. It never
 waits for disappearance or starts a provider-exit/retry protocol.
 
 Optional scope defaults to target-only and preserves the original flat receipt.

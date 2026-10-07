@@ -176,7 +176,10 @@ executable-name inference. No recorded-anchor/schema rewrite, transcript, hook
 wait, scan across sessions or provider API is used.
 
 With the same lock held, one existing `Cmux.run("rpc", "surface.close", ...)`
-uses explicit workspace/surface UUIDs. Target-only retains its existing
+uses explicit workspace/surface UUIDs and Boolean `force: true` on the initial
+admitted request, selecting the documented noninteractive route. There is no
+caller-exposed force option or changed request after refusal. Target-only retains
+its existing
 15-second I/O bound. Subtree uses context-local deadlines: 45 seconds for the
 whole pass including ancestry, at most five seconds per target including process
 probes, inventory and host request. Initial and per-target state acquisitions do
@@ -187,9 +190,14 @@ oversized plans and generations outside the JavaScript safe-integer range refuse
 without truncating or rounding identities or enlarging the adapter's
 60-second timeout. Every budget-exhausted remainder target is not attempted.
 
-Inherit stock host behavior, including last-terminal refusal. Actual CMUX 0.65
-returned `confirmation_required`, contradicting the older bypass assumption;
-retain that diagnostic without requesting force or manipulating confirmation.
+Inherit stock host behavior, including last-terminal refusal. Earlier CMUX 0.65
+requests without the field returned `confirmation_required`; immutable v0.65.0
+source defaults omitted force to false and requires true for the noninteractive
+branch. Selecting that published initial branch is a source-contract correction,
+not a host patch, retry, global setting or permission to invoke a separate live
+RPC. Actual installed/live acceptance remains unverified until separately
+authorized proof. Preserve any host refusal without fallback or confirmation
+manipulation.
 An exact successful reply maps to `closeAccepted: true`, `removal: "unconfirmed"`;
 the host's result naming is not a removal proof. Errors, timeout, cancellation
 and lost replies are surfaced without retries or post-send observations.

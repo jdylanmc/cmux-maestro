@@ -66,7 +66,9 @@ do not copy its source or history, modify it, or make this project depend on it.
   Explicit authorized `maestro_close` is separate: default one exact owned
   direct-child stock host close, or explicitly authorized fixed descendant-first
   subtree scope under the actual actor. Report every selected target within
-  bounded time/output, retaining host refusals and uncertain outcomes. No
+  bounded time/output, retaining host refusals and uncertain outcomes. Select
+  the documented noninteractive stock route on the initial admitted request;
+  never retry or change the request after refusal. No
   automatic cleanup, removal waits, retries, provider shutdown, task-success
   inference or capacity release.
 - Preserve the launch lease across external surface creation and attachment.

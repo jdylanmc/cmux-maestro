@@ -377,11 +377,19 @@ refuse. Active run launch leases and unresolved ownership refuse. No provider
 shutdown is required or attempted before closing an eligible live child.
 
 Admission issues **one stock CMUX `surface.close`** request per eligible target.
-Inherit its behavior, including last-terminal refusal; never request force or
-recreate UI confirmation. Observed CMUX 0.65 returned `confirmation_required`,
-contrary to the earlier confirmation-bypass assumption. That host refusal stays
-explicit (including a subtree `confirmation_required` reason), not accepted or
-bypassed. Synthetic tests do not establish compatibility with a live host.
+After unchanged ownership/admission guards, the initial request includes the
+documented Boolean `force: true` to select CMUX's noninteractive close route.
+This is part of the authorized close contract, not a caller option or an
+escalation after refusal. Inherit host behavior, including last-terminal refusal;
+never construct a separate force RPC, retry a refused request or manipulate
+UI confirmation.
+
+Earlier CMUX 0.65 requests omitting this field returned `confirmation_required`;
+the immutable v0.65.0 source confirms omission defaults to false. The source
+correction selects the published branch; actual installed/live acceptance still
+requires separate proof. Any remaining host refusal stays explicit (including a
+subtree `confirmation_required` reason), never accepted or retried.
+Synthetic tests do not establish compatibility with a live host.
 A successful target-only tool result contains the exact target plus
 `ok: true`, `closeAccepted: true`,
 `removal: "unconfirmed"`. This is request acceptance, not terminal disappearance,
