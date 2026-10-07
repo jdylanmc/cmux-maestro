@@ -36,22 +36,25 @@ struct SidebarDetailLine: Equatable, Identifiable {
     let title: String
     let value: String
     var copyableSessionID: UUID? = nil
+    var copyableValue: String? = nil
     var help: String? = nil
     var id: String { title }
 
     static func sessionID(_ id: UUID, isParent: Bool = false, canCopy: Bool = true) -> Self {
         .init(title: isParent ? "Parent session ID" : "Session ID", value: id.uuidString,
-              copyableSessionID: canCopy ? id : nil)
+              copyableSessionID: canCopy ? id : nil, copyableValue: canCopy ? id.uuidString : nil)
     }
 }
 
 extension SidebarSurfaceDirectory {
     static func line(
-        _ directory: HierarchyAvailability<String?>, isParent: Bool = false, retained: Bool = false
+        _ directory: HierarchyAvailability<String?>, isParent: Bool = false, retained: Bool = false,
+        copyable: Bool = false
     ) -> SidebarDetailLine {
         .init(
             title: isParent ? parentTitle : title,
             value: retained ? "Not current for this original session" : directory.pathDisplayText,
+            copyableValue: copyable && !retained ? directory.copyablePathValue : nil,
             help: isParent ? parentHelp : help
         )
     }
@@ -512,7 +515,9 @@ enum SidebarPresentation {
         }
         result.isAgent = true
         result.visual = sessionState(session)
-        result.lines = sessionDetails(session).filter { ["Model", "Session ID"].contains($0.title) } + paths
+        result.lines = sessionDetails(session).filter {
+            ["Model", "Session ID", "Observed", "Child history"].contains($0.title)
+        } + Self.paths(hierarchy.pathContext(workspaceID: workspaceID, surfaceID: surfaceID), copyable: true)
         result.inspection = inspection(
             for: .unmanaged(.session(session.id)), hierarchy: hierarchy, connected: connected,
             tree: tree, managed: managed, availability: availability, now: now
@@ -526,7 +531,11 @@ enum SidebarPresentation {
            managedSession(for: node, in: tree, now: now)?.id == session.id {
             result.title = node.label
             result.visual = managedState(node, availability: availability, now: now, tree: tree)
-            let fields = Set(["Model", "Branch", "Worktree", "Git evidence", "Git changes", SidebarSurfaceDirectory.title, "Session ID"])
+            let fields = Set([
+                "Model", "Branch", "Worktree", "Git evidence", "Git changes",
+                SidebarSurfaceDirectory.title, "Session ID", "Observed", "Child history",
+                "Workspace path", "Project path"
+            ])
             result.lines = managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { fields.contains($0.title) }
             result.gitChanges = node.currentGitChanges(at: now)
@@ -672,13 +681,17 @@ enum SidebarPresentation {
                 if case .child(_, let childID) = selection {
                     guard let child = session.nodes.first(where: { $0.id == childID }) else { return nil }
                     let context = retained ? [] : paths(
-                        hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID), isParent: true
+                        hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
+                        isParent: true, copyable: true
                     )
                     return .init(title: child.name, lines: nodeDetails(child, session: session) + [
                         .init(title: "Placement", value: "Observed child; native placement belongs to its parent session")
                     ] + context, notice: notice, isAgent: child.kind == .subagent)
                 }
-                let context = retained ? [] : paths(hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID))
+                let context = retained ? [] : paths(
+                    hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
+                    copyable: true
+                )
                 return .init(title: "Copilot · \(session.shortID)", lines: sessionDetails(session) + context,
                              notice: notice, isAgent: true, otherActivity: session.secondaryActivity)
             }
@@ -1049,11 +1062,15 @@ enum SidebarPresentation {
         return nil
     }
 
-    static func paths(_ paths: HierarchyPathContext, isParent: Bool = false) -> [SidebarDetailLine] {
+    static func paths(
+        _ paths: HierarchyPathContext, isParent: Bool = false, copyable: Bool = false
+    ) -> [SidebarDetailLine] {
         [
-            .init(title: "Workspace path", value: paths.rootPath.pathDisplayText),
-            .init(title: "Project path", value: paths.projectRootPath.pathDisplayText),
-            SidebarSurfaceDirectory.line(paths.workingDirectory, isParent: isParent)
+            .init(title: "Workspace path", value: paths.rootPath.pathDisplayText,
+                  copyableValue: copyable ? paths.rootPath.copyablePathValue : nil),
+            .init(title: "Project path", value: paths.projectRootPath.pathDisplayText,
+                  copyableValue: copyable ? paths.projectRootPath.copyablePathValue : nil),
+            SidebarSurfaceDirectory.line(paths.workingDirectory, isParent: isParent, copyable: copyable)
         ]
     }
 
@@ -1127,15 +1144,24 @@ enum SidebarPresentation {
         if let model = managedModel(for: node, in: tree, now: now) {
             result.append(.init(title: "Model", value: model))
         }
-        result += managedGitDetails(node, now: now)
-        let paths = hierarchy.pathContext(
+        let pathContext = hierarchy.pathContext(
             workspaceID: node.workspaceId, surfaceID: node.surfaceId
         )
+        if let session = managedSession(for: node, in: tree, now: now) {
+            result += sessionDetails(session).filter {
+                ["Session ID", "Observed", "Child history"].contains($0.title)
+            }
+        } else if let sessionID = node.copilotSessionId {
+            result.append(.sessionID(sessionID))
+        }
+        result += retained
+            ? [SidebarSurfaceDirectory.line(pathContext.workingDirectory, retained: true)]
+            : Self.paths(pathContext, copyable: true)
+        result += managedGitDetails(node, now: now)
         result += [
             .init(title: "Copilot observation", value: tree.summary),
             .init(title: "Session glyph", value: node.iconId ?? "Sidebar default"),
             .init(title: "Icon color", value: node.iconColor?.title ?? "Theme default"),
-            SidebarSurfaceDirectory.line(paths.workingDirectory, retained: retained),
             .init(title: "Role", value: node.role.capitalized)
         ]
         if node.role == "worker" {
@@ -1149,9 +1175,6 @@ enum SidebarPresentation {
         let warnings = overviewWarnings(tree)
         if !warnings.isEmpty {
             result.append(.init(title: "Observation warnings", value: warnings.joined(separator: "\n")))
-        }
-        if let sessionID = node.copilotSessionId {
-            result.append(.sessionID(sessionID))
         }
         result += [
             .init(title: "Worker ID", value: node.id.uuidString),
@@ -1247,14 +1270,16 @@ enum SidebarPresentation {
             .sessionID(session.id, canCopy: [.alive, .dead].contains(session.liveness)),
             .init(title: "State", value: session.state.rawValue),
             .init(title: "Process", value: session.liveness.rawValue),
-            .init(title: "Observed", value: date(session.observedAt)),
+            .init(title: "Observed", value: date(session.observedAt),
+                  copyableValue: iso8601(session.observedAt)),
             .init(title: "Known working children", value: "\(session.knownRunningChildren)"),
             .init(title: "Retained outcomes", value: "\(session.retainedHistoryCount)"),
             .init(title: "Hidden history", value: "\(session.hiddenHistoryCount)"),
             .init(title: "Omitted children", value: session.hasUncountedChildren
                   ? "At least \(session.omittedChildrenCount); total unknown" : "\(session.omittedChildrenCount)"),
             .init(title: "Child history", value: session.childrenComplete && !session.treeDegraded
-                ? "Complete" : "Incomplete; missing work is not assumed finished")
+                ? "Complete" : "Incomplete; missing work is not assumed finished",
+                  copyableValue: session.childrenComplete && !session.treeDegraded ? "complete" : "incomplete")
         ]
         if let model = session.model { result.insert(.init(title: "Model", value: model), at: 2) }
         return result + activityDetails(session.activity) + attentionDetails(session.attention)
@@ -1288,6 +1313,12 @@ enum SidebarPresentation {
 
     private static func date(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private static func iso8601(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 
     private enum AgentSummaryState: CaseIterable {

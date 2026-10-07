@@ -25,7 +25,8 @@ const iconPaths = {
   flag: '<path d="M5 22V3q4-3 8 0t7 0v10q-4 3-7 0t-8 0"/>',
   beats: '<path d="M15 3v13"/><ellipse cx="11" cy="17" rx="4" ry="3" transform="rotate(-20 11 17)" fill="currentColor" stroke="none"/>',
   taskboard: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/>',
-  wand: '<path d="m4 20 12-12 4 4L8 24M14 10l4 4" transform="translate(0 -3)"/><path d="M5 3v4M3 5h4M19 2v4M17 4h4M20 17v4M18 19h4"/>'
+  wand: '<path d="m4 20 12-12 4 4L8 24M14 10l4 4" transform="translate(0 -3)"/><path d="M5 3v4M3 5h4M19 2v4M17 4h4M20 17v4M18 19h4"/>',
+  copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3"/>'
 };
 function icon(name, color = "currentColor") {
   return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${iconPaths[name] || iconPaths.robot}</svg>`;
@@ -48,8 +49,8 @@ const worktrees = {
   sidebar: { name: "cmux-maestro", branch: "Detached HEAD · a4c71e2", path: "/demo/worktrees/sidebar-design/cmux-maestro", exactID: "tree-002" }
 };
 const workspaces = [
-  { id: "design", name: "Maestro design", subtitle: "Sidebar & personalization", backlog: "#57 Cosmetic overhaul" },
-  { id: "scratch", name: "Scratch space", subtitle: "Non-repository work", backlog: null }
+  { id: "design", name: "Maestro design", subtitle: "Sidebar & personalization", backlog: "#57 Cosmetic overhaul", directory: "/demo/cmux-maestro" },
+  { id: "scratch", name: "Scratch space", subtitle: "Non-repository work", backlog: null, directory: "/demo/scratch" }
 ];
 const surfaces = [
   { id: "coordinator", workspace: "design", name: "Design coordinator", task: "Shape the sidebar overhaul", kind: "agent", state: "working", worktree: "main", parent: null, pane: 1, glyph: "compass", color: "#79d7cc", pet: "Sprout", model: "Copilot · demo model", elapsed: "24m", context: "38%", files: 4, add: 82, del: 19, agentTags: ["coordination"] },
@@ -65,20 +66,93 @@ const surfaces = [
   { id: "notes", workspace: "scratch", name: "Notes assistant", task: "Outline a personal project", kind: "agent", state: "idle", worktree: null, parent: null, pane: 1, glyph: "leaf", color: "#79d7cc", pet: "Pebble", model: "Copilot · demo model", elapsed: "6m", context: "12%", files: null, agentTags: [], directory: "/demo/scratch" },
   { id: "notes-child", workspace: "scratch", name: "Notes outline review", task: "Review the personal outline", kind: "agent", state: "idle", worktree: null, parent: "notes", pane: 2, glyph: "book", color: "#79d7cc", pet: "Sprout", model: "Copilot · demo model", elapsed: "2m", context: "8%", files: null, agentTags: [], directory: "/demo/scratch" }
 ];
-const observedChildren = [];
+const demoSessionMetadata = new Map(surfaces.filter(item => item.kind === "agent").map((item, index) => [item.id, {
+  sessionId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+  observedAt: "2026-09-25T20:00:00.000Z",
+  childHistory: "incomplete"
+}]));
+const observedChildren = [
+  { id: "task-source", parent: "implementer", name: "Inspect sidebar rendering", state: "working" },
+  { id: "task-review", parent: "implementer", name: "Review keyboard navigation", state: "done", outcome: "review-turn-1" },
+  { id: "task-check", parent: "implementer", name: "Check narrow layouts", state: "failed", outcome: "layout-turn-1" },
+  { id: "task-idle", parent: "implementer", name: "Compare spacing options", state: "idle" },
+  { id: "task-blocked", parent: "reviewer", name: "Review contrast choices", state: "blocked" },
+  { id: "task-notes", parent: "notes", name: "Check outline structure", state: "idle" }
+];
+const stressParagraph = "Inspect the complete sidebar while multiple independent sessions compare implementation details, revisit earlier decisions, wait for missing context, and record results that must remain distinguishable even when names share the same opening words. This deliberately oversized synthetic description should challenge truncation, wrapping, selection, previews, and access to controls without changing the identity or ownership of any item.";
+const stressToken = "UnbrokenSyntheticIdentifier".repeat(16);
+const stressHistory = [
+  "Initial inspection", "Alternative approach", "Review feedback",
+  "Revised implementation", "Follow-up verification", "Outstanding questions"
+].map((phase, index) => `${index + 1}. ${phase}: ${stressParagraph} Evidence reference: ${stressToken}.`).join("\n\n");
+const stressWorkspaceName = `Stress testing: ${stressParagraph} ${stressToken}`;
+function seedStressWorkspace() {
+  workspaces.push({ id: "stress", name: "Stress testing", subtitle: stressParagraph, backlog: null, directory: `/demo/stress/${stressToken}/workspace` });
+  worktrees["stress-wide"] = { name: `Wide families: ${stressParagraph}`, branch: `feature/${stressToken}`, path: `/demo/stress/${stressToken}/wide`, exactID: "tree-stress-wide" };
+  worktrees["stress-deep"] = { name: `Deep ancestry: ${stressParagraph}`, branch: `review/${stressToken}`, path: `/demo/stress/${stressToken}/deep`, exactID: "tree-stress-deep" };
+  const addAgent = (id, name, parent, index, worktree) => {
+    surfaces.push({
+      id, workspace: "stress", name, task: stressHistory, kind: "agent",
+      state: index === 0 ? "working" : ["working", "done", "idle", "input", "unknown"][index % 5],
+      worktree, parent, pane: index % 2 + 1, glyph: "robot", color: "#79d7cc", pet: "Orbit",
+      model: "Copilot · synthetic overload fixture", elapsed: "123h 45m", context: "99%",
+      files: 12345 + index, add: 987654 + index, del: 876543 + index,
+      agentTags: ["stress-long-labels", "stress-deep-ancestry", "stress-keyboard-access", "stress-many-siblings", "stress-incomplete-history", "stress-repeated-prefixes"]
+    });
+    demoSessionMetadata.set(id, {
+      sessionId: `00000000-0000-4000-8000-${String(1000 + index).padStart(12, "0")}`,
+      observedAt: "2026-09-29T22:00:00.000Z",
+      childHistory: `Incomplete synthetic history. Missing observations do not imply completion.\n\n${stressHistory}`
+    });
+  };
+  addAgent("stress-root", `Overload coordinator: ${stressParagraph}`, null, 0, "stress-wide");
+  for (let index = 1; index <= 48; index++) {
+    addAgent(`stress-agent-${index}`, `Review the complete sidebar: ${stressParagraph} Session ${index}. ${index % 8 === 0 ? stressToken : ""}`, "stress-root", index, index % 2 ? "stress-wide" : "stress-deep");
+  }
+  for (let depth = 1; depth <= 12; depth++) {
+    addAgent(`stress-depth-${depth}`, `Nested session ${depth}: ${stressParagraph}`, depth === 1 ? "stress-agent-1" : `stress-depth-${depth - 1}`, 48 + depth, "stress-deep");
+  }
+  const taskStates = ["working", "done", "failed", "blocked", "idle", "unknown", "cancelled", "working"];
+  for (let index = 1; index <= 160; index++) {
+    observedChildren.push({
+      id: `stress-task-${index}`, parent: index <= 96 ? "stress-root" : "stress-agent-1",
+      name: `Inspection ${index}: ${index % 9 === 0 ? stressToken : stressParagraph}`,
+      state: taskStates[(index - 1) % taskStates.length], outcome: `stress-outcome-${index}`,
+      attention: index === 94
+    });
+  }
+  for (let depth = 1; depth <= 12; depth++) {
+    observedChildren.push({
+      id: `stress-task-depth-${depth}`, parent: depth === 1 ? "stress-depth-12" : `stress-task-depth-${depth - 1}`,
+      name: `Nested internal task ${depth}: ${stressParagraph}`, state: depth === 12 ? "working" : "idle"
+    });
+  }
+  for (let index = 1; index <= 4; index++) {
+    const browser = index <= 2;
+    surfaces.push({
+      id: `stress-${browser ? "browser" : "terminal"}-${index}`, workspace: "stress",
+      name: `${browser ? "Browser investigation" : "Terminal output"} ${index}: ${stressParagraph} ${stressToken}`,
+      kind: browser ? "browser" : "terminal", state: "idle", pane: index % 2 + 1,
+      glyph: browser ? "globe" : "terminal", color: "#c5cdd8",
+      ...(browser ? { site: "synthetic", url: `https://example.invalid/${stressToken}?scenario=overflow` } : {})
+    });
+  }
+}
+seedStressWorkspace();
 const allSurfaces = () => [...surfaces, ...utilitySurfaces(state.utilityTabs)];
 const byId = id => allSurfaces().find(s => s.id === id);
 const STORAGE = "maestro-cosmetic-lab-v2";
 const initialState = () => ({
   version: 2, active: "implementer", grouping: "worktrees",
-  collapsed: { "design:main": true }, workspaceCollapsed: { scratch: true }, ancestryCollapsed: {}, paneCollapsed: {}, tabOrder: {},
-  icons: {}, pets: {}, tags: {}, panes: {}, paneSelected: {}, agentChoices: {}, dismissed: {}, showEnded: false, petHidden: {}, workspaceOrder: ["design", "scratch"],
-  utilityTabs: {}, beats: initialBeats(), selectedBeat: "beat-review", beatClock: Date.UTC(2026, 8, 25, 20, 0), beatAvailability: {}, fermata: false, workspaceFinished: {}, sidebarOrders: {}, createdDirectories: [], tagColors: {}
+  collapsed: { "design:main": true }, workspaceCollapsed: { scratch: true, stress: true }, ancestryCollapsed: {}, paneCollapsed: {}, tabOrder: {},
+  icons: {}, pets: {}, tags: {}, panes: {}, paneSelected: {}, agentChoices: {}, dismissed: {}, showEnded: false, petHidden: {}, workspaceOrder: ["design", "scratch", "stress"], stressLongName: false,
+  utilityTabs: {}, beats: initialBeats(), selectedBeat: "beat-review", beatClock: Date.UTC(2026, 8, 25, 20, 0), beatAvailability: {}, fermata: false, workspaceFinished: {}, sidebarOrders: {}, createdDirectories: [], tagColors: {}, taskDismissals: {}, taskGroupsCollapsed: {}
 });
 let state = initialState();
 let startupNotice = "";
 let migratedGrouping = false;
 let refreshedDemoSelection = false;
+let addedStressWorkspace = false;
 try {
   const raw = localStorage.getItem(STORAGE);
   if (raw) {
@@ -87,20 +161,28 @@ try {
     const directoryStateValid = validCreatedDirectories(directories);
     const savedWorkspaces = directoryStateValid ? [...workspaces, ...directories.map(directoryWorkspace)] : workspaces;
     const savedSurfaces = directoryStateValid ? [...surfaces, ...directories.map(directorySurface)] : surfaces;
+    const legacyWorkspaceOrder = Array.isArray(saved.workspaceOrder) && saved.workspaceOrder.length === savedWorkspaces.length - 1 &&
+      new Set(saved.workspaceOrder).size === saved.workspaceOrder.length && !saved.workspaceOrder.includes("stress") &&
+      saved.workspaceOrder.every(id => savedWorkspaces.some(workspace => workspace.id === id));
+    if (legacyWorkspaceOrder) saved.workspaceOrder.push("stress");
     const removedSelection = ["unknown-agent", "stale-agent"].includes(saved.active);
     if (removedSelection) {
       saved.active = "implementer";
       startupNotice = "Edge-case demo agents removed. Selected Sidebar implementer; saved Beats and preferences retained.";
     }
     const maps = ["collapsed", "workspaceCollapsed", "ancestryCollapsed", "icons", "pets", "tags", "panes", "petHidden", "paneSelected", "agentChoices"];
-    if (saved.version !== 2 || !directoryStateValid || !validTagColors(saved.tagColors) || !validUtilityState(saved) || ![...savedSurfaces, ...utilitySurfaces(saved.utilityTabs)].some(item => item.id === saved.active) || !maps.every(key => saved[key] && typeof saved[key] === "object" && !Array.isArray(saved[key])) ||
+    const taskDismissalsValid = saved.taskDismissals === undefined || (saved.taskDismissals !== null && typeof saved.taskDismissals === "object" && !Array.isArray(saved.taskDismissals) && Object.values(saved.taskDismissals).every(value => value === true));
+    const taskGroupsValid = saved.taskGroupsCollapsed === undefined || (saved.taskGroupsCollapsed !== null && typeof saved.taskGroupsCollapsed === "object" && !Array.isArray(saved.taskGroupsCollapsed) && Object.values(saved.taskGroupsCollapsed).every(value => typeof value === "boolean"));
+    if (saved.version !== 2 || (saved.stressLongName !== undefined && typeof saved.stressLongName !== "boolean") || !directoryStateValid || !taskDismissalsValid || !taskGroupsValid || !validTagColors(saved.tagColors) || !validUtilityState(saved) || ![...savedSurfaces, ...utilitySurfaces(saved.utilityTabs)].some(item => item.id === saved.active) || !maps.every(key => saved[key] && typeof saved[key] === "object" && !Array.isArray(saved[key])) ||
         !Array.isArray(saved.workspaceOrder) || saved.workspaceOrder.length !== savedWorkspaces.length || new Set(saved.workspaceOrder).size !== savedWorkspaces.length || !saved.workspaceOrder.every(id => savedWorkspaces.some(w => w.id === id))) {
       startupNotice = "Saved demo preferences are incompatible. Showing defaults; use Reset demo to clear them.";
     } else {
       const { views: legacyViews, ...preferences } = saved;
       workspaces.push(...directories.map(directoryWorkspace));
       surfaces.push(...directories.map(directorySurface));
-      state = { ...state, ...preferences };
+      state = { ...state, ...preferences, workspaceCollapsed: { stress: true, ...preferences.workspaceCollapsed } };
+      addedStressWorkspace = legacyWorkspaceOrder;
+      if (addedStressWorkspace) startupNotice = "Stress testing workspace added. Your existing demo preferences are preserved.";
       refreshedDemoSelection = removedSelection;
       if (!["worktrees", "subagents", "workspace"].includes(state.grouping)) state.grouping = "worktrees";
       if (legacyViews && saved.grouping === undefined) {
@@ -113,7 +195,7 @@ try {
 } catch (error) {
   startupNotice = `Could not load demo preferences (${error.name}). Changes may not survive reload.`;
 }
-let noticeTimer, hoverTimer, leaveTimer, hoveredId = null, pickerTarget = null, pickerType = "icon", iconQuery = "", tagTarget = null, tagColorTarget = null, draggedId = null, pendingDismiss = [], pendingDismissScope = null;
+let noticeTimer, hoverTimer, leaveTimer, hoveredId = null, hoverReturnFocus = null, pickerTarget = null, pickerType = "icon", iconQuery = "", tagTarget = null, tagColorTarget = null, draggedId = null, pendingDismiss = [], pendingDismissScope = null;
 function notify(text) {
   $("#notice").textContent = text;
   $("#notice").classList.add("visible");
@@ -124,15 +206,67 @@ function save() {
   try { localStorage.setItem(STORAGE, JSON.stringify(state)); }
   catch (error) { notify(`Preference save failed (${error.name}); this change is temporary.`); }
 }
-function restoreFocus(focus) {
-  if (focus?.isConnected) { focus.focus({ preventScroll: true }); return; }
-  if (focus?.id && document.getElementById(focus.id)) { document.getElementById(focus.id).focus({ preventScroll: true }); return; }
-  if (!focus?.dataset) return;
-  const entries = Object.entries(focus.dataset);
-  const replacement = [...document.querySelectorAll("button")].find(button => entries.length && entries.every(([key, value]) => button.dataset[key] === value));
-  replacement?.focus({ preventScroll: true });
+function captureFocusOrigin(element) {
+  const origin = element instanceof HTMLElement ? element : null;
+  const row = origin?.closest("[data-row]");
+  const workspace = row?.closest("[data-workspace]") || origin?.closest("[data-workspace]");
+  const rows = workspace ? [...workspace.querySelectorAll("[data-row]")] : [];
+  const visibleRows = rows.filter(item => canRestoreFocus(item.querySelector(".row-main")));
+  return {
+    element: origin,
+    id: origin?.id || "",
+    dataset: origin ? { ...origin.dataset } : {},
+    rowID: row?.dataset.row || null,
+    rowIndex: row ? visibleRows.indexOf(row) : -1,
+    workspaceID: workspace?.dataset.workspace || null,
+    iconID: origin?.closest("[data-icon]")?.dataset.icon || null
+  };
 }
-function commit() { const focus = document.activeElement; save(); render(); restoreFocus(focus); }
+function canRestoreFocus(element) {
+  if (!(element instanceof HTMLElement) || !element.isConnected || element === document.body || element === document.documentElement) return false;
+  if (element.disabled || element.closest("[hidden], [inert]") || !element.getClientRects().length) return false;
+  const style = getComputedStyle(element);
+  return style.display !== "none" && style.visibility !== "hidden";
+}
+function focusRestoreTarget(element) {
+  if (!canRestoreFocus(element)) return false;
+  element.scrollIntoView({ block: "nearest", inline: "nearest" });
+  element.focus({ preventScroll: true });
+  return document.activeElement === element;
+}
+function restoreFocus(focus) {
+  const origin = focus && "element" in focus ? focus : captureFocusOrigin(focus);
+  const element = origin?.element || focus;
+  if (focusRestoreTarget(element)) return;
+  if (origin?.id) {
+    const sameID = document.getElementById(origin.id);
+    if (focusRestoreTarget(sameID)) return;
+  }
+  const rows = origin?.workspaceID
+    ? [...document.querySelectorAll("[data-workspace]")].find(item => item.dataset.workspace === origin.workspaceID)?.querySelectorAll("[data-row]")
+    : document.querySelectorAll("[data-row]");
+  const candidates = [...(rows || [])];
+  const exact = origin?.rowID ? candidates.find(row => row.dataset.row === origin.rowID) : null;
+  const exactIcon = exact && origin?.iconID
+    ? [...exact.querySelectorAll("[data-icon]")].find(iconButton => iconButton.dataset.icon === origin.iconID)
+    : null;
+  if (focusRestoreTarget(exactIcon) || focusRestoreTarget(exact?.querySelector(".row-main"))) return;
+  const entries = Object.entries(origin?.dataset || element?.dataset || {});
+  const dataMatch = [...document.querySelectorAll("button")].find(button =>
+    entries.length && entries.every(([key, value]) => button.dataset[key] === value) && canRestoreFocus(button)
+  );
+  if (focusRestoreTarget(dataMatch)) return;
+  const visibleRows = candidates.map(row => row.querySelector(".row-main")).filter(canRestoreFocus);
+  const index = Math.min(Math.max(origin?.rowIndex ?? 0, 0), Math.max(visibleRows.length - 1, 0));
+  if (focusRestoreTarget(visibleRows[index])) return;
+  const workspace = origin?.workspaceID
+    ? [...document.querySelectorAll("[data-workspace]")].find(item => item.dataset.workspace === origin.workspaceID)
+    : null;
+  if (focusRestoreTarget(workspace?.querySelector(".workspace-select"))) return;
+  const grouping = document.querySelector('#global-grouping button[aria-pressed="true"]');
+  focusRestoreTarget(grouping);
+}
+function commit() { const focus = captureFocusOrigin(document.activeElement); save(); render(); restoreFocus(focus); }
 function resolvedIcon(surface) {
   if (surface.kind === "tool") return { glyph: surface.tool, color: "#afb5c0" };
   const override = state.icons[surface.id];
@@ -150,7 +284,7 @@ function resolvedPet(surface) {
   const choice = state.pets[surface.id];
   return choice?.mode === "default" ? "Sprout" : choice?.mode === "custom" && petNames.includes(choice.name) ? choice.name : state.agentChoices[surface.id]?.pet || surface.pet || "Sprout";
 }
-const stateLabel = item => ({ working: "Working", idle: "Idle", input: "Needs input", done: "Finished", unknown: "Unknown" }[item.state]);
+const stateLabel = item => ({ working: "Working", idle: "Idle", input: "Needs input", blocked: "Blocked", done: "Finished", failed: "Failed", cancelled: "Cancelled", unknown: "Unknown" }[item.state]);
 const dot = item => `<span class="state-dot ${item.state}" role="img" aria-label="${stateLabel(item)}" title="${stateLabel(item)}"></span>`;
 const paneFor = item => [1, 2].includes(state.panes[item.id]) ? state.panes[item.id] : item.pane;
 const activeWorkspace = () => byId(state.active).workspace;
@@ -245,7 +379,8 @@ function identityContext(item) {
 }
 function visibleAgents(workspace, mode) {
   const agents = surfaces.filter(s => s.workspace === workspace && s.kind === "agent" && !state.dismissed[s.id]);
-  const visible = new Set(agents.filter(a => showsFinished(workspace) || a.state !== "done").map(a => a.id));
+  const taskOwners = new Set(visibleInternalTasks(workspace).map(task => internalTaskOwner(task).id));
+  const visible = new Set(agents.filter(a => showsFinished(workspace) || a.state !== "done" || taskOwners.has(a.id)).map(a => a.id));
   if (mode === "subagents") {
     for (const item of agents) {
       if (!visible.has(item.id)) continue;
@@ -259,18 +394,18 @@ function visibleAgents(workspace, mode) {
   return agents.filter(a => visible.has(a.id));
 }
 const panelType = item => item.kind === "tool" ? item.name : item.kind === "browser" ? "Browser" : "Terminal";
-function renderRow(item, ordinal = null, container = null, kind = "row") {
+function renderRow(item, ordinal = null, container = null, kind = "row", includeTasks = true) {
   const sortable = container ? sortAttributes(kind, item.id, container) : "";
   if (item.kind === "tool") return `<div class="surface-row ${state.active === item.id ? "selected" : ""}" data-row="${item.id}" ${sortable} ${ordinal === null ? "" : `data-native-surface="${item.id}"`}><button class="identity-icon" data-focus="${item.id}" aria-label="Open ${item.name}">${iconFor(item)}</button><button class="row-main" data-focus="${item.id}"><span class="row-name">${item.name}</span><span class="row-meta">All workspaces · view only</span></button><button class="row-accessory" data-tool-move="${item.tool}" aria-label="Move ${item.name} tab">⇄</button></div>`;
   return `<div class="${item.kind === "agent" ? "agent-row" : "surface-row"} ${state.active === item.id ? "selected" : ""}" data-row="${item.id}" data-hover="${item.id}" ${sortable} ${ordinal === null ? "" : `data-native-surface="${item.id}"`}>
     <button class="identity-icon" data-icon="${item.id}" aria-label="Choose icon for ${escapeHTML(item.name)}" title="Right-click to choose icon">${iconFor(item)}</button>
     <button class="row-main" data-focus="${item.id}" ${state.active === item.id ? 'aria-current="true"' : ""} ${ordinal === null ? "" : `aria-label="${escapeHTML(item.name)}, tab ${ordinal}, ${panelType(item)} panel"`}><span class="row-title"><span class="row-name">${escapeHTML(item.name)}</span>${tagMarkup(item, true)}</span><span class="row-meta">${dot(item)}<span>${ordinal !== null ? `${panelType(item)} panel` : item.kind === "agent" ? escapeHTML(item.task) : item.kind === "browser" ? item.url : `Pane ${paneFor(item)}`}</span></span></button>
     <button class="row-accessory" data-menu="${item.id}" aria-label="Actions for ${escapeHTML(item.name)}">···</button>
-  </div>`;
+  </div>${includeTasks && item.kind === "agent" ? internalTaskGroup(item.id, visibleInternalTasks(item.workspace)) : ""}`;
 }
 function strip(items, key) {
-  return `<div class="summary-strip">${items.slice(0, 4).map(item => `<button class="strip-agent ${state.active === item.id ? "selected" : ""}" data-focus="${item.id}" data-hover="${item.id}" ${sortAttributes("row", item.id, `members:${key}`)} data-sort-axis="horizontal" aria-label="${escapeHTML(item.name)}, ${stateLabel(item)}"><span class="strip-identity">${dot(item)}${iconFor(item)}</span>${tagMarkup(item, true)}</button>`).join("")}
-    <button class="expand-strip" data-expand="${key}" aria-label="Expand ${items.length} agents">${items.length > 4 ? `+${items.length - 4} · ` : ""}${items.length} ${items.length === 1 ? "agent" : "agents"} ›</button></div>`;
+  return `<div class="summary-strip"><div class="strip-scroll" data-strip-key="${escapeHTML(key)}" tabindex="0" role="group" aria-label="${items.length} agent icons; scroll horizontally">${items.map(item => `<button class="strip-agent ${state.active === item.id ? "selected" : ""}" data-focus="${item.id}" data-hover="${item.id}" ${sortAttributes("row", item.id, `members:${key}`)} data-sort-axis="horizontal" aria-label="${escapeHTML(item.name)}, ${stateLabel(item)}" ${state.active === item.id ? 'aria-current="true"' : ""}><span class="strip-identity">${dot(item)}${iconFor(item)}</span></button>`).join("")}</div>
+    <button class="expand-strip" data-expand="${key}" aria-label="Expand ${items.length} agents" title="Expand agent rows"><span aria-hidden="true">›</span></button></div>`;
 }
 function worktreeView(workspace) {
   const items = visibleAgents(workspace, "worktrees");
@@ -278,39 +413,109 @@ function worktreeView(workspace) {
     const members = orderedSidebar(items.filter(a => a.worktree === key), `members:${workspace}:${key}`);
     if (!members.length) return "";
     const groupKey = `${workspace}:${key}`, closed = !!state.collapsed[groupKey];
-    return `<section class="worktree" data-worktree-id="${tree.exactID}"><div class="group-heading" ${sortAttributes("worktree", key, `worktrees:${workspace}`)}><button class="group-disclose" data-expand="${groupKey}" aria-expanded="${!closed}" aria-label="${closed ? "Expand" : "Collapse"} worktree ${tree.name}, ${tree.branch}, ${tree.exactID}" title="Verified synthetic membership ${tree.exactID} · same basename is not identity"><span class="chevron" aria-hidden="true">${closed ? "›" : "⌄"}</span><span class="branch-mark">${icon("branch")}</span><span class="group-title"><b>${tree.name}</b><span class="branch-label">${tree.branch} · ${tree.exactID}</span></span><span class="count">${members.length}</span></button></div>${closed ? strip(members, groupKey) : `<div class="group-rows">${members.map(item => renderRow(item, null, `members:${workspace}:${key}`)).join("")}</div>`}</section>`;
+    return `<section class="worktree" data-worktree-id="${tree.exactID}"><div class="group-heading" ${sortAttributes("worktree", key, `worktrees:${workspace}`)}><button class="group-disclose" data-expand="${groupKey}" aria-expanded="${!closed}" aria-label="${closed ? "Expand" : "Collapse"} worktree ${tree.name}, ${tree.branch}, ${tree.exactID}" title="Verified synthetic membership ${tree.exactID} · same basename is not identity"><span class="chevron" aria-hidden="true">${closed ? "›" : "⌄"}</span><span class="branch-mark">${icon("branch")}</span><span class="group-title"><b>${tree.name}</b><span class="branch-label" title="${escapeHTML(tree.branch)} · ${tree.exactID}">${tree.branch} · ${tree.exactID}</span></span><span class="count">${members.length}</span></button></div>${closed ? strip(members, groupKey) : `<div class="group-rows">${members.map(item => renderRow(item, null, `members:${workspace}:${key}`)).join("")}</div>`}</section>`;
   }).join("");
   html += orderedSidebar(items.filter(item => !item.worktree), `standalone:${workspace}`).map(item => renderRow(item, null, `standalone:${workspace}`)).join("");
   return html;
 }
-function observedRow(item) {
-  return `<div class="observed-row" data-observed="${item.id}"><span class="observed-mark">↳</span><div><b>${escapeHTML(item.name)}</b><span>No separate surface observed</span><small>Parent: ${escapeHTML(byId(item.parent).name)}<br>Worktree unknown · no own chat, pet, or exit action</small>${state.dismissed[item.parent] ? '<small>Parent chat closed · child state unverified</small>' : `<button data-parent-chat="${item.parent}">Open parent chat</button>`}</div></div>`;
+function internalTaskOwner(task) {
+  const seen = new Set([task.id]);
+  let parent = task.parent;
+  while (!byId(parent)) {
+    if (seen.has(parent)) throw new Error(`Cyclic internal task parent: ${task.id}`);
+    seen.add(parent);
+    const ancestor = observedChildren.find(item => item.id === parent);
+    if (!ancestor) throw new Error(`Missing internal task parent: ${task.id}`);
+    parent = ancestor.parent;
+  }
+  return byId(parent);
+}
+const taskOutcomeKey = task => JSON.stringify([internalTaskOwner(task).id, task.parent, task.id, task.outcome]);
+const taskNeedsAttention = task => !!task.attention || ["blocked", "input"].includes(task.state);
+function visibleInternalTasks(workspace) {
+  const tasks = observedChildren.filter(task => internalTaskOwner(task).workspace === workspace);
+  const visible = new Set(tasks.filter(task => {
+    if (taskNeedsAttention(task) || task.state === "working") return true;
+    if (["done", "failed"].includes(task.state)) return !state.taskDismissals[taskOutcomeKey(task)];
+    return task.state === "idle" && showsFinished(workspace);
+  }).map(task => task.id));
+  for (const task of tasks) {
+    if (!visible.has(task.id)) continue;
+    let ancestor = tasks.find(item => item.id === task.parent);
+    while (ancestor && !visible.has(ancestor.id)) {
+      visible.add(ancestor.id);
+      ancestor = tasks.find(item => item.id === ancestor.parent);
+    }
+  }
+  return tasks.filter(task => visible.has(task.id));
+}
+function canDismissTask(task, visible) {
+  return ["done", "failed"].includes(task.state) && typeof task.outcome === "string" && task.outcome.length > 0 &&
+    !taskNeedsAttention(task) && !visible.some(child => child.parent === task.id);
+}
+function internalTaskStatus(task) {
+  const marks = {
+    done: '<path d="m3 8 3 3 7-7"/>',
+    failed: '<circle cx="8" cy="8" r="6"/><path d="m6 6 4 4m0-4-4 4"/>',
+    blocked: '<path d="M5 4v8m6-8v8"/>',
+    input: '<path d="M8 3v6"/><circle cx="8" cy="12" r=".8" fill="currentColor" stroke="none"/>',
+    idle: '<circle cx="8" cy="8" r="3.5"/>',
+    cancelled: '<circle cx="8" cy="8" r="6"/><path d="m4 12 8-8"/>',
+    unknown: '<path d="M5.5 5a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4"/><circle cx="8" cy="12" r=".8" fill="currentColor" stroke="none"/>'
+  };
+  if (task.state !== "working" && !marks[task.state]) throw new Error(`Unrecognized internal task state: ${task.state}`);
+  const attention = task.attention && !["blocked", "input"].includes(task.state);
+  const label = `${stateLabel(task)}${attention ? "; needs attention" : ""}`;
+  const mark = task.state === "working" ? '<span class="task-spinner" aria-hidden="true"></span>' :
+    `<svg class="task-state-mark" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${marks[task.state]}</svg>`;
+  return `<span class="task-status ${escapeHTML(task.state)}${task.attention ? " attention" : ""}" role="img" aria-label="${escapeHTML(label)}" title="${escapeHTML(label)}">${mark}${attention ? '<span class="task-attention" aria-hidden="true">!</span>' : ""}</span>`;
+}
+function internalTaskGroup(parent, visible, nested = false) {
+  const children = visible.filter(task => task.parent === parent);
+  if (!children.length) return "";
+  const owner = byId(parent) || observedChildren.find(task => task.id === parent);
+  const closed = !nested && !!state.taskGroupsCollapsed[parent];
+  const listID = `internal-tasks-${parent}`;
+  const list = `<ul class="internal-tasks" ${nested ? `data-task-parent="${escapeHTML(parent)}"` : `id="${escapeHTML(listID)}"`} ${closed ? "hidden" : ""} aria-label="Internal tasks for ${escapeHTML(owner.name)}">${children.map(task => `<li class="task-branch" data-observed="${escapeHTML(task.id)}" data-task-state="${escapeHTML(task.state)}"><div class="task-line"><span class="task-name" title="${escapeHTML(task.name)}">${escapeHTML(task.name)}</span>${internalTaskStatus(task)}${canDismissTask(task, visible) ? `<button class="task-dismiss" data-dismiss-task="${escapeHTML(task.id)}" data-task-outcome="${escapeHTML(taskOutcomeKey(task))}" aria-label="Dismiss ${escapeHTML(task.name)} outcome" title="Dismiss outcome; keep parent tab open">×</button>` : ""}</div>${internalTaskGroup(task.id, visible, true)}</li>`).join("")}</ul>`;
+  if (nested) return list;
+  const owned = visible.filter(task => internalTaskOwner(task).id === parent);
+  const working = owned.filter(task => task.state === "working").length;
+  const attention = owned.filter(task => taskNeedsAttention(task) || task.state === "failed").length;
+  const summary = closed ? `<span class="task-group-summary">${working ? `<span aria-label="${working} working tasks">${internalTaskStatus({ state: "working" })}${working}</span>` : ""}${attention ? `<span aria-label="${attention} blocked, failed or attention-needed tasks">${internalTaskStatus({ state: "input" })}${attention}</span>` : ""}</span>` : "";
+  return `<div class="internal-task-group" data-task-parent="${escapeHTML(parent)}"><button class="task-group-toggle" data-toggle-tasks="${escapeHTML(parent)}" aria-expanded="${!closed}" aria-controls="${escapeHTML(listID)}" aria-label="${closed ? "Expand" : "Collapse"} ${owned.length} internal tasks for ${escapeHTML(owner.name)}${closed ? `; ${working} working; ${attention} blocked, failed or needing attention` : ""}"><span class="task-disclosure" aria-hidden="true">${closed ? "›" : "⌄"}</span><span class="task-group-label">${owned.length} internal tasks</span>${summary}</button>${list}</div>`;
+}
+function retainedInternalTasks(workspace) {
+  const visible = visibleInternalTasks(workspace);
+  return surfaces.filter(item => item.workspace === workspace && state.dismissed[item.id] && visible.some(task => task.parent === item.id)).map(item =>
+    `<section class="retained-tasks"><p>${escapeHTML(item.name)} <span>Parent tab closed; task states are last observed</span></p>${internalTaskGroup(item.id, visible)}</section>`).join("");
 }
 function ancestryView(workspace) {
   const items = visibleAgents(workspace, "subagents");
+  const tasks = visibleInternalTasks(workspace);
   function branch(item, container) {
     const childContainer = `family:${workspace}:${item.id}`;
     const children = orderedSidebar(items.filter(a => a.parent === item.id), childContainer), closed = !!state.ancestryCollapsed[item.id];
-    const observed = observedChildren.filter(child => child.parent === item.id);
+    const observed = tasks.filter(child => child.parent === item.id);
     const count = children.length + observed.length;
-    return `<div class="ancestor"><div class="ancestor-row">${count ? `<button class="chevron" data-ancestry="${item.id}" aria-label="${closed ? "Expand" : "Collapse"} children of ${escapeHTML(item.name)}" aria-expanded="${!closed}">${closed ? "›" : "⌄"}</button>` : ""}${renderRow(item, null, container, "agent-tree")}</div>${count ? closed ? `<div class="group-subtitle">${children.length} agent windows · ${observed.length} observed children</div>` : `<div class="tree-children">${children.map(child => branch(child, childContainer)).join("")}${observed.map(observedRow).join("")}</div>` : ""}</div>`;
+    const taskSummary = observed.length ? ` · ${observed.length} internal tasks${tasks.some(task => internalTaskOwner(task).id === item.id && taskNeedsAttention(task)) ? " · Needs attention" : ""}` : "";
+    return `<div class="ancestor"><div class="ancestor-row">${count ? `<button class="chevron" data-ancestry="${item.id}" aria-label="${closed ? "Expand" : "Collapse"} children of ${escapeHTML(item.name)}" aria-expanded="${!closed}">${closed ? "›" : "⌄"}</button>` : ""}${renderRow(item, null, container, "agent-tree", false)}</div>${count ? closed ? `<div class="group-subtitle">${children.length} agent windows${taskSummary}</div>` : `${internalTaskGroup(item.id, tasks)}${children.length ? `<div class="tree-children">${children.map(child => branch(child, childContainer)).join("")}</div>` : ""}` : ""}</div>`;
   }
-  const orphanedActivity = observedChildren.filter(child => byId(child.parent).workspace === workspace && state.dismissed[child.parent]);
   const rootContainer = `family:${workspace}:root`;
-  return orderedSidebar(items.filter(a => !items.some(parent => parent.id === a.parent)), rootContainer).map(item => `${item.parent && state.dismissed[item.parent] ? `<div class="retained-parent" data-retained-parent="${item.parent}">Spawned by ${escapeHTML(byId(item.parent).name)} · session closed<br>Recorded ancestry retained; child still open.</div>` : ""}${branch(item, rootContainer)}`).join("") + orphanedActivity.map(observedRow).join("");
+  return orderedSidebar(items.filter(a => !items.some(parent => parent.id === a.parent)), rootContainer).map(item => `${item.parent && state.dismissed[item.parent] ? `<div class="retained-parent" data-retained-parent="${item.parent}">Spawned by ${escapeHTML(byId(item.parent).name)} · session closed<br>Recorded ancestry retained; child still open.</div>` : ""}${branch(item, rootContainer)}`).join("");
 }
 function showsFinished(workspace) {
   return state.workspaceFinished[workspace] ?? state.showEnded;
 }
 function renderFinishedToggle(workspace) {
-  const native = state.grouping === "workspace", visible = native || showsFinished(workspace.id);
-  return `<button class="finished-toggle" data-toggle-finished="${workspace.id}" aria-label="Show finished agents in ${escapeHTML(workspace.name)}" aria-pressed="${visible}" ${native ? "disabled" : ""} title="${native ? "Workspace view includes all open tabs" : visible ? "Hide finished agents" : "Show finished agents"}"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${iconPaths.eye}${!visible ? '<path d="m3 3 18 18"/>' : ""}</svg></button>`;
+  const native = state.grouping === "workspace", visible = showsFinished(workspace.id);
+  const label = native ? "Show idle tasks" : "Show idle tasks and finished chats";
+  return `<button class="finished-toggle" data-toggle-finished="${workspace.id}" aria-label="${label} in ${escapeHTML(workspace.name)}" aria-pressed="${visible}" title="${visible ? label.replace("Show", "Hide") : label}${native ? "; all real tabs stay visible" : ""}. Finished task outcomes stay until dismissed."><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${iconPaths.eye}${!visible ? '<path d="m3 3 18 18"/>' : ""}</svg></button>`;
 }
 function renderWorkspace(workspace) {
   const closed = !!state.workspaceCollapsed[workspace.id], view = state.grouping;
   return `<section class="workspace ${workspace.id === activeWorkspace() ? "active" : ""}" data-workspace="${workspace.id}" data-grouping-mode="${view}">
     <header class="workspace-title" ${sortAttributes("workspace", workspace.id, "workspaces")}><button class="workspace-collapse" data-workspace-collapse="${workspace.id}" aria-label="${closed ? "Expand" : "Collapse"} workspace ${escapeHTML(workspace.name)}" aria-expanded="${!closed}" aria-controls="workspace-content-${workspace.id}" title="${closed ? "Expand" : "Collapse"} workspace"><span aria-hidden="true">${closed ? "+" : "−"}</span></button><button class="workspace-select" data-workspace-select="${workspace.id}"><span data-hover-workspace="${workspace.id}">${escapeHTML(workspace.name)}</span></button><div class="workspace-actions">${renderFinishedToggle(workspace)}<button data-backlog="${workspace.id}" aria-label="Backlog for ${escapeHTML(workspace.name)}" title="Workspace backlog">↗</button><button data-workspace-menu="${workspace.id}" aria-label="Actions for ${escapeHTML(workspace.name)}">···</button></div></header>
-    <div id="workspace-content-${workspace.id}" ${closed ? "hidden" : ""}>${closed ? "" : view === "workspace" ? nativeWorkspaceView(workspace.id) : `${view === "worktrees" ? worktreeView(workspace.id) : ancestryView(workspace.id)}<div class="nonagents">${orderedSidebar(allSurfaces().filter(s => s.workspace === workspace.id && s.kind !== "agent"), `other:${workspace.id}`).map(item => renderRow(item, null, `other:${workspace.id}`)).join("")}</div>`}</div>
+    <div id="workspace-content-${workspace.id}" ${closed ? "hidden" : ""}>${closed ? "" : `${view === "workspace" ? nativeWorkspaceView(workspace.id) : `${view === "worktrees" ? worktreeView(workspace.id) : ancestryView(workspace.id)}<div class="nonagents">${orderedSidebar(allSurfaces().filter(s => s.workspace === workspace.id && s.kind !== "agent"), `other:${workspace.id}`).map(item => renderRow(item, null, `other:${workspace.id}`)).join("")}</div>`}${retainedInternalTasks(workspace.id)}`}</div>
   </section>`;
 }
 function nativeWorkspaceView(workspace) {
@@ -322,6 +527,21 @@ function nativeWorkspaceView(workspace) {
 }
 function metrics(item) {
   return item.kind === "agent" ? `<div class="detail-metrics"><span>${item.context} context</span><span>${item.elapsed} elapsed</span><span>${item.files === null ? "Git unavailable" : `${item.files} files <b class="additions">+${item.add}</b> <b class="deletions">−${item.del}</b>`}</span></div>` : `<div class="detail-metrics"><span>${item.kind === "browser" ? item.url : "No attached agent"}</span><span>Pane ${paneFor(item)}</span></div>`;
+}
+function previewFields(item) {
+  const metadata = demoSessionMetadata.get(item.id);
+  const projectPath = item.worktree ? worktrees[item.worktree].path : null;
+  const workspacePath = workspaces.find(workspace => workspace.id === item.workspace)?.directory;
+  const displayPath = path => path === "/demo" ? "~" : path?.startsWith("/demo/") ? `~${path.slice(5)}` : path;
+  const fields = [
+    { key: "session-id", label: "Session ID", value: metadata?.sessionId },
+    { key: "observed", label: "Observed", value: metadata?.observedAt, display: metadata?.observedAt ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(metadata.observedAt)) : null },
+    { key: "child-history", label: "Child history", value: metadata?.childHistory, display: metadata?.childHistory === "incomplete" ? "Incomplete: missing work is not assumed finished" : metadata?.childHistory },
+    { key: "workspace-path", label: "Workspace path", value: workspacePath, display: displayPath(workspacePath) },
+    { key: "project-path", label: "Project path", value: projectPath, display: displayPath(projectPath) ?? (item.worktree === null ? "Not a repository" : "Unavailable") },
+    { key: "working-directory", label: "Working directory", value: projectPath ?? item.directory, display: displayPath(projectPath ?? item.directory) }
+  ];
+  return `<dl class="detail-fields">${fields.map(field => `<div class="detail-field" data-field="${field.key}"><dt><span class="detail-field-label"><span>${field.label}</span>${field.value == null ? "" : `<button type="button" class="field-copy" data-copy-value="${escapeHTML(field.value)}" data-copy-label="${field.label}" aria-label="Copy ${field.label.toLowerCase()}" title="Copy ${field.label.toLowerCase()}">${icon("copy")}</button>`}</span></dt><dd>${escapeHTML(field.display ?? field.value ?? "Unavailable")}</dd></div>`).join("")}</dl>`;
 }
 const tagSwatches = [
   ["Rose", "#efb8c8"], ["Peach", "#efc2a1"], ["Gold", "#e8d28d"], ["Lime", "#c8dda0"],
@@ -402,7 +622,7 @@ function renderPinned() {
   }
   $("#pinned-details").innerHTML = `<div class="pinned-heading"><span class="eyebrow">Active window · pinned</span><span>Demo metadata</span></div>
     <div class="detail-identity">${item.kind === "agent" ? `<button class="pet-button" data-pet="${item.id}" aria-label="Choose pet for ${escapeHTML(item.name)}" title="Choose pet · original placeholder">${state.petHidden[item.id] ? icon("spark", "#9ba6b6") : pet(resolvedPet(item))}</button>` : `<button class="identity-icon" data-icon="${item.id}" aria-label="Choose icon">${iconFor(item)}</button>`}<div class="detail-info"><div class="detail-name">${escapeHTML(item.name)}</div><div class="muted">${dot(item)} ${stateLabel(item)} · Pane ${paneFor(item)}</div><div class="muted">${item.model || (item.kind === "browser" ? "Browser window" : "Terminal window")}</div></div></div>
-    ${metrics(item)}<div class="detail-path" title="${escapeHTML(identityContext(item))}">${escapeHTML(identityContext(item))}</div>${tagMarkup(item)}${item.kind === "agent" ? `<div class="session-note">Session demo:${item.id} · original placeholder pet</div><button class="dismiss-inline" data-dismiss="${item.id}">Exit session & close tab · simulated</button>` : ""}`;
+    ${metrics(item)}<div class="detail-path" title="${escapeHTML(identityContext(item))}">${escapeHTML(identityContext(item))}</div>${item.kind === "agent" ? previewFields(item) : ""}${tagMarkup(item)}${item.kind === "agent" ? `<div class="session-note">Synthetic session metadata · original placeholder pet</div><button class="dismiss-inline" data-dismiss="${item.id}">Exit session & close tab · simulated</button>` : ""}`;
 }
 function renderStage() {
   const workspace = workspaces.find(w => w.id === activeWorkspace());
@@ -417,8 +637,13 @@ function renderStage() {
   }).join("");
 }
 function render() {
+  const stripOffsets = new Map([...document.querySelectorAll(".strip-scroll")].map(element => [element.dataset.stripKey, element.scrollLeft]));
   hideHover();
+  workspaces.find(workspace => workspace.id === "stress").name = state.stressLongName ? stressWorkspaceName : "Stress testing";
+  $("#stress-controls").hidden = activeWorkspace() !== "stress";
+  $("#stress-long-name").checked = !!state.stressLongName;
   $("#workspaces").innerHTML = state.workspaceOrder.map(id => renderWorkspace(workspaces.find(w => w.id === id))).join("");
+  document.querySelectorAll(".strip-scroll").forEach(element => { element.scrollLeft = stripOffsets.get(element.dataset.stripKey) ?? 0; });
   $("#window-context").hidden = state.grouping !== "workspace";
   document.querySelectorAll("[data-grouping]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.grouping === state.grouping)));
   document.querySelectorAll("[data-open-tool]").forEach(button => {
@@ -438,7 +663,7 @@ function focusItem(id) {
   commit();
 }
 function hideHover() {
-  clearTimeout(hoverTimer); clearTimeout(leaveTimer); hoveredId = null; $("#hover-card").hidden = true;
+  clearTimeout(hoverTimer); clearTimeout(leaveTimer); hoveredId = null; hoverReturnFocus = null; $("#hover-card").hidden = true;
 }
 function place(element, rect, width = 280) {
   element.style.left = `${Math.max(12, Math.min(rect.right + 9, window.innerWidth - width - 12))}px`;
@@ -446,9 +671,12 @@ function place(element, rect, width = 280) {
 }
 function showHover(id, anchor, isWorkspace = false) {
   if (document.querySelector("dialog[open]")) return;
-  clearTimeout(leaveTimer);
+  clearTimeout(hoverTimer); clearTimeout(leaveTimer);
+  const changedSubject = hoveredId !== id;
   hoveredId = id;
+  hoverReturnFocus = anchor.matches("button") ? anchor : anchor.querySelector(".row-main");
   const card = $("#hover-card");
+  const previousScrollTop = card.scrollTop;
   if (isWorkspace) {
     const workspace = workspaces.find(w => w.id === id);
     const agents = surfaces.filter(s => s.workspace === id && s.kind === "agent" && !state.dismissed[s.id]);
@@ -457,23 +685,27 @@ function showHover(id, anchor, isWorkspace = false) {
     const item = byId(id);
     const showPet = item.kind === "agent" && !state.petHidden[item.id];
     const petPreview = showPet ? `<span class="hover-pet" role="img" aria-label="${escapeHTML(resolvedPet(item))}, original placeholder pet for ${escapeHTML(item.name)}">${pet(resolvedPet(item))}</span>` : "";
-    card.innerHTML = `<span class="eyebrow">Window preview · no focus change</span><div class="hover-identity"><h3 class="hover-title">${iconFor(item)} ${escapeHTML(item.name)}</h3>${petPreview}</div><p>${escapeHTML(item.task || item.url || "Terminal")}</p><p>${dot(item)} ${stateLabel(item)} · Pane ${paneFor(item)}</p>${metrics(item)}<div class="detail-path">${escapeHTML(identityContext(item))}</div>${tagMarkup(item)}<footer>Synthetic metadata · ${item.parent ? `spawned by ${escapeHTML(byId(item.parent).name)}${state.dismissed[item.parent] ? " (parent session exited)" : ""}` : "no recorded parent"}<br>Preview never marks attention seen.${item.kind === "agent" ? `<br><span class="hover-pet-note">${showPet ? "Original placeholder pet" : "Pet hidden by preference"}</span>` : ""}</footer>`;
+    card.innerHTML = `<span class="eyebrow">Window preview · no focus change</span><div class="hover-identity"><h3 class="hover-title">${iconFor(item)} ${escapeHTML(item.name)}</h3>${petPreview}</div><p>${escapeHTML(item.task || item.url || "Terminal")}</p><p>${dot(item)} ${stateLabel(item)} · Pane ${paneFor(item)}</p>${metrics(item)}<div class="detail-path">${escapeHTML(identityContext(item))}</div>${item.kind === "agent" ? previewFields(item) : ""}${tagMarkup(item)}<footer>Synthetic metadata · ${item.parent ? `spawned by ${escapeHTML(byId(item.parent).name)}${state.dismissed[item.parent] ? " (parent session exited)" : ""}` : "no recorded parent"}<br>Preview never marks attention seen.${item.kind === "agent" ? `<br><span class="hover-pet-note">${showPet ? "Original placeholder pet" : "Pet hidden by preference"}</span>` : ""}</footer>`;
   }
+  card.scrollTop = changedSubject ? 0 : previousScrollTop;
   card.hidden = false;
   const anchorRect = anchor.getBoundingClientRect();
   place(card, { top: anchorRect.top, right: $("#sidebar").getBoundingClientRect().right });
 }
 function openDialog(id) {
+  const card = $("#hover-card");
+  const previewOrigin = !card.hidden && hoverReturnFocus ? hoverReturnFocus : document.activeElement;
+  const returnFocus = captureFocusOrigin(previewOrigin);
   hideHover();
   const dialog = $(`#${id}`);
-  if (!dialog.open) { dialog.returnFocus = document.activeElement; dialog.showModal(); }
+  if (!dialog.open) { dialog.returnFocus = returnFocus; dialog.showModal(); }
   return dialog;
 }
 function openPicker(id, type, anchor) {
   pickerTarget = id; pickerType = type; iconQuery = "";
   const dialog = $("#picker"); renderPicker();
   openDialog("picker");
-  if (anchor instanceof HTMLElement) dialog.returnFocus = anchor;
+  if (anchor instanceof HTMLElement) dialog.returnFocus = captureFocusOrigin(anchor);
   place(dialog, anchor.getBoundingClientRect(), 316);
   if (type === "icon") $("#icon-search").focus();
 }
@@ -498,9 +730,9 @@ function iconChoices(selected) {
 }
 function openContext(id, anchor) {
   const item = byId(id);
-  $("#context-content").innerHTML = `<div id="context-menu-title" class="menu-label">Actions for ${escapeHTML(item.name)}</div><button data-menu-focus="${id}">${item.kind === "agent" ? "Open existing chat" : "Focus window"}</button><button data-menu-icon="${id}">Choose icon & color…</button>${item.kind === "agent" ? `<button data-menu-pet="${id}">Choose pet…</button><button data-menu-tags="${id}">Edit your tags…</button><button data-dismiss="${id}">Exit session & close tab · simulated</button>${surfaces.some(child => child.parent === id && !state.dismissed[child.id]) ? `<button data-close-children="${id}">Direct orchestrator: close children…</button>` : ""}` : ""}<button data-menu-move="${id}">Move to pane ${paneFor(item) === 1 ? 2 : 1}</button><button data-close="context-menu">Cancel</button>`;
+  $("#context-content").innerHTML = `<div class="menu-label">${escapeHTML(item.name)}</div><button data-menu-focus="${id}">${item.kind === "agent" ? "Open existing chat" : "Focus window"}</button><button data-menu-icon="${id}">Choose icon & color…</button>${item.kind === "agent" ? `<button data-menu-pet="${id}">Choose pet…</button><button data-menu-tags="${id}">Edit your tags…</button><button data-dismiss="${id}">Exit session & close tab · simulated</button>${surfaces.some(child => child.parent === id && !state.dismissed[child.id]) ? `<button data-close-children="${id}">Direct orchestrator: close children…</button>` : ""}` : ""}<button data-menu-move="${id}">Move to pane ${paneFor(item) === 1 ? 2 : 1}</button><button data-close="context-menu">Cancel</button>`;
   const dialog = openDialog("context-menu");
-  dialog.returnFocus = anchor.matches("button") ? anchor : anchor.querySelector(".row-main");
+  dialog.returnFocus = captureFocusOrigin(anchor.matches("button") ? anchor : anchor.querySelector(".row-main"));
   place(dialog, anchor.getBoundingClientRect(), 218);
 }
 function editTags(id) {
@@ -575,10 +807,34 @@ function renderInstallStatus() {
   const descriptions = { matching: "✓ Matches this build · simulated comparison", missing: "Not installed · simulated", different: "Installed content differs · not an upstream-version check", unreadable: "Cannot read installed content · status unknown" };
   $("#install-status").innerHTML = `<span class="integration-status ${scenario}">${descriptions[scenario]}</span>`;
 }
-document.addEventListener("click", event => {
+document.addEventListener("click", async event => {
   const button = event.target.closest("button");
   if (!button) return;
   const d = button.dataset;
+  if ("copyValue" in d) {
+    try { await navigator.clipboard.writeText(d.copyValue); notify(`${d.copyLabel} copied.`); }
+    catch (error) { notify(`Copy failed (${error.name}). Allow clipboard access and try again.`); }
+    return;
+  }
+  if (d.dismissTask) {
+    const task = observedChildren.find(item => item.id === d.dismissTask);
+    if (!task || !canDismissTask(task, visibleInternalTasks(internalTaskOwner(task).workspace))) {
+      notify("This task outcome cannot be dismissed while it has active work or attention."); return;
+    }
+    if (d.taskOutcome !== taskOutcomeKey(task)) {
+      render(); notify("Task outcome changed. Review the current result before dismissing."); return;
+    }
+    const parent = internalTaskOwner(task);
+    state.taskDismissals[taskOutcomeKey(task)] = true;
+    commit();
+    $(`#workspaces [data-row="${parent.id}"] .row-main`)?.focus({ preventScroll: true });
+    notify("Task outcome dismissed. No tab or session was closed.");
+    return;
+  }
+  if (d.toggleTasks) {
+    state.taskGroupsCollapsed[d.toggleTasks] = !state.taskGroupsCollapsed[d.toggleTasks];
+    commit(); return;
+  }
   if ("openDirectory" in d) { $("#directory-error").textContent = ""; openDialog("directory-dialog"); $("#directory-path").focus(); return; }
   if (d.tagColor) { openTagColor(d.tagColor); return; }
   if (d.tagSwatch || "tagColorReset" in d) {
@@ -602,7 +858,6 @@ document.addEventListener("click", event => {
   }
   if (d.dismiss) { requestDismiss([d.dismiss]); return; }
   if (d.closeChildren) { requestDismiss(surfaces.filter(item => item.parent === d.closeChildren).map(item => item.id), d.closeChildren); return; }
-  if (d.parentChat) { focusItem(d.parentChat); notify("Opened the parent chat only. No separate child surface is observed."); return; }
   if (d.historyOpen) { $("#history-dialog").close(); focusItem(d.historyOpen); notify("Simulated completed chat opened. Its session remains open for continued interaction."); return; }
   if (d.menu) { openContext(d.menu, button); return; }
   if ("agentUpdate" in d) {
@@ -624,12 +879,7 @@ document.addEventListener("click", event => {
   if (d.move) { moveTab(d.move, paneFor(byId(d.move)) === 1 ? 2 : 1); return; }
   if (d.backlog) { const workspace = workspaces.find(w => w.id === d.backlog); notify(workspace.backlog ? `Demo shortcut: ${workspace.backlog}. No external tracker was opened.` : "No backlog configured for this workspace."); return; }
   if (d.workspaceMenu) {
-    const workspace = workspaces.find(item => item.id === d.workspaceMenu);
-    if (!workspace) {
-      notify("Workspace actions are no longer available.");
-      return;
-    }
-    $("#context-content").innerHTML = `<div id="context-menu-title" class="menu-label">Actions for ${escapeHTML(workspace.name)}</div><button data-workspace-collapse="${d.workspaceMenu}" data-menu-dismiss>Collapse / expand</button><button data-workspace-reorder="${d.workspaceMenu}">Move ${state.workspaceOrder[0] === d.workspaceMenu ? "down" : "up"}</button><button data-backlog="${d.workspaceMenu}" data-menu-dismiss>Open backlog shortcut</button><button data-close="context-menu">Cancel</button>`;
+    $("#context-content").innerHTML = `<div class="menu-label">Workspace actions</div><button data-workspace-collapse="${d.workspaceMenu}" data-menu-dismiss>Collapse / expand</button><button data-workspace-reorder="${d.workspaceMenu}">Move ${state.workspaceOrder[0] === d.workspaceMenu ? "down" : "up"}</button><button data-backlog="${d.workspaceMenu}" data-menu-dismiss>Open backlog shortcut</button><button data-close="context-menu">Cancel</button>`;
     place(openDialog("context-menu"), button.getBoundingClientRect(), 218); return;
   }
   if (d.workspaceReorder) {
@@ -659,6 +909,7 @@ document.addEventListener("click", event => {
   if ("petHide" in d) { state.petHidden[pickerTarget] = !state.petHidden[pickerTarget]; commit(); renderPicker(); }
 });
 document.addEventListener("contextmenu", event => {
+  if (event.target.closest(".internal-tasks")) return;
   const iconTarget = event.target.closest("[data-icon]"), rowTarget = event.target.closest("[data-row]"), workspaceTarget = event.target.closest("[data-workspace]");
   if (iconTarget) { event.preventDefault(); openPicker(iconTarget.dataset.icon, "icon", iconTarget); }
   else if (rowTarget) { event.preventDefault(); openContext(rowTarget.dataset.row, rowTarget); }
@@ -678,13 +929,26 @@ document.addEventListener("pointerout", event => {
   const target = event.target.closest("[data-hover], [data-hover-workspace]");
   if (!target || target.contains(event.relatedTarget)) return;
   clearTimeout(hoverTimer);
-  leaveTimer = setTimeout(hideHover, 220);
+  leaveTimer = setTimeout(() => {
+    if ($("#hover-card").contains(document.activeElement)) return;
+    hideHover();
+  }, 220);
 });
 $("#hover-card").addEventListener("pointerenter", () => clearTimeout(leaveTimer));
-$("#hover-card").addEventListener("pointerleave", () => { if (!$("#hover-card").contains(document.activeElement)) leaveTimer = setTimeout(hideHover, 220); });
+$("#hover-card").addEventListener("pointerleave", () => {
+  if ($("#hover-card").contains(document.activeElement)) return;
+  clearTimeout(leaveTimer);
+  leaveTimer = setTimeout(() => {
+    if ($("#hover-card").contains(document.activeElement)) return;
+    hideHover();
+  }, 220);
+});
 $("#hover-card").addEventListener("focusin", () => clearTimeout(leaveTimer));
+$("#hover-card").addEventListener("focusout", event => {
+  if (!$("#hover-card").contains(event.relatedTarget) && !$("#hover-card").matches(":hover")) hideHover();
+});
 document.addEventListener("focusin", event => {
-  const row = event.target.matches(".row-main") ? event.target.closest("[data-hover]") : null;
+  const row = event.target.matches(".row-main, .strip-agent") ? event.target.closest("[data-hover]") : null;
   if (row && !sidebarDrag && !draggedId) showHover(row.dataset.hover, row);
 });
 document.addEventListener("focusout", event => {
@@ -692,6 +956,20 @@ document.addEventListener("focusout", event => {
   if (row && !row.contains(event.relatedTarget) && !$("#hover-card").contains(event.relatedTarget)) hideHover();
 });
 document.addEventListener("keydown", event => {
+  const card = $("#hover-card");
+  if (event.key === "Tab" && !card.hidden && hoverReturnFocus) {
+    const buttons = [...card.querySelectorAll("button:not(:disabled)")];
+    if (!event.shiftKey && event.target === hoverReturnFocus && buttons.length) {
+      event.preventDefault(); buttons[0].focus(); return;
+    }
+    if (card.contains(event.target) && ((event.shiftKey && event.target === buttons[0]) || (!event.shiftKey && event.target === buttons.at(-1)))) {
+      event.preventDefault();
+      const target = event.shiftKey ? hoverReturnFocus : hoverReturnFocus.closest("[data-row]")?.querySelector("[data-menu]") || hoverReturnFocus;
+      target.focus({ preventScroll: true });
+      if (!event.shiftKey) hideHover();
+      return;
+    }
+  }
   if (event.altKey && !event.ctrlKey && !event.metaKey && ["ArrowUp", "ArrowDown"].includes(event.key)) {
     const unit = event.target.closest("[data-sort-kind]");
     if (unit && !document.querySelector("dialog[open]")) {
@@ -705,6 +983,7 @@ document.addEventListener("keydown", event => {
     }
   }
   if (event.key === "Escape") {
+    if (card.contains(document.activeElement)) hoverReturnFocus?.focus({ preventScroll: true });
     hideHover(); endSidebarDrag();
   }
   if ($("#context-menu").open && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
@@ -786,6 +1065,14 @@ $("#history-button").onclick = () => {
 };
 $("#confirm-dismiss").onclick = simulateDismiss;
 $("#sidebar-width").oninput = event => { document.documentElement.style.setProperty("--sidebar-width", `${event.target.value}px`); hideHover(); };
+$("#stress-button").onclick = () => {
+  const target = surfaces.find(item => item.workspace === "stress" && !state.dismissed[item.id]);
+  if (!target) { notify("All stress tabs are closed in this demo. Reset demo to restore the fixture."); return; }
+  focusItem(target.id);
+  $('[data-workspace="stress"]').scrollIntoView({ block: "start" });
+};
+$("#stress-long-name").onchange = event => { state.stressLongName = event.target.checked; commit(); };
+$("#stress-history").onclick = () => { renderHistory(); openDialog("history-dialog"); };
 $("#reset-demo").onclick = () => {
   const created = new Set(state.createdDirectories.map(record => record.id));
   for (let index = workspaces.length - 1; index >= 0; index--) if (created.has(workspaces[index].id)) workspaces.splice(index, 1);
@@ -823,7 +1110,14 @@ $("#directory-form").onsubmit = event => {
   notify("Demo workspace opened. No directory was read and no terminal process was started.");
 };
 window.addEventListener("resize", hideHover);
-$("#workspaces").addEventListener("scroll", hideHover);
+$("#workspaces").addEventListener("scroll", event => {
+  const focused = document.activeElement;
+  if (event.target instanceof HTMLElement && event.target.matches(".strip-scroll") && focused?.matches(".strip-agent:focus-visible") && event.target.contains(focused)) {
+    const card = event.target.getBoundingClientRect(), button = focused.getBoundingClientRect();
+    if (button.left >= card.left && button.right <= card.right) { showHover(focused.dataset.hover, focused); return; }
+  }
+  hideHover();
+}, true);
 render();
 if (startupNotice) notify(startupNotice);
-if (migratedGrouping || refreshedDemoSelection) save();
+if (migratedGrouping || refreshedDemoSelection || addedStressWorkspace) save();

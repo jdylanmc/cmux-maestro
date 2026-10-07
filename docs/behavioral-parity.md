@@ -22,6 +22,26 @@ metadata, installer transactions, SDK-fetch concurrency, compiled-hook and
 sandbox checks. Validation hosts do not open installation windows or permit
 plugin changes. No new test framework is required.
 
+### Background-shell representation
+
+Structured `shell_completed` and `shell_detached_completed` notifications remain
+decoded, but no longer create synthetic "Background shell" work rows, outcome
+attention or dismissal candidates, regardless of exit code. This is an explicit
+UI removal policy (#155), not evidence of deliberate cancellation or successful
+shell/worker execution. Real worker/task errors and independently observed
+`shell:<toolCallId>` tool invocations remain unchanged. Raw provider history and
+stored dismissal settings are not deleted or migrated.
+
+`./scripts/test-copilot-shell-reducer.sh` compiles the actual Foundation decoder
+and reducer without launching the app or a UI test host. It checks both
+notification kinds across zero, ordinary nonzero, signal-compatible and missing
+exit codes, replay/reconstruction, independent error preservation, real-work
+retirement, request reuse, one-word replay saturation and 128 bounded lifecycles.
+The former notification-based retirement fixtures now admit and complete real
+shell tool work while preserving original assertions, bounds and stress, with
+explicit retirement preconditions. These scoped checks do not substitute for
+the full hosted test matrix or current-head CI.
+
 ### Setup fixture readiness
 
 Process-cleanup tests wait for the injected clock's first post-`posix_spawn`
@@ -149,8 +169,10 @@ starts no metadata process. The existing command-line installer treats verified
 enabled, all/subset-disabled and unresolved-applicability completions as success
 while retaining explicit messages; real errors and usage retain nonzero exits.
 
-The tested setup compatibility boundary is **Copilot CLI 1.0.88 and 1.0.89,
-SDK protocol 3**. Other version/protocol pairs refuse before registration changes.
+Setup attempts **stable Copilot CLI 1.x releases using SDK protocol 3**, retaining
+public metadata, exact-source and operation-readback checks. Other major versions,
+prereleases and protocols refuse before registration changes. Historical live
+probes below cover 1.0.88 and 1.0.89, not every release admitted by the range.
 Setup uses only `status.get`, `hooks.discover` and `plugins.list` over a new,
 bounded public stdio connection. It sends no agent/session creation or model
 request, never attaches to an existing session and shuts the metadata process
@@ -387,8 +409,10 @@ provider mutation for no-ops and compatible external-resource-only updates.
 For a required payload replacement it records original state and mutation
 intent before the official operation, keeps dedicated staging inactive, and
 requires official `plugins.disable` plus exact-source readback before
-publication/commit. The disable RPC is version-gated to 1.0.89 and checks the
-selected identity before its name-based mutation. Install/update success alone
+publication/commit. The disable RPC is attempted on stable 1.x releases using
+protocol 3 and checks the selected identity before its name-based mutation.
+Unsupported operations or failed disabled-state readback still block publication.
+Install/update success alone
 does not prove preservation. Disabled legacy observer migration also disables
 the dedicated file; an existing dedicated file retains its independent choice.
 
@@ -448,7 +472,8 @@ regressions exercise actual argument quoting and verbatim task wrapping,
 terminal I/O, the validated executable/PATH/cwd, acceptance with missing
 observations, native observation on either side of attachment, cancellation
 and ambiguous creation, exact generation/process identity, account/policy
-boundaries and both eight-resource limits. Native adapter tests exercise
+boundaries and both admission paths at the configured `MAX_LIVE_WORKERS` cap,
+including managed roots and retained terminals. Native adapter tests exercise
 precreated bindings, exact session join and one independent observation,
 ordinary peer send/reply and no retries. Hooks remain observers; these fixtures
 do not claim hook delivery or prompt consumption.
@@ -476,17 +501,42 @@ previously gave each held runtime a ten-second synthetic barrier deadline
 while sequentially launching all eight and checking rejection/archive. Its
 first runtime could expire before release on hosted runners. That fixture now
 uses an owner-held kernel lock released after the admission assertions, not an
-elapsed-time assumption; the same eight reservations/ninth refusal and eight
-eventual results are required. No production or CI timeout was enlarged.
+elapsed-time assumption. The current capacity regression requires the configured
+maximum reservations and eventual results, with any additional launch refused.
+That barrier repair did not enlarge a production or CI timeout.
 
 Legacy report fixtures release their synthetic first-turn output after the
 launch receipt, keeping post-start protocol assertions separate from the
 unchanged rejection of an already-failed first boundary during startup.
 Fixture condition waits read committed control state under its shared lock;
 an atomically replaced `state.json` alone does not mean observer publication
-has finished or the writer has released ownership. The failed-attachment
+has finished or the writer has released ownership. Snapshot reads copy bounded,
+stable file bytes under that lock, then decode and validate the immutable copy
+after releasing it. A gated validation regression proves a new writer can
+commit without changing the captured snapshot; malformed and invalid snapshots
+still fail. Read-modify-write operations keep their full exclusive transaction
+and bounded acquisition waits. Legacy runtime attachment/token reads share the
+read lock until the exclusive startup mutation; private ticket guards and
+the attachment-file lease remain unchanged. Control-character checks retain
+their UTF-8 byte bounds and exact accepted/rejected characters without a
+per-character Python scan on every node's stored provider path.
+Lock-acquisition budgets scale by `max(1, MAX_LIVE_WORKERS / 8)`, preserving
+the original eight-session allowance as more runtimes contend for serialized
+durable writes; both ordinary and runtime acquisitions use that same knob.
+The 50ms retry interval, immediate zero-wait behavior, lock modes and failure
+on exhaustion remain unchanged; this does not extend launch/result deadlines
+or retry a non-contention failure. Deterministic clock tests use real contended
+locks to prove both successful acquisition and bounded refusal at several
+configured capacities. This capacity-scaled budget is an explicit policy
+change, not an inference that shorter critical sections alone fixed CI.
+The pending-capacity fixture scales its bounded six-second result wait by the
+same factor: its old wait must not expire before an allowed runtime acquisition
+can finish. This synthetic allowance changes no production result deadline,
+still requires every exact completed report and provider call, and preserves
+simultaneous maximum reservations, over-cap refusal and archive protection.
+The failed-attachment
 capacity fixture stops only its completed synthetic supervisors while retaining
-every terminal, and requires the actual eight-resource-limit error, not a busy
+every terminal, and requires the actual configured resource-limit error, not a busy
 store error. Separate live-supervisor capacity and recovery cases remain intact.
 
 Fixtures are not installed workers, live provider readiness, visible native

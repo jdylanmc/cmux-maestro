@@ -18,9 +18,26 @@ Notable changes are recorded using Keep a Changelog categories.
   29 prototype, approved contract, 56-state synthetic review gallery and
   current ticket handoff (#134). Preserve earlier evidence and distinguish
   the approved target from native delivery and current feature readiness.
+- Add label-owned copy actions for permitted raw session, observation,
+  child-history and path values in agent previews and pinned details,
+  preserving provenance, keyboard access and explicit clipboard feedback
+  (#112).
 
 ### Changed
 
+- Raise the per-workspace hard limit from 8 to 32 live managed sessions,
+  including managed coordinators and retained resources, without changing
+  launch accounting or the 128-node and eight-level nesting limits. Validate
+  immutable read snapshots outside the shared lock so readers do not block
+  writers during decoding and validation, and share read-only runtime ticket
+  lookups. Scale bounded lock-acquisition budgets with the same capacity knob,
+  retaining exclusive mutations, failure on exhaustion and launch/result deadlines.
+- Attempt Copilot integration with stable CLI 1.x releases on protocol 3 instead
+  of an exact-release whitelist. Preserve source ownership, disabled-state
+  readback and transaction guards; report incompatible version/protocol pairs.
+
+- Constrain the working long-identity action-menu reference to the viewport,
+  preserving complete accessible names and keyboard-reachable actions (#132).
 - Guide native Maestro coordinators and workers to send compact milestone-only
   handoffs, yield between decisions, and reconcile current-candidate evidence
   without losing unresolved findings. Preserve fire-and-forget messaging and
@@ -53,6 +70,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Remove synthetic background-shell rows and their associated outcome notices,
+  preserving worker/task errors and distinct shell tool invocations (#155).
 - Qualify managed Git labels, verification and change counts as evidence from
   the assigned directory, not Copilot's current `/cwd`, preserving stale and
   unavailable states and separate CMUX surface-directory reports (#119, #59).
@@ -94,5 +113,5 @@ Notable changes are recorded using Keep a Changelog categories.
   not every Unknown agent or all of #118.
 - Preserve managed-session custody through failed startup and partial storage
   publication; allow safe failed or exited managed roots to archive without a
-  surviving tab, and keep moved terminals counted against the eight-resource
+  surviving tab, and keep moved terminals counted against the live-resource
   limit using atomic host inventory (#64).

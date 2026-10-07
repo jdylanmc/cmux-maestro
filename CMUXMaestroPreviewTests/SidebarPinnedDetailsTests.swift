@@ -182,6 +182,49 @@ struct SidebarPinnedDetailsTests {
         )))
     }
 
+    @Test func pinnedActiveAgentSharesOnlyTheSixPermittedRawCopyFields() throws {
+        let source = hierarchy(directory: "/synthetic/work/../current")
+        let workspaces = source.workspaces.enumerated().map { index, workspace in
+            HierarchyWorkspace(
+                id: workspace.id, title: workspace.title, detail: workspace.detail,
+                isSelected: workspace.isSelected, isPinned: workspace.isPinned, unreadCount: workspace.unreadCount,
+                rootPath: .available(index == 0 ? "/synthetic/root/../workspace" : "/synthetic/peer"),
+                projectRootPath: .available(index == 0 ? "/synthetic/project/../repo" : nil),
+                surfaces: workspace.surfaces
+            )
+        }
+        let exactPaths = HierarchySnapshot(
+            sequence: source.sequence, receivedSnapshot: source.receivedSnapshot,
+            workspaceListAvailable: source.workspaceListAvailable,
+            workspaceMetadataAvailable: source.workspaceMetadataAvailable,
+            surfaceMetadataAvailable: source.surfaceMetadataAvailable,
+            workspacePathsAvailable: source.workspacePathsAvailable,
+            workspaces: workspaces, windowID: source.windowID
+        )
+        let content = pinned(exactPaths, sessions: [session()])
+        let copied = Dictionary(uniqueKeysWithValues: content.lines.compactMap { line in
+            line.copyableValue.map { (line.title, $0) }
+        })
+        let timestamp = ISO8601DateFormatter()
+        timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        #expect(copied == [
+            "Session ID": fixtures.sessionID.uuidString,
+            "Observed": timestamp.string(from: now),
+            "Child history": "complete",
+            "Workspace path": "/synthetic/root/../workspace",
+            "Project path": "/synthetic/project/../repo",
+            "Surface directory": "/synthetic/work/../current"
+        ])
+        #expect(content.lines.first { $0.title == "Workspace path" }?.value == "/synthetic/workspace")
+        #expect(content.lines.first { $0.title == "Project path" }?.value == "/synthetic/repo")
+        #expect(content.lines.first { $0.title == "Surface directory" }?.value == "/synthetic/current")
+
+        let noPaths = pinned(hierarchy(paths: false), sessions: [session()])
+        #expect(noPaths.lines.first { $0.title == "Workspace path" }?.copyableValue == nil)
+        #expect(noPaths.lines.first { $0.title == "Project path" }?.copyableValue == nil)
+        #expect(noPaths.lines.first { $0.title == "Surface directory" }?.copyableValue == nil)
+    }
+
     @Test func ordinarySurfacesAndUnconfirmedIdentityCannotRetainAgentFields() {
         for kind in [HierarchySurfaceKind.browser, .markdown, .filePreview, .unknown] {
             let result = pinned(hierarchy(kind: kind), nodes: [managed()])
@@ -262,19 +305,20 @@ struct SidebarPinnedDetailsTests {
 
             let pasteboard = NSPasteboard.withUniqueName()
             defer { pasteboard.releaseGlobally() }
-            var copied: [UUID] = []
+            var copied: [String] = []
             var inspections = 0
             let hosting = NSHostingView(rootView: SidebarPinnedFooter(
                 content: content, inspect: { inspections += 1 },
-                copySessionID: { copied.append($0); return SidebarSessionCopy.copy($0, to: pasteboard) }
+                copyValue: { copied.append($0); return SidebarSessionCopy.copy($0, to: pasteboard) }
             ).frame(width: 300))
             hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 220)
             try await settle(hosting)
             let buttons = views(hosting).compactMap { $0 as? NSButton }
                 .filter { $0.accessibilityIdentifier() == "hover-copy-value" }
-            #expect(buttons.count == 1)
-            #expect(try #require(buttons.first).accessibilityPerformPress())
-            #expect(copied == [replacementID] && inspections == 0)
+            #expect(buttons.count == 5)
+            let sessionButton = try #require(buttons.first { $0.accessibilityLabel() == "Copy session ID" })
+            #expect(sessionButton.accessibilityPerformPress())
+            #expect(copied == [replacementID.uuidString] && inspections == 0)
             #expect(pasteboard.string(forType: .string) == replacementID.uuidString)
         }
     }
@@ -587,7 +631,8 @@ struct SidebarPinnedDetailsTests {
         #expect(bitmap.pixelsWide == Int(panelContent.bounds.width) * 2
                 && bitmap.pixelsHigh == Int(panelContent.bounds.height) * 2)
         if change == "unchanged" {
-            #expect(copyControls.count == 1)
+            #expect(copyControls.contains { $0.accessibilityLabel() == "Copy session ID" })
+            #expect(copyControls.count <= 6)
             #expect(fields.contains(fixtures.sessionID.uuidString))
             #expect(preferences.attention.acknowledged == [
                 .init(sessionID: fixtures.sessionID, ownerID: nil, evidence: evidence.evidence)
@@ -853,7 +898,7 @@ struct SidebarPinnedDetailsTests {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
         var inspections = 0
-        var copies: [UUID] = []
+        var copies: [String] = []
         for dark in [false, true] {
             for width: CGFloat in [240, 340] {
                 for height: CGFloat in [144, 220] {
@@ -864,7 +909,7 @@ struct SidebarPinnedDetailsTests {
                     window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
                     let hosting = NSHostingView(rootView: VStack {
                         SidebarPinnedFooter(content: content, maximumHeight: height, inspect: { inspections += 1 },
-                                            copySessionID: { copies.append($0); return SidebarSessionCopy.copy($0, to: pasteboard) })
+                                            copyValue: { copies.append($0); return SidebarSessionCopy.copy($0, to: pasteboard) })
                         Spacer(minLength: 50)
                     }
                     .padding(10)
@@ -874,36 +919,47 @@ struct SidebarPinnedDetailsTests {
                     defer { window.contentView = nil; window.close() }
                     try await settle(hosting)
                     #expect(!window.isVisible && inspections == 0)
+                    let initialBitmap = try capture(hosting)
+                    let initialImage = folder.appendingPathComponent(
+                        "pinned46-\(dark ? "dark" : "light")-\(Int(width))x\(Int(height))-initial.png"
+                    )
+                    try #require(initialBitmap.representation(using: .png, properties: [:])).write(to: initialImage)
+                    let initialText = try SidebarRenderingEvidence.recognizedNativeLines(in: initialImage)
+                    #expect(initialText.contains { $0.contains("Verified agent") }, "\(initialImage.lastPathComponent): \(initialText)")
+                    let initialModel = try await footerModelPixels(
+                        in: initialBitmap, dark: dark, destination: initialImage
+                    )
+                    #expect(initialModel, "\(initialImage.lastPathComponent): exact visible model pixels")
                     let buttons = views(hosting).compactMap { $0 as? NSButton }
                         .filter { $0.accessibilityIdentifier() == "hover-copy-value" }
-                    let button = try #require(buttons.first)
-                    #expect(buttons.count == 1)
-                    #expect(button.acceptsFirstResponder && button.accessibilityLabel() == "Copy session ID")
+                    let button = try #require(buttons.first { $0.accessibilityLabel() == "Copy session ID" })
+                    #expect(buttons.count == 5)
+                    for action in buttons { #expect(action.acceptsFirstResponder) }
+                    #expect(button.acceptsFirstResponder)
+                    button.scrollToVisible(button.bounds)
+                    try await settle(hosting)
                     #expect(button.accessibilityPerformPress())
                     try await settle(hosting)
                     #expect(button.accessibilityValue() as? String == "Copied")
                     #expect(pasteboard.string(forType: .string) == fixtures.sessionID.uuidString)
                     let feedback = try #require(views(hosting).compactMap { $0 as? NSTextField }
                         .first { $0.accessibilityIdentifier() == "hover-copy-feedback" })
+                    feedback.scrollToVisible(feedback.bounds)
+                    try await settle(hosting)
                     #expect(feedback.stringValue == "Copied" && feedback.accessibilityValue() == "Copied")
                     let drawing = feedback.alignmentRect(forFrame: feedback.bounds)
                     #expect(drawing.height > 0 && feedback.visibleRect.contains(drawing))
                     let viewport = try #require(feedback.enclosingScrollView?.contentView)
                     #expect(viewport.bounds.contains(viewport.convert(drawing, from: feedback)))
+                    let scroll = try #require(views(hosting).compactMap { $0 as? NSScrollView }.first)
+                    scroll.contentView.scroll(to: .zero)
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    try await settle(hosting)
                     let bitmap = try capture(hosting)
                     #expect(bitmap.pixelsWide == Int(width) * 2 && bitmap.pixelsHigh == Int(height + 70) * 2)
                     let png = try #require(bitmap.representation(using: .png, properties: [:]))
-                    let destination = folder.appendingPathComponent(
-                        "pinned46-\(dark ? "dark" : "light")-\(Int(width))x\(Int(height)).png"
-                    )
+                    let destination = folder.appendingPathComponent("pinned46-feedback-\(dark ? "dark" : "light")-\(Int(width))x\(Int(height)).png")
                     try png.write(to: destination)
-                    let text = try SidebarRenderingEvidence.recognizedNativeLines(in: destination)
-                    #expect(text.contains { $0.contains("Verified agent") },
-                            "\(destination.lastPathComponent): \(text)")
-                    let model = try await footerModelPixels(in: bitmap, dark: dark, destination: destination)
-                    #expect(model, "\(destination.lastPathComponent): exact visible model pixels")
-                    #expect(text.contains("Copied"),
-                            "\(destination.lastPathComponent): \(text)")
                     for scroll in views(hosting).compactMap({ $0 as? NSScrollView }) {
                         let document = try #require(scroll.documentView)
                         #expect(document.bounds.width <= scroll.contentView.bounds.width + 0.5)
@@ -937,7 +993,7 @@ struct SidebarPinnedDetailsTests {
             ))
             cards.append((name, AnyView(SidebarHoverCard(
                 data: content, close: { Issue.record("Offscreen render must not close") },
-                copySessionID: { _ in Issue.record("Offscreen render must not copy"); return false }
+                copyValue: { _ in Issue.record("Offscreen render must not copy"); return false }
             )), label))
         }
         for (name, target, label) in [
@@ -965,7 +1021,7 @@ struct SidebarPinnedDetailsTests {
             let content = pinned(hierarchy, sessions: sessions, nodes: nodes)
             cards.append((name, AnyView(SidebarPinnedFooter(
                 content: content, maximumHeight: 900, inspect: { Issue.record("Offscreen render must not inspect") },
-                copySessionID: { _ in Issue.record("Offscreen render must not copy"); return false }
+                copyValue: { _ in Issue.record("Offscreen render must not copy"); return false }
             )), "Surface directory"))
         }
         for (name, card, label) in cards {
@@ -980,6 +1036,15 @@ struct SidebarPinnedDetailsTests {
             defer { window.contentView = nil; window.close() }
             let responder = window.firstResponder
             try await settle(hosting)
+            if let pathAction = views(hosting).compactMap({ $0 as? NSButton }).first(where: {
+                ["Copy surface directory", "Copy parent surface directory"].contains($0.accessibilityLabel())
+            }) {
+                if let document = pathAction.enclosingScrollView?.documentView {
+                    let fieldRect = pathAction.convert(pathAction.bounds, to: document).insetBy(dx: 0, dy: -48)
+                    document.scrollToVisible(fieldRect)
+                }
+                try await settle(hosting)
+            }
             #expect(!window.isVisible && window.firstResponder === responder)
             let bitmap = try capture(hosting)
             let destination = folder.appendingPathComponent("directory77-\(name)-\(dark ? "dark" : "light").png")
@@ -1016,7 +1081,7 @@ struct SidebarPinnedDetailsTests {
             let hosting = NSHostingView(rootView: VStack {
                 SidebarPinnedFooter(content: content, maximumHeight: 144,
                                     inspect: { Issue.record("Rendering must not inspect") },
-                                    copySessionID: { _ in Issue.record("Rendering must not copy"); return false })
+                                    copyValue: { _ in Issue.record("Rendering must not copy"); return false })
                     .frame(height: control == "clipped" ? 60 : nil, alignment: .top)
                     .clipped()
                     .opacity(control == "hidden" ? 0 : 1)

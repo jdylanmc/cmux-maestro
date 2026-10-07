@@ -86,6 +86,16 @@ struct SidebarSessionCopyTests {
         view.layoutSubtreeIfNeeded()
     }
 
+    private func prepareOffscreenRender(_ window: NSWindow, content: NSView) async throws {
+        #expect(!window.isVisible && !window.isKeyWindow)
+        content.layoutSubtreeIfNeeded()
+        content.displayIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        content.layoutSubtreeIfNeeded()
+        content.displayIfNeeded()
+        #expect(!window.isVisible && !window.isKeyWindow)
+    }
+
     @Test func nativeCopyWritesOnlyExactGUIDAndSupportsRepeatedCopies() {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
@@ -98,6 +108,339 @@ struct SidebarSessionCopyTests {
         }
     }
 
+    @Test func nativeCopyWritesExactRawStringsAndRejectsEmptyValuesWithoutClearingClipboard() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let raw = "/Users/example/repository/../workspace"
+        pasteboard.setString("previous", forType: .string)
+        #expect(SidebarSessionCopy.copy(raw, to: pasteboard))
+        #expect(pasteboard.string(forType: .string) == raw)
+        #expect(pasteboard.pasteboardItems?.count == 1)
+        #expect(!SidebarSessionCopy.copy("", to: pasteboard))
+        #expect(pasteboard.string(forType: .string) == raw)
+    }
+
+    @Test func copyableFieldKeepsActionOnLabelAndCopiesOnlyOnEnter() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let raw = "/synthetic/worktree/../project"
+        var writes: [String] = []
+        var focus: [Bool] = []
+        let frame = NSRect(x: 0, y: 0, width: 260, height: 90)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        let field = SidebarCopyableValue(
+            value: "~/project", label: "Workspace path", clipboardValue: raw,
+            copy: {
+                writes.append($0)
+                return SidebarSessionCopy.copy($0, to: pasteboard)
+            },
+            focusChanged: { focus.append($0) }
+        )
+        let hosting = NSHostingView(rootView: field
+            .environment(\.colorScheme, .light)
+            .background(Color.white))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        hosting.frame = frame
+        try await settle(hosting)
+        try await prepareOffscreenRender(window, content: hosting)
+
+        let button = try copyButton(in: hosting)
+        let buttonRect = hosting.convert(button.bounds, from: button)
+        #expect(button.accessibilityLabel() == "Copy workspace path")
+        let targetRect = button.accessibilityFrame()
+        #expect(targetRect.width >= 24 && targetRect.height >= 24)
+        #expect(abs(buttonRect.width - 24) < 0.5)
+        #expect(writes.isEmpty && pasteboard.string(forType: .string) == nil)
+        let fieldImage = try capture(hosting)
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let image = folder.appendingPathComponent("copy-field-label-owner.png")
+        try #require(fieldImage.representation(using: .png, properties: [:])).write(to: image)
+        let lines = try SidebarRenderingEvidence.recognizedLines(in: image, dark: false, naturalLanguage: true)
+        let labelIndex = try #require(lines.firstIndex(of: "Workspace path"))
+        let valueIndex = try #require(lines.firstIndex {
+            $0.localizedCaseInsensitiveContains("project") && !$0.localizedCaseInsensitiveContains("Workspace")
+        })
+        #expect(labelIndex < valueIndex)
+
+        #expect(window.makeFirstResponder(button))
+        try await settle(hosting)
+        #expect(focus == [true])
+        #expect(button.focusRingType == .exterior)
+        #expect(hosting.convert(button.bounds, from: button) == buttonRect)
+        #expect(writes.isEmpty)
+        let enter = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\r",
+            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36
+        ))
+        button.keyDown(with: enter)
+        try await settle(hosting)
+        #expect(writes == [raw])
+        #expect(pasteboard.string(forType: .string) == raw)
+    }
+
+    @Test func copyableFieldShiftTabUsesThePreviousKeyLoop() async throws {
+        let frame = NSRect(x: 0, y: 0, width: 260, height: 90)
+        let panel = SidebarHoverPanel(
+            contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false
+        )
+        panel.isReleasedWhenClosed = false
+        panel.allowsKeyboard = true
+        var copied = false
+        var returned = false
+        let hosting = NSHostingView(rootView: SidebarCopyableValue(
+            value: "~/project", label: "Workspace path", clipboardValue: "/synthetic/project",
+            copy: { _ in copied = true; return true }
+        ).environment(\.colorScheme, .light).background(Color.white))
+        panel.contentView = hosting
+        defer { panel.contentView = nil; panel.close() }
+        hosting.frame = frame
+        try await settle(hosting)
+        let button = try copyButton(in: hosting)
+        panel.returnToOrigin = { returned = true }
+        #expect(panel.makeFirstResponder(button))
+        let shiftTab = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .shift, timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, characters: "\t",
+            charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48
+        ))
+        button.keyDown(with: shiftTab)
+        #expect(returned)
+        #expect(!copied)
+    }
+
+    @Test func nativeLabelHoverUsesOnlyItsFieldHeaderAndDoesNotCopyOrShiftLayout() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.setString("previous", forType: .string)
+        let rawValues = ["/synthetic/workspace", "/synthetic/project"]
+        var writes: [String] = []
+        let frame = NSRect(x: 0, y: 0, width: 260, height: 120)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = NSHostingView(rootView: VStack(alignment: .leading, spacing: 4) {
+            SidebarCopyableValue(
+                value: "~/workspace", label: "Workspace path", clipboardValue: rawValues[0],
+                copy: {
+                    writes.append($0)
+                    return SidebarSessionCopy.copy($0, to: pasteboard)
+                }
+            )
+            SidebarCopyableValue(
+                value: "~/project", label: "Project path", clipboardValue: rawValues[1],
+                copy: {
+                    writes.append($0)
+                    return SidebarSessionCopy.copy($0, to: pasteboard)
+                }
+            )
+        }.frame(width: frame.width, height: frame.height, alignment: .topLeading))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        hosting.frame = frame
+        try await settle(hosting)
+
+        let buttons = views(in: hosting).compactMap { $0 as? NSButton }
+            .filter { $0.accessibilityIdentifier() == "hover-copy-value" }
+        let workspaceButton = try #require(buttons.first { $0.accessibilityLabel() == "Copy workspace path" })
+        let projectButton = try #require(buttons.first { $0.accessibilityLabel() == "Copy project path" })
+        let workspaceButtonRect = hosting.convert(workspaceButton.bounds, from: workspaceButton)
+        let projectButtonRect = hosting.convert(projectButton.bounds, from: projectButton)
+        let hoverViews = views(in: hosting).compactMap { $0 as? SidebarCopyableValueHoverView }
+        let workspaceHoverView = try #require(hoverViews.first {
+            hosting.convert($0.bounds, from: $0).contains(NSPoint(
+                x: workspaceButtonRect.minX - 2, y: workspaceButtonRect.midY
+            ))
+        })
+        let projectHoverView = try #require(hoverViews.first {
+            hosting.convert($0.bounds, from: $0).contains(NSPoint(
+                x: projectButtonRect.minX - 2, y: projectButtonRect.midY
+            ))
+        })
+        let workspaceTrackingArea = try #require(workspaceHoverView.trackingAreas.first)
+        let projectTrackingArea = try #require(projectHoverView.trackingAreas.first)
+        let workspaceTrackingRect = hosting.convert(workspaceTrackingArea.rect, from: workspaceHoverView)
+        let projectTrackingRect = hosting.convert(projectTrackingArea.rect, from: projectHoverView)
+        let workspaceLabelPoint = NSPoint(
+            x: (workspaceTrackingRect.minX + workspaceButtonRect.minX) / 2,
+            y: workspaceTrackingRect.midY
+        )
+        let projectLabelPoint = NSPoint(
+            x: (projectTrackingRect.minX + projectButtonRect.minX) / 2,
+            y: projectTrackingRect.midY
+        )
+        let workspaceValuePoint = NSPoint(
+            x: workspaceTrackingRect.minX + 12,
+            y: workspaceTrackingRect.midY + (hosting.isFlipped ? 21 : -21)
+        )
+        let projectValuePoint = NSPoint(
+            x: projectTrackingRect.minX + 12,
+            y: projectTrackingRect.midY + (hosting.isFlipped ? 21 : -21)
+        )
+        let blankPoint = NSPoint(x: hosting.bounds.maxX - 3, y: workspaceTrackingRect.midY)
+        let workspaceButtonPoint = NSPoint(x: workspaceButtonRect.midX, y: workspaceButtonRect.midY)
+
+        func isVisiblyPainted(_ view: NSView) -> Bool {
+            var ancestor: NSView? = view
+            while let current = ancestor {
+                if current.isHidden || current.alphaValue <= 0 ||
+                    current.layer?.isHidden == true || current.layer?.opacity == 0 {
+                    return false
+                }
+                ancestor = current.superview
+            }
+            return true
+        }
+
+        func enterExitEvent(_ type: NSEvent.EventType, at point: NSPoint) throws -> NSEvent {
+            try #require(NSEvent.enterExitEvent(
+                with: type, location: hosting.convert(point, to: nil), modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                trackingNumber: 0, userData: nil
+            ))
+        }
+
+        func movePointer(to point: NSPoint) throws {
+            let event = try #require(NSEvent.mouseEvent(
+                with: .mouseMoved, location: hosting.convert(point, to: nil),
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+            ))
+            window.sendEvent(event)
+        }
+
+        #expect(workspaceTrackingArea.options.contains(.mouseEnteredAndExited))
+        #expect(projectTrackingArea.options.contains(.mouseEnteredAndExited))
+        #expect(workspaceTrackingRect.contains(workspaceLabelPoint))
+        #expect(workspaceTrackingRect.contains(workspaceButtonPoint))
+        #expect(!workspaceTrackingRect.contains(workspaceValuePoint))
+        #expect(!projectTrackingRect.contains(projectValuePoint))
+        #expect(!workspaceTrackingRect.contains(blankPoint))
+        #expect(!workspaceTrackingRect.contains(projectLabelPoint))
+        #expect(!projectTrackingRect.contains(workspaceLabelPoint))
+        #expect(!isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        #expect(writes.isEmpty && pasteboard.string(forType: .string) == "previous")
+        let initialWorkspaceButtonRect = workspaceButtonRect
+        let initialProjectButtonRect = projectButtonRect
+        let initialWorkspaceHoverRect = workspaceTrackingRect
+
+        workspaceHoverView.mouseEntered(with: try enterExitEvent(.mouseEntered, at: workspaceButtonPoint))
+        try await settle(hosting)
+        #expect(!isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        workspaceHoverView.mouseExited(with: try enterExitEvent(.mouseExited, at: blankPoint))
+
+        for point in [workspaceValuePoint, projectValuePoint, blankPoint] {
+            try movePointer(to: point)
+            try await settle(hosting)
+            #expect(!isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        }
+
+        workspaceHoverView.mouseEntered(with: try enterExitEvent(.mouseEntered, at: workspaceLabelPoint))
+        try await settle(hosting)
+        #expect(isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        #expect(hosting.convert(workspaceButton.bounds, from: workspaceButton) == initialWorkspaceButtonRect)
+        #expect(hosting.convert(workspaceHoverView.bounds, from: workspaceHoverView) == initialWorkspaceHoverRect)
+        #expect(writes.isEmpty && pasteboard.string(forType: .string) == "previous")
+
+        try movePointer(to: workspaceButtonPoint)
+        try await settle(hosting)
+        #expect(workspaceTrackingRect.contains(workspaceButtonPoint))
+        #expect(isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        #expect(hosting.convert(workspaceButton.bounds, from: workspaceButton) == initialWorkspaceButtonRect)
+
+        workspaceHoverView.mouseExited(with: try enterExitEvent(.mouseExited, at: workspaceValuePoint))
+        try await settle(hosting)
+        #expect(!isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        for point in [workspaceValuePoint, projectValuePoint, blankPoint] {
+            try movePointer(to: point)
+            try await settle(hosting)
+            #expect(!isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        }
+        #expect(hosting.convert(projectButton.bounds, from: projectButton) == initialProjectButtonRect)
+        #expect(writes.isEmpty && pasteboard.string(forType: .string) == "previous")
+
+        projectHoverView.mouseEntered(with: try enterExitEvent(.mouseEntered, at: projectLabelPoint))
+        try await settle(hosting)
+        #expect(!isVisiblyPainted(workspaceButton) && isVisiblyPainted(projectButton))
+        projectHoverView.mouseExited(with: try enterExitEvent(.mouseExited, at: projectValuePoint))
+        try await settle(hosting)
+        #expect(!isVisiblyPainted(workspaceButton) && !isVisiblyPainted(projectButton))
+        #expect(writes.isEmpty && pasteboard.string(forType: .string) == "previous")
+    }
+
+    @Test func previewScrollResetsForANewSubjectButNotSameSubjectRefresh() async throws {
+        func card(_ id: String, _ title: String, _ prefix: String) -> SidebarHoverCard {
+            SidebarHoverCard(
+                data: .init(
+                    id: id, category: "Agent preview", title: title,
+                    lines: (0..<30).map { .init(title: "Field \($0)", value: "\(prefix)-value-\($0)") }
+                ),
+                close: {}, copyValue: { _ in false }
+            )
+        }
+        let frame = NSRect(x: 0, y: 0, width: 300, height: 260)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        func rendered(_ card: SidebarHoverCard) -> AnyView {
+            AnyView(card.environment(\.colorScheme, .light).background(Color.white))
+        }
+        let hosting = NSHostingView(rootView: rendered(card("subject-a", "Subject A", "a")))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        hosting.frame = frame
+        try await settle(hosting)
+        try await prepareOffscreenRender(window, content: hosting)
+        func recognizedText(_ filename: String) throws -> [String] {
+            hosting.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            hosting.displayIfNeeded()
+            let bitmap = try capture(hosting)
+            let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent(".build/layout-validation/offscreen")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let image = folder.appendingPathComponent(filename)
+            try #require(bitmap.representation(using: .png, properties: [:])).write(to: image)
+            return try SidebarRenderingEvidence.recognizedLines(in: image, dark: false, naturalLanguage: true)
+        }
+        func scrollView() throws -> NSScrollView {
+            try #require(views(in: hosting).compactMap { $0 as? NSScrollView }.first)
+        }
+        func scrollToBottom(_ scroll: NSScrollView) throws {
+            let document = try #require(scroll.documentView)
+            scroll.contentView.scroll(to: NSPoint(
+                x: 0, y: max(0, document.bounds.height - scroll.contentView.bounds.height)
+            ))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+
+        var scroll = try scrollView()
+        try scrollToBottom(scroll)
+        #expect(scroll.contentView.bounds.origin.y > 0)
+        let subjectB = card("subject-b", "Subject B", "b")
+        #expect(subjectB.data.id == "subject-b" && subjectB.data.title == "Subject B")
+        hosting.rootView = rendered(subjectB)
+        try await settle(hosting)
+        scroll = try scrollView()
+        #expect(scroll.contentView.bounds.origin.y == 0)
+        #expect(try recognizedText("preview-subject-b-top.png").contains("Subject B"))
+
+        try scrollToBottom(scroll)
+        #expect(scroll.contentView.bounds.origin.y > 0)
+        let refreshedSubjectB = card("subject-b", "Subject B", "refreshed")
+        #expect(refreshedSubjectB.data.id == subjectB.data.id)
+        #expect(refreshedSubjectB.data.title == subjectB.data.title)
+        hosting.rootView = rendered(refreshedSubjectB)
+        try await settle(hosting)
+        scroll = try scrollView()
+        #expect(scroll.contentView.bounds.origin.y > 0)
+        #expect(try recognizedText("preview-subject-b-refresh-bottom.png").contains("refreshed-value-29"))
+    }
+
     @Test func cardCopiesOwnAndParentValuesAndResetsFeedbackOnIdentityChange() async throws {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
@@ -108,11 +451,15 @@ struct SidebarSessionCopyTests {
                 data: .init(id: "same-card", category: "Agent preview", title: "Synthetic agent",
                             lines: [.sessionID(id, isParent: parent)]),
                 close: { Issue.record("Copy must not close the preview") },
-                copySessionID: {
-                    copies.append($0)
-                    return succeeds && SidebarSessionCopy.copy($0, to: pasteboard)
-                }
-            )
+                    copyValue: {
+                        guard let id = UUID(uuidString: $0) else {
+                            Issue.record("Session ID copy must preserve the exact UUID")
+                            return false
+                        }
+                        copies.append(id)
+                        return succeeds && SidebarSessionCopy.copy($0, to: pasteboard)
+                    }
+                )
         }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 260),
                               styleMask: .borderless, backing: .buffered, defer: false)
@@ -191,7 +538,10 @@ struct SidebarSessionCopyTests {
     @Test func standaloneControlResetsFeedbackWithoutIdentityOrSidebarDependencies() async throws {
         var copies = 0
         func value(_ text: String) -> SidebarCopyableValue {
-            SidebarCopyableValue(value: text, label: "Example value", copy: { copies += 1; return true })
+            SidebarCopyableValue(
+                value: text, label: "Example value", clipboardValue: text,
+                copy: { _ in copies += 1; return true }
+            )
         }
         let hosting = NSHostingView(rootView: value("first"))
         hosting.frame = NSRect(x: 0, y: 0, width: 224, height: 100)
@@ -215,7 +565,7 @@ struct SidebarSessionCopyTests {
 
     @Test func openingHoverExplicitPreviewAndRefreshingNeverCopy() throws {
         var copies = 0
-        let presenter = SidebarHoverPresenter(copySessionID: { _ in copies += 1; return true },
+        let presenter = SidebarHoverPresenter(copyValue: { _ in copies += 1; return true },
                                               showPanel: { _, _, _ in })
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 400, height: 400),
                               styleMask: .borderless, backing: .buffered, defer: false)
@@ -249,7 +599,7 @@ struct SidebarSessionCopyTests {
                 .sessionID(ownID, canCopy: false),
                 .init(title: "Worker ID", value: parentID.uuidString)
             ]),
-            close: {}, copySessionID: { _ in Issue.record("No copy action is available"); return false }
+            close: {}, copyValue: { _ in Issue.record("No copy action is available"); return false }
         ))
         hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 260)
         try await settle(hosting)
@@ -260,7 +610,7 @@ struct SidebarSessionCopyTests {
         let hosting = NSHostingView(rootView: SidebarHoverCard(
             data: .init(id: "negative-controls", category: "Agent preview", title: "Synthetic agent",
                         lines: [.sessionID(ownID)]),
-            close: {}, copySessionID: { _ in true }
+            close: {}, copyValue: { _ in true }
         ).background(Color(nsColor: .windowBackgroundColor)))
         hosting.frame = NSRect(x: 0, y: 0, width: 224, height: 260)
         try await settle(hosting)
@@ -303,7 +653,7 @@ struct SidebarSessionCopyTests {
 
     @Test func nativeFeedbackWrapsWithoutClippingOrTakingFocus() async throws {
         let hosting = NSHostingView(rootView: SidebarCopyableValue(
-            value: "Example", label: "Example value", copy: { false }
+            value: "Example", label: "Example value", clipboardValue: "raw-example", copy: { _ in false }
         ).background(Color(nsColor: .windowBackgroundColor)))
         hosting.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
         try await settle(hosting)
@@ -328,7 +678,7 @@ struct SidebarSessionCopyTests {
             let hosting = NSHostingView(rootView: SidebarHoverCard(
                 data: .init(id: "synthetic-parent", category: "Agent preview", title: "Synthetic child",
                             lines: [.sessionID(parentID, isParent: true)]),
-                close: {}, copySessionID: { _ in copies += 1; return succeeds }
+                close: {}, copyValue: { _ in copies += 1; return succeeds }
             ).environment(\.colorScheme, dark ? .dark : .light)
                 .background(Color(nsColor: .windowBackgroundColor)))
             window.contentView = hosting

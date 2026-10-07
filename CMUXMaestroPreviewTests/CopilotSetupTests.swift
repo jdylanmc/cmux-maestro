@@ -124,10 +124,11 @@ final class SetupDeadlineClock: @unchecked Sendable {
 }
 
 struct CopilotPluginExchangeTests {
-    @Test func disableUsesIdentityPrecheckOfficialAPIAndReadback() throws {
+    @Test(arguments: ["1.0.89", "1.0.91", "1.1.0", "1.99.123"])
+    func disableUsesIdentityPrecheckOfficialAPIAndReadback(version: String) throws {
         let exchange = try CopilotMetadataExchange(operation: .disable(identity: "owned-id"))
         _ = try requests(exchange)
-        try send(exchange, id: 1, result: ["version": "1.0.89", "protocolVersion": 3])
+        try send(exchange, id: 1, result: ["version": version, "protocolVersion": 3])
         #expect(try requests(exchange).contains("plugins.list"))
         var plugin: [String: Any] = ["name": CopilotPluginManifest.name, "marketplace": "",
                                      "enabled": true, "directSourceId": "owned-id"]
@@ -148,7 +149,7 @@ struct CopilotPluginExchangeTests {
         let exchange = try CopilotMetadataExchange(operation: .disable(identity: "owned-id"))
         _ = try requests(exchange)
         if kind == "unsupported-version" {
-            #expect(throws: (any Error).self) { try send(exchange, id: 1, result: ["version": "1.0.88", "protocolVersion": 3]) }
+            #expect(throws: (any Error).self) { try send(exchange, id: 1, result: ["version": "2.0.0", "protocolVersion": 3]) }
             #expect(try requests(exchange).isEmpty)
             return
         }
@@ -237,13 +238,14 @@ struct CopilotPluginExchangeTests {
                     "directSourceId": identity], "deprecationWarning": "Untrusted provider wording"]
     }
 
-    @Test func installUsesExactSourceAndProviderReceiptAfterVersionCheck() throws {
+    @Test(arguments: ["1.0.88", "1.0.89", "1.0.91", "1.1.0"])
+    func installUsesExactSourceAndProviderReceiptAfterVersionCheck(version: String) throws {
         let source = URL(fileURLWithPath: "/owned/stable/plugin")
         let exchange = try CopilotMetadataExchange(operation: .install(source: source, expectedIdentity: nil))
         let initial = try requests(exchange)
         #expect(initial.contains("status.get"))
         #expect(!initial.contains("plugins.install"))
-        try send(exchange, id: 1, result: ["version": "1.0.89", "protocolVersion": 3])
+        try send(exchange, id: 1, result: ["version": version, "protocolVersion": 3])
         let request = try requests(exchange).replacingOccurrences(of: "\\/", with: "/")
         #expect(request.contains("plugins.install"))
         #expect(request.contains(source.path))
@@ -254,10 +256,11 @@ struct CopilotPluginExchangeTests {
         #expect(exchange.input[1] == -1)
     }
 
-    @Test func uninstallUsesExactSourceIdentityAndAcceptsNullResult() throws {
+    @Test(arguments: ["1.0.88", "1.0.89", "1.0.91", "1.1.0"])
+    func uninstallUsesExactSourceIdentityAndAcceptsNullResult(version: String) throws {
         let exchange = try CopilotMetadataExchange(operation: .uninstall(identity: "owned-opaque-id"))
         _ = try requests(exchange)
-        try send(exchange, id: 1, result: ["version": "1.0.89", "protocolVersion": 3])
+        try send(exchange, id: 1, result: ["version": version, "protocolVersion": 3])
         let request = try requests(exchange)
         #expect(request.contains("plugins.uninstall"))
         #expect(request.contains("directSourceId"))
@@ -267,12 +270,15 @@ struct CopilotPluginExchangeTests {
         #expect(exchange.pluginReceipt?.plugin == nil)
     }
 
-    @Test(arguments: ["1.0.87", "1.0.90", "invalid"])
-    func unsupportedProviderNeverReceivesMutation(version: String) throws {
+    @Test(arguments: [
+        ("0.9.0", 3), ("2.0.0", 3), ("invalid", 3), ("1.0.91-preview", 3),
+        ("1.0.91", 2), ("1.0.91", 4),
+    ])
+    func unsupportedProviderNeverReceivesMutation(version: String, protocolVersion: Int) throws {
         let exchange = try CopilotMetadataExchange(operation: .uninstall(identity: "owned-id"))
         _ = try requests(exchange)
         #expect(throws: (any Error).self) {
-            try send(exchange, id: 1, result: ["version": version, "protocolVersion": 3])
+            try send(exchange, id: 1, result: ["version": version, "protocolVersion": protocolVersion])
         }
         #expect(try requests(exchange).isEmpty)
         #expect(exchange.pluginReceipt == nil)

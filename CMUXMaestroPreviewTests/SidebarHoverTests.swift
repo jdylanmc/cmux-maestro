@@ -11,11 +11,13 @@ struct SidebarHoverTests {
 
     private func withProductionKeyboardSidebar(
         _ check: @MainActor (NSWindow, NSView, SidebarConnectionModel, SidebarPreferences,
-                  SidebarTitleNativeButton, SidebarTitleNativeButton) async throws -> Void
+                  SidebarTitleNativeButton, SidebarTitleNativeButton, NSPasteboard) async throws -> Void
     ) async throws {
         let fixture = SidebarTreeFixtures()
         let preferenceFixture = try SidebarPreferenceFixture()
         defer { preferenceFixture.cleanup() }
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
         let preferences = preferenceFixture.preferences()
         let date = Date()
         let evidence = AgentAttention(kind: .turnFinished,
@@ -64,7 +66,8 @@ struct SidebarHoverTests {
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 600),
                               styleMask: .titled, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences))
+        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
+            .environment(\.sidebarClipboardWrite, { SidebarSessionCopy.copy($0, to: pasteboard) }))
         window.contentView = hosting
         defer {
             for anchor in descendants(hosting).compactMap({ $0 as? SidebarHoverAnchorView }) {
@@ -83,7 +86,7 @@ struct SidebarHoverTests {
         try #require(origin.preview.available && following.preview.available)
         window.autorecalculatesKeyViewLoop = true
         window.recalculateKeyViewLoop()
-        try await check(window, hosting, model, preferences, origin, following)
+        try await check(window, hosting, model, preferences, origin, following, pasteboard)
     }
 
     private func automaticPath(from origin: NSView, to following: NSView) throws -> [NSView] {
@@ -101,7 +104,7 @@ struct SidebarHoverTests {
     }
 
     @Test func productionSidebarAutomaticallyLinksExactFollowingRow() async throws {
-        try await withProductionKeyboardSidebar { window, _, model, preferences, origin, following in
+        try await withProductionKeyboardSidebar { window, _, model, preferences, origin, following, _ in
             let path = try automaticPath(from: origin, to: following)
             #expect(path.last === following && !path.contains { $0 === origin })
             #expect(!window.isVisible && model.navigation.status == .idle)
@@ -113,7 +116,7 @@ struct SidebarHoverTests {
     @Test(arguments: ["tab", "escape", "shift-tab"])
     func hostedPreviewKeysContinueToFollowingRow(exit: String) async throws {
         let fixture = SidebarTreeFixtures()
-        try await withProductionKeyboardSidebar { window, hosting, model, preferences, origin, following in
+        try await withProductionKeyboardSidebar { window, hosting, model, preferences, origin, following, pasteboard in
             @MainActor func pinned() -> SidebarDetailContent {
                 SidebarPresentation.pinnedDetails(
                     hierarchy: model.hierarchy, connected: true, tree: model.copilot.tree,
@@ -131,7 +134,7 @@ struct SidebarHoverTests {
                 .first { $0.state.mode == .keyboard })
             try #require(window.isKeyWindow && presenter.state.mode == .keyboard)
             func send(_ code: UInt16, to target: NSWindow, flags: NSEvent.ModifierFlags = []) throws {
-                let characters = code == 48 ? "\t" : code == 49 ? " " : "\u{1b}"
+                let characters = code == 48 ? "\t" : code == 49 ? " " : code == 36 ? "\r" : "\u{1b}"
                 NSApp.sendEvent(try #require(NSEvent.keyEvent(
                     with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
                     windowNumber: target.windowNumber, context: nil, characters: characters,
@@ -144,18 +147,31 @@ struct SidebarHoverTests {
             try #require((panel.firstResponder as? NSButton)?.accessibilityIdentifier() == "hover-close")
             try send(48, to: panel)
             let copy = try #require(panel.firstResponder as? NSButton)
-            try #require(copy.accessibilityIdentifier() == "hover-copy-value")
+            try #require(copy.accessibilityIdentifier() == "hover-copy-value"
+                         && copy.accessibilityLabel() == "Copy session ID")
             try send(49, to: panel)
             await sidebarEventually { copy.accessibilityValue() as? String == "Copied" }
-            #expect(NSPasteboard.general.string(forType: .string) == fixture.sessionID.uuidString)
+            #expect(pasteboard.string(forType: .string) == fixture.sessionID.uuidString)
+            try #require(panel.isKeyWindow && panel.firstResponder === copy)
             let controls = descendants(try #require(panel.contentView)).compactMap { $0 as? NSButton }
                 .filter { ["hover-close", "hover-copy-value"].contains($0.accessibilityIdentifier()) && $0.canBecomeKeyView }
-            try #require(controls.count == 2 && controls.last === copy)
+            let copyControls = controls.filter { $0.accessibilityIdentifier() == "hover-copy-value" }
+            try #require(controls.count == 6 && copyControls.count == 5 && copyControls.first === copy)
             let path = try automaticPath(from: origin, to: following)
             if exit == "tab" {
+                for _ in 1..<copyControls.count {
+                    try send(48, to: panel)
+                    try #require(copyControls.contains { $0 === panel.firstResponder })
+                }
+                try #require(panel.firstResponder === copyControls.last)
                 try send(48, to: panel)
+            } else if exit == "escape" {
+                try send(53, to: panel)
+                #expect(window.isKeyWindow && window.firstResponder === origin)
+                #expect(presenter.state.mode == .hidden && !panel.isVisible)
+                try send(48, to: window)
             } else {
-                try send(exit == "escape" ? 53 : 48, to: panel, flags: exit == "shift-tab" ? .shift : [])
+                try send(48, to: panel, flags: .shift)
                 #expect(window.isKeyWindow && window.firstResponder === origin)
                 #expect(presenter.state.mode == .hidden && !panel.isVisible)
                 try send(48, to: window)
@@ -207,26 +223,68 @@ struct SidebarHoverTests {
     }
 
     @Test func previewTabExitsAtLastNativeControlInsteadOfWrapping() throws {
-        let panel = SidebarHoverPanel(contentRect: NSRect(x: 100, y: 100, width: 280, height: 120),
+        let panel = SidebarHoverPanel(contentRect: NSRect(x: 100, y: 100, width: 280, height: 240),
                                      styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
         defer { panel.close() }
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 120))
-        let close = SidebarTitleNativeButton(frame: NSRect(x: 0, y: 60, width: 200, height: 30))
-        let copy = SidebarTitleNativeButton(frame: NSRect(x: 0, y: 20, width: 200, height: 30))
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 240))
+        let close = SidebarTitleNativeButton(frame: NSRect(x: 0, y: 204, width: 200, height: 24))
         close.setAccessibilityIdentifier("hover-close")
-        copy.setAccessibilityIdentifier("hover-copy-value")
         root.addSubview(close)
-        root.addSubview(copy)
+        let copies = (0..<6).map { index in
+            let copy = SidebarTitleNativeButton(
+                frame: NSRect(x: 0, y: CGFloat(168 - index * 24), width: 200, height: 24)
+            )
+            copy.setAccessibilityIdentifier("hover-copy-value")
+            root.addSubview(copy)
+            return copy
+        }
+        let firstCopy = try #require(copies.first)
+        let lastCopy = try #require(copies.last)
         panel.contentView = root
         panel.allowsKeyboard = true
-        var exits = 0
+        var exits = 0, returns = 0
         panel.advanceFromPreview = { exits += 1 }
+        panel.returnToOrigin = { returns += 1 }
         #expect(panel.focusControls() && panel.firstResponder === close)
         panel.selectNextKeyView(nil)
-        #expect(panel.firstResponder === copy && exits == 0)
+        #expect(panel.firstResponder === firstCopy && exits == 0)
+        for copy in copies.dropFirst() {
+            panel.selectNextKeyView(nil)
+            #expect(panel.firstResponder === copy && exits == 0)
+        }
         panel.selectNextKeyView(nil)
-        #expect(panel.firstResponder === copy && exits == 1)
+        #expect(panel.firstResponder === lastCopy && exits == 1)
+        #expect(panel.makeFirstResponder(firstCopy))
+        panel.selectPreviousKeyView(nil)
+        #expect(panel.firstResponder === firstCopy && returns == 1)
+    }
+
+    @Test func previewShiftTabReturnsFromFirstNativeControlWithoutWrapping() throws {
+        let panel = SidebarHoverPanel(contentRect: NSRect(x: 100, y: 100, width: 280, height: 180),
+                                     styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        defer { panel.close() }
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 180))
+        let close = SidebarTitleNativeButton(frame: NSRect(x: 0, y: 140, width: 200, height: 24))
+        close.setAccessibilityIdentifier("hover-close")
+        root.addSubview(close)
+        for index in 0..<6 {
+            let copy = SidebarTitleNativeButton(frame: NSRect(x: 0, y: CGFloat(108 - index * 24), width: 200, height: 24))
+            copy.setAccessibilityIdentifier("hover-copy-value")
+            root.addSubview(copy)
+        }
+        panel.contentView = root
+        panel.allowsKeyboard = true
+        var returns = 0
+        panel.returnToOrigin = { returns += 1 }
+        #expect(panel.focusControls() && panel.firstResponder === close)
+        panel.selectNextKeyView(nil)
+        let copy = try #require(panel.firstResponder as? NSButton)
+        try #require(panel.firstResponder === copy)
+        try #require(copy.accessibilityIdentifier() == "hover-copy-value")
+        panel.selectPreviousKeyView(nil)
+        #expect(panel.firstResponder === copy && returns == 1)
     }
 
     @Test func nativeTabTraversesIntoExactCopyControlWithoutPressingOrReplacingOrigin() async throws {
@@ -239,9 +297,9 @@ struct SidebarHoverTests {
         window.contentView = root
         defer { window.contentView = nil; window.close() }
         let sessionID = UUID()
-        var copied: [UUID] = []
+        var copied: [String] = []
         var pressed = 0
-        let presenter = SidebarHoverPresenter(copySessionID: { copied.append($0); return true }, showPanel: { _, _, _ in })
+        let presenter = SidebarHoverPresenter(copyValue: { copied.append($0); return true }, showPanel: { _, _, _ in })
         defer { presenter.detach() }
         presenter.update(anchor: button, data: .init(
             id: "keyboard-session", category: "Agent preview", title: "Synthetic keyboard agent",
@@ -279,7 +337,7 @@ struct SidebarHoverTests {
         try #require(panel.firstResponder === copy)
         panel.sendEvent(try key(49, in: panel, characters: " "))
         await sidebarEventually { copy.accessibilityValue() as? String == "Copied" }
-        #expect(copied == [sessionID] && pressed == 0)
+        #expect(copied == [sessionID.uuidString] && pressed == 0)
         #expect(copy.accessibilityValue() as? String == "Copied")
         presenter.dismiss(restoreFocus: true)
         #expect(presenter.state.mode == .hidden)
@@ -495,6 +553,33 @@ struct SidebarHoverTests {
         #expect(state.shouldOpen)
     }
 
+    @Test func delayedPointerDismissalRechecksPreviewCopyFocus() async throws {
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 400, height: 400),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let anchor = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 30))
+        window.contentView = anchor
+        defer { window.contentView = nil; window.close() }
+        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in })
+        defer { presenter.detach() }
+        presenter.update(anchor: anchor, data: .init(
+            id: "focus-retained", category: "Agent preview", title: "Synthetic agent",
+            lines: [.sessionID(UUID())]
+        ), group: nil)
+        presenter.hoverAnchor(true)
+        presenter.open(explicit: false)
+        presenter.hoverAnchor(false)
+        presenter.copyActionFocus(true)
+        try await Task.sleep(for: .milliseconds(260))
+        #expect(presenter.state.mode == .hover)
+        #expect(presenter.panel != nil)
+        presenter.copyActionFocus(false)
+        try await Task.sleep(for: .milliseconds(260))
+        #expect(presenter.state.mode == .hidden)
+        #expect(presenter.panel?.contentView == nil)
+        #expect(!presenter.isMonitoring)
+    }
+
     @Test func leavingOrDetachingCancelsPendingHover() async throws {
         let presenter = SidebarHoverPresenter()
         presenter.hoverAnchor(true)
@@ -634,7 +719,7 @@ struct SidebarHoverTests {
             window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             let hosting = NSHostingView(rootView: SidebarHoverCard(data: data, close: {
                 Issue.record("Rendering must not dismiss the card")
-            }, copySessionID: { _ in
+            },             copyValue: { _ in
                 Issue.record("Rendering must not copy")
                 return false
             }).environment(\.colorScheme, dark ? .dark : .light).background(Color(nsColor: .windowBackgroundColor)))

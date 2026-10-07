@@ -12,6 +12,7 @@
     <div><strong>Maestro</strong><span class="divider">/</span> Design lab <span class="lab-badge">SYNTHETIC DATA</span></div>
     <div class="lab-tools">
       <label class="width-control">Sidebar <input id="sidebar-width" type="range" min="280" max="460" value="350" aria-label="Sidebar width"></label>
+      <button id="stress-button">Stress testing</button>
       <button id="settings-button">CLI integration</button>
       <button id="reset-demo">Reset demo</button>
     </div>
@@ -36,16 +37,21 @@
     <section class="stage" aria-label="Synthetic native window layout">
       <header class="stage-header"><div><span class="eyebrow">Layout experiment · synthetic windows</span><h2 id="stage-title"></h2></div><span class="quiet">Worktree ≠ family ≠ pane</span></header>
       <div class="design-note">One grouping for <b>all workspaces</b>: Worktrees, Sub-agents, or native Workspace organization. Switching only changes presentation. Hover previews stay separate from the pinned active-window details.</div>
+      <section id="stress-controls" class="stress-controls" aria-label="Synthetic stress controls" hidden>
+        <p><b>Whole-sidebar overload.</b> 61 agent chats, 172 internal tasks, two browsers and two terminals. Paragraph-long names and histories, unbroken identifiers, six tags per agent, large counts, 48 sibling chats, 96 tasks under one parent, and 12 levels of each kind of ancestry. No live sessions.</p>
+        <div><label><input id="stress-long-name" type="checkbox">Paragraph-length workspace name</label><button id="stress-history">Open long histories</button></div>
+      </section>
       <div id="native-layout" class="native-layout"></div>
       <section class="design-ledger">
         <h3>Review this direction</h3>
+        <div><span class="ledger-dot"></span><p><b>Tabs are destinations. Tasks are activity.</b> Identity icons belong to interactive tabs. Internal Copilot tasks stay connected beneath their parent as single lines: a green spinner while working, a quiet check when finished, a red cross on failure. Status words live in tooltips and accessible labels. Idle tasks hide; finished outcomes stay until dismissed. The eye reveals idle tasks, not cancelled, unknown or dismissed outcomes.</p></div>
         <div><span class="ledger-dot"></span><p><b>Worktree ≠ ancestry ≠ pane.</b> Reviewer shares the implementer's worktree, but has its own child. The coordinator's children span worktrees.</p></div>
         <div><span class="ledger-dot"></span><p><b>Placement is not ownership.</b> Drag tabs between the two panes, or use their Move button. This never changes worktree groups or spawn relationships.</p></div>
         <div><span class="ledger-dot"></span><p><b>Views, not modes.</b> Beats and Taskboard open reusable content tabs. Move them between panes or workspaces; close and reopen them without changing agents or Beat definitions.</p></div>
         <div><span class="ledger-dot"></span><p><b>A Beat is a cron prompt.</b> One exact agent, one cron expression, one prompt. Each Beat can wait once; another occurrence does not add another queued prompt. The wand builds an expression, not a second schedule.</p></div>
         <div><span class="ledger-dot"></span><p><b>Finished is not exited.</b> Open a finished chat to continue. Proposed “Exit session & close tab” is simulated here; active sessions require confirmation. No production graceful-exit capability is implied.</p></div>
         <div><span class="ledger-dot"></span><p><b>Nothing here controls CMUX.</b> Diagnostics, Beats, tabs, and pets are synthetic. Beats adds a visual exploration of #42, not live scheduling or an expansion of the native delivery backlog. No prompts or commands are sent.</p></div>
-        <footer><a href="https://github.com/jdylanmc/cmux-maestro/issues/57" target="_blank" rel="noreferrer">Design parent #57 ↗</a><button id="capability-button">Research & capability notes</button></footer>
+        <footer><a href="https://github.com/jdylanmc/cmux-maestro/issues/131" target="_blank" rel="noreferrer">Internal tasks #131</a><a href="https://github.com/jdylanmc/cmux-maestro/issues/57" target="_blank" rel="noreferrer">Design parent #57 ↗</a><button id="capability-button">Research & capability notes</button></footer>
       </section>
     </section>
   </main>
@@ -73,7 +79,7 @@
     <header><div><span class="eyebrow" id="picker-kind"></span><h2 id="picker-title"></h2></div><button class="close" data-close="picker" aria-label="Close picker">×</button></header>
     <div id="picker-content"></div>
   </dialog>
-  <dialog id="context-menu" class="context-menu" aria-labelledby="context-menu-title"><div id="context-content"></div></dialog>
+  <dialog id="context-menu" class="context-menu" aria-label="Item actions"><div id="context-content"></div></dialog>
   <dialog id="directory-dialog" class="settings-dialog compact-dialog" aria-labelledby="directory-title">
     <header><h2 id="directory-title">Open directory as new workspace</h2><button data-close="directory-dialog" aria-label="Cancel opening directory">×</button></header>
     <form id="directory-form">
