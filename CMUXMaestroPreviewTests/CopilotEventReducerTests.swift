@@ -281,10 +281,11 @@ nonisolated struct CopilotEventReducerTests {
         try feed(&reducer, "abort", agent: "child", [:])
         #expect(reducer.value().children.last?.state == .cancelled)
         #expect(reducer.value().children.last?.terminalEvent != nil)
+        let beforeBackgroundNotification = reducer.value()
         try feed(&reducer, "system.notification", [
             "kind": ["type": "shell_completed", "shellId": "background", "exitCode": 0]
         ])
-        #expect(reducer.value().children.last?.terminalEvent != nil)
+        #expect(reducer.value() == beforeBackgroundNotification)
     }
 
     @Test func staleCompletionAndUnsupportedLifecycleDoNotFabricateProgress() throws {
@@ -864,16 +865,14 @@ nonisolated struct CopilotEventReducerTests {
         #expect(reducer.issues.contains(.readLimitReached))
     }
 
-    @Test func backgroundShellExitUsesStructuredNotificationNotContentOrArguments() throws {
+    @Test func backgroundShellCompletionCreatesNoSyntheticRowOrAttention() throws {
         var reducer = CopilotEventReducer(sessionID: UUID())
         try feed(&reducer, "system.notification", [
             "content": "PROMPT_SENTINEL",
             "kind": ["type": "shell_completed", "shellId": "background-1", "exitCode": 7, "description": "ARGS_SENTINEL"]
         ])
-        let child = try #require(reducer.value().children.first)
-        #expect(child.id == "shell-session:background-1")
-        #expect(child.state == .failed)
-        #expect(child.name == "Background shell")
+        #expect(reducer.value().children.isEmpty)
+        #expect(reducer.value().attention.isEmpty)
         #expect(reducer.issues.isEmpty)
     }
 
