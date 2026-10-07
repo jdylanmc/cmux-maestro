@@ -2625,9 +2625,13 @@ class LifecycleFailureTests(unittest.TestCase):
         initial["nodes"][parent_id].update(
             permissionMode="yolo", toolPolicy={"allow": [], "deny": ["web"]},
         )
-        for rule in ("read", "shell(git status)"):
-            with self.subTest(rule=rule):
+        for rule, parent_allows in (
+            ("read", []), ("read", ["read"]),
+            ("shell(git status)", []), ("shell(git status)", ["shell(git status)"]),
+        ):
+            with self.subTest(rule=rule, parent_allows=parent_allows):
                 self.state = copy.deepcopy(initial)
+                self.state["nodes"][parent_id]["toolPolicy"]["allow"] = parent_allows
                 self.mutations = 0
                 launcher = mock.Mock(return_value={"launchAccepted": True})
                 self.permission_spawn(parent_id, {"allowTools": [rule]}, launcher)
@@ -2637,6 +2641,7 @@ class LifecycleFailureTests(unittest.TestCase):
                 self.assertEqual(child["toolPolicy"], {"allow": [rule], "deny": ["web"]})
                 self.assertEqual(len(self.state["launches"]), 1)
                 self.assertEqual(len(self.state["nodes"]), 3)
+                self.assertEqual(self.mutations, 1)
                 arguments = CONTROLLER["interactive_arguments"]
                 with mock.patch.dict(arguments.__globals__, {"trusted_executable": lambda *_: "/synthetic/copilot"}):
                     argv = arguments(child, "Synthetic")
