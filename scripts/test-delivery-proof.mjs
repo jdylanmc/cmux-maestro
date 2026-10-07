@@ -6,7 +6,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { EventEmitter, once } from "node:events";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { start, startManaged, validateSend } from "./delivery-proof/adapter.mjs";
@@ -957,4 +957,74 @@ if (mode === "cancel") setTimeout(() => process.exit(5), 4000);
   assert.equal((await close({ target, scope: "subtree" }, { sessionId: own.sessionId })).resultType, "failure");
   assert.equal(await fs.readFile(callsFile, "utf8"), "complete\noverflow\ncancel\n");
   assert.deepEqual(f.sends, []);
+});
+
+test("native close rejects unrepresentable captured generations before effects through the actual adapter roundtrip", async (t) => {
+  for (const generation of ["9007199254740993", "1" + "0".repeat(400)]) {
+    await t.test(`captured generation with ${generation.length} digits`, async (t) => {
+      const packet = JSON.parse(execFileSync("python3", ["-B", "-c", `
+import io,json,runpy,sys
+from contextlib import redirect_stdout,redirect_stderr
+module=runpy.run_path(sys.argv[1])
+fixture=module["NativeCloseTests"]()
+fixture.setUp()
+try:
+    fixture.state["nodes"].pop(fixture.grandchild["id"])
+    child=fixture.add_close_descendant(fixture.child,12347)
+    child["generation"]=int(sys.argv[2])
+    fixture.persist()
+    fixture.cmux.workspace_surfaces.return_value.add(child["surfaceId"])
+    fixture.cmux.run.side_effect=lambda *args,**kwargs:json.loads(args[2])
+    before={str(p):p.read_bytes() for p in fixture.home.rglob("*") if p.is_file()}
+    stdout,stderr=io.StringIO(),io.StringIO()
+    with redirect_stdout(stdout),redirect_stderr(stderr):
+        code=fixture.invoke({"identity":fixture.identity,"target":fixture.target,"scope":"subtree"},cli=True)
+    after={str(p):p.read_bytes() for p in fixture.home.rglob("*") if p.is_file()}
+    print(json.dumps({"code":code,"stdout":stdout.getvalue(),"stderr":stderr.getvalue(),
+        "target":fixture.target,"effects":fixture.cmux.run.call_count,"unchanged":before==after}))
+finally:
+    fixture.doCleanups()
+`, fileURLToPath(new URL("./test-delivery-proof.py", import.meta.url)), generation], {
+        encoding: "utf8", timeout: 15_000, maxBuffer: 1_048_576,
+      }));
+      const f = await managedFixture(t);
+      const own = { ...f.bindings[0], workspaceId: packet.target.workspaceId };
+      await fs.writeFile(path.join(f.root, `${own.peer}.json`), JSON.stringify(own), { mode: 0o600 });
+      const packetFile = path.join(f.root, "controller-packet.json");
+      const executable = path.join(f.root, "generation-controller.mjs");
+      await fs.writeFile(packetFile, JSON.stringify(packet), { mode: 0o600 });
+      await fs.writeFile(executable, `#!${process.execPath}
+import { readFileSync } from "node:fs";
+const request=JSON.parse(readFileSync(0,"utf8"));
+if(process.argv.slice(2).join()!=="native-close" || request.scope!=="subtree") process.exit(4);
+const packet=JSON.parse(readFileSync(${JSON.stringify(packetFile)},"utf8"));
+process.stdout.write(packet.stdout);
+process.stderr.write(packet.stderr);
+process.exitCode=packet.code;
+`, { mode: 0o700 });
+      let close;
+      const adapter = await start({
+        root: f.root, peer: own.peer, managed: true, expected: { ...own, controller: executable },
+        joinSession: async ({ tools }) => {
+          close = tools.find(tool => tool.name === "maestro_close").handler;
+          return { sessionId: own.sessionId };
+        },
+      });
+      t.after(() => adapter.close());
+
+      const output = await close({ target: packet.target, scope: "subtree" }, { sessionId: own.sessionId });
+
+      assert.equal(packet.effects, 0,
+        `exact numeric identities must be representable before any host effect; actual adapter reply: ${
+          typeof output === "string" ? output : JSON.stringify(output)}`);
+      assert.equal(packet.unchanged, true);
+      assert.equal(packet.code, 2);
+      assert.equal(packet.stdout, "");
+      assert.equal(output.resultType, "failure");
+      assert.match(output.textResultForLlm, /No fallback or retry.*removal is unconfirmed/);
+      assert.ok(Buffer.byteLength(output.textResultForLlm) <= 65_536);
+      assert.equal(output.textResultForLlm.includes("closeAccepted"), false);
+      assert.deepEqual(f.sends, []);
+    });
+  }
 });
