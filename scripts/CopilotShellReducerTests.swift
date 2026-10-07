@@ -16,7 +16,8 @@ nonisolated struct CopilotShellReducerTests {
             ("real invocation retirement and lifecycle replay", realInvocationPressurePreservesRetirementAndReplayGuards),
             ("retired request placeholder and exact request replay", retiredRequestPlaceholderPreservesFreshRequest),
             ("saturated retired unknown owner", saturatedReplayCannotReattestRetiredUnknownOwner),
-            ("128 bounded reconstructed lifecycles", repeatedLifecyclesKeepUnchangedBounds)
+            ("128 bounded reconstructed lifecycles", repeatedLifecyclesKeepUnchangedBounds),
+            ("unjoined notification cannot prove primary turn completion", unjoinedNotificationCannotProvePrimaryTurnCompletion)
         ]
         for (name, test) in scenarios {
             do {
@@ -30,7 +31,7 @@ nonisolated struct CopilotShellReducerTests {
             FileHandle.standardError.write(Data(("FAIL: " + failures.joined(separator: "\nFAIL: ") + "\n").utf8))
             exit(1)
         }
-        print("PASS: compiled production shell decoder/reducer; 10 removal cases and 7 guard scenarios")
+        print("PASS: compiled production shell decoder/reducer; 10 removal cases and 8 guard scenarios")
     }
 
     private static func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -38,12 +39,14 @@ nonisolated struct CopilotShellReducerTests {
     }
 
     private static func event(
-        _ type: String, id: UUID = UUID(), agent: String? = nil,
-        timestamp: String = "2026-10-07T12:00:00Z", data: [String: Any]
+        _ type: String, id: UUID = UUID(), agent: String? = nil, parent: UUID? = nil,
+        timestamp: String? = "2026-10-07T12:00:00Z", data: [String: Any]
     ) throws -> Data {
         var envelope: [String: Any] = [
-            "id": id.uuidString, "type": type, "timestamp": timestamp, "data": data
+            "id": id.uuidString, "type": type, "data": data
         ]
+        if let timestamp { envelope["timestamp"] = timestamp }
+        if let parent { envelope["parentId"] = parent.uuidString }
         if let agent { envelope["agentId"] = agent }
         return try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys])
     }
@@ -268,5 +271,23 @@ nonisolated struct CopilotShellReducerTests {
         try check(counts.work == 1 && counts.agents <= 1 && counts.tombstones <= 32 && counts.events <= 8
                     && counts.replayWords == 16_384 && counts.eventReplayWords == 16_384,
                   "Original work/relationship/lifecycle/replay budgets must not be relaxed")
+    }
+
+    private static func unjoinedNotificationCannotProvePrimaryTurnCompletion() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let a = UUID(), b = UUID(), notification = UUID()
+        reducer.consume(try event("assistant.turn_start", id: a, timestamp: nil,
+                                 data: ["turnId": "0", "interactionId": "A"]))
+        reducer.consume(try event("assistant.turn_end", parent: a, timestamp: nil, data: ["turnId": "0"]))
+        reducer.consume(try event("assistant.turn_start", id: b, timestamp: nil,
+                                 data: ["turnId": "0", "interactionId": "B"]))
+        reducer.consume(try event("system.notification", id: notification, parent: b, timestamp: nil, data: [
+            "kind": ["type": "shell_completed", "shellId": "unjoined", "exitCode": 0]
+        ]))
+        try check(reducer.value().children.isEmpty, "Unjoined notification must create no synthetic child")
+        reducer.consume(try event("assistant.turn_end", parent: notification, timestamp: nil, data: ["turnId": "0"]))
+        let state = reducer.value()
+        try check(state.state == .unknown && state.attention.isEmpty && reducer.issues == [.ambiguousTurn],
+                  "Unjoined notification parent chain must not attest current primary turn completion")
     }
 }

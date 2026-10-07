@@ -786,7 +786,7 @@ nonisolated struct CopilotInteractionTests {
         reducer.consume(try interactionEvent("system.notification", id: notification, parent: b, data: [
             "kind": ["type": "shell_completed", "shellId": "unjoined", "exitCode": 0]
         ]))
-        #expect(reducer.value().children.first?.state == .completed)
+        #expect(reducer.value().children.isEmpty)
         reducer.consume(try interactionEvent("assistant.turn_end", parent: notification, turn: "0"))
         #expect(reducer.value().state == .unknown)
         #expect(reducer.value().attention.isEmpty)
