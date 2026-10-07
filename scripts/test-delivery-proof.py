@@ -2546,6 +2546,26 @@ class LifecycleFailureTests(unittest.TestCase):
                 self.assertEqual(child["permissionMode"], "default")
                 self.assertEqual(child["toolPolicy"], {"allow": expected_allow, "deny": ["web"]})
 
+    def test_native_spawn_preserves_optional_launch_selection_for_controller_resolution(self):
+        identity = {"login": "synthetic"}
+        assignment = {
+            "name": "Selected child", "cwd": str(REPO), "task": "Synthetic",
+            "model": "gpt-6.1-sol", "contextTier": "long_context", "reasoningEffort": "medium",
+        }
+        request = {"identity": identity, "assignment": assignment}
+        spawn = mock.Mock(return_value={"launchAccepted": True})
+        native = CONTROLLER["command_native_spawn"]
+        with mock.patch.dict(native.__globals__, {"command_spawn": spawn}), mock.patch(
+            "sys.stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode())),
+        ):
+            self.assertEqual(native(self.root, self.cmux), {"launchAccepted": True})
+        args = spawn.call_args.args[0]
+        self.assertEqual(args.model, "gpt-6.1-sol")
+        self.assertEqual(args.context_tier, "long_context")
+        self.assertEqual(args.reasoning_effort, "medium")
+        self.assertEqual(spawn.call_args.kwargs["native_identity"], identity)
+        self.assertTrue(args.require_pinned_launch_settings)
+
     def test_atomic_census_distinguishes_removed_and_surviving_exited_surface(self):
         observe = CONTROLLER["resource_observations"]
         for present in (True, False):
