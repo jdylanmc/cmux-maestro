@@ -78,6 +78,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Keep valid provider-native reasoning defaults from blocking unrelated model
+  selection; omit unrepresentable CLI defaults while retaining malformed-data
+  refusal and warned provider-default behavior (#154).
 - Allow bounded finite child narrowing from recorded YOLO without redundant
   parent allow rules, preserving denies, default-parent and escalation guards
   (#154).
