@@ -2302,6 +2302,7 @@ def native_close_request(root, cmux, request):
             attempted = True
             result = cmux.run("rpc", "surface.close", json.dumps({
                 "workspace_id": child["workspaceId"], "surface_id": child["surfaceId"],
+                "force": True,
             }))
         except CloseBudgetExhausted:
             attempted = False
