@@ -1281,7 +1281,7 @@ enum SidebarPresentation {
                 ? "Complete" : "Incomplete; missing work is not assumed finished",
                   copyableValue: session.childrenComplete && !session.treeDegraded ? "complete" : "incomplete")
         ]
-        if let model = session.model { result.insert(.init(title: "Model", value: model), at: 2) }
+        result.insert(.init(title: "Model", value: session.model ?? "Unavailable"), at: 2)
         return result + activityDetails(session.activity) + attentionDetails(session.attention)
     }
 
