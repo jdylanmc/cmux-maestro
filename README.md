@@ -610,6 +610,46 @@ controller callers may retain Copilot defaults by omitting the requirement flag;
 the bundled orchestration skill deliberately does not and always requires the
 pinned Maestro account and model.
 
+### Optional per-launch preferences
+
+Native `maestro_spawn` accepts optional `model`, `contextTier` and
+`reasoningEffort` strings. Omission preserves existing configured launches,
+without a model query, new warning or context/effort flag. No activity defaults
+are inferred from worker names, roles or task text.
+
+For explicit preferences, the existing joined extension reads
+`session.rpc.model.list()` using that session's authentication context and
+checks the invoking account before and after. Only bounded model IDs,
+supported tiers/efforts and advertised default effort enter private launch
+evidence; raw model/billing/quota data does not enter state, prompts or host
+commands. Malformed, duplicate, oversized or foreign evidence and account drift
+refuse before launch. This is a capability snapshot, not atomic account/provider
+admission or an observation of the child's running settings.
+
+Supported selections feed the actual `--model`, `--context` and
+`--reasoning-effort` arguments. Unsupported safe optional requests **warn**:
+an unavailable requested model falls back only to the configured pin when that
+pin is available in the session catalog; no available configured fallback
+means refusal, never arbitrary model substitution. A valid selected model
+survives an unsupported context/effort request: context falls to its default
+tier, effort to its advertised default (or no override when unavailable).
+Unavailable experimental model lookup warns and preserves the old configured
+launch without applying optional overrides. Unsafe input, missing credentials,
+ownership, permission and capacity failures are not preference fallback.
+
+The bounded private `launchSelection` record and receipt distinguish requested
+preferences, configured arguments, evidence source and warnings; `observed`
+remains unknown. `long_context` is a supported tier, not a numeric context-window
+claim. Account entitlements and actual provider application remain unverified
+until independently observed; no model getter/setter changes a parent session.
+
+The CLI adds `spawn --model`, `--context-tier` and `--reasoning-effort`. Direct
+callers lack joined-session evidence, so new selections warn and retain
+configured defaults. `launch-coordinator --model` keeps its pre-existing
+explicit-over-configured precedence and syntax validation, without claiming
+session-catalog support; its new context/effort options warn and remain omitted.
+Neither native Settings nor persistent Copilot configuration is changed.
+
 ### Workspace launch capacity
 
 The controller's `capacity --workspace <workspace-uuid>` command returns a

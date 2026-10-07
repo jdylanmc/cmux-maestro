@@ -12,7 +12,51 @@ const MAX_BODY = 4096;
 const MAX_FRAME = 8192;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const CAPABILITY = /^[0-9a-f]{64}$/;
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/;
+const CONTEXT_TIERS = ["default", "long_context"];
+const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+const PREFERENCES = ["model", "contextTier", "reasoningEffort"];
 const decoder = new TextDecoder("utf-8", { fatal: true });
+
+function validatePreferences(assignment) {
+  for (const key of PREFERENCES) {
+    if (!(key in assignment)) continue;
+    const pattern = key === "model" ? MODEL_ID : /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+    requireCondition(typeof assignment[key] === "string" && pattern.test(assignment[key]));
+  }
+}
+
+function modelCapabilities(response) {
+  requireCondition(response && Array.isArray(response.list) && response.list.length <= 128);
+  const ids = new Set();
+  function options(value, supported) {
+    if (value === undefined) return [];
+    requireCondition(Array.isArray(value) && value.length <= 32 &&
+      value.every(item => typeof item === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(item)) &&
+      new Set(value).size === value.length);
+    return value.filter(item => supported.includes(item));
+  }
+  return response.list.map(model => {
+    requireCondition(model && typeof model === "object" && !Array.isArray(model) &&
+      typeof model.id === "string" && MODEL_ID.test(model.id) && !ids.has(model.id));
+    ids.add(model.id);
+    const contextTiers = options(model.supportedContextTiers, CONTEXT_TIERS);
+    if (!contextTiers.includes("default")) contextTiers.unshift("default");
+    const longContext = model.billing?.tokenPrices?.longContext;
+    if (longContext !== undefined) {
+      requireCondition(longContext !== null && typeof longContext === "object" && !Array.isArray(longContext));
+      if (!contextTiers.includes("long_context")) contextTiers.push("long_context");
+    }
+    const reasoningEfforts = options(model.supportedReasoningEfforts, REASONING_EFFORTS);
+    const result = { id: model.id, contextTiers, reasoningEfforts };
+    if (model.defaultReasoningEffort !== undefined) {
+      requireCondition(typeof model.defaultReasoningEffort === "string" &&
+        reasoningEfforts.includes(model.defaultReasoningEffort));
+      result.defaultReasoningEffort = model.defaultReasoningEffort;
+    }
+    return result;
+  });
+}
 
 function requireCondition(condition) {
   if (!condition) throw new Error("Invalid or unavailable proof route.");
@@ -205,6 +249,26 @@ export async function start({ root, peer, joinSession, managed = false, expected
     await currentBinding();
     return { login: auth.login, host: auth.host };
   }
+  async function launchCapabilities(invocation, account) {
+    let response;
+    let source = "unavailable";
+    if (typeof session.rpc.model?.list === "function") {
+      try {
+        response = await session.rpc.model.list();
+        source = "session-model-list";
+      } catch (error) {
+        if (error?.code !== -32601) {
+          throw new Error("The invoking session model API failed; no terminal was created");
+        }
+      }
+    }
+    const models = source === "session-model-list" ? modelCapabilities(response) : [];
+    const current = await currentAccount(invocation);
+    requireCondition(current.login === account.login && current.host === account.host);
+    const evidence = { version: 1, sessionId: own.sessionId, account, source, models };
+    requireCondition(Buffer.byteLength(JSON.stringify(evidence), "utf8") <= 32768);
+    return evidence;
+  }
   const tools = [
     {
       name: managed ? "maestro_peers" : "maestro_proof_peers",
@@ -341,6 +405,9 @@ export async function start({ root, peer, joinSession, managed = false, expected
         color: { type: "string", enum: ["theme", "green", "teal", "blue", "purple", "pink", "red", "gray"] },
         allowTools: { type: "array", items: { type: "string" } },
         denyTools: { type: "array", items: { type: "string" } },
+        model: { type: "string" },
+        contextTier: { type: "string" },
+        reasoningEffort: { type: "string" },
         yolo: { type: "boolean", description: "Only with explicit human approval for a coordinator launch." },
       },
       required: ["name", "cwd", "task"],
@@ -351,16 +418,22 @@ export async function start({ root, peer, joinSession, managed = false, expected
         requireCondition(session?.sessionId === own.sessionId && invocation?.sessionId === own.sessionId);
         requireCondition(assignment && typeof assignment === "object" && !Array.isArray(assignment));
         requireCondition(Object.keys(assignment).every(key =>
-          ["name", "cwd", "task", "allowTools", "denyTools", "yolo", "icon", "color"].includes(key)));
+          ["name", "cwd", "task", "allowTools", "denyTools", "yolo", "icon", "color", ...PREFERENCES].includes(key)));
+        validatePreferences(assignment);
         const auth = await currentAccount(invocation);
-        const result = await launch({
+        const evidence = PREFERENCES.some(key => key in assignment)
+          ? await launchCapabilities(invocation, auth) : undefined;
+        const request = {
           identity: {
             nodeId: own.nodeId, workspaceId: own.workspaceId, sessionId: own.sessionId,
             generation: own.generation, capability: own.capability,
             login: auth.login, host: auth.host,
           },
           assignment,
-        }, expected.controller);
+          ...(evidence === undefined ? {} : { launchCapabilities: evidence }),
+        };
+        requireCondition(Buffer.byteLength(JSON.stringify(request), "utf8") <= 65536);
+        const result = await launch(request, expected.controller);
         return JSON.stringify(result);
       } catch (error) {
         return {

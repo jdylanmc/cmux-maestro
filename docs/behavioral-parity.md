@@ -532,6 +532,16 @@ remain unchanged. These checks establish recorded/requested policy only: they do
 not inspect human-modified live permissions, prove atomic provider-policy
 comparison, or guarantee actual manual startup when provider defaults/environment
 request allow-all. That runtime acceptance gap remains explicit.
+Optional launch-selection tests exercise real native assignment forwarding,
+sanitized session-scoped model metadata, account rechecking, malformed/foreign
+evidence refusal, supported argv and warned configured fallback. Generic
+omission performs no model query; unavailable experimental lookup preserves
+the prior launch. Model-specific tier/effort fallback retains a valid selected
+model. No available configured fallback means refusal, not arbitrary selection.
+Root model precedence stays unchanged, and new options without joined evidence
+warn without injecting unsupported flags. These are synthetic source contracts,
+not observed child model/context settings, entitlements or a numeric long-context
+window; full catalog/billing data is absent from persisted selection metadata.
 The failed-attachment
 capacity fixture stops only its completed synthetic supervisors while retaining
 every terminal, and requires the actual configured resource-limit error, not a busy
