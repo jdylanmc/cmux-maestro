@@ -13,7 +13,10 @@ nonisolated struct CopilotShellReducerTests {
             ("replay and reconstruction retain no synthetic shell outcomes", replayCannotRecreateSyntheticRowsOrAttention),
             ("unrelated and malformed notifications", ignoresUnrelatedNotificationsAndRejectsMalformedExitCodes),
             ("independent worker and invocation errors", preservesIndependentFailuresAndMatchingDisplayNames),
-            ("real invocation retirement and lifecycle replay", realInvocationPressurePreservesRetirementAndReplayGuards)
+            ("real invocation retirement and lifecycle replay", realInvocationPressurePreservesRetirementAndReplayGuards),
+            ("retired request placeholder and exact request replay", retiredRequestPlaceholderPreservesFreshRequest),
+            ("saturated retired unknown owner", saturatedReplayCannotReattestRetiredUnknownOwner),
+            ("128 bounded reconstructed lifecycles", repeatedLifecyclesKeepUnchangedBounds)
         ]
         for (name, test) in scenarios {
             do {
@@ -27,7 +30,7 @@ nonisolated struct CopilotShellReducerTests {
             FileHandle.standardError.write(Data(("FAIL: " + failures.joined(separator: "\nFAIL: ") + "\n").utf8))
             exit(1)
         }
-        print("PASS: compiled production shell decoder/reducer; 10 removal cases and 4 guard scenarios")
+        print("PASS: compiled production shell decoder/reducer; 10 removal cases and 7 guard scenarios")
     }
 
     private static func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -173,5 +176,97 @@ nonisolated struct CopilotShellReducerTests {
         reducer.consume(oldFinish)
         try check(reducer.value() == fresh, "Old start/completion must not mutate newly admitted worker")
         try check(reducer.retentionCounts.work == 1 && reducer.issues.isEmpty, "Real pressure must preserve unchanged work bound without degradation")
+    }
+
+    private static func retiredRequestPlaceholderPreservesFreshRequest() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumWorkItems: 1, maximumRelationships: 4)
+        for payload in try [
+            event("permission.requested", agent: "worker", data: ["requestId": "old"]),
+            event("permission.completed", agent: "worker", data: ["requestId": "old"]),
+            event("abort", agent: "worker", data: [:]),
+            event("assistant.turn_start", data: ["turnId": "next"]),
+            event("tool.execution_start", data: ["toolCallId": "retire-worker", "toolName": "bash"]),
+            event("tool.execution_complete", data: ["toolCallId": "retire-worker", "success": true])
+        ] { reducer.consume(payload) }
+        try check(reducer.value().children.map(\.id) == ["shell:retire-worker"] && reducer.retentionCounts.work == 1,
+                  "Request placeholder must actually retire under the original one-node bound")
+        reducer.consume(try event("permission.requested", agent: "worker", data: ["requestId": "fresh"]))
+        let fresh = reducer.value()
+        guard let worker = fresh.children.first(where: { $0.id == "worker" }) else {
+            throw Failure(description: "Fresh exact request must admit previously retired owner")
+        }
+        try check(worker.kind == .unknown && worker.state == .blocked && worker.attention?.map(\.kind) == [.permission],
+                  "Fresh request must preserve blocking identity without inheriting aborted outcome")
+        try check(reducer.issues.isEmpty, "Fresh request must retain original issue guard; actual issues=\(reducer.issues)")
+        reducer.consume(try event("permission.requested", agent: "worker", data: ["requestId": "old"]))
+        try check(reducer.value().children.first { $0.id == "worker" } == worker,
+                  "Old resolved request must not mutate fresh worker; actual=\(reducer.value().children), issues=\(reducer.issues)")
+        print("OBSERVATION retired request: original worker guard preserved; full-state-equal=\(reducer.value() == fresh), post-replay issues=\(reducer.issues)")
+    }
+
+    private static func saturatedReplayCannotReattestRetiredUnknownOwner() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumWorkItems: 1,
+                                          maximumLifecycleEvents: 16, maximumReplayFilterWords: 1)
+        for payload in try [
+            event("subagent.started", agent: "child", data: ["toolCallId": "spawn-child", "agentDisplayName": "Synthetic child"]),
+            event("assistant.turn_start", agent: "child", data: ["turnId": "0", "interactionId": "A"]),
+            event("assistant.turn_end", agent: "child", data: ["turnId": "0"]),
+            event("subagent.completed", agent: "child", data: ["toolCallId": "spawn-child", "agentDisplayName": "Synthetic child"]),
+            event("assistant.turn_start", agent: "child", data: ["turnId": "0", "interactionId": "B"]),
+            event("abort", agent: "child", data: [:]),
+            event("assistant.turn_start", data: ["turnId": "root", "interactionId": "root"]),
+            event("tool.execution_start", data: ["toolCallId": "pressure", "toolName": "bash"]),
+            event("tool.execution_complete", data: ["toolCallId": "pressure", "success": true])
+        ] { reducer.consume(payload) }
+        try check(reducer.value().children.allSatisfy { $0.id != "child" } && reducer.retentionCounts.work == 1,
+                  "Saturation case must actually retire child before replay pressure")
+        for _ in 0..<128 {
+            reducer.consume(try event("session.model_change", data: ["newModel": "pressure"]))
+        }
+        for payload in try [
+            event("subagent.started", agent: "child", data: ["toolCallId": "new-spawn", "agentDisplayName": "New child"]),
+            event("subagent.configured", agent: "child", data: ["model": "synthetic-model", "multiTurn": true]),
+            event("assistant.turn_start", agent: "child", data: ["turnId": "0", "interactionId": "new-A"])
+        ] { reducer.consume(payload) }
+        try check(reducer.value().children.allSatisfy { $0.id != "child" || $0.state == .unknown },
+                  "Saturated replay must not reattest retired owner")
+        try check(reducer.issues.contains(.readLimitReached) && reducer.retentionCounts.work <= 1
+                    && reducer.retentionCounts.eventReplayWords == 1,
+                  "Original saturation and one-node/one-word limits must remain enforced")
+    }
+
+    private static func repeatedLifecyclesKeepUnchangedBounds() throws {
+        let session = UUID()
+        var original = CopilotEventReducer(
+            sessionID: session, maximumWorkItems: 1, maximumRelationships: 32, maximumLifecycleEvents: 8
+        )
+        var rebuilt = CopilotEventReducer(
+            sessionID: session, maximumWorkItems: 1, maximumRelationships: 32, maximumLifecycleEvents: 8
+        )
+        for index in 0..<128 {
+            let payloads = try [
+                event("subagent.started", agent: "worker", data: [
+                    "toolCallId": "spawn-\(index)", "agentDisplayName": "Worker", "parentId": "parent"
+                ]),
+                event("assistant.turn_start", agent: "worker", data: ["turnId": "turn-\(index)"]),
+                event("permission.requested", agent: "worker", data: ["requestId": "request-\(index)"]),
+                event("subagent.completed", data: ["toolCallId": "spawn-\(index)", "agentDisplayName": "Worker"]),
+                event("tool.execution_start", data: ["toolCallId": "retire-\(index)", "toolName": "bash"]),
+                event("tool.execution_complete", data: ["toolCallId": "retire-\(index)", "success": true])
+            ]
+            for payload in payloads { original.consume(payload); rebuilt.consume(payload) }
+            try check(original.value().children.allSatisfy { $0.id != "worker" } && original.retentionCounts.work == 1,
+                      "Lifecycle \(index) must genuinely retire worker without increasing capacity")
+        }
+        let fresh = try event("assistant.turn_start", agent: "worker", data: ["turnId": "last-fresh"])
+        original.consume(fresh)
+        rebuilt.consume(fresh)
+        try check(original.value() == rebuilt.value() && original.value().children.first?.id == "worker"
+                    && original.value().children.first?.state == .working && original.issues.isEmpty,
+                  "128 lifecycle reconstruction must preserve fresh owner and unchanged guard behavior")
+        let counts = original.retentionCounts
+        try check(counts.work == 1 && counts.agents <= 1 && counts.tombstones <= 32 && counts.events <= 8
+                    && counts.replayWords == 16_384 && counts.eventReplayWords == 16_384,
+                  "Original work/relationship/lifecycle/replay budgets must not be relaxed")
     }
 }

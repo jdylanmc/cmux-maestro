@@ -380,10 +380,10 @@ nonisolated struct CopilotEventReducerTests {
         for row in [toolA, startA, turnA, requestA, endA, finishA, startA, turnA] { reducer.consume(row) }
         #expect(reducer.value().children.first?.state == .completed)
         if retire {
-            try feed(&reducer, "system.notification", [
-                "kind": ["type": "shell_completed", "shellId": "retire-a", "exitCode": 0]
-            ])
+            try feed(&reducer, "tool.execution_start", ["toolCallId": "retire-a", "toolName": "bash"])
+            try feed(&reducer, "tool.execution_complete", ["toolCallId": "retire-a", "success": true])
             #expect(!reducer.value().children.contains(where: { $0.id == "worker" }))
+            #expect(reducer.retentionCounts.work == 1)
         }
         try feed(&reducer, "tool.execution_start", ["toolCallId": "tool-b", "toolName": "task"])
         try feed(&reducer, "subagent.started", agent: "worker", [
@@ -455,11 +455,16 @@ nonisolated struct CopilotEventReducerTests {
                 try copilotTestEvent("subagent.completed", data: [
                     "toolCallId": "spawn-\(index)", "agentDisplayName": "Worker"
                 ]),
-                try copilotTestEvent("system.notification", data: [
-                    "kind": ["type": "shell_completed", "shellId": "retire-\(index)", "exitCode": 0]
+                try copilotTestEvent("tool.execution_start", data: [
+                    "toolCallId": "retire-\(index)", "toolName": "bash"
+                ]),
+                try copilotTestEvent("tool.execution_complete", data: [
+                    "toolCallId": "retire-\(index)", "success": true
                 ])
             ]
             for row in rows { original.consume(row); rebuilt.consume(row) }
+            #expect(!original.value().children.contains { $0.id == "worker" })
+            #expect(original.retentionCounts.work == 1)
         }
         let fresh = try copilotTestEvent("assistant.turn_start", agent: "worker", data: ["turnId": "last-fresh"])
         original.consume(fresh); rebuilt.consume(fresh)
@@ -488,9 +493,10 @@ nonisolated struct CopilotEventReducerTests {
         ])
         for row in [spawnA, turnA, endA, completeA] { reducer.consume(row) }
         if retire {
-            try feed(&reducer, "system.notification", [
-                "kind": ["type": "shell_completed", "shellId": "retire-a", "exitCode": 0]
-            ])
+            try feed(&reducer, "tool.execution_start", ["toolCallId": "retire-a", "toolName": "bash"])
+            try feed(&reducer, "tool.execution_complete", ["toolCallId": "retire-a", "success": true])
+            #expect(!reducer.value().children.contains { $0.id == "worker" })
+            #expect(reducer.retentionCounts.work == 1)
         }
         try feed(&reducer, "assistant.turn_start", agent: "worker", ["turnId": "turn-b", "model": "fresh-model"])
         let fresh = try #require(reducer.value().children.first(where: { $0.id == "worker" }))

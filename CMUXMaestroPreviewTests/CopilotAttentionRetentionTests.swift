@@ -336,11 +336,11 @@ nonisolated struct CopilotAttentionRetentionTests {
             attentionEvent("permission.completed", agent: "worker", data: ["requestId": "old"]),
             attentionEvent("abort", agent: "worker"),
             attentionEvent("assistant.turn_start", data: ["turnId": "next"]),
-            attentionEvent("system.notification", data: [
-                "kind": ["type": "shell_completed", "shellId": "retire-worker", "exitCode": 0]
-            ])
+            attentionEvent("tool.execution_start", data: ["toolCallId": "retire-worker", "toolName": "bash"]),
+            attentionEvent("tool.execution_complete", data: ["toolCallId": "retire-worker", "success": true])
         ] { reducer.consume(row) }
         #expect(!reducer.value().children.contains { $0.id == "worker" })
+        #expect(reducer.retentionCounts.work == 1)
         reducer.consume(try attentionEvent("permission.requested", agent: "worker", data: ["requestId": "fresh"]))
         let fresh = try #require(reducer.value().children.first { $0.id == "worker" })
         #expect(fresh.kind == .unknown && fresh.state == .blocked)
