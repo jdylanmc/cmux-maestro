@@ -2197,7 +2197,7 @@ def command_native_close(root, cmux):
     except (UnicodeError, ValueError) as error:
         raise OrchestrationError("Native close request is invalid.") from error
 
-    def owned(state, identity=target_identity, *, direct=True):
+    def owned(state, identity=target_identity, *, direct=True, selecting=False):
         actor = authorize_native_actor(state, request["identity"])
         if (actor["id"] != os.environ.get("CMUX_MAESTRO_WORKER_ID")
                 or actor["copilotSessionId"] != os.environ.get("SESSION_ID")
@@ -2212,7 +2212,7 @@ def command_native_close(root, cmux):
             ("sessionId", "copilotSessionId"), ("generation", "generation"),
         )):
             raise OrchestrationError("Close target identity changed.")
-        for node in (actor, target):
+        for node in (actor,) if selecting else (actor, target):
             if (node.get("executionMode") != "interactive" or not node.get("messaging")
                     or node.get("archiving") or node.get("surfaceUnknown") or node.get("launchError")
                     or not node.get("surfaceId") or not node.get("providerProcess")
@@ -2224,7 +2224,7 @@ def command_native_close(root, cmux):
         return actor, target
 
     snapshot = read_state(root)
-    actor, target = owned(snapshot)
+    actor, target = owned(snapshot, selecting=request.get("scope") == "subtree")
     if direct_process_identity(actor["providerProcess"]["pid"]) != actor["providerProcess"]:
         raise OrchestrationError("Close invoking provider identity changed.")
 
