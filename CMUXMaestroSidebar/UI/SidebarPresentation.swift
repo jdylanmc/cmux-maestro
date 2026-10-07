@@ -1141,8 +1141,8 @@ enum SidebarPresentation {
             result += [.init(title: "Context", value: "Needed by work or attention"),
                        .init(title: "Focus", value: retainedFocusUnavailable)]
         }
-        if let model = managedModel(for: node, in: tree, now: now) {
-            result.append(.init(title: "Model", value: model))
+        if let session = managedSession(for: node, in: tree, now: now) {
+            result.append(.init(title: "Model", value: session.model ?? "Unavailable"))
         }
         let pathContext = hierarchy.pathContext(
             workspaceID: node.workspaceId, surfaceID: node.surfaceId
