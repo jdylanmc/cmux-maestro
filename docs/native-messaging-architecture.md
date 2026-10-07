@@ -183,7 +183,8 @@ probes, inventory and host request. Initial and per-target state acquisitions do
 not wait for capacity-scaled lock budgets. Context resets on success/failure so
 other commands retain their timeouts. The complete worst-case JSON result shape,
 including CLI wrapper/newline, is reserved under 65,536 bytes before host effects;
-oversized plans refuse without truncating identities or enlarging the adapter's
+oversized plans and generations outside the JavaScript safe-integer range refuse
+without truncating or rounding identities or enlarging the adapter's
 60-second timeout. Every budget-exhausted remainder target is not attempted.
 
 Inherit stock host behavior, including last-terminal refusal. Actual CMUX 0.65
@@ -194,8 +195,10 @@ the host's result naming is not a removal proof. Errors, timeout, cancellation
 and lost replies are surfaced without retries or post-send observations.
 Subtree results repeat every captured identity with `attempted`, `outcome`,
 `reason` and unconfirmed removal. Accepted alone adds `closeAccepted: true`;
-preflight failure is refused, host failure/lost reply is unknown, budget remainder
-is not attempted. A failed descendant does not block an independently valid
+preflight failure (including a missing captured session) is refused; host failure,
+malformed text or lost reply after dispatch is unknown; deadline expiry before
+dispatch and budget remainder are not attempted. A failed descendant does not
+block an independently valid
 sibling/parent. Recheck captured ancestry, exact identity, actor/source/process,
 workspace and leases under each target lock. Never substitute replacements or
 expand with late children. No process exit, completion acknowledgement, new

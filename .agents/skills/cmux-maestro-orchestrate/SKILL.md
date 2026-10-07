@@ -356,7 +356,11 @@ Unavailable captured surface/session fields remain null. The pass uses a
 45-second total budget, at most five seconds per target, and nonwaiting state
 lock acquisitions. Budget-exhausted remainder targets are explicitly
 `not-attempted`; a complete result plan exceeding the existing 65,536-byte
-transport bound refuses before host effects. Transport cancellation, overflow
+transport bound, or containing a generation outside the existing JavaScript
+safe-integer numeric wire range, refuses before host effects rather than rounding
+or changing an identity. Deadline expiry before host dispatch is not an attempt;
+timeout or malformed host text after dispatch remains unknown. Transport
+cancellation, overflow
 or loss can still leave the entire request uncertain; never retry automatically.
 
 The controller checks its private actor capability/control identity, invoking

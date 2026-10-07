@@ -13,7 +13,10 @@ Notable changes are recorded using Keep a Changelog categories.
 - Add explicitly authorized descendant-first subtree close with one fixed private
   selection, independent continuation after refusal or uncertainty, and complete
   bounded per-target results. Preserve default target-only behavior, ancestry and
-  resource accounting; report `confirmation_required` without forced fallback
+  resource accounting; refuse unrepresentable numeric identities before effects,
+  preserve results after malformed host replies, and distinguish pre-dispatch
+  refusal from unknown dispatched requests. Report `confirmation_required`
+  without forced fallback
   (#91).
 - Versioned visual-design references for #57, including the frozen September
   29 prototype, approved contract, 56-state synthetic review gallery and
