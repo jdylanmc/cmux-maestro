@@ -144,12 +144,18 @@ inferred. Cleanup must follow exact lifecycle ownership, not a guessed idle stat
 
 ### Explicit owned-child close
 
-`maestro_close({target: {workerId, workspaceId, surfaceId, sessionId, generation}})`
+`maestro_close({target: {workerId, workspaceId, surfaceId, sessionId, generation}, scope?})`
 uses the CLI-owned adapter and existing controller, not the peer socket or the
 sidebar. The model supplies only one explicit child identity. The adapter binds
 the actual invoking session and private capability; controller admission also
 requires that session's inherited actor/control token, run, generation, current
 surface and provider ancestry. Public peer discovery grants no close rights.
+Omitted scope and explicit `target-only` preserve the flat single-target receipt.
+Explicit `subtree` captures a fixed bounded private root/descendant selection
+and uses the actual actor, not impersonated intermediate parents. The exact root
+must remain a direct child; selected descendants are separately admitted in that
+captured tree. Descendants precede parents, at most once each. An ended root can
+still identify owned live descendants without itself passing close admission.
 
 The controller rechecks exact direct-child ownership against the initial
 snapshot under its existing exclusive state lock. Active run launch leases,
@@ -170,13 +176,30 @@ executable-name inference. No recorded-anchor/schema rewrite, transcript, hook
 wait, scan across sessions or provider API is used.
 
 With the same lock held, one existing `Cmux.run("rpc", "surface.close", ...)`
-uses explicit workspace/surface UUIDs and its normal 15-second I/O bound.
-Stock CMUX's socket path bypasses confirmation and may refuse the last terminal.
+uses explicit workspace/surface UUIDs. Target-only retains its existing
+15-second I/O bound. Subtree uses context-local deadlines: 45 seconds for the
+whole pass including ancestry, at most five seconds per target including process
+probes, inventory and host request. Initial and per-target state acquisitions do
+not wait for capacity-scaled lock budgets. Context resets on success/failure so
+other commands retain their timeouts. The complete worst-case JSON result shape,
+including CLI wrapper/newline, is reserved under 65,536 bytes before host effects;
+oversized plans refuse without truncating identities or enlarging the adapter's
+60-second timeout. Every budget-exhausted remainder target is not attempted.
+
+Inherit stock host behavior, including last-terminal refusal. Actual CMUX 0.65
+returned `confirmation_required`, contradicting the older bypass assumption;
+retain that diagnostic without requesting force or manipulating confirmation.
 An exact successful reply maps to `closeAccepted: true`, `removal: "unconfirmed"`;
 the host's result naming is not a removal proof. Errors, timeout, cancellation
 and lost replies are surfaced without retries or post-send observations.
-No process exit, completion acknowledgement, new lifecycle state, capacity
-release, archive or descendant cleanup follows.
+Subtree results repeat every captured identity with `attempted`, `outcome`,
+`reason` and unconfirmed removal. Accepted alone adds `closeAccepted: true`;
+preflight failure is refused, host failure/lost reply is unknown, budget remainder
+is not attempted. A failed descendant does not block an independently valid
+sibling/parent. Recheck captured ancestry, exact identity, actor/source/process,
+workspace and leases under each target lock. Never substitute replacements or
+expand with late children. No process exit, completion acknowledgement, new
+lifecycle state, capacity release, archive or automatic cleanup follows.
 
 The lock serializes controller changes only. PID/start precision and source
 marker freshness remain limited by their existing sources; markers are not an

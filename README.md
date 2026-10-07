@@ -419,8 +419,21 @@ owned direct child using its exact `workerId`, `workspaceId`, `surfaceId`,
 `sessionId` and `generation`. It validates private native authority, process and
 session-source anchors, current workspace membership and launch fences, then
 sends one stock CMUX `surface.close`. No sidebar control or host change is
-involved. Stock socket close bypasses confirmation and can refuse the last
-terminal; this is not UI-close parity.
+involved. Inherit stock host refusals, including the last terminal; this is not
+UI-close parity. Observed CMUX 0.65 returned `confirmation_required`, contrary
+to the earlier bypass assumption; no force or confirmation fallback is used.
+
+Omitted `scope` or `"scope": "target-only"` preserves that single-target contract.
+Explicit `"scope": "subtree"` captures the exact child's private descendants
+once and attempts safely admitted targets descendants-first, at most once.
+Refused or unknown descendants do not block independently valid siblings or
+parents. Every selected identity appears in `results`, with `attempted`,
+`outcome`, a compact `reason`, and `removal: "unconfirmed"`. New children and
+replacement identities never enter the pass. Its 45-second budget and five-second
+target windows leave remaining targets explicitly not attempted; an oversized
+complete result plan refuses before host effects. The existing 60-second,
+65,536-byte adapter transport remains unchanged. Synthetic source/transport
+coverage does not replace separately authorized disposable live-host proof.
 
 `closeAccepted: true` with `removal: "unconfirmed"` means only local request
 acceptance. There is no disappearance wait, retry, provider shutdown, typing or

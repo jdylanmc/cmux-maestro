@@ -281,7 +281,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
   });
   if (managed) tools.push({
     name: "maestro_close",
-    description: "Request closure of one explicitly authorized, currently owned direct child's terminal. Uses stock CMUX close (no confirmation; last-terminal refusal applies). Acceptance is not removal or task completion. No wait, retry, provider shutdown, or subtree cleanup.",
+    description: "Request an explicitly authorized owned direct-child close, or a fixed descendant-first subtree pass with scope: subtree. Uses stock CMUX close; host refusals remain explicit. Every selected target is reported; acceptance is not removal or task completion. No removal wait, retry, provider shutdown, or capacity release.",
     parameters: {
       type: "object",
       properties: {

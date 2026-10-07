@@ -314,7 +314,7 @@ Dual final-message and helper reports are refused rather than reconciled.
 Reports are self-reported operational evidence, not independent review or
 artifact acceptance. Keep secrets, raw output and full prompts out of summaries.
 
-## Request one owned child close
+## Request an owned child or explicit subtree close
 
 Only for an explicitly authorized close, call native `maestro_close` with the
 exact identity from that child's launch result:
@@ -334,9 +334,30 @@ exact identity from that child's launch result:
 Use the actual generation, not the illustrative `1`. The adapter supplies the
 invoking native identity privately. Do not inspect tokens, construct a private
 `native-close` request, or substitute a peer address, name, current focus or
-worktree. Peer participation is not close authority. Only a direct child in the
-same run/workspace is eligible: never self, parent, sibling, unrelated peer or
-subtree. Unselected descendants remain owned and untouched.
+worktree. Peer participation is not close authority. The exact selected root must
+be a direct child in the same run/workspace: never self, parent, sibling or an
+unrelated peer. Omitted `scope` (or `"scope": "target-only"`) keeps the existing
+single-target receipt and leaves descendants owned and untouched.
+
+Only with explicit subtree authorization, add `"scope": "subtree"` alongside
+`target`. The controller captures the root's private descendant identities once,
+then considers descendants before parents under the actual invoking actor.
+New children never expand that selection; changed identities are refused rather
+than replaced. An ended selected root does not hide its valid live descendants.
+One refusal or unknown host result does not prevent an independently valid sibling
+or parent attempt. Never impersonate intermediate parents or send them shutdown
+instructions.
+
+Subtree returns `scope: "subtree"` and a complete `results` array. Each record
+contains the captured five-field identity, `attempted`, `outcome` (`accepted`,
+`refused`, `unknown`, or `not-attempted`), a bounded `reason`, and
+`removal: "unconfirmed"`. Only accepted records have `closeAccepted: true`.
+Unavailable captured surface/session fields remain null. The pass uses a
+45-second total budget, at most five seconds per target, and nonwaiting state
+lock acquisitions. Budget-exhausted remainder targets are explicitly
+`not-attempted`; a complete result plan exceeding the existing 65,536-byte
+transport bound refuses before host effects. Transport cancellation, overflow
+or loss can still leave the entire request uncertain; never retry automatically.
 
 The controller checks its private actor capability/control identity, invoking
 provider ancestry, exact child session/generation/surface, current workspace
@@ -351,9 +372,14 @@ ambiguous or repurposed evidence and an ended/zombie launch or source owner
 refuse. Active run launch leases and unresolved ownership refuse. No provider
 shutdown is required or attempted before closing an eligible live child.
 
-Admission issues **one stock CMUX `surface.close`** request. It bypasses UI close
-confirmation and inherits stock last-terminal refusal. A successful tool result
-contains the exact target plus `ok: true`, `closeAccepted: true`,
+Admission issues **one stock CMUX `surface.close`** request per eligible target.
+Inherit its behavior, including last-terminal refusal; never request force or
+recreate UI confirmation. Observed CMUX 0.65 returned `confirmation_required`,
+contrary to the earlier confirmation-bypass assumption. That host refusal stays
+explicit (including a subtree `confirmation_required` reason), not accepted or
+bypassed. Synthetic tests do not establish compatibility with a live host.
+A successful target-only tool result contains the exact target plus
+`ok: true`, `closeAccepted: true`,
 `removal: "unconfirmed"`. This is request acceptance, not terminal disappearance,
 provider exit, task completion or permission to release capacity. Refusal,
 timeout, cancellation and lost/invalid replies may leave an uncertain outcome.
