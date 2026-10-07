@@ -85,6 +85,78 @@ class StoreBudgetTests(unittest.TestCase):
         operation.assert_called_once()
         self.assertEqual(self.ticks, 0)
 
+    def test_workspace_limits_do_not_change_reference_wait_budget(self):
+        acquire = CONTROLLER["with_store"]
+        workspace = str(uuid.uuid4())
+        for limit in (1, 128):
+            for wait in (0, 1, 2):
+                with self.subTest(limit=limit, wait=wait):
+                    self.ticks = 0
+                    with CONTROLLER["Store"](self.root) as store:
+                        state = store.read()
+                        state["workspaceCapacity"] = {workspace: limit}
+                        store.write(state)
+                        with mock.patch.dict(acquire.__globals__, {"time": self.clock}):
+                            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "operation is active"):
+                                acquire(self.root, lambda _: None, wait=wait)
+                    self.assertAlmostEqual(self.clock.monotonic(), wait * 4)
+
+
+class WorkspaceCapacityTests(unittest.TestCase):
+    def test_old_state_defaults_and_invalid_persisted_limits(self):
+        state = CONTROLLER["empty_state"]()
+        workspace = "abcdef00-0000-4000-8000-000000000001"
+        CONTROLLER["validate_state"](state)
+        summary = CONTROLLER["workspace_capacity"](state, workspace)
+        self.assertEqual(summary["limit"], 32)
+        self.assertEqual(summary["used"], 0)
+        self.assertEqual(summary["nodeSlotsRemaining"], 128)
+        self.assertTrue(summary["admissionAvailable"])
+        for value in (0, 129, -1, True, "32", 32.0, None):
+            with self.subTest(value=value), self.assertRaises(CONTROLLER["OrchestrationError"]):
+                CONTROLLER["validate_state"]({**state, "workspaceCapacity": {workspace: value}})
+        for value in ([], {"not-a-workspace": 32}, {workspace.upper(): 32},
+                      {str(uuid.uuid4()): 32 for _ in range(129)}):
+            with self.subTest(value=value), self.assertRaises(CONTROLLER["OrchestrationError"]):
+                CONTROLLER["validate_state"]({**state, "workspaceCapacity": value})
+
+    def test_summary_counts_pending_once_and_preserves_unknown_and_retained(self):
+        workspace, other = str(uuid.uuid4()), str(uuid.uuid4())
+        state = CONTROLLER["empty_state"]()
+        state["workspaceCapacity"] = {workspace: 4}
+        for role, phase, owner in (
+            ("coordinator", "launching", workspace), ("worker", "launching", workspace),
+            ("worker", "process-disappeared", workspace), ("worker", "resource-retired", workspace),
+            ("worker", "launching", other), ("coordinator", "registered", workspace),
+        ):
+            identifier = str(uuid.uuid4())
+            node = {"id": identifier, "role": role, "phase": phase, "workspaceId": owner}
+            if role == "coordinator" and phase != "registered":
+                node["executionMode"] = "interactive"
+            state["nodes"][identifier] = node
+            if phase == "launching":
+                state["launches"][identifier] = {"workspaceId": owner}
+        state["retainedResources"] = [{"workspaceId": workspace}, {"workspaceId": other}]
+        summary = CONTROLLER["workspace_capacity"](state, workspace)
+        self.assertEqual(summary, {
+            "workspaceId": workspace, "limit": 4, "ceiling": 128, "managedRoots": 1,
+            "workers": 2, "retainedResources": 1, "pendingLaunches": 2, "used": 4,
+            "remaining": 0, "nodeSlotsRemaining": 122, "admissionAvailable": False, "advisory": True,
+        })
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "resource limit"):
+            CONTROLLER["require_workspace_capacity"](state, workspace)
+
+    def test_configured_limit_does_not_hide_global_node_exhaustion(self):
+        state = CONTROLLER["empty_state"]()
+        workspace = str(uuid.uuid4())
+        state["workspaceCapacity"] = {workspace: 128}
+        state["nodes"] = {str(index): {"role": "coordinator", "workspaceId": workspace}
+                          for index in range(128)}
+        summary = CONTROLLER["workspace_capacity"](state, workspace)
+        self.assertEqual(summary["remaining"], 128)
+        self.assertEqual(summary["nodeSlotsRemaining"], 0)
+        self.assertFalse(summary["admissionAvailable"])
+
 
 class ProofTests(unittest.TestCase):
     def test_bounded_text_preserves_controls_unicode_and_byte_limits(self):
@@ -844,7 +916,9 @@ class ProofTests(unittest.TestCase):
         else:
             old = snapshot["nodes"][self.node["id"]]
             old.update(phase="launching", supervisor=None, providerProcess=None)
-            snapshot["launches"][self.node["id"]] = {"runId": actor["runId"]}
+            snapshot["launches"][self.node["id"]] = {
+                "runId": actor["runId"], "workspaceId": actor["workspaceId"],
+            }
         before = copy.deepcopy(self.node)
         binding = self.route_path().read_bytes()
         result, retire = self.status_interleaving(
@@ -882,7 +956,9 @@ class ProofTests(unittest.TestCase):
                 worker = next(item for item in result["workers"] if item["workerId"] == self.node["id"])
                 for key in ("surfacePresent", "supervisorRunning", "providerRunning"):
                     self.assertIsNone(worker[key], (field, key))
-        state["launches"][self.node["id"]] = {"runId": actor["runId"]}
+        state["launches"][self.node["id"]] = {
+            "runId": actor["runId"], "workspaceId": actor["workspaceId"],
+        }
         _, retire = self.status_interleaving(
             state, actor, copy.deepcopy(state), process_start=lambda _: None,
         )
@@ -2274,8 +2350,8 @@ class LifecycleFailureTests(unittest.TestCase):
 
     def test_live_capacity_includes_roots_and_retained(self):
         for command in ("launch-coordinator", "spawn"):
-            for retained_count in (0, MAX_LIVE_WORKERS // 2 - 1, MAX_LIVE_WORKERS - 2):
-                with self.subTest(command=command, retained=retained_count):
+            for limit, retained_count in ((2, 0), (32, 0), (32, 15), (32, 30), (64, 31), (128, 126)):
+                with self.subTest(command=command, limit=limit, retained=retained_count):
                     actor = copy.deepcopy(self.actor)
                     managed_root = {
                         **copy.deepcopy(self.worker), "id": str(uuid.uuid4()),
@@ -2286,7 +2362,7 @@ class LifecycleFailureTests(unittest.TestCase):
                     }
                     managed_root["runId"] = managed_root["id"]
                     nodes = {actor["id"]: actor}
-                    for index in range(MAX_LIVE_WORKERS - 1 - retained_count):
+                    for index in range(limit - 1 - retained_count):
                         node = copy.deepcopy(managed_root)
                         if index:
                             node.update(id=str(uuid.uuid4()), runId=str(uuid.uuid4()),
@@ -2298,7 +2374,8 @@ class LifecycleFailureTests(unittest.TestCase):
                         "surfaceId": str(uuid.uuid4()), "archivedAt": CONTROLLER["now"](),
                     } for _ in range(retained_count)]
                     self.state = {**CONTROLLER["empty_state"](),
-                                  "nodes": nodes, "retainedResources": retained}
+                                  "nodes": nodes, "retainedResources": retained,
+                                  "workspaceCapacity": {actor["workspaceId"]: limit}}
                     CONTROLLER["validate_state"](self.state)
                     self.cmux.workspace_surfaces.return_value = {
                         node["surfaceId"] for node in nodes.values()
@@ -2332,13 +2409,43 @@ class LifecycleFailureTests(unittest.TestCase):
                         launcher.assert_called_once()
                         self.assertEqual(sum(CONTROLLER["has_managed_runtime"](node)
                                              for node in self.state["nodes"].values())
-                                         + len(self.state["retainedResources"]), MAX_LIVE_WORKERS)
+                                         + len(self.state["retainedResources"]), limit)
                         self.assertEqual(len(self.state["launches"]), 1)
                         before = copy.deepcopy(self.state)
                         with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "resource limit"):
                             function(args, self.root, self.cmux, **kwargs)
                         self.assertEqual(self.state, before)
                         launcher.assert_called_once()
+
+    def test_spawn_rechecks_changed_limit_after_advisory_preflight(self):
+        self.state["workspaceCapacity"] = {self.actor["workspaceId"]: 2}
+        preflight = CONTROLLER["workspace_capacity"](self.state, self.actor["workspaceId"])
+        self.assertTrue(preflight["admissionAvailable"])
+        self.before_mutate = lambda _: self.state["workspaceCapacity"].update(
+            {self.actor["workspaceId"]: 1}
+        )
+        spawn = CONTROLLER["command_spawn"]
+        launcher = mock.Mock(side_effect=AssertionError("no remaining slot may launch"))
+        args = CONTROLLER["parser"]().parse_args([
+            "spawn", "--actor-id", self.actor["id"], "--token", self.token,
+            "--name", "Capacity changed", "--task", "Synthetic", "--cwd", str(REPO),
+        ])
+        with mock.patch.dict(spawn.__globals__, {
+            "read_state": lambda *a, **k: copy.deepcopy(self.state),
+            "mutate": self.mutate,
+            "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+            "resolve_copilot_token": lambda _: None,
+            "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+            "messaging_configuration": lambda _: None,
+            "resource_observations": lambda *_: ({}, set()),
+            "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+            "launch_reserved_session": launcher,
+        }), mock.patch.dict(os.environ, {"CMUX_MAESTRO_TESTING": "1"}):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "resource limit"):
+                spawn(args, self.root, self.cmux)
+        launcher.assert_not_called()
+        self.assertEqual(self.state["launches"], {})
+        self.assertEqual(len(self.state["nodes"]), 2)
 
     def test_atomic_census_distinguishes_removed_and_surviving_exited_surface(self):
         observe = CONTROLLER["resource_observations"]

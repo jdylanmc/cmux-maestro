@@ -596,6 +596,41 @@ controller callers may retain Copilot defaults by omitting the requirement flag;
 the bundled orchestration skill deliberately does not and always requires the
 pinned Maestro account and model.
 
+### Workspace launch capacity
+
+The controller's `capacity --workspace <workspace-uuid>` command returns a
+read-only, **advisory** preflight without provider credentials or host RPCs.
+Authenticated `status` also includes the same workspace-wide `capacity` summary,
+including managed roots, workers, retained resources, pending launches, used
+slots, configured limit and remaining global node slots. Pending leases are
+already counted through their managed nodes, not added twice. Unknown or stale
+process/terminal ownership is not free capacity.
+
+To persist a limit, a human-directed workspace coordinator uses:
+
+```sh
+python3 scripts/cmux-maestro-orchestrator.py capacity \
+  --workspace <workspace-uuid> --limit 64 \
+  --actor-id <coordinator-id> --token <private-control-token>
+```
+
+Keep the control token private, as with other authenticated controller commands.
+Worker actors and coordinators from other workspaces cannot change the limit.
+Limits are integers from **1 through 128**, defaulting to **32** when omitted.
+They live in the existing private `Orchestration/control/state.json`, separately
+from account/model settings; native Settings does not edit them. Lowering a limit
+below current usage preserves every session and retained resource and refuses
+new admissions until usage permits them. No automatic cleanup or reuse occurs.
+
+A successful preflight reserves nothing. Root and child launch reservations
+recheck the latest limit and exact resource usage inside their exclusive
+transaction. The separate **128-node** and **8-level** bounds still apply, so a
+configured limit of 128 is not a guarantee of 128 available nodes or demonstrated
+128-provider load. Lock acquisition retains the existing 32-session reference
+policy: ordinary waits remain bounded to 4 seconds, two-second waits to 8 seconds,
+and zero-wait requests remain immediate, regardless of workspace capacity.
+Upstream activation ordering and installed-runtime validation are separate.
+
 ### Legacy bounded-worker compatibility
 
 Existing bounded workers retain `follow-up` and `report`. Follow-up is privately queued only after a directly owned

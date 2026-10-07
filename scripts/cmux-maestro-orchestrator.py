@@ -27,6 +27,7 @@ MAX_BYTES = 1_048_576
 MAX_NODES = 128
 MAX_DEPTH = 8
 MAX_LIVE_WORKERS = 32
+MAX_LIVE_WORKERS_CEILING = 128
 MAX_ARCHIVES = 32
 MAX_LABEL = 100
 MAX_TASK = 32_768
@@ -785,6 +786,13 @@ def validate_state(state):
     state.setdefault("archives", [])
     state.setdefault("retainedResources", [])
     state.setdefault("launches", {})
+    limits = state.get("workspaceCapacity", {})
+    if not isinstance(limits, dict) or len(limits) > MAX_NODES:
+        raise OrchestrationError("Workspace capacity settings exceed their safe limit.")
+    for workspace, limit in limits.items():
+        if canonical_uuid(workspace, "capacity workspace ID") != workspace:
+            raise OrchestrationError("Stored capacity workspace ID must be canonical lowercase.")
+        validate_capacity_limit(limit)
     nodes = state["nodes"]
     launches = state["launches"]
     if not isinstance(launches, dict) or len(launches) > MAX_NODES:
@@ -1337,7 +1345,7 @@ class Store:
 
 
 def with_store(root, operation, *, wait=1, read_only=False):
-    # Keep the original eight-session allowance per contender as capacity grows.
+    # Preserve the 32-session reference budget independently of workspace limits.
     deadline = time.monotonic() + wait * max(1, MAX_LIVE_WORKERS / 8)
     while True:
         try:
@@ -1365,6 +1373,61 @@ def read_state(root, *, wait=1):
     )
     # The copied bytes are immutable; validation need not keep writers waiting.
     return Store._decode_state(payload)
+
+
+def validate_capacity_limit(limit):
+    if type(limit) is not int or not 1 <= limit <= MAX_LIVE_WORKERS_CEILING:
+        raise OrchestrationError("Workspace capacity must be an integer from 1 to 128.")
+    return limit
+
+
+def workspace_capacity(state, workspace):
+    nodes = [
+        node for node in state["nodes"].values()
+        if node["workspaceId"] == workspace and has_managed_runtime(node)
+        and node["phase"] != "resource-retired"
+    ]
+    roots = sum(node["role"] == "coordinator" for node in nodes)
+    retained = sum(item["workspaceId"] == workspace for item in state["retainedResources"])
+    limit = state.get("workspaceCapacity", {}).get(workspace, MAX_LIVE_WORKERS)
+    used = len(nodes) + retained
+    node_slots = MAX_NODES - len(state["nodes"])
+    return {
+        "workspaceId": workspace, "limit": limit, "ceiling": MAX_LIVE_WORKERS_CEILING,
+        "managedRoots": roots, "workers": len(nodes) - roots, "retainedResources": retained,
+        "pendingLaunches": sum(item["workspaceId"] == workspace for item in state["launches"].values()),
+        "used": used, "remaining": max(0, limit - used), "nodeSlotsRemaining": node_slots,
+        "admissionAvailable": used < limit and node_slots > 0, "advisory": True,
+    }
+
+
+def require_workspace_capacity(state, workspace):
+    capacity = workspace_capacity(state, workspace)
+    if capacity["used"] >= capacity["limit"]:
+        raise OrchestrationError(
+            "Live worker resource limit reached; reuse a reported worker or close a retired tab."
+        )
+
+
+def command_capacity(args, root):
+    workspace = canonical_uuid(args.workspace, "workspace ID")
+    if args.limit is None:
+        return {"capacity": workspace_capacity(read_state(root), workspace)}
+    limit = validate_capacity_limit(args.limit)
+    if not args.actor_id or not args.token:
+        raise OrchestrationError("Changing capacity requires an authenticated workspace coordinator.")
+
+    def configure(state):
+        actor = authorize(state, args.actor_id, args.token)
+        if actor["role"] != "coordinator" or actor["workspaceId"] != workspace:
+            raise OrchestrationError("Only this workspace's authenticated coordinator may change capacity.")
+        limits = state.setdefault("workspaceCapacity", {})
+        if workspace not in limits and len(limits) >= MAX_NODES:
+            raise OrchestrationError("Workspace capacity settings exceed their safe limit.")
+        limits[workspace] = limit
+        return {"capacity": workspace_capacity(state, workspace)}
+
+    return mutate(root, configure)
 
 
 def remove_launch_credential(root, worker_id):
@@ -1765,13 +1828,7 @@ def command_launch_coordinator(args, root, cmux):
         reconcile_resources(state, snapshot, observations, retained_gone)
         if len(state["nodes"]) >= MAX_NODES:
             raise OrchestrationError("Orchestration node limit reached.")
-        live = sum(
-            1 for current in state["nodes"].values()
-            if has_managed_runtime(current) and current["workspaceId"] == workspace
-            and current["phase"] != "resource-retired"
-        ) + sum(item["workspaceId"] == workspace for item in state["retainedResources"])
-        if live >= MAX_LIVE_WORKERS:
-            raise OrchestrationError("Live session resource limit reached.")
+        require_workspace_capacity(state, workspace)
         state["nodes"][node["id"]] = node
         state["launches"][node["id"]] = {
             "workerId": node["id"], "runId": node["runId"], "workspaceId": workspace,
@@ -2323,18 +2380,7 @@ def command_spawn(args, root, cmux, *, native_identity=None):
         ) != (actor["runId"], actor["workspaceId"], actor["surfaceId"]):
             raise OrchestrationError("Actor ownership changed during spawn.")
         reconcile_resources(state, snapshot, observations, retained_gone)
-        live = sum(
-            1 for node in state["nodes"].values()
-            if has_managed_runtime(node) and node["workspaceId"] == current["workspaceId"]
-            and node["phase"] != "resource-retired"
-        ) + sum(
-            1 for resource in state["retainedResources"]
-            if resource["workspaceId"] == current["workspaceId"]
-        )
-        if live >= MAX_LIVE_WORKERS:
-            raise OrchestrationError(
-                "Live worker resource limit reached; reuse a reported worker or close a retired tab."
-            )
+        require_workspace_capacity(state, current["workspaceId"])
         depth = 0
         cursor = current
         while cursor["parentId"] is not None:
@@ -3574,7 +3620,8 @@ def command_status(args, root, cmux):
             if exited:
                 retire_messaging(node)
         apply_git_evidence(state, git_evidence)
-        return {"runId": current_actor["runId"], "workers": [{
+        return {"runId": current_actor["runId"],
+                "capacity": workspace_capacity(state, current_actor["workspaceId"]), "workers": [{
             "workerId": node["id"], "parentId": node["parentId"], "name": node["label"],
             "role": node["role"],
             "executionMode": node.get("executionMode"),
@@ -3812,6 +3859,11 @@ def parser():
         "launch-settings",
         help="Report whether pinned Maestro account and model settings are ready without revealing them",
     )
+    capacity = commands.add_parser("capacity", help="Inspect advisory workspace capacity or configure its limit")
+    capacity.add_argument("--workspace", required=True)
+    capacity.add_argument("--limit", type=int, help="Persist a limit from 1 to 128; omitted means read-only preflight")
+    capacity.add_argument("--actor-id")
+    capacity.add_argument("--token")
     icons = commands.add_parser("icons", help="Search pinned Nerd Font glyphs; no registration required")
     icons.add_argument("--search")
     icons.add_argument("--offset", type=int, default=0)
@@ -3904,9 +3956,11 @@ def main(argv=None):
             # state file, host RPC argument, prompt, or launch receipt.
             print(command_launch_credential(root), end="")
             return 0
-        cmux = None if args.command in {"launch-settings", "runtime", "report", "native-observe"} else Cmux()
+        cmux = None if args.command in {"launch-settings", "capacity", "runtime", "report", "native-observe"} else Cmux()
         if args.command == "launch-settings":
             output = command_launch_settings(root)
+        elif args.command == "capacity":
+            output = command_capacity(args, root)
         elif args.command == "register":
             output = command_register(args, root, cmux)
         elif args.command == "launch-coordinator":

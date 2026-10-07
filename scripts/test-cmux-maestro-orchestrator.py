@@ -925,6 +925,107 @@ class HarnessTeardownTests(unittest.TestCase):
                 h.close()
 
 
+class WorkspaceCapacityCLITests(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.close)
+
+    def capacity(self, *arguments, **options):
+        return self.h.run("capacity", "--workspace", self.h.workspace, *arguments, **options)
+
+    def configure(self, limit, **options):
+        return self.capacity("--limit", str(limit), "--actor-id", self.h.node,
+                             "--token", self.h.token, **options)
+
+    def test_default_preflight_does_not_require_provider_or_host(self):
+        before = self.h.state()
+        environment = {**self.h.env, "CMUX_MAESTRO_CMUX": "/missing/cmux",
+                       "CMUX_MAESTRO_COPILOT": "/missing/copilot"}
+        summary = self.capacity(env=environment)["capacity"]
+        self.assertEqual(summary["limit"], 32)
+        self.assertEqual(summary["used"], 0)
+        self.assertTrue(summary["advisory"])
+        self.assertTrue(summary["admissionAvailable"])
+        self.assertEqual(self.h.state(), before)
+
+    def test_limits_persist_across_processes_and_status_agrees(self):
+        for limit in (1, 32, 128):
+            with self.subTest(limit=limit):
+                self.assertEqual(self.configure(limit)["capacity"]["limit"], limit)
+                self.assertEqual(self.h.state()["workspaceCapacity"], {self.h.workspace: limit})
+                preflight = self.capacity()["capacity"]
+                status = self.h.run("status", "--actor-id", self.h.node,
+                                    "--token", self.h.token)["capacity"]
+                self.assertEqual(status, preflight)
+        other = str(uuid.uuid4())
+        self.assertEqual(self.h.run("capacity", "--workspace", other)["capacity"]["limit"], 32)
+
+    def test_invalid_limits_or_wrong_authority_preserve_state(self):
+        self.configure(64)
+        before = self.h.state()
+        for arguments in (
+            ("--limit", "0", "--actor-id", self.h.node, "--token", self.h.token),
+            ("--limit", "129", "--actor-id", self.h.node, "--token", self.h.token),
+            ("--limit", "128"),
+            ("--limit", "128", "--actor-id", self.h.node, "--token", "wrong"),
+        ):
+            with self.subTest(arguments=arguments):
+                self.assertEqual(self.capacity(*arguments, check=False)["returncode"], 2)
+                self.assertEqual(self.h.state(), before)
+        denied = self.h.run("capacity", "--workspace", str(uuid.uuid4()), "--limit", "128",
+                            "--actor-id", self.h.node, "--token", self.h.token, check=False)
+        self.assertEqual(denied["returncode"], 2)
+        self.assertEqual(self.h.state(), before)
+
+    def test_worker_cannot_change_its_admission_budget(self):
+        receipt = self.h.spawn()
+        token = self.h.cmux_data()["tokens"][receipt["workerId"]]
+        before = self.h.state().get("workspaceCapacity")
+        denied = self.capacity("--limit", "128", "--actor-id", receipt["workerId"],
+                               "--token", token, check=False)
+        self.assertEqual(denied["returncode"], 2)
+        self.assertIn("authenticated coordinator", denied["stderr"])
+        self.assertEqual(self.h.state().get("workspaceCapacity"), before)
+
+    def test_lowering_below_usage_keeps_exact_resources_and_refuses_new_launch(self):
+        receipts = [self.h.spawn(label=f"Existing {index}") for index in range(2)]
+        before = self.h.state()
+        summary = self.configure(1)["capacity"]
+        self.assertEqual(summary["used"], 2)
+        self.assertEqual(summary["remaining"], 0)
+        self.assertFalse(summary["admissionAvailable"])
+        after = self.h.state()
+        self.assertEqual(after["nodes"], before["nodes"])
+        self.assertEqual(after["retainedResources"], before["retainedResources"])
+        self.assertEqual(after["launches"], before["launches"])
+        rejected = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token, "--name", "Refused",
+            "--cwd", str(REPO), "--task", "bounded", check=False,
+        )
+        self.assertEqual(rejected["returncode"], 2)
+        self.assertIn("resource limit", rejected["stderr"])
+        self.assertEqual(len(self.h.cmux_data()["surfaces"]), len(receipts) + 1)
+
+    def test_advisory_preflight_cannot_reserve_last_slot_against_concurrent_spawns(self):
+        self.configure(1)
+        self.assertTrue(self.capacity()["capacity"]["admissionAvailable"])
+        arguments = ["spawn", "--actor-id", self.h.node, "--token", self.h.token,
+                     "--name", "Capacity race", "--cwd", str(REPO), "--task", "bounded"]
+        processes = [self.h.start(*arguments) for _ in range(2)]
+        results = [self.h.finish(process, check=False) for process in processes]
+        self.assertEqual(sorted(result["returncode"] for result in results), [0, 2])
+        failed = next(result for result in results if result["returncode"] == 2)
+        self.assertIn("resource limit", failed["stderr"])
+        summary = self.capacity()["capacity"]
+        self.assertEqual(summary["used"], 1)
+        self.assertFalse(summary["admissionAvailable"])
+        self.assertEqual(len(self.h.cmux_data()["surfaces"]), 2)
+        self.configure(128)
+        self.assertTrue(self.capacity()["capacity"]["admissionAvailable"])
+        self.configure(1)
+        self.assertEqual(self.capacity()["capacity"]["used"], 1)
+
+
 class OrchestratorTests(unittest.TestCase):
     def setUp(self):
         self.h = Harness()

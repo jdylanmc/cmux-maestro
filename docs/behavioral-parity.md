@@ -501,19 +501,26 @@ the attachment-file lease remain unchanged. Control-character checks retain
 their UTF-8 byte bounds and exact accepted/rejected characters without a
 per-character Python scan on every node's stored provider path.
 Lock-acquisition budgets scale by `max(1, MAX_LIVE_WORKERS / 8)`, preserving
-the original eight-session allowance as more runtimes contend for serialized
-durable writes; both ordinary and runtime acquisitions use that same knob.
+the original eight-session allowance against the fixed 32-session reference
+for serialized durable writes; both ordinary and runtime acquisitions use
+that same reference. Per-workspace admission limits (default 32, configurable
+from 1 through 128) do not shrink or enlarge these waits.
 The 50ms retry interval, immediate zero-wait behavior, lock modes and failure
 on exhaustion remain unchanged; this does not extend launch/result deadlines
 or retry a non-contention failure. Deterministic clock tests use real contended
 locks to prove both successful acquisition and bounded refusal at several
-configured capacities. This capacity-scaled budget is an explicit policy
+reference capacities. This reference-scaled budget is an explicit policy
 change, not an inference that shorter critical sections alone fixed CI.
 The pending-capacity fixture scales its bounded six-second result wait by the
 same factor: its old wait must not expire before an allowed runtime acquisition
 can finish. This synthetic allowance changes no production result deadline,
 still requires every exact completed report and provider call, and preserves
 simultaneous maximum reservations, over-cap refusal and archive protection.
+Workspace capacity regressions cover persisted CLI configuration, rejected
+worker/cross-workspace changes, root/child admission at limits 2, 32, 64 and 128
+with retained resources, non-double-counted leases, unknown ownership, and
+concurrent admission after an advisory preflight. The 128-boundary proof uses
+synthetic retained resources; it is not a 128-provider load measurement.
 The failed-attachment
 capacity fixture stops only its completed synthetic supervisors while retaining
 every terminal, and requires the actual configured resource-limit error, not a busy
