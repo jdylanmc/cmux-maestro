@@ -251,6 +251,20 @@ struct SidebarPinnedDetailsTests {
         #expect(pinned(hierarchy(kind: .agentSession), sessions: []).notice != nil)
     }
 
+    @Test func freshDeadRootInspectorQualifiesItsOwnModelAsLastReported() throws {
+        let ended = session(liveness: .dead)
+        let subject = try #require(SidebarPresentation.inspection(
+            for: .unmanaged(.session(ended.id)), hierarchy: hierarchy(), connected: true,
+            tree: tree([ended]), managed: .empty, availability: .ready, now: now
+        ))
+
+        let details = try #require(inspector(subject, sessions: [ended]))
+
+        #expect(details.lines.filter { $0.title == "Last reported model" }.map(\.value) == ["verified-model"])
+        #expect(!details.lines.contains { $0.title == "Model" || $0.value == "child-model" })
+        #expect(details.lines.filter { $0.copyableSessionID != nil } == [.sessionID(ended.id)])
+    }
+
     @Test func readerRepublishedDeadOwnerDoesNotSuppressItsLiveReplacement() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
