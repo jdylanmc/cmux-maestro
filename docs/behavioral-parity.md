@@ -546,6 +546,11 @@ Root model precedence stays unchanged, and new options without joined evidence
 warn without injecting unsupported flags. These are synthetic source contracts,
 not observed child model/context settings, entitlements or a numeric long-context
 window; full catalog/billing data is absent from persisted selection metadata.
+Mixed-catalog controls distinguish valid provider-native effort defaults from
+malformed non-advertised defaults before known-CLI projection. Unrepresentable
+valid defaults are omitted without poisoning another supported model; selected
+models without a representable default retain the provider default with a warning
+and no fabricated effort argument.
 The failed-attachment
 capacity fixture stops only its completed synthetic supervisors while retaining
 every terminal, and requires the actual configured resource-limit error, not a busy

@@ -47,11 +47,14 @@ function modelCapabilities(response) {
       requireCondition(longContext !== null && typeof longContext === "object" && !Array.isArray(longContext));
       if (!contextTiers.includes("long_context")) contextTiers.push("long_context");
     }
-    const reasoningEfforts = options(model.supportedReasoningEfforts, REASONING_EFFORTS);
-    const result = { id: model.id, contextTiers, reasoningEfforts };
     if (model.defaultReasoningEffort !== undefined) {
       requireCondition(typeof model.defaultReasoningEffort === "string" &&
-        reasoningEfforts.includes(model.defaultReasoningEffort));
+        Array.isArray(model.supportedReasoningEfforts) &&
+        model.supportedReasoningEfforts.includes(model.defaultReasoningEffort));
+    }
+    const reasoningEfforts = options(model.supportedReasoningEfforts, REASONING_EFFORTS);
+    const result = { id: model.id, contextTiers, reasoningEfforts };
+    if (reasoningEfforts.includes(model.defaultReasoningEffort)) {
       result.defaultReasoningEffort = model.defaultReasoningEffort;
     }
     return result;

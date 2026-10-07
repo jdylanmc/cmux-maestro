@@ -624,7 +624,10 @@ For explicit preferences, the existing joined extension reads
 checks the invoking account before and after. Only bounded model IDs,
 supported tiers/efforts and advertised default effort enter private launch
 evidence; raw model/billing/quota data does not enter state, prompts or host
-commands. Malformed, duplicate, oversized or foreign evidence and account drift
+commands. Provider-native defaults are validated against raw advertised support;
+valid defaults outside the current CLI's effort levels are omitted from the
+projection, not invented as CLI flags or used to reject unrelated selections.
+Malformed, duplicate, oversized or foreign evidence and account drift
 refuse before launch. This is a capability snapshot, not atomic account/provider
 admission or an observation of the child's running settings.
 
