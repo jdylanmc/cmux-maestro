@@ -477,6 +477,20 @@ struct SidebarAgentHoverTests {
         #expect(result.lines.filter { $0.copyableSessionID != nil } == [.sessionID(observed.id)])
     }
 
+    @Test func observedChildOfDeadSessionQualifiesItsOwnModelAsLastReported() throws {
+        var parent = session(name: "parent-only-model", liveness: .dead)
+        parent.nodes = [.init(id: "child", parentID: nil, depth: 0, kind: .subagent, name: "Review agent",
+                             state: .working, model: "child-reported-model", ancestryUnresolved: false, hasChildren: false)]
+
+        let result = try #require(card(.child(sessionID: parent.id, childID: "child"), sessions: [parent]))
+
+        #expect(result.title == "Review agent")
+        #expect(result.subtitle == "Last reported: working")
+        #expect(result.lines.filter { $0.title == "Last reported model" }.map(\.value) == ["child-reported-model"])
+        #expect(!result.lines.contains { $0.title == "Model" || $0.value == "parent-only-model" })
+        #expect(result.lines.filter { $0.copyableSessionID != nil } == [.sessionID(parent.id, isParent: true)])
+    }
+
     @Test func managedPreviewRejectsAReplacedGenerationAndShowsOnlyVerifiedMetrics() throws {
         let node = SidebarOrchestrationNode(
             id: UUID(), runId: UUID(), parentId: nil, role: "worker", label: "Managed agent",
