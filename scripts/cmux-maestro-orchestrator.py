@@ -2231,6 +2231,11 @@ def native_close_request(root, cmux, request):
     subtree = request.get("scope") == "subtree"
 
     def owned(state, identity=target_identity, *, direct=True, selecting=False):
+        native_identity = request["identity"]
+        node_id = native_identity.get("nodeId") if isinstance(native_identity, dict) else None
+        stored_actor = state["nodes"].get(node_id) if isinstance(node_id, str) else None
+        if stored_actor and not stored_actor.get("copilotSessionId"):
+            raise OrchestrationError("Native session identity changed.")
         actor = authorize_native_actor(state, request["identity"])
         if (actor["id"] != os.environ.get("CMUX_MAESTRO_WORKER_ID")
                 or actor["copilotSessionId"] != os.environ.get("SESSION_ID")
