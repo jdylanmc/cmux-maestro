@@ -2492,6 +2492,132 @@ class LifecycleFailureTests(unittest.TestCase):
                     del self.state["launches"][child_id]
                     del self.state["nodes"][child_id]
 
+    def permission_spawn(self, parent_id, assignment, launcher, *, root=None, reader=None, writer=None):
+        native = CONTROLLER["command_native_spawn"]
+        request = {"identity": {"login": "synthetic"}, "assignment": {
+            "name": "Permission child", "cwd": str(REPO), "task": "Synthetic", **assignment,
+        }}
+        with mock.patch.dict(native.__globals__, {
+            "read_state": reader or (lambda *a, **k: copy.deepcopy(self.state)),
+            "mutate": writer or self.mutate,
+            "authorize_native_spawn": lambda state, *_: state["nodes"][parent_id],
+            "process_matches": lambda _: True,
+            "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+            "resolve_copilot_token": lambda _: None,
+            "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+            "messaging_configuration": lambda _: None,
+            "resource_observations": lambda *_: ({}, set()),
+            "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+            "launch_reserved_session": launcher,
+        }), mock.patch("sys.stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))):
+            return native(root or self.root, self.cmux)
+
+    def test_native_deny_only_request_inherits_parent_mode_and_allows_with_additional_denies(self):
+        parent = self.state["nodes"][self.worker["id"]]
+        parent.update(permissionMode="yolo", toolPolicy={"allow": ["read"], "deny": ["web"]})
+        launcher = mock.Mock(return_value={"launchAccepted": True})
+        self.permission_spawn(parent["id"], {"denyTools": ["shell(rm)"]}, launcher)
+        child = self.state["nodes"][launcher.call_args.args[2]]
+        self.assertEqual(child["permissionMode"], "yolo")
+        self.assertEqual(child["toolPolicy"], {"allow": ["read"], "deny": ["web", "shell(rm)"]})
+
+    def test_native_inheritance_refuses_missing_policy_provenance_after_real_store_normalization(self):
+        original_read, original_mutate = CONTROLLER["read_state"], CONTROLLER["mutate"]
+        parent_id = self.worker["id"]
+        initial = copy.deepcopy(self.state)
+        initial["nodes"][parent_id].update(
+            permissionMode="default", toolPolicy={"allow": ["read"], "deny": ["web"]},
+        )
+        for missing in ("permissionMode", "toolPolicy"):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                with CONTROLLER["Store"](root) as store:
+                    store.write(initial)
+                state = copy.deepcopy(initial)
+                del state["nodes"][parent_id][missing]
+                path = root / "control/state.json"
+                payload = json.dumps(state).encode()
+                path.write_bytes(payload)
+                normalized = original_read(root)
+                self.assertEqual(normalized["nodes"][parent_id]["executionMode"], "interactive")
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "(?i)permission|policy|provenance"):
+                    self.permission_spawn(parent_id, {}, launcher, root=root,
+                                          reader=original_read, writer=original_mutate)
+                launcher.assert_not_called()
+                self.assertEqual(path.read_bytes(), payload)
+
+    def test_native_inheritance_refuses_recorded_parent_policy_drift_before_reservation(self):
+        initial = copy.deepcopy(self.state)
+        parent_id = self.worker["id"]
+        initial["nodes"][parent_id].update(
+            permissionMode="yolo", toolPolicy={"allow": ["read", "shell(git status)"], "deny": ["web"]},
+        )
+        for field, value in (
+            ("permissionMode", "default"),
+            ("toolPolicy", {"allow": ["read"], "deny": ["web", "shell(git status)"]}),
+        ):
+            with self.subTest(field=field):
+                self.state = copy.deepcopy(initial)
+                self.before_mutate = lambda _, field=field, value=value: self.state["nodes"][parent_id].update(
+                    {field: copy.deepcopy(value)}
+                )
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "(?i)permission|policy"):
+                    self.permission_spawn(parent_id, {}, launcher)
+                launcher.assert_not_called()
+                self.assertEqual(self.state["launches"], {})
+                self.assertEqual(len(self.state["nodes"]), 2)
+                self.assertEqual(self.state["nodes"][parent_id][field], value)
+
+    def test_legacy_bounded_policy_normalization_remains_readable_without_new_provenance(self):
+        state = copy.deepcopy(self.state)
+        parent_id = self.worker["id"]
+        state["nodes"][parent_id].update(executionMode="bounded", providerProcess=None)
+        state["nodes"][parent_id].pop("permissionMode", None)
+        state["nodes"][parent_id].pop("toolPolicy")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            with CONTROLLER["Store"](root) as store:
+                store.write(self.state)
+            path = root / "control/state.json"
+            payload = json.dumps(state).encode()
+            path.write_bytes(payload)
+            normalized = CONTROLLER["read_state"](root)
+            self.assertEqual(normalized["nodes"][parent_id]["executionMode"], "bounded")
+            self.assertEqual(normalized["nodes"][parent_id]["toolPolicy"], {"allow": [], "deny": []})
+            self.assertEqual(path.read_bytes(), payload)
+
+    def test_native_coordinator_explicit_yolo_grant_preserves_denies_without_a_narrowing_list(self):
+        parent = self.state["nodes"][self.worker["id"]]
+        parent.update(role="coordinator", parentId=None, runId=parent["id"], runtimeProtocolVersion=2,
+                      launchSettings={"version": 1, "model": "synthetic-model"},
+                      permissionMode="default", toolPolicy={"allow": ["read"], "deny": ["web"]})
+        CONTROLLER["validate_state"](self.state)
+        launcher = mock.Mock(return_value={"launchAccepted": True})
+        self.permission_spawn(parent["id"], {"yolo": True, "denyTools": ["shell(rm)"]}, launcher)
+        child = self.state["nodes"][launcher.call_args.args[2]]
+        self.assertEqual(child["permissionMode"], "yolo")
+        self.assertEqual(child["toolPolicy"]["deny"], ["web", "shell(rm)"])
+
+    def test_native_coordinator_refuses_contradictory_yolo_grant_and_narrowing_list(self):
+        initial = copy.deepcopy(self.state)
+        parent_id = self.worker["id"]
+        initial["nodes"][parent_id].update(
+            role="coordinator", parentId=None, runId=parent_id, runtimeProtocolVersion=2,
+            launchSettings={"version": 1, "model": "synthetic-model"},
+            permissionMode="default", toolPolicy={"allow": ["read"], "deny": ["web"]},
+        )
+        for allowed in ([], ["read"]):
+            with self.subTest(allowed=allowed):
+                self.state = copy.deepcopy(initial)
+                CONTROLLER["validate_state"](self.state)
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "(?i)permission|yolo|policy"):
+                    self.permission_spawn(parent_id, {"yolo": True, "allowTools": allowed}, launcher)
+                launcher.assert_not_called()
+                self.assertEqual(self.state, initial)
+
     def test_launch_arguments_preserve_inherited_yolo_denies_and_explicit_allows(self):
         node = {
             **self.worker, "copilotExecutable": "/synthetic/copilot",
