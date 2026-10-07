@@ -2812,6 +2812,22 @@ class LifecycleFailureTests(unittest.TestCase):
         self.assertNotIn("--reasoning-effort", argv)
         self.assertTrue(receipt.get("warnings"))
 
+    def test_valid_model_with_unrepresentable_provider_default_warns_without_inventing_cli_effort(self):
+        self.state["nodes"][self.worker["id"]]["permissionMode"] = "default"
+        identity = self.model_launch_identity()
+        evidence = self.model_launch_capabilities(identity)
+        evidence["models"].append({
+            "id": "provider/custom", "contextTiers": ["default"], "reasoningEfforts": [],
+        })
+        launcher = mock.Mock(return_value={"launchAccepted": True})
+        receipt, argv = self.model_preference_spawn(
+            identity, {"model": "provider/custom", "reasoningEffort": "medium"}, evidence, launcher,
+        )
+        self.assertEqual(argv[argv.index("--model") + 1], "provider/custom")
+        self.assertNotIn("--reasoning-effort", argv)
+        self.assertTrue(receipt.get("warnings"))
+        launcher.assert_called_once()
+
     def test_native_model_selection_refuses_when_configured_fallback_is_unavailable(self):
         self.state["nodes"][self.worker["id"]]["permissionMode"] = "default"
         identity = self.model_launch_identity()

@@ -805,6 +805,58 @@ test("native model metadata errors and account drift refuse without a launch or 
   }
 });
 
+test("native model projection keeps valid provider-native defaults from poisoning known selection", async (t) => {
+  for (const providerDefault of [undefined, "ultra", "max"]) {
+    await t.test(providerDefault ?? "no-default", async (t) => {
+      const f = await managedFixture(t);
+      const own = f.bindings[0];
+      let tools;
+      const requests = [];
+      const custom = {
+        id: "provider/custom", name: "Fixture custom provider",
+        capabilities: { supports: { reasoningEffort: true }, limits: {} },
+        supportedContextTiers: ["default"], supportedReasoningEfforts: ["ultra"],
+      };
+      if (providerDefault !== undefined) custom.defaultReasoningEffort = providerDefault;
+      const adapter = await start({
+        root: f.root, peer: own.peer, managed: true, expected: own,
+        joinSession: async options => {
+          tools = options.tools;
+          return { sessionId: own.sessionId, rpc: {
+            gitHubAuth: { getStatus: async () => ({
+              isAuthenticated: true, host: "https://github.com", login: "verified-parent",
+            }) },
+            model: { list: async () => ({ list: [{
+              id: "gpt-6.1-sol", name: "Fixture known model",
+              capabilities: { supports: { reasoningEffort: true }, limits: {} },
+              supportedContextTiers: ["default", "long_context"],
+              supportedReasoningEfforts: ["medium"], defaultReasoningEffort: "medium",
+            }, custom] }) },
+          } };
+        },
+        launch: async request => { requests.push(request); return { ok: true, launchAccepted: true }; },
+      });
+      t.after(() => adapter.close());
+      const result = await tools.find(tool => tool.name === "maestro_spawn").handler({
+        name: "Known selected", cwd: "/synthetic", task: "Bounded", model: "gpt-6.1-sol",
+        contextTier: "long_context", reasoningEffort: "medium",
+      }, { sessionId: own.sessionId });
+      if (providerDefault === "max") {
+        assert.equal(result.resultType, "failure");
+        assert.equal(requests.length, 0);
+      } else {
+        assert.equal(typeof result, "string");
+        assert.equal(JSON.parse(result).launchAccepted, true);
+        assert.equal(requests.length, 1);
+        assert.deepEqual(requests[0].launchCapabilities.models[1], {
+          id: "provider/custom", contextTiers: ["default"], reasoningEfforts: [],
+        });
+        assert.equal(JSON.stringify(requests[0]).includes("ultra"), false);
+      }
+    });
+  }
+});
+
 test("installed routes refuse stale generations, lost participation and wrong invocation", async (t) => {
   const f = await managedFixture(t);
   await f.launch(0);
