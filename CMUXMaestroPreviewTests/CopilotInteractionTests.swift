@@ -25,10 +25,10 @@ nonisolated struct CopilotInteractionTests {
                                                  interaction: "root-\(index)"))
         }
         if retire {
-            reducer.consume(try interactionEvent("system.notification", data: [
-                "kind": ["type": "shell_completed", "shellId": "pressure", "exitCode": 0]
-            ]))
+            reducer.consume(try interactionEvent("tool.execution_start", data: ["toolCallId": "pressure", "toolName": "bash"]))
+            reducer.consume(try interactionEvent("tool.execution_complete", data: ["toolCallId": "pressure", "success": true]))
             #expect(reducer.value().children.allSatisfy { $0.id != "child" })
+            #expect(reducer.retentionCounts.work == 1)
             if spill {
                 for index in 0..<32 {
                     reducer.consume(try interactionEvent("assistant.turn_start", turn: "after-retirement-\(index)",
@@ -64,10 +64,10 @@ nonisolated struct CopilotInteractionTests {
         }
         reducer.consume(try interactionEvent("abort", owner: "child"))
         reducer.consume(try interactionEvent("assistant.turn_start", turn: "root", interaction: "root"))
-        reducer.consume(try interactionEvent("system.notification", data: [
-            "kind": ["type": "shell_completed", "shellId": "pressure", "exitCode": 0]
-        ]))
+        reducer.consume(try interactionEvent("tool.execution_start", data: ["toolCallId": "pressure", "toolName": "bash"]))
+        reducer.consume(try interactionEvent("tool.execution_complete", data: ["toolCallId": "pressure", "success": true]))
         #expect(reducer.value().children.allSatisfy { $0.id != "child" })
+        #expect(reducer.retentionCounts.work == 1)
         for row in try copilotTestReplayPressure() { reducer.consume(row) }
         for row in try [
             interactionEvent("subagent.started", owner: "child", data: [
@@ -640,9 +640,10 @@ nonisolated struct CopilotInteractionTests {
             reducer.consume(row)
         }
         if retire {
-            reducer.consume(try interactionEvent("system.notification", data: [
-                "kind": ["type": "shell_completed", "shellId": "retire", "exitCode": 0]
-            ]))
+            reducer.consume(try interactionEvent("tool.execution_start", data: ["toolCallId": "retire", "toolName": "bash"]))
+            reducer.consume(try interactionEvent("tool.execution_complete", data: ["toolCallId": "retire", "success": true]))
+            #expect(reducer.value().children.allSatisfy { $0.id != "child" })
+            #expect(reducer.retentionCounts.work == 1)
         }
         reducer.consume(try interactionEvent("subagent.started", at: Date(timeIntervalSince1970: 2_010),
                                              owner: "child", data: [
@@ -755,10 +756,10 @@ nonisolated struct CopilotInteractionTests {
         if limited {
             for row in try copilotTestReplayPressure() { reducer.consume(row) }
         } else {
-            reducer.consume(try interactionEvent("system.notification", data: [
-                "kind": ["type": "shell_completed", "shellId": "retire", "exitCode": 0]
-            ]))
+            reducer.consume(try interactionEvent("tool.execution_start", data: ["toolCallId": "retire", "toolName": "bash"]))
+            reducer.consume(try interactionEvent("tool.execution_complete", data: ["toolCallId": "retire", "success": true]))
             #expect(reducer.value().children.first?.id != "child")
+            #expect(reducer.retentionCounts.work == 1)
         }
         reducer.consume(rows[5])
         let child = try #require(reducer.value().children.first { $0.id == "child" })
@@ -785,7 +786,7 @@ nonisolated struct CopilotInteractionTests {
         reducer.consume(try interactionEvent("system.notification", id: notification, parent: b, data: [
             "kind": ["type": "shell_completed", "shellId": "unjoined", "exitCode": 0]
         ]))
-        #expect(reducer.value().children.first?.state == .completed)
+        #expect(reducer.value().children.isEmpty)
         reducer.consume(try interactionEvent("assistant.turn_end", parent: notification, turn: "0"))
         #expect(reducer.value().state == .unknown)
         #expect(reducer.value().attention.isEmpty)
