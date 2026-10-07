@@ -607,10 +607,17 @@ class Harness:
                         pass
             self.drain_thread = threading.Thread(target=drain)
             self.drain_thread.start()
-        self.registration = self.run(
-            "register", "--workspace", self.workspace, "--surface", self.surface,
-            "--name", "Coordinator",
-        )
+        try:
+            self.registration = self.run(
+                "register", "--workspace", self.workspace, "--surface", self.surface,
+                "--name", "Coordinator",
+            )
+        except Exception as error:
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                raise error from cleanup_error
+            raise
 
     def run(self, *args, check=True, timeout=15, env=None):
         command = [
