@@ -768,18 +768,9 @@ nonisolated struct CopilotEventReducer: Sendable {
                 if work["shell:\(tool)"] != nil { removeTool(tool) }
             }
         case "system.notification":
-            if let shell = event.shellID {
-                // No argument/result scraping to guess a join from shell IDs
-                // to invocation IDs. Only this structured kind establishes exit.
-                let id = "shell-session:\(shell)"
-                if work[id] == nil {
-                    insert(Work(
-                        id: id, parent: event.agentID, kind: .shell,
-                        name: "Background shell", state: .unknown, model: nil
-                    ))
-                }
-                finish(id, state: event.shellExitCode.map { $0 == 0 ? .completed : .failed } ?? .completed, event: event)
-            }
+            // Background-process metadata does not create UI work or outcome
+            // attention. Independently observed shell tool invocations remain.
+            break
         case "subagent.started":
             guard let tool = event.toolCallID else { return }
             let id = event.agentID ?? tool
