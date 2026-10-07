@@ -12,7 +12,8 @@ nonisolated struct CopilotShellReducerTests {
             ("all structured background completions removed", removesStructuredBackgroundCompletions),
             ("replay and reconstruction retain no synthetic shell outcomes", replayCannotRecreateSyntheticRowsOrAttention),
             ("unrelated and malformed notifications", ignoresUnrelatedNotificationsAndRejectsMalformedExitCodes),
-            ("independent worker and invocation errors", preservesIndependentFailuresAndMatchingDisplayNames)
+            ("independent worker and invocation errors", preservesIndependentFailuresAndMatchingDisplayNames),
+            ("real invocation retirement and lifecycle replay", realInvocationPressurePreservesRetirementAndReplayGuards)
         ]
         for (name, test) in scenarios {
             do {
@@ -26,7 +27,7 @@ nonisolated struct CopilotShellReducerTests {
             FileHandle.standardError.write(Data(("FAIL: " + failures.joined(separator: "\nFAIL: ") + "\n").utf8))
             exit(1)
         }
-        print("PASS: compiled production shell decoder/reducer; 10 removal cases and 3 guard scenarios")
+        print("PASS: compiled production shell decoder/reducer; 10 removal cases and 4 guard scenarios")
     }
 
     private static func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -142,5 +143,35 @@ nonisolated struct CopilotShellReducerTests {
         try check(invocation.kind == .shell && invocation.state == .failed && invocation.attention?.first?.kind == .error,
                   "Never suppress all shell-kind work or real invocation errors")
         try check(state == before, "Background process events must add no row, error, aborted signal or dismissal burden")
+    }
+
+    private static func realInvocationPressurePreservesRetirementAndReplayGuards() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumWorkItems: 1)
+        let oldStart = try event("subagent.started", agent: "worker", data: [
+            "toolCallId": "old-spawn", "agentDisplayName": "Old worker"
+        ])
+        let oldFinish = try event("subagent.completed", data: [
+            "toolCallId": "old-spawn", "agentDisplayName": "Old worker"
+        ])
+        reducer.consume(oldStart)
+        reducer.consume(oldFinish)
+        try check(reducer.value().children.first?.state == .completed, "Establish actual terminal worker before pressure")
+        reducer.consume(try event("tool.execution_start", data: ["toolCallId": "pressure", "toolName": "bash"]))
+        let retired = reducer.value()
+        try check(retired.children.map(\.id) == ["shell:pressure"], "Real invocation admission must actually retire terminal worker")
+        reducer.consume(try event("tool.execution_complete", data: ["toolCallId": "pressure", "success": true]))
+        reducer.consume(oldStart)
+        reducer.consume(oldFinish)
+        try check(reducer.value().children.map(\.id) == ["shell:pressure"], "Old lifecycle replay must not recreate retired worker")
+        reducer.consume(try event("subagent.started", agent: "worker", data: [
+            "toolCallId": "new-spawn", "agentDisplayName": "Fresh worker"
+        ]))
+        let fresh = reducer.value()
+        try check(fresh.children.count == 1 && fresh.children.first?.name == "Fresh worker",
+                  "Fresh exact spawn must replace terminal pressure without inheriting old metadata")
+        reducer.consume(oldStart)
+        reducer.consume(oldFinish)
+        try check(reducer.value() == fresh, "Old start/completion must not mutate newly admitted worker")
+        try check(reducer.retentionCounts.work == 1 && reducer.issues.isEmpty, "Real pressure must preserve unchanged work bound without degradation")
     }
 }
