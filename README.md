@@ -550,12 +550,26 @@ It has no tool-permission grants in frontmatter and reuses the installed
 For the skill tool, pass `{"skill":"maestro"}`. Only the existing lifecycle/icon
 plugin slash commands remain namespaced; the global messaging guide is not.
 
-Defaults grant nothing. A coordinator may request native `yolo: true` **only with explicit
-user approval**; Copilot receives `--allow-all` alongside all explicit denies.
-Workers cannot request YOLO, even if the coordinator was allowed it; requests are
-rejected before credential lookup/reservation. Descendants keep bounded explicit
-allows and inherited denies. There is no speculative full permission inheritance,
-permission callback or persistent provider setting change.
+For prospective native children of an interactive managed parent, omitted
+`allowTools` and `yolo` inherit the parent's explicit **recorded launch policy**.
+A deny-only request keeps that recorded mode/allows and adds denies. An explicit
+`allowTools` list (including `[]`) or `yolo: false` selects requested default mode
+without `--allow-all`; omitted allows still inherit, and parent denies survive.
+Explicit allow rules cannot exceed the parent's recorded allows. A coordinator
+may request `yolo: true` **only with explicit human approval**, without a narrowing
+allow-list; combining both intents refuses. Workers' explicit YOLO requests still
+refuse before credentials/reservation, separately from inheriting parent YOLO.
+Missing recorded provenance or policy drift before reservation refuses.
+
+This is **recorded/requested policy, not verified current provider permissions**.
+Human `/permissions` changes can make launch records stale. In particular,
+Copilot's `defaultPermissionMode: "allow-all"` or `COPILOT_ALLOW_ALL` may elevate
+a new session despite omission of `--allow-all`; requested default mode is not
+proof of actual manual startup. The inspected SDK exposes current mode/path
+getters but no verified complete current tool/deny/URL policy snapshot or atomic
+same-or-narrower external-child admission. Full live inheritance/restricted-startup
+acceptance remains unverified. No permission callback, persistent setting change,
+or launch-then-policy mutation is used.
 
 Each native child has one private Unix socket and a launcher-created binding
 under `~/.copilot/extensions/maestro/r/`; account credentials never enter these
@@ -672,11 +686,13 @@ Read-only controller snapshots use shared locks; state mutations remain
 exclusive. Idle supervisors therefore do not serialize their status reads
 behind the mutation lock as a workspace approaches its worker limit.
 Spawn accepts bounded caller-explicit `--allow-tool` and `--deny-tool` rules;
-the default adds no grants, denies win, and descendants cannot exceed their
-parent's explicit allows or remove inherited denies. These Copilot flags are
-policy controls, not an operating-system sandbox. Shell access is never a
-default and requires an explicit task-level caller decision; wildcard,
-all-resource and `--allow-all` grants are never injected.
+registered/legacy defaults add no grants, denies win, and descendants cannot
+exceed their parent's explicit allows or remove inherited denies. Prospective
+native interactive children inherit recorded parent policy as qualified above;
+legacy bounded behavior is unchanged. These Copilot flags are policy controls,
+not an operating-system sandbox. No shell or wildcard grant is synthesized from
+tool visibility or prompt text; recorded parent YOLO and explicitly approved
+coordinator YOLO requests append `--allow-all` while retaining denies.
 
 The default view is a restrained workspace outline. Primary semibold workspace headers
 contain explicit coordinator → worker → nested-worker rows, with guide lines and

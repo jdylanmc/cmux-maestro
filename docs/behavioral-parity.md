@@ -521,6 +521,17 @@ worker/cross-workspace changes, root/child admission at limits 2, 32, 64 and 128
 with retained resources, non-double-counted leases, unknown ownership, and
 concurrent admission after an advisory preflight. The 128-boundary proof uses
 synthetic retained resources; it is not a 128-provider load measurement.
+Prospective native-child permission regressions exercise explicit recorded
+parent mode/allow/deny inheritance, deny-only additions, explicit list/false
+narrowing, coordinator-only broad requests and contradictory-intent refusal.
+Actual Store normalization preserves negative provenance when filling a missing
+interactive tool policy; a missing mode remains missing. Neither becomes verified
+parent policy. Exclusive reservation rechecks the recorded snapshot before adding
+a child or lease. Legacy bounded normalization and explicit worker YOLO refusals
+remain unchanged. These checks establish recorded/requested policy only: they do
+not inspect human-modified live permissions, prove atomic provider-policy
+comparison, or guarantee actual manual startup when provider defaults/environment
+request allow-all. That runtime acceptance gap remains explicit.
 The failed-attachment
 capacity fixture stops only its completed synthetic supervisors while retaining
 every terminal, and requires the actual configured resource-limit error, not a busy

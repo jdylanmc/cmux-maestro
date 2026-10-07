@@ -686,6 +686,18 @@ def validate_tool_policy(value):
         raise OrchestrationError("Stored Copilot tool policy is not canonical.")
 
 
+def recorded_native_permissions(actor):
+    if (
+        actor.get("executionMode") != "interactive"
+        or actor.get("permissionPolicyUnverified")
+        or actor.get("permissionMode") not in {"default", "yolo"}
+    ):
+        raise OrchestrationError("Recorded parent permission policy provenance is unavailable.")
+    policy = actor.get("toolPolicy")
+    validate_tool_policy(policy)
+    return actor["permissionMode"], {"allow": list(policy["allow"]), "deny": list(policy["deny"])}
+
+
 def default_root():
     override = os.environ.get("CMUX_MAESTRO_ROOT")
     if override:
@@ -847,6 +859,8 @@ def validate_state(state):
             raise OrchestrationError("Stored launch permission mode is invalid.")
         if node.get("permissionMode") == "yolo" and mode != "interactive":
             raise OrchestrationError("YOLO requires an explicitly launched interactive session.")
+        if "permissionPolicyUnverified" in node and node["permissionPolicyUnverified"] is not True:
+            raise OrchestrationError("Stored permission policy provenance is invalid.")
         messaging = node.get("messaging")
         if messaging is not None and (
             not isinstance(messaging, dict) or set(messaging) != {"version", "routes", "extension"}
@@ -1231,6 +1245,8 @@ class Store:
             node.setdefault("pendingReport", None)
             node.setdefault("supervisor", None)
             node.setdefault("verifiedBoundaryGeneration", None)
+            if node.get("executionMode") == "interactive" and "toolPolicy" not in node:
+                node["permissionPolicyUnverified"] = True
             node.setdefault("toolPolicy", {"allow": [], "deny": []})
             node.setdefault("worktreeLabel", None)
             node.setdefault("branchLabel", None)
@@ -2056,8 +2072,8 @@ def command_native_spawn(root, cmux):
         raise OrchestrationError("Native launch color is invalid.")
     args = argparse.Namespace(
         actor_id=None, token=None, name=assignment["name"], cwd=assignment["cwd"],
-        task=assignment["task"], allow_tool=assignment.get("allowTools", []),
-        deny_tool=assignment.get("denyTools", []), yolo=assignment.get("yolo", False),
+        task=assignment["task"], allow_tool=assignment.get("allowTools"),
+        deny_tool=assignment.get("denyTools", []), yolo=assignment.get("yolo"),
         require_pinned_launch_settings=True, icon=assignment.get("icon"), color=assignment.get("color"),
         delivery_proof_fixture=None, delivery_proof_experimental=False, delivery_proof_yolo=False,
     )
@@ -2342,6 +2358,17 @@ def command_spawn(args, root, cmux, *, native_identity=None):
     yolo = getattr(args, "yolo", False) or bool(proof and proof.get("yolo"))
     if yolo and actor["role"] != "coordinator":
         raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
+    inherited_permissions = None
+    permission_mode = "yolo" if yolo else "default"
+    if native_identity is not None and actor.get("executionMode") == "interactive":
+        if yolo and args.allow_tool is not None:
+            raise OrchestrationError("Explicit YOLO and a narrowing tool policy cannot be combined.")
+        inherited_permissions = recorded_native_permissions(actor)
+        parent_mode, parent_policy = inherited_permissions
+        if not yolo and args.allow_tool is None and args.yolo is not False:
+            permission_mode = parent_mode
+        allowed = parent_policy["allow"] if args.allow_tool is None else args.allow_tool
+        tool_policy = normalize_tool_policy(allowed, args.deny_tool, parent_policy)
     if actor.get("messaging") and native_identity is None:
         raise OrchestrationError("Managed sessions must use maestro_spawn to verify their current Copilot account.")
     if native_identity is None and proof is None and os.environ.get("CMUX_MAESTRO_TESTING") != "1":
@@ -2350,7 +2377,8 @@ def command_spawn(args, root, cmux, *, native_identity=None):
     launch_settings = worker_launch_settings(root)
     if native_identity is not None:
         launch_settings = {**launch_settings, "copilotAccount": native_identity["login"]}
-    if (args.require_pinned_launch_settings or proof is not None or messaging is not None or yolo) and (
+    if (args.require_pinned_launch_settings or proof is not None or messaging is not None
+            or permission_mode == "yolo") and (
         launch_settings.get("copilotAccount") is None
         or launch_settings.get("model") is None
     ):
@@ -2360,8 +2388,9 @@ def command_spawn(args, root, cmux, *, native_identity=None):
     # Check availability before creating a terminal; never persist the credential.
     copilot, launch_path = provider_launch_context(actor)
     resolve_copilot_token(launch_settings.get("copilotAccount"))
-    parent_policy = actor["toolPolicy"] if has_managed_runtime(actor) else None
-    tool_policy = normalize_tool_policy(args.allow_tool, args.deny_tool, parent_policy)
+    if inherited_permissions is None:
+        parent_policy = actor["toolPolicy"] if has_managed_runtime(actor) else None
+        tool_policy = normalize_tool_policy(args.allow_tool or [], args.deny_tool, parent_policy)
     pane = cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
     if has_managed_runtime(actor) and not process_matches(actor):
         raise OrchestrationError("Actor worker supervisor identity is stale.")
@@ -2375,6 +2404,8 @@ def command_spawn(args, root, cmux, *, native_identity=None):
                    else authorize(state, args.actor_id, args.token))
         if yolo and current["role"] != "coordinator":
             raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
+        if inherited_permissions is not None and recorded_native_permissions(current) != inherited_permissions:
+            raise OrchestrationError("Recorded parent permission policy changed during spawn.")
         if (
             current["runId"], current["workspaceId"], current.get("surfaceId")
         ) != (actor["runId"], actor["workspaceId"], actor["surfaceId"]):
@@ -2419,7 +2450,7 @@ def command_spawn(args, root, cmux, *, native_identity=None):
             state["nodes"][identifier]["deliveryProof"] = proof
         if messaging is not None:
             state["nodes"][identifier]["messaging"] = messaging
-        state["nodes"][identifier]["permissionMode"] = "yolo" if yolo else "default"
+        state["nodes"][identifier]["permissionMode"] = permission_mode
         state["launches"][identifier] = {
             "workerId": identifier, "runId": current["runId"],
             "sessionId": session_id, "generation": 1,
@@ -3897,10 +3928,10 @@ def parser():
     spawn.add_argument("--name", required=True)
     spawn.add_argument("--task", required=True)
     spawn.add_argument("--cwd", required=True)
-    spawn.add_argument("--allow-tool", action="append", default=[])
+    spawn.add_argument("--allow-tool", action="append")
     spawn.add_argument("--deny-tool", action="append", default=[])
     spawn.add_argument("--require-pinned-launch-settings", action="store_true")
-    spawn.add_argument("--yolo", action="store_true",
+    spawn.add_argument("--yolo", action="store_true", default=None,
                        help="Explicit user-approved coordinator launch with --allow-all; preserves denies")
     spawn.add_argument("--delivery-proof-fixture", help="Opt in to one prepared disposable native-extension fixture")
     spawn.add_argument("--delivery-proof-experimental", action="store_true",
