@@ -3,6 +3,7 @@
 
 import argparse
 import codecs
+import contextvars
 import datetime
 import fcntl
 import functools
@@ -67,6 +68,21 @@ REPORT_KEYS = {
 
 class OrchestrationError(Exception):
     pass
+
+
+# Bound reused probes only within this close invocation; other commands keep
+# their existing timeouts, and nested target budgets cannot leak to another call.
+CLOSE_DEADLINE = contextvars.ContextVar("close_deadline", default=None)
+
+
+def close_timeout(default):
+    deadline = CLOSE_DEADLINE.get()
+    if deadline is None:
+        return default
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise OrchestrationError("Close pass budget exhausted.")
+    return min(default, remaining)
 
 
 class CoordinatorLaunchError(OrchestrationError):
@@ -1383,7 +1399,7 @@ class Cmux:
     def run(self, command, *arguments):
         invocation = [self.executable, "--json", "--id-format", "uuids", command, *arguments]
         try:
-            result = subprocess.run(invocation, capture_output=True, text=True, timeout=15)
+            result = subprocess.run(invocation, capture_output=True, text=True, timeout=close_timeout(15))
         except subprocess.TimeoutExpired:
             raise OrchestrationError(f"CMUX {command} timed out.")
         if result.returncode:
@@ -1557,7 +1573,7 @@ def process_start(pid):
     try:
         result = subprocess.run(
             ["/bin/ps", "-o", "lstart=", "-p", str(pid)],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True, text=True, timeout=close_timeout(3),
         )
     except (subprocess.TimeoutExpired, OSError):
         return None
@@ -2016,7 +2032,7 @@ def direct_process_identity(pid):
         try:
             result = subprocess.run(
                 ["/bin/ps", "-o", "ppid=", "-p", str(ancestor)],
-                capture_output=True, text=True, timeout=3,
+                capture_output=True, text=True, timeout=close_timeout(3),
             )
             ancestor = int(result.stdout.strip()) if result.returncode == 0 else 0
         except (ValueError, OSError, subprocess.TimeoutExpired):
@@ -2086,7 +2102,7 @@ def close_process_is_live(process):
     try:
         result = subprocess.run(
             ["/bin/ps", "-o", "state=,lstart=", "-p", str(process["pid"])],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True, text=True, timeout=close_timeout(3),
         )
     except (OSError, subprocess.TimeoutExpired, UnicodeError):
         return False
@@ -2100,7 +2116,7 @@ def close_source_owner(pid, launch):
     try:
         result = subprocess.run(
             ["/bin/ps", "-o", "ppid=,uid=,lstart=", "-p", str(pid)],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True, text=True, timeout=close_timeout(3),
         )
     except (OSError, subprocess.TimeoutExpired, UnicodeError):
         return None
@@ -2197,6 +2213,19 @@ def command_native_close(root, cmux):
     except (UnicodeError, ValueError) as error:
         raise OrchestrationError("Native close request is invalid.") from error
 
+    if request.get("scope") != "subtree":
+        return native_close_request(root, cmux, request)
+    token = CLOSE_DEADLINE.set(time.monotonic() + 45)
+    try:
+        return native_close_request(root, cmux, request)
+    finally:
+        CLOSE_DEADLINE.reset(token)
+
+
+def native_close_request(root, cmux, request):
+    target_identity = request["target"]
+    subtree = request.get("scope") == "subtree"
+
     def owned(state, identity=target_identity, *, direct=True, selecting=False):
         actor = authorize_native_actor(state, request["identity"])
         if (actor["id"] != os.environ.get("CMUX_MAESTRO_WORKER_ID")
@@ -2223,10 +2252,8 @@ def command_native_close(root, cmux):
             raise OrchestrationError("Close refuses an active run launch lease.")
         return actor, target
 
-    snapshot = read_state(root)
+    snapshot = read_state(root, wait=0) if subtree else read_state(root)
     actor, target = owned(snapshot, selecting=request.get("scope") == "subtree")
-    if direct_process_identity(actor["providerProcess"]["pid"]) != actor["providerProcess"]:
-        raise OrchestrationError("Close invoking provider identity changed.")
 
     def subtree_result(identity, outcome, reason, *, attempted):
         return {
@@ -2280,7 +2307,9 @@ def command_native_close(root, cmux):
             return subtree_result(selected_identity, "accepted", "accepted", attempted=True)
         return {**selected_identity, "closeAccepted": True, "removal": "unconfirmed"}
 
-    if request.get("scope", "target-only") == "target-only":
+    if not subtree:
+        if direct_process_identity(actor["providerProcess"]["pid"]) != actor["providerProcess"]:
+            raise OrchestrationError("Close invoking provider identity changed.")
         return with_store(root, send_once, wait=0)
 
     selection = [{
@@ -2288,9 +2317,22 @@ def command_native_close(root, cmux):
         "surfaceId": node.get("surfaceId"), "sessionId": node.get("copilotSessionId"),
         "generation": node["generation"],
     } for node in reversed(descendants(snapshot, target))]
+    deadline = CLOSE_DEADLINE.get()
+    actor_refused = False
+    try:
+        actor_refused = direct_process_identity(actor["providerProcess"]["pid"]) != actor["providerProcess"]
+    except (OrchestrationError, OSError):
+        actor_refused = True
     results = []
     for selected in selection:
+        if time.monotonic() >= deadline:
+            results.append(subtree_result(selected, "not-attempted", "budget-exhausted", attempted=False))
+            continue
+        if actor_refused:
+            results.append(subtree_result(selected, "refused", "actor-unavailable", attempted=False))
+            continue
         attempted = False
+        token = CLOSE_DEADLINE.set(min(deadline, time.monotonic() + 5))
         try:
             result = with_store(
                 root, lambda store: send_once(store, selected, direct=False), wait=0,
@@ -2300,6 +2342,8 @@ def command_native_close(root, cmux):
                 selected, "unknown" if attempted else "refused",
                 "host-failure" if attempted else "admission-refused", attempted=attempted,
             )
+        finally:
+            CLOSE_DEADLINE.reset(token)
         results.append(result)
     return {"scope": "subtree", "results": results}
 
