@@ -555,7 +555,9 @@ For prospective native children of an interactive managed parent, omitted
 A deny-only request keeps that recorded mode/allows and adds denies. An explicit
 `allowTools` list (including `[]`) or `yolo: false` selects requested default mode
 without `--allow-all`; omitted allows still inherit, and parent denies survive.
-Explicit allow rules cannot exceed the parent's recorded allows. A coordinator
+Default-mode parents retain literal allow-subset checks. Recorded YOLO parents
+permit bounded finite child allow rules without redundant parent allows, while
+retaining all denies and wildcard/broad-rule rejection. A coordinator
 may request `yolo: true` **only with explicit human approval**, without a narrowing
 allow-list; combining both intents refuses. Workers' explicit YOLO requests still
 refuse before credentials/reservation, separately from inheriting parent YOLO.

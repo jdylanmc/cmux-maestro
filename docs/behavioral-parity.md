@@ -524,6 +524,10 @@ synthetic retained resources; it is not a 128-provider load measurement.
 Prospective native-child permission regressions exercise explicit recorded
 parent mode/allow/deny inheritance, deny-only additions, explicit list/false
 narrowing, coordinator-only broad requests and contradictory-intent refusal.
+Finite narrowing under recorded YOLO does not require redundant explicit parent
+allow strings: empty and redundant lists produce the same default-mode child,
+one reservation/lease/launch and retained denies. Default-mode parent escalation
+and wildcard grants still refuse; matching deny strings remove allows.
 Actual Store normalization preserves negative provenance when filling a missing
 interactive tool policy; a missing mode remains missing. Neither becomes verified
 parent policy. Exclusive reservation rechecks the recorded snapshot before adding

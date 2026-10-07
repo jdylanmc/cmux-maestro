@@ -775,7 +775,7 @@ def assigned_directory(value):
     return cwd
 
 
-def normalize_tool_policy(allow, deny, parent=None):
+def normalize_tool_policy(allow, deny, parent=None, *, parent_yolo=False):
     if not isinstance(allow, list) or not isinstance(deny, list):
         raise OrchestrationError("Copilot tool policy must contain rule lists.")
     if len(allow) > MAX_POLICY_RULES or len(deny) > MAX_POLICY_RULES:
@@ -799,7 +799,7 @@ def normalize_tool_policy(allow, deny, parent=None):
         raise OrchestrationError("Broad Copilot tool grants are not supported.")
     if parent is not None:
         parent_allow = set(parent["allow"])
-        if any(rule not in parent_allow for rule in allowed):
+        if not parent_yolo and any(rule not in parent_allow for rule in allowed):
             raise OrchestrationError("A worker cannot grant a child additional Copilot tools.")
         denied = list(dict.fromkeys([*parent["deny"], *denied]))
     denied_set = set(denied)
@@ -2515,7 +2515,9 @@ def command_spawn(args, root, cmux, *, native_identity=None):
         if not yolo and args.allow_tool is None and args.yolo is not False:
             permission_mode = parent_mode
         allowed = parent_policy["allow"] if args.allow_tool is None else args.allow_tool
-        tool_policy = normalize_tool_policy(allowed, args.deny_tool, parent_policy)
+        tool_policy = normalize_tool_policy(
+            allowed, args.deny_tool, parent_policy, parent_yolo=parent_mode == "yolo",
+        )
     if actor.get("messaging") and native_identity is None:
         raise OrchestrationError("Managed sessions must use maestro_spawn to verify their current Copilot account.")
     if native_identity is None and proof is None and os.environ.get("CMUX_MAESTRO_TESTING") != "1":
