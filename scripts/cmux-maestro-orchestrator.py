@@ -2277,7 +2277,7 @@ def command_native_close(root, cmux):
         result = with_store(
             root, lambda store: send_once(store, selected, direct=False), wait=0,
         )
-        results.append({**result, "attempted": True})
+        results.append({**result, "attempted": True, "outcome": "accepted", "reason": "accepted"})
     return {"scope": "subtree", "results": results}
 
 
