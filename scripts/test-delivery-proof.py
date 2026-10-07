@@ -2358,6 +2358,7 @@ class LifecycleFailureTests(unittest.TestCase):
                         **copy.deepcopy(self.worker), "id": str(uuid.uuid4()),
                         "parentId": None, "role": "coordinator",
                         "runtimeProtocolVersion": 2, "launchMethod": "direct",
+                        "permissionMode": "default",
                         "launchSettings": {"version": 1, "copilotAccount": "synthetic",
                                            "model": "synthetic-model"},
                     }
