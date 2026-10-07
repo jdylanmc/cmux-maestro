@@ -2507,6 +2507,45 @@ class LifecycleFailureTests(unittest.TestCase):
         self.assertEqual([argv[index + 1] for index, value in enumerate(argv) if value == "--deny-tool"],
                          ["web", "shell(rm)"])
 
+    def test_explicit_native_restrictions_disable_inherited_yolo(self):
+        for overrides, expected_allow in (
+            ({"yolo": False}, ["read", "shell(git status)"]),
+            ({"allowTools": ["read"]}, ["read"]),
+            ({"allowTools": []}, []),
+        ):
+            with self.subTest(overrides=overrides):
+                parent = copy.deepcopy(self.worker)
+                parent.update(permissionMode="yolo", toolPolicy={
+                    "allow": ["read", "shell(git status)"], "deny": ["web"],
+                })
+                self.state = {**CONTROLLER["empty_state"](), "nodes": {
+                    self.actor["id"]: copy.deepcopy(self.actor), parent["id"]: parent,
+                }}
+                CONTROLLER["validate_state"](self.state)
+                assignment = {
+                    "name": "Restricted child", "cwd": str(REPO), "task": "Synthetic", **overrides,
+                }
+                request = {"identity": {"login": "synthetic"}, "assignment": assignment}
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                native_spawn = CONTROLLER["command_native_spawn"]
+                with mock.patch.dict(native_spawn.__globals__, {
+                    "read_state": lambda *a, **k: copy.deepcopy(self.state),
+                    "mutate": self.mutate,
+                    "authorize_native_spawn": lambda state, *_: state["nodes"][parent["id"]],
+                    "process_matches": lambda _: True,
+                    "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+                    "resolve_copilot_token": lambda _: None,
+                    "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+                    "messaging_configuration": lambda _: None,
+                    "resource_observations": lambda *_: ({}, set()),
+                    "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+                    "launch_reserved_session": launcher,
+                }), mock.patch("sys.stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))):
+                    native_spawn(self.root, self.cmux)
+                child = self.state["nodes"][launcher.call_args.args[2]]
+                self.assertEqual(child["permissionMode"], "default")
+                self.assertEqual(child["toolPolicy"], {"allow": expected_allow, "deny": ["web"]})
+
     def test_atomic_census_distinguishes_removed_and_surviving_exited_surface(self):
         observe = CONTROLLER["resource_observations"]
         for present in (True, False):
