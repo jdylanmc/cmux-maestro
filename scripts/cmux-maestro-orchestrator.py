@@ -2261,6 +2261,15 @@ def native_close_request(root, cmux, request):
             "removal": "unconfirmed", **({"closeAccepted": True} if outcome == "accepted" else {}),
         }
 
+    def host_reason(failure, fallback):
+        if isinstance(failure, dict):
+            error = failure.get("error")
+            code = error.get("code") if isinstance(error, dict) else error
+            confirmed = code == "confirmation_required"
+        else:
+            confirmed = bool(re.search(r"\bconfirmation_required\b", str(failure)))
+        return "confirmation_required" if confirmed else fallback
+
     attempted = False
 
     def send_once(store, selected_identity=target_identity, *, direct=True):
@@ -2286,7 +2295,9 @@ def native_close_request(root, cmux, request):
             }))
         except (OrchestrationError, OSError) as error:
             if not direct:
-                return subtree_result(selected_identity, "unknown", "host-failure", attempted=True)
+                return subtree_result(
+                    selected_identity, "unknown", host_reason(error, "host-failure"), attempted=True,
+                )
             detail = str(error)[:240] if isinstance(error, OrchestrationError) else type(error).__name__
             raise OrchestrationError(
                 f"Close request failed or is uncertain: {detail} No retry was made; removal is unconfirmed."
@@ -2299,7 +2310,9 @@ def native_close_request(root, cmux, request):
                 raise ValueError()
         except (OrchestrationError, ValueError) as error:
             if not direct:
-                return subtree_result(selected_identity, "unknown", "unrecognized-reply", attempted=True)
+                return subtree_result(
+                    selected_identity, "unknown", host_reason(result, "unrecognized-reply"), attempted=True,
+                )
             raise OrchestrationError(
                 "Close reply is unrecognized; removal is unconfirmed. No retry was made."
             ) from error
@@ -2317,6 +2330,15 @@ def native_close_request(root, cmux, request):
         "surfaceId": node.get("surfaceId"), "sessionId": node.get("copilotSessionId"),
         "generation": node["generation"],
     } for node in reversed(descendants(snapshot, target))]
+    # Reserve the full CLI wire shape, including its wrapper/newline, before
+    # any host action. The overestimate covers every compact outcome variant.
+    reserved = [{
+        **identity, "outcome": "not-attempted", "reason": "x" * 32,
+        "attempted": False, "removal": "unconfirmed", "closeAccepted": True,
+    } for identity in selection]
+    if len(json.dumps({"ok": True, "scope": "subtree", "results": reserved},
+                      sort_keys=True).encode("utf-8")) + 1 > 65_536:
+        raise OrchestrationError("Close result plan exceeds the output size bound; no request was made.")
     deadline = CLOSE_DEADLINE.get()
     actor_refused = False
     try:
