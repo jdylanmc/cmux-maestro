@@ -70,6 +70,10 @@ class OrchestrationError(Exception):
     pass
 
 
+class CloseBudgetExhausted(OrchestrationError):
+    pass
+
+
 # Bound reused probes only within this close invocation; other commands keep
 # their existing timeouts, and nested target budgets cannot leak to another call.
 CLOSE_DEADLINE = contextvars.ContextVar("close_deadline", default=None)
@@ -81,7 +85,7 @@ def close_timeout(default):
         return default
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise OrchestrationError("Close pass budget exhausted.")
+        raise CloseBudgetExhausted("Close pass budget exhausted.")
     return min(default, remaining)
 
 
@@ -2244,7 +2248,8 @@ def native_close_request(root, cmux, request):
         for node in (actor,) if selecting else (actor, target):
             if (node.get("executionMode") != "interactive" or not node.get("messaging")
                     or node.get("archiving") or node.get("surfaceUnknown") or node.get("launchError")
-                    or not node.get("surfaceId") or not node.get("providerProcess")
+                    or not node.get("surfaceId") or not node.get("copilotSessionId")
+                    or not node.get("providerProcess")
                     or node["phase"] != "turn-running"
                     or is_direct_launch(node) and node.get("launchAccepted") is not True):
                 raise OrchestrationError("Close ownership is unresolved or no longer current.")
@@ -2293,11 +2298,18 @@ def native_close_request(root, cmux, request):
             result = cmux.run("rpc", "surface.close", json.dumps({
                 "workspace_id": child["workspaceId"], "surface_id": child["surfaceId"],
             }))
-        except (OrchestrationError, OSError) as error:
+        except CloseBudgetExhausted:
+            attempted = False
+            if direct:
+                raise
+            return subtree_result(selected_identity, "not-attempted", "budget-exhausted", attempted=False)
+        except (OrchestrationError, OSError, UnicodeError) as error:
             if not direct:
                 return subtree_result(
                     selected_identity, "unknown", host_reason(error, "host-failure"), attempted=True,
                 )
+            if isinstance(error, UnicodeError):
+                raise
             detail = str(error)[:240] if isinstance(error, OrchestrationError) else type(error).__name__
             raise OrchestrationError(
                 f"Close request failed or is uncertain: {detail} No retry was made; removal is unconfirmed."
@@ -2330,6 +2342,11 @@ def native_close_request(root, cmux, request):
         "surfaceId": node.get("surfaceId"), "sessionId": node.get("copilotSessionId"),
         "generation": node["generation"],
     } for node in reversed(descendants(snapshot, target))]
+    if any(type(identity["generation"]) is not int
+           or not 0 <= identity["generation"] <= 9_007_199_254_740_991 for identity in selection):
+        raise OrchestrationError(
+            "Close result plan contains a generation outside the exact numeric wire bound; no request was made."
+        )
     # Reserve the full CLI wire shape, including its wrapper/newline, before
     # any host action. The overestimate covers every compact outcome variant.
     reserved = [{
@@ -2343,7 +2360,7 @@ def native_close_request(root, cmux, request):
     actor_refused = False
     try:
         actor_refused = direct_process_identity(actor["providerProcess"]["pid"]) != actor["providerProcess"]
-    except (OrchestrationError, OSError):
+    except (OrchestrationError, OSError, UnicodeError):
         actor_refused = True
     results = []
     for selected in selection:
@@ -2359,7 +2376,7 @@ def native_close_request(root, cmux, request):
             result = with_store(
                 root, lambda store: send_once(store, selected, direct=False), wait=0,
             )
-        except (OrchestrationError, OSError):
+        except (OrchestrationError, OSError, UnicodeError):
             result = subtree_result(
                 selected, "unknown" if attempted else "refused",
                 "host-failure" if attempted else "admission-refused", attempted=attempted,
