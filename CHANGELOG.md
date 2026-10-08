@@ -83,6 +83,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Align the historical-session dismissal fixture's clocks; keep production
+  stale-action rejection and native dismissal/focus assertions unchanged.
 - Remove synthetic background-shell rows and their associated outcome notices,
   preserving worker/task errors and distinct shell tool invocations (#155).
 - Show explicit unavailable or last-reported model text for the exact observed
