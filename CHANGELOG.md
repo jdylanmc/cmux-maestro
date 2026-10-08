@@ -14,10 +14,25 @@ Notable changes are recorded using Keep a Changelog categories.
   an authenticated coordinator CLI, with advisory usage/preflight and exact
   root, worker, retained-resource and pending-lease accounting. Preserve
   existing lock budgets and independent node/depth bounds (#154).
+- Show read-only global Maestro guide-content status in Settings > CLI Integration,
+  with explicit Re-check, build-relative matching and read/copy feedback.
+  Keep installation and updates manual through the existing copyable command;
+  guide status does not imply runtime or messaging readiness (#55).
 - Request one exact owned child-terminal close through stock CMUX, preserving
   private ownership and launch guards. Return request acceptance without waiting
   for removal, retrying, shutting down the provider, or releasing capacity; inherit
-  CMUX's socket confirmation bypass and last-terminal refusal (#90).
+  stock host refusals, including last-terminal refusal (#90).
+- Add explicitly authorized descendant-first subtree close with one fixed private
+  selection, independent continuation after refusal or uncertainty, and complete
+  bounded per-target results. Select the stock host's documented noninteractive
+  branch on the initial admitted request, not as a retry or fallback. Preserve
+  default target-only receipt/scope, ancestry and
+  resource accounting; refuse unrepresentable numeric identities before effects,
+  preserve results after malformed host replies, and distinguish pre-dispatch
+  refusal from unknown dispatched requests. Preserve prior results when an
+  invoking worker loses its stored session identity. Report `confirmation_required`
+  without forced fallback
+  (#91).
 - Versioned visual-design references for #57, including the frozen September
   29 prototype, approved contract, 56-state synthetic review gallery and
   current ticket handoff (#134). Preserve earlier evidence and distinguish
@@ -33,6 +48,8 @@ Notable changes are recorded using Keep a Changelog categories.
   children, preserving denies, narrowing and provenance/drift refusals. Current
   provider-policy equivalence and actual restricted startup remain unverified
   (#154).
+- Target two-hour Joe deliveries without skipping gates. Select doctrines before
+  review/self-checks, keep one PR-state contract, and check local skill hashes/links.
 - Raise the default per-workspace limit from 8 to 32 live managed sessions,
   including managed coordinators and retained resources, without changing
   launch accounting or the 128-node and eight-level nesting limits. Validate
@@ -87,8 +104,12 @@ Notable changes are recorded using Keep a Changelog categories.
 - Clean up failed orchestration-test fixture registration through the existing
   quiescence protocol, retaining evidence and both errors when cleanup cannot
   complete (#154).
+- Align the historical-session dismissal fixture's clocks; keep production
+  stale-action rejection and native dismissal/focus assertions unchanged.
 - Remove synthetic background-shell rows and their associated outcome notices,
   preserving worker/task errors and distinct shell tool invocations (#155).
+- Show explicit unavailable or last-reported model text for the exact observed
+  agent, without borrowing another session's model (#74).
 - Qualify managed Git labels, verification and change counts as evidence from
   the assigned directory, not Copilot's current `/cwd`, preserving stale and
   unavailable states and separate CMUX surface-directory reports (#119, #59).

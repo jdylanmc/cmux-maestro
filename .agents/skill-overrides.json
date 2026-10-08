@@ -1,0 +1,9 @@
+{
+  "skills": ["doctrine", "joe-mode", "joe-mode-cmux", "roast", "shepherd", "ship", "verify"],
+  "links": [
+    ".agents/skills/doctrine/APPLY.md#joe-review-operations",
+    ".agents/skills/ship/DELIVERY.md#pr-states",
+    ".agents/skills/ship/DELIVERY.md#current-base-readiness-and-real-custody",
+    ".agents/skills/joe-mode/DELIVERY-PACE.md#target"
+  ]
+}

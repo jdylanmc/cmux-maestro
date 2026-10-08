@@ -248,6 +248,34 @@ class CompiledBridgeMac(SyntheticMac):
         return result
 
 
+class LocalPreviewImportTests(unittest.TestCase):
+    def test_child_imports_do_not_write_source_bytecode(self):
+        methods = (
+            "assert_bridge_death_preserves_provider_lease",
+            "test_compiled_bridge_actual_parent_exit_recovers_both_generations_from_disk",
+            "test_compiled_bridge_revalidates_after_actual_exit_between_component_restorations",
+        )
+        for name in methods:
+            with self.subTest(method=name), tempfile.TemporaryDirectory(prefix="cmux-preview-import-") as directory:
+                root = Path(directory)
+                scripts = root / "scripts"
+                scripts.mkdir()
+                for filename in ("test-local-preview.py", "local-preview.py",
+                                 "verify-build-metadata.py", "preview-command-worker.py"):
+                    shutil.copyfile(ROOT / "scripts" / filename, scripts / filename)
+                code = next(value for value in getattr(LocalPreviewTests, name).__code__.co_consts
+                            if isinstance(value, str) and "spec.loader.exec_module(tests)" in value)
+                # Execute the actual child import, stopping before its fixture operations.
+                prefix = code.split("spec.loader.exec_module(tests)", 1)[0] + "spec.loader.exec_module(tests)"
+                result = subprocess.run([
+                    sys.executable, "-I", "-c",
+                    "import sys; sys.dont_write_bytecode = False\n" + prefix,
+                    str(scripts / "test-local-preview.py"),
+                ], capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual([str(path.relative_to(root)) for path in root.rglob("*.pyc")], [])
+
+
 class LocalPreviewTests(unittest.TestCase):
     compiled_bridge_ready = False
     compiled_bridge_failure = None
@@ -288,6 +316,7 @@ class LocalPreviewTests(unittest.TestCase):
         os.mkfifo(gate, 0o600)
         code = """
 import importlib.util,json,os,pathlib,sys,time
+sys.dont_write_bytecode = True
 spec=importlib.util.spec_from_file_location('fixture',sys.argv[1])
 tests=importlib.util.module_from_spec(spec); spec.loader.exec_module(tests)
 home,source,provider=map(pathlib.Path,sys.argv[2:5])
@@ -522,6 +551,7 @@ else:
         before = self.integration_snapshot()
         code = """
 import importlib.util, pathlib, sys
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('install_tests', sys.argv[1])
 tests = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tests)
@@ -628,6 +658,7 @@ with installer.locked():
         before = self.integration_snapshot()
         code = """
 import importlib.util, os, pathlib, sys
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('install_tests', sys.argv[1])
 tests = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tests)

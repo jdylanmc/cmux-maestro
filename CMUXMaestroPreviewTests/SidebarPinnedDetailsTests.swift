@@ -251,6 +251,20 @@ struct SidebarPinnedDetailsTests {
         #expect(pinned(hierarchy(kind: .agentSession), sessions: []).notice != nil)
     }
 
+    @Test func freshDeadRootInspectorQualifiesItsOwnModelAsLastReported() throws {
+        let ended = session(liveness: .dead)
+        let subject = try #require(SidebarPresentation.inspection(
+            for: .unmanaged(.session(ended.id)), hierarchy: hierarchy(), connected: true,
+            tree: tree([ended]), managed: .empty, availability: .ready, now: now
+        ))
+
+        let details = try #require(inspector(subject, sessions: [ended]))
+
+        #expect(details.lines.filter { $0.title == "Last reported model" }.map(\.value) == ["verified-model"])
+        #expect(!details.lines.contains { $0.title == "Model" || $0.value == "child-model" })
+        #expect(details.lines.filter { $0.copyableSessionID != nil } == [.sessionID(ended.id)])
+    }
+
     @Test func readerRepublishedDeadOwnerDoesNotSuppressItsLiveReplacement() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
@@ -663,6 +677,45 @@ struct SidebarPinnedDetailsTests {
             managed: orchestration.snapshot, availability: orchestration.availability, now: date
         ) == pinnedBefore)
         print("R2 \(mode.rawValue)/\(change): retained production NSMenuItem dispatched; copies=\(copyControls.count), acknowledgements=\(preferences.attention.acknowledged.count), host=0")
+    }
+
+    @Test func reportedModelSwitchUpdatesOnlyExactHoveredSubjectAndLeavesPinnedPeerAlone() throws {
+        let fixedPeer = session(other: true)
+        let initial = session()
+        let updated = SidebarCopilotSession(
+            id: initial.id, workspaceID: initial.workspaceID, surfaceID: initial.surfaceID,
+            liveness: .alive, state: .working, model: "provider/root-v2", observedAt: now,
+            nodes: [.init(id: "child", parentID: nil, depth: 0, kind: .subagent, name: "Child",
+                          state: .working, model: "provider/child-v2", ancestryUnresolved: false, hasChildren: false)],
+            childrenComplete: true, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        let activePeer = hierarchy(active: fixtures.workspaceB)
+        let before = pinned(activePeer, sessions: [initial, fixedPeer])
+        for (observed, rootModel, childModel) in [
+            (initial, "verified-model", "child-model"), (updated, "provider/root-v2", "provider/child-v2")
+        ] {
+            let observations = tree([observed, fixedPeer])
+            for (target, expected) in [
+                (SidebarAgentHoverTarget.session(observed.id), rootModel),
+                (.child(sessionID: observed.id, childID: "child"), childModel)
+            ] {
+                let hover = try #require(SidebarAgentHoverContent.card(
+                    for: target, hierarchy: activePeer, connected: true, tree: observations,
+                    managed: .empty, availability: .ready, now: now
+                ))
+                #expect(hover.lines.filter { $0.title == "Model" }.map(\.value) == [expected])
+                #expect(!hover.lines.contains { $0.value == "other-model" })
+            }
+            let subject = try #require(SidebarPresentation.inspection(
+                for: .unmanaged(.session(observed.id)), hierarchy: activePeer, connected: true,
+                tree: observations, managed: .empty, availability: .ready, now: now
+            ))
+            let details = try #require(inspector(subject, hierarchy: activePeer, sessions: [observed, fixedPeer]))
+            #expect(details.lines.filter { $0.title == "Model" }.map(\.value) == [rootModel])
+            #expect(pinned(activePeer, sessions: [observed, fixedPeer]) == before)
+        }
+        #expect(before.inspection?.sessionID == fixedPeer.id)
+        #expect(before.lines.contains(.init(title: "Model", value: "other-model")))
     }
 
     @Test func childInspectionRetainsParentPlacementAndDoesNotChangePinnedSubject() throws {

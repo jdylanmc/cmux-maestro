@@ -9,6 +9,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test local skill override validation
+        run: node --test scripts/test-skill-overrides.mjs
+      - name: Verify local skill overrides and policy links
+        run: node scripts/check-skill-overrides.mjs
       - name: Verify terminal orchestration contracts
         run: python3 scripts/test-cmux-maestro-orchestrator.py
       - name: Verify managed messaging and legacy proof launcher contracts
@@ -48,7 +52,33 @@ jobs:
           path: |
             .build/tests/scoped-results/**/*.json
             .build/tests/scoped-results/**/*.txt
+            .build/tests/scoped-results/**/guide-acceptance/*.log
+            .build/tests/scoped-results/**/guide-acceptance/probe.xcresult
+            .build/tests/scoped-results/**/guide-acceptance/images/*.png
             .build/setup-tests/metadata-watchdog/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  guide-ui-consumer-probe:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify additive UI probe contracts
+        run: python3 scripts/test-guide-ui-validation.py
+      - name: Fetch pinned project SDK
+        run: ./scripts/fetch-sdk.sh
+      - name: Probe public UI consumer with synthetic host
+        run: ./scripts/test-guide-ui-validation.sh
+      - name: Upload separate public UI probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guide-ui-consumer-probe
+          path: |
+            .build/guide-ui-validation/run-*/evidence.json
+            .build/guide-ui-validation/run-*/*.log
+            .build/guide-ui-validation/run-*/probe.xcresult
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14

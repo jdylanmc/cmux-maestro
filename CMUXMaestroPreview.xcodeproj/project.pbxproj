@@ -7,6 +7,19 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D14400000000000000000101 = {isa = PBXBuildFile; fileRef = D14400000000000000000201; };
+		D14400000000000000000102 = {isa = PBXBuildFile; fileRef = D14400000000000000000202; };
+		D14400000000000000000103 = {isa = PBXBuildFile; fileRef = D14400000000000000000203; };
+		D14400000000000000000104 = {isa = PBXBuildFile; fileRef = D14400000000000000000203; };
+		D15500000000000000000101 = {isa = PBXBuildFile; fileRef = D15500000000000000000201; };
+		D15500000000000000000102 = {isa = PBXBuildFile; fileRef = D15500000000000000000202; };
+		D15500000000000000000103 = {isa = PBXBuildFile; fileRef = D15500000000000000000203; };
+		D15500000000000000000104 = {isa = PBXBuildFile; fileRef = D15500000000000000000204; };
+		D15500000000000000000105 = {isa = PBXBuildFile; fileRef = D15500000000000000000205; };
+		D15500000000000000000106 = {isa = PBXBuildFile; fileRef = D15500000000000000000206; };
+		D15500000000000000000107 = {isa = PBXBuildFile; fileRef = C06100000000000000000201; };
+		D15500000000000000000108 = {isa = PBXBuildFile; fileRef = C06100000000000000000204; };
+		D15500000000000000000109 = {isa = PBXBuildFile; fileRef = D15500000000000000000209; };
 		C01000000000000000000001 /* AgentSessionSnapshot.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C01000000000000000000011; };
 		C01000000000000000000002 /* AgentSessionSnapshot.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C01000000000000000000011; };
 		C01000000000000000000003 /* CopilotSnapshotAdapter.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C01000000000000000000012; };
@@ -73,6 +86,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		D15500000000000000000003 = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A3685BE12FCA3AEE00009F1B;
+			proxyType = 1;
+			remoteGlobalIDString = D15500000000000000000001;
+			remoteInfo = CMUXMaestroGuideUIHost;
+		};
 		C06100000000000000000003 /* Helper Proxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = A3685BE12FCA3AEE00009F1B;
@@ -120,6 +140,19 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		D14400000000000000000201 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroGuideUIHost/GuideAcceptanceFixture.swift; sourceTree = SOURCE_ROOT; };
+		D14400000000000000000202 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroGuideUITests/GuideAcceptanceTests.swift; sourceTree = SOURCE_ROOT; };
+		D14400000000000000000203 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreviewTests/GuideAcceptanceEvidence.swift; sourceTree = SOURCE_ROOT; };
+		D15500000000000000000201 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroGuideUIHost/GuideValidationApp.swift; sourceTree = SOURCE_ROOT; };
+		D15500000000000000000202 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroGuideUIHost/GuideValidationContent.swift; sourceTree = SOURCE_ROOT; };
+		D15500000000000000000203 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/Integration/CLIIntegrationGuide.swift; sourceTree = SOURCE_ROOT; };
+		D15500000000000000000204 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/Integration/CLIIntegrationSettingsView.swift; sourceTree = SOURCE_ROOT; };
+		D15500000000000000000205 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/Integration/CLIIntegrationGuideModel.swift; sourceTree = SOURCE_ROOT; };
+		D15500000000000000000206 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/Integration/CLIIntegrationGuideReader.swift; sourceTree = SOURCE_ROOT; };
+		D15500000000000000000209 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroGuideUITests/GuideConsumerReadinessTests.swift; sourceTree = SOURCE_ROOT; };
+		D15500000000000000000210 = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = CMUXMaestroGuideUIHost/GuideUIValidation.xcconfig; sourceTree = SOURCE_ROOT; };
+		D15500000000000000000211 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CMUXMaestroGuideUIHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D15500000000000000000212 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CMUXMaestroGuideUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C01000000000000000000011 /* AgentSessionSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/Domain/AgentSessionSnapshot.swift; sourceTree = SOURCE_ROOT; };
 		C01000000000000000000012 /* CopilotSnapshotAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/CopilotSnapshotAdapter.swift; sourceTree = SOURCE_ROOT; };
 		C05700000000000000000011 /* SidebarRowActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarRowActions.swift; sourceTree = SOURCE_ROOT; };
@@ -215,6 +248,8 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		D15500000000000000000303 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		D15500000000000000000304 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 		C06100000000000000000007 /* Hook Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -247,9 +282,28 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		D15500000000000000000005 /* Guide UI validation */ = {
+			isa = PBXGroup;
+			children = (
+				D14400000000000000000201,
+				D14400000000000000000202,
+				D14400000000000000000203,
+				D15500000000000000000201,
+				D15500000000000000000202,
+				D15500000000000000000203,
+				D15500000000000000000204,
+				D15500000000000000000205,
+				D15500000000000000000206,
+				D15500000000000000000209,
+				D15500000000000000000210,
+			);
+			name = "Guide UI validation";
+			sourceTree = "<group>";
+		};
 		A3685BE02FCA3AEE00009F1B = {
 			isa = PBXGroup;
 			children = (
+				D15500000000000000000005 /* Guide UI validation */,
 				C05400000000000000000004 /* adapter.mjs */,
 				C05400000000000000000005 /* extension.mjs */,
 				C09300000000000000000003 /* CopilotAssetEnvelope.swift */,
@@ -281,6 +335,8 @@
 		A3685BEA2FCA3AEE00009F1B /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				D15500000000000000000211 /* CMUXMaestroGuideUIHost.app */,
+				D15500000000000000000212 /* CMUXMaestroGuideUITests.xctest */,
 				A3685BE92FCA3AEE00009F1B /* CMUXMaestroPreview.app */,
 				A3685BF62FCA3AF000009F1B /* CMUXMaestroPreviewTests.xctest */,
 				A3685C242FCA3B2500009F1B /* CMUX Maestro Preview Extension.appex */,
@@ -328,6 +384,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		D15500000000000000000001 /* CMUXMaestroGuideUIHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D15500000000000000000401;
+			buildPhases = (D15500000000000000000301, D15500000000000000000303, );
+			buildRules = ();
+			dependencies = ();
+			name = CMUXMaestroGuideUIHost;
+			productName = CMUXMaestroGuideUIHost;
+			productReference = D15500000000000000000211;
+			productType = "com.apple.product-type.application";
+		};
+		D15500000000000000000002 /* CMUXMaestroGuideUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D15500000000000000000402;
+			buildPhases = (D15500000000000000000302, D15500000000000000000304, );
+			buildRules = ();
+			dependencies = (D15500000000000000000004, );
+			name = CMUXMaestroGuideUITests;
+			productName = CMUXMaestroGuideUITests;
+			productReference = D15500000000000000000212;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		C06100000000000000000004 /* CMUXMaestroCopilotHook */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = C06100000000000000000008;
@@ -347,6 +425,7 @@
 				A3685BE52FCA3AEE00009F1B /* Sources */,
 				A3685BE62FCA3AEE00009F1B /* Frameworks */,
 				A3685BE72FCA3AEE00009F1B /* Resources */,
+				D05500000000000000000001 /* Generate guide content reference */,
 				A3685C312FCA3B3700009F1B /* Embed ExtensionKit Extensions */,
 				C06100000000000000000005 /* Embed Helpers */,
 			);
@@ -423,6 +502,10 @@
 				LastSwiftUpdateCheck = 2650;
 				LastUpgradeCheck = 2650;
 				TargetAttributes = {
+					D15500000000000000000002 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = D15500000000000000000001;
+					};
 					A3685BE82FCA3AEE00009F1B = {
 						CreatedOnToolsVersion = 26.5;
 					};
@@ -452,6 +535,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+				D15500000000000000000001 /* CMUXMaestroGuideUIHost */,
+				D15500000000000000000002 /* CMUXMaestroGuideUITests */,
 				A3685BE82FCA3AEE00009F1B /* CMUXMaestroPreview */,
 				A3685BF52FCA3AF000009F1B /* CMUXMaestroPreviewTests */,
 				A3685C232FCA3B2500009F1B /* CMUXMaestroSidebar */,
@@ -459,6 +544,25 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		D05500000000000000000001 /* Generate guide content reference */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = (
+				"$(SRCROOT)/skills/maestro/SKILL.md",
+				"$(SRCROOT)/scripts/write-guide-reference.py",
+			);
+			name = "Generate guide content reference";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/maestro-guide.sha256",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\n/usr/bin/python3 \"$SRCROOT/scripts/write-guide-reference.py\" \"$SRCROOT/skills/maestro/SKILL.md\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/maestro-guide.sha256\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A3685BE72FCA3AEE00009F1B /* Resources */ = {
@@ -493,6 +597,18 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		D15500000000000000000301 /* Guide host sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (D15500000000000000000101, D15500000000000000000102, D15500000000000000000103, D15500000000000000000104, D15500000000000000000105, D15500000000000000000106, D15500000000000000000107, D15500000000000000000108, D14400000000000000000101, D14400000000000000000103, );
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D15500000000000000000302 /* Guide UI test sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (D15500000000000000000109, D14400000000000000000102, D14400000000000000000104, );
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		C06100000000000000000009 /* Hook Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -570,6 +686,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		D15500000000000000000004 = {
+			isa = PBXTargetDependency;
+			target = D15500000000000000000001;
+			targetProxy = D15500000000000000000003;
+		};
 		C06100000000000000000012 /* Helper Dependency */ = {
 			isa = PBXTargetDependency;
 			target = C06100000000000000000004;
@@ -588,6 +709,46 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		D15500000000000000000411 = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = D15500000000000000000210;
+			buildSettings = {
+				PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview.Validation.Tests.GuideHost;
+				PRODUCT_NAME = CMUXMaestroGuideUIHost;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+			};
+			name = Debug;
+		};
+		D15500000000000000000412 = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = D15500000000000000000210;
+			buildSettings = {
+				PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview.Validation.Tests.GuideHost;
+				PRODUCT_NAME = CMUXMaestroGuideUIHost;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+			};
+			name = Release;
+		};
+		D15500000000000000000413 = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = D15500000000000000000210;
+			buildSettings = {
+				PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview.Validation.Tests.GuideUITests;
+				PRODUCT_NAME = CMUXMaestroGuideUITests;
+				TEST_TARGET_NAME = CMUXMaestroGuideUIHost;
+			};
+			name = Debug;
+		};
+		D15500000000000000000414 = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = D15500000000000000000210;
+			buildSettings = {
+				PRODUCT_BUNDLE_IDENTIFIER = com.jdylanmc.CMUXMaestroPreview.Validation.Tests.GuideUITests;
+				PRODUCT_NAME = CMUXMaestroGuideUITests;
+				TEST_TARGET_NAME = CMUXMaestroGuideUIHost;
+			};
+			name = Release;
+		};
 		C06100000000000000000013 /* Hook Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -940,6 +1101,18 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		D15500000000000000000401 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (D15500000000000000000411, D15500000000000000000412, );
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D15500000000000000000402 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (D15500000000000000000413, D15500000000000000000414, );
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		C06100000000000000000008 /* Hook configuration list */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (C06100000000000000000013, C06100000000000000000014, );

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Scheme LastUpgradeVersion="2650" version="1.7">
+   <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="NO">
+      <BuildActionEntries>
+         <BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="YES">
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="D15500000000000000000001" BuildableName="CMUXMaestroGuideUIHost.app" BlueprintName="CMUXMaestroGuideUIHost" ReferencedContainer="container:CMUXMaestroPreview.xcodeproj"/>
+         </BuildActionEntry>
+         <BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="YES">
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="D15500000000000000000002" BuildableName="CMUXMaestroGuideUITests.xctest" BlueprintName="CMUXMaestroGuideUITests" ReferencedContainer="container:CMUXMaestroPreview.xcodeproj"/>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="NO">
+      <MacroExpansion>
+         <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="D15500000000000000000001" BuildableName="CMUXMaestroGuideUIHost.app" BlueprintName="CMUXMaestroGuideUIHost" ReferencedContainer="container:CMUXMaestroPreview.xcodeproj"/>
+      </MacroExpansion>
+      <Testables>
+         <TestableReference skipped="NO" parallelizable="NO">
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="D15500000000000000000002" BuildableName="CMUXMaestroGuideUITests.xctest" BlueprintName="CMUXMaestroGuideUITests" ReferencedContainer="container:CMUXMaestroPreview.xcodeproj"/>
+         </TestableReference>
+      </Testables>
+   </TestAction>
+   <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB">
+      <BuildableProductRunnable runnableDebuggingMode="0">
+         <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="D15500000000000000000001" BuildableName="CMUXMaestroGuideUIHost.app" BlueprintName="CMUXMaestroGuideUIHost" ReferencedContainer="container:CMUXMaestroPreview.xcodeproj"/>
+      </BuildableProductRunnable>
+   </LaunchAction>
+</Scheme>

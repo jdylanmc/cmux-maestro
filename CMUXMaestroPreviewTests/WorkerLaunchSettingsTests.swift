@@ -13,7 +13,8 @@ struct WorkerLaunchSettingsTests {
         #expect(CLIIntegrationGuide.copyInstallCommand(to: pasteboard))
         #expect(pasteboard.string(forType: .string) == expected)
         #expect(!expected.contains("--yes"))
-        let view = NSHostingView(rootView: CLIIntegrationSettingsView())
+        let model = CLIIntegrationGuideModel(read: { .referenceUnavailable })
+        let view = NSHostingView(rootView: CLIIntegrationSettingsView(model: model, copyCommand: { false }))
         #expect(view.fittingSize.width == 600)
         #expect(view.fittingSize.height == 350)
         let settings = NSHostingView(rootView: MaestroSettingsView())
@@ -29,19 +30,22 @@ struct WorkerLaunchSettingsTests {
         #expect(app.components(separatedBy: "Settings {").count == 2)
         let settings = try String(contentsOf: repository.appendingPathComponent(
             "CMUXMaestroPreview/Integration/WorkerLaunchSettings.swift"), encoding: .utf8)
-        let guide = try #require(settings.components(separatedBy: "nonisolated struct WorkerLaunchSettings:").first)
-        #expect(guide.contains("WorkerLaunchSettingsView()"))
-        #expect(guide.contains("CLIIntegrationSettingsView()"))
-        #expect(guide.contains(#"Label("CLI Integration", systemImage: "terminal")"#))
+        let scene = try #require(settings.components(separatedBy: "nonisolated struct WorkerLaunchSettings:").first)
+        let guide = try String(contentsOf: repository.appendingPathComponent(
+            "CMUXMaestroPreview/Integration/CLIIntegrationSettingsView.swift"), encoding: .utf8)
+        let command = try String(contentsOf: repository.appendingPathComponent(
+            "CMUXMaestroPreview/Integration/CLIIntegrationGuide.swift"), encoding: .utf8)
+        #expect(scene.contains("WorkerLaunchSettingsView()"))
+        #expect(scene.contains("CLIIntegrationSettingsView()"))
+        #expect(scene.contains(#"Label("CLI Integration", systemImage: "terminal")"#))
         #expect(guide.contains("Text(CLIIntegrationGuide.installCommand)"))
         #expect(guide.contains(#"Button("Copy install command")"#))
         #expect(guide.contains("CLIIntegrationGuide.copyInstallCommand()"))
         for forbidden in [
-            "Process(", "NSWorkspace", "CopilotSetup()", ".task", ".onAppear", "--yes",
-            ".copilot/skills", "FileManager", "Data(contentsOf:", "URLSession",
-            "Up to date", "Matches this build", ".orange"
+            "Process(", "NSWorkspace", "CopilotSetup()", "--yes",
+            "FileManager", "Data(contentsOf:", "URLSession", "Up to date", ".orange"
         ] {
-            #expect(!guide.contains(forbidden))
+            #expect(!(scene + guide + command).contains(forbidden))
         }
     }
 

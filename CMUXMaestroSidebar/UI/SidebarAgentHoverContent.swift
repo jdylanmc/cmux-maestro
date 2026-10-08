@@ -57,7 +57,7 @@ enum SidebarAgentHoverContent {
                 return .init(id: "child-\(sessionID)-\(childID)", category: "Agent preview", title: child.name,
                              notice: "Child observation is no longer current.")
             }
-            let allowed = Set(["Name", "Kind", "Model", "Ancestry", "Completion", "Child ID", "Parent session ID"])
+            let allowed = Set(["Name", "Kind", "Model", "Last reported model", "Ancestry", "Completion", "Child ID", "Parent session ID"])
             let retained = SidebarPresentation.retainedSessionIDs(tree, managed: managed.nodes, now: now).contains(sessionID)
             var lines = SidebarPresentation.nodeDetails(child, session: session).filter { allowed.contains($0.title) }
             lines += [
@@ -97,11 +97,8 @@ enum SidebarAgentHoverContent {
             return .init(id: "session-\(session.id)", category: "Agent preview", title: title,
                          notice: "Session observation is no longer current.")
         }
-        let allowed = Set(["Model", "Observed", "Child history", "Session ID"])
+        let allowed = Set(["Model", "Last reported model", "Observed", "Child history", "Session ID"])
         var lines = SidebarPresentation.sessionDetails(session).filter { allowed.contains($0.title) }
-        if session.liveness != .alive {
-            lines = lines.map { $0.title == "Model" ? .init(title: "Last reported model", value: $0.value) : $0 }
-        }
         if !retained { lines += SidebarPresentation.paths(hierarchy.pathContext(
             workspaceID: session.workspaceID, surfaceID: session.surfaceID
         ), copyable: true) }

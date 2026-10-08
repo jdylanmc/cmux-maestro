@@ -23,6 +23,9 @@ scope nor unattended merge authority.
 
 ## Review and user merge gate
 
+Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
+[PR states](../../.agents/skills/ship/DELIVERY.md#pr-states). Non-draft is not merge authority.
+
 1. The implementation author publishes a candidate and **never self-merges**.
    Only a separate, explicitly human-authorized **PR Sniper** may merge scoped
    PRs. AFK implementation/publication approval is not merge approval.
@@ -50,6 +53,8 @@ scope nor unattended merge authority.
 `.github/workflows/ci.yml` is authoritative. Its current commands, in order:
 
 ```sh
+node --test scripts/test-skill-overrides.mjs
+node scripts/check-skill-overrides.mjs
 python3 scripts/test-cmux-maestro-orchestrator.py
 python3 scripts/test-delivery-proof.py
 node --test scripts/test-delivery-proof.mjs
@@ -75,7 +80,7 @@ lint command or report lint as passed.
 
 Configuration-only authors may run the smallest relevant document/package
 checks and formatting gate locally; no full native build is required just to
-publish their draft. This does not waive the complete pre-merge CI gate.
+publish their candidate. This does not waive the complete pre-merge CI gate.
 `./scripts/build-register.sh` is a local installation action, not a CI command;
 do not run it as an incidental configuration check.
 
