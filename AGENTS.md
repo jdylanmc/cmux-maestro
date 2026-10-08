@@ -230,7 +230,7 @@ packages are capability blockers, not permission to alter global settings.
 ### Joe delivery and merge policy
 
 See [`docs/agents/merge-policy.md`](docs/agents/merge-policy.md) for the
-four-developer pool, standalone worktrees, installed Maestro lifecycle and
+current human-authorized concurrency budget, standalone worktrees, installed Maestro lifecycle and
 native `/maestro` messaging, independent review, and human-authorized PR Sniper
 merge gate. Authors stop at candidates; this guide does not authorize merging,
 timers, services, or live-session changes.

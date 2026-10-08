@@ -841,7 +841,19 @@ The bounded private `launchSelection` record and receipt distinguish requested
 preferences, configured arguments, evidence source and warnings; `observed`
 remains unknown. `long_context` is a supported tier, not a numeric context-window
 claim. Account entitlements and actual provider application remain unverified
-until independently observed; no model getter/setter changes a parent session.
+until independently observed. On a supporting installed adapter,
+`maestro_identity({"includeModel":true})` reads the responding session's
+`session.rpc.model.getCurrent()` and returns a bounded `modelObservation`:
+`observed` with source, timestamp and the actually reported model/context/effort,
+or `unavailable` with a reason. Unreported context/effort is omitted, not replaced
+with launch defaults. No catalog, plan-model alternative or raw error is returned.
+The account and exact binding are rechecked after the read; drift refuses.
+Default identity calls preserve their existing account-only behavior and make
+no model query. A parent cannot use this to observe a child; the child must make
+its own explicit query. This does not wait for startup, poll, persist observations,
+switch models or prove entitlement, token-window size or installed execution.
+The timestamp is local collection time, not an atomic provider revision.
+A reported virtual `auto` model does not identify the backing model of a turn.
 
 The CLI adds `spawn --model`, `--context-tier` and `--reasoning-effort`. Direct
 callers lack joined-session evidence, so new selections warn and retain
@@ -880,7 +892,10 @@ A successful preflight reserves nothing. Root and child launch reservations
 recheck the latest limit and exact resource usage inside their exclusive
 transaction. The separate **128-node** and **8-level** bounds still apply, so a
 configured limit of 128 is not a guarantee of 128 available nodes or demonstrated
-128-provider load. Lock acquisition retains the existing 32-session reference
+128-provider load. `nodeSlotsRemaining` includes all stored nodes across workspaces,
+including resource-retired history; live-workspace `remaining` alone is not an
+admission check. History exhaustion is not repaired by increasing live capacity,
+closing a tab, or deleting records automatically. Lock acquisition retains the existing 32-session reference
 policy: ordinary waits remain bounded to 4 seconds, two-second waits to 8 seconds,
 and zero-wait requests remain immediate, regardless of workspace capacity.
 Upstream activation ordering and installed-runtime validation are separate.

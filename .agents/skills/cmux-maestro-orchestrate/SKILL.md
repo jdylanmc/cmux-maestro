@@ -62,6 +62,14 @@ status and native `maestro_spawn` for children. Require current-session
 coordination. There is no invisible SDK-agent fallback.
 Call `maestro_identity({})` to verify the actual current session/account before
 dispatch. A failed identity query is a blocker, not an invitation to guess.
+When the loaded schema supports `includeModel`, the exact responding worker can
+call `maestro_identity({"includeModel":true})` to observe its own current model,
+context tier and reasoning effort. The optional `modelObservation` is either
+`observed` with source/time and only reported values, or `unavailable` with an
+explicit reason. Default identity calls do not query models. Missing model API
+evidence does not invalidate a verified identity/account; changed account or
+binding does. This is a read, never a model switch, entitlement proof or numeric
+context-window measurement. A parent's response does not observe its child.
 
 ## Register an existing caller for legacy lifecycle control
 
@@ -163,6 +171,10 @@ for the task. The sole new explicit broad-mode option is a **user-approved
 coordinator** `yolo: true` (or root `--yolo`); it supplies Copilot `--allow-all` while preserving
 explicit denies. Never request a new broad grant by default or to solve a stalled
 permission prompt; recorded inheritance follows the qualified contract above.
+An explicit human grant covering new coordinator-launched workers in the current
+scope can be applied without asking again for every launch. Record its scope;
+do not change existing sessions, infer broader authority, or re-interview routine
+delivery actions already authorized. New scope and risk decisions remain human-owned.
 Worker actors cannot request YOLO, including for descendants of a YOLO worker;
 inheriting an explicit recorded parent YOLO mode is a separate source behavior.
 An explicit `allowTools` list (including `[]`) or `yolo: false` selects requested
@@ -247,6 +259,10 @@ workspace coordinator to configure 1 through 128; the independent global
 `capacity --workspace <exact-workspace-uuid>` for advisory preflight. A successful
 query reserves nothing; actual admission rechecks the latest limit and exact
 resources transactionally. A product ceiling is not the team's dispatch budget.
+Check both `remaining` and `nodeSlotsRemaining`, plus `admissionAvailable`.
+The global node limit includes retained history, even resource-retired nodes;
+positive live-workspace room does not establish a free node. Exhaustion is not
+permission to erase history, raise a ceiling, or retry fan-out automatically.
 Capacity reconciliation requires CMUX's atomic `surface.list` workspace
 snapshot, not separate pane inventories that can miss a moving terminal.
 Unavailable or malformed inventory blocks launch without freeing resource slots.

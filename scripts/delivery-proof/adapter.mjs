@@ -61,6 +61,27 @@ function modelCapabilities(response) {
   });
 }
 
+function modelObservation(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) ||
+      (snapshot.modelId !== undefined &&
+        (typeof snapshot.modelId !== "string" || !MODEL_ID.test(snapshot.modelId))) ||
+      (snapshot.contextTier !== undefined && !CONTEXT_TIERS.includes(snapshot.contextTier)) ||
+      (snapshot.reasoningEffort !== undefined &&
+        (typeof snapshot.reasoningEffort !== "string" ||
+          !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(snapshot.reasoningEffort)))) {
+    return { status: "unavailable", reason: "model-response-invalid" };
+  }
+  if (snapshot.modelId === undefined) {
+    return { status: "unavailable", reason: "model-not-reported" };
+  }
+  return {
+    status: "observed", source: "session-model-current", observedAt: new Date().toISOString(),
+    model: snapshot.modelId,
+    ...(snapshot.contextTier === undefined ? {} : { contextTier: snapshot.contextTier }),
+    ...(snapshot.reasoningEffort === undefined ? {} : { reasoningEffort: snapshot.reasoningEffort }),
+  };
+}
+
 function requireCondition(condition) {
   if (!condition) throw new Error("Invalid or unavailable proof route.");
 }
@@ -272,6 +293,20 @@ export async function start({ root, peer, joinSession, managed = false, expected
     requireCondition(Buffer.byteLength(JSON.stringify(evidence), "utf8") <= 32768);
     return evidence;
   }
+  async function currentModel(invocation, account) {
+    let result = { status: "unavailable", reason: "model-api-unavailable" };
+    if (typeof session.rpc.model?.getCurrent === "function") {
+      try {
+        result = modelObservation(await session.rpc.model.getCurrent());
+      } catch (error) {
+        result = { status: "unavailable",
+          reason: error?.code === -32601 ? "model-api-unavailable" : "model-api-failed" };
+      }
+    }
+    const current = await currentAccount(invocation);
+    requireCondition(current.login === account.login && current.host === account.host);
+    return result;
+  }
   const tools = [
     {
       name: managed ? "maestro_peers" : "maestro_proof_peers",
@@ -334,13 +369,18 @@ export async function start({ root, peer, joinSession, managed = false, expected
   ];
   if (managed) tools.push({
     name: "maestro_identity",
-    description: "Read this managed session's exact public identity and current verified Copilot account. No credentials, plan inference, or launch effects.",
-    parameters: { type: "object", properties: {}, additionalProperties: false },
+    description: "Read this managed session's exact public identity and current verified Copilot account. Optionally observe its current model, context tier and effort, not another child's settings. No credentials, plan inference, or launch effects.",
+    parameters: {
+      type: "object", properties: { includeModel: { type: "boolean" } }, additionalProperties: false,
+    },
     handler: async (args, invocation) => {
       try {
-        exactKeys(args, []);
+        exactKeys(args, args && Object.hasOwn(args, "includeModel") ? ["includeModel"] : []);
+        requireCondition(!Object.hasOwn(args, "includeModel") || typeof args.includeModel === "boolean");
         const account = await currentAccount(invocation);
-        return JSON.stringify({ nodeId: own.nodeId, ...ownAddress, account });
+        const observation = args.includeModel ? await currentModel(invocation, account) : undefined;
+        return JSON.stringify({ nodeId: own.nodeId, ...ownAddress, account,
+          ...(observation === undefined ? {} : { modelObservation: observation }) });
       } catch {
         return { resultType: "failure", textResultForLlm: "Maestro session identity or account is unavailable; no fallback was used." };
       }
@@ -403,7 +443,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
   });
   if (managed) tools.push({
     name: "maestro_spawn",
-    description: "Launch one explicitly authorized visible interactive Maestro child using this session's current Copilot account. Returns after exact terminal creation/ownership without waiting for provider, hooks, or tools. Acceptance is not prompt consumption, readiness, or task completion. No fallback or retry.",
+    description: "Launch one explicitly authorized visible interactive Maestro child using this session's current Copilot account. Returns after exact terminal creation/ownership without waiting for provider, hooks, or tools. Acceptance is not prompt consumption, readiness, or task completion. Optional preference fallback is reported; no account fallback or launch retry.",
     parameters: {
       type: "object",
       properties: {

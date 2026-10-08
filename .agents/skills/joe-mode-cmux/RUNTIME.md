@@ -73,6 +73,32 @@ Do not install or refresh global skills automatically. Resolve stale registered
 skill routes against the target repository's current packages and invocation
 policy; do not run retired archive workflows merely because a tool lists them.
 
+## Capacity preflight
+
+Before layout or fan-out, inspect the installed controller's public help for
+`capacity`, then query the exact verified workspace:
+
+```sh
+"$CMUX_MAESTRO_ORCHESTRATOR" capacity --workspace "$CMUX_WORKSPACE_ID"
+```
+
+Supporting controllers report `capacity.admissionAvailable`, `remaining`, and
+`nodeSlotsRemaining`. Check all three against the next bounded dispatch and the
+human-authorized concurrency budget; reserve room for useful support/review work.
+The default live workspace limit is 32 and the configurable range is 1..128,
+but the separate 128-node history limit and eight-level depth limit still apply.
+Stored node history, including resource-retired nodes, can exhaust slots even with live
+workspace room. A larger workspace limit does not fix global node exhaustion.
+
+This query is advisory, reserves nothing, and does not observe provider health.
+Root/child admission rechecks authoritative state transactionally. Count managed
+roots, support workers and retained resources, not just developers. Do not infer
+free capacity from a completed assignment, accepted close, missing peer, or tab
+appearance. If the installed command is absent, report unavailable preflight
+rather than inspecting private state or inventing counts. Actual exhaustion
+stops fan-out: no automatic retry, history deletion, ceiling increase or cleanup.
+Only an explicitly authorized coordinator may change the workspace limit.
+
 ## Launch and retain the runtime contract
 
 Every role uses `maestro_spawn`: developer, Discovery, test, reviewer,
@@ -100,13 +126,41 @@ All roles remain in the existing CMUX workspace.
 The runtime verifies the invoking Copilot account for each launch. Never
 substitute saved settings, an active GitHub CLI account, repository identity,
 ambient credentials, or a hardcoded model. Missing account/API evidence fails
-before terminal creation. Explicit model selection remains separate.
+before terminal creation. Model selection remains separate: omission preserves
+configured launch defaults. Honor the human's current choice to keep defaults or
+manually switch models; do not impose role-name model pins from older packets.
+Only pass `model`, `contextTier`, or `reasoningEffort` when the loaded native
+schema declares them and the caller requests them. Unsupported safe preferences
+warn and retain supported configured defaults; unsafe inputs, identity, account,
+permission and resource failures never become preference fallback. Do not claim
+a numeric token window from `long_context`.
+
+On supporting tools, a worker may query its own
+`maestro_identity({"includeModel":true})` for a fresh `modelObservation`.
+`observed` describes that exact responding session, not its parent or sibling;
+missing context/effort stays unreported. `unavailable` includes an explicit
+reason and does not invalidate an otherwise verified identity/account. Launch
+receipts remain requested/configured evidence, not observed child execution.
+Do not wait or poll for this observation inside spawn.
 
 Add no tool grants by default. Pass only authorized `allowTools` and `denyTools`
 rules. Native `yolo: true` is the explicit human-approved coordinator-only
-equivalent of legacy `spawn --yolo`, preserving denies. It is never a default,
-inferred permission inheritance, or a fix for a prompt. Worker actors cannot
-request YOLO for descendants.
+equivalent of legacy `spawn --yolo`, preserving denies. A current explicit
+scope-level grant for new coordinator-launched workers need not be re-interviewed
+at every routine launch. It does not change existing sessions or authorize
+unrelated grants. Never enable YOLO merely to suppress a prompt. Worker actors
+cannot explicitly request YOLO for descendants.
+
+On supporting runtimes, omitted `allowTools` and `yolo` inherit the parent's
+explicit recorded launch policy, including recorded YOLO and denies. An explicit
+list or `yolo:false` narrows the requested mode; deny-only additions preserve
+recorded allows/mode. Recorded inheritance is not complete current effective
+permission inheritance: mode/path getters do not expose all live rules, URLs,
+exclusions or atomic provider admission. Keep that limitation explicit; never
+invent missing policy, drop denies or mutate provider settings to obtain equality.
+Routine source/test/review/publication already authorized for the scoped delivery
+does not need another permission interview. New scope, risk acceptance, install,
+live experiments and merge authority remain separate gates.
 
 Record the exact returned worker/session/surface/generation and launch result.
 A supervisor acknowledgement does not prove provider startup or adapter

@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Read the responding managed session's current model, context tier and effort
+  through optional identity observation, with explicit unavailable reasons and
+  no launch-default substitution or model changes (#152).
 - Request optional per-launch model, context tier and reasoning effort using
   bounded session-scoped capability evidence, with visible configured fallback
   for unsupported preferences and refusal of unsafe or foreign evidence.
@@ -44,6 +47,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Preflight Joe launches against both live workspace and global node capacity;
+  honor current scoped staffing, model-default and new-worker permission choices
+  without repeating routine authorization interviews (#154).
 - Inherit explicit recorded parent launch permissions for prospective native
   children, preserving denies, narrowing and provenance/drift refusals. Current
   provider-policy equivalence and actual restricted startup remain unverified

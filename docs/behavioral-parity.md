@@ -593,6 +593,14 @@ malformed non-advertised defaults before known-CLI projection. Unrepresentable
 valid defaults are omitted without poisoning another supported model; selected
 models without a representable default retain the provider default with a warning
 and no fabricated effort argument.
+Optional identity-observation regressions exercise the exact joined session's
+current model read, account/binding recheck, bounded field projection and explicit
+unavailable reasons. Omitted or false `includeModel` performs no model query and
+preserves the old identity response. Missing effort/context is not filled from
+configuration; provider-native safe effort values remain observations rather
+than invented CLI overrides. Wrong-session calls and account drift refuse.
+These mocked SDK responses are source-contract evidence, not an installed-child
+demonstration; spawning still does not wait for an observation.
 The failed-attachment
 capacity fixture stops only its completed synthetic supervisors while retaining
 every terminal, and requires the actual configured resource-limit error, not a busy
