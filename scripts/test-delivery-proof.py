@@ -85,6 +85,78 @@ class StoreBudgetTests(unittest.TestCase):
         operation.assert_called_once()
         self.assertEqual(self.ticks, 0)
 
+    def test_workspace_limits_do_not_change_reference_wait_budget(self):
+        acquire = CONTROLLER["with_store"]
+        workspace = str(uuid.uuid4())
+        for limit in (1, 128):
+            for wait in (0, 1, 2):
+                with self.subTest(limit=limit, wait=wait):
+                    self.ticks = 0
+                    with CONTROLLER["Store"](self.root) as store:
+                        state = store.read()
+                        state["workspaceCapacity"] = {workspace: limit}
+                        store.write(state)
+                        with mock.patch.dict(acquire.__globals__, {"time": self.clock}):
+                            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "operation is active"):
+                                acquire(self.root, lambda _: None, wait=wait)
+                    self.assertAlmostEqual(self.clock.monotonic(), wait * 4)
+
+
+class WorkspaceCapacityTests(unittest.TestCase):
+    def test_old_state_defaults_and_invalid_persisted_limits(self):
+        state = CONTROLLER["empty_state"]()
+        workspace = "abcdef00-0000-4000-8000-000000000001"
+        CONTROLLER["validate_state"](state)
+        summary = CONTROLLER["workspace_capacity"](state, workspace)
+        self.assertEqual(summary["limit"], 32)
+        self.assertEqual(summary["used"], 0)
+        self.assertEqual(summary["nodeSlotsRemaining"], 128)
+        self.assertTrue(summary["admissionAvailable"])
+        for value in (0, 129, -1, True, "32", 32.0, None):
+            with self.subTest(value=value), self.assertRaises(CONTROLLER["OrchestrationError"]):
+                CONTROLLER["validate_state"]({**state, "workspaceCapacity": {workspace: value}})
+        for value in ([], {"not-a-workspace": 32}, {workspace.upper(): 32},
+                      {str(uuid.uuid4()): 32 for _ in range(129)}):
+            with self.subTest(value=value), self.assertRaises(CONTROLLER["OrchestrationError"]):
+                CONTROLLER["validate_state"]({**state, "workspaceCapacity": value})
+
+    def test_summary_counts_pending_once_and_preserves_unknown_and_retained(self):
+        workspace, other = str(uuid.uuid4()), str(uuid.uuid4())
+        state = CONTROLLER["empty_state"]()
+        state["workspaceCapacity"] = {workspace: 4}
+        for role, phase, owner in (
+            ("coordinator", "launching", workspace), ("worker", "launching", workspace),
+            ("worker", "process-disappeared", workspace), ("worker", "resource-retired", workspace),
+            ("worker", "launching", other), ("coordinator", "registered", workspace),
+        ):
+            identifier = str(uuid.uuid4())
+            node = {"id": identifier, "role": role, "phase": phase, "workspaceId": owner}
+            if role == "coordinator" and phase != "registered":
+                node["executionMode"] = "interactive"
+            state["nodes"][identifier] = node
+            if phase == "launching":
+                state["launches"][identifier] = {"workspaceId": owner}
+        state["retainedResources"] = [{"workspaceId": workspace}, {"workspaceId": other}]
+        summary = CONTROLLER["workspace_capacity"](state, workspace)
+        self.assertEqual(summary, {
+            "workspaceId": workspace, "limit": 4, "ceiling": 128, "managedRoots": 1,
+            "workers": 2, "retainedResources": 1, "pendingLaunches": 2, "used": 4,
+            "remaining": 0, "nodeSlotsRemaining": 122, "admissionAvailable": False, "advisory": True,
+        })
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "resource limit"):
+            CONTROLLER["require_workspace_capacity"](state, workspace)
+
+    def test_configured_limit_does_not_hide_global_node_exhaustion(self):
+        state = CONTROLLER["empty_state"]()
+        workspace = str(uuid.uuid4())
+        state["workspaceCapacity"] = {workspace: 128}
+        state["nodes"] = {str(index): {"role": "coordinator", "workspaceId": workspace}
+                          for index in range(128)}
+        summary = CONTROLLER["workspace_capacity"](state, workspace)
+        self.assertEqual(summary["remaining"], 128)
+        self.assertEqual(summary["nodeSlotsRemaining"], 0)
+        self.assertFalse(summary["admissionAvailable"])
+
 
 class ProofTests(unittest.TestCase):
     def test_bounded_text_preserves_controls_unicode_and_byte_limits(self):
@@ -562,6 +634,7 @@ class ProofTests(unittest.TestCase):
 
     def test_native_spawn_inherits_live_account_not_saved_account(self):
         state, _ = self.lifecycle_state()
+        self.node["permissionMode"] = "default"
         spawn = CONTROLLER["command_spawn"]
         identity = self.native_identity()
         args = CONTROLLER["parser"]().parse_args([
@@ -844,7 +917,9 @@ class ProofTests(unittest.TestCase):
         else:
             old = snapshot["nodes"][self.node["id"]]
             old.update(phase="launching", supervisor=None, providerProcess=None)
-            snapshot["launches"][self.node["id"]] = {"runId": actor["runId"]}
+            snapshot["launches"][self.node["id"]] = {
+                "runId": actor["runId"], "workspaceId": actor["workspaceId"],
+            }
         before = copy.deepcopy(self.node)
         binding = self.route_path().read_bytes()
         result, retire = self.status_interleaving(
@@ -882,7 +957,9 @@ class ProofTests(unittest.TestCase):
                 worker = next(item for item in result["workers"] if item["workerId"] == self.node["id"])
                 for key in ("surfacePresent", "supervisorRunning", "providerRunning"):
                     self.assertIsNone(worker[key], (field, key))
-        state["launches"][self.node["id"]] = {"runId": actor["runId"]}
+        state["launches"][self.node["id"]] = {
+            "runId": actor["runId"], "workspaceId": actor["workspaceId"],
+        }
         _, retire = self.status_interleaving(
             state, actor, copy.deepcopy(state), process_start=lambda _: None,
         )
@@ -3077,19 +3154,20 @@ class LifecycleFailureTests(unittest.TestCase):
 
     def test_live_capacity_includes_roots_and_retained(self):
         for command in ("launch-coordinator", "spawn"):
-            for retained_count in (0, MAX_LIVE_WORKERS // 2 - 1, MAX_LIVE_WORKERS - 2):
-                with self.subTest(command=command, retained=retained_count):
+            for limit, retained_count in ((2, 0), (32, 0), (32, 15), (32, 30), (64, 31), (128, 126)):
+                with self.subTest(command=command, limit=limit, retained=retained_count):
                     actor = copy.deepcopy(self.actor)
                     managed_root = {
                         **copy.deepcopy(self.worker), "id": str(uuid.uuid4()),
                         "parentId": None, "role": "coordinator",
                         "runtimeProtocolVersion": 2, "launchMethod": "direct",
+                        "permissionMode": "default",
                         "launchSettings": {"version": 1, "copilotAccount": "synthetic",
                                            "model": "synthetic-model"},
                     }
                     managed_root["runId"] = managed_root["id"]
                     nodes = {actor["id"]: actor}
-                    for index in range(MAX_LIVE_WORKERS - 1 - retained_count):
+                    for index in range(limit - 1 - retained_count):
                         node = copy.deepcopy(managed_root)
                         if index:
                             node.update(id=str(uuid.uuid4()), runId=str(uuid.uuid4()),
@@ -3101,7 +3179,8 @@ class LifecycleFailureTests(unittest.TestCase):
                         "surfaceId": str(uuid.uuid4()), "archivedAt": CONTROLLER["now"](),
                     } for _ in range(retained_count)]
                     self.state = {**CONTROLLER["empty_state"](),
-                                  "nodes": nodes, "retainedResources": retained}
+                                  "nodes": nodes, "retainedResources": retained,
+                                  "workspaceCapacity": {actor["workspaceId"]: limit}}
                     CONTROLLER["validate_state"](self.state)
                     self.cmux.workspace_surfaces.return_value = {
                         node["surfaceId"] for node in nodes.values()
@@ -3135,13 +3214,515 @@ class LifecycleFailureTests(unittest.TestCase):
                         launcher.assert_called_once()
                         self.assertEqual(sum(CONTROLLER["has_managed_runtime"](node)
                                              for node in self.state["nodes"].values())
-                                         + len(self.state["retainedResources"]), MAX_LIVE_WORKERS)
+                                         + len(self.state["retainedResources"]), limit)
                         self.assertEqual(len(self.state["launches"]), 1)
                         before = copy.deepcopy(self.state)
                         with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "resource limit"):
                             function(args, self.root, self.cmux, **kwargs)
                         self.assertEqual(self.state, before)
                         launcher.assert_called_once()
+
+    def test_spawn_rechecks_changed_limit_after_advisory_preflight(self):
+        self.state["workspaceCapacity"] = {self.actor["workspaceId"]: 2}
+        preflight = CONTROLLER["workspace_capacity"](self.state, self.actor["workspaceId"])
+        self.assertTrue(preflight["admissionAvailable"])
+        self.before_mutate = lambda _: self.state["workspaceCapacity"].update(
+            {self.actor["workspaceId"]: 1}
+        )
+        spawn = CONTROLLER["command_spawn"]
+        launcher = mock.Mock(side_effect=AssertionError("no remaining slot may launch"))
+        args = CONTROLLER["parser"]().parse_args([
+            "spawn", "--actor-id", self.actor["id"], "--token", self.token,
+            "--name", "Capacity changed", "--task", "Synthetic", "--cwd", str(REPO),
+        ])
+        with mock.patch.dict(spawn.__globals__, {
+            "read_state": lambda *a, **k: copy.deepcopy(self.state),
+            "mutate": self.mutate,
+            "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+            "resolve_copilot_token": lambda _: None,
+            "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+            "messaging_configuration": lambda _: None,
+            "resource_observations": lambda *_: ({}, set()),
+            "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+            "launch_reserved_session": launcher,
+        }), mock.patch.dict(os.environ, {"CMUX_MAESTRO_TESTING": "1"}):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "resource limit"):
+                spawn(args, self.root, self.cmux)
+        launcher.assert_not_called()
+        self.assertEqual(self.state["launches"], {})
+        self.assertEqual(len(self.state["nodes"]), 2)
+
+    def test_native_child_inherits_verified_parent_permissions_without_explicit_yolo(self):
+        for role in ("coordinator", "worker"):
+            for mode in ("default", "yolo"):
+                with self.subTest(role=role, mode=mode):
+                    parent = copy.deepcopy(self.worker)
+                    parent.update(role=role, permissionMode=mode, toolPolicy={
+                        "allow": ["read", "shell(git status)"], "deny": ["web"],
+                    })
+                    if role == "coordinator":
+                        parent.update(parentId=None, runId=parent["id"], runtimeProtocolVersion=2,
+                                      launchSettings={"version": 1, "model": "synthetic-model"})
+                    self.state = {**CONTROLLER["empty_state"](), "nodes": {
+                        self.actor["id"]: copy.deepcopy(self.actor), parent["id"]: parent,
+                    }}
+                    CONTROLLER["validate_state"](self.state)
+                    spawn = CONTROLLER["command_spawn"]
+                    args = CONTROLLER["parser"]().parse_args([
+                        "spawn", "--actor-id", parent["id"], "--token", self.token,
+                        "--name", "Inherited permissions", "--task", "Synthetic",
+                        "--cwd", str(REPO),
+                    ])
+                    launcher = mock.Mock(return_value={"launchAccepted": True})
+                    with mock.patch.dict(spawn.__globals__, {
+                        "read_state": lambda *a, **k: copy.deepcopy(self.state),
+                        "mutate": self.mutate,
+                        "authorize_native_spawn": lambda state, *_: state["nodes"][parent["id"]],
+                        "process_matches": lambda _: True,
+                        "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+                        "resolve_copilot_token": lambda _: None,
+                        "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+                        "messaging_configuration": lambda _: None,
+                        "resource_observations": lambda *_: ({}, set()),
+                        "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+                        "launch_reserved_session": launcher,
+                    }):
+                        spawn(args, self.root, self.cmux, native_identity={"login": "synthetic"})
+                    child_id = launcher.call_args.args[2]
+                    child = self.state["nodes"][child_id]
+                    self.assertEqual(child["parentId"], parent["id"])
+                    self.assertEqual(child["permissionMode"], mode)
+                    self.assertEqual(child["toolPolicy"], parent["toolPolicy"])
+                    self.assertEqual(len(self.state["launches"]), 1)
+                    del self.state["launches"][child_id]
+                    del self.state["nodes"][child_id]
+
+    def permission_spawn(self, parent_id, assignment, launcher, *, root=None, reader=None, writer=None):
+        native = CONTROLLER["command_native_spawn"]
+        request = {"identity": {"login": "synthetic"}, "assignment": {
+            "name": "Permission child", "cwd": str(REPO), "task": "Synthetic", **assignment,
+        }}
+        with mock.patch.dict(native.__globals__, {
+            "read_state": reader or (lambda *a, **k: copy.deepcopy(self.state)),
+            "mutate": writer or self.mutate,
+            "authorize_native_spawn": lambda state, *_: state["nodes"][parent_id],
+            "process_matches": lambda _: True,
+            "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+            "resolve_copilot_token": lambda _: None,
+            "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+            "messaging_configuration": lambda _: None,
+            "resource_observations": lambda *_: ({}, set()),
+            "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+            "launch_reserved_session": launcher,
+        }), mock.patch("sys.stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))):
+            return native(root or self.root, self.cmux)
+
+    def test_native_deny_only_request_inherits_parent_mode_and_allows_with_additional_denies(self):
+        parent = self.state["nodes"][self.worker["id"]]
+        parent.update(permissionMode="yolo", toolPolicy={"allow": ["read"], "deny": ["web"]})
+        launcher = mock.Mock(return_value={"launchAccepted": True})
+        self.permission_spawn(parent["id"], {"denyTools": ["shell(rm)"]}, launcher)
+        child = self.state["nodes"][launcher.call_args.args[2]]
+        self.assertEqual(child["permissionMode"], "yolo")
+        self.assertEqual(child["toolPolicy"], {"allow": ["read"], "deny": ["web", "shell(rm)"]})
+
+    def test_native_inheritance_refuses_missing_policy_provenance_after_real_store_normalization(self):
+        original_read, original_mutate = CONTROLLER["read_state"], CONTROLLER["mutate"]
+        parent_id = self.worker["id"]
+        initial = copy.deepcopy(self.state)
+        initial["nodes"][parent_id].update(
+            permissionMode="default", toolPolicy={"allow": ["read"], "deny": ["web"]},
+        )
+        for missing in ("permissionMode", "toolPolicy"):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                with CONTROLLER["Store"](root) as store:
+                    store.write(initial)
+                state = copy.deepcopy(initial)
+                del state["nodes"][parent_id][missing]
+                path = root / "control/state.json"
+                payload = json.dumps(state).encode()
+                path.write_bytes(payload)
+                normalized = original_read(root)
+                self.assertEqual(normalized["nodes"][parent_id]["executionMode"], "interactive")
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "(?i)permission|policy|provenance"):
+                    self.permission_spawn(parent_id, {}, launcher, root=root,
+                                          reader=original_read, writer=original_mutate)
+                launcher.assert_not_called()
+                self.assertEqual(path.read_bytes(), payload)
+
+    def test_native_inheritance_refuses_recorded_parent_policy_drift_before_reservation(self):
+        initial = copy.deepcopy(self.state)
+        parent_id = self.worker["id"]
+        initial["nodes"][parent_id].update(
+            permissionMode="yolo", toolPolicy={"allow": ["read", "shell(git status)"], "deny": ["web"]},
+        )
+        for field, value in (
+            ("permissionMode", "default"),
+            ("toolPolicy", {"allow": ["read"], "deny": ["web", "shell(git status)"]}),
+        ):
+            with self.subTest(field=field):
+                self.state = copy.deepcopy(initial)
+                self.before_mutate = lambda _, field=field, value=value: self.state["nodes"][parent_id].update(
+                    {field: copy.deepcopy(value)}
+                )
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "(?i)permission|policy"):
+                    self.permission_spawn(parent_id, {}, launcher)
+                launcher.assert_not_called()
+                self.assertEqual(self.state["launches"], {})
+                self.assertEqual(len(self.state["nodes"]), 2)
+                self.assertEqual(self.state["nodes"][parent_id][field], value)
+
+    def test_legacy_bounded_policy_normalization_remains_readable_without_new_provenance(self):
+        state = copy.deepcopy(self.state)
+        parent_id = self.worker["id"]
+        state["nodes"][parent_id].update(executionMode="bounded", providerProcess=None)
+        state["nodes"][parent_id].pop("permissionMode", None)
+        state["nodes"][parent_id].pop("toolPolicy")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            with CONTROLLER["Store"](root) as store:
+                store.write(self.state)
+            path = root / "control/state.json"
+            payload = json.dumps(state).encode()
+            path.write_bytes(payload)
+            normalized = CONTROLLER["read_state"](root)
+            self.assertEqual(normalized["nodes"][parent_id]["executionMode"], "bounded")
+            self.assertEqual(normalized["nodes"][parent_id]["toolPolicy"], {"allow": [], "deny": []})
+            self.assertEqual(path.read_bytes(), payload)
+
+    def test_native_coordinator_explicit_yolo_grant_preserves_denies_without_a_narrowing_list(self):
+        parent = self.state["nodes"][self.worker["id"]]
+        parent.update(role="coordinator", parentId=None, runId=parent["id"], runtimeProtocolVersion=2,
+                      launchSettings={"version": 1, "model": "synthetic-model"},
+                      permissionMode="default", toolPolicy={"allow": ["read"], "deny": ["web"]})
+        CONTROLLER["validate_state"](self.state)
+        launcher = mock.Mock(return_value={"launchAccepted": True})
+        self.permission_spawn(parent["id"], {"yolo": True, "denyTools": ["shell(rm)"]}, launcher)
+        child = self.state["nodes"][launcher.call_args.args[2]]
+        self.assertEqual(child["permissionMode"], "yolo")
+        self.assertEqual(child["toolPolicy"]["deny"], ["web", "shell(rm)"])
+
+    def test_native_coordinator_refuses_contradictory_yolo_grant_and_narrowing_list(self):
+        initial = copy.deepcopy(self.state)
+        parent_id = self.worker["id"]
+        initial["nodes"][parent_id].update(
+            role="coordinator", parentId=None, runId=parent_id, runtimeProtocolVersion=2,
+            launchSettings={"version": 1, "model": "synthetic-model"},
+            permissionMode="default", toolPolicy={"allow": ["read"], "deny": ["web"]},
+        )
+        for allowed in ([], ["read"]):
+            with self.subTest(allowed=allowed):
+                self.state = copy.deepcopy(initial)
+                CONTROLLER["validate_state"](self.state)
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "(?i)permission|yolo|policy"):
+                    self.permission_spawn(parent_id, {"yolo": True, "allowTools": allowed}, launcher)
+                launcher.assert_not_called()
+                self.assertEqual(self.state, initial)
+
+    def test_recorded_yolo_with_empty_explicit_allows_accepts_finite_child_narrowing(self):
+        initial = copy.deepcopy(self.state)
+        parent_id = self.worker["id"]
+        initial["nodes"][parent_id].update(
+            permissionMode="yolo", toolPolicy={"allow": [], "deny": ["web"]},
+        )
+        for rule, parent_allows in (
+            ("read", []), ("read", ["read"]),
+            ("shell(git status)", []), ("shell(git status)", ["shell(git status)"]),
+        ):
+            with self.subTest(rule=rule, parent_allows=parent_allows):
+                self.state = copy.deepcopy(initial)
+                self.state["nodes"][parent_id]["toolPolicy"]["allow"] = parent_allows
+                self.mutations = 0
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                self.permission_spawn(parent_id, {"allowTools": [rule]}, launcher)
+                launcher.assert_called_once()
+                child = self.state["nodes"][launcher.call_args.args[2]]
+                self.assertEqual(child["permissionMode"], "default")
+                self.assertEqual(child["toolPolicy"], {"allow": [rule], "deny": ["web"]})
+                self.assertEqual(len(self.state["launches"]), 1)
+                self.assertEqual(len(self.state["nodes"]), 3)
+                self.assertEqual(self.mutations, 1)
+                arguments = CONTROLLER["interactive_arguments"]
+                with mock.patch.dict(arguments.__globals__, {"trusted_executable": lambda *_: "/synthetic/copilot"}):
+                    argv = arguments(child, "Synthetic")
+                self.assertNotIn("--allow-all", argv)
+                self.assertEqual(argv[argv.index("--allow-tool") + 1], rule)
+                self.assertEqual(argv[argv.index("--deny-tool") + 1], "web")
+
+    def test_recorded_yolo_finite_narrowing_keeps_denies_and_default_parent_escalation_guards(self):
+        initial = copy.deepcopy(self.state)
+        parent_id = self.worker["id"]
+        for mode, rule, denied, accepted in (
+            ("yolo", "read", ["web", "read"], True),
+            ("default", "read", ["web"], False),
+            ("yolo", "*", ["web"], False),
+        ):
+            with self.subTest(mode=mode, rule=rule, denied=denied):
+                self.state = copy.deepcopy(initial)
+                self.state["nodes"][parent_id].update(
+                    permissionMode=mode, toolPolicy={"allow": [], "deny": denied},
+                )
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                if accepted:
+                    self.permission_spawn(parent_id, {"allowTools": [rule]}, launcher)
+                    child = self.state["nodes"][launcher.call_args.args[2]]
+                    self.assertEqual(child["permissionMode"], "default")
+                    self.assertEqual(child["toolPolicy"], {"allow": [], "deny": denied})
+                    launcher.assert_called_once()
+                else:
+                    before = copy.deepcopy(self.state)
+                    with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                        self.permission_spawn(parent_id, {"allowTools": [rule]}, launcher)
+                    launcher.assert_not_called()
+                    self.assertEqual(self.state, before)
+
+    def test_launch_arguments_preserve_inherited_yolo_denies_and_explicit_allows(self):
+        node = {
+            **self.worker, "copilotExecutable": "/synthetic/copilot",
+            "workingDirectory": str(REPO), "permissionMode": "yolo",
+            "toolPolicy": {"allow": ["read"], "deny": ["web", "shell(rm)"]},
+        }
+        arguments = CONTROLLER["interactive_arguments"]
+        with mock.patch.dict(arguments.__globals__, {"trusted_executable": lambda *_: "/synthetic/copilot"}):
+            argv = arguments(node, "Synthetic task")
+        self.assertEqual(argv.count("--allow-all"), 1)
+        self.assertIn("--allow-tool", argv)
+        self.assertEqual(argv[argv.index("--allow-tool") + 1], "read")
+        self.assertEqual([argv[index + 1] for index, value in enumerate(argv) if value == "--deny-tool"],
+                         ["web", "shell(rm)"])
+
+    def test_explicit_native_restrictions_disable_inherited_yolo(self):
+        for overrides, expected_allow in (
+            ({"yolo": False}, ["read", "shell(git status)"]),
+            ({"allowTools": ["read"]}, ["read"]),
+            ({"allowTools": []}, []),
+        ):
+            with self.subTest(overrides=overrides):
+                parent = copy.deepcopy(self.worker)
+                parent.update(permissionMode="yolo", toolPolicy={
+                    "allow": ["read", "shell(git status)"], "deny": ["web"],
+                })
+                self.state = {**CONTROLLER["empty_state"](), "nodes": {
+                    self.actor["id"]: copy.deepcopy(self.actor), parent["id"]: parent,
+                }}
+                CONTROLLER["validate_state"](self.state)
+                assignment = {
+                    "name": "Restricted child", "cwd": str(REPO), "task": "Synthetic", **overrides,
+                }
+                request = {"identity": {"login": "synthetic"}, "assignment": assignment}
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                native_spawn = CONTROLLER["command_native_spawn"]
+                with mock.patch.dict(native_spawn.__globals__, {
+                    "read_state": lambda *a, **k: copy.deepcopy(self.state),
+                    "mutate": self.mutate,
+                    "authorize_native_spawn": lambda state, *_: state["nodes"][parent["id"]],
+                    "process_matches": lambda _: True,
+                    "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+                    "resolve_copilot_token": lambda _: None,
+                    "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+                    "messaging_configuration": lambda _: None,
+                    "resource_observations": lambda *_: ({}, set()),
+                    "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+                    "launch_reserved_session": launcher,
+                }), mock.patch("sys.stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))):
+                    native_spawn(self.root, self.cmux)
+                child = self.state["nodes"][launcher.call_args.args[2]]
+                self.assertEqual(child["permissionMode"], "default")
+                self.assertEqual(child["toolPolicy"], {"allow": expected_allow, "deny": ["web"]})
+
+    def test_native_spawn_preserves_optional_launch_selection_for_controller_resolution(self):
+        identity = self.model_launch_identity()
+        assignment = {
+            "name": "Selected child", "cwd": str(REPO), "task": "Synthetic",
+            "model": "gpt-6.1-sol", "contextTier": "long_context", "reasoningEffort": "medium",
+        }
+        evidence = self.model_launch_capabilities(identity)
+        request = {"identity": identity, "assignment": assignment, "launchCapabilities": evidence}
+        spawn = mock.Mock(return_value={"launchAccepted": True})
+        native = CONTROLLER["command_native_spawn"]
+        with mock.patch.dict(native.__globals__, {"command_spawn": spawn}), mock.patch(
+            "sys.stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode())),
+        ):
+            self.assertEqual(native(self.root, self.cmux), {"launchAccepted": True})
+        args = spawn.call_args.args[0]
+        self.assertEqual(args.model, "gpt-6.1-sol")
+        self.assertEqual(args.context_tier, "long_context")
+        self.assertEqual(args.reasoning_effort, "medium")
+        self.assertEqual(args.launch_capabilities, evidence)
+        self.assertEqual(spawn.call_args.kwargs["native_identity"], identity)
+        self.assertTrue(args.require_pinned_launch_settings)
+
+    def model_launch_identity(self):
+        return {
+            "nodeId": self.worker["id"], "workspaceId": self.worker["workspaceId"],
+            "sessionId": self.worker["copilotSessionId"], "generation": 1,
+            "capability": "1" * 64, "login": "synthetic", "host": "https://github.com",
+        }
+
+    def model_launch_capabilities(self, identity):
+        return {
+            "version": 1, "sessionId": identity["sessionId"],
+            "account": {"login": identity["login"], "host": identity["host"]},
+            "source": "session-model-list",
+            "models": [
+                {"id": "synthetic-model", "contextTiers": ["default"],
+                 "reasoningEfforts": ["low", "medium"], "defaultReasoningEffort": "low"},
+                {"id": "gpt-6.1-sol", "contextTiers": ["default", "long_context"],
+                 "reasoningEfforts": ["medium", "high"], "defaultReasoningEffort": "medium"},
+            ],
+        }
+
+    def model_preference_spawn(self, identity, selected, evidence, launcher, credentials=None):
+        native = CONTROLLER["command_native_spawn"]
+        request = {"identity": identity, "assignment": {
+            "name": "Model fixture", "cwd": str(REPO), "task": "Synthetic", **selected,
+        }}
+        if evidence is not None:
+            request["launchCapabilities"] = evidence
+        with mock.patch.dict(native.__globals__, {
+            "read_state": lambda *a, **k: copy.deepcopy(self.state),
+            "mutate": self.mutate,
+            "authorize_native_spawn": lambda state, *_: state["nodes"][self.worker["id"]],
+            "process_matches": lambda _: True,
+            "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+            "resolve_copilot_token": credentials or (lambda _: None),
+            "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+            "messaging_configuration": lambda _: None,
+            "resource_observations": lambda *_: ({}, set()),
+            "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+            "launch_reserved_session": launcher,
+            "trusted_executable": lambda *_: "/synthetic/copilot",
+        }), mock.patch("sys.stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))):
+            receipt = native(self.root, self.cmux)
+            child = self.state["nodes"][launcher.call_args.args[2]]
+            return receipt, CONTROLLER["interactive_arguments"](child, "Synthetic task")
+
+    def test_unavailable_native_model_api_warns_and_retains_configured_launch_without_overrides(self):
+        self.state["nodes"][self.worker["id"]]["permissionMode"] = "default"
+        identity = self.model_launch_identity()
+        evidence = self.model_launch_capabilities(identity)
+        evidence.update(source="unavailable", models=[])
+        launcher = mock.Mock(return_value={"launchAccepted": True})
+        receipt, argv = self.model_preference_spawn(identity, {
+            "model": "gpt-6.1-sol", "contextTier": "long_context", "reasoningEffort": "medium",
+        }, evidence, launcher)
+        self.assertEqual(argv[argv.index("--model") + 1], "synthetic-model")
+        self.assertNotIn("--context", argv)
+        self.assertNotIn("--reasoning-effort", argv)
+        self.assertTrue(receipt.get("warnings"))
+
+    def test_valid_model_with_unrepresentable_provider_default_warns_without_inventing_cli_effort(self):
+        self.state["nodes"][self.worker["id"]]["permissionMode"] = "default"
+        identity = self.model_launch_identity()
+        evidence = self.model_launch_capabilities(identity)
+        evidence["models"].append({
+            "id": "provider/custom", "contextTiers": ["default"], "reasoningEfforts": [],
+        })
+        launcher = mock.Mock(return_value={"launchAccepted": True})
+        receipt, argv = self.model_preference_spawn(
+            identity, {"model": "provider/custom", "reasoningEffort": "medium"}, evidence, launcher,
+        )
+        self.assertEqual(argv[argv.index("--model") + 1], "provider/custom")
+        self.assertNotIn("--reasoning-effort", argv)
+        self.assertTrue(receipt.get("warnings"))
+        launcher.assert_called_once()
+
+    def test_native_model_selection_refuses_when_configured_fallback_is_unavailable(self):
+        self.state["nodes"][self.worker["id"]]["permissionMode"] = "default"
+        identity = self.model_launch_identity()
+        evidence = self.model_launch_capabilities(identity)
+        evidence["models"] = [evidence["models"][1]]
+        launcher, credentials = mock.Mock(), mock.Mock()
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "(?i)(configured|fallback).*(available|supported)"):
+            self.model_preference_spawn(identity, {"model": "unknown-model"}, evidence, launcher, credentials)
+        launcher.assert_not_called()
+        credentials.assert_not_called()
+        self.assertEqual(self.state["launches"], {})
+        self.assertEqual(len(self.state["nodes"]), 2)
+
+    def test_native_model_evidence_binding_and_malformed_inputs_refuse_before_effects(self):
+        self.state["nodes"][self.worker["id"]]["permissionMode"] = "default"
+        identity = self.model_launch_identity()
+        original = self.model_launch_capabilities(identity)
+        variants = [
+            ({**original, "sessionId": str(uuid.uuid4())}, {"model": "gpt-6.1-sol"}),
+            ({**original, "account": {**original["account"], "login": "wrong-account"}}, {"model": "gpt-6.1-sol"}),
+            ({**original, "account": {**original["account"], "host": "https://invalid.example"}}, {"model": "gpt-6.1-sol"}),
+            ({**original, "version": True}, {"model": "gpt-6.1-sol"}),
+            ({**original, "source": "unavailable"}, {"model": "gpt-6.1-sol"}),
+            ({**original, "models": [original["models"][0], original["models"][0]]}, {"model": "gpt-6.1-sol"}),
+            ({**original, "models": [
+                {**original["models"][0], "defaultReasoningEffort": "unsupported"},
+            ]}, {"model": "gpt-6.1-sol"}),
+            ({**original, "models": [
+                {**original["models"][0], "id": f"fixture-{index}"} for index in range(129)
+            ]}, {"model": "gpt-6.1-sol"}),
+            (original, {"model": "--allow-all"}),
+            (original, {"contextTier": 1_000_000}),
+            (original, {"reasoningEffort": {"medium": True}}),
+        ]
+        before = copy.deepcopy(self.state)
+        for evidence, selected in variants:
+            with self.subTest(evidence=evidence, selected=selected):
+                launcher, credentials = mock.Mock(), mock.Mock()
+                with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "(?i)invalid|capabil|evidence|account|session|model|preference"):
+                    self.model_preference_spawn(identity, selected, evidence, launcher, credentials)
+                launcher.assert_not_called()
+                credentials.assert_not_called()
+                self.assertEqual(self.state, before)
+
+    def test_optional_launch_preferences_reach_argv_or_warn_and_keep_configured_defaults(self):
+        initial_state = copy.deepcopy(self.state)
+        initial_state["nodes"][self.worker["id"]]["permissionMode"] = "default"
+        for selected, expected, warned in (
+            ({"model": "gpt-6.1-sol", "contextTier": "long_context", "reasoningEffort": "medium"},
+             {"--model": "gpt-6.1-sol", "--context": "long_context", "--reasoning-effort": "medium"}, False),
+            ({"model": "unknown-model", "contextTier": "unknown-tier", "reasoningEffort": "unknown-effort"},
+             {"--model": "synthetic-model", "--context": "default", "--reasoning-effort": "low"}, True),
+            ({"model": "gpt-6.1-sol", "contextTier": "unknown-tier", "reasoningEffort": "unknown-effort"},
+             {"--model": "gpt-6.1-sol", "--context": "default", "--reasoning-effort": "medium"}, True),
+        ):
+            with self.subTest(selected=selected):
+                self.state = copy.deepcopy(initial_state)
+                self.mutations = 0
+                request = {
+                    "identity": self.model_launch_identity(),
+                    "assignment": {"name": "Selected child", "cwd": str(REPO), "task": "Synthetic", **selected},
+                }
+                request["launchCapabilities"] = self.model_launch_capabilities(request["identity"])
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                native = CONTROLLER["command_native_spawn"]
+                with mock.patch.dict(native.__globals__, {
+                    "read_state": lambda *a, **k: copy.deepcopy(self.state),
+                    "mutate": self.mutate,
+                    "authorize_native_spawn": lambda state, *_: state["nodes"][self.worker["id"]],
+                    "process_matches": lambda _: True,
+                    "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
+                    "resolve_copilot_token": lambda _: None,
+                    "worker_launch_settings": lambda _: {"version": 1, "model": "synthetic-model"},
+                    "messaging_configuration": lambda _: None,
+                    "resource_observations": lambda *_: ({}, set()),
+                    "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
+                    "launch_reserved_session": launcher,
+                    "trusted_executable": lambda *_: "/synthetic/copilot",
+                }), mock.patch("sys.stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))):
+                    receipt = native(self.root, self.cmux)
+                    child = self.state["nodes"][launcher.call_args.args[2]]
+                    argv = CONTROLLER["interactive_arguments"](child, "Synthetic task")
+                for flag, value in expected.items():
+                    self.assertIn(flag, argv)
+                    self.assertEqual(argv[argv.index(flag) + 1], value)
+                if warned:
+                    self.assertTrue(receipt.get("warnings"), "unsupported optional preferences must visibly warn")
+                else:
+                    self.assertFalse(receipt.get("warnings"))
+                for value in selected.values():
+                    if value.startswith("unknown"):
+                        self.assertNotIn(value, argv)
 
     def test_atomic_census_distinguishes_removed_and_surviving_exited_surface(self):
         observe = CONTROLLER["resource_observations"]
@@ -3339,6 +3920,35 @@ class RootCustodyTests(unittest.TestCase):
         })
         self.patches.start()
         self.addCleanup(self.patches.stop)
+
+    def test_existing_explicit_root_model_retains_precedence_without_a_joined_model_api(self):
+        launcher = mock.Mock(return_value={"launchAccepted": True})
+        command = CONTROLLER["command_launch_coordinator"]
+        with mock.patch.dict(command.__globals__, {"launch_reserved_session": launcher}):
+            command(CONTROLLER["parser"]().parse_args(self.argv + ["--model", "explicit-root-model"]),
+                    self.root, self.cmux)
+        node = CONTROLLER["read_state"](self.root)["nodes"][launcher.call_args.args[2]]
+        argv = CONTROLLER["interactive_arguments"](node, "Synthetic")
+        self.assertEqual(argv[argv.index("--model") + 1], "explicit-root-model")
+        self.assertNotIn("--context", argv)
+        self.assertNotIn("--reasoning-effort", argv)
+        self.cmux.create_surface.assert_not_called()
+
+    def test_new_root_preferences_without_joined_evidence_warn_and_preserve_explicit_model(self):
+        launcher = mock.Mock(return_value={"launchAccepted": True})
+        command = CONTROLLER["command_launch_coordinator"]
+        with mock.patch.dict(command.__globals__, {"launch_reserved_session": launcher}):
+            receipt = command(CONTROLLER["parser"]().parse_args(self.argv + [
+                "--model", "explicit-root-model", "--context-tier", "long_context",
+                "--reasoning-effort", "medium",
+            ]), self.root, self.cmux)
+        node = CONTROLLER["read_state"](self.root)["nodes"][launcher.call_args.args[2]]
+        argv = CONTROLLER["interactive_arguments"](node, "Synthetic")
+        self.assertEqual(argv[argv.index("--model") + 1], "explicit-root-model")
+        self.assertNotIn("--context", argv)
+        self.assertNotIn("--reasoning-effort", argv)
+        self.assertTrue(receipt.get("warnings"))
+        self.cmux.create_surface.assert_not_called()
 
     def test_root_and_native_child_receive_milestone_contract_with_verbatim_tasks(self):
         """Generated provider argv, not evidence of consuming-agent compliance."""

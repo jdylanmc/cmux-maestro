@@ -62,6 +62,14 @@ status and native `maestro_spawn` for children. Require current-session
 coordination. There is no invisible SDK-agent fallback.
 Call `maestro_identity({})` to verify the actual current session/account before
 dispatch. A failed identity query is a blocker, not an invitation to guess.
+When the loaded schema supports `includeModel`, the exact responding worker can
+call `maestro_identity({"includeModel":true})` to observe its own current model,
+context tier and reasoning effort. The optional `modelObservation` is either
+`observed` with source/time and only reported values, or `unavailable` with an
+explicit reason. Default identity calls do not query models. Missing model API
+evidence does not invalidate a verified identity/account; changed account or
+binding does. This is a read, never a model switch, entitlement proof or numeric
+context-window measurement. A parent's response does not observe its child.
 
 ## Register an existing caller for legacy lifecycle control
 
@@ -127,8 +135,19 @@ Call native `maestro_spawn` with a complete first assignment:
 The adapter reads the invoking session's current account through
 `session.rpc.gitHubAuth.getStatus()` for each launch. Neither task text, repository
 authentication, saved account defaults, nor another session selects that account.
-Missing identity/API support refuses before terminal creation. Explicit model
-selection remains separate. Optional `allowTools` and `denyTools` arrays carry
+Missing account identity/API support refuses before terminal creation. Optional
+`model`, `contextTier`, and `reasoningEffort` request per-launch preferences on
+controllers/tools declaring these fields; do not send unsupported arguments to
+an older installed tool. Generic omission preserves configured launches without
+a model query or new flags. Explicit requests use the actual joined session's
+`model.list()` capability snapshot, bound to its account before and after lookup.
+Unsupported safe preferences warn and use available configured defaults;
+unavailable lookup retains the old configured launch with an explicit warning.
+Malformed/foreign evidence, account drift, missing credentials and resource or
+permission failures refuse; they are not preference fallback. Requested and
+configured selections are not observed child settings or a numeric token window.
+No role/name/task-text inference or persistent setting change is used.
+Optional `allowTools` and `denyTools` arrays carry
 exact authorized rules; `yolo: true` requires explicit human approval and a
 coordinator actor. A worker cannot escalate by launching another root.
 
@@ -138,26 +157,49 @@ call the private ingress yourself.
 
 ## Permissions and runtime ownership
 
-The safe default adds no Copilot tool grants. Pass each exact authorized rule
-in `allowTools` or `denyTools`; a new root's CLI uses `--allow-tool` and
-`--deny-tool`. Do not synthesize full parent-permission inheritance.
+Root and legacy defaults add no Copilot tool grants. Pass each exact authorized
+rule in `allowTools` or `denyTools`; a new root's CLI uses `--allow-tool` and
+`--deny-tool`. On controllers supporting #154, prospective native interactive
+children inherit the parent's explicit **recorded launch policy** when
+`allowTools` and `yolo` are omitted. Deny-only requests keep that recorded mode
+and allows while adding denies. Verify installed capability separately; source
+changes do not reconfigure existing sessions or authorize installation.
 
 These are Copilot policy arguments, not an operating-system sandbox. Never add
 `--allow-all`, a wildcard, all paths or URLs, or rights not explicitly approved
-for the task. The sole explicit broad-mode option is a **user-approved
+for the task. The sole new explicit broad-mode option is a **user-approved
 coordinator** `yolo: true` (or root `--yolo`); it supplies Copilot `--allow-all` while preserving
-explicit denies. Never add it by default or to solve a stalled permission prompt.
-Worker actors cannot request YOLO, including for descendants of a YOLO worker.
-There is no inferred full parent-permission inheritance. A general shell grant
-must also be caller-explicit and task-
-justified; it is never a default. Denies win. A descendant receives no additional
-grants by default and may request only a subset of its parent's explicit allows;
-inherited denies cannot be removed. Policies remain private.
+explicit denies. Never request a new broad grant by default or to solve a stalled
+permission prompt; recorded inheritance follows the qualified contract above.
+An explicit human grant covering new coordinator-launched workers in the current
+scope can be applied without asking again for every launch. Record its scope;
+do not change existing sessions, infer broader authority, or re-interview routine
+delivery actions already authorized. New scope and risk decisions remain human-owned.
+Worker actors cannot request YOLO, including for descendants of a YOLO worker;
+inheriting an explicit recorded parent YOLO mode is a separate source behavior.
+An explicit `allowTools` list (including `[]`) or `yolo: false` selects requested
+default mode without `--allow-all`; omitted allows still inherit. A native
+explicit YOLO request combined with a narrowing list refuses. Default-mode parents enforce literal allow-subset checks. Verified recorded
+YOLO permits bounded finite child rules without redundant parent allows;
+wildcard/broad-rule rejection remains. Denies win and cannot be removed.
+Missing provenance or recorded-policy drift before reservation refuses.
+Do not synthesize shell/wildcard grants from tool visibility or task text.
+Policies remain private.
+
+Recorded/requested policy is **not a full current-provider permission snapshot**.
+Human changes can make it stale. Copilot's `defaultPermissionMode: "allow-all"`
+or `COPILOT_ALLOW_ALL` can elevate actual startup even without `--allow-all`;
+requested default mode does not prove manual mode. Partial mode/path getters
+do not establish complete current tool/deny/URL policy or atomic same-or-narrower
+admission. Report these limits, never invent an override, mutate policy after
+launch, isolate provider settings, or claim actual restricted startup from flags.
 
 Root startup and native child launch create exactly one unfocused terminal tab
 beside the caller and launch normal interactive Copilot with the supplied task.
-Managed children inherit the verified invoking account; no account or model
-fallback is allowed. No personal account or model is shipped as a project default. Input and
+Managed children inherit the verified invoking account; no account fallback is
+allowed. Optional preference fallback is bounded and explicit as above, never
+an arbitrary model substitution. No personal account or model is shipped as a
+project default. Input and
 output belong directly to that terminal: the human can type follow-ups, answer
 questions, and continue after the first task finishes. Copilot itself starts
 through CMUX's `surface.create` direct `initial_command`,
@@ -208,10 +250,19 @@ Maestro roles. A failed launch is a blocker, not permission to change runtimes.
 
 Managed workers spawn descendants through the same native `maestro_spawn` tool.
 The adapter binds the actual sender; it is not supplied by the model. Respect the depth
-and the controller's `MAX_LIVE_WORKERS` workspace limit, including managed
+and the controller's configured workspace limit, including managed
 coordinators and retained resources; finishing an initial task does not release
 an open interactive session or terminal slot. Reuse an idle worker instead of retrying fanout
-failures in a loop.
+failures in a loop. The #154 source defaults to 32 and permits an authenticated
+workspace coordinator to configure 1 through 128; the independent global
+128-node and depth bounds still apply. Verify installed support before using
+`capacity --workspace <exact-workspace-uuid>` for advisory preflight. A successful
+query reserves nothing; actual admission rechecks the latest limit and exact
+resources transactionally. A product ceiling is not the team's dispatch budget.
+Check both `remaining` and `nodeSlotsRemaining`, plus `admissionAvailable`.
+The global node limit includes retained history, even resource-retired nodes;
+positive live-workspace room does not establish a free node. Exhaustion is not
+permission to erase history, raise a ceiling, or retry fan-out automatically.
 Capacity reconciliation requires CMUX's atomic `surface.list` workspace
 snapshot, not separate pane inventories that can miss a moving terminal.
 Unavailable or malformed inventory blocks launch without freeing resource slots.

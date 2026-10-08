@@ -6,6 +6,17 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Read the responding managed session's current model, context tier and effort
+  through optional identity observation, with explicit unavailable reasons and
+  no launch-default substitution or model changes (#152).
+- Request optional per-launch model, context tier and reasoning effort using
+  bounded session-scoped capability evidence, with visible configured fallback
+  for unsupported preferences and refusal of unsafe or foreign evidence.
+  Configured arguments remain distinct from observed provider settings (#154).
+- Configure per-workspace launch capacity from 1 to 128 (default 32) through
+  an authenticated coordinator CLI, with advisory usage/preflight and exact
+  root, worker, retained-resource and pending-lease accounting. Preserve
+  existing lock budgets and independent node/depth bounds (#154).
 - Show read-only global Maestro guide-content status in Settings > CLI Integration,
   with explicit Re-check, build-relative matching and read/copy feedback.
   Keep installation and updates manual through the existing copyable command;
@@ -36,14 +47,21 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Preflight Joe launches against both live workspace and global node capacity;
+  honor current scoped staffing, model-default and new-worker permission choices
+  without repeating routine authorization interviews (#154).
+- Inherit explicit recorded parent launch permissions for prospective native
+  children, preserving denies, narrowing and provenance/drift refusals. Current
+  provider-policy equivalence and actual restricted startup remain unverified
+  (#154).
 - Target two-hour Joe deliveries without skipping gates. Select doctrines before
   review/self-checks, keep one PR-state contract, and check local skill hashes/links.
-- Raise the per-workspace hard limit from 8 to 32 live managed sessions,
+- Raise the default per-workspace limit from 8 to 32 live managed sessions,
   including managed coordinators and retained resources, without changing
   launch accounting or the 128-node and eight-level nesting limits. Validate
   immutable read snapshots outside the shared lock so readers do not block
   writers during decoding and validation, and share read-only runtime ticket
-  lookups. Scale bounded lock-acquisition budgets with the same capacity knob,
+  lookups. Scale bounded lock-acquisition budgets against the fixed 32-session reference,
   retaining exclusive mutations, failure on exhaustion and launch/result deadlines.
 - Attempt Copilot integration with stable CLI 1.x releases on protocol 3 instead
   of an exact-release whitelist. Preserve source ownership, disabled-state
@@ -83,6 +101,15 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Keep valid provider-native reasoning defaults from blocking unrelated model
+  selection; omit unrepresentable CLI defaults while retaining malformed-data
+  refusal and warned provider-default behavior (#154).
+- Allow bounded finite child narrowing from recorded YOLO without redundant
+  parent allow rules, preserving denies, default-parent and escalation guards
+  (#154).
+- Clean up failed orchestration-test fixture registration through the existing
+  quiescence protocol, retaining evidence and both errors when cleanup cannot
+  complete (#154).
 - Align the historical-session dismissal fixture's clocks; keep production
   stale-action rejection and native dismissal/focus assertions unchanged.
 - Remove synthetic background-shell rows and their associated outcome notices,

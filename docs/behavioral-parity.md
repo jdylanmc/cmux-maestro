@@ -543,19 +543,64 @@ the attachment-file lease remain unchanged. Control-character checks retain
 their UTF-8 byte bounds and exact accepted/rejected characters without a
 per-character Python scan on every node's stored provider path.
 Lock-acquisition budgets scale by `max(1, MAX_LIVE_WORKERS / 8)`, preserving
-the original eight-session allowance as more runtimes contend for serialized
-durable writes; both ordinary and runtime acquisitions use that same knob.
+the original eight-session allowance against the fixed 32-session reference
+for serialized durable writes; both ordinary and runtime acquisitions use
+that same reference. Per-workspace admission limits (default 32, configurable
+from 1 through 128) do not shrink or enlarge these waits.
 The 50ms retry interval, immediate zero-wait behavior, lock modes and failure
 on exhaustion remain unchanged; this does not extend launch/result deadlines
 or retry a non-contention failure. Deterministic clock tests use real contended
 locks to prove both successful acquisition and bounded refusal at several
-configured capacities. This capacity-scaled budget is an explicit policy
+reference capacities. This reference-scaled budget is an explicit policy
 change, not an inference that shorter critical sections alone fixed CI.
 The pending-capacity fixture scales its bounded six-second result wait by the
 same factor: its old wait must not expire before an allowed runtime acquisition
 can finish. This synthetic allowance changes no production result deadline,
 still requires every exact completed report and provider call, and preserves
 simultaneous maximum reservations, over-cap refusal and archive protection.
+Workspace capacity regressions cover persisted CLI configuration, rejected
+worker/cross-workspace changes, root/child admission at limits 2, 32, 64 and 128
+with retained resources, non-double-counted leases, unknown ownership, and
+concurrent admission after an advisory preflight. The 128-boundary proof uses
+synthetic retained resources; it is not a 128-provider load measurement.
+Prospective native-child permission regressions exercise explicit recorded
+parent mode/allow/deny inheritance, deny-only additions, explicit list/false
+narrowing, coordinator-only broad requests and contradictory-intent refusal.
+Finite narrowing under recorded YOLO does not require redundant explicit parent
+allow strings: empty and redundant lists produce the same default-mode child,
+one reservation/lease/launch and retained denies. Default-mode parent escalation
+and wildcard grants still refuse; matching deny strings remove allows.
+Actual Store normalization preserves negative provenance when filling a missing
+interactive tool policy; a missing mode remains missing. Neither becomes verified
+parent policy. Exclusive reservation rechecks the recorded snapshot before adding
+a child or lease. Legacy bounded normalization and explicit worker YOLO refusals
+remain unchanged. These checks establish recorded/requested policy only: they do
+not inspect human-modified live permissions, prove atomic provider-policy
+comparison, or guarantee actual manual startup when provider defaults/environment
+request allow-all. That runtime acceptance gap remains explicit.
+Optional launch-selection tests exercise real native assignment forwarding,
+sanitized session-scoped model metadata, account rechecking, malformed/foreign
+evidence refusal, supported argv and warned configured fallback. Generic
+omission performs no model query; unavailable experimental lookup preserves
+the prior launch. Model-specific tier/effort fallback retains a valid selected
+model. No available configured fallback means refusal, not arbitrary selection.
+Root model precedence stays unchanged, and new options without joined evidence
+warn without injecting unsupported flags. These are synthetic source contracts,
+not observed child model/context settings, entitlements or a numeric long-context
+window; full catalog/billing data is absent from persisted selection metadata.
+Mixed-catalog controls distinguish valid provider-native effort defaults from
+malformed non-advertised defaults before known-CLI projection. Unrepresentable
+valid defaults are omitted without poisoning another supported model; selected
+models without a representable default retain the provider default with a warning
+and no fabricated effort argument.
+Optional identity-observation regressions exercise the exact joined session's
+current model read, account/binding recheck, bounded field projection and explicit
+unavailable reasons. Omitted or false `includeModel` performs no model query and
+preserves the old identity response. Missing effort/context is not filled from
+configuration; provider-native safe effort values remain observations rather
+than invented CLI overrides. Wrong-session calls and account drift refuse.
+These mocked SDK responses are source-contract evidence, not an installed-child
+demonstration; spawning still does not wait for an observation.
 The failed-attachment
 capacity fixture stops only its completed synthetic supervisors while retaining
 every terminal, and requires the actual configured resource-limit error, not a busy
