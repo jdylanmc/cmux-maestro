@@ -78,6 +78,21 @@ test("rejects a broken incoming anchor even when the declared anchor still exist
   await assert.rejects(checkOverrides(f.root), /Missing policy anchor: README.md/);
 });
 
+test("rejects the full declared fragment instead of accepting its valid prefix", async (t) => {
+  const f = await fixture(t);
+  await f.write(".agents/skill-overrides.json", JSON.stringify({
+    skills: ["example"], links: ["docs/state.md#pr-states#missing"],
+  }));
+  await assert.rejects(checkOverrides(f.root), /Missing policy anchor: docs\/state.md#pr-states#missing/);
+});
+
+test("rejects the full incoming fragment instead of accepting its valid prefix", async (t) => {
+  const f = await fixture(t);
+  await f.write("README.md", "[State](docs/state.md#pr-states#missing)\n");
+  f.track();
+  await assert.rejects(checkOverrides(f.root), /Missing policy anchor: README.md/);
+});
+
 test("deleted policy document fails rather than silently reducing coverage", async (t) => {
   const f = await fixture(t);
   await rm(join(f.root, "docs/state.md"));
