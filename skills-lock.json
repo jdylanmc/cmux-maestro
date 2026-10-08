@@ -227,13 +227,13 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/joe-mode/SKILL.md",
-      "computedHash": "681d0db146c4413691a5c41c7e0849c018d088c42fe974d096bfd4494c1bc31d"
+      "computedHash": "1b5570fe5e340af95d6a62aa27138bb499731895f4b27698e6ca7846d8b6a587"
     },
     "joe-mode-cmux": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/joe-mode-cmux/SKILL.md",
-      "computedHash": "772b70bc3c0e200c068a705f136bbece355064306bb79f3860cd2428031e4d9f"
+      "computedHash": "8afd6ad94fcb87eae9ecc8b9ede88b369c39e9bec08ba2515050be6f9ec8cdcc"
     },
     "joe-mode-paseo": {
       "source": "jdylanmc/agent-skills",
@@ -323,13 +323,13 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/shepherd/SKILL.md",
-      "computedHash": "78a901ccd537bc39a777eb901cf341436e5d088ef2118a43f2a38f736a4833a4"
+      "computedHash": "eaab7e527ba541f6b430279baa4cee2adbe97c4fbc7fb865ab7b1d6914c5e177"
     },
     "ship": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/ship/SKILL.md",
-      "computedHash": "2893b4b4a3f34c950010b1b316bc85e293aa9e01dd7a418f4107c600f825eb6f"
+      "computedHash": "4982293f259d7b45c86b6bafb1fc73c321bac80361dbf8383046e39c726535e5"
     },
     "specify": {
       "source": "jdylanmc/agent-skills",

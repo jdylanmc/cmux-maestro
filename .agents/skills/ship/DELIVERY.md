@@ -4,6 +4,11 @@ Supporting contract for the peer Ship, Patch, and Refactor routes, not another
 routable skill or permission to invoke Ship. The selected route owns its work
 through independent review, publication, and actual Shepherd custody. Follow
 [invocation policy](../setup/INVOCATION.md); narrower human requests remain narrower.
+For Joe-owned work, apply the local
+[review visibility rule](../joe-mode/DELIVERY-PACE.md#review-visibility-is-not-merge-eligibility):
+implementation-complete PRs may be non-draft before validation and review finish.
+That exception changes provider draft status, not the full final-signoff gate
+below or custody. Standalone routes retain their existing promotion gate.
 Never approve, merge, enable automatic merge, or close delivery tracker items.
 The sole recovery-issue exception is separately authorized, verified episode
 closure under [RECOVERY](../shepherd/RECOVERY.md).
@@ -87,7 +92,8 @@ Use the [commit-message policy](../setup/COMMIT-STYLE.md) for authored messages.
 Before creation, inspect existing PRs for this delivery/branch. Reuse the matching
 PR; clarify ambiguity. After an uncertain creation result, query before retrying.
 Push the owned branch and create an internal draft once a meaningful candidate
-exists; never manufacture an empty commit. Include requirements/ticket references,
+exists, or a non-draft for implementation-complete Joe work; never manufacture
+an empty commit. Include requirements/ticket references,
 scope, summary, criterion evidence, checks, and outstanding work. Use closing
 references only for fully satisfied work. Confirm publication and its actual URL.
 Missing access is a blocker. If no change is needed, report the already-satisfied
@@ -95,8 +101,9 @@ result rather than manufacture a PR.
 
 An internal draft is progress, not a final handoff or readiness claim. The route
 retains custody while implementing; no competing Shepherd repair loop. On Azure
-DevOps, use `isDraft: true` and full source/target refs, then `isDraft: false` only
-after the gate below, never status `completed` or auto-completion. Link planning
+DevOps, use `isDraft: true` and full source/target refs, then `isDraft: false` at
+the applicable promotion gate (Joe review visibility or standalone final
+signoff), never status `completed` or auto-completion. Link planning
 items through supported relations.
 
 ## Current-base readiness and real custody
@@ -115,15 +122,19 @@ Idle may mean scheduled waiter. Without monitoring runtime, record **handoff blo
 monitoring stopped**, last observed state, resumption action; never promise
 unattended monitoring after runtime/session loss.
 
-Accepted Shepherd must actually promote through the provider and verify non-draft
-readback before announcing **ready for human signoff**:
+For Joe work, the implementation owner promotes for review and verifies non-draft
+readback as soon as implementation is complete; pending checks, acceptance,
+review and custody remain explicit. This does not announce final readiness.
+Accepted Shepherd verifies non-draft state (promoting if still appropriate)
+and every gate below before announcing **ready for human signoff**:
 - GitHub: `gh pr ready` for resolved PR/repository, then read `isDraft`.
   Azure DevOps: update `isDraft: false`, then read back. Request success/local
   flags prove no promotion.
 - Require accepted custody, met acceptance, current independent review, passing
   required candidate checks, no unresolved blockers, source containing latest
   observed target.
-- Immediately before promotion, reread provider/live source/target refs.
+- Immediately before final-signoff promotion or announcement, reread
+  provider/live source/target refs.
   Changed refs invalidate claims and restart affected maintenance/proof even if
   mergeability stays green. Record head/base/time; further base movement can
   invalidate readiness again.
@@ -134,7 +145,8 @@ readback before announcing **ready for human signoff**:
 Reconcile each selected delivery in a batch. Mixed ready/draft/blocked results
 are progress, never **all delivered** while scoped work remains unfinished.
 Keep unfinished PRs' blockers and custody explicit; never mark blocked PRs ready
-to satisfy a completion report.
+for final signoff to satisfy a completion report. A Joe PR ready for review can
+still be blocked for merge.
 
 Readiness is not actual human approval or a guarantee of immediate mergeability
 under every policy. Report pending human approval separately; a blocking review,

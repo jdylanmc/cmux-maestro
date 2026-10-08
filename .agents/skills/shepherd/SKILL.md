@@ -106,9 +106,14 @@ Call the existing owner route—[Ship](../ship/SKILL.md), [Patch](../patch/SKILL
 
 The route classifies evidence, performs bounded implementation and independent review, validates, and updates the same PR. It never invokes Ship as a generic finish or starts a nested Shepherd. On return, reconcile actual head, review coverage, check state, and addressed findings before resuming observation. A missing result, failed repair, or human-owned decision is reported explicitly and ends safe automatic remediation. If concrete evidence requires Joe re-routing/reimplementation/refactoring, load and execute [RECOVERY](RECOVERY.md): one linked issue/episode, actual existing-controller intake acknowledgment and serialized repair/return, not an automatic route switch. Missing authority or a human product decision remains a blocker.
 
-If a draft's outstanding delivery work needs completing, return it to its existing route under the same ownership rule. Do not promote while acceptance, independent review, current-base proof, or required checks remain incomplete. A blocked draft is not the final handoff.
+If a draft's outstanding implementation needs completing, return it to its
+existing route under the same ownership rule. For Joe work, follow
+[DELIVERY's review-visibility exception](../ship/DELIVERY.md): complete
+implementation may be non-draft with pending acceptance, review or CI explicit.
+Standalone routes still wait for the full promotion gate. Neither state permits
+a final-signoff claim while required evidence or blockers remain unresolved.
 
-With DELIVERY's full gate/accepted custody, actually promote; verify provider
+With DELIVERY's full gate/accepted custody, promote if needed; verify provider
 non-draft readback/current candidate before announcing readiness. Send/request
 success is insufficient. After accepted terminal repair return, arrange LIFECYCLE
 retirement, preserving monitoring scope/worktree.

@@ -5,6 +5,12 @@ and tooling, not application resources. `../skills-lock.json` records each
 skill's source, source path, and content hash. Preserve upstream notices when
 refreshing these copies.
 
+The checked-in `joe-mode` and `joe-mode-cmux` packages include repository-local
+delivery-pace adaptations, with corresponding Joe-only readiness alignment in
+`ship/DELIVERY.md` and `shepherd/SKILL.md`. Their lock hashes describe these local
+contents, not an upstream release; source attribution is unchanged. Preserve
+these adaptations deliberately when refreshing dependencies.
+
 These notices cover the dependency material below. They do not select a
 project-wide license for CMUX Maestro or replace file-specific terms.
 

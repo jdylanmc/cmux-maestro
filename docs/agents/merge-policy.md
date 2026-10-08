@@ -23,6 +23,12 @@ scope nor unattended merge authority.
 
 ## Review and user merge gate
 
+Joe delivery uses the local [two-hour planning target and finish-first
+policy](../../.agents/skills/joe-mode/DELIVERY-PACE.md), not a hard timeout.
+Implementation-complete PRs are **ready for review** even with pending review,
+CI or acceptance; publish the missing evidence explicitly. Non-draft status
+does not satisfy any of the final-signoff or merge gates below.
+
 1. The implementation author publishes a candidate and **never self-merges**.
    Only a separate, explicitly human-authorized **PR Sniper** may merge scoped
    PRs. AFK implementation/publication approval is not merge approval.
@@ -75,7 +81,7 @@ lint command or report lint as passed.
 
 Configuration-only authors may run the smallest relevant document/package
 checks and formatting gate locally; no full native build is required just to
-publish their draft. This does not waive the complete pre-merge CI gate.
+publish their candidate. This does not waive the complete pre-merge CI gate.
 `./scripts/build-register.sh` is a local installation action, not a CI command;
 do not run it as an incidental configuration check.
 
