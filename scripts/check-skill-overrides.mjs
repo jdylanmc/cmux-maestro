@@ -38,6 +38,11 @@ function headings(markdown) {
   return anchors;
 }
 
+function splitFragment(link) {
+  const index = link.indexOf("#");
+  return index < 0 ? [link, ""] : [link.slice(0, index), link.slice(index + 1)];
+}
+
 export async function checkOverrides(root) {
   root = await realpath(root);
   const config = JSON.parse(await readFile(join(root, ".agents/skill-overrides.json"), "utf8"));
@@ -75,7 +80,7 @@ export async function checkOverrides(root) {
   }
   for (const link of config.links) {
     if (typeof link !== "string") throw new Error("Policy link must be a string");
-    const [path, anchor] = link.split("#");
+    const [path, anchor] = splitFragment(link);
     const target = resolve(root, path);
     await checkLink(target, anchor, link);
     targets.add(target);
@@ -91,7 +96,7 @@ export async function checkOverrides(root) {
     for (const match of markdown.matchAll(/\[[^\]]*\]\(([^)\s]+)\)/g)) {
       const link = match[1];
       if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(link)) continue;
-      const [path, anchor] = link.split("#");
+      const [path, anchor] = splitFragment(link);
       const target = path ? resolve(dirname(source), decodeURIComponent(path)) : source;
       if (!targets.has(target)) continue;
       await checkLink(target, anchor, `${file}: ${link}`);
