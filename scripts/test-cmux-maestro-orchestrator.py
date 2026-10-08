@@ -752,6 +752,41 @@ class Harness:
         data["surfaces"].append(surface)
         self.cmux_state.write_text(json.dumps(data))
 
+    def quiescence_diagnostics(self, processes):
+        result = {
+            "recordedAtClose": [
+                {"pid": item["pid"], "start": item["start"]} for item in processes
+            ],
+        }
+        lsof = shutil.which("lsof")
+        if lsof is None:
+            return {**result, "unavailable": "lsof-missing"}
+        try:
+            opened = subprocess.run(
+                [lsof, "-Fp", "--", self.lifetime.name],
+                capture_output=True, text=True, timeout=1,
+            )
+            if opened.returncode not in (0, 1):
+                return {**result, "unavailable": f"lsof-exit-{opened.returncode}"}
+            pids = sorted({
+                int(line[1:]) for line in opened.stdout.splitlines()
+                if line.startswith("p") and line[1:].isdigit()
+            })
+            result["lifetimeFilePids"] = pids
+            if pids:
+                metadata = subprocess.run(
+                    ["/bin/ps", "-o", "pid=,ppid=,lstart=,stat=", "-p",
+                     ",".join(str(pid) for pid in pids)],
+                    capture_output=True, text=True, timeout=1,
+                )
+                if metadata.returncode:
+                    result["unavailable"] = f"ps-exit-{metadata.returncode}"
+                else:
+                    result["processMetadata"] = metadata.stdout.splitlines()
+        except (OSError, subprocess.TimeoutExpired) as error:
+            result["unavailable"] = type(error).__name__
+        return result
+
     def close(self):
         if self.closed:
             return
@@ -783,7 +818,13 @@ class Harness:
                     break
                 except BlockingIOError:
                     if time.monotonic() >= deadline:
-                        raise AssertionError(f"Fixture process quiescence unavailable; preserved {self.path}")
+                        # File-open observations are sampled after failure, not
+                        # authority to signal a descendant or claim lock ownership.
+                        diagnostics = self.quiescence_diagnostics(processes)
+                        raise AssertionError(
+                            f"Fixture process quiescence unavailable; preserved {self.path}\n"
+                            f"Fixture process metadata: {json.dumps(diagnostics)}"
+                        )
                     time.sleep(0.02)
         finally:
             self.drain_stop.set()
@@ -888,7 +929,7 @@ class HarnessTeardownTests(unittest.TestCase):
         ]
         with patch("shutil.which", return_value="/usr/sbin/lsof"), \
                 patch("subprocess.run", side_effect=results) as run:
-            observed = h.quiescence_diagnostics(known)
+            observed = h.quiescence_diagnostics([{**known[0], "args": "not-for-diagnostics"}])
         self.assertEqual(observed, {
             "recordedAtClose": known,
             "lifetimeFilePids": [41, 42],
@@ -920,6 +961,12 @@ class HarnessTeardownTests(unittest.TestCase):
             self.assertEqual(h.quiescence_diagnostics([]),
                              {"recordedAtClose": [], "lifetimeFilePids": []})
             self.assertEqual(run.call_count, 1)
+        with patch("shutil.which", return_value="/usr/sbin/lsof"), \
+                patch("subprocess.run", return_value=subprocess.CompletedProcess(
+                    ["lsof"], 2, "", "raw tool error is not diagnostic metadata",
+                )):
+            self.assertEqual(h.quiescence_diagnostics([]),
+                             {"recordedAtClose": [], "unavailable": "lsof-exit-2"})
 
     def test_constructor_success_keeps_fixture_active_without_cleanup(self):
         h = object.__new__(Harness)
