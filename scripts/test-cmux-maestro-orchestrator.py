@@ -850,6 +850,8 @@ class HarnessTeardownTests(unittest.TestCase):
                     patch.dict(CONTROLLER_API, {
                         "process_observation": unittest.mock.Mock(side_effect=AssertionError("no process exists")),
                     }), patch.object(Harness, "close", autospec=True, side_effect=close) as cleanup, \
+                    patch.object(Harness, "quiescence_diagnostics", create=True,
+                                 return_value={"synthetic": "failure-boundary"}) as diagnostics, \
                     patch("fcntl.flock", side_effect=flock), \
                     patch("time.monotonic", side_effect=[0, 4]), patch("time.sleep") as sleep:
                 with self.assertRaises(subprocess.TimeoutExpired) as caught:
@@ -861,6 +863,8 @@ class HarnessTeardownTests(unittest.TestCase):
                 self.assertEqual(len(secondary), 1)
                 self.assertIs(caught.exception.__cause__, secondary[0])
                 self.assertIn("quiescence", str(secondary[0]))
+                self.assertIn('"synthetic": "failure-boundary"', str(secondary[0]))
+                diagnostics.assert_called_once_with([])
                 self.assertFalse(h.closed)
                 self.assertTrue(h.path.is_dir())
                 self.assertFalse(h.temp._finalizer.alive)
@@ -869,6 +873,53 @@ class HarnessTeardownTests(unittest.TestCase):
                 sleep.assert_not_called()
         finally:
             h.close()
+
+    def test_quiescence_diagnostics_reports_only_exact_file_holders_and_process_metadata(self):
+        h = object.__new__(Harness)
+        h.lifetime = unittest.mock.Mock(name="lifetime")
+        h.lifetime.name = "/owned-fixture/process-lifetime"
+        known = [{"pid": 41, "start": "Thu Oct  8 17:00:00 2026"}]
+        results = [
+            subprocess.CompletedProcess(["lsof"], 0, "p41\nf5\np42\nf5\n", ""),
+            subprocess.CompletedProcess(
+                ["ps"], 0,
+                "41 1 Thu Oct  8 17:00:00 2026 Ss\n42 41 Thu Oct  8 17:00:01 2026 S\n", "",
+            ),
+        ]
+        with patch("shutil.which", return_value="/usr/sbin/lsof"), \
+                patch("subprocess.run", side_effect=results) as run:
+            observed = h.quiescence_diagnostics(known)
+        self.assertEqual(observed, {
+            "recordedAtClose": known,
+            "lifetimeFilePids": [41, 42],
+            "processMetadata": results[1].stdout.splitlines(),
+        })
+        self.assertEqual(run.call_args_list[0].args[0],
+                         ["/usr/sbin/lsof", "-Fp", "--", h.lifetime.name])
+        self.assertEqual(run.call_args_list[1].args[0],
+                         ["/bin/ps", "-o", "pid=,ppid=,lstart=,stat=", "-p", "41,42"])
+        self.assertTrue(all(call.kwargs["timeout"] == 1 for call in run.call_args_list))
+        self.assertTrue(all(call.kwargs["capture_output"] for call in run.call_args_list))
+
+    def test_quiescence_diagnostics_exposes_unavailable_or_disappeared_observations(self):
+        h = object.__new__(Harness)
+        h.lifetime = unittest.mock.Mock(name="lifetime")
+        h.lifetime.name = "/owned-fixture/process-lifetime"
+        with patch("shutil.which", return_value=None), patch("subprocess.run") as run:
+            self.assertEqual(h.quiescence_diagnostics([]),
+                             {"recordedAtClose": [], "unavailable": "lsof-missing"})
+            run.assert_not_called()
+        with patch("shutil.which", return_value="/usr/sbin/lsof"), \
+                patch("subprocess.run", side_effect=subprocess.TimeoutExpired(["lsof"], 1)):
+            self.assertEqual(h.quiescence_diagnostics([]),
+                             {"recordedAtClose": [], "unavailable": "TimeoutExpired"})
+        with patch("shutil.which", return_value="/usr/sbin/lsof"), \
+                patch("subprocess.run", return_value=subprocess.CompletedProcess(
+                    ["lsof"], 1, "", "",
+                )) as run:
+            self.assertEqual(h.quiescence_diagnostics([]),
+                             {"recordedAtClose": [], "lifetimeFilePids": []})
+            self.assertEqual(run.call_count, 1)
 
     def test_constructor_success_keeps_fixture_active_without_cleanup(self):
         h = object.__new__(Harness)
