@@ -9,7 +9,18 @@ Notable changes are recorded using Keep a Changelog categories.
 - Request one exact owned child-terminal close through stock CMUX, preserving
   private ownership and launch guards. Return request acceptance without waiting
   for removal, retrying, shutting down the provider, or releasing capacity; inherit
-  CMUX's socket confirmation bypass and last-terminal refusal (#90).
+  stock host refusals, including last-terminal refusal (#90).
+- Add explicitly authorized descendant-first subtree close with one fixed private
+  selection, independent continuation after refusal or uncertainty, and complete
+  bounded per-target results. Select the stock host's documented noninteractive
+  branch on the initial admitted request, not as a retry or fallback. Preserve
+  default target-only receipt/scope, ancestry and
+  resource accounting; refuse unrepresentable numeric identities before effects,
+  preserve results after malformed host replies, and distinguish pre-dispatch
+  refusal from unknown dispatched requests. Preserve prior results when an
+  invoking worker loses its stored session identity. Report `confirmation_required`
+  without forced fallback
+  (#91).
 - Versioned visual-design references for #57, including the frozen September
   29 prototype, approved contract, 56-state synthetic review gallery and
   current ticket handoff (#134). Preserve earlier evidence and distinguish

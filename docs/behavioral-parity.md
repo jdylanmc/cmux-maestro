@@ -117,13 +117,35 @@ commands remain unchanged. Full xcresult bundles are not included in this
 diagnostic artifact.
 All eleven workflow commands remain required.
 
-### Explicit owned-child close (#90)
+### Explicit owned-child and subtree close (#90, #91)
 
 The native adapter's `maestro_close` and controller's private `native-close`
 ingress admit one exact, currently owned direct interactive child, then request
-stock `surface.close` once. This intentionally inherits socket confirmation
-bypass and last-terminal refusal, not UI confirmation/pinning parity. It never
+stock `surface.close` once with the documented initial Boolean `force: true`.
+This selects the noninteractive host route while retaining last-terminal
+refusal, not UI confirmation/pinning parity. Earlier CMUX 0.65 requests omitted
+the field and returned `confirmation_required`; tagged source confirms that
+false-default branch. Behavioral fixtures distinguish the published running-
+terminal confirmation and noninteractive branches, including stock refusal
+before force handling. This is source proof, not installed/live acceptance.
+No retry, force-after-refusal or confirmation manipulation follows. It never
 waits for disappearance or starts a provider-exit/retry protocol.
+
+Optional scope defaults to target-only and preserves the original flat receipt.
+Explicit subtree captures private descendants once, admits them under the real
+actor, and returns complete exact per-target results descendants-first. Refusal
+or unknown host results do not block valid siblings/parents. Fixed selection,
+retained ended roots, late children, changed generation/session/surface/ancestry,
+source/process/workspace changes and leases have behavioral fixtures. Records,
+routes and resource accounting remain byte-preserved except fixture-owned races.
+Actual subprocess timeout arguments and CLI wire output are exercised across
+127 selected targets: the 45-second pass, five-second target windows, nonwaiting
+locks, and unchanged 60-second/65,536-byte transport bounds are not source-text
+assertions. Oversized complete plans refuse before effects; remaining budget
+targets are reported not attempted. Context deadlines reset after success/failure.
+Real adapter `execFile` fixtures preserve a 127-result reply and report overflow,
+in-flight cancellation and already-aborted refusal without retry. These are
+synthetic source/transport proofs, not real-host survivor or partial-failure proof.
 
 `NativeCloseTests` in `scripts/test-delivery-proof.py` exercise private
 actor/invoker authority, direct-child scope, stale target fields, process/source

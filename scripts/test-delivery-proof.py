@@ -2,7 +2,7 @@
 """Fixture/launcher contracts only: never authenticates or launches a real provider."""
 
 import copy
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import io
 import hashlib
 import json
@@ -1259,6 +1259,21 @@ class NativeCloseTests(unittest.TestCase):
     def persist(self):
         CONTROLLER["with_store"](self.root, lambda store: store.write(self.state))
 
+    def add_close_descendant(self, parent, pid):
+        node = {
+            **copy.deepcopy(self.child), "id": str(uuid.uuid4()), "parentId": parent["id"],
+            "surfaceId": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
+            "providerProcess": {"pid": pid, "start": self.child["providerProcess"]["start"]},
+        }
+        self.state["nodes"][node["id"]] = node
+        self.starts[pid] = node["providerProcess"]["start"]
+        self.parents[pid] = 1
+        source = self.source(node)
+        source.mkdir(mode=0o700)
+        (source / f"inuse.{pid}.lock").touch(mode=0o600)
+        CONTROLLER["bind_messaging"](node)
+        return node
+
     @contextmanager
     def owned_source_wrapper(self):
         source = self.source(self.child)
@@ -1318,11 +1333,14 @@ finally:
         self.parents[12347] = 12346
         return marker
 
-    def invoke(self, request=None, *, anchor=None, kill_error=ProcessLookupError, real_pids=()):
+    def invoke(self, request=None, *, anchor=None, kill_error=ProcessLookupError, real_pids=(),
+               before_process=None, clock=None, cli=False):
         close = CONTROLLER["command_native_close"]
         process_start = CONTROLLER["process_start"]
         run = subprocess.run
         def process_probe(arguments, **kwargs):
+            if before_process is not None:
+                before_process(arguments, **kwargs)
             if arguments[:2] == ["/bin/ps", "-o"] and int(arguments[-1]) not in real_pids:
                 pid = int(arguments[-1])
                 start = self.starts.get(pid)
@@ -1331,6 +1349,10 @@ finally:
                 elif arguments[2] == "ppid=,uid=,lstart=":
                     output = (f"{self.parents.get(pid, 1)} {self.process_uids.get(pid, os.getuid())} {start}\n"
                               if start else "")
+                elif arguments[2] == "ppid=":
+                    output = f"{self.parents.get(pid, 1)}\n"
+                elif arguments[2] == "lstart=":
+                    output = f"{start}\n" if start else ""
                 else:
                     raise AssertionError("Unexpected process probe")
                 return subprocess.CompletedProcess(arguments, 0, output, "")
@@ -1346,11 +1368,15 @@ finally:
                     "direct_process_identity": anchor or (lambda _: dict(self.actor["providerProcess"])),
                     "retire_messaging": mock.Mock(side_effect=AssertionError("close must preserve routes")),
                     "reconcile_resources": mock.Mock(side_effect=AssertionError("close must not reconcile")),
-                    "time": mock.Mock(wraps=time, sleep=mock.Mock(side_effect=AssertionError("close must not wait"))),
+                    "time": clock or mock.Mock(
+                        wraps=time, sleep=mock.Mock(side_effect=AssertionError("close must not wait")),
+                    ),
+                    "default_root": lambda: self.root,
+                    "Cmux": lambda: self.cmux,
                 }), \
                 mock.patch("os.kill", side_effect=kill_error), \
                 mock.patch("subprocess.run", side_effect=process_probe):
-            return close(self.root, self.cmux)
+            return CONTROLLER["main"](["native-close"]) if cli else close(self.root, self.cmux)
 
     def test_close_accepts_one_live_direct_child_and_preserves_every_record_and_route(self):
         before = {file: file.read_bytes() for directory in (self.root, self.routes)
@@ -1361,6 +1387,7 @@ finally:
             mock.call.workspace_surfaces(self.actor["workspaceId"]),
             mock.call.run("rpc", "surface.close", json.dumps({
                 "workspace_id": self.target["workspaceId"], "surface_id": self.target["surfaceId"],
+                "force": True,
             })),
         ])
         self.assertEqual({file: file.read_bytes() for file in before}, before)
@@ -1375,6 +1402,782 @@ finally:
         self.persist()
         self.assertTrue(self.invoke()["closeAccepted"])
         self.cmux.run.assert_called_once()
+
+    def test_subtree_closes_cross_worktree_descendant_before_root_without_touching_survivors(self):
+        self.child["workingDirectory"] = str(self.home / "parent-worktree")
+        self.grandchild["workingDirectory"] = str(self.home / "descendant-worktree")
+        self.sibling["workingDirectory"] = self.child["workingDirectory"]
+        self.grandchild["providerProcess"] = {
+            "pid": 12347, "start": self.child["providerProcess"]["start"],
+        }
+        self.starts[12347] = self.grandchild["providerProcess"]["start"]
+        self.parents[12347] = 1
+        source = self.source(self.grandchild)
+        source.mkdir(mode=0o700)
+        (source / "inuse.12347.lock").touch(mode=0o600)
+        for node in (self.child, self.grandchild, self.sibling):
+            CONTROLLER["bind_messaging"](node)
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        grandchild_target = {
+            "workerId": self.grandchild["id"], "workspaceId": self.grandchild["workspaceId"],
+            "surfaceId": self.grandchild["surfaceId"], "sessionId": self.grandchild["copilotSessionId"],
+            "generation": 1,
+        }
+        requests = []
+        def accept(*arguments, **_kwargs):
+            self.assertEqual(arguments[:2], ("rpc", "surface.close"))
+            request = json.loads(arguments[2])
+            requests.append(request)
+            return request
+        self.cmux.run.side_effect = accept
+
+        result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+
+        self.assertEqual(requests, [
+            {"workspace_id": self.grandchild["workspaceId"], "surface_id": self.grandchild["surfaceId"], "force": True},
+            {"workspace_id": self.child["workspaceId"], "surface_id": self.child["surfaceId"], "force": True},
+        ])
+        self.assertEqual(result["scope"], "subtree")
+        self.assertEqual(len(result["results"]), 2)
+        for actual, target in zip(result["results"], (grandchild_target, self.target)):
+            self.assertEqual({key: actual[key] for key in target}, target)
+            self.assertEqual(actual["outcome"], "accepted")
+            self.assertIs(actual["attempted"], True)
+            self.assertIs(actual["closeAccepted"], True)
+            self.assertEqual(actual["removal"], "unconfirmed")
+            self.assertTrue(actual["reason"].isascii())
+            self.assertLessEqual(len(actual["reason"]), 32)
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+        self.assertEqual(CONTROLLER["read_state"](self.root), self.state)
+        self.assertNotIn(self.token, json.dumps(result))
+        self.assertNotIn(self.identity["capability"], json.dumps(result))
+
+    def test_subtree_continues_valid_sibling_and_parent_after_one_unknown_host_result(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        left = self.add_close_descendant(self.child, 12347)
+        right = self.add_close_descendant(self.child, 12348)
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.cmux.workspace_surfaces.return_value = {
+            node["surfaceId"] for node in self.state["nodes"].values()
+        }
+        for failure in (
+            CONTROLLER["OrchestrationError"]("lastSurface"),
+            OSError("synthetic lost reply"),
+            {"ok": False, "error": "synthetic unrecognized response"},
+        ):
+            with self.subTest(failure=failure):
+                requests = []
+                def request(*arguments, **_kwargs):
+                    self.assertEqual(arguments[:2], ("rpc", "surface.close"))
+                    target = json.loads(arguments[2])
+                    requests.append(target)
+                    if len(requests) == 1:
+                        if isinstance(failure, Exception):
+                            raise failure
+                        return failure
+                    return target
+                self.cmux.run.side_effect = request
+
+                result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+
+                self.assertEqual(len(requests), 3, "one uncertain descendant must not abort or retry the pass")
+                self.assertEqual({item["surface_id"] for item in requests[:2]}, {
+                    left["surfaceId"], right["surfaceId"],
+                })
+                self.assertEqual(requests[-1], {
+                    "workspace_id": self.child["workspaceId"], "surface_id": self.child["surfaceId"],
+                    "force": True,
+                })
+                self.assertEqual(len(result["results"]), 3)
+                self.assertEqual([item["surfaceId"] for item in result["results"]],
+                                 [item["surface_id"] for item in requests])
+                for index, item in enumerate(result["results"]):
+                    self.assertIs(item["attempted"], True)
+                    self.assertEqual(item["outcome"], "unknown" if index == 0 else "accepted")
+                    self.assertEqual(item["removal"], "unconfirmed")
+                    self.assertTrue(item["reason"].isascii())
+                    self.assertLessEqual(len(item["reason"]), 32)
+                    self.assertEqual(item.get("closeAccepted", False), index != 0)
+                self.assertEqual(
+                    {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before,
+                )
+                self.assertNotIn("synthetic", json.dumps(result))
+
+    def test_subtree_refuses_changed_captured_descendant_without_aborting_or_substituting(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        captured = copy.deepcopy(descendant)
+        target = {
+            "workerId": captured["id"], "workspaceId": captured["workspaceId"],
+            "surfaceId": captured["surfaceId"], "sessionId": captured["copilotSessionId"], "generation": 1,
+        }
+        marker = self.source(descendant) / "inuse.12347.lock"
+        for change in ("generation", "surface", "session", "parent", "missing", "process", "marker", "workspace"):
+            with self.subTest(change=change):
+                self.state["nodes"][captured["id"]] = copy.deepcopy(captured)
+                self.starts[12347] = captured["providerProcess"]["start"]
+                marker.touch(mode=0o600)
+                self.persist()
+                surfaces = {node["surfaceId"] for node in self.state["nodes"].values()}
+                self.cmux.workspace_surfaces.return_value = surfaces
+                self.cmux.run.reset_mock()
+                after_change = {}
+                def changed(_):
+                    current = self.state["nodes"][captured["id"]]
+                    if change == "generation":
+                        current["generation"] = 2
+                    elif change == "surface":
+                        current["surfaceId"] = str(uuid.uuid4())
+                        surfaces.add(current["surfaceId"])
+                    elif change == "session":
+                        current["copilotSessionId"] = str(uuid.uuid4())
+                    elif change == "parent":
+                        current["parentId"] = self.sibling["id"]
+                    elif change == "missing":
+                        self.state["nodes"].pop(captured["id"])
+                    elif change == "process":
+                        self.starts[12347] = "replacement-start"
+                    elif change == "marker":
+                        marker.unlink()
+                    elif change == "workspace":
+                        surfaces.remove(captured["surfaceId"])
+                    self.persist()
+                    after_change.update({
+                        file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()
+                    })
+                    return self.actor["providerProcess"]
+
+                result = self.invoke(
+                    {"identity": self.identity, "target": self.target, "scope": "subtree"}, anchor=changed,
+                )
+
+                self.cmux.run.assert_called_once()
+                arguments = self.cmux.run.call_args.args
+                self.assertEqual(arguments[:2], ("rpc", "surface.close"))
+                self.assertEqual(json.loads(arguments[2]), {
+                    "workspace_id": self.child["workspaceId"], "surface_id": self.child["surfaceId"],
+                    "force": True,
+                })
+                self.assertEqual(len(result["results"]), 2)
+                refused, accepted = result["results"]
+                self.assertEqual({key: refused[key] for key in target}, target)
+                self.assertEqual(refused["outcome"], "refused")
+                self.assertIs(refused["attempted"], False)
+                self.assertNotIn("closeAccepted", refused)
+                self.assertEqual(refused["removal"], "unconfirmed")
+                self.assertTrue(refused["reason"])
+                self.assertTrue(refused["reason"].isascii())
+                self.assertLessEqual(len(refused["reason"]), 32)
+                self.assertEqual(accepted["workerId"], self.child["id"])
+                self.assertEqual(accepted["outcome"], "accepted")
+                self.assertEqual(
+                    {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, after_change,
+                )
+
+    def test_subtree_never_adds_a_child_that_appears_after_the_private_snapshot(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        after_change = {}
+        late = {}
+        def appeared(_):
+            late.update(self.add_close_descendant(descendant, 12348))
+            self.persist()
+            self.cmux.workspace_surfaces.return_value = {
+                node["surfaceId"] for node in self.state["nodes"].values()
+            }
+            after_change.update({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()})
+            return self.actor["providerProcess"]
+        self.cmux.run.side_effect = lambda *args, **kwargs: json.loads(args[2])
+
+        result = self.invoke(
+            {"identity": self.identity, "target": self.target, "scope": "subtree"}, anchor=appeared,
+        )
+
+        self.assertEqual([item["workerId"] for item in result["results"]], [descendant["id"], self.child["id"]])
+        self.assertEqual([json.loads(call.args[2])["surface_id"] for call in self.cmux.run.call_args_list],
+                         [descendant["surfaceId"], self.child["surfaceId"]])
+        self.assertNotIn(late["id"], json.dumps(result))
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, after_change)
+
+    def test_explicit_target_only_keeps_the_flat_receipt_and_all_descendant_records(self):
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.cmux.workspace_surfaces.return_value.add(descendant["surfaceId"])
+
+        result = self.invoke({"identity": self.identity, "target": self.target, "scope": "target-only"})
+
+        self.assertEqual(result, {**self.target, "closeAccepted": True, "removal": "unconfirmed"})
+        self.cmux.run.assert_called_once()
+        self.assertEqual(json.loads(self.cmux.run.call_args.args[2])["surface_id"], self.child["surfaceId"])
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_subtree_ended_selected_root_does_not_hide_its_live_owned_descendant(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.child.update(phase="process-disappeared", availability="unavailable")
+        self.starts[12346] = None
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.cmux.workspace_surfaces.return_value.add(descendant["surfaceId"])
+        self.cmux.run.side_effect = lambda *args, **kwargs: json.loads(args[2])
+
+        result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+
+        self.cmux.run.assert_called_once()
+        self.assertEqual(json.loads(self.cmux.run.call_args.args[2])["surface_id"], descendant["surfaceId"])
+        self.assertEqual([item["workerId"] for item in result["results"]], [descendant["id"], self.child["id"]])
+        self.assertEqual([item["outcome"] for item in result["results"]], ["accepted", "refused"])
+        self.assertEqual([item["attempted"] for item in result["results"]], [True, False])
+        self.assertTrue(all(item["removal"] == "unconfirmed" for item in result["results"]))
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_subtree_rechecks_actor_process_after_an_accepted_descendant(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.cmux.workspace_surfaces.return_value.add(descendant["surfaceId"])
+        def accepted_then_actor_changed(*args, **kwargs):
+            self.starts[12345] = "replacement-start"
+            return json.loads(args[2])
+        self.cmux.run.side_effect = accepted_then_actor_changed
+
+        result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+
+        self.cmux.run.assert_called_once()
+        self.assertEqual(json.loads(self.cmux.run.call_args.args[2])["surface_id"], descendant["surfaceId"])
+        self.assertEqual([item["workerId"] for item in result["results"]], [descendant["id"], self.child["id"]])
+        self.assertEqual([item["outcome"] for item in result["results"]], ["accepted", "refused"])
+        self.assertEqual([item["attempted"] for item in result["results"]], [True, False])
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_subtree_rechecks_new_run_lease_between_targets_without_releasing_resources(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        left = self.add_close_descendant(self.child, 12347)
+        right = self.add_close_descendant(self.child, 12348)
+        self.persist()
+        self.cmux.workspace_surfaces.return_value = {
+            node["surfaceId"] for node in self.state["nodes"].values()
+        }
+        self.cmux.run.side_effect = lambda *args, **kwargs: json.loads(args[2])
+        acquire = CONTROLLER["with_store"]
+        injected = False
+        after_change = {}
+        def acquire_then_launch(root, operation, **kwargs):
+            nonlocal injected
+            result = acquire(root, operation, **kwargs)
+            if self.cmux.run.call_count == 1 and not injected:
+                injected = True
+                self.sibling["phase"] = "launching"
+                self.state["launches"][self.sibling["id"]] = {
+                    "workerId": self.sibling["id"], "runId": self.actor["runId"],
+                    "workspaceId": self.actor["workspaceId"], "sessionId": self.sibling["copilotSessionId"],
+                    "generation": 1, "surfaceId": self.sibling["surfaceId"], "state": "starting",
+                    "createdAt": CONTROLLER["now"](), "updatedAt": CONTROLLER["now"](),
+                }
+                self.persist()
+                after_change.update({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()})
+            return result
+        with mock.patch.dict(CONTROLLER["command_native_close"].__globals__, {"with_store": acquire_then_launch}):
+            result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+
+        self.assertTrue(injected)
+        self.cmux.run.assert_called_once()
+        self.assertEqual({item["workerId"] for item in result["results"]},
+                         {left["id"], right["id"], self.child["id"]})
+        self.assertEqual([item["outcome"] for item in result["results"]], ["accepted", "refused", "refused"])
+        self.assertEqual([item["attempted"] for item in result["results"]], [True, False, False])
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, after_change)
+
+    def test_subtree_bounds_real_process_and_host_timeouts_and_accounts_for_all_127_targets(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        self.state["nodes"].pop(self.sibling["id"])
+        selected = [self.child] + [self.add_close_descendant(self.child, 12400 + index) for index in range(126)]
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.assertEqual(len(self.state["nodes"]), 128)
+        self.parents[os.getpid()] = self.actor["providerProcess"]["pid"]
+        self.cmux = CONTROLLER["Cmux"].__new__(CONTROLLER["Cmux"])
+        self.cmux.executable = "/synthetic/cmux"
+        elapsed = 0.0
+        deadlines = []
+        host_requests = []
+        def spend(arguments, **kwargs):
+            nonlocal elapsed
+            timeout = kwargs["timeout"]
+            deadlines.append((elapsed, timeout, arguments))
+            duration = timeout if arguments[0] == "/synthetic/cmux" and arguments[5] == "surface.close" else 0.01
+            elapsed += min(duration, timeout)
+            if duration >= timeout:
+                raise subprocess.TimeoutExpired(arguments, timeout)
+        def host(arguments, **kwargs):
+            self.assertEqual(arguments[:5], ["/synthetic/cmux", "--json", "--id-format", "uuids", "rpc"])
+            self.assertEqual(arguments[5], "surface.list")
+            return subprocess.CompletedProcess(arguments, 0, json.dumps({
+                "workspace_id": self.actor["workspaceId"],
+                "surfaces": [{"id": node["surfaceId"]} for node in self.state["nodes"].values()],
+            }), "")
+        def observe(arguments, **kwargs):
+            if arguments[0] == "/synthetic/cmux" and arguments[5] == "surface.close":
+                host_requests.append(json.loads(arguments[6]))
+            spend(arguments, **kwargs)
+        clock = SimpleNamespace(monotonic=lambda: elapsed,
+                                sleep=mock.Mock(side_effect=AssertionError("subtree must not wait for locks")))
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch("subprocess.run", side_effect=host), redirect_stdout(stdout), redirect_stderr(stderr):
+            code = self.invoke(
+                {"identity": self.identity, "target": self.target, "scope": "subtree"},
+                anchor=CONTROLLER["direct_process_identity"], before_process=observe, clock=clock, cli=True,
+            )
+
+        self.assertEqual(code, 0, stderr.getvalue())
+        self.assertIsNone(CONTROLLER["CLOSE_DEADLINE"].get())
+        self.assertEqual(CONTROLLER["close_timeout"](15), 15)
+        self.assertLessEqual(elapsed, 45.000001, "all ancestry, source and host work must fit the bounded pass")
+        self.assertLess(elapsed, 60, "adapter deadline must retain response-serialization headroom")
+        self.assertTrue(deadlines)
+        self.assertTrue(all(0 < timeout <= 5 for _, timeout, _ in deadlines))
+        self.assertTrue(all(start + timeout <= 45.000001 for start, timeout, _ in deadlines))
+        self.assertTrue(host_requests)
+        self.assertLess(len(host_requests), len(selected))
+        self.assertEqual(len({item["surface_id"] for item in host_requests}), len(host_requests))
+        wire = stdout.getvalue().encode("utf-8")
+        self.assertLessEqual(len(wire), 65_536)
+        self.assertEqual(stderr.getvalue(), "")
+        result = json.loads(wire)
+        self.assertIs(result["ok"], True)
+        self.assertEqual(result["scope"], "subtree")
+        self.assertEqual(len(result["results"]), 127)
+        actual = {item["workerId"]: item for item in result["results"]}
+        self.assertEqual(set(actual), {node["id"] for node in selected})
+        attempted = {item["surface_id"] for item in host_requests}
+        for node in selected:
+            item = actual[node["id"]]
+            self.assertEqual({key: item[key] for key in self.target}, {
+                "workerId": node["id"], "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
+                "sessionId": node["copilotSessionId"], "generation": node["generation"],
+            })
+            self.assertEqual(item["attempted"], node["surfaceId"] in attempted)
+            self.assertEqual(item["removal"], "unconfirmed")
+            self.assertNotIn("closeAccepted", item)
+            self.assertIn(item["outcome"], ("unknown", "refused", "not-attempted"))
+        skipped = [item for item in result["results"] if item["outcome"] == "not-attempted"]
+        self.assertTrue(skipped)
+        self.assertTrue(all(item["reason"] == "budget-exhausted" for item in skipped))
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_subtree_initial_snapshot_does_not_wait_the_capacity_scaled_store_budget(self):
+        elapsed = 0.0
+        def sleep(seconds):
+            nonlocal elapsed
+            elapsed += seconds
+        clock = SimpleNamespace(monotonic=lambda: elapsed, sleep=sleep)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with CONTROLLER["Store"](self.root), redirect_stdout(stdout), redirect_stderr(stderr):
+            code = self.invoke(
+                {"identity": self.identity, "target": self.target, "scope": "subtree"}, clock=clock, cli=True,
+            )
+
+        self.assertEqual(code, 2)
+        self.assertIn("operation is active", json.loads(stderr.getvalue())["error"])
+        self.assertEqual(elapsed, 0, "subtree must not inherit the capacity-scaled acquisition wait")
+        self.assertEqual(stdout.getvalue(), "")
+        self.cmux.run.assert_not_called()
+
+    def test_subtree_initial_ancestry_probe_budget_accounts_for_every_selected_target(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        chain = [os.getpid()] + list(range(22000, 22015)) + [12345]
+        for child, parent in zip(chain, chain[1:]):
+            self.parents[child] = parent
+        elapsed = 0.0
+        def slow_ancestry(arguments, **kwargs):
+            nonlocal elapsed
+            if arguments[:3] == ["/bin/ps", "-o", "ppid="]:
+                elapsed += min(2.9, kwargs["timeout"])
+                if kwargs["timeout"] < 2.9:
+                    raise subprocess.TimeoutExpired(arguments, kwargs["timeout"])
+        clock = SimpleNamespace(monotonic=lambda: elapsed,
+                                sleep=mock.Mock(side_effect=AssertionError("subtree must not wait")))
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = self.invoke(
+                {"identity": self.identity, "target": self.target, "scope": "subtree"},
+                anchor=CONTROLLER["direct_process_identity"], before_process=slow_ancestry, clock=clock, cli=True,
+            )
+
+        self.assertLessEqual(elapsed, 45.000001, "ancestry probes belong to the same bounded pass")
+        self.assertEqual(code, 0, stderr.getvalue())
+        result = json.loads(stdout.getvalue())
+        self.assertEqual({item["workerId"] for item in result["results"]}, {descendant["id"], self.child["id"]})
+        self.assertTrue(all(item["attempted"] is False for item in result["results"]))
+        self.assertTrue(all(item["outcome"] in ("refused", "not-attempted") for item in result["results"]))
+        self.assertTrue(all(item["removal"] == "unconfirmed" for item in result["results"]))
+        self.cmux.run.assert_not_called()
+
+    def test_subtree_rejects_unserializable_complete_plan_before_any_host_effect(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendants = [self.add_close_descendant(self.child, 12400 + index) for index in range(23)]
+        for node in descendants:
+            node["generation"] = 10 ** 3000
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.cmux.workspace_surfaces.return_value = {
+            node["surfaceId"] for node in self.state["nodes"].values()
+        }
+        self.cmux.run.side_effect = lambda *args, **kwargs: json.loads(args[2])
+        stdout, stderr = io.StringIO(), io.StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = self.invoke(
+                {"identity": self.identity, "target": self.target, "scope": "subtree"}, cli=True,
+            )
+
+        self.cmux.run.assert_not_called()
+        self.assertEqual(code, 2)
+        self.assertIsNone(CONTROLLER["CLOSE_DEADLINE"].get())
+        self.assertEqual(CONTROLLER["close_timeout"](15), 15)
+        self.assertEqual(stdout.getvalue(), "")
+        failure = json.loads(stderr.getvalue())
+        self.assertIs(failure["ok"], False)
+        self.assertRegex(failure["error"], r"(?i)(result|output|plan).*(bound|size|large)")
+        self.assertLessEqual(len(stderr.getvalue().encode("utf-8")), 65_536)
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_subtree_preserves_confirmation_required_without_acceptance_fallback_or_retry(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.cmux.workspace_surfaces.return_value.add(descendant["surfaceId"])
+        for failure in (
+            CONTROLLER["OrchestrationError"]("CMUX rpc failed: confirmation_required"),
+            {"ok": False, "error": {"code": "confirmation_required", "message": "synthetic private host detail"}},
+        ):
+            with self.subTest(failure=failure):
+                requests = []
+                def request(*args, **kwargs):
+                    target = json.loads(args[2])
+                    requests.append(target)
+                    if len(requests) == 1:
+                        if isinstance(failure, Exception):
+                            raise failure
+                        return failure
+                    return target
+                self.cmux.run.side_effect = request
+
+                result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+
+                self.assertEqual([item["surface_id"] for item in requests],
+                                 [descendant["surfaceId"], self.child["surfaceId"]])
+                blocked, accepted = result["results"]
+                self.assertIn(blocked["outcome"], ("unknown", "refused"))
+                self.assertIs(blocked["attempted"], True)
+                self.assertNotIn("closeAccepted", blocked)
+                self.assertEqual(blocked["reason"], "confirmation_required")
+                self.assertEqual(blocked["removal"], "unconfirmed")
+                self.assertEqual(accepted["outcome"], "accepted")
+                self.assertNotIn("synthetic", json.dumps(result))
+                self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_subtree_unavailable_captured_session_refuses_only_that_target(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        session_id = descendant["copilotSessionId"]
+        self.cmux.workspace_surfaces.return_value.add(descendant["surfaceId"])
+        self.cmux.run.side_effect = lambda *args, **kwargs: json.loads(args[2])
+        for absent in (False, True):
+            with self.subTest(absent=absent):
+                descendant["copilotSessionId"] = session_id
+                if absent:
+                    descendant.pop("copilotSessionId")
+                else:
+                    descendant["copilotSessionId"] = None
+                self.persist()
+                self.cmux.run.reset_mock()
+                before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+
+                result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+
+                self.cmux.run.assert_called_once()
+                self.assertEqual(json.loads(self.cmux.run.call_args.args[2])["surface_id"], self.child["surfaceId"])
+                self.assertEqual(len(result["results"]), 2)
+                refused, accepted = result["results"]
+                self.assertEqual(refused["workerId"], descendant["id"])
+                self.assertEqual(refused["surfaceId"], descendant["surfaceId"])
+                self.assertEqual(refused["workspaceId"], descendant["workspaceId"])
+                self.assertIsNone(refused["sessionId"])
+                self.assertEqual(refused["generation"], 1)
+                self.assertEqual(refused["outcome"], "refused")
+                self.assertIs(refused["attempted"], False)
+                self.assertNotIn("closeAccepted", refused)
+                self.assertEqual(refused["removal"], "unconfirmed")
+                self.assertTrue(refused["reason"])
+                self.assertEqual({key: accepted[key] for key in self.target}, self.target)
+                self.assertEqual(accepted["outcome"], "accepted")
+                self.assertIs(accepted["attempted"], True)
+                self.assertIs(accepted["closeAccepted"], True)
+                self.assertEqual(accepted["removal"], "unconfirmed")
+                self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_subtree_real_host_decode_failure_keeps_prior_results_and_attempts_parent(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        left = self.add_close_descendant(self.child, 12347)
+        right = self.add_close_descendant(self.child, 12348)
+        self.persist()
+        invalid_host = self.home / "invalid-byte-host"
+        invalid_host.write_text(f"#!{sys.executable}\nimport os\nos.write(1, b'\\xff')\n")
+        invalid_host.chmod(0o700)
+        raw_host = CONTROLLER["Cmux"].__new__(CONTROLLER["Cmux"])
+        raw_host.executable = str(invalid_host)
+        self.cmux.workspace_surfaces.return_value = {
+            node["surfaceId"] for node in self.state["nodes"].values()
+        }
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        requests = []
+        def host(*args, **kwargs):
+            request = json.loads(args[2])
+            requests.append(request)
+            return raw_host.run(*args, **kwargs) if len(requests) == 2 else request
+        self.cmux.run.side_effect = host
+
+        result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+
+        self.assertEqual(len(requests), 3)
+        self.assertEqual({item["surface_id"] for item in requests[:2]}, {left["surfaceId"], right["surfaceId"]})
+        self.assertEqual(requests[-1]["surface_id"], self.child["surfaceId"])
+        self.assertEqual(len(result["results"]), 3)
+        self.assertEqual([item["surfaceId"] for item in result["results"]],
+                         [item["surface_id"] for item in requests])
+        self.assertEqual([item["outcome"] for item in result["results"]], ["accepted", "unknown", "accepted"])
+        selected = {node["surfaceId"]: node for node in (left, right, self.child)}
+        for item in result["results"]:
+            node = selected[item["surfaceId"]]
+            self.assertEqual({key: item[key] for key in self.target}, {
+                "workerId": node["id"], "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
+                "sessionId": node["copilotSessionId"], "generation": node["generation"],
+            })
+        self.assertTrue(all(item["attempted"] is True for item in result["results"]))
+        self.assertTrue(all(item["removal"] == "unconfirmed" for item in result["results"]))
+        self.assertNotIn("closeAccepted", result["results"][1])
+        self.assertTrue(result["results"][1]["reason"].isascii())
+        self.assertLessEqual(len(result["results"][1]["reason"]), 32)
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_subtree_expiry_after_inventory_before_dispatch_reports_no_host_attempt(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.cmux = CONTROLLER["Cmux"].__new__(CONTROLLER["Cmux"])
+        self.cmux.executable = "/synthetic/cmux"
+        elapsed = 0.0
+        closes = []
+        def host(arguments, **kwargs):
+            nonlocal elapsed
+            if arguments[5] == "surface.close":
+                closes.append(arguments)
+                return subprocess.CompletedProcess(arguments, 0, arguments[6], "")
+            self.assertEqual(arguments[5], "surface.list")
+            elapsed += kwargs["timeout"]
+            return subprocess.CompletedProcess(arguments, 0, json.dumps({
+                "workspace_id": self.actor["workspaceId"],
+                "surfaces": [{"id": node["surfaceId"]} for node in self.state["nodes"].values()],
+            }), "")
+        clock = SimpleNamespace(monotonic=lambda: elapsed,
+                                sleep=mock.Mock(side_effect=AssertionError("close must not wait")))
+
+        with mock.patch("subprocess.run", side_effect=host):
+            result = self.invoke(
+                {"identity": self.identity, "target": self.target, "scope": "subtree"}, clock=clock,
+            )
+
+        self.assertEqual(closes, [])
+        self.assertEqual([item["workerId"] for item in result["results"]], [descendant["id"], self.child["id"]])
+        self.assertTrue(all(item["attempted"] is False for item in result["results"]))
+        self.assertTrue(all(item["outcome"] in ("refused", "not-attempted") for item in result["results"]))
+        self.assertTrue(all(item["removal"] == "unconfirmed" for item in result["results"]))
+        self.assertTrue(all("closeAccepted" not in item for item in result["results"]))
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_subtree_timeout_after_subprocess_dispatch_remains_an_unknown_attempt(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        self.cmux = CONTROLLER["Cmux"].__new__(CONTROLLER["Cmux"])
+        self.cmux.executable = "/synthetic/cmux"
+        closes = []
+        def host(arguments, **kwargs):
+            if arguments[5] == "surface.close":
+                closes.append(json.loads(arguments[6]))
+                raise subprocess.TimeoutExpired(arguments, kwargs["timeout"])
+            self.assertEqual(arguments[5], "surface.list")
+            return subprocess.CompletedProcess(arguments, 0, json.dumps({
+                "workspace_id": self.actor["workspaceId"],
+                "surfaces": [{"id": node["surfaceId"]} for node in self.state["nodes"].values()],
+            }), "")
+
+        with mock.patch("subprocess.run", side_effect=host):
+            result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+
+        self.assertEqual([item["surface_id"] for item in closes], [descendant["surfaceId"], self.child["surfaceId"]])
+        self.assertEqual([item["outcome"] for item in result["results"]], ["unknown", "unknown"])
+        self.assertTrue(all(item["attempted"] is True for item in result["results"]))
+        self.assertTrue(all(item["removal"] == "unconfirmed" for item in result["results"]))
+        self.assertTrue(all("closeAccepted" not in item for item in result["results"]))
+        self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_subtree_worker_actor_session_loss_retains_accepted_result_and_refuses_remainder(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        coordinator = {
+            **copy.deepcopy(self.actor), "id": str(uuid.uuid4()),
+            "surfaceId": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
+        }
+        self.actor.update(role="worker", parentId=coordinator["id"])
+        self.state["nodes"][coordinator["id"]] = coordinator
+        actor_session = self.actor["copilotSessionId"]
+        self.persist()
+        self.cmux.workspace_surfaces.return_value = {
+            node["surfaceId"] for node in self.state["nodes"].values()
+        }
+        self.cmux.run.side_effect = lambda *args, **kwargs: json.loads(args[2])
+        captured = [{
+            "workerId": node["id"], "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
+            "sessionId": node["copilotSessionId"], "generation": node["generation"],
+        } for node in (descendant, self.child)]
+        acquire = CONTROLLER["with_store"]
+        for mode in ("unchanged", "null", "absent"):
+            with self.subTest(mode=mode):
+                self.actor["copilotSessionId"] = actor_session
+                self.persist()
+                self.cmux.run.reset_mock()
+                changed = False
+                after_change = {}
+                def acquire_then_change(root, operation, **kwargs):
+                    nonlocal changed
+                    result = acquire(root, operation, **kwargs)
+                    if self.cmux.run.call_count == 1 and not changed:
+                        changed = True
+                        if mode == "null":
+                            self.actor["copilotSessionId"] = None
+                        elif mode == "absent":
+                            self.actor.pop("copilotSessionId")
+                        self.persist()
+                        after_change.update({
+                            file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()
+                        })
+                    return result
+
+                with mock.patch.dict(CONTROLLER["command_native_close"].__globals__, {
+                    "with_store": acquire_then_change,
+                }):
+                    try:
+                        result = self.invoke({"identity": self.identity, "target": self.target, "scope": "subtree"})
+                    finally:
+                        self.assertIsNone(CONTROLLER["CLOSE_DEADLINE"].get())
+
+                self.assertTrue(changed, "fixture must mutate only after the first host action's lock releases")
+                expected_attempts = 2 if mode == "unchanged" else 1
+                self.assertEqual(self.cmux.run.call_count, expected_attempts)
+                self.assertEqual([json.loads(call.args[2])["surface_id"] for call in self.cmux.run.call_args_list],
+                                 [target["surfaceId"] for target in captured[:expected_attempts]])
+                self.assertEqual(len(result["results"]), 2)
+                self.assertEqual([{key: item[key] for key in self.target} for item in result["results"]], captured)
+                self.assertEqual([item["outcome"] for item in result["results"]],
+                                 ["accepted", "accepted" if mode == "unchanged" else "refused"])
+                self.assertEqual([item["attempted"] for item in result["results"]], [True, mode == "unchanged"])
+                self.assertTrue(all(item["removal"] == "unconfirmed" for item in result["results"]))
+                self.assertIs(result["results"][0]["closeAccepted"], True)
+                if mode != "unchanged":
+                    self.assertNotIn("closeAccepted", result["results"][1])
+                    self.assertTrue(result["results"][1]["reason"].isascii())
+                    self.assertLessEqual(len(result["results"][1]["reason"]), 32)
+                self.assertEqual(
+                    {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, after_change,
+                )
+
+    def test_initial_stock_close_selects_noninteractive_cmux065_branch_once(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        # v0.65.0 dda24fbd: Surface.swift:648 defaults omitted force to false;
+        # ControlSurfaceContext2.swift:606-610 refuses running processes unless force is true.
+        for scope in (None, "target-only", "subtree"):
+            with self.subTest(scope=scope):
+                surfaces = {node["surfaceId"] for node in self.state["nodes"].values()}
+                requests = []
+                def stock_host(*args, **kwargs):
+                    self.assertEqual(args[:2], ("rpc", "surface.close"))
+                    request = json.loads(args[2])
+                    requests.append(request)
+                    if len(surfaces) <= 1:
+                        raise CONTROLLER["OrchestrationError"]("invalid_state: Cannot close the last surface")
+                    force = request.get("force", False)
+                    if type(force) is not bool or force is not True:
+                        raise CONTROLLER["OrchestrationError"]("confirmation_required")
+                    surfaces.remove(request["surface_id"])
+                    return {key: request[key] for key in ("workspace_id", "surface_id")}
+                self.cmux.run.side_effect = stock_host
+                self.cmux.workspace_surfaces.side_effect = lambda _: set(surfaces)
+                before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+                request = {"identity": self.identity, "target": self.target}
+                if scope is not None:
+                    request["scope"] = scope
+
+                result = self.invoke(request)
+
+                targets = [descendant, self.child] if scope == "subtree" else [self.child]
+                if scope == "subtree":
+                    self.assertEqual([item["outcome"] for item in result["results"]], ["accepted", "accepted"])
+                self.assertEqual(requests, [{
+                    "workspace_id": node["workspaceId"], "surface_id": node["surfaceId"], "force": True,
+                } for node in targets])
+                self.assertTrue(all(type(item["force"]) is bool for item in requests))
+                if scope == "subtree":
+                    self.assertEqual([item["workerId"] for item in result["results"]],
+                                     [descendant["id"], self.child["id"]])
+                    self.assertTrue(all(item["attempted"] and item["removal"] == "unconfirmed"
+                                        for item in result["results"]))
+                else:
+                    self.assertEqual(result, {**self.target, "closeAccepted": True, "removal": "unconfirmed"})
+                self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
+
+    def test_initial_noninteractive_close_does_not_bypass_stock_last_surface_refusal(self):
+        self.state["nodes"].pop(self.grandchild["id"])
+        descendant = self.add_close_descendant(self.child, 12347)
+        self.persist()
+        self.cmux.workspace_surfaces.return_value.add(descendant["surfaceId"])
+        for scope in ("target-only", "subtree"):
+            with self.subTest(scope=scope):
+                requests = []
+                def last_surface(*args, **kwargs):
+                    request = json.loads(args[2])
+                    requests.append(request)
+                    # Stock v0.65.0 checks lastSurface before the force/confirmation branch.
+                    raise CONTROLLER["OrchestrationError"]("invalid_state: Cannot close the last surface")
+                self.cmux.run.side_effect = last_surface
+                before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+                request = {"identity": self.identity, "target": self.target, "scope": scope}
+                if scope == "target-only":
+                    with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "last surface"):
+                        self.invoke(request)
+                else:
+                    result = self.invoke(request)
+                    self.assertEqual([item["outcome"] for item in result["results"]], ["unknown", "unknown"])
+                    self.assertTrue(all(item["attempted"] and item["removal"] == "unconfirmed"
+                                        and "closeAccepted" not in item for item in result["results"]))
+                targets = [descendant, self.child] if scope == "subtree" else [self.child]
+                self.assertEqual(requests, [{
+                    "workspace_id": node["workspaceId"], "surface_id": node["surfaceId"], "force": True,
+                } for node in targets])
+                self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
 
     def test_close_accepts_real_wrapper_with_separate_direct_source_owner(self):
         with self.owned_source_wrapper() as (wrapper, owner_pid):
