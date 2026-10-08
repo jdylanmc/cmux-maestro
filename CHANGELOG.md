@@ -83,6 +83,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Request native in-turn steering for managed peer messages instead of waiting
+  for the current turn to finish; preserve legacy proof enqueue and
+  fire-and-forget limits (#163).
 - Align the historical-session dismissal fixture's clocks; keep production
   stale-action rejection and native dismissal/focus assertions unchanged.
 - Remove synthetic background-shell rows and their associated outcome notices,
