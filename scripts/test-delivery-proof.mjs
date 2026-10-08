@@ -648,6 +648,138 @@ test("native launch reads the invoking session account on each request, not task
   assert.equal(requests.length, 2);
 });
 
+test("native identity observes only its own current model when explicitly requested", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  let tools;
+  let modelQueries = 0;
+  let login = "verified-parent";
+  let snapshot = {
+    modelId: "gpt-6.1-sol", contextTier: "long_context", reasoningEffort: "medium",
+    planBaseModelId: "not-the-current-model", privateMetadata: "not-for-transmission",
+  };
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async options => {
+      tools = options.tools;
+      return { sessionId: own.sessionId, rpc: {
+        gitHubAuth: { getStatus: async () => ({
+          isAuthenticated: true, host: "https://github.com", login,
+        }) },
+        model: { getCurrent: async () => { modelQueries++; return snapshot; } },
+      } };
+    },
+  });
+  t.after(() => adapter.close());
+  const tool = tools.find(item => item.name === "maestro_identity");
+  const invocation = { sessionId: own.sessionId };
+  for (const args of [{}, { includeModel: false }]) {
+    const result = await tool.handler(args, invocation);
+    assert.equal(typeof result, "string");
+    assert.deepEqual(JSON.parse(result), {
+      nodeId: own.nodeId, ...managedAddress(own),
+      account: { login, host: "https://github.com" },
+    });
+    assert.equal(modelQueries, 0);
+  }
+  assert.equal(tool.parameters.properties.includeModel.type, "boolean");
+  const before = Date.now();
+  const result = JSON.parse(await tool.handler({ includeModel: true }, invocation));
+  const { observedAt, ...observation } = result.modelObservation;
+  assert.deepEqual(observation, {
+    status: "observed", source: "session-model-current",
+    model: "gpt-6.1-sol", contextTier: "long_context", reasoningEffort: "medium",
+  });
+  assert.ok(Date.parse(observedAt) >= before && Date.parse(observedAt) <= Date.now());
+  assert.equal(result.sessionId, own.sessionId);
+  assert.equal(modelQueries, 1);
+  assert.equal(JSON.stringify(result).includes("not-for-transmission"), false);
+  assert.equal(JSON.stringify(result).includes("not-the-current-model"), false);
+  assert.equal(JSON.stringify(result).includes(own.capability), false);
+
+  snapshot = { modelId: "provider/custom", reasoningEffort: "ultra" };
+  const next = JSON.parse(await tool.handler({ includeModel: true }, invocation)).modelObservation;
+  assert.equal(next.model, "provider/custom");
+  assert.equal(next.reasoningEffort, "ultra");
+  assert.equal("contextTier" in next, false, "missing observations are not configured defaults");
+  for (const args of [{ includeModel: "true" }, { includeModel: null },
+    { includeModel: true, modelId: "forged" }]) {
+    assert.equal((await tool.handler(args, invocation)).resultType, "failure");
+  }
+  assert.equal((await tool.handler({ includeModel: true },
+    { sessionId: f.bindings[1].sessionId })).resultType, "failure");
+  assert.equal(modelQueries, 2);
+});
+
+test("native identity reports model observation limits without inventing configured evidence", async (t) => {
+  for (const [name, getter, reason] of [
+    ["absent", undefined, "model-api-unavailable"],
+    ["unsupported", async () => { throw Object.assign(new Error("private"), { code: -32601 }); },
+      "model-api-unavailable"],
+    ["failed", async () => { throw new Error("PRIVATE_MODEL_ERROR"); }, "model-api-failed"],
+    ["unreported", async () => ({ reasoningEffort: "medium" }), "model-not-reported"],
+    ["null", async () => null, "model-response-invalid"],
+    ["unsafe-model", async () => ({ modelId: "bad\nmodel" }), "model-response-invalid"],
+    ["unsafe-effort", async () => ({ modelId: "safe", reasoningEffort: [] }), "model-response-invalid"],
+    ["unknown-tier", async () => ({ modelId: "safe", contextTier: "invented" }), "model-response-invalid"],
+  ]) {
+    await t.test(name, async t => {
+      const f = await managedFixture(t);
+      const own = f.bindings[0];
+      let tools;
+      const adapter = await start({
+        root: f.root, peer: own.peer, managed: true, expected: own,
+        joinSession: async options => {
+          tools = options.tools;
+          return { sessionId: own.sessionId, rpc: {
+            gitHubAuth: { getStatus: async () => ({
+              isAuthenticated: true, host: "https://github.com", login: "verified-parent",
+            }) }, model: { getCurrent: getter },
+          } };
+        },
+      });
+      t.after(() => adapter.close());
+      const response = await tools.find(item => item.name === "maestro_identity")
+        .handler({ includeModel: true }, { sessionId: own.sessionId });
+      assert.equal(typeof response, "string", "optional model failure must preserve verified identity");
+      const result = JSON.parse(response);
+      assert.deepEqual(result.modelObservation, { status: "unavailable", reason });
+      assert.equal(result.account.login, "verified-parent");
+      assert.equal(JSON.stringify(result).includes("PRIVATE_MODEL_ERROR"), false);
+    });
+  }
+});
+
+test("native identity refuses account drift across its optional model observation", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  let tools;
+  let login = "before";
+  let modelQueries = 0;
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async options => {
+      tools = options.tools;
+      return { sessionId: own.sessionId, rpc: {
+        gitHubAuth: { getStatus: async () => ({
+          isAuthenticated: true, host: "https://github.com", login,
+        }) },
+        model: { getCurrent: async () => {
+          modelQueries++;
+          login = "after";
+          return { modelId: "safe" };
+        } },
+      } };
+    },
+  });
+  t.after(() => adapter.close());
+  const result = await tools.find(item => item.name === "maestro_identity")
+    .handler({ includeModel: true }, { sessionId: own.sessionId });
+  assert.equal(result.resultType, "failure");
+  assert.equal("modelObservation" in result, false);
+  assert.equal(modelQueries, 1);
+});
+
 test("native launch refuses unsupported account APIs without creating a terminal", async (t) => {
   const f = await managedFixture(t);
   const own = f.bindings[0];
