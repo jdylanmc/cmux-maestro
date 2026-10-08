@@ -18,6 +18,13 @@ answer the UI question. Contract tests mock Copilot and are not live proof.
 
 ## Contract and boundary
 
+This section and the live observations below record the original **enqueue**
+proof. The current managed transport requests native **immediate** steering;
+legacy/disposable proof routes still enqueue. See the
+[managed steering contract](native-messaging-architecture.md#managed-steering-and-turn-boundaries-163)
+for #163 source evidence and remaining native acceptance. None of the historical
+draft-preservation or delivery observations below proves the new managed mode.
+
 The extension calls `joinSession({ tools })`, verifies the joined session against
 its launcher-written binding, and calls `session.send({ prompt, mode: "enqueue" })`.
 It supplies no account, model, permission handler, user-input hook, or sensitive
@@ -475,7 +482,7 @@ participating same-workspace peers, across sibling branches/runs, without
 changing ancestor-only lifecycle authorization. Installed addresses add
 `generation`. Sender/return addresses are bound, not caller-supplied; capabilities
 never appear in tool output or native prompts. Tools expose participation, not
-liveness. Before every tool use or native enqueue, the adapter rechecks its own
+liveness. Before every tool use or native submission, the adapter rechecks its own
 binding; stale/removed identities fail closed. The unchanged fixture interface
 continues to use `maestro_proof_*` and its historical two-peer address shape.
 
@@ -520,7 +527,7 @@ worker. After full CI/review and explicit setup approval:
 
 For safe **offline isolated acceptance now**, rerun the setup contract test and
 adapter suites in this worktree. They exercise private disposable `.build/` paths,
-the installer file writer, exact tool registration and native enqueue contracts
+the installer file writer, exact tool registration and native submission contracts
 with mocked sessions, and clean only their own fixtures. The unsigned bundle can
 be inspected without opening or installing it. Do not bypass its production
 mutation guard to claim a live installed test. Live acceptance is a separate
