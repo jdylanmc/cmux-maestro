@@ -1141,8 +1141,8 @@ enum SidebarPresentation {
             result += [.init(title: "Context", value: "Needed by work or attention"),
                        .init(title: "Focus", value: retainedFocusUnavailable)]
         }
-        if let model = managedModel(for: node, in: tree, now: now) {
-            result.append(.init(title: "Model", value: model))
+        if let session = managedSession(for: node, in: tree, now: now) {
+            result.append(.init(title: "Model", value: session.model ?? "Unavailable"))
         }
         let pathContext = hierarchy.pathContext(
             workspaceID: node.workspaceId, surfaceID: node.surfaceId
@@ -1256,7 +1256,8 @@ enum SidebarPresentation {
             .init(title: "Icon color", value: session.iconColor ?? "theme"),
             .init(title: "Child ID", value: node.id)
         ]
-        if let model = node.model { result.insert(.init(title: "Model", value: model), at: 3) }
+        result.insert(.init(title: session.liveness == .alive ? "Model" : "Last reported model",
+                            value: node.model ?? "Unavailable"), at: 3)
         if node.historyAncestor { result.append(.init(title: "History", value: "Kept for child context")) }
         if node.state.isTerminal {
             result.append(.init(title: "Completion", value: node.terminalTimestamp.map(date) ?? "Completion age unknown"))
@@ -1281,7 +1282,8 @@ enum SidebarPresentation {
                 ? "Complete" : "Incomplete; missing work is not assumed finished",
                   copyableValue: session.childrenComplete && !session.treeDegraded ? "complete" : "incomplete")
         ]
-        if let model = session.model { result.insert(.init(title: "Model", value: model), at: 2) }
+        result.insert(.init(title: session.liveness == .alive ? "Model" : "Last reported model",
+                            value: session.model ?? "Unavailable"), at: 2)
         return result + activityDetails(session.activity) + attentionDetails(session.attention)
     }
 

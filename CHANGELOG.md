@@ -68,6 +68,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 - Remove synthetic background-shell rows and their associated outcome notices,
   preserving worker/task errors and distinct shell tool invocations (#155).
+- Show explicit unavailable or last-reported model text for the exact observed
+  agent, without borrowing another session's model (#74).
 - Qualify managed Git labels, verification and change counts as evidence from
   the assigned directory, not Copilot's current `/cwd`, preserving stale and
   unavailable states and separate CMUX surface-directory reports (#119, #59).
