@@ -26,7 +26,8 @@ struct SidebarInternalTaskRenderingTests {
             ], now: now)
         ])
         defer { model.setVisible(false) }
-        let mounted = mount(model, preferences, width: 350)
+        // This tests session identity, not expiry: observation, display and action share one instant.
+        let mounted = mount(model, preferences, width: 350, now: now, actionNow: { now })
         defer { mounted.window.contentView = nil; mounted.window.close() }
         await sidebarEventually {
             names(mounted.host).count == 3

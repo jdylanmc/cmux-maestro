@@ -17,6 +17,11 @@ respective recurring runtime extensions.
 
 Hand the human pull requests to review. Loop existing skills, not a second implementation process. The human-authored [intent](intent.md) defines the purpose.
 
+Apply [delivery pace](DELIVERY-PACE.md). Record `joeReviewVisibility: true` in
+Joe delivery packets; [DELIVERY owns PR states](../ship/DELIVERY.md#pr-states).
+Every review, self-check and duck follows
+[invoker doctrine selection](../doctrine/APPLY.md#joe-review-operations).
+
 Use [Doctrine](../doctrine/SKILL.md) under the [common application contract](../doctrine/APPLY.md). Scope explicit selections to the named delivery, not every unrelated backlog item. With none preselected, choose appropriate doctrines per worker from catalog metadata; each work packet carries IDs, required flags, reasons, source locations, and digests. Applying workers retrieve the texts. Require `worktrees` for each PR-producing lane and preserve role-specific requirements such as `solid` for code Roast.
 
 Joe-mode starts only when requested and stays active in this session until paused or stopped. Route subsequent turns within the anchor. A side question does not stop work; explicit redirection does. Bounded workers must not activate another Joe-mode controller. Follow the [invocation contract](../setup/INVOCATION.md): one controller per repository, not per issue, branch, worktree, or selected scope.
@@ -134,8 +139,10 @@ and handoffs to the group's full coverage. Track stage (`coding`, `awaiting peer
 `awaiting PM`, `awaiting human`), candidate commit, next action/owner and blocking
 question. Runtime adapters own verified placement, naming and identity readback.
 
-Peers hand off directly, including RED/GREEN when selected: exact assignment
-identities, immutable commits/evidence, receiver acknowledgment, named integrator.
+Peers hand off directly: exact identities, immutable commits/evidence, named
+integrator. [LIFECYCLE](../squadron/LIFECYCLE.md) owns accepted custody;
+[CMUX RUNTIME](../joe-mode-cmux/RUNTIME.md#native-coordination) owns transport.
+Fire-and-forget sends prove neither acceptance nor completion. No ACK protocol.
 PM handles boundaries, decisions and publication coordination, not every exchange.
 The delivery owner retains integration; peer exchange grants no extra authority.
 
@@ -184,7 +191,9 @@ redispatch.
 
 ## 4. Run concurrent paths through the existing flow
 
-Fill available capacity with independent work. Do not stop all delivery during discovery of the next slice or wait for the whole backlog to be specified before dispatching known work.
+Advance existing candidates before filling available capacity with independent
+work. Do not stop all delivery during discovery of the next slice or wait for the
+whole backlog to be specified before dispatching known work.
 
 | Situation | Route and return contract |
 | --- | --- |
@@ -262,14 +271,9 @@ read-only, never another controller.
 
 ## 6. Hand over PRs, not just progress
 
-For each delivery, surface the actual PR URL, covered issue/spec references, concise change summary, acceptance/check evidence, outstanding decisions, and confirmed Shepherd owner/status. Distinguish **draft/in progress**, **blocked**, and **ready for human review** using the shared delivery contract and current provider state. The final ready handoff is reviewed, GREEN, and rebased/current with latest main or the explicit target, with checks tied to the current head and a freshly observed base. "PR created", mergeable, or yesterday's green result does not mean ready. Human final sign-off remains outstanding.
-
-Require DELIVERY's actual promotion and provider non-draft readback plus
-receiver-observed, acknowledged Shepherd custody. Reconcile each selected PR:
-mixed ready/draft/blocked batches are progress, never **all delivered** while
-scoped work is unfinished. Do not promote blocked drafts to clear the board.
-
-Every PR handed to the human must have a Roast covering its current candidate, whether produced by this run or supplied by a coworker. Reuse a still-applicable review; otherwise route to Roast without taking over the PR's delivery owner or silently authorizing edits. Review a draft's available candidate with its incomplete scope explicit. Missing review capability requires reporting the gap and seeking direction, not a clean-review or review-ready claim.
+Use [DELIVERY's PR states and revision rules](../ship/DELIVERY.md#pr-states).
+Return URL, coverage, actual head/base, proof, gaps and accepted Shepherd custody.
+Mixed finished/blocked work is progress, not "all delivered."
 
 Return human feedback to the same owner and PR. A review-ready PR does not end Joe-mode or discovery. After merging/closure, reconcile backlog and dependencies before dispatching more work; do not manufacture follow-up work or close unrelated tracker items.
 

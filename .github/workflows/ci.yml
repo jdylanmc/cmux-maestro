@@ -9,6 +9,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test local skill override validation
+        run: node --test scripts/test-skill-overrides.mjs
+      - name: Verify local skill overrides and policy links
+        run: node scripts/check-skill-overrides.mjs
       - name: Verify terminal orchestration contracts
         run: python3 scripts/test-cmux-maestro-orchestrator.py
       - name: Verify managed messaging and legacy proof launcher contracts

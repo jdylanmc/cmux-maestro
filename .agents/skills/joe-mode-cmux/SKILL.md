@@ -11,6 +11,9 @@ Run Joe-mode as a visible, interactive CMUX cockpit. This is an adapter around
 [Joe-mode](../joe-mode/SKILL.md), not another project-management policy or
 controller. The human-authored [intent](intent.md) defines its purpose.
 
+Use Joe's [delivery pace](../joe-mode/DELIVERY-PACE.md) and
+[invoker doctrine selection](../doctrine/APPLY.md#joe-review-operations).
+
 Read [LAYOUT](LAYOUT.md) before changing CMUX topology and [RUNTIME](RUNTIME.md)
 before registering or spawning through Maestro. Apply Joe-mode's
 [runtime guidance](../joe-mode/RUNTIME.md), shared

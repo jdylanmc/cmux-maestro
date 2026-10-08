@@ -13,6 +13,9 @@ Use [doctrine selection and application](../doctrine/APPLY.md), preserving the w
 
 Evidence before claims. Identify the smallest sufficient proof for the actual acceptance conditions, inspect it, report the result, and stop.
 
+For Joe work, including self-verification, apply the
+[invoker-selection contract](../doctrine/APPLY.md#joe-review-operations).
+
 ## Scope
 
 Verification does not authorize product changes. Make fixes only when the task includes them; otherwise report failures for the user to act on. Do not add polish, cleanup, new features, or unrelated tests after the criteria pass.

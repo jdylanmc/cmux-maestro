@@ -32,6 +32,8 @@ Record the findings' revision or source snapshot. Preserve checkout, index, and 
 
 ## 2. Choose the standards
 
+For Joe assignments, apply the [invoker-selection contract](../doctrine/APPLY.md#joe-review-operations).
+
 Use the material's human intent, explicit requirements, audience, and relevant repository guidance. Briefly explain applicable standards and why. Do not invent a spec, impose a document format, or apply engineering criteria to unrelated material.
 
 Use [Doctrine](../doctrine/SKILL.md) and its [application contract](../doctrine/APPLY.md). Preserve the task's operator selection and caller requirements. **When the material includes code, require `solid` for that code review**, even if other doctrines were preselected. For non-code material, do not force SOLID. With no preselection, choose other relevant standards from catalog metadata; `code`, `testing`, and `documentation` are candidates only when the material warrants them. The applying reviewer loads the verified full texts before review. Missing or altered required doctrine is an explicit coverage gap requiring direction, not a successful review.

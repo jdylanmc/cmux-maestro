@@ -36,6 +36,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Target two-hour Joe deliveries without skipping gates. Select doctrines before
+  review/self-checks, keep one PR-state contract, and check local skill hashes/links.
 - Raise the per-workspace hard limit from 8 to 32 live managed sessions,
   including managed coordinators and retained resources, without changing
   launch accounting or the 128-node and eight-level nesting limits. Validate
@@ -81,6 +83,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Align the historical-session dismissal fixture's clocks; keep production
+  stale-action rejection and native dismissal/focus assertions unchanged.
 - Remove synthetic background-shell rows and their associated outcome notices,
   preserving worker/task errors and distinct shell tool invocations (#155).
 - Show explicit unavailable or last-reported model text for the exact observed

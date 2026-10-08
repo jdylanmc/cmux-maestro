@@ -5,6 +5,14 @@ and tooling, not application resources. `../skills-lock.json` records each
 skill's source, source path, and content hash. Preserve upstream notices when
 refreshing these copies.
 
+[skill-overrides.json](skill-overrides.json) names local adaptations.
+`skills-lock.json` hashes their checked-in contents; source fields retain upstream
+attribution, not a claim of identical upstream content. Refresh can overwrite
+adaptations: review the diff, preserve needed changes, then update affected hashes.
+Run `node scripts/check-skill-overrides.mjs`; CI checks hash drift and links to
+the named policy documents/anchors. This is not a semantic policy review or a
+general Markdown linter. Human intent and doctrine source texts stay unchanged.
+
 These notices cover the dependency material below. They do not select a
 project-wide license for CMUX Maestro or replace file-specific terms.
 
