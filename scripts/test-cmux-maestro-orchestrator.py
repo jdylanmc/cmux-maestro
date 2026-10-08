@@ -1144,6 +1144,73 @@ class WorkspaceCapacityCLITests(unittest.TestCase):
         self.assertTrue(summary["admissionAvailable"])
         self.assertEqual(self.h.state(), before)
 
+    def seed_workspace_history(self, workspace, count):
+        def populate(state):
+            for index in range(count):
+                node, _ = CONTROLLER_API["new_root"](
+                    workspace, str(uuid.uuid4()), self.h.pane, f"History {index}",
+                )
+                state["nodes"][node["id"]] = node
+        self.h.change_state(populate)
+
+    def test_other_workspace_full_history_does_not_block_spawn_or_saved_observer(self):
+        other = str(uuid.uuid4())
+        self.seed_workspace_history(other, 127)
+        available = self.capacity()["capacity"]
+        self.assertEqual(available["nodeSlotsRemaining"], 127)
+        self.assertTrue(available["admissionAvailable"])
+        receipt = self.h.spawn()
+        node = self.h.wait_node(receipt["workerId"], lambda item: item["availability"] == "idle")
+        self.assertEqual(node["workspaceId"], self.h.workspace)
+        saved = CONTROLLER_API["read_state"](self.h.root)
+        self.assertEqual(len(saved["nodes"]), 129)
+        projected = json.loads((self.h.root / "observer/current.json").read_text())
+        self.assertTrue(projected["complete"])
+        self.assertEqual(len(projected["nodes"]), 129)
+        self.assertEqual({item["id"] for item in projected["nodes"]}, set(saved["nodes"]))
+        self.seed_workspace_history(other, 1)
+        blocked = self.h.run("capacity", "--workspace", other)["capacity"]
+        self.assertEqual(blocked["nodeSlotsRemaining"], 0)
+        self.assertFalse(blocked["admissionAvailable"])
+        self.assertEqual(self.capacity()["capacity"]["nodeSlotsRemaining"], 126)
+
+    def test_workspace_history_limit_and_host_limit_are_distinct(self):
+        self.seed_workspace_history(self.h.workspace, 127)
+        before = self.h.state()
+        blocked = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Refused", "--cwd", str(REPO), "--task", "bounded", check=False,
+        )
+        self.assertEqual(blocked["returncode"], 2)
+        self.assertIn("Workspace stored-node limit", blocked["stderr"])
+        self.assertEqual(self.h.state(), before)
+        capacity = self.capacity()["capacity"]
+        self.assertEqual(capacity["storedNodes"], 128)
+        self.assertEqual(capacity["storedNodeLimit"], 128)
+        self.assertEqual(capacity["hostNodeLimit"], 1024)
+        self.assertEqual(capacity["hostNodeSlotsRemaining"], 896)
+        self.assertEqual(capacity["hostStateByteLimit"], 1_048_576)
+
+    def test_multi_workspace_validator_keeps_local_node_and_retained_limits(self):
+        self.seed_workspace_history(str(uuid.uuid4()), 128)
+        saved = self.h.state()
+        CONTROLLER_API["validate_state"](saved)
+        invalid = json.loads(json.dumps(saved))
+        workspace = next(item["workspaceId"] for item in invalid["nodes"].values()
+                         if item["workspaceId"] != self.h.workspace)
+        extra, _ = CONTROLLER_API["new_root"](workspace, str(uuid.uuid4()), self.h.pane, "Excess")
+        invalid["nodes"][extra["id"]] = extra
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Workspace stored-node"):
+            CONTROLLER_API["validate_state"](invalid)
+        saved["retainedResources"] = [
+            {"workspaceId": group, "surfaceId": str(uuid.uuid4())}
+            for group in (self.h.workspace, workspace) for _ in range(128)
+        ]
+        CONTROLLER_API["validate_state"](saved)
+        saved["retainedResources"].append({"workspaceId": workspace, "surfaceId": str(uuid.uuid4())})
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Workspace retained"):
+            CONTROLLER_API["validate_state"](saved)
+
     def test_limits_persist_across_processes_and_status_agrees(self):
         for limit in (1, 32, 128):
             with self.subTest(limit=limit):

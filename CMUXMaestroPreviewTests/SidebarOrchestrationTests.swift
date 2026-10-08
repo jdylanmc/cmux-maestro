@@ -219,6 +219,33 @@ struct SidebarOrchestrationTests {
         }
     }
 
+    @Test func workspaceNodeAllowancesAreIndependentWithinBoundedHostProjection() throws {
+        let now = Date()
+        let first = UUID(), second = UUID()
+        let nodes = [first, second].flatMap { workspace in
+            (0..<128).map { _ in
+                node(run: UUID(), role: "coordinator", parent: nil, workspace: workspace)
+            }
+        }
+        try SidebarOrchestrationReader.validate(.init(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: nodes
+        ))
+        let excess = node(run: UUID(), role: "coordinator", parent: nil, workspace: first)
+        #expect(throws: CopilotFileError.self) {
+            try SidebarOrchestrationReader.validate(.init(
+                version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: nodes + [excess]
+            ))
+        }
+        let hostOverflow = (0..<1025).map { _ in
+            node(run: UUID(), role: "coordinator", parent: nil, workspace: UUID())
+        }
+        #expect(throws: CopilotFileError.self) {
+            try SidebarOrchestrationReader.validate(.init(
+                version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: hostOverflow
+            ))
+        }
+    }
+
     @Test func managedCoordinatorRequiresExactInteractiveSessionIdentity() throws {
         let now = Date()
         let root = SidebarOrchestrationNode(
