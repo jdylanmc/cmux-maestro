@@ -745,12 +745,28 @@ It has no tool-permission grants in frontmatter and reuses the installed
 For the skill tool, pass `{"skill":"maestro"}`. Only the existing lifecycle/icon
 plugin slash commands remain namespaced; the global messaging guide is not.
 
-Defaults grant nothing. A coordinator may request native `yolo: true` **only with explicit
-user approval**; Copilot receives `--allow-all` alongside all explicit denies.
-Workers cannot request YOLO, even if the coordinator was allowed it; requests are
-rejected before credential lookup/reservation. Descendants keep bounded explicit
-allows and inherited denies. There is no speculative full permission inheritance,
-permission callback or persistent provider setting change.
+For prospective native children of an interactive managed parent, omitted
+`allowTools` and `yolo` inherit the parent's explicit **recorded launch policy**.
+A deny-only request keeps that recorded mode/allows and adds denies. An explicit
+`allowTools` list (including `[]`) or `yolo: false` selects requested default mode
+without `--allow-all`; omitted allows still inherit, and parent denies survive.
+Default-mode parents retain literal allow-subset checks. Recorded YOLO parents
+permit bounded finite child allow rules without redundant parent allows, while
+retaining all denies and wildcard/broad-rule rejection. A coordinator
+may request `yolo: true` **only with explicit human approval**, without a narrowing
+allow-list; combining both intents refuses. Workers' explicit YOLO requests still
+refuse before credentials/reservation, separately from inheriting parent YOLO.
+Missing recorded provenance or policy drift before reservation refuses.
+
+This is **recorded/requested policy, not verified current provider permissions**.
+Human `/permissions` changes can make launch records stale. In particular,
+Copilot's `defaultPermissionMode: "allow-all"` or `COPILOT_ALLOW_ALL` may elevate
+a new session despite omission of `--allow-all`; requested default mode is not
+proof of actual manual startup. The inspected SDK exposes current mode/path
+getters but no verified complete current tool/deny/URL policy snapshot or atomic
+same-or-narrower external-child admission. Full live inheritance/restricted-startup
+acceptance remains unverified. No permission callback, persistent setting change,
+or launch-then-policy mutation is used.
 
 Each native child has one private Unix socket and a launcher-created binding
 under `~/.copilot/extensions/maestro/r/`; account credentials never enter these
@@ -790,6 +806,99 @@ active `gh` account are not switched. Changes affect only future workers. Direct
 controller callers may retain Copilot defaults by omitting the requirement flag;
 the bundled orchestration skill deliberately does not and always requires the
 pinned Maestro account and model.
+
+### Optional per-launch preferences
+
+Native `maestro_spawn` accepts optional `model`, `contextTier` and
+`reasoningEffort` strings. Omission preserves existing configured launches,
+without a model query, new warning or context/effort flag. No activity defaults
+are inferred from worker names, roles or task text.
+
+For explicit preferences, the existing joined extension reads
+`session.rpc.model.list()` using that session's authentication context and
+checks the invoking account before and after. Only bounded model IDs,
+supported tiers/efforts and advertised default effort enter private launch
+evidence; raw model/billing/quota data does not enter state, prompts or host
+commands. Provider-native defaults are validated against raw advertised support;
+valid defaults outside the current CLI's effort levels are omitted from the
+projection, not invented as CLI flags or used to reject unrelated selections.
+Malformed, duplicate, oversized or foreign evidence and account drift
+refuse before launch. This is a capability snapshot, not atomic account/provider
+admission or an observation of the child's running settings.
+
+Supported selections feed the actual `--model`, `--context` and
+`--reasoning-effort` arguments. Unsupported safe optional requests **warn**:
+an unavailable requested model falls back only to the configured pin when that
+pin is available in the session catalog; no available configured fallback
+means refusal, never arbitrary model substitution. A valid selected model
+survives an unsupported context/effort request: context falls to its default
+tier, effort to its advertised default (or no override when unavailable).
+Unavailable experimental model lookup warns and preserves the old configured
+launch without applying optional overrides. Unsafe input, missing credentials,
+ownership, permission and capacity failures are not preference fallback.
+
+The bounded private `launchSelection` record and receipt distinguish requested
+preferences, configured arguments, evidence source and warnings; `observed`
+remains unknown. `long_context` is a supported tier, not a numeric context-window
+claim. Account entitlements and actual provider application remain unverified
+until independently observed. On a supporting installed adapter,
+`maestro_identity({"includeModel":true})` reads the responding session's
+`session.rpc.model.getCurrent()` and returns a bounded `modelObservation`:
+`observed` with source, timestamp and the actually reported model/context/effort,
+or `unavailable` with a reason. Unreported context/effort is omitted, not replaced
+with launch defaults. No catalog, plan-model alternative or raw error is returned.
+The account and exact binding are rechecked after the read; drift refuses.
+Default identity calls preserve their existing account-only behavior and make
+no model query. A parent cannot use this to observe a child; the child must make
+its own explicit query. This does not wait for startup, poll, persist observations,
+switch models or prove entitlement, token-window size or installed execution.
+The timestamp is local collection time, not an atomic provider revision.
+A reported virtual `auto` model does not identify the backing model of a turn.
+
+The CLI adds `spawn --model`, `--context-tier` and `--reasoning-effort`. Direct
+callers lack joined-session evidence, so new selections warn and retain
+configured defaults. `launch-coordinator --model` keeps its pre-existing
+explicit-over-configured precedence and syntax validation, without claiming
+session-catalog support; its new context/effort options warn and remain omitted.
+Neither native Settings nor persistent Copilot configuration is changed.
+
+### Workspace launch capacity
+
+The controller's `capacity --workspace <workspace-uuid>` command returns a
+read-only, **advisory** preflight without provider credentials or host RPCs.
+Authenticated `status` also includes the same workspace-wide `capacity` summary,
+including managed roots, workers, retained resources, pending launches, used
+slots, configured limit and remaining global node slots. Pending leases are
+already counted through their managed nodes, not added twice. Unknown or stale
+process/terminal ownership is not free capacity.
+
+To persist a limit, a human-directed workspace coordinator uses:
+
+```sh
+python3 scripts/cmux-maestro-orchestrator.py capacity \
+  --workspace <workspace-uuid> --limit 64 \
+  --actor-id <coordinator-id> --token <private-control-token>
+```
+
+Keep the control token private, as with other authenticated controller commands.
+Worker actors and coordinators from other workspaces cannot change the limit.
+Limits are integers from **1 through 128**, defaulting to **32** when omitted.
+They live in the existing private `Orchestration/control/state.json`, separately
+from account/model settings; native Settings does not edit them. Lowering a limit
+below current usage preserves every session and retained resource and refuses
+new admissions until usage permits them. No automatic cleanup or reuse occurs.
+
+A successful preflight reserves nothing. Root and child launch reservations
+recheck the latest limit and exact resource usage inside their exclusive
+transaction. The separate **128-node** and **8-level** bounds still apply, so a
+configured limit of 128 is not a guarantee of 128 available nodes or demonstrated
+128-provider load. `nodeSlotsRemaining` includes all stored nodes across workspaces,
+including resource-retired history; live-workspace `remaining` alone is not an
+admission check. History exhaustion is not repaired by increasing live capacity,
+closing a tab, or deleting records automatically. Lock acquisition retains the existing 32-session reference
+policy: ordinary waits remain bounded to 4 seconds, two-second waits to 8 seconds,
+and zero-wait requests remain immediate, regardless of workspace capacity.
+Upstream activation ordering and installed-runtime validation are separate.
 
 ### Legacy bounded-worker compatibility
 
@@ -832,11 +941,13 @@ Read-only controller snapshots use shared locks; state mutations remain
 exclusive. Idle supervisors therefore do not serialize their status reads
 behind the mutation lock as a workspace approaches its worker limit.
 Spawn accepts bounded caller-explicit `--allow-tool` and `--deny-tool` rules;
-the default adds no grants, denies win, and descendants cannot exceed their
-parent's explicit allows or remove inherited denies. These Copilot flags are
-policy controls, not an operating-system sandbox. Shell access is never a
-default and requires an explicit task-level caller decision; wildcard,
-all-resource and `--allow-all` grants are never injected.
+registered/legacy defaults add no grants, denies win, and descendants cannot
+exceed their parent's explicit allows or remove inherited denies. Prospective
+native interactive children inherit recorded parent policy as qualified above;
+legacy bounded behavior is unchanged. These Copilot flags are policy controls,
+not an operating-system sandbox. No shell or wildcard grant is synthesized from
+tool visibility or prompt text; recorded parent YOLO and explicitly approved
+coordinator YOLO requests append `--allow-all` while retaining denies.
 
 The default view is a restrained workspace outline. Primary semibold workspace headers
 contain explicit coordinator → worker → nested-worker rows, with guide lines and

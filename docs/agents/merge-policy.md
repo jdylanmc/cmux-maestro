@@ -6,8 +6,13 @@ scope nor unattended merge authority.
 
 ## Placement and capacity
 
-- The human-authorized pool is **four concurrent developers**. Bootstrap and
-  startup repair each consume a slot while active; do not exceed the pool.
+- Use the current **human-authorized concurrency budget**, not an older fixed
+  four/six-developer quota from another activation or adapter. Bootstrap and
+  startup repair each consume a slot while active. Include useful support and
+  retained resources within the verified runtime limits; reserve review capacity.
+  Check live-workspace room and the independent global node/depth bounds before
+  dispatch. A configurable product ceiling does not increase human authority or
+  prove that retained history leaves free nodes.
 - Each independent writer owns a standalone Git worktree and delivery branch.
   The Project Manager coordinates on `main`, Discovery uses `discovery/<feat>`,
   and the separate merge coordinator uses `pr-sniper`. Never repurpose another

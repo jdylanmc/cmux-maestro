@@ -607,10 +607,17 @@ class Harness:
                         pass
             self.drain_thread = threading.Thread(target=drain)
             self.drain_thread.start()
-        self.registration = self.run(
-            "register", "--workspace", self.workspace, "--surface", self.surface,
-            "--name", "Coordinator",
-        )
+        try:
+            self.registration = self.run(
+                "register", "--workspace", self.workspace, "--surface", self.surface,
+                "--name", "Coordinator",
+            )
+        except Exception as error:
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                raise error from cleanup_error
+            raise
 
     def run(self, *args, check=True, timeout=15, env=None):
         command = [
@@ -745,6 +752,41 @@ class Harness:
         data["surfaces"].append(surface)
         self.cmux_state.write_text(json.dumps(data))
 
+    def quiescence_diagnostics(self, processes):
+        result = {
+            "recordedAtClose": [
+                {"pid": item["pid"], "start": item["start"]} for item in processes
+            ],
+        }
+        lsof = shutil.which("lsof")
+        if lsof is None:
+            return {**result, "unavailable": "lsof-missing"}
+        try:
+            opened = subprocess.run(
+                [lsof, "-Fp", "--", self.lifetime.name],
+                capture_output=True, text=True, timeout=1,
+            )
+            if opened.returncode not in (0, 1):
+                return {**result, "unavailable": f"lsof-exit-{opened.returncode}"}
+            pids = sorted({
+                int(line[1:]) for line in opened.stdout.splitlines()
+                if line.startswith("p") and line[1:].isdigit()
+            })
+            result["lifetimeFilePids"] = pids
+            if pids:
+                metadata = subprocess.run(
+                    ["/bin/ps", "-o", "pid=,ppid=,lstart=,stat=", "-p",
+                     ",".join(str(pid) for pid in pids)],
+                    capture_output=True, text=True, timeout=1,
+                )
+                if metadata.returncode:
+                    result["unavailable"] = f"ps-exit-{metadata.returncode}"
+                else:
+                    result["processMetadata"] = metadata.stdout.splitlines()
+        except (OSError, subprocess.TimeoutExpired) as error:
+            result["unavailable"] = type(error).__name__
+        return result
+
     def close(self):
         if self.closed:
             return
@@ -776,7 +818,13 @@ class Harness:
                     break
                 except BlockingIOError:
                     if time.monotonic() >= deadline:
-                        raise AssertionError(f"Fixture process quiescence unavailable; preserved {self.path}")
+                        # File-open observations are sampled after failure, not
+                        # authority to signal a descendant or claim lock ownership.
+                        diagnostics = self.quiescence_diagnostics(processes)
+                        raise AssertionError(
+                            f"Fixture process quiescence unavailable; preserved {self.path}\n"
+                            f"Fixture process metadata: {json.dumps(diagnostics)}"
+                        )
                     time.sleep(0.02)
         finally:
             self.drain_stop.set()
@@ -793,6 +841,154 @@ class Harness:
 
 
 class HarnessTeardownTests(unittest.TestCase):
+    def test_constructor_registration_timeout_closes_owned_fixture_and_preserves_original_error(self):
+        h = object.__new__(Harness)
+        original_close = Harness.close
+        injected = subprocess.TimeoutExpired(["synthetic-registration"], 15)
+        try:
+            with patch("subprocess.run", side_effect=injected) as run, \
+                    patch("subprocess.Popen", side_effect=AssertionError("no process may start")) as popen, \
+                    patch.dict(CONTROLLER_API, {
+                        "process_observation": unittest.mock.Mock(side_effect=AssertionError("no process exists")),
+                    }), patch.object(Harness, "close", autospec=True, side_effect=original_close) as close:
+                with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                    h.__init__()
+                self.assertIs(caught.exception, injected)
+                self.assertEqual(run.call_count, 1)
+                self.assertEqual(run.call_args.args[0][2], "register")
+                self.assertEqual(run.call_args.kwargs["timeout"], 15)
+                popen.assert_not_called()
+                CONTROLLER_API["process_observation"].assert_not_called()
+                close.assert_called_once_with(h)
+                self.assertTrue(h.closed)
+                self.assertTrue(h.lifetime.closed)
+                self.assertFalse(h.temp._finalizer.alive)
+                self.assertFalse(h.path.exists())
+        finally:
+            h.close()
+
+    def test_constructor_retains_unquiesced_fixture_and_chains_cleanup_failure_to_original_error(self):
+        h = object.__new__(Harness)
+        original_close, original_flock = Harness.close, fcntl.flock
+        injected = subprocess.TimeoutExpired(["synthetic-registration"], 15)
+        secondary = []
+
+        def close(harness):
+            try:
+                original_close(harness)
+            except AssertionError as error:
+                secondary.append(error)
+                raise
+
+        def flock(file, operation):
+            if operation & fcntl.LOCK_EX:
+                raise BlockingIOError("synthetic unquiesced fixture")
+            return original_flock(file, operation)
+
+        try:
+            with patch("subprocess.run", side_effect=injected) as run, \
+                    patch("subprocess.Popen", side_effect=AssertionError("no process may start")) as popen, \
+                    patch.dict(CONTROLLER_API, {
+                        "process_observation": unittest.mock.Mock(side_effect=AssertionError("no process exists")),
+                    }), patch.object(Harness, "close", autospec=True, side_effect=close) as cleanup, \
+                    patch.object(Harness, "quiescence_diagnostics", create=True,
+                                 return_value={"synthetic": "failure-boundary"}) as diagnostics, \
+                    patch("fcntl.flock", side_effect=flock), \
+                    patch("time.monotonic", side_effect=[0, 4]), patch("time.sleep") as sleep:
+                with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                    h.__init__()
+                self.assertIs(caught.exception, injected)
+                self.assertEqual(run.call_count, 1)
+                popen.assert_not_called()
+                cleanup.assert_called_once_with(h)
+                self.assertEqual(len(secondary), 1)
+                self.assertIs(caught.exception.__cause__, secondary[0])
+                self.assertIn("quiescence", str(secondary[0]))
+                self.assertIn('"synthetic": "failure-boundary"', str(secondary[0]))
+                diagnostics.assert_called_once_with([])
+                self.assertFalse(h.closed)
+                self.assertTrue(h.path.is_dir())
+                self.assertFalse(h.temp._finalizer.alive)
+                self.assertFalse(h.lifetime.closed)
+                self.assertEqual(os.pread(h.lifetime.fileno(), 1, 0), b"0")
+                sleep.assert_not_called()
+        finally:
+            h.close()
+
+    def test_quiescence_diagnostics_reports_only_exact_file_holders_and_process_metadata(self):
+        h = object.__new__(Harness)
+        h.lifetime = unittest.mock.Mock(name="lifetime")
+        h.lifetime.name = "/owned-fixture/process-lifetime"
+        known = [{"pid": 41, "start": "Thu Oct  8 17:00:00 2026"}]
+        results = [
+            subprocess.CompletedProcess(["lsof"], 0, "p41\nf5\np42\nf5\n", ""),
+            subprocess.CompletedProcess(
+                ["ps"], 0,
+                "41 1 Thu Oct  8 17:00:00 2026 Ss\n42 41 Thu Oct  8 17:00:01 2026 S\n", "",
+            ),
+        ]
+        with patch("shutil.which", return_value="/usr/sbin/lsof"), \
+                patch("subprocess.run", side_effect=results) as run:
+            observed = h.quiescence_diagnostics([{**known[0], "args": "not-for-diagnostics"}])
+        self.assertEqual(observed, {
+            "recordedAtClose": known,
+            "lifetimeFilePids": [41, 42],
+            "processMetadata": results[1].stdout.splitlines(),
+        })
+        self.assertEqual(run.call_args_list[0].args[0],
+                         ["/usr/sbin/lsof", "-Fp", "--", h.lifetime.name])
+        self.assertEqual(run.call_args_list[1].args[0],
+                         ["/bin/ps", "-o", "pid=,ppid=,lstart=,stat=", "-p", "41,42"])
+        self.assertTrue(all(call.kwargs["timeout"] == 1 for call in run.call_args_list))
+        self.assertTrue(all(call.kwargs["capture_output"] for call in run.call_args_list))
+
+    def test_quiescence_diagnostics_exposes_unavailable_or_disappeared_observations(self):
+        h = object.__new__(Harness)
+        h.lifetime = unittest.mock.Mock(name="lifetime")
+        h.lifetime.name = "/owned-fixture/process-lifetime"
+        with patch("shutil.which", return_value=None), patch("subprocess.run") as run:
+            self.assertEqual(h.quiescence_diagnostics([]),
+                             {"recordedAtClose": [], "unavailable": "lsof-missing"})
+            run.assert_not_called()
+        with patch("shutil.which", return_value="/usr/sbin/lsof"), \
+                patch("subprocess.run", side_effect=subprocess.TimeoutExpired(["lsof"], 1)):
+            self.assertEqual(h.quiescence_diagnostics([]),
+                             {"recordedAtClose": [], "unavailable": "TimeoutExpired"})
+        with patch("shutil.which", return_value="/usr/sbin/lsof"), \
+                patch("subprocess.run", return_value=subprocess.CompletedProcess(
+                    ["lsof"], 1, "", "",
+                )) as run:
+            self.assertEqual(h.quiescence_diagnostics([]),
+                             {"recordedAtClose": [], "lifetimeFilePids": []})
+            self.assertEqual(run.call_count, 1)
+        with patch("shutil.which", return_value="/usr/sbin/lsof"), \
+                patch("subprocess.run", return_value=subprocess.CompletedProcess(
+                    ["lsof"], 2, "", "raw tool error is not diagnostic metadata",
+                )):
+            self.assertEqual(h.quiescence_diagnostics([]),
+                             {"recordedAtClose": [], "unavailable": "lsof-exit-2"})
+
+    def test_constructor_success_keeps_fixture_active_without_cleanup(self):
+        h = object.__new__(Harness)
+        registration = {"coordinatorId": "synthetic", "controlToken": "synthetic"}
+        completed = subprocess.CompletedProcess(["synthetic-registration"], 0, json.dumps(registration), "")
+        try:
+            with patch("subprocess.run", return_value=completed) as run, \
+                    patch("subprocess.Popen", side_effect=AssertionError("no process may start")) as popen, \
+                    patch.object(Harness, "close", autospec=True) as close:
+                h.__init__()
+                self.assertEqual(h.registration, {**registration, "returncode": 0, "stderr": ""})
+                self.assertEqual(run.call_count, 1)
+                close.assert_not_called()
+                popen.assert_not_called()
+                self.assertFalse(h.closed)
+                self.assertTrue(h.path.is_dir())
+                self.assertTrue(h.temp._finalizer.alive)
+                self.assertFalse(h.lifetime.closed)
+                self.assertEqual(os.pread(h.lifetime.fileno(), 1, 0), b"1")
+        finally:
+            h.close()
+
     def test_wait_failure_preserves_assertion_and_captures_runtime_diagnostics(self):
         with tempfile.TemporaryDirectory() as directory:
             harness = object.__new__(Harness)
@@ -923,6 +1119,129 @@ class HarnessTeardownTests(unittest.TestCase):
                     closer.join(timeout=6)
                     self.assertFalse(closer.is_alive())
                 h.close()
+
+
+class WorkspaceCapacityCLITests(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.close)
+
+    def capacity(self, *arguments, **options):
+        return self.h.run("capacity", "--workspace", self.h.workspace, *arguments, **options)
+
+    def configure(self, limit, **options):
+        return self.capacity("--limit", str(limit), "--actor-id", self.h.node,
+                             "--token", self.h.token, **options)
+
+    def test_default_preflight_does_not_require_provider_or_host(self):
+        before = self.h.state()
+        environment = {**self.h.env, "CMUX_MAESTRO_CMUX": "/missing/cmux",
+                       "CMUX_MAESTRO_COPILOT": "/missing/copilot"}
+        summary = self.capacity(env=environment)["capacity"]
+        self.assertEqual(summary["limit"], 32)
+        self.assertEqual(summary["used"], 0)
+        self.assertTrue(summary["advisory"])
+        self.assertTrue(summary["admissionAvailable"])
+        self.assertEqual(self.h.state(), before)
+
+    def test_limits_persist_across_processes_and_status_agrees(self):
+        for limit in (1, 32, 128):
+            with self.subTest(limit=limit):
+                self.assertEqual(self.configure(limit)["capacity"]["limit"], limit)
+                self.assertEqual(self.h.state()["workspaceCapacity"], {self.h.workspace: limit})
+                preflight = self.capacity()["capacity"]
+                status = self.h.run("status", "--actor-id", self.h.node,
+                                    "--token", self.h.token)["capacity"]
+                self.assertEqual(status, preflight)
+        other = str(uuid.uuid4())
+        self.assertEqual(self.h.run("capacity", "--workspace", other)["capacity"]["limit"], 32)
+
+    def test_invalid_limits_or_wrong_authority_preserve_state(self):
+        self.configure(64)
+        before = self.h.state()
+        for arguments in (
+            ("--limit", "0", "--actor-id", self.h.node, "--token", self.h.token),
+            ("--limit", "129", "--actor-id", self.h.node, "--token", self.h.token),
+            ("--limit", "128"),
+            ("--limit", "128", "--actor-id", self.h.node, "--token", "wrong"),
+        ):
+            with self.subTest(arguments=arguments):
+                self.assertEqual(self.capacity(*arguments, check=False)["returncode"], 2)
+                self.assertEqual(self.h.state(), before)
+        denied = self.h.run("capacity", "--workspace", str(uuid.uuid4()), "--limit", "128",
+                            "--actor-id", self.h.node, "--token", self.h.token, check=False)
+        self.assertEqual(denied["returncode"], 2)
+        self.assertEqual(self.h.state(), before)
+
+    def test_worker_cannot_change_its_admission_budget(self):
+        receipt = self.h.spawn()
+        token = self.h.cmux_data()["tokens"][receipt["workerId"]]
+        before = self.h.state().get("workspaceCapacity")
+        denied = self.capacity("--limit", "128", "--actor-id", receipt["workerId"],
+                               "--token", token, check=False)
+        self.assertEqual(denied["returncode"], 2)
+        self.assertIn("authenticated coordinator", denied["stderr"])
+        self.assertEqual(self.h.state().get("workspaceCapacity"), before)
+
+    def test_updating_full_configuration_map_preserves_other_workspaces(self):
+        limits = {str(uuid.uuid4()): 17 for _ in range(127)}
+        limits[self.h.workspace] = 32
+        self.h.change_state(lambda state: state.update(workspaceCapacity=limits))
+        self.assertEqual(self.configure(64)["capacity"]["limit"], 64)
+        expected = {**limits, self.h.workspace: 64}
+        self.assertEqual(self.h.state()["workspaceCapacity"], expected)
+        other = next(workspace for workspace in limits if workspace != self.h.workspace)
+        self.assertEqual(self.h.run("capacity", "--workspace", other)["capacity"]["limit"], 17)
+
+    def test_corrupt_persisted_capacity_refuses_without_repair_or_default(self):
+        path = self.h.root / "control" / "state.json"
+        original = self.h.state()
+        for invalid in (None, {self.h.workspace: 129}, {self.h.workspace: True}):
+            with self.subTest(invalid=invalid):
+                payload = json.dumps({**original, "workspaceCapacity": invalid}).encode()
+                path.write_bytes(payload)
+                result = self.capacity(check=False)
+                self.assertEqual(result["returncode"], 2)
+                self.assertIn("capacity", result["stderr"].lower())
+                self.assertEqual(path.read_bytes(), payload)
+
+    def test_lowering_below_usage_keeps_exact_resources_and_refuses_new_launch(self):
+        receipts = [self.h.spawn(label=f"Existing {index}") for index in range(2)]
+        before = self.h.state()
+        summary = self.configure(1)["capacity"]
+        self.assertEqual(summary["used"], 2)
+        self.assertEqual(summary["remaining"], 0)
+        self.assertFalse(summary["admissionAvailable"])
+        after = self.h.state()
+        self.assertEqual(after["nodes"], before["nodes"])
+        self.assertEqual(after["retainedResources"], before["retainedResources"])
+        self.assertEqual(after["launches"], before["launches"])
+        rejected = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token, "--name", "Refused",
+            "--cwd", str(REPO), "--task", "bounded", check=False,
+        )
+        self.assertEqual(rejected["returncode"], 2)
+        self.assertIn("resource limit", rejected["stderr"])
+        self.assertEqual(len(self.h.cmux_data()["surfaces"]), len(receipts) + 1)
+
+    def test_advisory_preflight_cannot_reserve_last_slot_against_concurrent_spawns(self):
+        self.configure(1)
+        self.assertTrue(self.capacity()["capacity"]["admissionAvailable"])
+        arguments = ["spawn", "--actor-id", self.h.node, "--token", self.h.token,
+                     "--name", "Capacity race", "--cwd", str(REPO), "--task", "bounded"]
+        processes = [self.h.start(*arguments) for _ in range(2)]
+        results = [self.h.finish(process, check=False) for process in processes]
+        self.assertEqual(sorted(result["returncode"] for result in results), [0, 2])
+        failed = next(result for result in results if result["returncode"] == 2)
+        self.assertIn("resource limit", failed["stderr"])
+        summary = self.capacity()["capacity"]
+        self.assertEqual(summary["used"], 1)
+        self.assertFalse(summary["admissionAvailable"])
+        self.assertEqual(len(self.h.cmux_data()["surfaces"]), 2)
+        self.configure(128)
+        self.assertTrue(self.capacity()["capacity"]["admissionAvailable"])
+        self.configure(1)
+        self.assertEqual(self.capacity()["capacity"]["used"], 1)
 
 
 class OrchestratorTests(unittest.TestCase):

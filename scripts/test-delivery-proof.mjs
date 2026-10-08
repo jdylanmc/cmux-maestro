@@ -699,6 +699,138 @@ test("native launch reads the invoking session account on each request, not task
   assert.equal(requests.length, 2);
 });
 
+test("native identity observes only its own current model when explicitly requested", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  let tools;
+  let modelQueries = 0;
+  let login = "verified-parent";
+  let snapshot = {
+    modelId: "gpt-6.1-sol", contextTier: "long_context", reasoningEffort: "medium",
+    planBaseModelId: "not-the-current-model", privateMetadata: "not-for-transmission",
+  };
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async options => {
+      tools = options.tools;
+      return { sessionId: own.sessionId, rpc: {
+        gitHubAuth: { getStatus: async () => ({
+          isAuthenticated: true, host: "https://github.com", login,
+        }) },
+        model: { getCurrent: async () => { modelQueries++; return snapshot; } },
+      } };
+    },
+  });
+  t.after(() => adapter.close());
+  const tool = tools.find(item => item.name === "maestro_identity");
+  const invocation = { sessionId: own.sessionId };
+  for (const args of [{}, { includeModel: false }]) {
+    const result = await tool.handler(args, invocation);
+    assert.equal(typeof result, "string");
+    assert.deepEqual(JSON.parse(result), {
+      nodeId: own.nodeId, ...managedAddress(own),
+      account: { login, host: "https://github.com" },
+    });
+    assert.equal(modelQueries, 0);
+  }
+  assert.equal(tool.parameters.properties.includeModel.type, "boolean");
+  const before = Date.now();
+  const result = JSON.parse(await tool.handler({ includeModel: true }, invocation));
+  const { observedAt, ...observation } = result.modelObservation;
+  assert.deepEqual(observation, {
+    status: "observed", source: "session-model-current",
+    model: "gpt-6.1-sol", contextTier: "long_context", reasoningEffort: "medium",
+  });
+  assert.ok(Date.parse(observedAt) >= before && Date.parse(observedAt) <= Date.now());
+  assert.equal(result.sessionId, own.sessionId);
+  assert.equal(modelQueries, 1);
+  assert.equal(JSON.stringify(result).includes("not-for-transmission"), false);
+  assert.equal(JSON.stringify(result).includes("not-the-current-model"), false);
+  assert.equal(JSON.stringify(result).includes(own.capability), false);
+
+  snapshot = { modelId: "provider/custom", reasoningEffort: "ultra" };
+  const next = JSON.parse(await tool.handler({ includeModel: true }, invocation)).modelObservation;
+  assert.equal(next.model, "provider/custom");
+  assert.equal(next.reasoningEffort, "ultra");
+  assert.equal("contextTier" in next, false, "missing observations are not configured defaults");
+  for (const args of [{ includeModel: "true" }, { includeModel: null },
+    { includeModel: true, modelId: "forged" }]) {
+    assert.equal((await tool.handler(args, invocation)).resultType, "failure");
+  }
+  assert.equal((await tool.handler({ includeModel: true },
+    { sessionId: f.bindings[1].sessionId })).resultType, "failure");
+  assert.equal(modelQueries, 2);
+});
+
+test("native identity reports model observation limits without inventing configured evidence", async (t) => {
+  for (const [name, getter, reason] of [
+    ["absent", undefined, "model-api-unavailable"],
+    ["unsupported", async () => { throw Object.assign(new Error("private"), { code: -32601 }); },
+      "model-api-unavailable"],
+    ["failed", async () => { throw new Error("PRIVATE_MODEL_ERROR"); }, "model-api-failed"],
+    ["unreported", async () => ({ reasoningEffort: "medium" }), "model-not-reported"],
+    ["null", async () => null, "model-response-invalid"],
+    ["unsafe-model", async () => ({ modelId: "bad\nmodel" }), "model-response-invalid"],
+    ["unsafe-effort", async () => ({ modelId: "safe", reasoningEffort: [] }), "model-response-invalid"],
+    ["unknown-tier", async () => ({ modelId: "safe", contextTier: "invented" }), "model-response-invalid"],
+  ]) {
+    await t.test(name, async t => {
+      const f = await managedFixture(t);
+      const own = f.bindings[0];
+      let tools;
+      const adapter = await start({
+        root: f.root, peer: own.peer, managed: true, expected: own,
+        joinSession: async options => {
+          tools = options.tools;
+          return { sessionId: own.sessionId, rpc: {
+            gitHubAuth: { getStatus: async () => ({
+              isAuthenticated: true, host: "https://github.com", login: "verified-parent",
+            }) }, model: { getCurrent: getter },
+          } };
+        },
+      });
+      t.after(() => adapter.close());
+      const response = await tools.find(item => item.name === "maestro_identity")
+        .handler({ includeModel: true }, { sessionId: own.sessionId });
+      assert.equal(typeof response, "string", "optional model failure must preserve verified identity");
+      const result = JSON.parse(response);
+      assert.deepEqual(result.modelObservation, { status: "unavailable", reason });
+      assert.equal(result.account.login, "verified-parent");
+      assert.equal(JSON.stringify(result).includes("PRIVATE_MODEL_ERROR"), false);
+    });
+  }
+});
+
+test("native identity refuses account drift across its optional model observation", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  let tools;
+  let login = "before";
+  let modelQueries = 0;
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async options => {
+      tools = options.tools;
+      return { sessionId: own.sessionId, rpc: {
+        gitHubAuth: { getStatus: async () => ({
+          isAuthenticated: true, host: "https://github.com", login,
+        }) },
+        model: { getCurrent: async () => {
+          modelQueries++;
+          login = "after";
+          return { modelId: "safe" };
+        } },
+      } };
+    },
+  });
+  t.after(() => adapter.close());
+  const result = await tools.find(item => item.name === "maestro_identity")
+    .handler({ includeModel: true }, { sessionId: own.sessionId });
+  assert.equal(result.resultType, "failure");
+  assert.equal("modelObservation" in result, false);
+  assert.equal(modelQueries, 1);
+});
+
 test("native launch refuses unsupported account APIs without creating a terminal", async (t) => {
   const f = await managedFixture(t);
   const own = f.bindings[0];
@@ -715,6 +847,197 @@ test("native launch refuses unsupported account APIs without creating a terminal
   );
   assert.equal(result.resultType, "failure");
   assert.equal(launches, 0);
+});
+
+test("native spawn carries optional caller launch preferences without changing omission or account identity", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  const requests = [];
+  let modelQueries = 0;
+  let tools;
+  const receipt = { ok: true, launchAccepted: true, startup: "pending" };
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async options => {
+      tools = options.tools;
+      return {
+        sessionId: own.sessionId,
+        rpc: { gitHubAuth: { getStatus: async () => ({
+          isAuthenticated: true, host: "https://github.com", login: "verified-parent",
+        }) }, model: { list: async () => {
+          modelQueries++;
+          return { list: [{
+            id: "gpt-6.1-sol", name: "Fixture selected model",
+            capabilities: { supports: { reasoningEffort: true }, limits: {} },
+            supportedContextTiers: ["default", "long_context"],
+            supportedReasoningEfforts: ["medium", "high"], defaultReasoningEffort: "medium",
+            metadata: { privateFixture: "not-for-transmission" },
+          }], quotaSnapshots: { fixture: "not-for-transmission" } };
+        } } },
+      };
+    },
+    launch: async request => { requests.push(request); return receipt; },
+  });
+  t.after(() => adapter.close());
+  const spawn = tools.find(tool => tool.name === "maestro_spawn").handler;
+  const assignment = { name: "Child", cwd: "/synthetic", task: "Bounded task" };
+  const invocation = { sessionId: own.sessionId };
+  assert.deepEqual(JSON.parse(await spawn(assignment, invocation)), receipt);
+  assert.deepEqual(requests[0].assignment, assignment);
+  assert.equal(modelQueries, 0);
+  assert.equal("launchCapabilities" in requests[0], false);
+  const selected = {
+    ...assignment, model: "gpt-6.1-sol", contextTier: "long_context", reasoningEffort: "medium",
+  };
+  const result = await spawn(selected, invocation);
+  assert.equal(typeof result, "string", "supported optional inputs must reach the controller");
+  assert.deepEqual(JSON.parse(result), receipt);
+  assert.deepEqual(requests[1].assignment, selected);
+  assert.equal(requests[1].identity.login, "verified-parent");
+  assert.equal(modelQueries, 1);
+  assert.deepEqual(requests[1].launchCapabilities, {
+    version: 1, sessionId: own.sessionId,
+    account: { login: "verified-parent", host: "https://github.com" },
+    source: "session-model-list",
+    models: [{
+      id: "gpt-6.1-sol", contextTiers: ["default", "long_context"],
+      reasoningEfforts: ["medium", "high"], defaultReasoningEffort: "medium",
+    }],
+  });
+  assert.equal(JSON.stringify(requests[1]).includes("not-for-transmission"), false);
+  assert.equal(result.includes(own.capability), false);
+  assert.equal((await spawn({ ...selected, login: "injected" }, invocation)).resultType, "failure");
+  assert.equal(requests.length, 2);
+});
+
+test("native preference API absence forwards unavailable evidence and preserves visible fallback warning", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  let tools;
+  let request;
+  const receipt = {
+    ok: true, launchAccepted: true,
+    warnings: ["Capability verification unavailable; configured defaults retained."],
+  };
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async options => {
+      tools = options.tools;
+      return { sessionId: own.sessionId, rpc: { gitHubAuth: { getStatus: async () => ({
+        isAuthenticated: true, host: "https://github.com", login: "verified-parent",
+      }) } } };
+    },
+    launch: async value => { request = value; return receipt; },
+  });
+  t.after(() => adapter.close());
+  const result = await tools.find(tool => tool.name === "maestro_spawn").handler({
+    name: "Child", cwd: "/synthetic", task: "Bounded", model: "gpt-6.1-sol",
+  }, { sessionId: own.sessionId });
+  assert.equal(typeof result, "string");
+  assert.deepEqual(JSON.parse(result), receipt);
+  assert.deepEqual(request.launchCapabilities, {
+    version: 1, sessionId: own.sessionId,
+    account: { login: "verified-parent", host: "https://github.com" },
+    source: "unavailable", models: [],
+  });
+});
+
+test("native model metadata errors and account drift refuse without a launch or fallback", async (t) => {
+  for (const scenario of ["malformed", "duplicate", "account-drift", "forged-evidence"]) {
+    await t.test(scenario, async (t) => {
+      const f = await managedFixture(t);
+      const own = f.bindings[0];
+      let tools;
+      let reads = 0;
+      let queries = 0;
+      let launches = 0;
+      const model = {
+        id: "gpt-6.1-sol", name: "Fixture",
+        capabilities: { supports: { reasoningEffort: true }, limits: {} },
+        supportedContextTiers: ["default"], supportedReasoningEfforts: ["medium"],
+        defaultReasoningEffort: "medium",
+      };
+      const adapter = await start({
+        root: f.root, peer: own.peer, managed: true, expected: own,
+        joinSession: async options => {
+          tools = options.tools;
+          return { sessionId: own.sessionId, rpc: {
+            gitHubAuth: { getStatus: async () => ({
+              isAuthenticated: true, host: "https://github.com",
+              login: scenario === "account-drift" && ++reads > 1 ? "changed-parent" : "verified-parent",
+            }) },
+            model: { list: async () => {
+              queries++;
+              return scenario === "malformed" ? { list: "invalid" } :
+                { list: scenario === "duplicate" ? [model, model] : [model] };
+            } },
+          } };
+        },
+        launch: async () => { launches++; return { ok: true }; },
+      });
+      t.after(() => adapter.close());
+      const selected = { name: "Child", cwd: "/synthetic", task: "Bounded", model: "gpt-6.1-sol" };
+      if (scenario === "forged-evidence") selected.launchCapabilities = { source: "session-model-list" };
+      const result = await tools.find(tool => tool.name === "maestro_spawn").handler(
+        selected, { sessionId: own.sessionId },
+      );
+      assert.equal(result.resultType, "failure");
+      assert.equal(launches, 0);
+      assert.equal(queries, scenario === "forged-evidence" ? 0 : 1);
+    });
+  }
+});
+
+test("native model projection keeps valid provider-native defaults from poisoning known selection", async (t) => {
+  for (const providerDefault of [undefined, "ultra", "max"]) {
+    await t.test(providerDefault ?? "no-default", async (t) => {
+      const f = await managedFixture(t);
+      const own = f.bindings[0];
+      let tools;
+      const requests = [];
+      const custom = {
+        id: "provider/custom", name: "Fixture custom provider",
+        capabilities: { supports: { reasoningEffort: true }, limits: {} },
+        supportedContextTiers: ["default"], supportedReasoningEfforts: ["ultra"],
+      };
+      if (providerDefault !== undefined) custom.defaultReasoningEffort = providerDefault;
+      const adapter = await start({
+        root: f.root, peer: own.peer, managed: true, expected: own,
+        joinSession: async options => {
+          tools = options.tools;
+          return { sessionId: own.sessionId, rpc: {
+            gitHubAuth: { getStatus: async () => ({
+              isAuthenticated: true, host: "https://github.com", login: "verified-parent",
+            }) },
+            model: { list: async () => ({ list: [{
+              id: "gpt-6.1-sol", name: "Fixture known model",
+              capabilities: { supports: { reasoningEffort: true }, limits: {} },
+              supportedContextTiers: ["default", "long_context"],
+              supportedReasoningEfforts: ["medium"], defaultReasoningEffort: "medium",
+            }, custom] }) },
+          } };
+        },
+        launch: async request => { requests.push(request); return { ok: true, launchAccepted: true }; },
+      });
+      t.after(() => adapter.close());
+      const result = await tools.find(tool => tool.name === "maestro_spawn").handler({
+        name: "Known selected", cwd: "/synthetic", task: "Bounded", model: "gpt-6.1-sol",
+        contextTier: "long_context", reasoningEffort: "medium",
+      }, { sessionId: own.sessionId });
+      if (providerDefault === "max") {
+        assert.equal(result.resultType, "failure");
+        assert.equal(requests.length, 0);
+      } else {
+        assert.equal(typeof result, "string");
+        assert.equal(JSON.parse(result).launchAccepted, true);
+        assert.equal(requests.length, 1);
+        assert.deepEqual(requests[0].launchCapabilities.models[1], {
+          id: "provider/custom", contextTiers: ["default"], reasoningEfforts: [],
+        });
+        assert.equal(JSON.stringify(requests[0]).includes("ultra"), false);
+      }
+    });
+  }
 });
 
 test("installed routes refuse stale generations, lost participation and wrong invocation", async (t) => {

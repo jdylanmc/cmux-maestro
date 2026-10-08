@@ -28,6 +28,7 @@ MAX_BYTES = 1_048_576
 MAX_NODES = 128
 MAX_DEPTH = 8
 MAX_LIVE_WORKERS = 32
+MAX_LIVE_WORKERS_CEILING = 128
 MAX_ARCHIVES = 32
 MAX_LABEL = 100
 MAX_TASK = 32_768
@@ -299,6 +300,137 @@ def worker_launch_settings(root):
         return validate_launch_settings(json.loads(data))
     except (ValueError, TypeError) as error:
         raise OrchestrationError("Worker launch settings are unreadable; no default account was substituted.") from error
+
+
+CONTEXT_TIERS = {"default", "long_context"}
+REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+PREFERENCE_KEYS = {"model", "contextTier", "reasoningEffort"}
+
+
+def validate_launch_preferences(value):
+    if not isinstance(value, dict) or set(value) - PREFERENCE_KEYS:
+        raise OrchestrationError("Launch preference fields are invalid.")
+    for key, candidate in value.items():
+        if not isinstance(candidate, str):
+            raise OrchestrationError(f"Launch {key} preference is invalid.")
+        if key == "model":
+            validate_launch_settings({"version": 1, "model": candidate})
+        elif re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", candidate) is None:
+            raise OrchestrationError(f"Launch {key} preference is invalid.")
+    return value
+
+
+def requested_launch_preferences(args, *, include_model=True):
+    return validate_launch_preferences({
+        key: value for key, value in (
+            ("model", getattr(args, "model", None) if include_model else None),
+            ("contextTier", getattr(args, "context_tier", None)),
+            ("reasoningEffort", getattr(args, "reasoning_effort", None)),
+        ) if value is not None
+    })
+
+
+def validate_launch_capabilities(value, identity):
+    if (not isinstance(value, dict)
+            or set(value) != {"version", "sessionId", "account", "source", "models"}
+            or type(value["version"]) is not int or value["version"] != 1
+            or not isinstance(identity, dict)
+            or value["sessionId"] != identity.get("sessionId")
+            or value["account"] != {"login": identity.get("login"), "host": identity.get("host")}):
+        raise OrchestrationError("Launch capability evidence session/account binding is invalid.")
+    canonical_uuid(value["sessionId"], "launch capability session ID")
+    if value["source"] not in ("session-model-list", "unavailable"):
+        raise OrchestrationError("Launch capability evidence source is invalid.")
+    models = value["models"]
+    if not isinstance(models, list) or len(models) > 128 or (
+        value["source"] == "unavailable" and models
+    ):
+        raise OrchestrationError("Launch capability model list is invalid.")
+    ids = set()
+    for model in models:
+        if (not isinstance(model, dict)
+                or set(model) - {"id", "contextTiers", "reasoningEfforts", "defaultReasoningEffort"}
+                or not {"id", "contextTiers", "reasoningEfforts"}.issubset(model)):
+            raise OrchestrationError("Launch model capability fields are invalid.")
+        validate_launch_preferences({"model": model["id"]})
+        if model["id"] in ids:
+            raise OrchestrationError("Launch model capability IDs must be unique.")
+        ids.add(model["id"])
+        for field, supported in (("contextTiers", CONTEXT_TIERS), ("reasoningEfforts", REASONING_EFFORTS)):
+            values = model[field]
+            if (not isinstance(values, list) or len(values) > len(supported)
+                    or any(not isinstance(item, str) or item not in supported for item in values)
+                    or len(set(values)) != len(values)):
+                raise OrchestrationError("Launch model capability options are invalid.")
+        if "default" not in model["contextTiers"] or (
+            "defaultReasoningEffort" in model
+            and model["defaultReasoningEffort"] not in model["reasoningEfforts"]
+        ):
+            raise OrchestrationError("Launch model capability defaults are invalid.")
+    if len(json.dumps(value, separators=(",", ":")).encode()) > 32768:
+        raise OrchestrationError("Launch capability evidence exceeds its size bound.")
+    return value
+
+
+def validate_launch_selection(value):
+    if (not isinstance(value, dict)
+            or set(value) != {"requested", "configured", "source", "warnings", "observed"}
+            or value["source"] not in ("session-model-list", "unavailable")
+            or value["observed"] is not None):
+        raise OrchestrationError("Stored launch selection is invalid.")
+    validate_launch_preferences(value["requested"])
+    validate_launch_preferences(value["configured"])
+    if value["source"] == "unavailable" and set(value["configured"]) - {"model"}:
+        raise OrchestrationError("Unverified launch selection cannot configure optional context or effort.")
+    for key, supported in (("contextTier", CONTEXT_TIERS), ("reasoningEffort", REASONING_EFFORTS)):
+        if key in value["configured"] and value["configured"][key] not in supported:
+            raise OrchestrationError("Stored configured launch option is invalid.")
+    warnings = value["warnings"]
+    if not isinstance(warnings, list) or len(warnings) > 3:
+        raise OrchestrationError("Stored launch warnings exceed their bound.")
+    for warning in warnings:
+        bounded_text(warning, "launch warning", 512)
+
+
+def resolve_launch_preferences(requested, settings, capabilities=None, identity=None):
+    validate_launch_preferences(requested)
+    if capabilities is not None:
+        validate_launch_capabilities(capabilities, identity)
+    if not requested:
+        return None
+    configured = {"model": settings["model"]} if settings.get("model") is not None else {}
+    source = capabilities["source"] if capabilities is not None else "unavailable"
+    warnings = []
+    if source == "unavailable":
+        warnings.append("Model capability verification is unavailable; configured defaults retained without optional overrides.")
+    else:
+        models = {model["id"]: model for model in capabilities["models"]}
+        selected = requested.get("model", settings.get("model"))
+        if selected not in models:
+            if "model" in requested:
+                warnings.append("Requested model is unavailable; configured model retained.")
+            selected = settings.get("model")
+        if selected not in models:
+            raise OrchestrationError("Configured fallback model is not available in this session's model catalog.")
+        configured["model"] = selected
+        model = models[selected]
+        if "contextTier" in requested:
+            tier = requested["contextTier"]
+            if tier not in model["contextTiers"]:
+                warnings.append("Requested context tier is unsupported for the selected model; default tier retained.")
+                tier = "default"
+            configured["contextTier"] = tier
+        if "reasoningEffort" in requested:
+            effort = requested["reasoningEffort"]
+            if effort not in model["reasoningEfforts"]:
+                warnings.append("Requested reasoning effort is unsupported for the selected model; advertised or provider default retained.")
+                effort = model.get("defaultReasoningEffort")
+            if effort is not None:
+                configured["reasoningEffort"] = effort
+    selection = {"requested": requested, "configured": configured, "source": source,
+                 "warnings": warnings, "observed": None}
+    validate_launch_selection(selection)
+    return selection
 
 
 def command_launch_settings(root):
@@ -663,7 +795,7 @@ def assigned_directory(value):
     return cwd
 
 
-def normalize_tool_policy(allow, deny, parent=None):
+def normalize_tool_policy(allow, deny, parent=None, *, parent_yolo=False):
     if not isinstance(allow, list) or not isinstance(deny, list):
         raise OrchestrationError("Copilot tool policy must contain rule lists.")
     if len(allow) > MAX_POLICY_RULES or len(deny) > MAX_POLICY_RULES:
@@ -687,7 +819,7 @@ def normalize_tool_policy(allow, deny, parent=None):
         raise OrchestrationError("Broad Copilot tool grants are not supported.")
     if parent is not None:
         parent_allow = set(parent["allow"])
-        if any(rule not in parent_allow for rule in allowed):
+        if not parent_yolo and any(rule not in parent_allow for rule in allowed):
             raise OrchestrationError("A worker cannot grant a child additional Copilot tools.")
         denied = list(dict.fromkeys([*parent["deny"], *denied]))
     denied_set = set(denied)
@@ -703,6 +835,18 @@ def validate_tool_policy(value):
     normalized = normalize_tool_policy(value["allow"], value["deny"])
     if normalized != value:
         raise OrchestrationError("Stored Copilot tool policy is not canonical.")
+
+
+def recorded_native_permissions(actor):
+    if (
+        actor.get("executionMode") != "interactive"
+        or actor.get("permissionPolicyUnverified")
+        or actor.get("permissionMode") not in {"default", "yolo"}
+    ):
+        raise OrchestrationError("Recorded parent permission policy provenance is unavailable.")
+    policy = actor.get("toolPolicy")
+    validate_tool_policy(policy)
+    return actor["permissionMode"], {"allow": list(policy["allow"]), "deny": list(policy["deny"])}
 
 
 def default_root():
@@ -805,6 +949,13 @@ def validate_state(state):
     state.setdefault("archives", [])
     state.setdefault("retainedResources", [])
     state.setdefault("launches", {})
+    limits = state.get("workspaceCapacity", {})
+    if not isinstance(limits, dict) or len(limits) > MAX_NODES:
+        raise OrchestrationError("Workspace capacity settings exceed their safe limit.")
+    for workspace, limit in limits.items():
+        if canonical_uuid(workspace, "capacity workspace ID") != workspace:
+            raise OrchestrationError("Stored capacity workspace ID must be canonical lowercase.")
+        validate_capacity_limit(limit)
     nodes = state["nodes"]
     launches = state["launches"]
     if not isinstance(launches, dict) or len(launches) > MAX_NODES:
@@ -847,6 +998,11 @@ def validate_state(state):
             raise OrchestrationError("Stored runtime protocol is unsupported.")
         if node.get("launchSettings") is not None:
             validate_launch_settings(node["launchSettings"])
+        if "launchSelection" in node:
+            validate_launch_selection(node["launchSelection"])
+            configured = node["launchSelection"]["configured"]
+            if "model" in configured and configured["model"] != (node.get("launchSettings") or {}).get("model"):
+                raise OrchestrationError("Stored launch selection does not match its configured model.")
         if ("copilotExecutable" in node) != ("launchPath" in node):
             raise OrchestrationError("Stored provider executable context is incomplete.")
         if "copilotExecutable" in node:
@@ -859,6 +1015,8 @@ def validate_state(state):
             raise OrchestrationError("Stored launch permission mode is invalid.")
         if node.get("permissionMode") == "yolo" and mode != "interactive":
             raise OrchestrationError("YOLO requires an explicitly launched interactive session.")
+        if "permissionPolicyUnverified" in node and node["permissionPolicyUnverified"] is not True:
+            raise OrchestrationError("Stored permission policy provenance is invalid.")
         messaging = node.get("messaging")
         if messaging is not None and (
             not isinstance(messaging, dict) or set(messaging) != {"version", "routes", "extension"}
@@ -1243,6 +1401,8 @@ class Store:
             node.setdefault("pendingReport", None)
             node.setdefault("supervisor", None)
             node.setdefault("verifiedBoundaryGeneration", None)
+            if node.get("executionMode") == "interactive" and "toolPolicy" not in node:
+                node["permissionPolicyUnverified"] = True
             node.setdefault("toolPolicy", {"allow": [], "deny": []})
             node.setdefault("worktreeLabel", None)
             node.setdefault("branchLabel", None)
@@ -1357,7 +1517,7 @@ class Store:
 
 
 def with_store(root, operation, *, wait=1, read_only=False):
-    # Keep the original eight-session allowance per contender as capacity grows.
+    # Preserve the 32-session reference budget independently of workspace limits.
     deadline = time.monotonic() + wait * max(1, MAX_LIVE_WORKERS / 8)
     while True:
         try:
@@ -1385,6 +1545,61 @@ def read_state(root, *, wait=1):
     )
     # The copied bytes are immutable; validation need not keep writers waiting.
     return Store._decode_state(payload)
+
+
+def validate_capacity_limit(limit):
+    if type(limit) is not int or not 1 <= limit <= MAX_LIVE_WORKERS_CEILING:
+        raise OrchestrationError("Workspace capacity must be an integer from 1 to 128.")
+    return limit
+
+
+def workspace_capacity(state, workspace):
+    nodes = [
+        node for node in state["nodes"].values()
+        if node["workspaceId"] == workspace and has_managed_runtime(node)
+        and node["phase"] != "resource-retired"
+    ]
+    roots = sum(node["role"] == "coordinator" for node in nodes)
+    retained = sum(item["workspaceId"] == workspace for item in state["retainedResources"])
+    limit = state.get("workspaceCapacity", {}).get(workspace, MAX_LIVE_WORKERS)
+    used = len(nodes) + retained
+    node_slots = MAX_NODES - len(state["nodes"])
+    return {
+        "workspaceId": workspace, "limit": limit, "ceiling": MAX_LIVE_WORKERS_CEILING,
+        "managedRoots": roots, "workers": len(nodes) - roots, "retainedResources": retained,
+        "pendingLaunches": sum(item["workspaceId"] == workspace for item in state["launches"].values()),
+        "used": used, "remaining": max(0, limit - used), "nodeSlotsRemaining": node_slots,
+        "admissionAvailable": used < limit and node_slots > 0, "advisory": True,
+    }
+
+
+def require_workspace_capacity(state, workspace):
+    capacity = workspace_capacity(state, workspace)
+    if capacity["used"] >= capacity["limit"]:
+        raise OrchestrationError(
+            "Live worker resource limit reached; reuse a reported worker or close a retired tab."
+        )
+
+
+def command_capacity(args, root):
+    workspace = canonical_uuid(args.workspace, "workspace ID")
+    if args.limit is None:
+        return {"capacity": workspace_capacity(read_state(root), workspace)}
+    limit = validate_capacity_limit(args.limit)
+    if not args.actor_id or not args.token:
+        raise OrchestrationError("Changing capacity requires an authenticated workspace coordinator.")
+
+    def configure(state):
+        actor = authorize(state, args.actor_id, args.token)
+        if actor["role"] != "coordinator" or actor["workspaceId"] != workspace:
+            raise OrchestrationError("Only this workspace's authenticated coordinator may change capacity.")
+        limits = state.setdefault("workspaceCapacity", {})
+        if workspace not in limits and len(limits) >= MAX_NODES:
+            raise OrchestrationError("Workspace capacity settings exceed their safe limit.")
+        limits[workspace] = limit
+        return {"capacity": workspace_capacity(state, workspace)}
+
+    return mutate(root, configure)
 
 
 def remove_launch_credential(root, worker_id):
@@ -1747,6 +1962,7 @@ def command_launch_coordinator(args, root, cmux):
         "version": 1, "copilotAccount": args.account or settings.get("copilotAccount"),
         "model": args.model or settings.get("model"),
     })
+    selection = resolve_launch_preferences(requested_launch_preferences(args, include_model=False), settings)
     if not settings.get("copilotAccount") or not settings.get("model"):
         raise OrchestrationError("A managed coordinator requires an explicit account and configured model.")
     messaging = messaging_configuration(root)
@@ -1772,6 +1988,9 @@ def command_launch_coordinator(args, root, cmux):
         "coordinatorId": node["id"], "runId": node["runId"], "controlToken": token,
         "workspaceId": workspace, "sessionId": node["copilotSessionId"],
     }
+    if selection is not None:
+        node["launchSelection"] = selection
+        receipt.update(launchSelection=selection, warnings=selection["warnings"])
     reservation_prepared = False
     reservation_committed = False
 
@@ -1785,13 +2004,7 @@ def command_launch_coordinator(args, root, cmux):
         reconcile_resources(state, snapshot, observations, retained_gone)
         if len(state["nodes"]) >= MAX_NODES:
             raise OrchestrationError("Orchestration node limit reached.")
-        live = sum(
-            1 for current in state["nodes"].values()
-            if has_managed_runtime(current) and current["workspaceId"] == workspace
-            and current["phase"] != "resource-retired"
-        ) + sum(item["workspaceId"] == workspace for item in state["retainedResources"])
-        if live >= MAX_LIVE_WORKERS:
-            raise OrchestrationError("Live session resource limit reached.")
+        require_workspace_capacity(state, workspace)
         state["nodes"][node["id"]] = node
         state["launches"][node["id"]] = {
             "workerId": node["id"], "runId": node["runId"], "workspaceId": workspace,
@@ -2002,13 +2215,18 @@ def command_native_spawn(root, cmux):
         request = json.loads(raw)
     except (UnicodeError, ValueError) as error:
         raise OrchestrationError("Native launch request is invalid.") from error
-    if not isinstance(request, dict) or set(request) != {"identity", "assignment"}:
+    if (not isinstance(request, dict) or not {"identity", "assignment"}.issubset(request)
+            or set(request) - {"identity", "assignment", "launchCapabilities"}):
         raise OrchestrationError("Native launch request fields are invalid.")
     assignment = request["assignment"]
     if not isinstance(assignment, dict) or set(assignment) - {
-        "name", "cwd", "task", "allowTools", "denyTools", "yolo", "icon", "color"
+        "name", "cwd", "task", "allowTools", "denyTools", "yolo", "icon", "color",
+        "model", "contextTier", "reasoningEffort"
     } or not {"name", "cwd", "task"}.issubset(assignment):
         raise OrchestrationError("Native assignment fields are invalid.")
+    validate_launch_preferences({key: assignment[key] for key in PREFERENCE_KEYS if key in assignment})
+    if "launchCapabilities" in request:
+        validate_launch_capabilities(request["launchCapabilities"], request["identity"])
     if type(assignment.get("yolo", False)) is not bool:
         raise OrchestrationError("Native launch permission mode is invalid.")
     if any(not isinstance(assignment.get(key, []), list) for key in ("allowTools", "denyTools")):
@@ -2019,10 +2237,12 @@ def command_native_spawn(root, cmux):
         raise OrchestrationError("Native launch color is invalid.")
     args = argparse.Namespace(
         actor_id=None, token=None, name=assignment["name"], cwd=assignment["cwd"],
-        task=assignment["task"], allow_tool=assignment.get("allowTools", []),
-        deny_tool=assignment.get("denyTools", []), yolo=assignment.get("yolo", False),
+        task=assignment["task"], allow_tool=assignment.get("allowTools"),
+        deny_tool=assignment.get("denyTools", []), yolo=assignment.get("yolo"),
         require_pinned_launch_settings=True, icon=assignment.get("icon"), color=assignment.get("color"),
         delivery_proof_fixture=None, delivery_proof_experimental=False, delivery_proof_yolo=False,
+        model=assignment.get("model"), context_tier=assignment.get("contextTier"),
+        reasoning_effort=assignment.get("reasoningEffort"), launch_capabilities=request.get("launchCapabilities"),
     )
     return command_spawn(args, root, cmux, native_identity=request["identity"])
 
@@ -2417,6 +2637,19 @@ def command_spawn(args, root, cmux, *, native_identity=None):
     yolo = getattr(args, "yolo", False) or bool(proof and proof.get("yolo"))
     if yolo and actor["role"] != "coordinator":
         raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
+    inherited_permissions = None
+    permission_mode = "yolo" if yolo else "default"
+    if native_identity is not None and actor.get("executionMode") == "interactive":
+        if yolo and args.allow_tool is not None:
+            raise OrchestrationError("Explicit YOLO and a narrowing tool policy cannot be combined.")
+        inherited_permissions = recorded_native_permissions(actor)
+        parent_mode, parent_policy = inherited_permissions
+        if not yolo and args.allow_tool is None and args.yolo is not False:
+            permission_mode = parent_mode
+        allowed = parent_policy["allow"] if args.allow_tool is None else args.allow_tool
+        tool_policy = normalize_tool_policy(
+            allowed, args.deny_tool, parent_policy, parent_yolo=parent_mode == "yolo",
+        )
     if actor.get("messaging") and native_identity is None:
         raise OrchestrationError("Managed sessions must use maestro_spawn to verify their current Copilot account.")
     if native_identity is None and proof is None and os.environ.get("CMUX_MAESTRO_TESTING") != "1":
@@ -2425,18 +2658,26 @@ def command_spawn(args, root, cmux, *, native_identity=None):
     launch_settings = worker_launch_settings(root)
     if native_identity is not None:
         launch_settings = {**launch_settings, "copilotAccount": native_identity["login"]}
-    if (args.require_pinned_launch_settings or proof is not None or messaging is not None or yolo) and (
+    selection = resolve_launch_preferences(
+        requested_launch_preferences(args), launch_settings,
+        getattr(args, "launch_capabilities", None), native_identity,
+    )
+    if (args.require_pinned_launch_settings or proof is not None or messaging is not None
+            or permission_mode == "yolo") and (
         launch_settings.get("copilotAccount") is None
         or launch_settings.get("model") is None
     ):
         raise OrchestrationError(
             "Pinned Maestro account and model settings are required; configure Agent launch settings before spawning."
         )
+    if selection is not None and "model" in selection["configured"]:
+        launch_settings = {**launch_settings, "model": selection["configured"]["model"]}
     # Check availability before creating a terminal; never persist the credential.
     copilot, launch_path = provider_launch_context(actor)
     resolve_copilot_token(launch_settings.get("copilotAccount"))
-    parent_policy = actor["toolPolicy"] if has_managed_runtime(actor) else None
-    tool_policy = normalize_tool_policy(args.allow_tool, args.deny_tool, parent_policy)
+    if inherited_permissions is None:
+        parent_policy = actor["toolPolicy"] if has_managed_runtime(actor) else None
+        tool_policy = normalize_tool_policy(args.allow_tool or [], args.deny_tool, parent_policy)
     pane = cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
     if has_managed_runtime(actor) and not process_matches(actor):
         raise OrchestrationError("Actor worker supervisor identity is stale.")
@@ -2450,23 +2691,14 @@ def command_spawn(args, root, cmux, *, native_identity=None):
                    else authorize(state, args.actor_id, args.token))
         if yolo and current["role"] != "coordinator":
             raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
+        if inherited_permissions is not None and recorded_native_permissions(current) != inherited_permissions:
+            raise OrchestrationError("Recorded parent permission policy changed during spawn.")
         if (
             current["runId"], current["workspaceId"], current.get("surfaceId")
         ) != (actor["runId"], actor["workspaceId"], actor["surfaceId"]):
             raise OrchestrationError("Actor ownership changed during spawn.")
         reconcile_resources(state, snapshot, observations, retained_gone)
-        live = sum(
-            1 for node in state["nodes"].values()
-            if has_managed_runtime(node) and node["workspaceId"] == current["workspaceId"]
-            and node["phase"] != "resource-retired"
-        ) + sum(
-            1 for resource in state["retainedResources"]
-            if resource["workspaceId"] == current["workspaceId"]
-        )
-        if live >= MAX_LIVE_WORKERS:
-            raise OrchestrationError(
-                "Live worker resource limit reached; reuse a reported worker or close a retired tab."
-            )
+        require_workspace_capacity(state, current["workspaceId"])
         depth = 0
         cursor = current
         while cursor["parentId"] is not None:
@@ -2505,7 +2737,9 @@ def command_spawn(args, root, cmux, *, native_identity=None):
             state["nodes"][identifier]["deliveryProof"] = proof
         if messaging is not None:
             state["nodes"][identifier]["messaging"] = messaging
-        state["nodes"][identifier]["permissionMode"] = "yolo" if yolo else "default"
+        state["nodes"][identifier]["permissionMode"] = permission_mode
+        if selection is not None:
+            state["nodes"][identifier]["launchSelection"] = selection
         state["launches"][identifier] = {
             "workerId": identifier, "runId": current["runId"],
             "sessionId": session_id, "generation": 1,
@@ -2514,9 +2748,11 @@ def command_spawn(args, root, cmux, *, native_identity=None):
         }
         current["lastControlAt"] = timestamp
     mutate(root, reserve)
-    return launch_reserved_session(
+    result = launch_reserved_session(
         root, cmux, identifier, session_id, worker_token, actor["workspaceId"], pane, cwd, label
     )
+    return ({**result, "launchSelection": selection, "warnings": selection["warnings"]}
+            if selection is not None else result)
 
 
 def launch_reserved_session(root, cmux, identifier, session_id, worker_token, workspace, pane, cwd, label):
@@ -2573,6 +2809,10 @@ def interactive_arguments(node, prompt):
     model = (node.get("launchSettings") or {}).get("model")
     if model is not None:
         arguments += ["--model", model]
+    configured = (node.get("launchSelection") or {}).get("configured", {})
+    for key, flag in (("contextTier", "--context"), ("reasoningEffort", "--reasoning-effort")):
+        if key in configured:
+            arguments += [flag, configured[key]]
     for rule in node["toolPolicy"]["allow"]:
         arguments += ["--allow-tool", rule]
     for rule in node["toolPolicy"]["deny"]:
@@ -3706,7 +3946,8 @@ def command_status(args, root, cmux):
             if exited:
                 retire_messaging(node)
         apply_git_evidence(state, git_evidence)
-        return {"runId": current_actor["runId"], "workers": [{
+        return {"runId": current_actor["runId"],
+                "capacity": workspace_capacity(state, current_actor["workspaceId"]), "workers": [{
             "workerId": node["id"], "parentId": node["parentId"], "name": node["label"],
             "role": node["role"],
             "executionMode": node.get("executionMode"),
@@ -3944,6 +4185,11 @@ def parser():
         "launch-settings",
         help="Report whether pinned Maestro account and model settings are ready without revealing them",
     )
+    capacity = commands.add_parser("capacity", help="Inspect advisory workspace capacity or configure its limit")
+    capacity.add_argument("--workspace", required=True)
+    capacity.add_argument("--limit", type=int, help="Persist a limit from 1 to 128; omitted means read-only preflight")
+    capacity.add_argument("--actor-id")
+    capacity.add_argument("--token")
     icons = commands.add_parser("icons", help="Search pinned Nerd Font glyphs; no registration required")
     icons.add_argument("--search")
     icons.add_argument("--offset", type=int, default=0)
@@ -3966,6 +4212,8 @@ def parser():
     coordinator.add_argument("--task", required=True)
     coordinator.add_argument("--account", help="Subscription for this new root; otherwise use the explicit coordinator setting")
     coordinator.add_argument("--model")
+    coordinator.add_argument("--context-tier")
+    coordinator.add_argument("--reasoning-effort")
     coordinator.add_argument("--allow-tool", action="append", default=[])
     coordinator.add_argument("--deny-tool", action="append", default=[])
     coordinator.add_argument("--yolo", action="store_true", help="Explicitly user-approved root permission mode")
@@ -3977,10 +4225,13 @@ def parser():
     spawn.add_argument("--name", required=True)
     spawn.add_argument("--task", required=True)
     spawn.add_argument("--cwd", required=True)
-    spawn.add_argument("--allow-tool", action="append", default=[])
+    spawn.add_argument("--allow-tool", action="append")
     spawn.add_argument("--deny-tool", action="append", default=[])
     spawn.add_argument("--require-pinned-launch-settings", action="store_true")
-    spawn.add_argument("--yolo", action="store_true",
+    spawn.add_argument("--model")
+    spawn.add_argument("--context-tier")
+    spawn.add_argument("--reasoning-effort")
+    spawn.add_argument("--yolo", action="store_true", default=None,
                        help="Explicit user-approved coordinator launch with --allow-all; preserves denies")
     spawn.add_argument("--delivery-proof-fixture", help="Opt in to one prepared disposable native-extension fixture")
     spawn.add_argument("--delivery-proof-experimental", action="store_true",
@@ -4036,9 +4287,11 @@ def main(argv=None):
             # state file, host RPC argument, prompt, or launch receipt.
             print(command_launch_credential(root), end="")
             return 0
-        cmux = None if args.command in {"launch-settings", "runtime", "report", "native-observe"} else Cmux()
+        cmux = None if args.command in {"launch-settings", "capacity", "runtime", "report", "native-observe"} else Cmux()
         if args.command == "launch-settings":
             output = command_launch_settings(root)
+        elif args.command == "capacity":
+            output = command_capacity(args, root)
         elif args.command == "register":
             output = command_register(args, root, cmux)
         elif args.command == "launch-coordinator":
