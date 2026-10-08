@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.directory = ROOT / ".build/metadata-tests" / str(uuid.uuid4())
         self.directory.mkdir(parents=True)
         self.commands = []
+        self.build_environments = []
 
     def tearDown(self):
         shutil.rmtree(self.directory)
@@ -45,23 +47,116 @@ class IntegratedTestScopeTests(unittest.TestCase):
         ]}]}
         return summary, tests
 
-    def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0, benchmark_flag=None):
+    def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0, benchmark_flag=None, guide_exit=0):
         def runner(command, **kwargs):
             self.commands.append(command)
             if command[0] == "xcodebuild":
+                self.build_environments.append(kwargs.get("env"))
                 code = (isolated_exit if any(arg.startswith("-only-testing:") for arg in command)
                         else remaining_exit if "test-without-building" in command else 0)
                 return subprocess.CompletedProcess(command, code)
             scope = Path(command[command.index("--path") + 1]).stem
             values = isolated if scope == "isolated" else remaining
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(values[0 if command[4] == "summary" else 1]))
-        with patch("builtins.print"), patch.dict(os.environ):
+        # These fixtures isolate the existing partition/count policy, not native guide execution.
+        with patch("builtins.print"), patch.dict(os.environ), \
+                patch.object(scopes, "produce_guide_acceptance", return_value={"exitCode": guide_exit, "environment": {}}), \
+                patch.object(scopes, "revalidate_guide_acceptance",
+                             side_effect=ValueError("Synthetic native producer failed") if guide_exit else None), \
+                patch.object(scopes, "validate_original_guide_cases"):
             if benchmark_flag is None:
                 os.environ.pop(BENCHMARK_FLAG, None)
             else:
                 os.environ[BENCHMARK_FLAG] = benchmark_flag
             result = scopes.run(["xcodebuild", "-scheme", "CMUXMaestroPreview"], self.directory / "results", runner)
         return result, json.loads((self.directory / "results/coverage.json").read_text())
+
+    def test_native_producer_failure_preserves_both_original_integrated_actions(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                        self.report([("OtherSuite/test()", "Passed")]), guide_exit=65)
+        self.assertEqual(result, 1)
+        self.assertEqual(evidence["guideAcceptance"]["exitCode"], 65)
+        self.assertIn("guideAcceptanceError", evidence)
+        self.assertEqual(sum("test-without-building" in command for command in self.commands), 2)
+        self.assertEqual(evidence["remainingCounts"]["passedTests"], 1)
+        for environment in self.build_environments[1:]:
+            self.assertFalse(any(key.startswith("TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_") for key in environment))
+
+    def test_stale_acceptance_aliases_never_reach_original_validators(self):
+        original = {
+            "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+            "CMUX_GUIDE_ACCEPTANCE_DIRECTORY": "/prior/invocation",
+            "TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_INVOCATION": "stale",
+            "TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_STATUSES_SHA256": "stale",
+        }
+        actual = scopes.hosted_test_environment(original)
+        self.assertFalse(any("GUIDE_ACCEPTANCE" in key for key in actual))
+        self.assertIn("TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_INVOCATION", original)
+
+    def test_hosted_venue_forwarding_uses_original_values_for_both_test_actions(self):
+        with patch.dict(os.environ, {
+            "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+            "TEST_RUNNER_GITHUB_ACTIONS": "stale",
+            "TEST_RUNNER_RUNNER_ENVIRONMENT": "self-hosted",
+            "TEST_RUNNER_UNRELATED": "preserved",
+        }):
+            original = dict(os.environ)
+            result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                            self.report([("OtherSuite/test()", "Passed")]))
+            self.assertEqual(dict(os.environ), original)
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.build_environments), 3)
+        self.assertIsNone(self.build_environments[0])
+        for environment in self.build_environments[1:]:
+            self.assertIsNotNone(environment)
+            self.assertEqual(environment["GITHUB_ACTIONS"], "true")
+            self.assertEqual(environment["RUNNER_ENVIRONMENT"], "github-hosted")
+            for name in ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT"):
+                self.assertEqual(environment["TEST_RUNNER_" + name], environment[name])
+            self.assertEqual(environment["TEST_RUNNER_UNRELATED"], "preserved")
+        self.assertEqual(evidence["guideCalibrationVenue"], {
+            "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+            "forwarding": "xcodebuild TEST_RUNNER_",
+        })
+
+    def test_local_or_nonhosted_venue_strips_aliases_without_excluding_existing_actions(self):
+        for outer in (
+            {}, {"GITHUB_ACTIONS": "true"}, {"RUNNER_ENVIRONMENT": "github-hosted"},
+            {"GITHUB_ACTIONS": "false", "RUNNER_ENVIRONMENT": "github-hosted"},
+            {"GITHUB_ACTIONS": "TRUE", "RUNNER_ENVIRONMENT": "github-hosted"},
+            {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted"},
+            {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "__CURRENT_VALUE__"},
+        ):
+            with self.subTest(outer=outer), patch.dict(os.environ, {
+                **outer, "TEST_RUNNER_GITHUB_ACTIONS": "true",
+                "TEST_RUNNER_RUNNER_ENVIRONMENT": "github-hosted",
+                "TEST_RUNNER_UNRELATED": "preserved",
+            }, clear=True):
+                original = dict(os.environ)
+                result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                                self.report([("OtherSuite/test()", "Passed")]))
+                self.assertEqual(result, 0)
+                self.assertEqual(dict(os.environ), original)
+                commands = [command for command in self.commands if command[0] == "xcodebuild"]
+                self.assertEqual(len(commands), 3)
+                self.assertIn("build-for-testing", commands[0])
+                self.assertIn("-only-testing:" + scopes.SELECTOR, commands[1])
+                self.assertIn("-skip-testing:" + scopes.SELECTOR, commands[2])
+                self.assertIsNone(self.build_environments[0])
+                for environment in self.build_environments[1:]:
+                    self.assertNotIn("TEST_RUNNER_GITHUB_ACTIONS", environment)
+                    self.assertNotIn("TEST_RUNNER_RUNNER_ENVIRONMENT", environment)
+                    self.assertEqual(environment.get("GITHUB_ACTIONS"), outer.get("GITHUB_ACTIONS"))
+                    self.assertEqual(environment.get("RUNNER_ENVIRONMENT"), outer.get("RUNNER_ENVIRONMENT"))
+                    self.assertEqual(environment["TEST_RUNNER_UNRELATED"], "preserved")
+                self.assertEqual(evidence["guideCalibrationVenue"], {
+                    "GITHUB_ACTIONS": outer.get("GITHUB_ACTIONS"),
+                    "RUNNER_ENVIRONMENT": outer.get("RUNNER_ENVIRONMENT"),
+                    "forwarding": None,
+                })
+                shutil.rmtree(self.directory / "results")
+                self.commands.clear()
+                self.build_environments.clear()
 
     def test_verified_one_test_then_full_complement_without_serialization(self):
         result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
@@ -435,8 +530,44 @@ class IntegratedTestScopeTests(unittest.TestCase):
 
 
 class BuildMetadataTests(unittest.TestCase):
+    def test_generated_guide_reference_is_exact_digest_only_and_fails_on_drift(self):
+        self.fixture("tests")
+        canonical = self.directory / "SKILL.md"
+        canonical.write_bytes(b"---\nname: maestro\n---\nSynthetic build guide.\n")
+        destination = self.app / "Contents/Resources/maestro-guide.sha256"
+        subprocess.run([sys.executable, str(ROOT / "scripts/write-guide-reference.py"),
+                        str(canonical), str(destination)], check=True)
+        self.assertEqual(destination.read_bytes(),
+                         (hashlib.sha256(canonical.read_bytes()).hexdigest() + "\n").encode("ascii"))
+        metadata.verify_guide_reference(self.app, canonical)
+        canonical.write_bytes(b"Changed canonical guide.\n")
+        with self.assertRaisesRegex(ValueError, "differs"):
+            metadata.verify_guide_reference(self.app, canonical)
+        for content in (b"", b"invalid\n", b"a" * 64, b"a" * 66):
+            destination.write_bytes(content)
+            with self.assertRaisesRegex(ValueError, "malformed"):
+                metadata.verify_guide_reference(self.app, canonical)
+        destination.unlink()
+        with self.assertRaisesRegex(ValueError, "missing"):
+            metadata.verify_guide_reference(self.app, canonical)
+        destination.symlink_to(canonical)
+        with self.assertRaisesRegex(ValueError, "malformed"):
+            metadata.verify_guide_reference(self.app, canonical)
+
+    def test_guide_reference_generation_rejects_missing_empty_and_oversized_source(self):
+        source = self.directory / "guide.md"
+        destination = self.directory / "reference"
+        for content in (None, b"", b"x" * 65_537):
+            if content is not None:
+                source.write_bytes(content)
+            result = subprocess.run([sys.executable, str(ROOT / "scripts/write-guide-reference.py"),
+                                     str(source), str(destination)], capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(destination.exists())
+
     def test_ci_preserves_all_eleven_validation_commands_without_new_conditions(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
         self.assertEqual(re.findall(r"^        run: (.+)$", workflow, re.MULTILINE), [
             "python3 scripts/test-cmux-maestro-orchestrator.py",
             "python3 scripts/test-delivery-proof.py",
@@ -459,11 +590,15 @@ class BuildMetadataTests(unittest.TestCase):
 
     def test_ci_always_uploads_json_evidence_and_retains_required_png_artifact(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
         steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
         for title, name, path in (
             ("Upload integrated test scope evidence", "integrated-test-scope-evidence",
              "|\n            .build/tests/scoped-results/**/*.json\n"
              "            .build/tests/scoped-results/**/*.txt\n"
+             "            .build/tests/scoped-results/**/guide-acceptance/*.log\n"
+             "            .build/tests/scoped-results/**/guide-acceptance/probe.xcresult\n"
+             "            .build/tests/scoped-results/**/guide-acceptance/images/*.png\n"
              "            .build/setup-tests/metadata-watchdog/"),
             ("Upload synthetic sidebar layout renders", "sidebar-layout-offscreen",
              ".build/layout-validation/offscreen/*.png"),
@@ -484,6 +619,7 @@ class BuildMetadataTests(unittest.TestCase):
 
     def test_ci_collects_final_metadata_diagnostics_after_both_producers(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
         steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
         uploads = [(index, step) for index, step in enumerate(steps)
                    if "          name: integrated-test-scope-evidence\n" in step]
@@ -787,8 +923,16 @@ class BuildMetadataTests(unittest.TestCase):
             str(ROOT / "CMUXMaestroPreview.xcodeproj/project.pbxproj"),
         ]))
         objects = project["objects"]
+        metadata.verify_guide_ui_project(project)
         for target in objects.values():
             if target.get("isa") != "PBXNativeTarget":
+                continue
+            if target["name"] in (metadata.GUIDE_HOST, metadata.GUIDE_TESTS):
+                for config_id in objects[target["buildConfigurationList"]]["buildConfigurations"]:
+                    settings = objects[config_id]["buildSettings"]
+                    ending = ".GuideHost" if target["name"] == metadata.GUIDE_HOST else ".GuideUITests"
+                    self.assertEqual(settings["PRODUCT_BUNDLE_IDENTIFIER"],
+                                     metadata.BASE_ID + ".Validation.Tests" + ending)
                 continue
             for config_id in objects[target["buildConfigurationList"]]["buildConfigurations"]:
                 settings = objects[config_id]["buildSettings"]

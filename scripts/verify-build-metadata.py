@@ -2,6 +2,7 @@
 """Check validation namespaces and the explicit native publication boundary."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,6 +27,28 @@ READ_PATHS = [
 ]
 SANDBOX_KEY = "com.apple.security.app-sandbox"
 READ_KEY = "com.apple.security.temporary-exception.files.home-relative-path.read-only"
+GUIDE_HOST = "CMUXMaestroGuideUIHost"
+GUIDE_TESTS = "CMUXMaestroGuideUITests"
+GUIDE_RECEIPT_SCHEMA = 2
+GUIDE_SHARED_SOURCES = [
+    "CMUXMaestroPreview/Integration/CLIIntegrationGuide.swift",
+    "CMUXMaestroPreview/Integration/CLIIntegrationSettingsView.swift",
+    "CMUXMaestroPreview/Integration/CLIIntegrationGuideModel.swift",
+    "CMUXMaestroPreview/Integration/CLIIntegrationGuideReader.swift",
+    "CMUXMaestroPreview/CopilotShared/CopilotIdentityRecord.swift",
+    "CMUXMaestroPreview/CopilotShared/CopilotFileAccess.swift",
+]
+GUIDE_HOST_SOURCES = [
+    "CMUXMaestroGuideUIHost/GuideValidationApp.swift",
+    "CMUXMaestroGuideUIHost/GuideValidationContent.swift",
+    "CMUXMaestroGuideUIHost/GuideAcceptanceFixture.swift",
+    "CMUXMaestroPreviewTests/GuideAcceptanceEvidence.swift",
+] + GUIDE_SHARED_SOURCES
+GUIDE_TEST_SOURCES = [
+    "CMUXMaestroGuideUITests/GuideConsumerReadinessTests.swift",
+    "CMUXMaestroGuideUITests/GuideAcceptanceTests.swift",
+    "CMUXMaestroPreviewTests/GuideAcceptanceEvidence.swift",
+]
 
 
 def require(condition, message):
@@ -83,6 +106,131 @@ def verify_settings(rows, mode):
             require(settings.get("CODE_SIGNING_ALLOWED") == "NO", "Validation unexpectedly enables signing.")
 
 
+def verify_guide_ui_project(project):
+    objects = project["objects"]
+    targets = {value["name"]: (key, value) for key, value in objects.items()
+               if value.get("isa") == "PBXNativeTarget"}
+    host_id, host = targets[GUIDE_HOST]
+    tests_id, tests = targets[GUIDE_TESTS]
+    inventory = {}
+    for name, target, expected, product in (
+        (GUIDE_HOST, host, GUIDE_HOST_SOURCES, "application"),
+        (GUIDE_TESTS, tests, GUIDE_TEST_SOURCES, "bundle.ui-testing"),
+    ):
+        require(target["productType"] == "com.apple.product-type." + product, "Wrong guide product type.")
+        require(not target.get("fileSystemSynchronizedGroups"), "Guide validation sources must be explicit.")
+        require(not target.get("packageProductDependencies"), "Guide validation must not depend on runtime packages.")
+        sources = []
+        kinds = []
+        for phase_id in target["buildPhases"]:
+            phase = objects[phase_id]
+            kinds.append(phase["isa"])
+            require(phase["isa"] in ("PBXSourcesBuildPhase", "PBXFrameworksBuildPhase"),
+                    "Guide validation must not embed runtime or execute build scripts.")
+            if phase["isa"] == "PBXSourcesBuildPhase":
+                for build_id in phase["files"]:
+                    reference = objects[objects[build_id]["fileRef"]]
+                    require(reference["sourceTree"] == "SOURCE_ROOT", "Guide source must use exact source-root path.")
+                    sources.append(reference["path"])
+            else:
+                require(not phase["files"], "Guide frameworks must use only SDK autolinking.")
+        require(sorted(kinds) == ["PBXFrameworksBuildPhase", "PBXSourcesBuildPhase"], "Unexpected guide phases.")
+        require(sorted(sources) == sorted(expected), "Guide single-source membership differs.")
+        inventory[name] = sorted(sources)
+    require(not host["dependencies"], "Guide host must not launch/build production dependencies.")
+    require([objects[key]["target"] for key in tests["dependencies"]] == [host_id],
+            "UI consumer must depend only on the synthetic host.")
+    attributes = objects[project["rootObject"]]["attributes"]["TargetAttributes"]
+    require(attributes[tests_id]["TestTargetID"] == host_id, "UI test target association differs.")
+    for name, (_, target) in targets.items():
+        if name not in (GUIDE_HOST, GUIDE_TESTS):
+            require(not any(objects[key]["target"] in (host_id, tests_id) for key in target["dependencies"]),
+                    "Production target must not depend on UI validation.")
+    app = targets["CMUXMaestroPreview"][1]
+    roots = [objects[key] for key in app["fileSystemSynchronizedGroups"]]
+    require(len(roots) == 1 and roots[0]["path"] == "CMUXMaestroPreview",
+            "Shared guide must remain in the production synchronized source root.")
+    excluded = [path for key in roots[0].get("exceptions", [])
+                for path in objects[key].get("membershipExceptions", [])]
+    require(not any(path.removeprefix("CMUXMaestroPreview/") in excluded for path in GUIDE_SHARED_SOURCES),
+            "Shared guide source excluded from production.")
+    return inventory
+
+
+def verify_guide_ui_settings(rows):
+    require(len(rows) == 2 and {row["target"] for row in rows} == {GUIDE_HOST, GUIDE_TESTS},
+            "Guide scheme must resolve exactly the host and UI consumer.")
+    for row in rows:
+        name, settings = row["target"], row["buildSettings"]
+        ending = ".GuideHost" if name == GUIDE_HOST else ".GuideUITests"
+        require(settings.get("PRODUCT_BUNDLE_IDENTIFIER") == BASE_ID + ".Validation.Tests" + ending,
+                "Guide product escaped its fixed validation namespace.")
+        require(settings.get("PRODUCT_NAME") == name, "Guide product name differs.")
+        require(settings.get("PRODUCT_TYPE") == "com.apple.product-type."
+                + ("application" if name == GUIDE_HOST else "bundle.ui-testing"), "Wrong resolved guide type.")
+        for key, expected in (("CODE_SIGNING_ALLOWED", "NO"), ("CODE_SIGNING_REQUIRED", "NO"),
+                              ("ENABLE_APP_SANDBOX", "NO"), ("SKIP_INSTALL", "YES"),
+                              ("MACOSX_DEPLOYMENT_TARGET", "14.0")):
+            require(settings.get(key) == expected, "Guide validation policy differs: " + key)
+        require(not settings.get("CODE_SIGN_ENTITLEMENTS") and not settings.get("DEVELOPMENT_TEAM"),
+                "Guide probe must not expand signing or entitlements.")
+        conditions = settings.get("SWIFT_ACTIVE_COMPILATION_CONDITIONS", "")
+        require("CMUX_GUIDE_UI_VALIDATION" in (conditions.split() if isinstance(conditions, str) else conditions),
+                "Guide target lacks its validation compilation guard.")
+        if name == GUIDE_TESTS:
+            require(settings.get("TEST_TARGET_NAME") == GUIDE_HOST, "Wrong UI host association.")
+            require(not settings.get("TEST_HOST") and not settings.get("BUNDLE_LOADER"),
+                    "Guide consumer must not be an in-process unit test.")
+        else:
+            require(settings.get("ENABLE_DEBUG_DYLIB") == "YES",
+                    "Guide host requires the verified split-debug implementation layout.")
+
+
+def verify_guide_ui_products(products):
+    require(not Path(products).is_symlink(), "Guide products directory must not be redirected.")
+    products = Path(products).resolve()
+    host = products / (GUIDE_HOST + ".app")
+    runner = products / (GUIDE_TESTS + "-Runner.app")
+    test = runner / "Contents/PlugIns" / (GUIDE_TESTS + ".xctest")
+    records = []
+    def required_file(path):
+        relative = path.relative_to(products)
+        require(all(not (products / parent).is_symlink() for parent in (relative, *relative.parents)),
+                "Guide product path must not contain symlinks: " + str(relative))
+        require(path.is_file(), "Required guide product file missing: " + str(relative))
+        return path
+
+    for bundle, ending, package, executable, code_names in (
+        (host, ".GuideHost", "APPL", GUIDE_HOST, (GUIDE_HOST, GUIDE_HOST + ".debug.dylib", "__preview.dylib")),
+        (runner, ".GuideUITests.xctrunner", "APPL", GUIDE_TESTS + "-Runner", (GUIDE_TESTS + "-Runner",)),
+        (test, ".GuideUITests", "BNDL", GUIDE_TESTS, (GUIDE_TESTS,)),
+    ):
+        info = plist(required_file(bundle / "Contents/Info.plist"))
+        identifier = BASE_ID + ".Validation.Tests" + ending
+        require(info.get("CFBundleIdentifier") == identifier, "Built guide bundle identifier differs.")
+        require(info.get("CFBundlePackageType") == package, "Built guide package type differs.")
+        require(info.get("CFBundleExecutable") == executable, "Built guide executable name differs.")
+        code_files = []
+        for name in code_names:
+            binary = required_file(bundle / "Contents/MacOS" / name)
+            require(0 < binary.stat().st_size <= 67_108_864, "Guide code file empty or oversized.")
+            if name == executable:
+                require(os.access(binary, os.X_OK), "Guide executable is not executable.")
+            code_files.append({"path": str(binary.relative_to(bundle)),
+                               "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()})
+        require({path.name for path in (bundle / "Contents/MacOS").iterdir()} == set(code_names),
+                "Guide product has unbound code files.")
+        records.append({"product": str(bundle.relative_to(products)), "bundleIdentifier": identifier,
+                        "codeFiles": code_files})
+    host_info = plist(host / "Contents/Info.plist")
+    require(not any(key.startswith("CMUXMaestro") for key in host_info), "Synthetic host has a production bridge.")
+    require(not (host / "Contents/Extensions").exists() and not (host / "Contents/Helpers").exists(),
+            "Synthetic host embeds production components.")
+    resources = host / "Contents/Resources"
+    require(not resources.exists() or not list(resources.iterdir()), "Synthetic host has unexpected resources.")
+    return records
+
+
 def verify_orchestration_resources(app, *, required=True):
     resources = Path(app) / "Contents/Resources"
     controller = resources / "cmux-maestro-orchestrator.py"
@@ -101,6 +249,19 @@ def verify_messaging_resources(app):
         resource = resources / name
         require(resource.is_file() and not resource.is_symlink() and 0 < resource.stat().st_size <= maximum,
                 f"Bundled messaging resource {name} is missing or oversized.")
+
+
+def verify_guide_reference(app, canonical):
+    reference = Path(app) / "Contents/Resources/maestro-guide.sha256"
+    require(reference.is_file() and not reference.is_symlink() and reference.stat().st_size == 65,
+            "Build guide reference is missing or malformed.")
+    with reference.open("rb") as stream:
+        actual = stream.read(66)
+    with Path(canonical).open("rb") as stream:
+        content = stream.read(65_537)
+    require(0 < len(content) <= 65_536, "Canonical guide is empty or oversized.")
+    expected = (hashlib.sha256(content).hexdigest() + "\n").encode("ascii")
+    require(actual == expected, "Build guide reference differs from this source checkout.")
 
 
 def verify_metadata(app, mode, *, expected_build=APP_BUILD_VERSION, require_orchestration=True, require_bridge=True):
@@ -291,6 +452,8 @@ def main():
             verify_signed(args.app)
         else:
             verify_metadata(args.app, args.mode)
+        if args.app:
+            verify_guide_reference(args.app, Path(__file__).resolve().parents[1] / "skills/maestro/SKILL.md")
         if args.source_entitlements:
             verify_profile(plist(args.source_entitlements))
     except (ValueError, OSError, KeyError, plistlib.InvalidFileException, subprocess.CalledProcessError):

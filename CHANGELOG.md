@@ -6,6 +6,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Show read-only global Maestro guide-content status in Settings > CLI Integration,
+  with explicit Re-check, build-relative matching and read/copy feedback.
+  Keep installation and updates manual through the existing copyable command;
+  guide status does not imply runtime or messaging readiness (#55).
 - Request one exact owned child-terminal close through stock CMUX, preserving
   private ownership and launch guards. Return request acceptance without waiting
   for removal, retrying, shutting down the provider, or releasing capacity; inherit

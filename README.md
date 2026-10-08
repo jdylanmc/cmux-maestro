@@ -213,17 +213,21 @@ YOLO and terminal I/O; they do not require a guide or pass `--plugin-dir`.
 ### CLI Integration: install the global guide
 
 Maestro's native **Settings > CLI Integration** tab explains the guide and
-provides selectable command text and **Copy install command**. It does not inspect
-global files, check versions or manage updates. Richer Settings management is
-deferred; it is not required for messaging or guide distribution. After the skill
-is merged to `main`, run this command in your own terminal:
+provides read-only guide-content status, **Re-check**, selectable command text
+and **Copy install command**. Each global location is reported separately as
+missing, unreadable, different, or **Matches this build**. Matching compares
+the file's exact bytes with a SHA-256 reference generated from this build's
+canonical `skills/maestro/SKILL.md`; the global guide itself is not bundled.
+A missing or invalid build reference is an explicit comparison error, not a
+local-guide verdict. Different content may be newer or customized, not outdated.
+Run this command in your own terminal to install or update:
 
 ```sh
 npx skills add jdylanmc/cmux-maestro --skill maestro --agent github-copilot --global --copy
 ```
 
 Review the installer's interactive confirmation; the command deliberately omits
-`--yes`. Settings only copies text: it does not execute `npx`, open a terminal,
+`--yes`. Settings only reads guide content and copies text: it does not execute `npx`, open a terminal,
 install a skill, or change global configuration. This is the **single canonical
 guide distribution**, from `skills/maestro/{SKILL.md,intent.md}`. Invoke global
 **`/maestro`**, or use the skill tool with `{"skill":"maestro"}`. No extra
@@ -247,6 +251,174 @@ all global skills live under `.copilot`. Bare plugin loading and explicit
 `--plugin-dir` both failed live; no upstream root cause is claimed. See the
 [public findings](docs/delivery-proof.md#guide-distribution-decision-after-live-proof).
 Any refresh of the user's existing global copy remains a separate consentful action.
+
+On opening CLI Integration or choosing **Re-check**, Maestro reads only
+`~/.agents/skills/maestro/SKILL.md` (the observed shared global installation)
+and `~/.copilot/skills/maestro/SKILL.md` (Copilot's agent-specific global location).
+Copies and symbolic links are supported; only stable regular files up to 64 KiB
+are read, off the main thread. Broken links, unsupported types, access failures
+and files changing during a read are reported without changing anything.
+No polling, project-skill search, provider configuration or session history is
+read. These are file observations, not evidence of which guide a session loaded,
+upstream freshness, observer hooks, observation health or messaging readiness.
+The isolated non-GUI reader/model checks can run with
+`./scripts/test-copilot-setup.sh --guide-only`; the normal setup and hosted test
+suites retain their full coverage.
+
+The guide rendering/action tests require the isolated GitHub-hosted validation
+venue. The two original `CLIIntegrationGuideRenderingTests` acceptance methods
+remain executed Swift Testing tests, now independently validating typed native
+observations rather than dispatching actions in the integrated app. Two distinct
+`GuideAcceptanceTests` XCTest methods produce those observations in the dedicated
+guide host **before** the original validators, within the same fresh integrated
+invocation. The three original resource/exposure/no-op controls are unchanged.
+This approved producer/validator split does not equate a passing result flag
+with behavioral evidence.
+
+Acceptance uses the original 600x414 AppKit composition (600x350 real guide and
+600x64 minimal subject), explicit accessibility environment, five statuses in
+both appearances, failure/success Copy attempts, and both complete Re-check
+transitions per appearance. Public snapshots independently identify the exposed
+subjects. Fixed synthetic controls dispatch `accessibilityPerformPress()` on
+the real node found through bounded unignored accessibility traversal; its
+actual Boolean return **and** effect are required. Clicks on the guide, raw-view
+AX lookup, direct model-action substitutes, and fallback dispatch are not used.
+Exact fittingSize/document/clip measurements and 48 original-named `cacheDisplay`
+PNGs remain host observations, not screenshot or frame approximations. Synthetic
+Copy/readers never access installed guides or the general pasteboard.
+
+The integrated test runner removes stale `TEST_RUNNER_` aliases for
+`GITHUB_ACTIONS` and `RUNNER_ENVIRONMENT` from its copied test environment.
+It forwards their original outer values through xcodebuild's documented
+`TEST_RUNNER_` mechanism only when both identify the exact GitHub-hosted venue.
+Absent/invalid values leave those aliases absent without excluding unrelated
+integrated build/test actions. The calibration's native guard still logs and
+checks its compilation, bundle and both environment predicates independently
+before AppKit access, refusing presentation outside the allowed venue.
+Their public AppKit presentation calibrates an ordinary SwiftUI button and
+the unchanged guide in separate hosting controllers in the same synthetic window.
+It preserves an already-regular activation policy, verifies the actual policy
+before and during readiness, and restores it only when it differs from the
+saved original. Required policy changes must succeed; skipped setters are not
+reported as successful calls.
+Exact exposed-root readiness and actions share one 180-second budget per active
+test case, not per control or appearance. A passing minimal control with a failing
+guide narrows investigation to composition; both failing leaves the host/query
+boundary unresolved, not a proven production defect. A changed host passing does
+not identify which presentation operation caused it. Native
+acceptance still requires the actual hosted results. For local compilation
+without opening windows, use `./scripts/test-copilot-setup.sh --compile-only`.
+The native wrapper's closed `--acceptance` mode selects exactly the two producers;
+default mode explicitly selects only the unchanged readiness case below.
+Each full native case has one shared 180-second budget, including all scenarios,
+actions, captures, observations and application teardown. Successful termination
+is checked immediately against that same deadline before final elapsed evidence;
+subsequent validation and attachments retain their final deadline checks.
+Public-consumer predicates are evaluated immediately before installing a wait;
+already-ready observations do not incur the predicate waiter's initial delay.
+Pending observations still use the remaining shared budget. Both immediate
+evaluation and normally returning waits are checked for late completion.
+Synchronous public operations are not claimed to be preemptible.
+The synthetic exposure control returns unignored children from its public
+`accessibilityChildren()` getter and uses that same projection for navigation.
+Filtering only inside the host's traversal or navigation getter does not remove
+ignored objects from the public children attribute. The raw omitted/ignored
+controls, their attributes/actions, and leaf buttons remain intact. Complete
+public snapshots must still contain exactly one exposed positive control; the
+consumer never filters duplicate controls. Local parser checks reject both the
+recorded two-node and earlier three-node failures; only fresh hosted snapshots
+can establish that the public projection is repaired.
+
+Fresh acceptance requires clean source before and after execution, exact source
+inventory/hashes, built product namespaces/hashes, attributable push or PR
+synthetic-merge parents, exact native identities/counts/exits, ordered complete
+stages, original validator/control executions and all 48 image provenance/hashes.
+Parent provenance comes from the exact checkout commit's raw Git object, with
+replacement objects disabled and its tree cross-checked. This works at a
+depth-one boundary where revision traversal suppresses parents; PR parent order
+must still equal the actual event's base then candidate, never event data alone.
+The integrated runner disables Python bytecode writes before importing its guide
+producer, so loading validation helpers cannot dirty the source checkout.
+Preview-test child processes apply the same policy before importing their test
+fixtures, preserving source cleanliness across the preceding CI steps.
+The clean-source gate still rejects existing untracked or modified files.
+Native attachment timestamps must be nondecreasing in required stage-ordinal
+order through the final attachment; equal-resolution timestamps are valid.
+Guide receipt schema 2 binds the existing split-debug host layout: the host
+executable, its `.debug.dylib` implementation and `__preview.dylib`, plus the
+runner and test-bundle executables. The resolved host must have
+`ENABLE_DEBUG_DYLIB=YES`; validation does not change that build setting.
+Each code file has an exact bundle-relative path and SHA-256, checked before
+and after native acceptance and again after integrated validation. Missing,
+changed, symlink-redirected or extra code in these `Contents/MacOS` directories
+fails closed. This bounded inventory does not hash SDK/system frameworks.
+Old executable-only receipts cannot be upgraded or reused for acceptance.
+Identical legitimate pixel hashes are allowed. Failed native production still
+runs the integrated suite; missing evidence fails the original validators.
+Both attachment exports are attempted and retained, but either nonzero exit
+rejects acceptance even when the exported files otherwise look complete.
+Each exporter uses its supported default schema rather than a version spelling
+that differs across Xcode releases. The exact test URL selector and strict
+manifest, payload, identity and timestamp checks remain mandatory; an unknown
+output shape fails, without a schema retry or fallback.
+The existing integrated artifact retains the producer logs, xcresult and images;
+the original image artifact receives only the freshly verified guide images.
+Compilation and mocked parser negatives do **not** verify native AXPress
+capability or the complete matrix. Those remain unverified until reviewed
+exact-source hosted execution passes.
+
+A separate additive `guide-ui-consumer-probe` CI job builds the validation-only
+`CMUXMaestroGuideUIHost` app and public XCTest UI target. It compiles the same
+unchanged guide view, command, model and reader sources as production, with a
+fixed synthetic Missing read closure and an injected copy sink; it does not
+read installed guides, write a pasteboard, or include setup/runtime components.
+The synthetic window must uniquely match both its public identifier and title.
+One ordinary minimal button must move its separately identified static-text
+counter value from 0 to 1 after one exact public click. Only then does the test require the
+unique real-guide root, Re-check button and both initial status identifiers/text.
+Re-check must also be enabled and hittable with positive geometry intersecting
+the initial guide scroll viewport and window; both status rows must have positive
+viewport-intersecting geometry. Partial intersection is sufficient: this does
+not require all guide content to fit, and the probe never scrolls to find it.
+A separate, fully clipped synthetic Re-check button must remain query-visible
+with the old accepted type/label/enabled attributes but be non-hittable and
+rejected by the same readiness predicate. Its overlay does not resize the guide.
+Its exposed group follows the offscreen child bounds, so the negative control
+must miss the positive window viewport, not an empty group/window intersection.
+The identified real-guide root must itself be the public scroll view; its frame
+intersected with the window supplies the positive guide viewport.
+Missing negative-control exposure fails the probe rather than skipping it.
+Fixture diagnostics never substitute for guide content; there is no whole-app
+guide fallback. This readiness probe does not replace the existing tests,
+their failures, the eleven original commands, or the full guide action matrix.
+
+`./scripts/test-guide-ui-validation.sh --compile-only` builds both new targets
+without launching an app or test. Without that flag, the wrapper refuses outside
+the original `GITHUB_ACTIONS=true` / `RUNNER_ENVIRONMENT=github-hosted` venue,
+forwards those values through `TEST_RUNNER_`, verifies exact built namespaces,
+then invokes `test-without-building` once. It accepts no extra xcodebuild options.
+Builds use full Xcode and the existing unsigned policy; the project still needs
+the pinned SDK from `./scripts/fetch-sdk.sh`, though neither new target links it.
+
+Launch, window/root, minimal and guide phases share a single 180-second
+active-case deadline for explicit waits. Synchronous XCTest launch, query and
+click calls cannot be preempted by that deadline. No custom watchdog, forced
+cleanup, retries, permission changes or prompt responses are added; ordinary
+XCTest lifecycle handling remains framework-owned. Xcode Helper permission and
+unsigned runner readiness are unproved until hosted execution. Apple documents
+that UI testing may itself generate an OS permission prompt; an unanswered prompt
+or signing/Helper failure is not a pass. Separate `guide-ui-consumer-probe`
+artifacts retain source hashes, phase logs and the complete xcresult with failure
+screenshots. Before the exact identifier-and-title window query, one public XCTest
+application-hierarchy attachment captures at most 16,384 characters and records
+whether it was truncated. It diagnoses missing window exposure without selecting
+another window, falling back to another attribute, or extending the deadline. Result validation
+checks the exact test plan independently from the project/target URL and
+reconciles XCTest's empty-argument method spelling with its reported identifier;
+missing or mismatched identities remain failures.
+Text logs redact checkout/home paths; framework-owned xcresult may
+contain the disposable runner's build paths. Neither a screenshot nor a new
+probe pass establishes full native guide acceptance.
 
 On the next explicit **Enable Copilot Integration**, setup removes only its old
 `Copilot/plugin/skills/maestro/SKILL.md` copy, if present, using owner-checked,
@@ -1600,6 +1772,9 @@ The sampler gets three seconds, then its exact unreaped child PID is killed and
 given one second to reap. A separate five-second hard bound signals any still-owned
 sampler and fails the test host even if diagnostic work stalls; unconfirmed
 cleanup remains explicit, never a success. Diagnostics
+preserve the observed sampler exit/timeout and reap state separately from an
+optional `sampleReadError`; a missing sample cannot erase that process outcome.
+The host still fails with exit 124. Diagnostics
 under `.build/tests/scoped-results/metadata-diagnostics/` are included in the
 existing scope-evidence artifact, including partial samples. Its final upload
 runs after both integrated and standalone setup tests, and also retains the
@@ -1640,8 +1815,10 @@ Both stalled controls must fail with sampled actual-runner stacks; an unexpected
 return, missing stack or outer probe timeout fails validation. The sampler-fault
 control must fail after killing and reaping its exact child while preserving
 partial output; it does not stand in for real stack-collection acceptance.
-Additional finite controls preserve nonzero sampler exits and timeouts with
-missing output, and distinguish living, exited-but-unreaped, and returned/reaped
+Three additional finite fake-sampler controls distinguish exit 17 without output,
+exit 17 with output, and timeout without output. Missing-file controls require
+both the original process outcome and an explicit sample-read failure.
+Additional finite controls distinguish living, exited-but-unreaped, and returned/reaped
 child contexts from the outer task completing. Changed-start and truncated-group
 controls query only newly owned fixture processes and must retain unknown states.
 Every stalled control still exits 124; successful disarming still exits zero.
