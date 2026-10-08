@@ -1211,6 +1211,76 @@ class WorkspaceCapacityCLITests(unittest.TestCase):
         with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Workspace retained"):
             CONTROLLER_API["validate_state"](saved)
 
+    def test_retired_history_in_a_does_not_consume_b_and_does_not_get_pruned(self):
+        other = str(uuid.uuid4())
+        def populate(state):
+            root, _ = CONTROLLER_API["new_root"](other, str(uuid.uuid4()), self.h.pane, "Other root")
+            state["nodes"][root["id"]] = root
+            for index in range(127):
+                retired, _ = CONTROLLER_API["new_root"](other, str(uuid.uuid4()), self.h.pane, f"Retired {index}")
+                retired.update(
+                    role="worker", parentId=root["id"], runId=root["runId"],
+                    executionMode="bounded", phase="resource-retired", availability="unavailable",
+                    generation=1, copilotSessionId=str(uuid.uuid4()),
+                )
+                state["nodes"][retired["id"]] = retired
+        self.h.change_state(populate)
+        original = {key: value for key, value in self.h.state()["nodes"].items()
+                    if value["workspaceId"] == other}
+        preflight = self.h.run("capacity", "--workspace", other)["capacity"]
+        self.assertEqual(preflight["used"], 0)
+        self.assertEqual(preflight["remaining"], 32)
+        self.assertEqual(preflight["nodeSlotsRemaining"], 0)
+        self.assertFalse(preflight["admissionAvailable"])
+        worker = self.h.spawn()
+        self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
+        after = {key: value for key, value in self.h.state()["nodes"].items()
+                 if value["workspaceId"] == other}
+        self.assertEqual(after, original)
+
+    def test_concurrent_registration_rechecks_each_workspace_last_node_slot(self):
+        other = str(uuid.uuid4())
+        self.seed_workspace_history(self.h.workspace, 126)
+        self.seed_workspace_history(other, 127)
+        surfaces = [str(uuid.uuid4()) for _ in range(3)]
+        for surface in surfaces[:2]:
+            self.h.add_surface(surface)
+        processes = []
+        for index, surface in enumerate(surfaces):
+            workspace = self.h.workspace if index < 2 else other
+            env = {**self.h.env, "CMUX_WORKSPACE_ID": workspace, "CMUX_SURFACE_ID": surface}
+            if index == 2:
+                env.update(FAKE_CMUX_STATE=str(self.h.path / "other-cmux.json"),
+                           TEST_WORKSPACE=workspace, TEST_ROOT_SURFACE=surface)
+            processes.append(self.h.start(
+                "register", "--workspace", workspace, "--surface", surface, "--name", "Concurrent",
+                env=env,
+            ))
+        results = [self.h.finish(process, check=False) for process in processes]
+        self.assertEqual(sorted(item["returncode"] for item in results[:2]), [0, 2])
+        self.assertEqual(results[2]["returncode"], 0)
+        denied = next(item for item in results[:2] if item["returncode"])
+        self.assertIn("Workspace stored-node limit", denied["stderr"])
+        saved = CONTROLLER_API["read_state"](self.h.root)
+        self.assertEqual(len(saved["nodes"]), 256)
+        for workspace in (self.h.workspace, other):
+            self.assertEqual(sum(node["workspaceId"] == workspace for node in saved["nodes"].values()), 128)
+
+    def test_byte_or_projection_overflow_cannot_commit_a_partial_reservation(self):
+        before = self.h.state()
+        observer = (self.h.root / "observer/current.json").read_bytes()
+        with patch.object(CONTROLLER_API["Store"], "_projection",
+                          side_effect=CONTROLLER_API["OrchestrationError"]("Host observer byte safety")):
+            with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Host observer"):
+                self.seed_workspace_history(str(uuid.uuid4()), 1)
+        self.assertEqual(self.h.state(), before)
+        self.assertEqual((self.h.root / "observer/current.json").read_bytes(), observer)
+        with CONTROLLER_API["Store"](self.h.root) as store:
+            with patch.dict(CONTROLLER_API["Store"].write.__globals__, {"MAX_BYTES": 64}):
+                with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Host control-state byte"):
+                    store.write(before)
+        self.assertEqual(self.h.state(), before)
+
     def test_limits_persist_across_processes_and_status_agrees(self):
         for limit in (1, 32, 128):
             with self.subTest(limit=limit):

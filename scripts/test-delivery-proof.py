@@ -138,15 +138,24 @@ class WorkspaceCapacityTests(unittest.TestCase):
                 state["launches"][identifier] = {"workspaceId": owner}
         state["retainedResources"] = [{"workspaceId": workspace}, {"workspaceId": other}]
         summary = CONTROLLER["workspace_capacity"](state, workspace)
-        self.assertEqual(summary, {
+        expected = {
             "workspaceId": workspace, "limit": 4, "ceiling": 128, "managedRoots": 1,
             "workers": 2, "retainedResources": 1, "pendingLaunches": 2, "used": 4,
-            "remaining": 0, "nodeSlotsRemaining": 122, "admissionAvailable": False, "advisory": True,
-        })
+            "remaining": 0, "nodeSlotsRemaining": 123, "admissionAvailable": False, "advisory": True,
+            "storedNodes": 5, "storedNodeLimit": 128,
+            "hostStoredNodes": 6, "hostNodeLimit": 1024, "hostNodeSlotsRemaining": 1018,
+            "hostRetainedResources": 2, "hostRetainedResourceLimit": 1024,
+            "hostRetainedResourceSlotsRemaining": 1022,
+            "hostStateBytes": len(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()) + 1,
+            "hostStateByteLimit": 1_048_576,
+            "hostCapacitySettings": 1, "hostCapacitySettingLimit": 128,
+        }
+        expected["hostStateBytesRemaining"] = 1_048_576 - expected["hostStateBytes"]
+        self.assertEqual(summary, expected)
         with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "resource limit"):
             CONTROLLER["require_workspace_capacity"](state, workspace)
 
-    def test_configured_limit_does_not_hide_global_node_exhaustion(self):
+    def test_configured_limit_does_not_hide_workspace_node_exhaustion(self):
         state = CONTROLLER["empty_state"]()
         workspace = str(uuid.uuid4())
         state["workspaceCapacity"] = {workspace: 128}
@@ -156,6 +165,22 @@ class WorkspaceCapacityTests(unittest.TestCase):
         self.assertEqual(summary["remaining"], 128)
         self.assertEqual(summary["nodeSlotsRemaining"], 0)
         self.assertFalse(summary["admissionAvailable"])
+
+    def test_host_safety_ceiling_is_distinct_from_workspace_allowance(self):
+        state = CONTROLLER["empty_state"]()
+        workspace = str(uuid.uuid4())
+        for group in range(8):
+            owner = str(uuid.uuid4())
+            for index in range(128):
+                state["nodes"][f"{group}-{index}"] = {
+                    "role": "coordinator", "workspaceId": owner, "phase": "registered",
+                }
+        capacity = CONTROLLER["workspace_capacity"](state, workspace)
+        self.assertEqual(capacity["nodeSlotsRemaining"], 128)
+        self.assertEqual(capacity["hostNodeSlotsRemaining"], 0)
+        self.assertFalse(capacity["admissionAvailable"])
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "Host stored-node safety"):
+            CONTROLLER["require_node_capacity"](state, workspace)
 
 
 class ProofTests(unittest.TestCase):
@@ -292,8 +317,8 @@ class ProofTests(unittest.TestCase):
         with mock.patch.dict(spawn.__globals__, {
             "assigned_directory": lambda _: Path(self.paths["a"]),
             "git_display_metadata": lambda _: {},
-            "read_state": lambda _: {},
-            "authorize": lambda *a, **k: {},
+            "read_state": lambda _: {"nodes": {}},
+            "authorize": lambda *a, **k: {"workspaceId": str(uuid.uuid4())},
             "worker_launch_settings": lambda _: {},
             "resolve_copilot_token": mock.Mock(side_effect=AssertionError("must not read credentials")),
         }):
@@ -543,8 +568,9 @@ class ProofTests(unittest.TestCase):
         forbidden = mock.Mock(side_effect=AssertionError("must refuse before launch side effects"))
         cmux = mock.Mock()
         with mock.patch.dict(spawn.__globals__, {
-            "read_state": lambda _: {}, "authorize": lambda *a: {"role": "coordinator"},
-            "authorize_native_spawn": lambda *a: {"role": "coordinator"},
+            "read_state": lambda _: {"nodes": {}},
+            "authorize": lambda *a: {"role": "coordinator", "workspaceId": str(uuid.uuid4())},
+            "authorize_native_spawn": lambda *a: {"role": "coordinator", "workspaceId": str(uuid.uuid4())},
             "git_display_metadata": lambda _: {},
             "worker_launch_settings": forbidden, "resolve_copilot_token": forbidden, "mutate": forbidden,
         }):

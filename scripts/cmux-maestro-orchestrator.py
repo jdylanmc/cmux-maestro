@@ -26,6 +26,8 @@ import uuid
 VERSION = 1
 MAX_BYTES = 1_048_576
 MAX_NODES = 128
+MAX_HOST_NODES = 1024
+MAX_WORKSPACE_CAPACITY_SETTINGS = 128
 MAX_DEPTH = 8
 MAX_LIVE_WORKERS = 32
 MAX_LIVE_WORKERS_CEILING = 128
@@ -950,20 +952,23 @@ def validate_state(state):
     state.setdefault("retainedResources", [])
     state.setdefault("launches", {})
     limits = state.get("workspaceCapacity", {})
-    if not isinstance(limits, dict) or len(limits) > MAX_NODES:
-        raise OrchestrationError("Workspace capacity settings exceed their safe limit.")
+    if not isinstance(limits, dict) or len(limits) > MAX_WORKSPACE_CAPACITY_SETTINGS:
+        raise OrchestrationError("Host workspace-capacity setting safety limit reached.")
     for workspace, limit in limits.items():
         if canonical_uuid(workspace, "capacity workspace ID") != workspace:
             raise OrchestrationError("Stored capacity workspace ID must be canonical lowercase.")
         validate_capacity_limit(limit)
     nodes = state["nodes"]
     launches = state["launches"]
-    if not isinstance(launches, dict) or len(launches) > MAX_NODES:
+    if not isinstance(launches, dict) or len(launches) > MAX_HOST_NODES:
         raise OrchestrationError("Launch transactions exceed their safe limit.")
-    if len(nodes) > MAX_NODES or len(state["archives"]) > MAX_ARCHIVES:
-        raise OrchestrationError("Control state exceeds its retention limit.")
-    if len(state["retainedResources"]) > MAX_NODES:
-        raise OrchestrationError("Retained resources exceed their safe limit.")
+    if len(nodes) > MAX_HOST_NODES:
+        raise OrchestrationError("Host stored-node safety limit reached.")
+    if len(state["archives"]) > MAX_ARCHIVES:
+        raise OrchestrationError("Control state exceeds its archive retention limit.")
+    if len(state["retainedResources"]) > MAX_HOST_NODES:
+        raise OrchestrationError("Host retained-resource safety limit reached.")
+    workspace_nodes = {}
     surfaces = set()
     roots_by_run = {}
     for identifier, node in nodes.items():
@@ -971,6 +976,10 @@ def validate_state(state):
             raise OrchestrationError("Stored node identity is invalid.")
         for field in ("runId", "workspaceId"):
             canonical_uuid(node.get(field), f"stored {field}")
+        workspace = node["workspaceId"]
+        workspace_nodes[workspace] = workspace_nodes.get(workspace, 0) + 1
+        if workspace_nodes[workspace] > MAX_NODES:
+            raise OrchestrationError("Workspace stored-node limit reached.")
         surface = node.get("surfaceId")
         if surface is not None:
             canonical_uuid(surface, "stored surfaceId")
@@ -1185,9 +1194,14 @@ def validate_state(state):
             if depth > MAX_DEPTH:
                 raise OrchestrationError("Stored ancestry exceeds the depth limit.")
     retained_ids = set()
+    workspace_retained = {}
     for resource in state["retainedResources"]:
         identifier = canonical_uuid(resource.get("surfaceId"), "retained surface ID")
         canonical_uuid(resource.get("workspaceId"), "retained workspace ID")
+        workspace = resource["workspaceId"]
+        workspace_retained[workspace] = workspace_retained.get(workspace, 0) + 1
+        if workspace_retained[workspace] > MAX_NODES:
+            raise OrchestrationError("Workspace retained-resource limit reached.")
         if identifier in retained_ids or identifier in surfaces:
             raise OrchestrationError("Retained resource ownership is duplicated.")
         retained_ids.add(identifier)
@@ -1429,9 +1443,8 @@ class Store:
         validate_state(state)
         encoded = json.dumps(state, sort_keys=True, separators=(",", ":")).encode() + b"\n"
         if len(encoded) > MAX_BYTES:
-            raise OrchestrationError("Control state exceeds its safe limit.")
-        self._atomic(self.control_fd, "state.json", encoded)
-        self._atomic(self.observer_fd, "current.json", self._projection(state))
+            raise OrchestrationError("Host control-state byte safety limit reached.")
+        projection = self._projection(state)
         icons = [{
             "nodeId": node["id"], "runId": node["runId"],
             "workspaceId": node["workspaceId"], "surfaceId": node["surfaceId"],
@@ -1440,9 +1453,14 @@ class Store:
             and (node.get("iconId") is not None or node.get("iconColor") is not None)]
         # Older supervisors may republish current.json without cosmetic fields.
         # A separate bounded projection preserves selections without hot-patching them.
-        self._atomic(self.observer_fd, "icons.json", json.dumps(
+        icon_data = json.dumps(
             {"version": 1, "icons": icons}, sort_keys=True, separators=(",", ":")
-        ).encode() + b"\n")
+        ).encode() + b"\n"
+        if len(icon_data) > MAX_BYTES:
+            raise OrchestrationError("Host icon-projection byte safety limit reached.")
+        self._atomic(self.control_fd, "state.json", encoded)
+        self._atomic(self.observer_fd, "current.json", projection)
+        self._atomic(self.observer_fd, "icons.json", icon_data)
 
     def _projection(self, state):
         nodes = sorted(
@@ -1476,17 +1494,17 @@ class Store:
             "gitChangesAt": item.get("gitChangesAt"),
             "createdAt": item["createdAt"],
             "updatedAt": item["updatedAt"],
-        } for item in nodes[:MAX_NODES]]
+        } for item in nodes[:MAX_HOST_NODES]]
         payload = {
             "version": VERSION,
             "generatedAt": now(),
-            "complete": len(nodes) <= MAX_NODES,
-            "omittedCount": max(0, len(nodes) - MAX_NODES),
+            "complete": len(nodes) <= MAX_HOST_NODES,
+            "omittedCount": max(0, len(nodes) - MAX_HOST_NODES),
             "nodes": projected,
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode() + b"\n"
         if len(encoded) > MAX_BYTES:
-            raise OrchestrationError("Observer projection exceeds its safe limit.")
+            raise OrchestrationError("Host observer-projection byte safety limit reached.")
         return encoded
 
     @staticmethod
@@ -1563,14 +1581,37 @@ def workspace_capacity(state, workspace):
     retained = sum(item["workspaceId"] == workspace for item in state["retainedResources"])
     limit = state.get("workspaceCapacity", {}).get(workspace, MAX_LIVE_WORKERS)
     used = len(nodes) + retained
-    node_slots = MAX_NODES - len(state["nodes"])
+    stored = sum(node["workspaceId"] == workspace for node in state["nodes"].values())
+    node_slots = MAX_NODES - stored
+    host_slots = MAX_HOST_NODES - len(state["nodes"])
+    host_retained_slots = MAX_HOST_NODES - len(state["retainedResources"])
+    state_bytes = len(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()) + 1
     return {
         "workspaceId": workspace, "limit": limit, "ceiling": MAX_LIVE_WORKERS_CEILING,
         "managedRoots": roots, "workers": len(nodes) - roots, "retainedResources": retained,
         "pendingLaunches": sum(item["workspaceId"] == workspace for item in state["launches"].values()),
         "used": used, "remaining": max(0, limit - used), "nodeSlotsRemaining": node_slots,
-        "admissionAvailable": used < limit and node_slots > 0, "advisory": True,
+        "storedNodes": stored, "storedNodeLimit": MAX_NODES,
+        "hostStoredNodes": len(state["nodes"]), "hostNodeLimit": MAX_HOST_NODES,
+        "hostNodeSlotsRemaining": host_slots,
+        "hostRetainedResources": len(state["retainedResources"]),
+        "hostRetainedResourceLimit": MAX_HOST_NODES,
+        "hostRetainedResourceSlotsRemaining": host_retained_slots,
+        "hostStateBytes": state_bytes, "hostStateByteLimit": MAX_BYTES,
+        "hostStateBytesRemaining": max(0, MAX_BYTES - state_bytes),
+        "hostCapacitySettings": len(state.get("workspaceCapacity", {})),
+        "hostCapacitySettingLimit": MAX_WORKSPACE_CAPACITY_SETTINGS,
+        "admissionAvailable": used < limit and node_slots > 0 and host_slots > 0
+            and state_bytes < MAX_BYTES,
+        "advisory": True,
     }
+
+
+def require_node_capacity(state, workspace):
+    if sum(node["workspaceId"] == workspace for node in state["nodes"].values()) >= MAX_NODES:
+        raise OrchestrationError("Workspace stored-node limit reached; explicitly archive an eligible run.")
+    if len(state["nodes"]) >= MAX_HOST_NODES:
+        raise OrchestrationError("Host stored-node safety limit reached; workspace quota is separate.")
 
 
 def require_workspace_capacity(state, workspace):
@@ -1594,8 +1635,8 @@ def command_capacity(args, root):
         if actor["role"] != "coordinator" or actor["workspaceId"] != workspace:
             raise OrchestrationError("Only this workspace's authenticated coordinator may change capacity.")
         limits = state.setdefault("workspaceCapacity", {})
-        if workspace not in limits and len(limits) >= MAX_NODES:
-            raise OrchestrationError("Workspace capacity settings exceed their safe limit.")
+        if workspace not in limits and len(limits) >= MAX_WORKSPACE_CAPACITY_SETTINGS:
+            raise OrchestrationError("Host workspace-capacity setting safety limit reached.")
         limits[workspace] = limit
         return {"capacity": workspace_capacity(state, workspace)}
 
@@ -1922,14 +1963,14 @@ def command_register(args, root, cmux):
     workspace = canonical_uuid(args.workspace, "workspace ID")
     surface = canonical_uuid(args.surface, "surface ID")
     require_current_surface(workspace, surface)
+    require_node_capacity(read_state(root), workspace)
     label = sanitize_label(bounded_text(args.name, "name", MAX_LABEL))
     cwd = assigned_directory(args.cwd)
     metadata = git_display_metadata(cwd) if cwd is not None else absent_git_metadata()
     pane = cmux.validate_surface(workspace, surface)
 
     def register(state):
-        if len(state["nodes"]) >= MAX_NODES:
-            raise OrchestrationError("Orchestration node limit reached.")
+        require_node_capacity(state, workspace)
         if any(node.get("surfaceId") == surface for node in state["nodes"].values()):
             raise OrchestrationError("This CMUX surface has a live registered owner.")
         node, token = new_root(workspace, surface, pane, label, cwd, metadata, args.icon, args.color)
@@ -1947,6 +1988,7 @@ def command_launch_coordinator(args, root, cmux):
     require_current_surface(workspace, source_surface)
     pane = cmux.validate_surface(workspace, source_surface)
     snapshot = read_state(root)
+    require_node_capacity(snapshot, workspace)
     if any(current.get("surfaceId") == source_surface and has_managed_runtime(current)
            for current in snapshot["nodes"].values()):
         raise OrchestrationError("A managed session cannot launch another root; use its authorized child-launch tool.")
@@ -2002,8 +2044,7 @@ def command_launch_coordinator(args, root, cmux):
         if any(legacy_supervisor_blocks(state, current) for current in state["nodes"].values()):
             raise OrchestrationError("Legacy managed runtime became active before coordinator launch.")
         reconcile_resources(state, snapshot, observations, retained_gone)
-        if len(state["nodes"]) >= MAX_NODES:
-            raise OrchestrationError("Orchestration node limit reached.")
+        require_node_capacity(state, workspace)
         require_workspace_capacity(state, workspace)
         state["nodes"][node["id"]] = node
         state["launches"][node["id"]] = {
@@ -2637,6 +2678,7 @@ def command_spawn(args, root, cmux, *, native_identity=None):
     yolo = getattr(args, "yolo", False) or bool(proof and proof.get("yolo"))
     if yolo and actor["role"] != "coordinator":
         raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
+    require_node_capacity(snapshot, actor["workspaceId"])
     inherited_permissions = None
     permission_mode = "yolo" if yolo else "default"
     if native_identity is not None and actor.get("executionMode") == "interactive":
@@ -2706,8 +2748,7 @@ def command_spawn(args, root, cmux, *, native_identity=None):
             cursor = state["nodes"][cursor["parentId"]]
         if depth + 1 > MAX_DEPTH:
             raise OrchestrationError("Maximum worker nesting depth reached.")
-        if len(state["nodes"]) >= MAX_NODES:
-            raise OrchestrationError("Orchestration node limit reached.")
+        require_node_capacity(state, current["workspaceId"])
         timestamp = now()
         state["nodes"][identifier] = {
             "id": identifier, "runId": current["runId"], "parentId": current["id"],
@@ -4076,10 +4117,11 @@ def command_archive(args, root, cmux):
                     "surfaceId": node["surfaceId"], "archivedAt": now(),
                 })
             del state["nodes"][node["id"]]
-        if len(state["retainedResources"]) > MAX_NODES:
-            raise OrchestrationError(
-                "Retained live terminal limit reached; close archived worker tabs first."
-            )
+        if sum(item["workspaceId"] == current["workspaceId"]
+               for item in state["retainedResources"]) > MAX_NODES:
+            raise OrchestrationError("Workspace retained-resource limit reached; archived terminals remain owned.")
+        if len(state["retainedResources"]) > MAX_HOST_NODES:
+            raise OrchestrationError("Host retained-resource safety limit reached; archived terminals remain owned.")
         return {"runId": run_id, "archived": True}
     result = mutate(root, finish, wait=1)
     direct_nodes = [node for node in snapshot["nodes"].values()

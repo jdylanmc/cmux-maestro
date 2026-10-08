@@ -563,6 +563,14 @@ worker/cross-workspace changes, root/child admission at limits 2, 32, 64 and 128
 with retained resources, non-double-counted leases, unknown ownership, and
 concurrent admission after an advisory preflight. The 128-boundary proof uses
 synthetic retained resources; it is not a 128-provider load measurement.
+The #167 regressions store 128 synthetic records in workspace A (including
+retired history) while B admits independently, preserve A unchanged, reject A's
+next node, and race last-slot registrations in both workspaces. Saved schema-1
+reload, complete multi-workspace observer output, workspace retained-resource
+bounds and distinct host node/byte protection are checked without real fleets.
+The Swift reader accepts 256 nodes across two 128-node workspaces but rejects
+129 in one workspace and 1,025 host-wide. Source publication does not upgrade
+an older installed reader/controller or demonstrate live activation.
 Prospective native-child permission regressions exercise explicit recorded
 parent mode/allow/deny inheritance, deny-only additions, explicit list/false
 narrowing, coordinator-only broad requests and contradictory-intent refusal.
