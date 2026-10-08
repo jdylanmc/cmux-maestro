@@ -11,10 +11,8 @@ Run Joe-mode as a visible, interactive CMUX cockpit. This is an adapter around
 [Joe-mode](../joe-mode/SKILL.md), not another project-management policy or
 controller. The human-authored [intent](intent.md) defines its purpose.
 
-Use Joe's [delivery pace](../joe-mode/DELIVERY-PACE.md): a two-hour planning
-target, coherent work batches and finish-first scheduling, not a timer or a
-new permission/review system. Implementation-complete PRs are ready for review;
-their remaining CI, acceptance and merge gates stay explicit.
+Use Joe's [delivery pace](../joe-mode/DELIVERY-PACE.md) and
+[invoker doctrine selection](../doctrine/APPLY.md#joe-review-operations).
 
 Read [LAYOUT](LAYOUT.md) before changing CMUX topology and [RUNTIME](RUNTIME.md)
 before registering or spawning through Maestro. Apply Joe-mode's
@@ -132,22 +130,6 @@ for decisions, material blockers, or pull requests ready for final review.
 Keep routine chatter in role surfaces.
 
 ## Reconcile and continue
-
-On reconnect or an apparent tool loss, reconcile the existing owned sessions
-before replacing anything. Public lifecycle process/surface presence establishes
-liveness, not active work or task consumption; a peer list is participation,
-not availability. Preserve exact worktree/index custody and in-flight commands.
-Resume the same lane from current artifacts at a safe boundary rather than
-replaying every queued milestone or spawning duplicate workers.
-
-An empty tool-discovery search is not proof that a previously loaded tool is
-gone. When its definition is still available and no explicit removal notice
-applies, use the supported read-only identity/peer check. If the tools genuinely
-fail or are unavailable, report the limitation and use supported extension
-diagnostics; reload/reinstall only within explicit authority. Never guess a
-schema, call private ingress, type into a terminal, or change credentials to
-work around it. Account drift pauses new launches until the actual invoking
-identity matches the human's choice; a saved pin or peer identity is no substitute.
 
 Use Maestro `status`, the Joe owner board, Git/provider state, and actual
 artifacts to reconcile outcomes. Use the separately installed `/maestro`

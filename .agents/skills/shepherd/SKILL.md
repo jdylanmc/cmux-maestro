@@ -64,7 +64,10 @@ For Azure DevOps, use the configured integration and the [provider reference](..
 
 Compare with the last observation. Unchanged check failures or handled comments are not new repair work. Reopen only when new evidence warrants it; a failed remedy is an explicit blocker, not an identical redispatch.
 
-Use [the shared current-base readiness gate](../ship/DELIVERY.md#current-base-readiness-and-real-custody). Do not call unknown mergeability, pending checks, missing required evidence, or an old-base head ready. No check results is not proof of success: establish what the repository requires. Separate **ready for human signoff** from actual approval/merge eligibility; report outstanding human votes without casting them. Blocking findings/reviews or other unmet policies prevent readiness. Immediately before promotion/announcement, reread actual remote source and target refs plus provider state; if either changed, invalidate the claim and reconcile again. Report the observed head/base/time, not a guarantee against the next base race, and continue watching after green.
+Use [DELIVERY's PR states](../ship/DELIVERY.md#pr-states) and
+[current-base gate](../ship/DELIVERY.md#current-base-readiness-and-real-custody).
+Report actual head/base/time, proof and accepted custody. No results is not a
+pass; ready for review is not final signoff. Continue owned observation after green.
 
 ## Act on meaningful changes
 
@@ -106,17 +109,9 @@ Call the existing owner route—[Ship](../ship/SKILL.md), [Patch](../patch/SKILL
 
 The route classifies evidence, performs bounded implementation and independent review, validates, and updates the same PR. It never invokes Ship as a generic finish or starts a nested Shepherd. On return, reconcile actual head, review coverage, check state, and addressed findings before resuming observation. A missing result, failed repair, or human-owned decision is reported explicitly and ends safe automatic remediation. If concrete evidence requires Joe re-routing/reimplementation/refactoring, load and execute [RECOVERY](RECOVERY.md): one linked issue/episode, actual existing-controller intake acknowledgment and serialized repair/return, not an automatic route switch. Missing authority or a human product decision remains a blocker.
 
-If a draft's outstanding implementation needs completing, return it to its
-existing route under the same ownership rule. For Joe work, follow
-[DELIVERY's review-visibility exception](../ship/DELIVERY.md): complete
-implementation may be non-draft with pending acceptance, review or CI explicit.
-Standalone routes still wait for the full promotion gate. Neither state permits
-a final-signoff claim while required evidence or blockers remain unresolved.
-
-With DELIVERY's full gate/accepted custody, promote if needed; verify provider
-non-draft readback/current candidate before announcing readiness. Send/request
-success is insufficient. After accepted terminal repair return, arrange LIFECYCLE
-retirement, preserving monitoring scope/worktree.
+Return unfinished implementation to its owner. Apply DELIVERY's state/revision
+rules; do not redefine them here. After accepted terminal repair return, arrange
+LIFECYCLE retirement, preserving monitoring scope/worktree.
 
 ## Observation rhythm
 

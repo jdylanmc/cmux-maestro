@@ -36,11 +36,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
-- Target two-hour Joe deliveries through finish-first scheduling, coherent
-  test/review batches and early blocker escalation, without skipping safeguards.
-  Make implementation-complete PRs available for review while retaining all
-  final-signoff/merge gates, and reconcile existing CMUX sessions after interruption
-  instead of duplicating work.
+- Target two-hour Joe deliveries without skipping gates. Select doctrines before
+  review/self-checks, keep one PR-state contract, and check local skill hashes/links.
 - Raise the per-workspace hard limit from 8 to 32 live managed sessions,
   including managed coordinators and retained resources, without changing
   launch accounting or the 128-node and eight-level nesting limits. Validate

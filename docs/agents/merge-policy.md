@@ -23,11 +23,8 @@ scope nor unattended merge authority.
 
 ## Review and user merge gate
 
-Joe delivery uses the local [two-hour planning target and finish-first
-policy](../../.agents/skills/joe-mode/DELIVERY-PACE.md), not a hard timeout.
-Implementation-complete PRs are **ready for review** even with pending review,
-CI or acceptance; publish the missing evidence explicitly. Non-draft status
-does not satisfy any of the final-signoff or merge gates below.
+Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
+[PR states](../../.agents/skills/ship/DELIVERY.md#pr-states). Non-draft is not merge authority.
 
 1. The implementation author publishes a candidate and **never self-merges**.
    Only a separate, explicitly human-authorized **PR Sniper** may merge scoped
@@ -56,6 +53,8 @@ does not satisfy any of the final-signoff or merge gates below.
 `.github/workflows/ci.yml` is authoritative. Its current commands, in order:
 
 ```sh
+node --test scripts/test-skill-overrides.mjs
+node scripts/check-skill-overrides.mjs
 python3 scripts/test-cmux-maestro-orchestrator.py
 python3 scripts/test-delivery-proof.py
 node --test scripts/test-delivery-proof.mjs
