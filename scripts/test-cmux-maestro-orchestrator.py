@@ -1121,6 +1121,73 @@ class HarnessTeardownTests(unittest.TestCase):
                 h.close()
 
 
+class StatusRetirementTests(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.close)
+        self.cmux = unittest.mock.Mock(spec=CONTROLLER_API["Cmux"])
+        self.cmux.workspace_surfaces.return_value = set()
+        self.cmux.surface_exists.return_value = False
+        self.processes = {}
+        self.addCleanup(patch.stopall)
+        patch.dict(CONTROLLER_API["command_status"].__globals__, {
+            "process_start": lambda pid: "synthetic-start" if self.processes.get(pid) is True else None,
+            "process_observation": lambda process: self.processes.get(process["pid"]) if process else None,
+        }).start()
+
+    def seed_retired(self, *, direct=False, unstarted=False):
+        parent = self.h.state()["nodes"][self.h.node]
+        node, _ = CONTROLLER_API["new_root"](
+            self.h.workspace, None if unstarted else str(uuid.uuid4()), self.h.pane, "Retired",
+        )
+        node.update(
+            role="worker", parentId=parent["id"], runId=parent["runId"],
+            executionMode="interactive" if direct else "bounded",
+            phase="terminal-disappeared", availability="unavailable",
+            generation=1, copilotSessionId=str(uuid.uuid4()),
+            task="Preserved task", result="Preserved historical result",
+            verifiedBoundaryGeneration=None if direct else 1,
+        )
+        if unstarted:
+            node["runtimeNotStarted"] = True
+        elif direct:
+            node.update(launchMethod="direct", providerProcess={"pid": 777001, "start": "synthetic-start"})
+        else:
+            node["supervisor"] = {"pid": 777001, "start": "synthetic-start"}
+        self.processes[777001] = False
+        self.h.change_state(lambda state: state["nodes"].update({node["id"]: node}))
+        snapshot = CONTROLLER_API["read_state"](self.h.root)
+        observations, gone = CONTROLLER_API["resource_observations"](snapshot, self.cmux, self.h.workspace)
+        self.h.change_state(lambda state: CONTROLLER_API["reconcile_resources"](
+            state, snapshot, observations, gone,
+        ))
+        self.assertEqual(self.h.state()["nodes"][node["id"]]["phase"], "resource-retired")
+        return node["id"]
+
+    def status(self, identifier):
+        args = CONTROLLER_API["parser"]().parse_args([
+            "status", "--actor-id", self.h.node, "--token", self.h.token,
+            "--worker-id", identifier,
+        ])
+        return CONTROLLER_API["command_status"](args, self.h.root, self.cmux)
+
+    def test_repeated_status_preserves_retirement_and_history(self):
+        identifier = self.seed_retired()
+        before = self.h.state()
+        self.assertEqual(CONTROLLER_API["workspace_capacity"](before, self.h.workspace)["used"], 0)
+        for _ in range(3):
+            status = self.status(identifier)
+            self.assertEqual(status["capacity"]["used"], 0)
+            self.assertEqual(status["capacity"]["storedNodes"], 2)
+            self.assertEqual(status["capacity"]["nodeSlotsRemaining"], 126)
+            worker = status["workers"][0]
+            self.assertEqual(worker["phase"], "resource-retired")
+            self.assertFalse(worker["surfacePresent"])
+            self.assertFalse(worker["supervisorRunning"])
+            self.assertEqual(worker["result"], "Preserved historical result")
+            self.assertEqual(self.h.state()["nodes"][identifier], before["nodes"][identifier])
+
+
 class WorkspaceCapacityCLITests(unittest.TestCase):
     def setUp(self):
         self.h = Harness()
