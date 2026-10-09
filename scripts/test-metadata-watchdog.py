@@ -11,7 +11,8 @@ import uuid
 
 MODES = ("complete", "stalled-clock", "polling-clock", "sampler-timeout",
          "sampler-exit-no-output", "sampler-exit-with-output", "sampler-timeout-no-output",
-         "owned-living", "owned-result-before-task", "owned-task-received", "owned-exited")
+         "owned-living", "owned-result-before-task", "owned-task-received", "owned-exited",
+         "diagnostic-cancel-pending", "diagnostic-cancel-returned", "diagnostic-lock-held")
 
 
 def require(condition, message):
@@ -55,26 +56,27 @@ def main():
             # The failing host cannot perform normal cleanup. Its synthetic child
             # is finite; observe its exit before starting another test, never signal
             # a PID whose unreaped ownership anchor ended with the probe.
-            child = int((case / "child.pid").read_text())
+            child = None if mode.startswith("diagnostic-") else int((case / "child.pid").read_text())
             deadline = time.monotonic() + 12
-            while True:
+            while child is not None:
                 try:
                     os.kill(child, 0)
                 except ProcessLookupError:
                     break
                 require(time.monotonic() < deadline, f"Finite probe child {child} did not exit.")
                 time.sleep(0.05)
-            print(f"Exact sampler {report['samplerPID']} reaped/absent; finite child {child} absent.", flush=True)
+            child_description = "no metadata child" if child is None else f"finite child {child} absent"
+            print(f"Exact sampler {report['samplerPID']} reaped/absent; {child_description}.", flush=True)
             require(report["test"] == "MetadataWatchdogProbe/" + mode, report)
             require(report["phase"] == "negative-control/" + mode, report)
-            minimum_samples = 0 if mode == "owned-exited" else (2 if mode == "polling-clock" else 1)
+            minimum_samples = 0 if mode == "owned-exited" or mode.startswith("diagnostic-") else (2 if mode == "polling-clock" else 1)
             require(report["deadlineSamples"] >= minimum_samples, report)
             require(report["samplerReaped"] is True, report)
-            if mode.startswith(("sampler-", "owned-")):
+            if mode.startswith(("sampler-", "owned-", "diagnostic-")):
                 timed_out = mode in ("sampler-timeout", "sampler-timeout-no-output")
                 require(report["sampleStatus"] == ("timed-out/signal-9" if timed_out else "exit-17"), report)
                 require(int((case / "sampler.pid").read_text()) == report["samplerPID"], report)
-                if mode.endswith("-no-output") or mode.startswith("owned-"):
+                if mode.endswith("-no-output") or mode.startswith(("owned-", "diagnostic-")):
                     require(not (case / "sample.txt").exists(), report)
                     require(report.get("sample") is None, report)
                     require("sample.txt" in report.get("sampleReadError", ""), report)
@@ -122,6 +124,22 @@ def main():
                     incomplete = json.loads((case / "incomplete-group.json").read_text())
                     require(incomplete["groupState"] == "unknown-enumeration", incomplete)
                     require(incomplete.get("members") is None, incomplete)
+            if mode.startswith("diagnostic-"):
+                diagnostic = report.get("supervision")
+                require(isinstance(diagnostic, dict), "Missing bounded supervision snapshot")
+                require(diagnostic["version"] == 1, diagnostic)
+                require(len(json.dumps(diagnostic).encode()) <= 8192, diagnostic)
+                require(diagnostic["overflow"] is False, diagnostic)
+                if mode == "diagnostic-lock-held":
+                    require(diagnostic["availability"] == 1 and diagnostic["boundaries"] == [], diagnostic)
+                else:
+                    require(diagnostic["availability"] == 0, diagnostic)
+                    cancel = diagnostic["boundaries"][0]
+                    require(cancel["begin"] > 0, diagnostic)
+                    require((cancel["end"] > cancel["begin"]) is (mode == "diagnostic-cancel-returned"), diagnostic)
+                    # Another active lane must not erase the outstanding cancel call.
+                    execute = diagnostic["boundaries"][2]
+                    require(execute["begin"] > cancel["begin"] and execute["end"] == 0, diagnostic)
         print(f"Metadata watchdog {mode}: expected exit={result.returncode}; evidence={case}", flush=True)
 
 
