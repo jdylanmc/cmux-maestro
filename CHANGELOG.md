@@ -110,6 +110,8 @@ Notable changes are recorded using Keep a Changelog categories.
 - Request native in-turn steering for managed peer messages instead of waiting
   for the current turn to finish; preserve legacy proof enqueue and
   fire-and-forget limits (#163).
+- Refresh lazy preference state when its registered ancestor directory changes,
+  preserving read-only initialization and unrelated subitem filtering (#169).
 - Keep valid provider-native reasoning defaults from blocking unrelated model
   selection; omit unrepresentable CLI defaults while retaining malformed-data
   refusal and warned provider-default behavior (#154).

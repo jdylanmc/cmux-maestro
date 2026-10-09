@@ -187,7 +187,7 @@ final class SidebarPreferenceStore<Value: SidebarPreferenceValue> {
     }
 }
 
-private nonisolated final class SidebarPreferencePresenter: NSObject, NSFilePresenter, @unchecked Sendable {
+nonisolated final class SidebarPreferencePresenter: NSObject, NSFilePresenter, @unchecked Sendable {
     let presentedItemURL: URL?
     let presentedItemOperationQueue: OperationQueue
     private let changed: @Sendable () -> Void
@@ -215,7 +215,7 @@ private nonisolated final class SidebarPreferencePresenter: NSObject, NSFilePres
     }
 
     func presentedItemDidChange() {
-        if presentedItemURL == target { changed() }
+        changed()
     }
 
     func presentedSubitemDidAppear(at url: URL) { subitemChanged(url) }

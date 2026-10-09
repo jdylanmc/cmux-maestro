@@ -59,6 +59,61 @@ struct SidebarLayoutTests {
         }
     }
 
+    @Test func lazyPresenterOwnItemChangesRefreshWithoutCreatingTarget() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let file = SidebarLayoutFile(url: fixture.root.appendingPathComponent("uncreated/nested/layout.json"))
+        let recorder = PresenterReadRecorder(file: file)
+        let presenter: any NSFilePresenter = SidebarPreferencePresenter(
+            url: file.url, observeCreation: true
+        ) { MainActor.assumeIsolated { recorder.refresh() } }
+        try #require(presenter.presentedItemURL?.standardizedFileURL.path == fixture.root.standardizedFileURL.path)
+        presenter.presentedItemDidChange?()
+        presenter.presentedItemDidChange?()
+        try #require(recorder.reads.count == 2)
+        try #require(recorder.reads.allSatisfy { $0 == .init() })
+        try #require(!FileManager.default.fileExists(atPath: file.url.deletingLastPathComponent().path))
+        presenter.presentedSubitemDidChange?(at: fixture.root.appendingPathComponent("unrelated.json"))
+        presenter.presentedSubitemDidAppear?(at: fixture.root.appendingPathComponent("unrelated"))
+        try #require(recorder.reads.count == 2)
+        presenter.presentedSubitemDidAppear?(at: file.url.deletingLastPathComponent())
+        try #require(recorder.reads.count == 3)
+        try #require(!FileManager.default.fileExists(atPath: file.url.path))
+    }
+
+    @Test func presenterOwnItemChangesRetainCoordinatedReadAndNoticeSemantics() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let file = SidebarLayoutFile(url: fixture.root.appendingPathComponent("uncreated/nested/layout.json"))
+        let recorder = PresenterReadRecorder(file: file)
+        let presenter: any NSFilePresenter = SidebarPreferencePresenter(
+            url: file.url, observeCreation: true
+        ) { MainActor.assumeIsolated { recorder.refresh() } }
+        try #require(!FileManager.default.fileExists(atPath: file.url.path))
+        let saved = file.apply(.density(.comfortable))
+        try #require(saved.notice == nil)
+        let bytes = try Data(contentsOf: file.url)
+        presenter.presentedItemDidChange?()
+        presenter.presentedItemDidChange?()
+        try #require(recorder.reads.count == 2)
+        try #require(recorder.reads.allSatisfy { $0 == saved })
+        try #require(try Data(contentsOf: file.url) == bytes)
+        let invalid = Data("invalid fixture".utf8)
+        try invalid.write(to: file.url)
+        presenter.presentedItemDidChange?()
+        try #require(recorder.reads.count == 3)
+        try #require(recorder.reads.last?.notice == SidebarLayoutFile.unreadableNotice)
+        try #require(try Data(contentsOf: file.url) == invalid)
+    }
+
+    private final class PresenterReadRecorder {
+        let file: SidebarLayoutFile
+        var reads: [SidebarLayoutRead] = []
+
+        init(file: SidebarLayoutFile) { self.file = file }
+        func refresh() { reads.append(file.read()) }
+    }
+
     @Test func everyIdentityAndDensityRoundTripAcrossStoreReconstruction() throws {
         try withFile { file in
             let store = SidebarLayoutStore(file: file)
