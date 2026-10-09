@@ -571,6 +571,14 @@ bounds and distinct host node/byte protection are checked without real fleets.
 The Swift reader accepts 256 nodes across two 128-node workspaces but rejects
 129 in one workspace and 1,025 host-wide. Source publication does not upgrade
 an older installed reader/controller or demonstrate live activation.
+Managed adapter regressions use 128 private A route/socket pairs plus two B
+participants: B discovers only B, exchanges one send/reply through the real
+local receiver, and refuses cross-workspace routing. Separate checks accept
+1,024 host bindings with128 local participants, refuse129 local or1,025 host,
+and cap directory scans at2,048 entries. Mixed-case equivalent saved workspace
+UUIDs share node/retained quotas without rewriting the original records, matching
+the Swift reader's UUID grouping. These are synthetic contract tests, not
+1,024 real sessions or a provider-latency measurement.
 Prospective native-child permission regressions exercise explicit recorded
 parent mode/allow/deny inheritance, deny-only additions, explicit list/false
 narrowing, coordinator-only broad requests and contradictory-intent refusal.

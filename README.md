@@ -916,6 +916,15 @@ Schema-1 saved states remain readable. Older installed readers/controllers
 retain their previous bounds until an explicitly authorized upgrade; source
 publication alone does not activate the multi-workspace allowance (#167).
 
+The shared managed-message route scan has matching finite host bounds:
+1,024 private bindings and 2,048 directory entries (route/socket pairs), with
+at most128 participants in the responding workspace. Other-workspace bindings
+are validated but omitted from its peer list; send/receive retain exact address,
+generation, capability and frame/body checks. Legacy proof transport is unchanged.
+Saved schema-1 UUID spellings share a canonical workspace census without
+rewriting ownership records or migrating the store; equivalent case spellings
+cannot obtain separate node/retained allowances.
+
 Lock acquisition retains the existing 32-session reference
 policy: ordinary waits remain bounded to 4 seconds, two-second waits to 8 seconds,
 and zero-wait requests remain immediate, regardless of workspace capacity.

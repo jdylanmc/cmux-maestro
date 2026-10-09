@@ -1237,8 +1237,16 @@ class WorkspaceCapacityCLITests(unittest.TestCase):
         workspace = "abcdefab-1234-4234-8234-abcdefabcdef"
         saved = self.h.state()
         saved["retainedResources"] = [
-            {"workspaceId": workspace, "surfaceId": str(uuid.uuid4())} for _ in range(128)
+            {"workspaceId": workspace, "surfaceId": str(uuid.uuid4())} for _ in range(127)
         ]
+        saved["retainedResources"].append({
+            "workspaceId": workspace.upper(), "surfaceId": str(uuid.uuid4()),
+        })
+        CONTROLLER_API["validate_state"](saved)
+        summary = CONTROLLER_API["workspace_capacity"](saved, workspace)
+        self.assertEqual(summary["retainedResources"], 128)
+        self.assertEqual(summary["used"], 128)
+        self.assertFalse(summary["admissionAvailable"])
         saved["retainedResources"].append({
             "workspaceId": workspace.upper(), "surfaceId": str(uuid.uuid4()),
         })

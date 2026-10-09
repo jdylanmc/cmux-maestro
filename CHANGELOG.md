@@ -49,7 +49,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 - Isolate stored-node admission and retired history by CMUX workspace, retaining
   128 nodes per workspace and distinct bounded host/storage protection. Keep
-  multi-workspace saved-state and sidebar projections valid without resetting,
+  multi-workspace saved-state, messaging routes and sidebar projections valid,
+  with equivalent UUID spellings sharing one allowance, without resetting,
   pruning or changing another workspace's sessions; activation remains an
   explicitly authorized upgrade (#167).
 - Preflight Joe launches against both live workspace and global node capacity;

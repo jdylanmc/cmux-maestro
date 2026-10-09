@@ -976,7 +976,7 @@ def validate_state(state):
             raise OrchestrationError("Stored node identity is invalid.")
         for field in ("runId", "workspaceId"):
             canonical_uuid(node.get(field), f"stored {field}")
-        workspace = node["workspaceId"]
+        workspace = canonical_uuid(node["workspaceId"], "stored workspace ID")
         workspace_nodes[workspace] = workspace_nodes.get(workspace, 0) + 1
         if workspace_nodes[workspace] > MAX_NODES:
             raise OrchestrationError("Workspace stored-node limit reached.")
@@ -1198,7 +1198,7 @@ def validate_state(state):
     for resource in state["retainedResources"]:
         identifier = canonical_uuid(resource.get("surfaceId"), "retained surface ID")
         canonical_uuid(resource.get("workspaceId"), "retained workspace ID")
-        workspace = resource["workspaceId"]
+        workspace = canonical_uuid(resource["workspaceId"], "retained workspace ID")
         workspace_retained[workspace] = workspace_retained.get(workspace, 0) + 1
         if workspace_retained[workspace] > MAX_NODES:
             raise OrchestrationError("Workspace retained-resource limit reached.")
@@ -1571,17 +1571,22 @@ def validate_capacity_limit(limit):
     return limit
 
 
+def same_workspace(left, right):
+    return canonical_uuid(left, "workspace ID") == canonical_uuid(right, "workspace ID")
+
+
 def workspace_capacity(state, workspace):
+    workspace = canonical_uuid(workspace, "workspace ID")
     nodes = [
         node for node in state["nodes"].values()
-        if node["workspaceId"] == workspace and has_managed_runtime(node)
+        if same_workspace(node["workspaceId"], workspace) and has_managed_runtime(node)
         and node["phase"] != "resource-retired"
     ]
     roots = sum(node["role"] == "coordinator" for node in nodes)
-    retained = sum(item["workspaceId"] == workspace for item in state["retainedResources"])
+    retained = sum(same_workspace(item["workspaceId"], workspace) for item in state["retainedResources"])
     limit = state.get("workspaceCapacity", {}).get(workspace, MAX_LIVE_WORKERS)
     used = len(nodes) + retained
-    stored = sum(node["workspaceId"] == workspace for node in state["nodes"].values())
+    stored = sum(same_workspace(node["workspaceId"], workspace) for node in state["nodes"].values())
     node_slots = MAX_NODES - stored
     host_slots = MAX_HOST_NODES - len(state["nodes"])
     host_retained_slots = MAX_HOST_NODES - len(state["retainedResources"])
@@ -1589,7 +1594,8 @@ def workspace_capacity(state, workspace):
     return {
         "workspaceId": workspace, "limit": limit, "ceiling": MAX_LIVE_WORKERS_CEILING,
         "managedRoots": roots, "workers": len(nodes) - roots, "retainedResources": retained,
-        "pendingLaunches": sum(item["workspaceId"] == workspace for item in state["launches"].values()),
+        "pendingLaunches": sum(same_workspace(item["workspaceId"], workspace)
+                               for item in state["launches"].values()),
         "used": used, "remaining": max(0, limit - used), "nodeSlotsRemaining": node_slots,
         "storedNodes": stored, "storedNodeLimit": MAX_NODES,
         "hostStoredNodes": len(state["nodes"]), "hostNodeLimit": MAX_HOST_NODES,
@@ -1608,7 +1614,8 @@ def workspace_capacity(state, workspace):
 
 
 def require_node_capacity(state, workspace):
-    if sum(node["workspaceId"] == workspace for node in state["nodes"].values()) >= MAX_NODES:
+    if sum(same_workspace(node["workspaceId"], workspace)
+           for node in state["nodes"].values()) >= MAX_NODES:
         raise OrchestrationError("Workspace stored-node limit reached; explicitly archive an eligible run.")
     if len(state["nodes"]) >= MAX_HOST_NODES:
         raise OrchestrationError("Host stored-node safety limit reached; workspace quota is separate.")
@@ -1632,7 +1639,7 @@ def command_capacity(args, root):
 
     def configure(state):
         actor = authorize(state, args.actor_id, args.token)
-        if actor["role"] != "coordinator" or actor["workspaceId"] != workspace:
+        if actor["role"] != "coordinator" or not same_workspace(actor["workspaceId"], workspace):
             raise OrchestrationError("Only this workspace's authenticated coordinator may change capacity.")
         limits = state.setdefault("workspaceCapacity", {})
         if workspace not in limits and len(limits) >= MAX_WORKSPACE_CAPACITY_SETTINGS:
@@ -4117,7 +4124,7 @@ def command_archive(args, root, cmux):
                     "surfaceId": node["surfaceId"], "archivedAt": now(),
                 })
             del state["nodes"][node["id"]]
-        if sum(item["workspaceId"] == current["workspaceId"]
+        if sum(same_workspace(item["workspaceId"], current["workspaceId"])
                for item in state["retainedResources"]) > MAX_NODES:
             raise OrchestrationError("Workspace retained-resource limit reached; archived terminals remain owned.")
         if len(state["retainedResources"]) > MAX_HOST_NODES:
