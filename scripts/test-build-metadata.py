@@ -733,6 +733,66 @@ class DiagnosticRetentionTests(unittest.TestCase):
         malformed = lambda command, **kwargs: subprocess.CompletedProcess(command, 0, stdout="invalid")
         self.assertEqual(scopes.diagnostic_source(malformed)["status"], "unavailable")
 
+    def test_replacement_ref_cannot_hide_dirty_raw_source(self):
+        root = self.directory / "synthetic-git"
+        root.mkdir()
+        def git(*arguments):
+            return subprocess.run(
+                ["git", "-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid",
+                 "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", *arguments],
+                cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+        git("init", "--quiet")
+        (root / "source").write_text("original\n")
+        git("add", "source")
+        git("commit", "--quiet", "-m", "original")
+        head, tree = git("rev-parse", "HEAD", "HEAD^{tree}").splitlines()
+        (root / "source").write_text("different\n")
+        git("add", "source")
+        git("commit", "--quiet", "-m", "different")
+        replacement = git("rev-parse", "HEAD")
+        git("update-ref", "HEAD", head)
+        git("replace", head, replacement)
+        def runner(command, **kwargs):
+            return subprocess.run(command, **{**kwargs, "cwd": root})
+        source = scopes.diagnostic_source(runner)
+        self.assertEqual((source["head"], source["tree"]), (head, tree))
+        self.assertEqual(git("--no-replace-objects", "status", "--porcelain"), "M  source")
+        self.assertTrue(source["dirty"], "Raw coordinates must use raw dirty-state interpretation.")
+        with patch("builtins.print"):
+            receipt = scopes.capture_failure_diagnostics(
+                self.directory, "remaining", source,
+                lambda *args, **kwargs: self.fail("Raw dirty source must never export."))
+        self.assertEqual(receipt["reason"], "clean-source-provenance-unavailable")
+
+    def test_ancestor_swap_after_inventory_cannot_read_outside_export(self):
+        outside = self.directory / "outside-export"
+        outside.mkdir()
+        (outside / "runner.ips").write_bytes(b"outside")
+        original_inventory = scopes.diagnostic_files
+        def swapped_inventory(root, *args, **kwargs):
+            files = original_inventory(root, *args, **kwargs)
+            if root.name == "exported":
+                (root / "nested").rename(root / "original-nested")
+                (root / "nested").symlink_to(outside, target_is_directory=True)
+            return files
+        with patch.object(scopes, "diagnostic_files", side_effect=swapped_inventory):
+            receipt = self.capture(payloads={"nested/runner.ips": b"allowed"})
+        self.assertEqual(receipt["status"], "unavailable")
+        self.assertFalse(list(self.directory.glob("failure-diagnostics/*/*.zip")))
+
+    def test_same_size_file_replacement_after_inventory_is_rejected(self):
+        original_inventory = scopes.diagnostic_files
+        def swapped_inventory(root, *args, **kwargs):
+            files = original_inventory(root, *args, **kwargs)
+            if root.name == "exported":
+                (root / "replacement").write_bytes(b"changed")
+                (root / "replacement").replace(root / "runner.ips")
+            return files
+        with patch.object(scopes, "diagnostic_files", side_effect=swapped_inventory):
+            receipt = self.capture(payloads={"runner.ips": b"allowed"})
+        self.assertEqual(receipt["status"], "unavailable")
+        self.assertFalse(list(self.directory.glob("failure-diagnostics/*/*.zip")))
+
 
 class BuildMetadataTests(unittest.TestCase):
     def test_generated_guide_reference_is_exact_digest_only_and_fails_on_drift(self):
