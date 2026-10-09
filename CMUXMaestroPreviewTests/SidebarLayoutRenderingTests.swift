@@ -814,6 +814,9 @@ struct SidebarLayoutRenderingTests {
                     model: model, preferences: preferences, width: 340, height: 1200,
                     managed: managed, expectedSessions: 2, destination: destination
                 ) { host in
+                    #expect(model.copilot.tree.sessions.allSatisfy {
+                        Set($0.outlineNodes.map(\.id)) == ["notice-activity", "notice-child"]
+                    }, "Completed activity must remain as ancestor context even without an attention signal")
                     let titles = nativeTitles(in: host).filter { $0.localFocusID?.hasPrefix("surface:") == true }
                     #expect(titles.count == 2, "Both exact agent surface titles must remain mounted")
                     func taskNames(in view: NSView) -> [NSTextField] {
@@ -1118,7 +1121,7 @@ struct SidebarLayoutRenderingTests {
                             ? "coordinator-model" : "worker-model",
                         children: includeAttentionChild ? [
                             CopilotChildWork(
-                                id: "notice-child", parentID: nil, kind: .subagent, name: "Notice child",
+                                id: "notice-child", parentID: "notice-activity", kind: .subagent, name: "Notice child",
                                 state: .completed, model: nil,
                                 attention: attentionKinds?.map {
                                     .init(kind: $0, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
