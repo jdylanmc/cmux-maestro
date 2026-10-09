@@ -495,9 +495,23 @@ class MacOperations:
                 if value:
                     cf.CFRelease(value)
 
-    def verify_registration(self, app, *, absent=False):
-        require((app.resolve() in self.app_paths()) != absent,
-                "LaunchServices does not contain the requested exact app ID/path state.")
+    def verify_registration(self, app, *, absent=False, operation="verify", context=None):
+        target = app.resolve()
+        diagnostic = {
+            "operation": operation, "stage": None, "transaction": None, "phase": None,
+            **(context or {}),
+            "bundleID": metadata.BASE_ID, "target": str(target),
+            "expected": "absent" if absent else "present",
+        }
+        prefix = "LaunchServices exact registration verification failed: "
+        try:
+            present = target in self.app_paths()
+        except (OSError, ValueError, RuntimeError) as error:
+            diagnostic.update(observed="unknown", queryError=type(error).__name__)
+            raise ValueError(prefix + json.dumps(diagnostic, sort_keys=True)) from error
+        if present == absent:
+            diagnostic["observed"] = "present" if present else "absent"
+            raise ValueError(prefix + json.dumps(diagnostic, sort_keys=True))
         result = self.run(
             ["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", metadata.BASE_ID + ".Extension"],
             text=True,
@@ -505,24 +519,24 @@ class MacOperations:
         require(not result.stderr.strip(), "Extension registration query reported a diagnostic.")
         metadata.verify_registration_output(result.stdout, app / EXTENSION, absent=absent)
 
-    def register(self, app):
+    def register(self, app, *, context=None):
         self.run([LSREGISTER, "-f", str(app)])
         self.run(["/usr/bin/pluginkit", "-a", str(app / EXTENSION)])
-        self.verify_registration(app)
+        self.verify_registration(app, operation="register", context=context)
 
-    def ensure_registration(self, app, *, complete_owned_app=False):
+    def ensure_registration(self, app, *, complete_owned_app=False, context=None):
         state = self.registration_state(app)
         if all(state.values()):
-            self.verify_registration(app)
+            self.verify_registration(app, operation="ensure-existing", context=context)
         elif complete_owned_app and state == {"application": True, "extension": False}:
             self.restore_registration(app, {"application": True, "extension": True}, expected_current=state)
-            self.verify_registration(app)
+            self.verify_registration(app, operation="ensure-completed", context=context)
         else:
             require(not any(state.values()),
                     f"Partial exact registration at {app}: {json.dumps(state, sort_keys=True)}. "
                     "App-only completion requires verified transaction ownership; an existing extension "
                     "may already be hosted, so no forced LaunchServices refresh is permitted.")
-            self.register(app)
+            self.register(app, context=context)
 
     def preflight_native_siblings(self, allowed):
         result = self.run(["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv",
@@ -540,7 +554,7 @@ class MacOperations:
         require(not foreign, "External same-ID native registrations require a separate ownership/consent decision: "
                 + "; ".join(foreign) + ". Preflight did not change these registrations.")
 
-    def unregister(self, app):
+    def unregister(self, app, *, context=None):
         result = self.run(
             ["/usr/bin/pluginkit", "-m", "-A", "-D", "-vv", "-i", metadata.BASE_ID + ".Extension"],
             text=True,
@@ -552,7 +566,7 @@ class MacOperations:
             self.run(["/usr/bin/pluginkit", "-r", str(app / EXTENSION)])
         if app.resolve() in self.app_paths():
             self.run([LSREGISTER, "-u", str(app)])
-        self.verify_registration(app, absent=True)
+        self.verify_registration(app, absent=True, operation="unregister", context=context)
 
     def registration_state(self, app):
         result = self.run(
@@ -852,7 +866,16 @@ class Installer:
         retired = self.receipt["retired"]
         if retired:
             self.match(self.slot(retired["slot"]), retired["identity"])
-            self.ops.verify_registration(self.slot(retired["slot"]), absent=True)
+            self.ops.verify_registration(self.slot(retired["slot"]), absent=True,
+                                         context=self.registration_context("verify_retired_inactive"))
+
+    def registration_context(self, stage):
+        transaction = self.receipt["transaction"]
+        return {
+            "stage": stage,
+            "transaction": transaction["kind"] if transaction else None,
+            "phase": transaction["phase"] if transaction else None,
+        }
 
     def preflight_native(self, source=None):
         transaction = self.receipt["transaction"]
@@ -887,11 +910,12 @@ class Installer:
         require(transaction and transaction["phase"] in ("ready", "reclaiming"), "Retirement requires an owned transaction.")
         if transaction["phase"] == "ready" and not self.receipt["retired"]:
             return
-        self.ops.verify_registration(self.destination, absent=True)
+        self.ops.verify_registration(self.destination, absent=True,
+                                     context=self.registration_context("reclaim_retired"))
         garbage = self.receipt["garbage"]
         if garbage and not garbage["deleting"]:
             self.match(self.slot(garbage["slot"]), garbage["identity"])
-            self.ops.unregister(self.slot(garbage["slot"]))
+            self.ops.unregister(self.slot(garbage["slot"]), context=self.registration_context("reclaim_retired"))
         self.ops.wait_idle(*self.protected_apps())
         if transaction["phase"] == "ready":
             retired = self.receipt["retired"]
@@ -914,7 +938,7 @@ class Installer:
             if not garbage["deleting"]:
                 self.match(path, garbage["identity"])
                 self.ops.assert_idle(path)
-                self.ops.unregister(path)
+                self.ops.unregister(path, context=self.registration_context("clean_garbage"))
                 garbage["deleting"] = True
                 garbage["node"] = directory_identity(path)
                 self.save()
@@ -952,13 +976,13 @@ class Installer:
                     application["phase"] = "quitting"
                     self.save()
                     self.application_action("quit", transaction["before"], expected=application["before"])
-            self.ops.unregister(self.destination)
+            self.ops.unregister(self.destination, context=self.registration_context("quiesce"))
         for key in ("previous", "retired"):
             item = self.receipt[key]
             if item:
-                self.ops.unregister(self.slot(item["slot"]))
+                self.ops.unregister(self.slot(item["slot"]), context=self.registration_context("quiesce"))
         if source:
-            self.ops.unregister(Path(source))
+            self.ops.unregister(Path(source), context=self.registration_context("quiesce"))
         self.ops.wait_idle(*self.protected_apps(), *([Path(source)] if source else []))
         transaction = self.receipt["transaction"]
         if transaction and transaction.get("application"):
@@ -1005,7 +1029,7 @@ class Installer:
             self.save()
             if state is not None:
                 self.application_action("quit", transaction["after"], expected=state)
-        self.ops.unregister(self.destination)
+        self.ops.unregister(self.destination, context=self.registration_context("stop_replacement_application"))
         self.ops.wait_idle(*self.protected_apps())
         if application and application["before"] is not None:
             application["phase"] = "new-stopped"
@@ -1074,7 +1098,7 @@ class Installer:
             require(version(new["version"]) >= version(old["version"]), "Update cannot downgrade; use explicit rollback.")
             if new == old:
                 self.verify_retired_inactive()
-                self.ops.verify_registration(self.destination)
+                self.ops.verify_registration(self.destination, context=self.registration_context("install_candidate"))
         transaction = {"kind": "refresh" if identical else "update" if update else "install",
                        "phase": "ready" if identical else "copying",
                        "slot": "slot-" + uuid.uuid4().hex + ".app", "before": old, "after": new,
@@ -1188,9 +1212,10 @@ class Installer:
 
     def retire_before_publication(self, app):
         if all(self.ops.registration_state(self.destination).values()):
-            self.ops.verify_registration(app, absent=True)
+            self.ops.verify_registration(app, absent=True,
+                                         context=self.registration_context("retire_before_publication"))
         else:
-            self.ops.unregister(app)
+            self.ops.unregister(app, context=self.registration_context("retire_before_publication"))
 
     def finish_committed(self):
         transaction = self.receipt["transaction"]
@@ -1215,7 +1240,7 @@ class Installer:
             self.match(source, transaction["after"])
             if refresh and any(self.ops.registration_state(source).values()):
                 self.quiesce()
-            self.ops.unregister(source)
+            self.ops.unregister(source, context=self.registration_context("finish_committed"))
         integration = transaction.get("integration")
         if integration:
             integration["state"] = "applying"
@@ -1224,7 +1249,7 @@ class Installer:
             integration["state"] = "applied"
             self.save()
         if refresh and not transaction.get("application"):
-            self.ops.verify_registration(self.destination)
+            self.ops.verify_registration(self.destination, context=self.registration_context("finish_committed"))
         else:
             self.publish_registration(transaction["after"])
         self.match(self.destination, transaction["after"])
@@ -1249,15 +1274,18 @@ class Installer:
         self.match(self.destination, transaction["after"])
         if transaction["before"] and transaction["kind"] != "refresh":
             self.match(self.slot(transaction["slot"]), transaction["before"])
-            self.ops.verify_registration(self.slot(transaction["slot"]), absent=True)
+            self.ops.verify_registration(self.slot(transaction["slot"]), absent=True,
+                                         context=self.registration_context("complete_commit"))
         self.verify_retired_inactive()
         if previous and transaction["kind"] != "rollback" and not refresh:
             require(self.receipt["retired"] is None, "Retired slot was not reclaimed.")
             self.match(self.slot(previous["slot"]), previous["identity"])
-            self.ops.verify_registration(self.slot(previous["slot"]), absent=True)
+            self.ops.verify_registration(self.slot(previous["slot"]), absent=True,
+                                         context=self.registration_context("complete_commit"))
         if transaction["source"]:
             self.match(Path(transaction["source"]), transaction["after"])
-            self.ops.verify_registration(Path(transaction["source"]), absent=True)
+            self.ops.verify_registration(Path(transaction["source"]), absent=True,
+                                         context=self.registration_context("complete_commit"))
         self.publish_registration(transaction["after"])
         integration = transaction.get("integration")
         if integration and integration["state"] != "released":
@@ -1304,7 +1332,8 @@ class Installer:
             require(identity in (transaction["before"], transaction["after"]),
                     "Publication identity is not owned by this transaction.")
         self.preflight_native(transaction["source"] if transaction else None)
-        self.ops.ensure_registration(self.destination, complete_owned_app=transaction is not None)
+        self.ops.ensure_registration(self.destination, complete_owned_app=transaction is not None,
+                                     context=self.registration_context("publish_registration"))
         self.match(self.destination, identity)
 
     def refresh_current_registration(self):
@@ -1322,7 +1351,7 @@ class Installer:
             if self.receipt["garbage"]:
                 self.idle()
                 if self.receipt["current"]:
-                    self.ops.unregister(self.destination)
+                    self.ops.unregister(self.destination, context=self.registration_context("recover"))
             self.clean_garbage()
             self.clean_removed_current()
             self.refresh_current_registration()
@@ -1419,11 +1448,12 @@ class Installer:
             if self.destination.exists():
                 self.match(self.destination, transaction["after"])
                 self.ops.assert_idle(self.destination)
-                self.ops.unregister(self.destination)
+                self.ops.unregister(self.destination, context=self.registration_context("revert_committed"))
                 self.ops.move(self.destination, candidate)
             else:
                 self.match(candidate, transaction["after"])
-            self.ops.verify_registration(self.destination, absent=True)
+            self.ops.verify_registration(self.destination, absent=True,
+                                         context=self.registration_context("revert_committed"))
             self.restore_source_registration(transaction)
             self.release_restored_integration()
             self.discard_staging()
@@ -1452,7 +1482,8 @@ class Installer:
         self.refresh_current_registration()
         self.restore_application(previous=True)
         self.release_restored_integration()
-        self.ops.verify_registration(candidate, absent=True)
+        self.ops.verify_registration(candidate, absent=True,
+                                     context=self.registration_context("finish_restored_candidate"))
         self.match(candidate, transaction["after"])
         if transaction["kind"] != "rollback":
             require(self.receipt["retired"] is None, "Retired slot was not reclaimed before restoration.")
@@ -1502,7 +1533,7 @@ class Installer:
         if transaction["phase"] == "ready":
             self.check_stable()
             self.idle()
-            self.ops.unregister(self.destination)
+            self.ops.unregister(self.destination, context=self.registration_context("finish_uninstall"))
             self.reclaim_retired()
             transaction["phase"] = "removing"
             self.save()
@@ -1543,7 +1574,7 @@ class Installer:
             return "App and Copilot transaction committed; checkpoint cleanup/final retention is pending. Run recover."
         if self.receipt["integration"] and not self.receipt["transaction"]:
             self.check_stable()
-            self.ops.verify_registration(self.destination)
+            self.ops.verify_registration(self.destination, context=self.registration_context("status"))
             return "App and Copilot transaction committed; checkpoint cleanup is pending. Run recover to finish owned bookkeeping."
         if (self.receipt["transaction"] or self.receipt["garbage"]
                 or (self.receipt["current"] is None and self.receipt["previous"])):
@@ -1555,7 +1586,7 @@ class Installer:
         if not current:
             return ("No installed preview. Ownership metadata retained; user data untouched."
                     + (" One inactive retired app is retained." if self.receipt["retired"] else ""))
-        self.ops.verify_registration(self.destination)
+        self.ops.verify_registration(self.destination, context=self.registration_context("status"))
         previous = self.receipt["previous"]
         return (f"Verified installed preview: {self.destination}\n"
                 f"Build {current['version']}; previous: {previous['identity']['version'] if previous else 'none'}; "
