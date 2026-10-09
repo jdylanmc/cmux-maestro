@@ -1211,6 +1211,40 @@ class WorkspaceCapacityCLITests(unittest.TestCase):
         with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Workspace retained"):
             CONTROLLER_API["validate_state"](saved)
 
+    def test_legacy_workspace_uuid_spellings_share_quota_without_rewriting_ownership(self):
+        workspace = "abcdefab-1234-4234-8234-abcdefabcdef"
+        self.seed_workspace_history(workspace, 127)
+        self.seed_workspace_history(workspace.upper(), 1)
+        before = self.h.state()
+        summary = self.h.run("capacity", "--workspace", workspace)["capacity"]
+        self.assertEqual(summary["storedNodes"], 128)
+        self.assertEqual(summary["nodeSlotsRemaining"], 0)
+        self.assertFalse(summary["admissionAvailable"])
+        self.assertEqual(CONTROLLER_API["workspace_capacity"](before, workspace.upper())["storedNodes"], 128)
+        self.assertEqual(self.h.state(), before)
+        self.assertEqual(sum(node["workspaceId"] == workspace.upper()
+                             for node in before["nodes"].values()), 1)
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Workspace stored-node"):
+            CONTROLLER_API["require_node_capacity"](before, workspace.upper())
+        extra, _ = CONTROLLER_API["new_root"](
+            workspace.upper(), str(uuid.uuid4()), self.h.pane, "Case alias",
+        )
+        before["nodes"][extra["id"]] = extra
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Workspace stored-node"):
+            CONTROLLER_API["validate_state"](before)
+
+    def test_legacy_retained_workspace_spellings_share_the_same_bound(self):
+        workspace = "abcdefab-1234-4234-8234-abcdefabcdef"
+        saved = self.h.state()
+        saved["retainedResources"] = [
+            {"workspaceId": workspace, "surfaceId": str(uuid.uuid4())} for _ in range(128)
+        ]
+        saved["retainedResources"].append({
+            "workspaceId": workspace.upper(), "surfaceId": str(uuid.uuid4()),
+        })
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Workspace retained"):
+            CONTROLLER_API["validate_state"](saved)
+
     def test_retired_history_in_a_does_not_consume_b_and_does_not_get_pruned(self):
         other = str(uuid.uuid4())
         def populate(state):
