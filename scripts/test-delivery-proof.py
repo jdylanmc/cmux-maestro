@@ -4044,6 +4044,18 @@ class RootCustodyTests(unittest.TestCase):
                     "Do not automatically retry", "No automatic acknowledgements or receipt protocol",
                     "terminal typing, focus changes, composer manipulation, or guessed routes",
                     "without a startup acknowledgement", "No slash skill is required",
+                    "Default delivery, review, test and investigation workers are short-lived",
+                    "one concrete bounded assignment", "full accessible evidence",
+                    "receiver inspects and explicitly accepts", "remaining duties and their owners",
+                    "no active command, child or PR duty is lost",
+                    "concrete current duty", "retention reason and exit condition",
+                    "Turn end, process exit, idle UI and a sent result are not accepted completion",
+                    "separately authorized", "serialized native maestro_close",
+                    "exact owned direct child", "explicit subtree authorization",
+                    "Preserve every refusal or unknown outcome", "no automatic retry",
+                    "removal wait", "capacity release", "self-close",
+                    "branches, worktrees, dirty patches, review receipts and session artifacts",
+                    "fresh worker for later independent work", "no permanent idle pool",
                 ):
                     self.assertIn(phrase, context)
                 self.assertNotIn(identity["capability"], prompt)

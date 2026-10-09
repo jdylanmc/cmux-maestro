@@ -12,6 +12,9 @@ closure under [RECOVERY](../shepherd/RECOVERY.md).
 Load/execute [agent lifecycle](../squadron/LIFECYCLE.md) for dispatch, accepted
 returns/custody, cancellation recovery, terminal retirement. One authority each:
 readiness here, placement in WORKSPACE, lifecycle there. Keep one evidence packet.
+For CMUX use its [handoff and close contract](../squadron/LIFECYCLE.md#cmux-handoff-and-close),
+not generic archive/removal verification or monitoring timers. This delivery
+contract supplies no close grant.
 
 ## One delivery packet, one owner
 
@@ -24,6 +27,10 @@ Keep the existing task/session record, not another controller:
   scope, and material decisions or uncertainty.
 - Declared validation commands, baseline failures, current results and their
   head/base, independent review coverage, findings, and criterion verdicts.
+- Exact bounded-worker outcome, full evidence location, unresolved findings and
+  provenance, remaining command/child/PR duties, receiver's actual acceptance
+  and named custody owners. Record retention reason/exit condition or the exact
+  separately authorized close request/outcome; a send is not acceptance.
 - Scoped doctrine IDs, source locations, pinned digests, required flags, and
   actual load/application reports as specified by [Doctrine](../doctrine/APPLY.md).
 - Original authorized kickoff: bounded monitor job/lifetime, scheduler grant or
@@ -184,3 +191,12 @@ pending human signoff, acknowledged Shepherd owner/observation.
 After accepted returns, retire terminal agents under LIFECYCLE; retain only
 concrete duties or explicit limits. Preserve unfinished work/delivery worktree
 while PR custody needs them; archival grants no workspace/branch/evidence deletion.
+An accepted bounded worker return may finish that worker's assignment while the
+delivery remains blocked or under review. Before closing the worker, explicitly
+transfer its unresolved findings, active PR ownership and follow-up duties to
+the identified accepting owner; do not drop them from this packet. A draft
+candidate, completed turn or quiet session never discharges those duties.
+Use fresh workers for later independent assignments, retaining an existing worker
+only for a concrete current duty with a reason and exit condition. In CMUX,
+serialize explicitly authorized owned closes and preserve refusal/unknown
+outcomes; close acceptance proves neither removal nor free capacity.

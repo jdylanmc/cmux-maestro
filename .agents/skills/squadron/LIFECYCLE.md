@@ -10,6 +10,12 @@ Load the owning contracts without replacing their gates:
 [RECOVERY](../shepherd/RECOVERY.md) for issue-backed Joe continuation.
 Keep cadence/episode facts in this custody record.
 
+For CMUX, the [handoff and close contract](#cmux-handoff-and-close) below takes
+precedence over generic retirement, archived-state verification, permission
+readback and timer mechanics in this file. Use the installed
+[Maestro lifecycle guide](../cmux-maestro-orchestrate/SKILL.md); do not substitute
+Paseo/Orca operations or infer a close grant from this guidance.
+
 For [Orca-owned work](../joe-mode-orca/RUNTIME.md), use the native Run,
 Task/Dispatch, workspace, permission and worker-release contract rather than
 Paseo-specific APIs below. Preserve the same acceptance, no-overlap and
@@ -84,6 +90,10 @@ roles, not stalled workers with only hypothetical future work.
 
 ## Retire finished owned agents
 
+The following archive/active-view procedure applies only to runtimes that
+support it under the caller's grant. CMUX uses the separate contract below,
+which requests close without waiting for removal.
+
 Owners **must actually archive/retire** clearly terminal owned agents through
 supported harness operations after accepting/preserving results and completing/
 transferring all duties. Default: action, not cleanup candidates. Read-only
@@ -115,6 +125,65 @@ Joe team kickoff includes TEAM's bounded blocked-work cleanup: verify remote
 branches and all local evidence before removing exact owned worktrees. Failed
 preservation means keep the worktree. Role retirement also needs PM-recorded
 heartbeat deletion; an unknown timer remains a concrete unresolved duty.
+
+## CMUX handoff and close
+
+Default delivery, review, test and investigation workers are short-lived: one
+concrete bounded assignment, then accepted return and separately authorized
+owned close. Later independent work gets a fresh worker within actual admission
+and staffing bounds, not a permanent idle pool. This policy adds no automatic
+global close authorization, scheduler, daemon, cleanup engine or completion
+protocol. No startup handshake, heartbeat or polling loop is required.
+
+Keep these distinct decisions in the existing task/delivery evidence:
+
+1. **Assign:** record the real parent and full launch identity (worker, workspace,
+   surface, session and generation), assignment/stop condition, scope and
+   return owner. Launch acceptance is not prompt consumption or task completion.
+2. **Offer the result:** preserve exact outcome (including blocked/failed), source
+   revision/commit SHA when applicable, full accessible evidence, unresolved
+   findings with provenance, dirty work and every remaining command, child,
+   PR, review, human-decision or other duty. No commit exists for some bounded
+   investigations: say so, never invent one. A compact milestone points to the
+   full artifact; it cannot replace it.
+3. **Accept custody:** the receiver inspects the actual candidate/artifacts and
+   explicitly accepts named scope, remaining duties and their owners. Preserve
+   that substantive decision, not an automatic messaging acknowledgment.
+   Missing/stale evidence or ambiguous ownership leaves transfer pending.
+   Outgoing writers stop before incoming writers mutate; no duplicate PR owner.
+   Blocked work may be transferred without claiming successful delivery.
+4. **Decide retention or close:** the owning parent checks that no active command,
+   child, repair or PR duty will be lost and that all other duties are complete
+   or accepted by an identified receiver. Unknown activity blocks closing.
+   Retain only a concrete current duty or capability/authority gap, with reason,
+   responsible owner and exit/resumption condition. Active PM, open Discovery,
+   a pending human decision and a genuinely owned PR scope qualify; idle state
+   or "might be useful later" does not. Do not cancel work to make it terminal.
+5. **Request only authorized close:** after the gates above, the actual owning
+   actor makes one serialized native `maestro_close` request for the exact owned
+   direct child. A worker cannot close itself, its parent, siblings or peers.
+   Do not send shutdown instructions to circumvent that ownership. Only an
+   explicit subtree grant permits the existing fixed descendant-first pass;
+   reconcile every selected descendant's evidence/duties before dispatch.
+   Target-only never settles child duties. Serialize requests rather than
+   launching concurrent closes; never impersonate intermediate parents.
+6. **Preserve the outcome:** retain every target and accepted/refused/unknown/
+   not-attempted result, including partial or lost replies. Request acceptance
+   is not terminal/provider removal, task success, review approval, or capacity
+   release. No removal wait, automatic retry, `/exit`, terminal typing, force-kill,
+   provider shutdown, or input fallback. Refusal/unknown retains unresolved
+   custody with the actual limitation and next owner action; absence of a
+   supported wake is a gap, not permission to create a timer.
+
+Turn end, process exit, idle UI and a sent result are never accepted task
+completion. The parent accepts/preserves the final report before any close that
+could interrupt it; sending it does not authorize self-retirement.
+
+Preserve branches, worktrees, dirty patches, review receipts and session
+artifacts. Agent retirement never deletes delivery resources, source markers
+or node history. Independent resource observation/accounting stays separate;
+retained history may still consume node capacity. Never erase records, retry
+fan-out, or infer room from a close receipt.
 
 For contract/caller changes, exercise [acceptance scenarios](LIFECYCLE-SCENARIOS.md).
 Package/link tests prove reachability, not runtime compliance.

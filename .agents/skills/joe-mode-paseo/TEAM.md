@@ -16,6 +16,13 @@ invoking Paseo's helpers or inventing equivalent APIs. Orca uses configured
 model defaults unless the human selected an override; discovery is evidence,
 not permission to replace that choice. Session Joe and CMUX acquire no timers.
 
+CMUX uses [LIFECYCLE's handoff and close contract](../squadron/LIFECYCLE.md#cmux-handoff-and-close)
+instead of Paseo archive, active-view removal verification, heartbeat or STATE
+cleanup operations below. Most workers are short-lived; the owning parent
+accepts evidence and settles duties before any explicitly authorized exact close.
+No blanket close authority, live removal proof or capacity release follows from
+this team policy.
+
 ## Roles and developer slots
 
 | Role | Job | Lifetime |
@@ -36,6 +43,17 @@ A feature lane reserves **two** slots. Bug, hardening and refactor each reserve
 **one**. Three features, two features plus two fixes, or six fixes fill the pool.
 Support roles and reviewers are outside the pool, bounded by useful work.
 Without a spare slot, queue the next feature; do not pretend it costs one.
+
+Delivery, review, test and investigation workers each get one bounded assignment.
+After the exact result/source SHA and full evidence are preserved, the receiver
+accepts unresolved findings and remaining custody before the parent retires the
+worker through its authorized runtime path. No active command, child or PR duty
+may be lost. Later independent work uses a fresh bounded worker, not indefinite
+parking. Retain only a concrete current duty with responsible owner, reason and
+exit condition: PM, an open Discovery conversation, a pending human decision,
+or an actually owned PR scope. A turn ending, process exit, idle UI or sent result
+is not accepted completion. Preserve worktrees, branches, dirty patches, review
+receipts and session artifacts regardless of agent disposition.
 
 Count every code-writing descendant, including a writing route owner, inside
 its lane's reservation. Do not double-count an already-reserved red/green pair.

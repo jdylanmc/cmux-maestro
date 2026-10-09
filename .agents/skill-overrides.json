@@ -1,10 +1,13 @@
 {
-  "skills": ["doctrine", "joe-mode", "joe-mode-cmux", "roast", "shepherd", "ship", "verify"],
+  "skills": ["doctrine", "joe-mode", "joe-mode-cmux", "joe-mode-paseo", "roast", "shepherd", "ship", "squadron", "verify"],
   "links": [
     ".agents/skills/doctrine/APPLY.md#joe-review-operations",
     ".agents/skills/ship/DELIVERY.md#pr-states",
     ".agents/skills/ship/DELIVERY.md#current-base-readiness-and-real-custody",
     ".agents/skills/joe-mode/DELIVERY-PACE.md#target",
+    ".agents/skills/cmux-maestro-orchestrate/SKILL.md#bounded-assignment-handoff-and-retention",
+    ".agents/skills/squadron/LIFECYCLE.md#cmux-handoff-and-close",
+    ".agents/skills/squadron/LIFECYCLE-SCENARIOS.md#cmux-bounded-worker-scenarios",
     ".agents/skills/joe-mode-cmux/SKILL.md#role-appearance"
   ]
 }
