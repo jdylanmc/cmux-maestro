@@ -95,8 +95,10 @@ its bundled skills, private local controller, native loader at
 declares only `sessionStart`, `userPromptSubmitted` and `postToolUse`, using the
 unchanged silenced helper wrapper. Private generation/provenance and an
 advisory setup lock live under the existing application `Copilot/` support
-directory. The loader is inert without matching launcher/session/workspace/
-generation bindings. Existing
+directory. Managed tools require matching launcher/session/workspace/generation
+bindings. Ordinary CMUX sessions can expose only the nonprivileged
+[`maestro_readiness` diagnostic](docs/native-messaging-architecture.md#ordinary-session-readiness-partial-162);
+this does not enroll the session or enable Joe activation. Existing
 `maestro-cmux`, other plugins, provider settings, and sidebar selection are
 never replaced automatically. Normal app updates refresh owned integration
 through the coordinated installer. Generated hooks use the **stable installed
