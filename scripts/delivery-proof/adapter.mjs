@@ -607,3 +607,54 @@ export async function startManaged({ joinSession, environment = process.env, dia
   }
   return start({ root, peer, joinSession, managed: true, expected, diagnostic, observe: observation, signal, onListener });
 }
+
+export async function startReadiness({ joinSession, environment = process.env, signal }) {
+  const sessionId = environment.SESSION_ID;
+  if (typeof sessionId !== "string" || !UUID.test(sessionId) ||
+    ![environment.CMUX_WORKSPACE_ID, environment.CMUX_SURFACE_ID].every(value =>
+      typeof value === "string" && value.length === 36 && UUID.test(value.toLowerCase()))) return null;
+  const launcherInputs = [
+    environment.CMUX_MAESTRO_MESSAGE_ROOT, environment.CMUX_MAESTRO_MESSAGE_PEER,
+    environment.CMUX_MAESTRO_WORKER_ID, environment.CMUX_MAESTRO_EXECUTION_MODE,
+  ];
+  // A complete managed launch belongs exclusively to startManaged, even if it fails.
+  if (launcherInputs.slice(0, 3).every(Boolean) && launcherInputs[3] === "interactive") return null;
+  const reason = launcherInputs.some(Boolean) ? "launcher-inputs-incomplete" : "launcher-inputs-absent";
+  let session;
+  let ready = false;
+  signal?.throwIfAborted();
+  session = await joinSession({ tools: [{
+    name: "maestro_readiness",
+    description: "Read only this extension's ordinary-session readiness and joined Copilot session ID. CMUX placement is unverified; account and private bindings are not inspected. No enrollment, peer messaging, or lifecycle authority.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    handler: async (args, invocation) => {
+      try {
+        signal?.throwIfAborted();
+        exactKeys(args, []);
+        requireCondition(ready && session?.sessionId === sessionId && invocation?.sessionId === sessionId);
+        return JSON.stringify({
+          status: "diagnostic-only",
+          session: { sessionId, source: "copilot-extension-join" },
+          cmux: { status: "environment-present-unverified" },
+          managed: { status: "unavailable", reason, binding: "not-inspected" },
+          capabilities: {
+            scope: "this-extension", readiness: true, selfSessionIdentity: true,
+            managedIdentity: false, peerDiscovery: false, peerMessaging: false,
+            spawn: false, close: false, inPlaceEnrollment: false,
+          },
+          limits: {
+            account: "not-observed", workspaceAndSurface: "not-verified",
+            otherExtensions: "not-inspected", priorInitializationFailure: "not-diagnosed",
+          },
+        });
+      } catch {
+        return { resultType: "failure",
+          textResultForLlm: "Maestro readiness unavailable for this invocation; no enrollment or fallback was attempted." };
+      }
+    },
+  }] });
+  signal?.throwIfAborted();
+  requireCondition(session?.sessionId === sessionId);
+  ready = true;
+  return session;
+}

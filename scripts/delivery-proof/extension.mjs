@@ -1,5 +1,5 @@
 import { joinSession } from "@github/copilot-sdk/extension";
-import { startManaged } from "./adapter.mjs";
+import { startManaged, startReadiness } from "./adapter.mjs";
 
 const shutdown = new AbortController();
 const diagnosticCodes = new Set([
@@ -29,6 +29,8 @@ process.on("SIGTERM", async () => {
 
 startManaged({
   joinSession, signal: shutdown.signal, onListener: value => { listener = value; },
+}).then(managed => {
+  if (managed === null) return startReadiness({ joinSession, signal: shutdown.signal });
 }).catch(error => {
   if (!stopping) fail("unavailable for this session", error);
 });

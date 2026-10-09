@@ -6,6 +6,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Expose bounded own-session readiness diagnostics in ordinary CMUX conversations
+  without enabling managed tools, inspecting private bindings, or enrolling the
+  session. Report unverified placement and absent/incomplete launcher inputs;
+  in-place Joe activation remains blocked (partial #162).
 - Read the responding managed session's current model, context tier and effort
   through optional identity observation, with explicit unavailable reasons and
   no launch-default substitution or model changes (#152).
