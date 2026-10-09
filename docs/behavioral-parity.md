@@ -577,7 +577,10 @@ local receiver, and refuses cross-workspace routing. Separate checks accept
 1,024 host bindings with128 local participants, refuse129 local or1,025 host,
 and cap directory scans at2,048 entries. Mixed-case equivalent saved workspace
 UUIDs share node/retained quotas without rewriting the original records, matching
-the Swift reader's UUID grouping. These are synthetic contract tests, not
+the Swift reader's UUID grouping. A decoded observer-wire control explicitly
+mixes127 lowercase plus one uppercase spelling of the same workspace UUID:
+128 is accepted; a129th equivalently spelled record is refused.
+These are synthetic contract tests, not
 1,024 real sessions or a provider-latency measurement.
 Prospective native-child permission regressions exercise explicit recorded
 parent mode/allow/deny inheritance, deny-only additions, explicit list/false
