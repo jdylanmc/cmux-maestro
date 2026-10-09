@@ -1281,6 +1281,68 @@ class WorkspaceCapacityCLITests(unittest.TestCase):
                     store.write(before)
         self.assertEqual(self.h.state(), before)
 
+    def test_real_byte_overflow_refuses_before_surface_or_partial_state_publication(self):
+        other = str(uuid.uuid4())
+        def populate(state):
+            root, _ = CONTROLLER_API["new_root"](other, str(uuid.uuid4()), self.h.pane, "Other")
+            state["nodes"][root["id"]] = root
+            for index in range(31):
+                retired, _ = CONTROLLER_API["new_root"](other, str(uuid.uuid4()), self.h.pane, f"Retired {index}")
+                retired.update(
+                    role="worker", parentId=root["id"], runId=root["runId"],
+                    executionMode="bounded", phase="resource-retired", availability="unavailable",
+                    generation=1, copilotSessionId=str(uuid.uuid4()),
+                    task="x" * 32_768 if index < 30 else "",
+                )
+                state["nodes"][retired["id"]] = retired
+            size = len(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()) + 1
+            remaining = 1_048_576 - 8192 - size
+            self.assertGreaterEqual(remaining, 0)
+            self.assertLessEqual(remaining, 32_768)
+            retired["task"] = "x" * remaining
+        self.h.change_state(populate)
+        before = {
+            path: path.read_bytes() for path in (
+                self.h.root / "control/state.json", self.h.root / "observer/current.json",
+                self.h.root / "observer/icons.json",
+            )
+        }
+        summary = self.capacity()["capacity"]
+        self.assertEqual(summary["hostStateBytesRemaining"], 8192)
+        self.assertEqual(summary["nodeSlotsRemaining"], 127)
+        self.assertGreater(summary["hostNodeSlotsRemaining"], 0)
+        surfaces = self.h.cmux_data()["surfaces"]
+        denied = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Too large", "--cwd", str(REPO), "--task", "x" * 32_768,
+            check=False,
+        )
+        self.assertEqual(denied["returncode"], 2)
+        self.assertIn("Host control-state byte safety limit", denied["stderr"])
+        self.assertEqual(self.h.cmux_data()["surfaces"], surfaces)
+        self.assertEqual(self.h.calls(), [])
+        for path, payload in before.items():
+            self.assertEqual(path.read_bytes(), payload)
+
+    def test_archive_keeps_other_workspace_retained_resources_without_global_128_refusal(self):
+        other = str(uuid.uuid4())
+        retained = [
+            {"workspaceId": other, "surfaceId": str(uuid.uuid4()),
+             "runId": str(uuid.uuid4()), "archivedAt": CONTROLLER_API["now"]()}
+            for _ in range(128)
+        ]
+        self.h.change_state(lambda state: state.update(retainedResources=retained))
+        receipt = self.h.spawn()
+        self.h.wait_node(receipt["workerId"], lambda node: node["phase"] == "reported-completed")
+        archived = self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token)
+        self.assertTrue(archived["archived"])
+        state = CONTROLLER_API["read_state"](self.h.root)
+        self.assertEqual(len(state["retainedResources"]), 129)
+        self.assertEqual([item for item in state["retainedResources"] if item["workspaceId"] == other],
+                         retained)
+        self.assertEqual(sum(item["workspaceId"] == self.h.workspace
+                             for item in state["retainedResources"]), 1)
+
     def test_limits_persist_across_processes_and_status_agrees(self):
         for limit in (1, 32, 128):
             with self.subTest(limit=limit):
