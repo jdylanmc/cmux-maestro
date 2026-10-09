@@ -130,6 +130,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Remove routine Turn finished notice lines and their reserved space from sidebar
+  agent rows, preserving actionable notices and primary state (#175).
 - Request native in-turn steering for managed peer messages instead of waiting
   for the current turn to finish; preserve legacy proof enqueue and
   fire-and-forget limits (#163).
