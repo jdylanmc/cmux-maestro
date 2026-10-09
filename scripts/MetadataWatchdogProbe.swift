@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import os
 @testable import CMUXMaestroPreview
 
 @main
@@ -9,11 +10,12 @@ struct MetadataWatchdogProbe {
         let mode = CommandLine.arguments[1]
         guard ["complete", "stalled-clock", "polling-clock", "sampler-timeout",
                "sampler-exit-no-output", "sampler-exit-with-output", "sampler-timeout-no-output",
-               "owned-living", "owned-result-before-task", "owned-task-received", "owned-exited"]
+               "owned-living", "owned-result-before-task", "owned-task-received", "owned-exited",
+               "diagnostic-cancel-pending", "diagnostic-cancel-returned", "diagnostic-lock-held"]
             .contains(mode) else { exit(2) }
         let directory = URL(fileURLWithPath: CommandLine.arguments[2])
         var sampler = URL(fileURLWithPath: "/usr/bin/sample")
-        if mode.hasPrefix("sampler-") || mode.hasPrefix("owned-") {
+        if mode.hasPrefix("sampler-") || mode.hasPrefix("owned-") || mode.hasPrefix("diagnostic-") {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             sampler = directory.appendingPathComponent("stuck-sampler")
             let pidFile = CopilotPluginManifest.shellQuoted(directory.appendingPathComponent("sampler.pid").path)
@@ -38,10 +40,12 @@ struct MetadataWatchdogProbe {
             try Data((script + "\n").utf8).write(to: sampler)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: sampler.path)
         }
+        let storage = OSAllocatedUnfairLock(initialState: CopilotSetupObservation.Snapshot())
+        let observation = mode.hasPrefix("diagnostic-") ? CopilotSetupObservation(storage: storage) : nil
         let watchdog = try MetadataProcessTestWatchdog(
             directory: directory, testIdentity: "MetadataWatchdogProbe/\(mode)",
             limit: .seconds(mode == "complete" ? 0.3 : 2),
-            samplerExecutable: sampler)
+            samplerExecutable: sampler, observation: observation)
         if mode == "complete" {
             watchdog.begin("completed-negative-control")
             let before = ContinuousClock.now
@@ -50,6 +54,18 @@ struct MetadataWatchdogProbe {
             watchdog.finish()
             try await Task.sleep(for: .seconds(0.6))
             return
+        }
+        if mode.hasPrefix("diagnostic-") {
+            watchdog.begin("negative-control/\(mode)")
+            if mode == "diagnostic-lock-held" {
+                storage.withLock { _ in holdTask() }
+                exit(1)
+            }
+            observation?.begin(.cancelCall)
+            observation?.begin(.execute)
+            if mode == "diagnostic-cancel-returned" { observation?.end(.cancelCall) }
+            holdTask()
+            exit(1)
         }
         if mode.hasPrefix("owned-") {
             try await ownedProcessControl(mode, directory: directory, watchdog: watchdog)
