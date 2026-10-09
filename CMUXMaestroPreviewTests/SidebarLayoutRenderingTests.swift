@@ -27,6 +27,16 @@ struct SidebarLayoutRenderingTests {
                     ) { host in
                         let titles = nativeTitles(in: host)
                         try #require(titles.count == 10, "Internal tasks are text, not interactive native titles")
+                        if appearance == .dark {
+                            let image = folder.appendingPathComponent("\(density.rawValue)-\(appearance.name)-\(width).png")
+                            let lines = try captureTitleLanes(in: host, image: image)
+                            #expect(lines.contains { $0.hasPrefix("maestro") },
+                                    "Location must use the recovered subtitle space, including at 240 points: \(lines)")
+                            #expect(!lines.contains { $0.hasPrefix("Agent") && $0.contains("maestro") },
+                                    "Managed and observed subtitles must not prepend their generic type: \(lines)")
+                            #expect(lines.contains { $0.contains("Terminal") })
+                            #expect(lines.contains { $0.contains("Browser") })
+                        }
                         let before = titles.map { host.convert($0.bounds, from: $0) }
                         for title in titles { title.focusChanged(true) }
                         try await Task.sleep(for: .milliseconds(20))
@@ -573,7 +583,8 @@ struct SidebarLayoutRenderingTests {
         }
         #expect(!lines.contains { $0.contains("Copilot agent") || $0.lowercased().contains("session ") })
         #expect(!lines.contains { $0.contains("counts incomplete") || $0.contains("0 agents") || $0.contains("Other tabs") })
-        #expect(lines.contains { $0.contains("Agent") && $0.contains("review-worktree") })
+        #expect(lines.contains { $0.contains("review-worktree") })
+        #expect(!lines.contains { $0.hasPrefix("Agent") && $0.contains("review-worktree") })
         #expect(!titleLines.contains { $0.contains("State unavailable") })
         #expect(lines.contains { $0.contains("Terminal") })
         #expect(!lines.contains { $0.contains("Earlier skill") || $0.contains("Branch collapsed")
