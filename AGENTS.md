@@ -216,6 +216,15 @@ Use the terse Conventional Commits policy in
 repository's author identity and no-co-author rule. Formatting grants no
 staging, commit, or history-rewrite authority.
 
+### Pull requests
+
+Every agent that creates or updates a PR in this repository invokes
+`/pull-request` (`.agents/skills/pull-request/`) to write the body: terse
+What/Why/How, Evidence, and Blast Radius. Use the repository PR template headings
+if one exists. Ship, Patch, Refactor, Shepherd and `create-pull-request`
+publication use that body; do not hand-write a different format. The skill
+grants no approval, ready, or merge authority.
+
 ### Doctrine
 
 The installed package is `.agents/skills/doctrine/`. Use its `SKILL.md` and
