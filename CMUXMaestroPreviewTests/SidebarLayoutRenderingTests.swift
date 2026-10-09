@@ -30,12 +30,18 @@ struct SidebarLayoutRenderingTests {
                         if appearance == .dark {
                             let image = folder.appendingPathComponent("\(density.rawValue)-\(appearance.name)-\(width).png")
                             let lines = try captureTitleLanes(in: host, image: image)
-                            #expect(lines.contains { $0.hasPrefix("maestro") },
+                            #expect(lines.contains { $0.contains("maestro-design") },
                                     "Location must use the recovered subtitle space, including at 240 points: \(lines)")
-                            #expect(!lines.contains { $0.hasPrefix("Agent") && $0.contains("maestro") },
+                            #expect(!lines.contains { $0.contains("Agent") && $0.contains("maestro") },
                                     "Managed and observed subtitles must not prepend their generic type: \(lines)")
                             #expect(lines.contains { $0.contains("Terminal") })
                             #expect(lines.contains { $0.contains("Browser") })
+                            let evidence = folder.deletingLastPathComponent().deletingLastPathComponent()
+                                .appendingPathComponent("layout-validation/offscreen")
+                            try FileManager.default.createDirectory(at: evidence, withIntermediateDirectories: true)
+                            try Data(contentsOf: image).write(to: evidence.appendingPathComponent(
+                                "agent-subtitles-\(density.rawValue)-\(width).png"
+                            ))
                         }
                         let before = titles.map { host.convert($0.bounds, from: $0) }
                         for title in titles { title.focusChanged(true) }
@@ -65,7 +71,8 @@ struct SidebarLayoutRenderingTests {
                         #expect(abs(ordinary[2].frame.minY - ordinary[1].frame.minY - density.rowHeight) < 0.01)
                         #expect(ordinary.prefix(3).allSatisfy { $0.frame.minX == ordinary[0].frame.minX })
                         #expect(geometry.contains { $0.help.contains("State unavailable")
-                            && $0.help.contains("Child history incomplete") && $0.help.contains("~/git/_opensource/example/maestro-design") })
+                            && $0.help.contains("Child history incomplete")
+                            && $0.help.contains("~/git/_opensource/example/maestro-design-location-with-a-deliberately-long-component") })
                         #expect(geometry.contains { $0.help.contains("Last verified location: Assigned directory: Not current Git state")
                             && $0.help.contains("Git changes: Assigned directory: Current counts unavailable")
                             && $0.help.contains("not Copilot's current /cwd") })
@@ -94,7 +101,7 @@ struct SidebarLayoutRenderingTests {
         let first = UUID(), second = UUID()
         let surfaces = (0..<6).map { _ in UUID() }
         let sessions = (0..<3).map { _ in UUID() }
-        let directory = NSHomeDirectory() + "/git/_opensource/example/maestro-design"
+        let directory = NSHomeDirectory() + "/git/_opensource/example/maestro-design-location-with-a-deliberately-long-component"
         func surface(_ index: Int, _ title: String, _ kind: HierarchySurfaceKind) -> HierarchySurface {
             .init(id: surfaces[index], title: title, kind: kind, isFocused: false, isPinned: false,
                   unreadCount: 0, workingDirectory: .available(kind == .browser ? nil : directory))
@@ -584,7 +591,7 @@ struct SidebarLayoutRenderingTests {
         #expect(!lines.contains { $0.contains("Copilot agent") || $0.lowercased().contains("session ") })
         #expect(!lines.contains { $0.contains("counts incomplete") || $0.contains("0 agents") || $0.contains("Other tabs") })
         #expect(lines.contains { $0.contains("review-worktree") })
-        #expect(!lines.contains { $0.hasPrefix("Agent") && $0.contains("review-worktree") })
+        #expect(!lines.contains { $0.contains("Agent") && $0.contains("review-worktree") })
         #expect(!titleLines.contains { $0.contains("State unavailable") })
         #expect(lines.contains { $0.contains("Terminal") })
         #expect(!lines.contains { $0.contains("Earlier skill") || $0.contains("Branch collapsed")

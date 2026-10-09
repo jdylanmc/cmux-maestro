@@ -123,6 +123,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Remove the redundant `Agent` subtitle prefix so existing location and activity
+  have more room, preserving status, full location help and non-agent labels (#188).
 - Request native in-turn steering for managed peer messages instead of waiting
   for the current turn to finish; preserve legacy proof enqueue and
   fire-and-forget limits (#163).
