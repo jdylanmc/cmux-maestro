@@ -811,6 +811,11 @@ enum SidebarPresentation {
         complete ? "No visible child tasks" : "Child history unavailable"
     }
 
+    /// Routine completion remains in details without adding a secondary row notice.
+    static func rowAttention(_ signals: [AgentAttention], state: AgentWorkState, degraded: Bool) -> [String] {
+        attention(signals.filter { $0.kind != .turnFinished }, state: state, degraded: degraded)
+    }
+
     static func attention(_ signals: [AgentAttention], state: AgentWorkState, degraded: Bool) -> [String] {
         var result = AgentAttentionKind.allCases.compactMap { kind -> String? in
             let count = signals.filter { $0.kind == kind }.count

@@ -1189,6 +1189,35 @@ struct SidebarClarityTests {
         #expect(!SidebarPresentation.collapsed(summary)[0].contains("0"))
     }
 
+    @Test func rowNoticesOmitOnlyRoutineCompletionWithoutChangingDetailedEvidence() {
+        let completion = signal(.turnFinished)
+        for state: AgentWorkState in [.queued, .working, .idle, .blocked, .completed, .failed, .cancelled, .unknown] {
+            #expect(SidebarPresentation.rowAttention([completion], state: state, degraded: false)
+                    == (state == .blocked ? ["Blocking reason unavailable"] : []))
+        }
+        #expect(SidebarPresentation.rowAttention([completion], state: .idle, degraded: true)
+                == ["Attention evidence incomplete"])
+        #expect(SidebarPresentation.rowAttention([completion], state: .blocked, degraded: true)
+                == ["Blocking reason unavailable", "Attention evidence incomplete"])
+        let actionable: [(AgentAttentionKind, String)] = [
+            (.permission, "Waiting for permission"), (.answer, "Waiting for answer"),
+            (.error, "Error reported"), (.aborted, "Aborted")
+        ]
+        for (kind, title) in actionable {
+            #expect(SidebarPresentation.rowAttention([completion, signal(kind)], state: .completed, degraded: false)
+                    == [title])
+            #expect(SidebarPresentation.rowAttention([completion, signal(kind)], state: .failed, degraded: true)
+                    == [title, "Attention evidence incomplete"])
+        }
+        #expect(SidebarPresentation.rowAttention(
+            [completion, signal(.error), signal(.error)], state: .completed, degraded: false
+        ) == ["Error reported (2)"])
+        #expect(SidebarPresentation.attention([completion], state: .idle, degraded: false) == ["Turn finished"])
+        #expect(SidebarPresentation.attentionDetails([completion]).contains {
+            $0.value == "Main turn only; background work may continue."
+        })
+    }
+
     @Test func selectionMetadataShowsOnlyObservedModelAndGrantedPaths() throws {
         let ended = node(state: .completed)
         let session = try #require(makeTree(nodes: [ended]).sessions.first)

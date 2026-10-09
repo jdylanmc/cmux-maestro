@@ -791,10 +791,15 @@ struct SidebarLayoutRenderingTests {
 
         for density in SidebarDensity.allCases {
             preferences.setDensity(density)
-            var captures: [(frames: [CGRect], text: String)] = []
-            let actionable: [AgentAttentionKind] = [.permission, .answer, .error, .aborted]
-            let scenarios: [[AgentAttentionKind]] = [[], [.turnFinished], actionable, actionable + [.turnFinished]]
-            for (index, signals) in scenarios.enumerated() {
+            var captures: [[CGRect]] = []
+            let actionable: [(AgentAttentionKind, String)] = [
+                (.permission, "Waiting for permission"), (.answer, "Waiting for answer"),
+                (.error, "Error reported"), (.aborted, "Aborted")
+            ]
+            let scenarios: [([AgentAttentionKind], String?)] = [([], nil), ([.turnFinished], nil)]
+                + actionable.flatMap { kind, title in [([kind], title), ([kind, .turnFinished], title)] }
+            for (index, scenario) in scenarios.enumerated() {
+                let (signals, expectedNotice) = scenario
                 let model = await makeManagedModel(
                     fixtures: SidebarTreeFixtures(), nodeCount: 2, attentionKinds: signals,
                     includeManaged: managed, includeAttentionChild: true
@@ -808,24 +813,46 @@ struct SidebarLayoutRenderingTests {
                     model: model, preferences: preferences, width: 340, height: 1200,
                     managed: managed, expectedSessions: 2, destination: destination
                 ) { host in
-                    frames = nativeTitles(in: host).map { host.convert($0.bounds, from: $0) }
-                    #expect(frames.count >= 4, "Both agent rows and their child rows must actually render")
+                    let titles = nativeTitles(in: host).filter { $0.localFocusID?.hasPrefix("surface:") == true }
+                    #expect(titles.count == 2, "Both exact agent surface titles must remain mounted")
+                    func taskNames(in view: NSView) -> [NSTextField] {
+                        view.subviews.flatMap { child in
+                            if let field = child as? NSTextField, field.accessibilityIdentifier() == "internal-task-name" {
+                                return [field]
+                            }
+                            return taskNames(in: child)
+                        }
+                    }
+                    let children = taskNames(in: host)
+                    #expect(children.count == 2, "Subagents are internal task text fields, not title buttons")
+                    #expect(children.allSatisfy { $0.stringValue == "Notice child" && ($0.toolTip?.contains("Finished") == true) },
+                            "Completed child identity and primary state remain intact")
+                    let activities = nativeTitles(in: host).filter {
+                        $0.accessibilityLabel()?.contains("Notice activity") == true
+                    }
+                    #expect(activities.count == 2, "Both child activity rows must actually render")
+                    frames = titles.map { host.convert($0.bounds, from: $0) }
+                        + children.map { host.convert($0.bounds, from: $0) }
+                        + activities.map { host.convert($0.bounds, from: $0) }
                 }
-                let text = try SidebarRenderingEvidence.recognizedLines(in: destination).joined(separator: "\n")
+                let text = try SidebarRenderingEvidence.recognizedLines(
+                    in: destination, naturalLanguage: true
+                ).joined(separator: "\n")
                 #expect(text.contains("Notice child"), "Positive OCR control: child identity remains visible")
+                #expect(text.contains("Notice activity"), "Positive OCR control: activity identity remains visible")
                 #expect(!text.localizedCaseInsensitiveContains("Turn finished"),
                         "Routine completion must not render a secondary label or icon line")
-                if !signals.isEmpty && signals != [.turnFinished] {
-                    for expected in ["Waiting for permission", "Waiting for answer", "Error reported", "Aborted"] {
-                        #expect(text.contains(expected), "Actionable notices must remain visible alongside completion")
-                    }
+                if let expectedNotice {
+                    #expect(text.contains(expectedNotice), "Each actionable notice must remain visible alongside completion")
                 }
-                captures.append((frames, text))
+                captures.append(frames)
             }
-            #expect(captures[0].frames == captures[1].frames,
+            #expect(captures[0] == captures[1],
                     "Routine completion must not move titles or reserve additional row spacing")
-            #expect(captures[2].frames == captures[3].frames,
-                    "Removing completion must retain exactly the actionable-notice spacing")
+            for index in stride(from: 2, to: captures.count, by: 2) {
+                #expect(captures[index] == captures[index + 1],
+                        "Removing completion must retain exactly each actionable notice's spacing")
+            }
         }
     }
 
@@ -1091,6 +1118,13 @@ struct SidebarLayoutRenderingTests {
                         children: includeAttentionChild ? [
                             CopilotChildWork(
                                 id: "notice-child", parentID: nil, kind: .subagent, name: "Notice child",
+                                state: .completed, model: nil,
+                                attention: attentionKinds?.map {
+                                    .init(kind: $0, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
+                                }
+                            ),
+                            CopilotChildWork(
+                                id: "notice-activity", parentID: nil, kind: .skill, name: "Notice activity",
                                 state: .completed, model: nil,
                                 attention: attentionKinds?.map {
                                     .init(kind: $0, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)

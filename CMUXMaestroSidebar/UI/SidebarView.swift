@@ -1983,7 +1983,7 @@ private struct CopilotSessionContents: View {
     @Environment(\.sidebarContentWidth) private var contentWidth
 
     var body: some View {
-        if !SidebarPresentation.attention(
+        if !SidebarPresentation.rowAttention(
             session.attention, state: session.state, degraded: session.attentionDegraded
         ).isEmpty {
             SidebarActionLayout {
@@ -2411,7 +2411,7 @@ private struct CopilotWorkRow: View {
             }
             .frame(minHeight: density.rowHeight)
             .sidebarRowActions(title: node.name, groups: actions)
-            if !SidebarPresentation.attention(
+            if !SidebarPresentation.rowAttention(
                 node.attention, state: node.state, degraded: node.attentionDegraded
             ).isEmpty {
                 AttentionSummary(attention: node.attention, state: node.state, degraded: node.attentionDegraded)
@@ -2640,7 +2640,11 @@ private struct TaskboardSessionRow: View {
             SidebarActionLayout {
                 SessionStateSummary(session: session)
             }
-            AttentionSummary(attention: session.attention, state: session.state, degraded: session.attentionDegraded)
+            if !SidebarPresentation.rowAttention(
+                session.attention, state: session.state, degraded: session.attentionDegraded
+            ).isEmpty {
+                AttentionSummary(attention: session.attention, state: session.state, degraded: session.attentionDegraded)
+            }
             ActivityCaption(text: SidebarPresentation.activityCaption(session.activity))
             if !session.childrenComplete || session.treeDegraded {
                 Label("Children unavailable", systemImage: "info.circle")
@@ -2662,7 +2666,7 @@ private struct AttentionSummary: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(SidebarPresentation.attention(attention, state: state, degraded: degraded), id: \.self) { text in
+            ForEach(SidebarPresentation.rowAttention(attention, state: state, degraded: degraded), id: \.self) { text in
                 Label(text, systemImage: state == .blocked ? "pause.circle" : "exclamationmark.circle")
                     .sidebarFont(.caption)
                     .foregroundStyle(state == .blocked || state == .failed
