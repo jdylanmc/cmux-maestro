@@ -115,8 +115,17 @@ Do not silently split an oversized message into multiple sends.
 
 The adapter supplies the bound sender/return address. Never add sender, capability,
 permission or control-token fields to a tool call. It attempts one local write;
-the recipient's CLI-owned adapter calls native `session.send` with `mode: enqueue`.
-Copilot, not Maestro or this skill, decides when the new prompt runs.
+the managed recipient's CLI-owned adapter calls native `session.send` with
+`mode: immediate`, requesting in-turn steering rather than waiting for the
+current turn to finish. Copilot, not Maestro or this skill, decides when input
+is consumed. This is not active-tool preemption or a latency guarantee; a
+permission or human-input wait may still block processing. The separate legacy
+disposable proof transport retains `enqueue`.
+
+Changing future sends does not drain or promote messages already queued.
+Do not inspect, replay, or manipulate that queue. Reconcile late messages using
+the milestone handoff rules below. An unsupported native send is diagnosed at
+the recipient without fallback to enqueue, terminal input, or automatic retry.
 
 Report success only as **a local write attempt; delivery and completion are
 unconfirmed**. Do not turn the tool result, a native message ID, or silence into a
