@@ -130,6 +130,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Share wrapping Git summaries across agent hover cards and pinned details, with
+  accessible green additions/red deletions and unchanged assigned-directory,
+  freshness and comparison semantics (#80).
 - Request native in-turn steering for managed peer messages instead of waiting
   for the current turn to finish; preserve legacy proof enqueue and
   fire-and-forget limits (#163).
