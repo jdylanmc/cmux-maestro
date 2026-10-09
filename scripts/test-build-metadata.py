@@ -591,6 +591,15 @@ class BuildMetadataTests(unittest.TestCase):
             self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
         self.assertNotIn("continue-on-error", workflow)
 
+    def test_ci_documentation_tracks_the_guarded_validation_commands(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0]
+        commands = re.findall(r"^        run: (.+)$", workflow, re.MULTILINE)
+        policy = (ROOT / "docs/agents/merge-policy.md").read_text()
+        section = policy.split("## Actual CI and formatting gates", 1)[1]
+        documented = section.split("```sh\n", 1)[1].split("\n```", 1)[0].splitlines()
+        self.assertEqual(documented, commands)
+
     def test_ci_always_uploads_json_evidence_and_retains_required_png_artifact(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
