@@ -23,6 +23,7 @@ else
     TEST_SOURCES+=(
         "$ROOT/CMUXMaestroPreviewTests/CopilotHookTests.swift"
         "$ROOT/CMUXMaestroPreviewTests/CopilotSetupTests.swift"
+        "$ROOT/CMUXMaestroPreviewTests/CopilotSetupObservationTests.swift"
         "$ROOT/CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift"
         "$ROOT/CMUXMaestroPreviewTests/MetadataProcessTestWatchdog.swift"
         "$ROOT/CMUXMaestroPreviewTests/MaestroAppLifecycleTests.swift"
@@ -46,6 +47,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feat
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotIdentityVerifier.swift" \
     "$ROOT/CMUXMaestroCopilotHook/CopilotHookRecorder.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/CopilotSetup.swift" \
+    "$ROOT/CMUXMaestroPreview/Integration/CopilotSetupObservation.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/CopilotSetupMetadata.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/CopilotObserverRegistration.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/MaestroAppLifecycle.swift" \

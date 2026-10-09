@@ -1335,6 +1335,7 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
     var timeout: TimeInterval = 45
     var terminationGrace: TimeInterval = 0.25
     var deadlineNow: @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+    var observation: CopilotSetupObservation?
 
     // POSIX waits must not occupy Swift's cooperative executor. Concurrent
     // dispatch workers also let independent invocations make progress together.
@@ -1349,6 +1350,8 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
     }
 
     func metadata(executable: URL, path: String, providerHome: URL? = nil) async -> CopilotMetadataResult {
+        observation?.begin(.metadata)
+        defer { observation?.end(.metadata) }
         do {
             let exchange = try CopilotMetadataExchange()
             defer { exchange.closeAll() }
@@ -1415,6 +1418,8 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
 
     private func invoke(executable: URL, arguments: [String], path: String, providerHome: URL?,
                         exchange: CopilotMetadataExchange?, isolatedHome: URL? = nil) async -> CopilotProcessResult {
+        observation?.begin(.invoke)
+        defer { observation?.end(.invoke) }
         guard !Task.isCancelled else { return .cancelled }
         let cancellation = CopilotSetupCancellation()
         return await withTaskCancellationHandler {
@@ -1440,15 +1445,21 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
                             environment["BASH_ENV"] = "/dev/null"
                             environment["ENV"] = "/dev/null"
                         }
+                        observation?.begin(.execute)
                         result = execute(executable: executable, arguments: arguments,
                                          environment: environment, cancellation: cancellation, exchange: exchange,
                                          workingDirectory: isolatedHome)
+                        observation?.end(.execute)
                     }
+                    observation?.begin(.resume)
                     continuation.resume(returning: result)
+                    observation?.end(.resume)
                 }
             }
         } onCancel: {
+            observation?.begin(.cancelHandler)
             cancellation.cancel()
+            observation?.end(.cancelHandler)
         }
     }
 
@@ -1460,29 +1471,34 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         else { return .unavailable }
         guard let pid = Self.spawn(executable: executable, arguments: arguments,
                                    environment: environment, cancellation: cancellation, exchange: exchange,
-                                   workingDirectory: workingDirectory) else {
+                                   workingDirectory: workingDirectory, observation: observation) else {
             return cancellation.isCancelled ? .cancelled : .unavailable
         }
         exchange?.spawned()
         let deadline = deadlineNow().advanced(by: .seconds(timeout))
         var outcome: CopilotProcessResult
         while true {
-            do { try exchange?.poll() } catch {
-                _ = Self.stopGroup(pid, grace: terminationGrace)
+            do {
+                observation?.begin(.poll)
+                defer { observation?.end(.poll) }
+                try exchange?.poll()
+            } catch {
+                _ = Self.stopGroup(pid, grace: terminationGrace, observation: observation)
                 return .unavailable
             }
             if cancellation.isCancelled {
+                observation?.note(.execute, .init(reason: .cancellationObserved))
                 outcome = .cancelled
                 break
             }
-            switch Self.childState(pid) {
+            switch Self.childState(pid, observation: observation) {
             case .exited(let status):
-                if Self.groupIsQuiescent(pid) {
-                    Self.reap(pid)
+                if Self.groupIsQuiescent(pid, observation: observation) {
+                    Self.reap(pid, observation: observation)
                     return .exited(status)
                 }
             case .unavailable:
-                _ = Self.stopGroup(pid, grace: terminationGrace)
+                _ = Self.stopGroup(pid, grace: terminationGrace, observation: observation)
                 return .unavailable
             default: break
             }
@@ -1494,13 +1510,14 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         }
         // Cancellation cannot bypass cleanup: this synchronous wait stays on
         // the dispatch worker until no member can perform further writes.
-        return Self.stopGroup(pid, grace: terminationGrace) ? outcome : .unavailable
+        return Self.stopGroup(pid, grace: terminationGrace, observation: observation) ? outcome : .unavailable
     }
 
     private static func spawn(executable: URL, arguments: [String],
                               environment: [String: String],
                               cancellation: CopilotSetupCancellation,
-                              exchange: CopilotMetadataExchange?, workingDirectory: URL? = nil) -> Int32? {
+                              exchange: CopilotMetadataExchange?, workingDirectory: URL? = nil,
+                              observation: CopilotSetupObservation? = nil) -> Int32? {
         let lease: CopilotProviderLease?
         do { lease = try CopilotProviderLease.load() }
         catch { return nil }
@@ -1586,7 +1603,7 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
                 var allowed: UInt8 = 71
                 guard write(gate[1], &allowed, 1) == 1 else { throw CopilotFileError.io }
             } catch {
-                _ = stopGroup(pid, grace: 0.25)
+                _ = stopGroup(pid, grace: 0.25, observation: observation)
                 return nil
             }
         }
@@ -1597,66 +1614,113 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         case running, exited(Int32), unavailable
     }
 
-    private static func childState(_ pid: Int32) -> ChildState {
+    private static func childState(_ pid: Int32, observation: CopilotSetupObservation? = nil) -> ChildState {
+        observation?.begin(.childWait)
+        defer { observation?.end(.childWait) }
         var info = siginfo_t()
         var result: Int32
+        var failure: Int32
         repeat {
             result = waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT)
-        } while result < 0 && errno == EINTR
+            failure = result < 0 ? errno : 0
+            observation?.note(.childWait, .init(
+                reason: result < 0 ? .childUnavailable : (info.si_pid == pid ? .childExited : .childRunning),
+                result: result, error: failure, pid: info.si_pid, status: info.si_status, code: info.si_code))
+        } while result < 0 && failure == EINTR
         guard result == 0 else { return .unavailable }
         guard info.si_pid == pid else { return .running }
         return .exited(info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status)
     }
 
-    private static func groupMembers(_ group: Int32) -> [Int32]? {
+    private static func groupMembers(_ group: Int32, observation: CopilotSetupObservation? = nil) -> [Int32]? {
         let required = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(group), nil, 0)
-        guard required >= 0 else { return nil }
+        guard required >= 0 else {
+            let failure = errno
+            observation?.note(.quiescence, .init(reason: .enumerationUnavailable, result: required, error: failure))
+            return nil
+        }
         var members = [Int32](repeating: 0, count: Int(required) / MemoryLayout<Int32>.size + 32)
         let capacity = Int32(members.count * MemoryLayout<Int32>.size)
         let count = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(group), &members, capacity)
-        guard count >= 0, count < capacity else { return nil }
+        guard count >= 0, count < capacity else {
+            let failure = count < 0 ? errno : 0
+            observation?.note(.quiescence, .init(reason: .enumerationUnavailable, result: count,
+                                               error: failure, count: capacity))
+            return nil
+        }
         return members.prefix(Int(count) / MemoryLayout<Int32>.size).filter { $0 > 0 }.sorted()
     }
 
-    private static func groupIsQuiescent(_ group: Int32) -> Bool {
-        guard let members = groupMembers(group) else { return false }
+    private static func groupIsQuiescent(_ group: Int32, observation: CopilotSetupObservation? = nil) -> Bool {
+        observation?.begin(.quiescence)
+        defer { observation?.end(.quiescence) }
+        guard let members = groupMembers(group, observation: observation) else { return false }
         for pid in members {
             var info = proc_bsdinfo()
             let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-            if proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size {
-                if info.pbi_pgid == UInt32(group), info.pbi_status != 5 { return false }
-            } else if errno != ESRCH {
+            let result = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
+            let failure = result == size ? 0 : errno
+            if result == size {
+                if info.pbi_pgid == UInt32(group), info.pbi_status != 5 {
+                    observation?.note(.quiescence, .init(reason: .livingMember, result: result,
+                                                       pid: pid, status: Int32(bitPattern: info.pbi_status)))
+                    return false
+                }
+            } else if failure != ESRCH {
+                observation?.note(.quiescence, .init(reason: .memberQueryUnknown, result: result, error: failure, pid: pid))
                 return false
             }
         }
         // A member may have forked immediately before exiting. Re-enumerate
         // rather than treating a disappearing PID as proof the whole group ended.
-        return groupMembers(group) == members
+        guard let after = groupMembers(group, observation: observation) else { return false }
+        let quiescent = after == members
+        observation?.note(.quiescence, .init(reason: quiescent ? .quiescent : .membershipChanged,
+                                           result: Int32(after.count), count: Int32(members.count)))
+        return quiescent
     }
 
-    private static func stopGroup(_ pid: Int32, grace: TimeInterval) -> Bool {
+    private static func stopGroup(_ pid: Int32, grace: TimeInterval, observation: CopilotSetupObservation? = nil) -> Bool {
+        observation?.begin(.stopGroup)
+        defer { observation?.end(.stopGroup) }
         // posix_spawn atomically gave this invocation a new group named by its
         // PID. WNOWAIT retains its leader until cleanup, preventing group-ID
         // reuse. Never signal the application's group or a reaped invocation.
         guard pid > 1, pid != getpgrp() else { return false }
-        if case .unavailable = childState(pid) { return false }
-        kill(-pid, SIGTERM)
+        if case .unavailable = childState(pid, observation: observation) { return false }
+        observation?.begin(.termSignal)
+        let termResult = kill(-pid, SIGTERM)
+        let termError = termResult < 0 ? errno : 0
         let deadline = ContinuousClock.now.advanced(by: .seconds(grace))
-        while !groupIsQuiescent(pid), ContinuousClock.now < deadline {
+        observation?.note(.termSignal, .init(result: termResult, error: termError, pid: pid, status: SIGTERM))
+        observation?.end(.termSignal)
+        while !groupIsQuiescent(pid, observation: observation), ContinuousClock.now < deadline {
             Thread.sleep(forTimeInterval: 0.01)
         }
-        if case .unavailable = childState(pid) { return false }
-        kill(-pid, SIGKILL)
-        while !groupIsQuiescent(pid) {
+        if case .unavailable = childState(pid, observation: observation) { return false }
+        observation?.begin(.killSignal)
+        let killResult = kill(-pid, SIGKILL)
+        let killError = killResult < 0 ? errno : 0
+        observation?.note(.killSignal, .init(result: killResult, error: killError, pid: pid, status: SIGKILL))
+        observation?.end(.killSignal)
+        while !groupIsQuiescent(pid, observation: observation) {
             Thread.sleep(forTimeInterval: 0.01)
         }
-        reap(pid)
+        reap(pid, observation: observation)
         return true
     }
 
-    private static func reap(_ pid: Int32) {
+    private static func reap(_ pid: Int32, observation: CopilotSetupObservation? = nil) {
+        observation?.begin(.reap)
+        defer { observation?.end(.reap) }
         var status: Int32 = 0
-        while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+        var result: Int32
+        var failure: Int32
+        repeat {
+            result = waitpid(pid, &status, 0)
+            failure = result < 0 ? errno : 0
+            observation?.note(.reap, .init(result: result, error: failure, pid: pid, status: status))
+        } while result < 0 && failure == EINTR
     }
 }
 

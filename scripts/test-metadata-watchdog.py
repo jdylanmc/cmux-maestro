@@ -65,7 +65,8 @@ def main():
                     break
                 require(time.monotonic() < deadline, f"Finite probe child {child} did not exit.")
                 time.sleep(0.05)
-            print(f"Exact sampler {report['samplerPID']} reaped/absent; finite child {child} absent.", flush=True)
+            child_description = "no metadata child" if child is None else f"finite child {child} absent"
+            print(f"Exact sampler {report['samplerPID']} reaped/absent; {child_description}.", flush=True)
             require(report["test"] == "MetadataWatchdogProbe/" + mode, report)
             require(report["phase"] == "negative-control/" + mode, report)
             minimum_samples = 0 if mode == "owned-exited" or mode.startswith("diagnostic-") else (2 if mode == "polling-clock" else 1)
@@ -126,6 +127,7 @@ def main():
             if mode.startswith("diagnostic-"):
                 diagnostic = report.get("supervision")
                 require(isinstance(diagnostic, dict), "Missing bounded supervision snapshot")
+                require(diagnostic["version"] == 1, diagnostic)
                 require(len(json.dumps(diagnostic).encode()) <= 8192, diagnostic)
                 require(diagnostic["overflow"] is False, diagnostic)
                 if mode == "diagnostic-lock-held":

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import os
 @testable import CMUXMaestroPreview
 
 @main
@@ -39,10 +40,12 @@ struct MetadataWatchdogProbe {
             try Data((script + "\n").utf8).write(to: sampler)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: sampler.path)
         }
+        let storage = OSAllocatedUnfairLock(initialState: CopilotSetupObservation.Snapshot())
+        let observation = mode.hasPrefix("diagnostic-") ? CopilotSetupObservation(storage: storage) : nil
         let watchdog = try MetadataProcessTestWatchdog(
             directory: directory, testIdentity: "MetadataWatchdogProbe/\(mode)",
             limit: .seconds(mode == "complete" ? 0.3 : 2),
-            samplerExecutable: sampler)
+            samplerExecutable: sampler, observation: observation)
         if mode == "complete" {
             watchdog.begin("completed-negative-control")
             let before = ContinuousClock.now
@@ -54,6 +57,13 @@ struct MetadataWatchdogProbe {
         }
         if mode.hasPrefix("diagnostic-") {
             watchdog.begin("negative-control/\(mode)")
+            if mode == "diagnostic-lock-held" {
+                storage.withLock { _ in holdTask() }
+                exit(1)
+            }
+            observation?.begin(.cancelCall)
+            observation?.begin(.execute)
+            if mode == "diagnostic-cancel-returned" { observation?.end(.cancelCall) }
             holdTask()
             exit(1)
         }
