@@ -778,6 +778,57 @@ struct SidebarLayoutRenderingTests {
         #expect((treeHeight - rootHeight) / 4 == SidebarDensity.compact.rowHeight)
     }
 
+    @Test(arguments: [true, false], [SidebarMode.hierarchy, .taskboard])
+    func ordinaryTurnCompletionAddsNoRowNoticeOrSpace(managed: Bool, mode: SidebarMode) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.setRetention(.never)
+        preferences.selectedMode = mode
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        for density in SidebarDensity.allCases {
+            preferences.setDensity(density)
+            var captures: [(frames: [CGRect], text: String)] = []
+            let actionable: [AgentAttentionKind] = [.permission, .answer, .error, .aborted]
+            let scenarios: [[AgentAttentionKind]] = [[], [.turnFinished], actionable, actionable + [.turnFinished]]
+            for (index, signals) in scenarios.enumerated() {
+                let model = await makeManagedModel(
+                    fixtures: SidebarTreeFixtures(), nodeCount: 2, attentionKinds: signals,
+                    includeManaged: managed, includeAttentionChild: true
+                )
+                defer { model.setVisible(false) }
+                let destination = folder.appendingPathComponent(
+                    "turn175-\(managed ? "managed" : "unmanaged")-\(mode.rawValue)-\(density.rawValue)-\(index).png"
+                )
+                var frames: [CGRect] = []
+                try await render(
+                    model: model, preferences: preferences, width: 340, height: 1200,
+                    managed: managed, expectedSessions: 2, destination: destination
+                ) { host in
+                    frames = nativeTitles(in: host).map { host.convert($0.bounds, from: $0) }
+                    #expect(frames.count >= 4, "Both agent rows and their child rows must actually render")
+                }
+                let text = try SidebarRenderingEvidence.recognizedLines(in: destination).joined(separator: "\n")
+                #expect(text.contains("Notice child"), "Positive OCR control: child identity remains visible")
+                #expect(!text.localizedCaseInsensitiveContains("Turn finished"),
+                        "Routine completion must not render a secondary label or icon line")
+                if !signals.isEmpty && signals != [.turnFinished] {
+                    for expected in ["Waiting for permission", "Waiting for answer", "Error reported", "Aborted"] {
+                        #expect(text.contains(expected), "Actionable notices must remain visible alongside completion")
+                    }
+                }
+                captures.append((frames, text))
+            }
+            #expect(captures[0].frames == captures[1].frames,
+                    "Routine completion must not move titles or reserve additional row spacing")
+            #expect(captures[2].frames == captures[3].frames,
+                    "Removing completion must retain exactly the actionable-notice spacing")
+        }
+    }
+
     @Test func activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes() async throws {
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/layout-validation/offscreen")
@@ -925,7 +976,8 @@ struct SidebarLayoutRenderingTests {
     }
 
     private func makeManagedModel(
-        fixtures: SidebarTreeFixtures, nodeCount: Int = 6, mixed: Bool = false, focusFirst: Bool = false
+        fixtures: SidebarTreeFixtures, nodeCount: Int = 6, mixed: Bool = false, focusFirst: Bool = false,
+        attentionKinds: [AgentAttentionKind]? = nil, includeManaged: Bool = true, includeAttentionChild: Bool = false
     ) async -> SidebarConnectionModel {
         let workspace = fixtures.workspaceA
         let surfaces = (0..<nodeCount).map { _ in UUID() }
@@ -1017,7 +1069,8 @@ struct SidebarLayoutRenderingTests {
         let orchestration = SidebarOrchestrationPolling(
             read: {
                 SidebarOrchestrationSnapshot(
-                    version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: nestedNodes
+                    version: 1, generatedAt: now, complete: true, omittedCount: 0,
+                    nodes: includeManaged ? nestedNodes : []
                 )
             },
             pause: { try await Task.sleep(for: .seconds(60)) }
@@ -1035,7 +1088,18 @@ struct SidebarLayoutRenderingTests {
                         state: node.availability == "busy" ? .working : .idle,
                         model: node.role == "coordinator"
                             ? "coordinator-model" : "worker-model",
-                        children: [], observedAt: now
+                        children: includeAttentionChild ? [
+                            CopilotChildWork(
+                                id: "notice-child", parentID: nil, kind: .subagent, name: "Notice child",
+                                state: .completed, model: nil,
+                                attention: attentionKinds?.map {
+                                    .init(kind: $0, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
+                                }
+                            )
+                        ] : [], observedAt: now,
+                        attention: attentionKinds?.map {
+                            .init(kind: $0, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
+                        }
                     )
                 } + extraObservations, issues: mixed ? [.loadingHistory] : [], isComplete: !mixed)
             },
