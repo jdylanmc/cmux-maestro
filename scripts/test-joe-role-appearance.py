@@ -43,6 +43,7 @@ class RoleAppearanceTests(unittest.TestCase):
             ("Roast", {"icon": "fa-fire", "color": "red"}),
             ("PR Sniper", {"icon": "md-target_account"}),
             ("Shepherd", {"icon": "fa-cat", "color": "green"}),
+            ("Developer", {"icon": "seti-bicep", "color": "gray"}),
         ):
             with self.subTest(role=role):
                 self.assertEqual(appearance(role), expected)
@@ -56,12 +57,15 @@ class RoleAppearanceTests(unittest.TestCase):
                          {"icon": "fa-code", "color": "pink"})
         self.assertEqual(appearance("PR Sniper", {"color": "purple"}),
                          {"icon": "md-target_account", "color": "purple"})
+        self.assertEqual(appearance("Developer", {"color": "purple"}),
+                         {"icon": "seti-bicep", "color": "purple"})
+        self.assertEqual(appearance("Developer", {"icon": "fa-code"}),
+                         {"icon": "fa-code", "color": "gray"})
 
     def test_other_existing_defaults_and_unknown_role_choices_are_not_replaced(self):
         for role, expected in (
             ("Project Manager", {"icon": "md-meditation", "color": "teal"}),
             ("Discovery", {"icon": "md-compass_outline", "color": "blue"}),
-            ("Developer", {"icon": "seti-bicep", "color": "purple"}),
             ("Blocker investigator", {}),
             ("Roast extra permissions", {}),
         ):
@@ -103,7 +107,7 @@ class RoleAppearanceTests(unittest.TestCase):
 
     def test_actual_native_assignment_forwards_only_requested_appearance(self):
         ingress = CONTROLLER["command_native_spawn"]
-        for role in ("Roast", "PR Sniper", "Shepherd"):
+        for role in ("Roast", "PR Sniper", "Shepherd", "Developer"):
             metadata = appearance(role)
             request = {"identity": {}, "assignment": {
                 "name": role, "cwd": str(ROOT), "task": "Bounded metadata fixture.", **metadata,
