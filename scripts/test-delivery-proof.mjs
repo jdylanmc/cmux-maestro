@@ -381,7 +381,12 @@ async function loaderFixture(t) {
   await fs.writeFile(route, JSON.stringify(binding), { mode: 0o600 });
   await fs.writeFile(path.join(root, "sdk.mjs"), `
 import { writeFileSync } from "node:fs";
-export async function joinSession() {
+export async function joinSession(config) {
+  if (process.env.FIXTURE_READINESS) {
+    writeFileSync(process.env.FIXTURE_STAGE, JSON.stringify({
+      options: Object.keys(config), tools: config.tools.map(tool => tool.name),
+    }));
+  }
   if (process.env.FIXTURE_FAIL_JOIN) {
     throw Object.assign(new Error(process.env.FIXTURE_PRIVATE_TEXT), { code: process.env.FIXTURE_PRIVATE_TEXT });
   }
@@ -552,6 +557,23 @@ test("actual native loader diagnostics never print raw exception text or private
   assert.ok(failed.stderr.length < 200);
   assert.equal(failed.stderr.includes(privateText), false);
   assert.equal(failed.stderr.includes(f.binding.capability), false);
+  assert.equal(await f.exists(f.endpoint), null);
+});
+
+test("actual native loader offers only readiness in an ordinary CMUX session", async (t) => {
+  const f = await loaderFixture(t);
+  const ordinary = f.launch({
+    CMUX_MAESTRO_MESSAGE_ROOT: "", CMUX_MAESTRO_MESSAGE_PEER: "",
+    CMUX_MAESTRO_WORKER_ID: "", CMUX_MAESTRO_GENERATION: "",
+    CMUX_MAESTRO_EXECUTION_MODE: "", CMUX_MAESTRO_DIRECT_LAUNCH: "",
+    CMUX_MAESTRO_LAUNCH_PID: "", CMUX_MAESTRO_ORCHESTRATOR: "",
+    FIXTURE_READINESS: "1",
+  });
+  assert.deepEqual(await f.exited(ordinary), [0, null]);
+  assert.ok(await f.exists(ordinary.stage), "Ordinary own-session extension must join for diagnostics");
+  assert.deepEqual(JSON.parse(await fs.readFile(ordinary.stage, "utf8")), {
+    options: ["tools"], tools: ["maestro_readiness"],
+  });
   assert.equal(await f.exists(f.endpoint), null);
 });
 
