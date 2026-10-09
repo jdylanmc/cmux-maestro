@@ -410,12 +410,23 @@ enum SidebarPresentation {
         attention.contains { $0.kind == .answer || $0.kind == .permission }
     }
 
-    static func statusDescription(_ visual: SidebarVisual, needsInput: Bool = false) -> String {
-        needsInput ? "Needs input. \(visual.title)" : visual.title
+    static let turnFinishedSymbol = "checkmark.square.fill"
+    static let turnFinishedDescription = String(
+        localized: "sidebar.status.observedTurnFinished",
+        defaultValue: "Turn finished. Main turn only; background work may continue."
+    )
+
+    static func statusDescription(
+        _ visual: SidebarVisual, needsInput: Bool = false, turnFinished: Bool = false
+    ) -> String {
+        if needsInput { return "Needs input. \(visual.title)" }
+        return turnFinished ? turnFinishedDescription : visual.title
     }
 
-    static func sessionStatus(_ session: SidebarCopilotSession) -> String {
-        let state = statusDescription(sessionState(session), needsInput: needsInput(session.attention))
+    static func sessionStatus(_ session: SidebarCopilotSession, turnFinished: Bool = false) -> String {
+        let state = statusDescription(
+            sessionState(session), needsInput: needsInput(session.attention), turnFinished: turnFinished
+        )
         return session.childrenComplete && !session.treeDegraded && !session.internalTaskCountsIncomplete ? state
             : "\(state). Child history incomplete; missing work is not assumed finished"
     }
@@ -1007,6 +1018,121 @@ enum SidebarPresentation {
         case .ambiguous: return .init(title: "Unconfirmed owner", symbol: "circle.dashed", tone: .neutral)
         case .unknown: return .init(title: "State unavailable", symbol: "circle.dashed", tone: .neutral)
         }
+    }
+
+    static func sessionTurnFinished(
+        _ session: SidebarCopilotSession, tree: SidebarCopilotTree, now: Date
+    ) -> Bool {
+        guard let current = currentStatusSession(session, tree: tree, now: now),
+              !current.attentionDegraded,
+              !current.nodes.contains(where: statusTakesPriority) else { return false }
+        return hasCurrentTurnCompletion(
+            state: current.state, attention: current.attention,
+            activity: current.activity, observedAt: current.observedAt
+        )
+    }
+
+    static func managedTurnFinished(
+        _ node: SidebarOrchestrationNode, availability: SidebarOrchestrationAvailability,
+        tree: SidebarCopilotTree, now: Date, managedNodes: [SidebarOrchestrationNode] = []
+    ) -> Bool {
+        guard availability == .ready,
+              let session = observedManagedSession(node, availability: availability, tree: tree, now: now),
+              sessionTurnFinished(session, tree: tree, now: now) else {
+            return false
+        }
+        var represented = Set([node.id])
+        var previousCount = 0
+        while represented.count != previousCount {
+            previousCount = represented.count
+            for child in managedNodes where child.runId == node.runId && child.workspaceId == node.workspaceId
+                && child.parentId.map(represented.contains) == true {
+                represented.insert(child.id)
+            }
+        }
+        for child in managedNodes where child.id != node.id && represented.contains(child.id) {
+            if let observed = observedManagedSession(child, availability: availability, tree: tree, now: now) {
+                guard let current = currentStatusSession(observed, tree: tree, now: now),
+                      [.idle, .completed].contains(current.state),
+                      current.attention.allSatisfy({ $0.kind == .turnFinished }),
+                      current.activity.map({ $0.kind == .idle }) ?? true,
+                      !current.nodes.contains(where: statusTakesPriority) else { return false }
+            } else {
+                let age = now.timeIntervalSince(child.updatedAt)
+                guard age >= -1, age <= SidebarOrchestrationReader.staleInterval, !child.isActive,
+                      ![.red, .attention].contains(managedState(child, availability: availability, now: now, tree: tree).tone) else {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    static func childTurnFinished(
+        _ node: SidebarCopilotNode, session: SidebarCopilotSession, tree: SidebarCopilotTree, now: Date
+    ) -> Bool {
+        guard !node.statusOnly, !node.ancestryUnresolved,
+              let current = currentStatusSession(session, tree: tree, now: now),
+              let child = current.nodes.first(where: { $0.id == node.id }),
+              child.state == node.state, child.attention == node.attention else { return false }
+        var represented = Set([child.id])
+        var previousCount = 0
+        while represented.count != previousCount {
+            previousCount = represented.count
+            for descendant in current.nodes where descendant.parentID.map(represented.contains) == true {
+                represented.insert(descendant.id)
+            }
+        }
+        guard !current.nodes.contains(where: { represented.contains($0.id) && statusTakesPriority($0) }) else {
+            return false
+        }
+        return hasCurrentTurnCompletion(
+            state: child.state, attention: child.attention,
+            activity: child.activity, observedAt: current.observedAt
+        )
+    }
+
+    private static func currentStatusSession(
+        _ session: SidebarCopilotSession, tree: SidebarCopilotTree, now: Date
+    ) -> SidebarCopilotSession? {
+        // Hidden or collapsed children still participate through the unfiltered observation.
+        guard !session.statusOnly, session.liveness == .alive, !session.attentionDegraded,
+              session.childrenComplete, !session.treeDegraded, !session.internalTaskCountsIncomplete,
+              tree.availability == .ready, tree.issues.isEmpty,
+              let generatedAt = tree.generatedAt, SidebarCopilotTree.isFresh(generatedAt, now: now) else { return nil }
+        let matches = tree.sessions.filter { $0.id == session.id }
+        guard matches.count == 1, let current = matches.first,
+              current.workspaceID == session.workspaceID, current.surfaceID == session.surfaceID,
+              current.observedAt == session.observedAt, current.state == session.state,
+              current.attention == session.attention, !current.statusOnly, current.liveness == .alive,
+              SidebarCopilotTree.isFresh(current.observedAt, now: now),
+              current.observedAt <= generatedAt.addingTimeInterval(1),
+              current.childrenComplete, !current.treeDegraded, !current.internalTaskCountsIncomplete,
+              !current.hasUncountedChildren, current.omittedChildrenCount == 0,
+              current.omittedActiveChildrenCount == 0,
+              Set(current.nodes.map(\.id)).count == current.nodes.count else { return nil }
+        return current
+    }
+
+    private static func statusTakesPriority(_ node: SidebarCopilotNode) -> Bool {
+        node.statusOnly || node.ancestryUnresolved || node.attentionDegraded
+            || ![.idle, .completed, .cancelled].contains(node.state)
+            || node.attention.contains { $0.kind != .turnFinished }
+            || node.activity.map { $0.kind != .idle } == true
+    }
+
+    private static func hasCurrentTurnCompletion(
+        state: AgentWorkState, attention: [AgentAttention], activity: AgentActivity?, observedAt: Date
+    ) -> Bool {
+        guard [.idle, .completed].contains(state), !attention.isEmpty,
+              attention.allSatisfy({ $0.kind == .turnFinished }),
+              let completion = attention.compactMap(\.occurredAt).max(),
+              completion <= observedAt.addingTimeInterval(1) else { return false }
+        if let activity {
+            guard activity.kind == .idle,
+                  activity.lastEventAt.map({ $0 <= completion }) ?? true else { return false }
+        }
+        return true
     }
 
     static func managedState(

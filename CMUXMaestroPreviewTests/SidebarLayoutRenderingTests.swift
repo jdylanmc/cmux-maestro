@@ -803,6 +803,8 @@ struct SidebarLayoutRenderingTests {
             let session = try #require(model.copilot.tree.sessions.first)
             #expect(session.state == .idle, "Turn completion must not rewrite the primary lifecycle state")
             #expect(session.attention.contains { $0.kind == .turnFinished })
+            #expect(title.toolTip?.contains(SidebarPresentation.turnFinishedDescription) == true)
+            #expect((title.accessibilityValue() as? String)?.contains(SidebarPresentation.turnFinishedDescription) == true)
             // The native title hosts metadata/status only; its adjacent role/identity glyph is outside this crop.
             let status = NSRect(x: 0, y: 0, width: 12, height: title.hosting.bounds.height)
             let bitmap = try #require(title.hosting.bitmapImageRepForCachingDisplay(in: status))

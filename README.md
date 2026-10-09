@@ -1596,6 +1596,14 @@ likewise do not end or unblock unrelated children. Process liveness, work state
 and attention remain independent. Process presence, idle time, file modification
 time and expired history never imply success, progress, or a hung agent.
 
+Agent rows show affirmative, current turn completion as a noninteractive green
+checked-box in the compact status slot, not a separate **Turn finished** line.
+New work restores the working spinner. Working or actionable evidence, including
+represented child work, takes precedence; missing, stale, disconnected or
+incomplete observations do not supply a completion check. Tooltip and accessible
+status text explain the main-turn-only meaning. Reduce Motion keeps the working
+indicator stationary; the completion check is always stationary.
+
 Copilot reuses turn IDs such as `0` and `1` in later interactions. When supplied,
 `data.interactionId` scopes accepted starts and replay protection together with
 the owner and turn ID. It is an opaque, nonempty string bounded to 256 UTF-8 bytes,

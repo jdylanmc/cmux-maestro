@@ -639,18 +639,22 @@ struct SidebarMotionTests {
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/layout-validation/offscreen")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        for (name, reduceMotion, needsInput) in [
-            ("working", false, false), ("reduced-motion", true, false), ("needs-input", false, true)
+        for (name, state, reduceMotion, needsInput, finished) in [
+            ("working", AgentWorkState.working, false, false, false),
+            ("reduced-motion", .working, true, false, false),
+            ("needs-input", .working, false, true, false),
+            ("turn-finished", .idle, false, false, true),
+            ("turn-finished-reduced-motion", .idle, true, false, true)
         ] {
             let host = NSHostingView(rootView:
                 HStack {
-                    SidebarStateBadge(visual: SidebarPresentation.state(.working), needsInput: needsInput)
+                    SidebarStateBadge(visual: SidebarPresentation.state(state), needsInput: needsInput, turnFinished: finished)
                     Text("Synthetic status").font(.caption)
                     Spacer()
                 }
                 .padding(.horizontal, 5)
                 .environment(\._accessibilityReduceMotion, reduceMotion)
-                .background(SidebarActivityBackground(visual: SidebarPresentation.state(.working)))
+                .background(SidebarActivityBackground(visual: SidebarPresentation.state(state)))
                 .background(Color.white)
                 .frame(width: 280, height: 40)
             )
@@ -677,6 +681,58 @@ struct SidebarMotionTests {
             }
             print("P57 native motion \(name): changedStatusPixels=\(left), changedOtherPixels=\(rest)")
         }
+    }
+
+    @Test func finishedTurnMatchesCheckedBoxAndReturnsToSameWorkingSlot() throws {
+        let f = SidebarTreeFixtures()
+        let now = Date()
+        func lane(_ badge: AnyView) -> AnyView {
+            AnyView(HStack {
+                badge
+                Text("Synthetic status").font(.caption)
+                Spacer()
+            }
+            .padding(.horizontal, 5)
+            .environment(\._accessibilityReduceMotion, true)
+            .background(Color.white)
+            .frame(width: 280, height: 40))
+        }
+        let host = NSHostingView(rootView: lane(AnyView(Color.clear.frame(width: 12, height: 14))))
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 280, height: 40),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var images: [NSBitmapImageRep] = []
+        for (index, state) in [AgentWorkState.working, .idle, .working].enumerated() {
+            let session = SidebarCopilotSession(
+                id: f.sessionID, workspaceID: f.workspaceA, surfaceID: f.surfaceA,
+                liveness: .alive, state: state, model: nil, observedAt: now, nodes: [],
+                childrenComplete: true, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0,
+                attention: [.init(kind: .turnFinished, evidence: .init(source: "copilot.events", eventID: f.sessionID), occurredAt: now)]
+            )
+            let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+            let finished = SidebarPresentation.sessionTurnFinished(session, tree: tree, now: now)
+            #expect(finished == (index == 1))
+            host.rootView = lane(AnyView(SidebarStateBadge(
+                visual: SidebarPresentation.sessionState(session), turnFinished: finished
+            )))
+            images.append(try capture(host, to: folder.appendingPathComponent("turn175-transition-\(index).png")))
+        }
+        host.rootView = lane(AnyView(Image(systemName: "checkmark.square.fill")
+            .font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.green).frame(width: 12, height: 14)))
+        let reference = try capture(host, to: folder.appendingPathComponent("turn175-checked-box-reference.png"))
+        #expect(differences(images[1], reference, columns: 0..<reference.pixelsWide) == 0,
+                "Completion must render the checked-box shape, not a static spinner or a green dot")
+        #expect(differences(images[0], images[2], columns: 0..<reference.pixelsWide) == 0)
+        #expect(differences(images[0], images[1], columns: 0..<40) > 0)
+        #expect(differences(images[0], images[1], columns: 40..<reference.pixelsWide) == 0,
+                "Only the existing status slot changes; text and row geometry remain fixed")
+        #expect(!window.isVisible)
     }
 
     private func capture(_ view: NSView, to file: URL) throws -> NSBitmapImageRep {
