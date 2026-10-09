@@ -13,16 +13,22 @@ struct SidebarHoverTests {
     func readOnlyPinnedPathsUseFittingInlineOrFullWrappedCompact(width: Double, density: SidebarDensity) async throws {
         let font: Font = density == .compact ? .caption2 : .caption
         func textHeight(_ text: String) -> CGFloat {
-            NSHostingView(rootView: Text(text).font(font)
-                .fixedSize(horizontal: false, vertical: true).frame(width: width)).fittingSize.height
+            let reference = NSHostingView(rootView: Text(text).font(font)
+                .fixedSize(horizontal: false, vertical: true).frame(width: width))
+            reference.frame = NSRect(x: 0, y: 0, width: width, height: 1_000)
+            reference.layoutSubtreeIfNeeded()
+            return reference.fittingSize.height
         }
         let oneLine = textHeight("Ag"), threeLines = textHeight("Ag\nAg\nAg")
         let candidates = (1...40).map { "/synthetic/" + String(repeating: "directory/", count: $0) }
         let labelWrap = try #require(candidates.first {
-            textHeight($0) <= oneLine + 0.5 && textHeight("Surface directory: \($0)") > oneLine + 0.5
+            let display = SidebarSurfaceDirectory.line(.available($0)).value
+            return textHeight(display) <= oneLine + 0.5
+                && textHeight("Surface directory: \(display)") > oneLine + 0.5
         })
         let medium = try #require(candidates.first {
-            textHeight($0) > oneLine + 0.5 && textHeight($0) <= threeLines + 0.5
+            let display = SidebarSurfaceDirectory.line(.available($0)).value
+            return textHeight(display) > oneLine + 0.5 && textHeight(display) <= threeLines + 0.5
         })
         func footer(_ lines: [SidebarDetailLine]) -> some View {
             SidebarPinnedFooter(
@@ -30,12 +36,16 @@ struct SidebarHoverTests {
                 inspect: {}, copyValue: { _ in Issue.record("Read-only directory must not copy"); return false }
             ).environment(\.sidebarDensity, density).frame(width: width)
                 .fixedSize(horizontal: false, vertical: true)
+                .environment(\.colorScheme, .light)
+                .background(Color(nsColor: .windowBackgroundColor))
         }
         let baseline = NSHostingView(rootView: footer([]))
         let baselineWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 600),
                                       styleMask: .borderless, backing: .buffered, defer: false)
         baselineWindow.isReleasedWhenClosed = false
+        baselineWindow.appearance = NSAppearance(named: .aqua)
         baselineWindow.contentView = baseline
+        baseline.frame = NSRect(x: 0, y: 0, width: width, height: 600)
         defer { baselineWindow.contentView = nil; baselineWindow.close() }
         baseline.layoutSubtreeIfNeeded()
         await sidebarEventually { baseline.fittingSize.height < 80 }
@@ -43,15 +53,18 @@ struct SidebarHoverTests {
         for (name, raw) in [("short", "/x"), ("label-wrap", labelWrap),
                             ("wrapped", medium), ("stress", disclosureStressPath)] {
             let line = SidebarSurfaceDirectory.line(.available(raw))
+            if name == "stress" { #expect(line.value == disclosureStressPath && line.value.count == 455) }
             let host = NSHostingView(rootView: footer([line]))
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 600),
                                   styleMask: .borderless, backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .aqua)
             window.contentView = host
+            host.frame = NSRect(x: 0, y: 0, width: width, height: 600)
             defer { window.contentView = nil; window.close() }
             host.layoutSubtreeIfNeeded()
             let expectedField = name == "short" ? oneLine
-                : name == "stress" ? 24 + 2 + threeLines : oneLine + 2 + textHeight(raw)
+                : name == "stress" ? 24 + 2 + threeLines : oneLine + 2 + textHeight(line.value)
             await sidebarEventually {
                 abs(host.fittingSize.height - (baselineHeight + 5 + expectedField)) <= 2
             }
@@ -65,23 +78,28 @@ struct SidebarHoverTests {
                 #expect(window.makeFirstResponder(toggle))
                 #expect(toggle.accessibilityPerformPress())
                 await sidebarEventually { toggle.accessibilityValue() as? String == "Expanded" }
-                let expectedExpanded = baselineHeight + 5 + 24 + 2 + textHeight(raw)
+                let expectedExpanded = baselineHeight + 5 + 24 + 2 + textHeight(line.value)
                 await sidebarEventually {
                     abs(host.fittingSize.height - expectedExpanded) <= 2
                 }
+                #expect(abs(host.fittingSize.height - expectedExpanded) <= 2)
                 #expect(window.firstResponder === toggle)
             } else {
                 #expect(toggle == nil, "Complete fitting compact text needs no dead control")
             }
-            print("PATH133 pinned width=\(width) density=\(density) case=\(name) oneLine=\(oneLine) threeLines=\(threeLines) field=\(host.fittingSize.height - baselineHeight - 5)")
+            print("PATH133 pinned width=\(width) density=\(density) case=\(name) oneLine=\(oneLine) threeLines=\(threeLines) fullDisplay=\(textHeight(line.value)) baseline=\(baselineHeight) actual=\(host.fittingSize.height) field=\(host.fittingSize.height - baselineHeight - 5)")
             host.layoutSubtreeIfNeeded()
             let output = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent(".build/layout-validation/offscreen")
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
             let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
             host.cacheDisplay(in: host.bounds, to: bitmap)
-            try #require(bitmap.representation(using: .png, properties: [:])).write(to: output
-                .appendingPathComponent("path133-\(Int(width))-\(density)-\(name).png"))
+            let image = output.appendingPathComponent("path133-\(Int(width))-\(density)-\(name).png")
+            try #require(bitmap.representation(using: .png, properties: [:])).write(to: image)
+            let recognized = try SidebarRenderingEvidence.recognizedLines(
+                in: image, dark: false, naturalLanguage: true
+            ).joined(separator: " ")
+            #expect(recognized.contains("Synthetic") && recognized.contains("Surface directory"))
         }
     }
 
