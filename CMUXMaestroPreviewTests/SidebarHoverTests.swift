@@ -9,6 +9,82 @@ struct SidebarHoverTests {
     private var disclosureStressToken: String { String(repeating: "UnbrokenSyntheticIdentifier", count: 16) }
     private var disclosureStressPath: String { "/demo/stress/\(disclosureStressToken)/workspace" }
 
+    @Test(arguments: [280.0, 350.0, 460.0], [SidebarDensity.compact, .comfortable])
+    func readOnlyPinnedPathsUseFittingInlineOrFullWrappedCompact(width: Double, density: SidebarDensity) async throws {
+        let font: Font = density == .compact ? .caption2 : .caption
+        func textHeight(_ text: String) -> CGFloat {
+            NSHostingView(rootView: Text(text).font(font)
+                .fixedSize(horizontal: false, vertical: true).frame(width: width)).fittingSize.height
+        }
+        let oneLine = textHeight("Ag"), threeLines = textHeight("Ag\nAg\nAg")
+        let candidates = (1...40).map { "/synthetic/" + String(repeating: "directory/", count: $0) }
+        let labelWrap = try #require(candidates.first {
+            textHeight($0) <= oneLine + 0.5 && textHeight("Surface directory: \($0)") > oneLine + 0.5
+        })
+        let medium = try #require(candidates.first {
+            textHeight($0) > oneLine + 0.5 && textHeight($0) <= threeLines + 0.5
+        })
+        func footer(_ lines: [SidebarDetailLine]) -> some View {
+            SidebarPinnedFooter(
+                content: .init(title: "Synthetic", lines: lines), maximumHeight: 1_000,
+                inspect: {}, copyValue: { _ in Issue.record("Read-only directory must not copy"); return false }
+            ).environment(\.sidebarDensity, density).frame(width: width)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        let baseline = NSHostingView(rootView: footer([]))
+        let baselineWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 600),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+        baselineWindow.isReleasedWhenClosed = false
+        baselineWindow.contentView = baseline
+        defer { baselineWindow.contentView = nil; baselineWindow.close() }
+        baseline.layoutSubtreeIfNeeded()
+        await sidebarEventually { baseline.fittingSize.height < 80 }
+        let baselineHeight = baseline.fittingSize.height
+        for (name, raw) in [("short", "/x"), ("label-wrap", labelWrap),
+                            ("wrapped", medium), ("stress", disclosureStressPath)] {
+            let line = SidebarSurfaceDirectory.line(.available(raw))
+            let host = NSHostingView(rootView: footer([line]))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 600),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            host.layoutSubtreeIfNeeded()
+            let expectedField = name == "short" ? oneLine
+                : name == "stress" ? 24 + 2 + threeLines : oneLine + 2 + textHeight(raw)
+            await sidebarEventually {
+                abs(host.fittingSize.height - (baselineHeight + 5 + expectedField)) <= 2
+            }
+            #expect(abs(host.fittingSize.height - (baselineHeight + 5 + expectedField)) <= 2,
+                    "The real pinned footer must show the entire medium compact value at its density-aware font")
+            let buttons = descendants(host).compactMap { $0 as? NSButton }
+            #expect(!buttons.contains { $0.accessibilityIdentifier() == "hover-copy-value" })
+            let toggle = buttons.first { $0.accessibilityIdentifier() == "sidebar-path-disclosure" }
+            if name == "stress" {
+                let toggle = try #require(toggle)
+                #expect(window.makeFirstResponder(toggle))
+                #expect(toggle.accessibilityPerformPress())
+                await sidebarEventually { toggle.accessibilityValue() as? String == "Expanded" }
+                let expectedExpanded = baselineHeight + 5 + 24 + 2 + textHeight(raw)
+                await sidebarEventually {
+                    abs(host.fittingSize.height - expectedExpanded) <= 2
+                }
+                #expect(window.firstResponder === toggle)
+            } else {
+                #expect(toggle == nil, "Complete fitting compact text needs no dead control")
+            }
+            print("PATH133 pinned width=\(width) density=\(density) case=\(name) oneLine=\(oneLine) threeLines=\(threeLines) field=\(host.fittingSize.height - baselineHeight - 5)")
+            host.layoutSubtreeIfNeeded()
+            let output = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent(".build/layout-validation/offscreen")
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try #require(bitmap.representation(using: .png, properties: [:])).write(to: output
+                .appendingPathComponent("path133-\(Int(width))-\(density)-\(name).png"))
+        }
+    }
+
     @Test(arguments: [280.0, 350.0, 460.0])
     func pathCompactHeightUsesActualCaptionAndWidth(width: Double) async throws {
         let line = try #require(SidebarPresentation.paths(.init(

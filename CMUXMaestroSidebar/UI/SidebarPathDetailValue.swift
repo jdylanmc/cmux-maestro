@@ -5,19 +5,28 @@ struct SidebarPathDetailValue: View {
     let copy: (String) -> Bool
     var focusChanged: (Bool) -> Void = { _ in }
     var inlineWhenShort = false
+    @Environment(\.sidebarDensity) private var density
     @State private var expanded = false
     @State private var fullHeight: CGFloat = 0
     @State private var compactHeight: CGFloat = 0
+    @State private var inlineHeight: CGFloat = 0
+    @State private var singleLineHeight: CGFloat = 0
 
     private var overflows: Bool {
         line.path?.isAvailable == true && compactHeight > 0 && fullHeight > compactHeight + 0.5
     }
 
-    private var font: Font { inlineWhenShort ? .caption2 : .caption }
+    private var font: Font {
+        inlineWhenShort ? SidebarTypography.font(.caption2, density: density) : .caption
+    }
+
+    private var inlineFits: Bool {
+        inlineHeight > 0 && singleLineHeight > 0 && inlineHeight <= singleLineHeight + 0.5
+    }
 
     var body: some View {
         Group {
-            if inlineWhenShort && !overflows {
+            if inlineWhenShort && inlineFits {
                 Text("\(line.title): \(line.value)")
                     .font(font).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
@@ -39,6 +48,16 @@ struct SidebarPathDetailValue: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .hidden().accessibilityHidden(true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { compactHeight = $0 }
+            if inlineWhenShort {
+                Text("\(line.title): \(line.value)").font(font).lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .hidden().accessibilityHidden(true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { inlineHeight = $0 }
+                Text(verbatim: "Ag").font(font)
+                    .fixedSize().hidden().accessibilityHidden(true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { singleLineHeight = $0 }
+            }
         }
         .accessibilityHint(line.help ?? "")
         .onChange(of: overflows) { if !overflows { expanded = false } }

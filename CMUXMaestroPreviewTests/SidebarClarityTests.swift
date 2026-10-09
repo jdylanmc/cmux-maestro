@@ -1206,8 +1206,12 @@ struct SidebarClarityTests {
         let full = "/synthetic/workspace/with/a/long/granted/path"
         let paths = HierarchyPathContext(rootPath: .available(full), projectRootPath: .unavailable, workingDirectory: .available(nil))
         #expect(SidebarPresentation.briefPath(root: paths.rootPath, project: paths.projectRootPath) == full)
-        #expect(SidebarPresentation.paths(paths).contains(.init(title: "Workspace path", value: full)))
-        #expect(SidebarPresentation.paths(paths).contains(.init(title: "Project path", value: "Path unavailable")))
+        #expect(SidebarPresentation.paths(paths).contains(.init(
+            title: "Workspace path", value: full, path: .init(field: .workspace, isAvailable: true)
+        )))
+        #expect(SidebarPresentation.paths(paths).contains(.init(
+            title: "Project path", value: "Path unavailable", path: .init(field: .project, isAvailable: false)
+        )))
         #expect(SidebarPresentation.briefPath(root: .unavailable, project: .unavailable) == nil)
         #expect(SidebarPresentation.briefPath(root: .available(nil), project: .available(full)) == full)
     }

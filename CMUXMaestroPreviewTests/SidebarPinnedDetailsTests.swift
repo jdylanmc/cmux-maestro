@@ -178,7 +178,8 @@ struct SidebarPinnedDetailsTests {
         #expect(pinned(connected: false).lines.isEmpty)
         #expect(pinned(hierarchy(paths: false)).lines.contains(.init(
             title: "Surface directory", value: "Path unavailable",
-            help: "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory."
+            help: "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory.",
+            path: .init(field: .surfaceDirectory, isAvailable: false)
         )))
     }
 

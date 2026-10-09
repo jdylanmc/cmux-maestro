@@ -76,15 +76,19 @@ extension EnvironmentValues {
     }
 }
 
-private struct SidebarTypography: ViewModifier {
+struct SidebarTypography: ViewModifier {
     let style: Font.TextStyle
     let weight: Font.Weight
     @Environment(\.sidebarDensity) private var density
 
-    func body(content: Content) -> some View {
+    static func font(_ style: Font.TextStyle, density: SidebarDensity, weight: Font.Weight = .regular) -> Font {
         let resolved: Font.TextStyle = density == .compact ? style
             : style == .caption2 ? .caption : style == .caption ? .subheadline : .body
-        content.font(.system(resolved).weight(weight))
+        return .system(resolved).weight(weight)
+    }
+
+    func body(content: Content) -> some View {
+        content.font(Self.font(style, density: density, weight: weight))
     }
 }
 
