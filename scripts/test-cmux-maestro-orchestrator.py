@@ -1343,23 +1343,39 @@ class WorkspaceCapacityCLITests(unittest.TestCase):
                 self.assertEqual(path.read_bytes(), payload)
 
     def test_lowering_below_usage_keeps_exact_resources_and_refuses_new_launch(self):
-        receipts = [self.h.spawn(label=f"Existing {index}") for index in range(2)]
-        before = self.h.state()
-        summary = self.configure(1)["capacity"]
-        self.assertEqual(summary["used"], 2)
-        self.assertEqual(summary["remaining"], 0)
-        self.assertFalse(summary["admissionAvailable"])
-        after = self.h.state()
-        self.assertEqual(after["nodes"], before["nodes"])
-        self.assertEqual(after["retainedResources"], before["retainedResources"])
-        self.assertEqual(after["launches"], before["launches"])
-        rejected = self.h.run(
-            "spawn", "--actor-id", self.h.node, "--token", self.h.token, "--name", "Refused",
-            "--cwd", str(REPO), "--task", "bounded", check=False,
-        )
-        self.assertEqual(rejected["returncode"], 2)
-        self.assertIn("resource limit", rejected["stderr"])
-        self.assertEqual(len(self.h.cmux_data()["surfaces"]), len(receipts) + 1)
+        barrier = self.h.path / "capacity-update-runtime-lock"
+        barrier.touch()
+        # Hold runtime publication, not a wall-clock delay, while comparing the
+        # complete state before/after the capacity-only mutation.
+        with barrier.open() as latch:
+            fcntl.flock(latch, fcntl.LOCK_EX)
+            self.h.env.update(FAKE_RUNTIME_LOCK=str(barrier), CMUX_MAESTRO_STARTUP_SECONDS="0")
+            try:
+                receipts = [self.h.spawn(label=f"Existing {index}") for index in range(2)]
+                self.assertTrue(all(item["startup"] == "pending" for item in receipts))
+                before = self.h.state()
+                summary = self.configure(1)["capacity"]
+                self.assertEqual(summary["used"], 2)
+                self.assertEqual(summary["remaining"], 0)
+                self.assertFalse(summary["admissionAvailable"])
+                after = self.h.state()
+                self.assertEqual(after["nodes"], before["nodes"])
+                self.assertEqual(after["retainedResources"], before["retainedResources"])
+                self.assertEqual(after["launches"], before["launches"])
+                self.assertEqual(self.h.calls(), [])
+                rejected = self.h.run(
+                    "spawn", "--actor-id", self.h.node, "--token", self.h.token, "--name", "Refused",
+                    "--cwd", str(REPO), "--task", "bounded", check=False,
+                )
+                self.assertEqual(rejected["returncode"], 2)
+                self.assertIn("resource limit", rejected["stderr"])
+                self.assertEqual(len(self.h.cmux_data()["surfaces"]), len(receipts) + 1)
+            finally:
+                fcntl.flock(latch, fcntl.LOCK_UN)
+        for receipt in receipts:
+            self.h.wait_node(receipt["workerId"], lambda node: node["phase"] == "reported-completed")
+        self.assertEqual(len(self.h.calls()), 2)
+        self.assertEqual(self.capacity()["capacity"]["used"], 2)
 
     def test_advisory_preflight_cannot_reserve_last_slot_against_concurrent_spawns(self):
         self.configure(1)
