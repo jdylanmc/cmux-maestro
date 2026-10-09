@@ -784,6 +784,7 @@ struct SidebarLayoutRenderingTests {
         defer { fixture.cleanup() }
         let preferences = fixture.preferences()
         preferences.setRetention(.never)
+        preferences.showEnded = true
         preferences.selectedMode = mode
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/layout-validation/offscreen")
