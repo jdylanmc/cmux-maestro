@@ -902,6 +902,15 @@ Live-workspace `remaining` alone is not an
 admission check. History exhaustion is not repaired by increasing live capacity,
 closing a tab, or deleting records automatically.
 
+Repeated status reads preserve `resource-retired` accounting while exact
+surface absence and process exit remain confirmed. Current `surfacePresent`,
+`supervisorRunning` and `providerRunning` probes still report loss or uncertainty;
+retirement never implies task success. Reappeared or uncertain resources and
+changed ownership/process generations count conservatively again, retaining
+historical loss state and results without adopting a restored terminal or
+process. Only normal authoritative reconciliation can retire them again.
+Active launches remain reserved; status never newly retires an unretired worker.
+
 Independent **host safety limits** bound the shared store: 1,024 total nodes
 (including leases), 1,024 retained resources, 128 configured workspace-limit
 entries, and 1 MiB each for state and observer/icon output. Preflight exposes

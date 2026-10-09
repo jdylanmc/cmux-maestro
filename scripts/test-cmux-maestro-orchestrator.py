@@ -1129,11 +1129,13 @@ class StatusRetirementTests(unittest.TestCase):
         self.cmux.workspace_surfaces.return_value = set()
         self.cmux.surface_exists.return_value = False
         self.processes = {}
-        self.addCleanup(patch.stopall)
-        patch.dict(CONTROLLER_API["command_status"].__globals__, {
+        self.process_observation = CONTROLLER_API["process_observation"]
+        probes = patch.dict(CONTROLLER_API["command_status"].__globals__, {
             "process_start": lambda pid: "synthetic-start" if self.processes.get(pid) is True else None,
             "process_observation": lambda process: self.processes.get(process["pid"]) if process else None,
-        }).start()
+        })
+        probes.start()
+        self.addCleanup(probes.stop)
 
     def seed_retired(self, *, direct=False, unstarted=False):
         parent = self.h.state()["nodes"][self.h.node]
@@ -1186,6 +1188,186 @@ class StatusRetirementTests(unittest.TestCase):
             self.assertFalse(worker["supervisorRunning"])
             self.assertEqual(worker["result"], "Preserved historical result")
             self.assertEqual(self.h.state()["nodes"][identifier], before["nodes"][identifier])
+
+    def test_direct_and_unstarted_retirement_survive_status(self):
+        for options in ({"direct": True}, {"unstarted": True}):
+            with self.subTest(options=options):
+                identifier = self.seed_retired(**options)
+                before = self.h.state()["nodes"][identifier]
+                for _ in range(2):
+                    status = self.status(identifier)
+                    self.assertEqual(status["capacity"]["used"], 0)
+                    self.assertEqual(status["workers"][0]["phase"], "resource-retired")
+                    self.assertEqual(self.h.state()["nodes"][identifier], before)
+
+    def test_reappearance_or_uncertainty_counts_without_adoption(self):
+        identifier = self.seed_retired(direct=True)
+        retired = self.h.state()["nodes"][identifier]
+        for surface, process in ((True, False), (False, True), (True, True),
+                                 (None, False), (False, None), (None, None)):
+            with self.subTest(surface=surface, process=process):
+                self.h.change_state(lambda state: state["nodes"].update({identifier: dict(retired)}))
+                self.cmux.surface_exists.return_value = surface
+                self.processes[777001] = process
+                for _ in range(2):
+                    status = self.status(identifier)
+                    self.assertEqual(status["capacity"]["used"], 1)
+                    worker = status["workers"][0]
+                    self.assertEqual(worker["availability"], "unavailable")
+                    self.assertIs(worker["surfacePresent"], surface)
+                    self.assertIs(worker["providerRunning"], process)
+                    current = self.h.state()["nodes"][identifier]
+                    for key in ("runId", "parentId", "surfaceId", "copilotSessionId",
+                                "generation", "providerProcess", "task", "result"):
+                        self.assertEqual(current[key], retired[key], key)
+
+    def test_reused_pid_does_not_adopt_an_unrelated_process(self):
+        identifier = self.seed_retired(direct=True)
+        with patch.dict(CONTROLLER_API["command_status"].__globals__, {
+            "process_start": lambda pid: "different-process-start",
+            "process_observation": self.process_observation,
+        }):
+            status = self.status(identifier)
+        self.assertEqual(status["capacity"]["used"], 0)
+        self.assertFalse(status["workers"][0]["providerRunning"])
+        self.assertEqual(status["workers"][0]["phase"], "resource-retired")
+
+    def add_lease(self, state, identifier):
+        node = state["nodes"][identifier]
+        node.update(phase="launching", availability="busy")
+        state["launches"][identifier] = {
+            "workerId": identifier, "runId": node["runId"], "workspaceId": node["workspaceId"],
+            "sessionId": node["copilotSessionId"], "generation": node["generation"],
+            "surfaceId": node["surfaceId"], "state": "starting",
+            "createdAt": node["createdAt"], "updatedAt": node["updatedAt"],
+        }
+
+    def test_active_lease_counts_and_status_preserves_it(self):
+        identifier = self.seed_retired(direct=True)
+        self.h.change_state(lambda state: self.add_lease(state, identifier))
+        before = self.h.state()
+        self.assertEqual(CONTROLLER_API["workspace_capacity"](before, self.h.workspace)["used"], 1)
+        status = self.status(identifier)
+        self.assertEqual(status["capacity"]["used"], 1)
+        self.assertEqual(status["capacity"]["pendingLaunches"], 1)
+        self.assertEqual(self.h.state()["launches"], before["launches"])
+        self.assertEqual(self.h.state()["nodes"][identifier]["result"], "Preserved historical result")
+
+    def test_changed_identity_or_lease_fences_inflight_retirement_evidence(self):
+        identifier = self.seed_retired(direct=True)
+        retired = self.h.state()["nodes"][identifier]
+        for change in ("generation", "providerProcess", "surfaceId", "lease", "surfaceUnknown"):
+            with self.subTest(change=change):
+                def reset(state):
+                    state["nodes"][identifier] = dict(retired)
+                    state["launches"].clear()
+                self.h.change_state(reset)
+                changed = []
+
+                def surface_probe(workspace, surface):
+                    CONTROLLER_API["read_state"](self.h.root, wait=0)
+                    if not changed:
+                        def replace(state):
+                            node = state["nodes"][identifier]
+                            if change == "generation":
+                                node["generation"] += 1
+                                node["copilotSessionId"] = str(uuid.uuid4())
+                            elif change == "providerProcess":
+                                node["providerProcess"] = {"pid": 777002, "start": "new-start"}
+                            elif change == "surfaceId":
+                                node["surfaceId"] = str(uuid.uuid4())
+                            elif change == "surfaceUnknown":
+                                node["surfaceId"] = None
+                                node["surfaceUnknown"] = True
+                            else:
+                                self.add_lease(state, identifier)
+                        self.h.change_state(replace)
+                        changed.append(self.h.state()["nodes"][identifier])
+                    return False
+
+                self.cmux.surface_exists.side_effect = surface_probe
+                status = self.status(identifier)
+                self.assertEqual(status["capacity"]["used"], 1)
+                self.assertIsNone(status["workers"][0]["surfacePresent"])
+                self.assertIsNone(status["workers"][0]["providerRunning"])
+                current = self.h.state()["nodes"][identifier]
+                for key in ("surfaceId", "copilotSessionId", "generation", "providerProcess", "result"):
+                    self.assertEqual(current[key], changed[0][key], key)
+                self.assertEqual(identifier in self.h.state()["launches"], change == "lease")
+
+    def test_admission_reconciliation_recounts_reappeared_or_uncertain_retirement(self):
+        identifier = self.seed_retired(direct=True)
+        retired = self.h.state()["nodes"][identifier]
+        for surface, process in ((True, False), (False, True), (True, True), (False, None)):
+            with self.subTest(surface=surface, process=process):
+                self.h.change_state(lambda state: state["nodes"].update({identifier: dict(retired)}))
+                self.cmux.workspace_surfaces.return_value = {retired["surfaceId"]} if surface else set()
+                self.processes[777001] = process
+                snapshot = CONTROLLER_API["read_state"](self.h.root)
+                observations, gone = CONTROLLER_API["resource_observations"](
+                    snapshot, self.cmux, self.h.workspace,
+                )
+                self.h.change_state(lambda state: CONTROLLER_API["reconcile_resources"](
+                    state, snapshot, observations, gone,
+                ))
+                current = self.h.state()
+                self.assertEqual(CONTROLLER_API["workspace_capacity"](current, self.h.workspace)["used"], 1)
+                self.assertEqual(current["nodes"][identifier]["result"], retired["result"])
+
+    def test_status_does_not_newly_retire_an_unretired_absent_worker(self):
+        identifier = self.seed_retired()
+        self.h.change_state(lambda state: state["nodes"][identifier].update(phase="terminal-disappeared"))
+        status = self.status(identifier)
+        self.assertEqual(status["capacity"]["used"], 1)
+        self.assertEqual(status["workers"][0]["phase"], "terminal-disappeared")
+
+    def test_uncertain_resource_requires_authoritative_reconciliation_to_retire_again(self):
+        identifier = self.seed_retired(direct=True)
+        self.processes[777001] = None
+        self.assertEqual(self.status(identifier)["capacity"]["used"], 1)
+        self.processes[777001] = False
+        self.assertEqual(self.status(identifier)["capacity"]["used"], 1)
+        snapshot = CONTROLLER_API["read_state"](self.h.root)
+        observations, gone = CONTROLLER_API["resource_observations"](snapshot, self.cmux, self.h.workspace)
+        self.h.change_state(lambda state: CONTROLLER_API["reconcile_resources"](
+            state, snapshot, observations, gone,
+        ))
+        self.assertEqual(self.status(identifier)["capacity"]["used"], 0)
+        self.assertEqual(self.h.state()["nodes"][identifier]["result"], "Preserved historical result")
+        self.assertEqual(self.h.calls(), [])
+
+    def test_reconciliation_cannot_retire_changed_identity_or_active_launch(self):
+        identifier = self.seed_retired(direct=True)
+        retired = self.h.state()["nodes"][identifier]
+        for change in ("generation", "providerProcess", "surfaceUnknown", "lease"):
+            with self.subTest(change=change):
+                def reset(state):
+                    state["nodes"][identifier] = {**retired, "phase": "terminal-disappeared"}
+                    state["launches"].clear()
+                self.h.change_state(reset)
+                snapshot = CONTROLLER_API["read_state"](self.h.root)
+                observations, gone = CONTROLLER_API["resource_observations"](
+                    snapshot, self.cmux, self.h.workspace,
+                )
+                def replace(state):
+                    node = state["nodes"][identifier]
+                    if change == "generation":
+                        node["generation"] += 1
+                        node["copilotSessionId"] = str(uuid.uuid4())
+                    elif change == "providerProcess":
+                        node["providerProcess"] = {"pid": 777002, "start": "new-start"}
+                    elif change == "surfaceUnknown":
+                        node["surfaceId"] = None
+                        node["surfaceUnknown"] = True
+                    else:
+                        self.add_lease(state, identifier)
+                self.h.change_state(replace)
+                before = self.h.state()
+                self.h.change_state(lambda state: CONTROLLER_API["reconcile_resources"](
+                    state, snapshot, observations, gone,
+                ))
+                self.assertEqual(self.h.state(), before)
+                self.assertEqual(CONTROLLER_API["workspace_capacity"](before, self.h.workspace)["used"], 1)
 
 
 class WorkspaceCapacityCLITests(unittest.TestCase):

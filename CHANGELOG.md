@@ -130,6 +130,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Keep verified retired workers out of live quota across repeated status reads,
+  while counting reappeared or uncertain resources conservatively and preserving
+  historical results, ownership and launch safeguards (#182).
 - Request native in-turn steering for managed peer messages instead of waiting
   for the current turn to finish; preserve legacy proof enqueue and
   fire-and-forget limits (#163).
