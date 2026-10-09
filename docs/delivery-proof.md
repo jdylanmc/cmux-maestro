@@ -527,7 +527,8 @@ mutation guard to claim a live installed test. Live acceptance is a separate
 parent-authorized action using fresh sessions, not an excuse to reuse or reload
 the preserved proof routes.
 
-Contract tests cover the generalized adapter, inert/mismatched loader, three-peer
+Contract tests cover the generalized adapter, inert outside-CMUX/mismatched loader,
+nonprivileged ordinary-session readiness, three-peer
 send/reply, foreign workspaces, stale generations, revoked participation, strict
 invocations, bound payloads, installer resources and preserved live routes,
 coordinator-only YOLO, inherited route scrubbing, pinned launches and legacy
