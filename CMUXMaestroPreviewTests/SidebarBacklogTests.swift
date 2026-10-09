@@ -214,6 +214,7 @@ struct SidebarBacklogTests {
               host: .init(performAction: { action, reply in recorder.perform(action, reply: reply) }))
     }
 
+    @MainActor
     private final class Recorder {
         var actions: [CmuxSidebarAction] = []
         let hold: Bool
