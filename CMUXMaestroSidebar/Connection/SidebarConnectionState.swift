@@ -14,12 +14,14 @@ final class SidebarConnectionModel {
     let copilot: SidebarCopilotPolling
     let orchestration: SidebarOrchestrationPolling
     let navigation: SidebarNavigation
+    let backlog: SidebarBacklog
     private var latestSequence: UInt64?
 
     init(
         copilot: SidebarCopilotPolling? = nil,
         orchestration: SidebarOrchestrationPolling? = nil,
-        navigation: SidebarNavigation? = nil
+        navigation: SidebarNavigation? = nil,
+        backlog: SidebarBacklog? = nil
     ) {
         if let copilot {
             self.copilot = copilot
@@ -28,6 +30,7 @@ final class SidebarConnectionModel {
         }
         self.orchestration = orchestration ?? SidebarOrchestrationPolling()
         self.navigation = navigation ?? SidebarNavigation()
+        self.backlog = backlog ?? SidebarBacklog()
     }
 
     func acceptSnapshot(sequence: UInt64) -> Bool {
@@ -46,6 +49,7 @@ final class SidebarConnectionModel {
         copilot.update(topology: SidebarTopology(hierarchy), connected: false)
         orchestration.update(topology: SidebarTopology(hierarchy), connected: false)
         navigation.disconnect()
+        backlog.disconnect()
     }
 
     func showConnected(workspaceCount: Int, surfaceCount: Int) {
@@ -60,6 +64,7 @@ final class SidebarConnectionModel {
         copilot.update(topology: SidebarTopology(hierarchy), connected: false)
         orchestration.update(topology: SidebarTopology(hierarchy), connected: false)
         navigation.disconnect()
+        backlog.disconnect()
     }
 
     func replaceHierarchy(with snapshot: HierarchySnapshot) {
@@ -74,6 +79,9 @@ final class SidebarConnectionModel {
     func setVisible(_ visible: Bool) {
         copilot.setVisible(visible)
         orchestration.setVisible(visible)
-        if !visible { navigation.cancelPending() }
+        if !visible {
+            navigation.cancelPending()
+            backlog.cancelPending()
+        }
     }
 }

@@ -46,6 +46,9 @@ final class SidebarPreferences {
     private let historyStore: SidebarPreferenceStore<SidebarHistorySettings>
     private let attentionStore: SidebarPreferenceStore<SidebarAttentionSettings>
     private let iconStore: SidebarPreferenceStore<SidebarIconSettings>
+    private let backlogStore: SidebarPreferenceStore<SidebarBacklogSettings>
+    var backlog: SidebarBacklogSettings { backlogStore.value.settings }
+    var backlogNotice: String? { backlogStore.value.notice }
     var icons: SidebarIconSettings { iconStore.value.settings }
     var iconNotice: String? { iconStore.value.notice }
     var history: SidebarHistorySettings { historyStore.value.settings }
@@ -81,10 +84,14 @@ final class SidebarPreferences {
 
     init(
         defaults: UserDefaults, historyFile: URL, attentionFile: URL, layoutStore: SidebarLayoutStore,
-        iconFile: URL? = nil
+        iconFile: URL? = nil, backlogFile: URL? = nil
     ) {
         self.defaults = defaults
         self.layoutStore = layoutStore
+        backlogStore = SidebarPreferenceStore(
+            file: .init(url: backlogFile ?? historyFile.deletingLastPathComponent().appendingPathComponent("sidebar-backlog.json")),
+            initializeMissingFile: false, preserveSettingsOnSaveFailure: true
+        )
         iconStore = SidebarPreferenceStore(
             file: .init(url: iconFile ?? historyFile.deletingLastPathComponent().appendingPathComponent("sidebar-icons.json")),
             initializeMissingFile: false, preserveSettingsOnSaveFailure: true
@@ -168,6 +175,13 @@ final class SidebarPreferences {
 
     func resetIcons() { iconStore.apply(reset: true) { _ in } }
     func refreshIcons() { iconStore.refresh() }
+
+    func setBacklogURL(_ text: String, for workspaceID: UUID) {
+        backlogStore.apply { try $0.setURL(text, for: workspaceID) }
+    }
+
+    func resetBacklogs() { backlogStore.apply(reset: true) { _ in } }
+    func refreshBacklogs() { backlogStore.refresh() }
 
     func setRetention(_ retention: SidebarHistoryRetention) {
         historyStore.apply { $0.retention = retention }

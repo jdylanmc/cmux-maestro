@@ -11,7 +11,7 @@ final class CMUXMaestroSidebarExtension: @MainActor CmuxSidebarExtension {
             .surfaceMetadata,
             .workspacePaths,
         ],
-        actionScopes: [.selectWorkspace, .selectSurface]
+        actionScopes: [.selectWorkspace, .selectSurface, .splitSurface, .openURL]
     )
 
     private let model = SidebarConnectionModel()
