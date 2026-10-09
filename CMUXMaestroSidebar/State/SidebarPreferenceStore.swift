@@ -215,7 +215,7 @@ nonisolated final class SidebarPreferencePresenter: NSObject, NSFilePresenter, @
     }
 
     func presentedItemDidChange() {
-        if presentedItemURL == target { changed() }
+        changed()
     }
 
     func presentedSubitemDidAppear(at url: URL) { subitemChanged(url) }
