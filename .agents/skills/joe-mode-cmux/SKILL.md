@@ -58,8 +58,9 @@ local routing sections directly under this adapter's human grant.
    this conversation must already be a managed coordinator with native peer
    and launch tools. Missing communication blocks activation, not merely layout.
 3. Reuse its exact managed identity; do not register another owner. Present it
-   as `PM · Joe Mode` with `md-meditation` (`󱅻`) in teal only through supported
-   owned metadata operations. Keep control tokens private.
+   as `PM · Joe Mode` using the `project-manager` [role appearance](#role-appearance)
+   only through explicitly authorized supported owned metadata operations.
+   Preserve human appearance choices and keep control tokens private.
 4. Inspect the existing workspace tree. Reconcile the four areas from
    [LAYOUT](LAYOUT.md) additively when [RUNTIME](RUNTIME.md)'s placement
    capability passes, without creating a new workspace/window, stealing focus,
@@ -84,25 +85,70 @@ several workers asking competing questions.
 
 Launch developers only for selected non-overlapping delivery assignments.
 Every launch uses native `maestro_spawn`, verified parent-account inheritance,
-explicit model selection, and a complete first task.
+the launch-default/preference contract in [RUNTIME](RUNTIME.md), and a complete
+first task. Resolve its explicit operational role through
+[role appearance](#role-appearance) before constructing the launch packet.
 When [RUNTIME](RUNTIME.md)'s placement capability is verified, move the
 returned exact surface into the developer pane and stack additional developers
 there as tabs. Otherwise leave workers beside the Project Manager and report
 the degraded layout. Name each worker for its delivery at spawn. Sharing a pane
 does not permit sharing a writing worktree.
 
-Launch one green shield-check Shepherd while accepted pull-request duties
-exist. Put it in Support when placement is supported; otherwise leave it beside
+Launch one Shepherd with the canonical `shepherd` appearance while accepted
+pull-request duties exist. Put it in Support when placement is supported; otherwise leave it beside
 the Project Manager. Support may also display review, test, log, or preview
 surfaces. Do not create an idle Shepherd merely to fill the pane.
 
-Respect Joe-mode's six developer slots by default and Maestro's stricter
-eight-live-session workspace bound. Effective developer capacity is the smaller
-of six and `8 - live managed non-developer sessions (including PM) - retained
-resources`. Reserve capacity for Discovery, Shepherd, and any required
-interactive reviewer before filling the developer pane. Non-agent test, log,
-and preview surfaces do not consume the Maestro worker bound. Finishing an
-initial task does not free an open interactive session or retained terminal.
+Respect the current human-authorized staffing budget and the installed
+[runtime preflight](RUNTIME.md#capacity-preflight) together. Joe's generic
+six-developer default is not a ceiling over an explicit scoped human budget;
+the runtime-first cohort authorizes up to twelve concurrent implementation
+workers plus useful support, only within verified runtime/resource room.
+Reserve capacity for PM, Discovery, Shepherd and independent review before
+dispatch. Installed behavior must be checked: the qualified source defaults
+to 32 live workspace sessions, but merged source is not an installed upgrade.
+Older installed controllers may still have a global 128-node history bound;
+#167-capable source separates workspace history from bounded host protection.
+Never substitute either product ceiling for the human dispatch budget or infer
+free slots from completion/close acceptance. Retained and uncertain managed
+resources still count. Ordinary non-agent previews/logs are not managed workers.
+
+## Role appearance
+
+[role-appearance.json](role-appearance.json) is the ONE authoritative local
+mapping for prospective role metadata. [role-appearance.py](role-appearance.py)
+prepares only `icon`/`color` fields; it never launches, edits live metadata,
+changes settings or grants permissions. Use the explicit operational role key,
+not a guessed role from a title or directory.
+
+For every applicable Joe/Maestro role launch, including nested review and
+authorized PR coordination, resolve appearance BEFORE its one `maestro_spawn`
+call. Use this same selector when preparing a prospective role handoff:
+
+```sh
+python3 "<joe-mode-cmux skill directory>/role-appearance.py" --role roast
+python3 "<joe-mode-cmux skill directory>/role-appearance.py" --role pr-sniper
+```
+
+Supply `--icon`/`--color` only for explicit human choices or authorized
+carry-forward appearance in the launch plan. Each supplied field wins over its
+default; unspecified fields retain the canonical role defaults. PR Sniper has
+no new color default. Shepherd retains the preexisting local green color;
+only its glyph changes. Unlisted roles keep supplied metadata without inventing
+new defaults. Other existing role defaults remain unchanged.
+
+Merge the resulting fields into the SAME launch assignment (`name`, `cwd`,
+`task`, and independently authorized policy). Verify the loaded tool declares
+`icon`/`color` and the exact glyph resolves through its supported catalog;
+unsupported appearance is a reported blocker, not a substituted icon.
+The helper is offline metadata preparation, not installed capability proof.
+Source tests verify glyph resolution and sanitized metadata, not live rendering.
+
+An existing session's role handoff does NOT authorize a metadata retrofit,
+relaunch or adoption. Preserve its current human choices and include the
+prospective role appearance/effects in the handoff; only a separate explicit
+owned metadata grant permits an actual change. Appearance communicates role,
+not readiness, authority, ownership or accepted work.
 
 ## Route work through Joe-mode
 
