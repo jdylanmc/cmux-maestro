@@ -86,9 +86,15 @@ Supporting controllers report `capacity.admissionAvailable`, `remaining`, and
 `nodeSlotsRemaining`. Check all three against the next bounded dispatch and the
 human-authorized concurrency budget; reserve room for useful support/review work.
 The default live workspace limit is 32 and the configurable range is 1..128,
-but the separate 128-node history limit and eight-level depth limit still apply.
+but the separate 128-node workspace history limit and eight-level depth limit still apply.
 Stored node history, including resource-retired nodes, can exhaust slots even with live
-workspace room. A larger workspace limit does not fix global node exhaustion.
+workspace room. In #167-capable controllers, other workspaces' history does not
+consume `nodeSlotsRemaining`; separate `hostNodeSlotsRemaining` reports the
+1,024-node host safety bound. Check `hostStateBytesRemaining` as advisory byte
+room too; serialized state/output still has a 1 MiB protection limit.
+A larger live limit fixes neither workspace history nor host safety exhaustion.
+Older installed controllers retain global128 behavior until an explicit upgrade;
+do not infer activation from this guide or reset/prune another workspace.
 
 This query is advisory, reserves nothing, and does not observe provider health.
 Root/child admission rechecks authoritative state transactionally. Count managed

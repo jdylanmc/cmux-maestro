@@ -1144,6 +1144,247 @@ class WorkspaceCapacityCLITests(unittest.TestCase):
         self.assertTrue(summary["admissionAvailable"])
         self.assertEqual(self.h.state(), before)
 
+    def seed_workspace_history(self, workspace, count):
+        def populate(state):
+            for index in range(count):
+                node, _ = CONTROLLER_API["new_root"](
+                    workspace, str(uuid.uuid4()), self.h.pane, f"History {index}",
+                )
+                state["nodes"][node["id"]] = node
+        self.h.change_state(populate)
+
+    def test_other_workspace_full_history_does_not_block_spawn_or_saved_observer(self):
+        other = str(uuid.uuid4())
+        self.seed_workspace_history(other, 127)
+        available = self.capacity()["capacity"]
+        self.assertEqual(available["nodeSlotsRemaining"], 127)
+        self.assertTrue(available["admissionAvailable"])
+        receipt = self.h.spawn()
+        node = self.h.wait_node(receipt["workerId"], lambda item: item["availability"] == "idle")
+        self.assertEqual(node["workspaceId"], self.h.workspace)
+        saved = CONTROLLER_API["read_state"](self.h.root)
+        self.assertEqual(len(saved["nodes"]), 129)
+        projected = json.loads((self.h.root / "observer/current.json").read_text())
+        self.assertTrue(projected["complete"])
+        self.assertEqual(len(projected["nodes"]), 129)
+        self.assertEqual({item["id"] for item in projected["nodes"]}, set(saved["nodes"]))
+        self.seed_workspace_history(other, 1)
+        blocked = self.h.run("capacity", "--workspace", other)["capacity"]
+        self.assertEqual(blocked["nodeSlotsRemaining"], 0)
+        self.assertFalse(blocked["admissionAvailable"])
+        self.assertEqual(self.capacity()["capacity"]["nodeSlotsRemaining"], 126)
+
+    def test_workspace_history_limit_and_host_limit_are_distinct(self):
+        self.seed_workspace_history(self.h.workspace, 127)
+        before = self.h.state()
+        blocked = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Refused", "--cwd", str(REPO), "--task", "bounded", check=False,
+        )
+        self.assertEqual(blocked["returncode"], 2)
+        self.assertIn("Workspace stored-node limit", blocked["stderr"])
+        self.assertEqual(self.h.state(), before)
+        capacity = self.capacity()["capacity"]
+        self.assertEqual(capacity["storedNodes"], 128)
+        self.assertEqual(capacity["storedNodeLimit"], 128)
+        self.assertEqual(capacity["hostNodeLimit"], 1024)
+        self.assertEqual(capacity["hostNodeSlotsRemaining"], 896)
+        self.assertEqual(capacity["hostStateByteLimit"], 1_048_576)
+
+    def test_multi_workspace_validator_keeps_local_node_and_retained_limits(self):
+        self.seed_workspace_history(str(uuid.uuid4()), 128)
+        saved = self.h.state()
+        CONTROLLER_API["validate_state"](saved)
+        invalid = json.loads(json.dumps(saved))
+        workspace = next(item["workspaceId"] for item in invalid["nodes"].values()
+                         if item["workspaceId"] != self.h.workspace)
+        extra, _ = CONTROLLER_API["new_root"](workspace, str(uuid.uuid4()), self.h.pane, "Excess")
+        invalid["nodes"][extra["id"]] = extra
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Workspace stored-node"):
+            CONTROLLER_API["validate_state"](invalid)
+        saved["retainedResources"] = [
+            {"workspaceId": group, "surfaceId": str(uuid.uuid4())}
+            for group in (self.h.workspace, workspace) for _ in range(128)
+        ]
+        CONTROLLER_API["validate_state"](saved)
+        saved["retainedResources"].append({"workspaceId": workspace, "surfaceId": str(uuid.uuid4())})
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Workspace retained"):
+            CONTROLLER_API["validate_state"](saved)
+
+    def test_legacy_workspace_uuid_spellings_share_quota_without_rewriting_ownership(self):
+        workspace = "abcdefab-1234-4234-8234-abcdefabcdef"
+        self.seed_workspace_history(workspace, 127)
+        self.seed_workspace_history(workspace.upper(), 1)
+        before = self.h.state()
+        summary = self.h.run("capacity", "--workspace", workspace)["capacity"]
+        self.assertEqual(summary["storedNodes"], 128)
+        self.assertEqual(summary["nodeSlotsRemaining"], 0)
+        self.assertFalse(summary["admissionAvailable"])
+        self.assertEqual(CONTROLLER_API["workspace_capacity"](before, workspace.upper())["storedNodes"], 128)
+        self.assertEqual(self.h.state(), before)
+        self.assertEqual(sum(node["workspaceId"] == workspace.upper()
+                             for node in before["nodes"].values()), 1)
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Workspace stored-node"):
+            CONTROLLER_API["require_node_capacity"](before, workspace.upper())
+        extra, _ = CONTROLLER_API["new_root"](
+            workspace.upper(), str(uuid.uuid4()), self.h.pane, "Case alias",
+        )
+        before["nodes"][extra["id"]] = extra
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Workspace stored-node"):
+            CONTROLLER_API["validate_state"](before)
+
+    def test_legacy_retained_workspace_spellings_share_the_same_bound(self):
+        workspace = "abcdefab-1234-4234-8234-abcdefabcdef"
+        saved = self.h.state()
+        saved["retainedResources"] = [
+            {"workspaceId": workspace, "surfaceId": str(uuid.uuid4())} for _ in range(127)
+        ]
+        saved["retainedResources"].append({
+            "workspaceId": workspace.upper(), "surfaceId": str(uuid.uuid4()),
+        })
+        CONTROLLER_API["validate_state"](saved)
+        summary = CONTROLLER_API["workspace_capacity"](saved, workspace)
+        self.assertEqual(summary["retainedResources"], 128)
+        self.assertEqual(summary["used"], 128)
+        self.assertFalse(summary["admissionAvailable"])
+        saved["retainedResources"].append({
+            "workspaceId": workspace.upper(), "surfaceId": str(uuid.uuid4()),
+        })
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Workspace retained"):
+            CONTROLLER_API["validate_state"](saved)
+
+    def test_retired_history_in_a_does_not_consume_b_and_does_not_get_pruned(self):
+        other = str(uuid.uuid4())
+        def populate(state):
+            root, _ = CONTROLLER_API["new_root"](other, str(uuid.uuid4()), self.h.pane, "Other root")
+            state["nodes"][root["id"]] = root
+            for index in range(127):
+                retired, _ = CONTROLLER_API["new_root"](other, str(uuid.uuid4()), self.h.pane, f"Retired {index}")
+                retired.update(
+                    role="worker", parentId=root["id"], runId=root["runId"],
+                    executionMode="bounded", phase="resource-retired", availability="unavailable",
+                    generation=1, copilotSessionId=str(uuid.uuid4()),
+                )
+                state["nodes"][retired["id"]] = retired
+        self.h.change_state(populate)
+        original = {key: value for key, value in self.h.state()["nodes"].items()
+                    if value["workspaceId"] == other}
+        preflight = self.h.run("capacity", "--workspace", other)["capacity"]
+        self.assertEqual(preflight["used"], 0)
+        self.assertEqual(preflight["remaining"], 32)
+        self.assertEqual(preflight["nodeSlotsRemaining"], 0)
+        self.assertFalse(preflight["admissionAvailable"])
+        worker = self.h.spawn()
+        self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
+        after = {key: value for key, value in self.h.state()["nodes"].items()
+                 if value["workspaceId"] == other}
+        self.assertEqual(after, original)
+
+    def test_concurrent_registration_rechecks_each_workspace_last_node_slot(self):
+        other = str(uuid.uuid4())
+        self.seed_workspace_history(self.h.workspace, 126)
+        self.seed_workspace_history(other, 127)
+        surfaces = [str(uuid.uuid4()) for _ in range(3)]
+        for surface in surfaces[:2]:
+            self.h.add_surface(surface)
+        processes = []
+        for index, surface in enumerate(surfaces):
+            workspace = self.h.workspace if index < 2 else other
+            env = {**self.h.env, "CMUX_WORKSPACE_ID": workspace, "CMUX_SURFACE_ID": surface}
+            if index == 2:
+                env.update(FAKE_CMUX_STATE=str(self.h.path / "other-cmux.json"),
+                           TEST_WORKSPACE=workspace, TEST_ROOT_SURFACE=surface)
+            processes.append(self.h.start(
+                "register", "--workspace", workspace, "--surface", surface, "--name", "Concurrent",
+                env=env,
+            ))
+        results = [self.h.finish(process, check=False) for process in processes]
+        self.assertEqual(sorted(item["returncode"] for item in results[:2]), [0, 2])
+        self.assertEqual(results[2]["returncode"], 0)
+        denied = next(item for item in results[:2] if item["returncode"])
+        self.assertIn("Workspace stored-node limit", denied["stderr"])
+        saved = CONTROLLER_API["read_state"](self.h.root)
+        self.assertEqual(len(saved["nodes"]), 256)
+        for workspace in (self.h.workspace, other):
+            self.assertEqual(sum(node["workspaceId"] == workspace for node in saved["nodes"].values()), 128)
+
+    def test_byte_or_projection_overflow_cannot_commit_a_partial_reservation(self):
+        before = self.h.state()
+        observer = (self.h.root / "observer/current.json").read_bytes()
+        with patch.object(CONTROLLER_API["Store"], "_projection",
+                          side_effect=CONTROLLER_API["OrchestrationError"]("Host observer byte safety")):
+            with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Host observer"):
+                self.seed_workspace_history(str(uuid.uuid4()), 1)
+        self.assertEqual(self.h.state(), before)
+        self.assertEqual((self.h.root / "observer/current.json").read_bytes(), observer)
+        with CONTROLLER_API["Store"](self.h.root) as store:
+            with patch.dict(CONTROLLER_API["Store"].write.__globals__, {"MAX_BYTES": 64}):
+                with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Host control-state byte"):
+                    store.write(before)
+        self.assertEqual(self.h.state(), before)
+
+    def test_real_byte_overflow_refuses_before_surface_or_partial_state_publication(self):
+        other = str(uuid.uuid4())
+        def populate(state):
+            root, _ = CONTROLLER_API["new_root"](other, str(uuid.uuid4()), self.h.pane, "Other")
+            state["nodes"][root["id"]] = root
+            for index in range(31):
+                retired, _ = CONTROLLER_API["new_root"](other, str(uuid.uuid4()), self.h.pane, f"Retired {index}")
+                retired.update(
+                    role="worker", parentId=root["id"], runId=root["runId"],
+                    executionMode="bounded", phase="resource-retired", availability="unavailable",
+                    generation=1, copilotSessionId=str(uuid.uuid4()),
+                    task="x" * 32_768 if index < 30 else "",
+                )
+                state["nodes"][retired["id"]] = retired
+            size = len(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()) + 1
+            remaining = 1_048_576 - 8192 - size
+            self.assertGreaterEqual(remaining, 0)
+            self.assertLessEqual(remaining, 32_768)
+            retired["task"] = "x" * remaining
+        self.h.change_state(populate)
+        before = {
+            path: path.read_bytes() for path in (
+                self.h.root / "control/state.json", self.h.root / "observer/current.json",
+                self.h.root / "observer/icons.json",
+            )
+        }
+        summary = self.capacity()["capacity"]
+        self.assertEqual(summary["hostStateBytesRemaining"], 8192)
+        self.assertEqual(summary["nodeSlotsRemaining"], 127)
+        self.assertGreater(summary["hostNodeSlotsRemaining"], 0)
+        surfaces = self.h.cmux_data()["surfaces"]
+        denied = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Too large", "--cwd", str(REPO), "--task", "x" * 32_768,
+            check=False,
+        )
+        self.assertEqual(denied["returncode"], 2)
+        self.assertIn("Host control-state byte safety limit", denied["stderr"])
+        self.assertEqual(self.h.cmux_data()["surfaces"], surfaces)
+        self.assertEqual(self.h.calls(), [])
+        for path, payload in before.items():
+            self.assertEqual(path.read_bytes(), payload)
+
+    def test_archive_keeps_other_workspace_retained_resources_without_global_128_refusal(self):
+        other = str(uuid.uuid4())
+        retained = [
+            {"workspaceId": other, "surfaceId": str(uuid.uuid4()),
+             "runId": str(uuid.uuid4()), "archivedAt": CONTROLLER_API["now"]()}
+            for _ in range(128)
+        ]
+        self.h.change_state(lambda state: state.update(retainedResources=retained))
+        receipt = self.h.spawn()
+        self.h.wait_node(receipt["workerId"], lambda node: node["phase"] == "reported-completed")
+        archived = self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token)
+        self.assertTrue(archived["archived"])
+        state = CONTROLLER_API["read_state"](self.h.root)
+        self.assertEqual(len(state["retainedResources"]), 129)
+        self.assertEqual([item for item in state["retainedResources"] if item["workspaceId"] == other],
+                         retained)
+        self.assertEqual(sum(item["workspaceId"] == self.h.workspace
+                             for item in state["retainedResources"]), 1)
+
     def test_limits_persist_across_processes_and_status_agrees(self):
         for limit in (1, 32, 128):
             with self.subTest(limit=limit):
@@ -1206,23 +1447,39 @@ class WorkspaceCapacityCLITests(unittest.TestCase):
                 self.assertEqual(path.read_bytes(), payload)
 
     def test_lowering_below_usage_keeps_exact_resources_and_refuses_new_launch(self):
-        receipts = [self.h.spawn(label=f"Existing {index}") for index in range(2)]
-        before = self.h.state()
-        summary = self.configure(1)["capacity"]
-        self.assertEqual(summary["used"], 2)
-        self.assertEqual(summary["remaining"], 0)
-        self.assertFalse(summary["admissionAvailable"])
-        after = self.h.state()
-        self.assertEqual(after["nodes"], before["nodes"])
-        self.assertEqual(after["retainedResources"], before["retainedResources"])
-        self.assertEqual(after["launches"], before["launches"])
-        rejected = self.h.run(
-            "spawn", "--actor-id", self.h.node, "--token", self.h.token, "--name", "Refused",
-            "--cwd", str(REPO), "--task", "bounded", check=False,
-        )
-        self.assertEqual(rejected["returncode"], 2)
-        self.assertIn("resource limit", rejected["stderr"])
-        self.assertEqual(len(self.h.cmux_data()["surfaces"]), len(receipts) + 1)
+        barrier = self.h.path / "capacity-update-runtime-lock"
+        barrier.touch()
+        # Hold runtime publication, not a wall-clock delay, while comparing the
+        # complete state before/after the capacity-only mutation.
+        with barrier.open() as latch:
+            fcntl.flock(latch, fcntl.LOCK_EX)
+            self.h.env.update(FAKE_RUNTIME_LOCK=str(barrier), CMUX_MAESTRO_STARTUP_SECONDS="0")
+            try:
+                receipts = [self.h.spawn(label=f"Existing {index}") for index in range(2)]
+                self.assertTrue(all(item["startup"] == "pending" for item in receipts))
+                before = self.h.state()
+                summary = self.configure(1)["capacity"]
+                self.assertEqual(summary["used"], 2)
+                self.assertEqual(summary["remaining"], 0)
+                self.assertFalse(summary["admissionAvailable"])
+                after = self.h.state()
+                self.assertEqual(after["nodes"], before["nodes"])
+                self.assertEqual(after["retainedResources"], before["retainedResources"])
+                self.assertEqual(after["launches"], before["launches"])
+                self.assertEqual(self.h.calls(), [])
+                rejected = self.h.run(
+                    "spawn", "--actor-id", self.h.node, "--token", self.h.token, "--name", "Refused",
+                    "--cwd", str(REPO), "--task", "bounded", check=False,
+                )
+                self.assertEqual(rejected["returncode"], 2)
+                self.assertIn("resource limit", rejected["stderr"])
+                self.assertEqual(len(self.h.cmux_data()["surfaces"]), len(receipts) + 1)
+            finally:
+                fcntl.flock(latch, fcntl.LOCK_UN)
+        for receipt in receipts:
+            self.h.wait_node(receipt["workerId"], lambda node: node["phase"] == "reported-completed")
+        self.assertEqual(len(self.h.calls()), 2)
+        self.assertEqual(self.capacity()["capacity"]["used"], 2)
 
     def test_advisory_preflight_cannot_reserve_last_slot_against_concurrent_spawns(self):
         self.configure(1)
