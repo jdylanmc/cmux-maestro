@@ -610,8 +610,9 @@ export async function startManaged({ joinSession, environment = process.env, dia
 
 export async function startReadiness({ joinSession, environment = process.env, signal }) {
   const sessionId = environment.SESSION_ID;
-  if (![sessionId, environment.CMUX_WORKSPACE_ID, environment.CMUX_SURFACE_ID]
-    .every(value => typeof value === "string" && UUID.test(value))) return null;
+  if (typeof sessionId !== "string" || !UUID.test(sessionId) ||
+    ![environment.CMUX_WORKSPACE_ID, environment.CMUX_SURFACE_ID].every(value =>
+      typeof value === "string" && value.length === 36 && UUID.test(value.toLowerCase()))) return null;
   const launcherInputs = [
     environment.CMUX_MAESTRO_MESSAGE_ROOT, environment.CMUX_MAESTRO_MESSAGE_PEER,
     environment.CMUX_MAESTRO_WORKER_ID, environment.CMUX_MAESTRO_EXECUTION_MODE,

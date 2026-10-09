@@ -160,14 +160,16 @@ interactive execution mode). That is **not** proof that no binding exists on
 disk: bindings are not inspected. Complete managed inputs belong exclusively to
 the managed initializer.
 
-Well-formed `CMUX_WORKSPACE_ID` and `CMUX_SURFACE_ID` environment hints are
-required to enable this branch, but they are **not verified host identity** and
-their values are not returned. Missing or malformed CMUX/session hints leave the
+Well-formed `CMUX_WORKSPACE_ID` and `CMUX_SURFACE_ID` environment hints in either
+hexadecimal case are required to enable this branch, but they are **not verified
+host identity** and their values are not returned. Missing or malformed CMUX/session hints leave the
 ordinary branch inert; this is not a host-location attestation.
 The account is explicitly not observed. Capability flags describe only what
 this extension registers, not other extensions, deferred-tool discovery or
 sidebar visibility. Cross-session calls, invalid arguments, cancellation and
-session mismatch fail closed with bounded output.
+session mismatch fail closed with bounded output. Only the two placement hints
+are case-normalized for validation; CLI session/join/invocation identity and
+managed/private UUID validation remain exact and unchanged.
 
 This is an **intermediate slice of #162**, not its enrollment/Joe activation
 solution. Trusted host provenance for the original direct-human request is
