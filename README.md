@@ -282,7 +282,8 @@ archive per exact runner-created `isolated`, `remaining`, or `full-fallback`
 result bundle. `coverage.json` records the invocation, scope, original test exit,
 clean checkout head/tree/raw commit parents, export outcome, archive hash, and
 file sizes/hashes. Clean source must agree before execution and before/after
-capture; missing or changed provenance refuses capture. Successful scopes do not
+capture; all source reads disable Git replacement objects. Missing or changed
+provenance refuses capture. Successful scopes do not
 export. Capture never changes selectors, test deadlines, coverage, or failure
 status, and never retries a test or export.
 
@@ -295,6 +296,13 @@ outside artifact globs. Inputs reject links/special files and exceed neither
 uncompressed, with a 65 MiB archive ceiling per scope (at most two scopes).
 The export subprocess has a separate 30-second deadline. These are publication
 bounds, not an OS disk quota on the export tool's temporary writes.
+Export traversal and payload reads use a pinned root directory descriptor and
+no-follow directory components; file identity/metadata must agree across
+inventory, opening, and reading. Input-bundle and destination checks remain
+preflight checks, not a filesystem snapshot or hostile same-user sandbox:
+the external export tool reopens its input path, and final publication uses the
+private invocation directory. Concurrent mutation outside the pinned export
+boundary is not comprehensively isolated.
 Only completed archives enter `failure-diagnostics/<scope>/<scope>.zip` in the
 existing 14-day `integrated-test-scope-evidence` artifact. Missing, empty, oversized,
 linked, timed-out, or failed exports record an explicit `unavailable` reason;

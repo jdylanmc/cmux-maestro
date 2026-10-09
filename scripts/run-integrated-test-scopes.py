@@ -2,6 +2,7 @@
 """Hosted-only partition: one blocking-observer regression, then its full complement."""
 import argparse
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import hashlib
@@ -345,34 +346,76 @@ def diagnostic_source(runner=subprocess.run):
         require(headers and headers[0] == "tree " + tree, "source-tree-mismatch")
         require(all(re.fullmatch(r"[0-9a-f]{40}", value) for value in [head, tree, *parents]),
                 "invalid-source-coordinates")
-        status = runner(["git", "status", "--porcelain", "--untracked-files=normal"], cwd=root, check=True,
-                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=5)
+        status = runner(["git", "--no-replace-objects", "status", "--porcelain", "--untracked-files=normal"],
+                        cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=5)
         return {"status": "available", "head": head, "tree": tree,
                 "parents": parents, "dirty": bool(status.stdout)}
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         return {"status": "unavailable", "reason": type(error).__name__}
 
 
-def diagnostic_files(root, maximum_bytes, maximum_entries):
+@contextmanager
+def diagnostic_directory(root, descriptor=None):
+    if descriptor is None:
+        require(root.is_dir() and not root.is_symlink(), "missing-or-linked-directory")
+        descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    else:
+        descriptor = os.dup(descriptor)
+    try:
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+def diagnostic_open(root_descriptor, relative, flags):
+    """Resolve every component beneath the pinned export root without following links."""
+    require(not relative.is_absolute() and ".." not in relative.parts, "invalid-diagnostic-relative-path")
+    parent = os.dup(root_descriptor)
+    try:
+        for component in relative.parts[:-1]:
+            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        if not relative.parts:
+            return os.dup(parent)
+        return os.open(relative.name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    finally:
+        os.close(parent)
+
+
+def diagnostic_identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def diagnostic_files(root, maximum_bytes, maximum_entries, *, root_descriptor=None):
     """Reject links/special files and oversized trees before exporting or publishing."""
-    require(root.is_dir() and not root.is_symlink(), "missing-or-linked-directory")
-    pending = [root]
     files = []
     total = entries = 0
-    while pending:
-        directory = pending.pop()
-        with os.scandir(directory) as children:
-            for child in children:
-                entries += 1
-                require(entries <= maximum_entries, "entry-limit-exceeded")
-                info = child.stat(follow_symlinks=False)
-                if stat.S_ISDIR(info.st_mode):
-                    pending.append(Path(child.path))
-                else:
-                    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1, "linked-or-special-file")
-                    total += info.st_size
-                    require(total <= maximum_bytes, "byte-limit-exceeded")
-                    files.append((Path(child.path), info.st_size))
+    with diagnostic_directory(root, root_descriptor) as root_descriptor:
+        pending = [(Path(), os.fstat(root_descriptor))]
+        while pending:
+            relative, expected = pending.pop()
+            descriptor = diagnostic_open(root_descriptor, relative, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                actual = os.fstat(descriptor)
+                require((actual.st_dev, actual.st_ino) == (expected.st_dev, expected.st_ino),
+                        "diagnostic-directory-changed")
+                with os.scandir(descriptor) as children:
+                    for child in children:
+                        entries += 1
+                        require(entries <= maximum_entries, "entry-limit-exceeded")
+                        info = child.stat(follow_symlinks=False)
+                        path = relative / child.name
+                        if stat.S_ISDIR(info.st_mode):
+                            pending.append((path, info))
+                        else:
+                            require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1, "linked-or-special-file")
+                            total += info.st_size
+                            require(total <= maximum_bytes, "byte-limit-exceeded")
+                            files.append((root / path, info))
+            finally:
+                os.close(descriptor)
     require(files, "empty-diagnostic-data")
     return sorted(files)
 
@@ -402,20 +445,24 @@ def capture_failure_diagnostics(directory, scope, source, runner=subprocess.run)
                 timeout=DIAGNOSTIC_EXPORT_SECONDS)
             receipt["exportExitCode"] = result.returncode
             require(result.returncode == 0, "diagnostic-export-failed")
-            files = diagnostic_files(exported, DIAGNOSTIC_MAX_BYTES, DIAGNOSTIC_MAX_FILES)
             inventory = []
             archive = scratch / "diagnostics.zip"
-            with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
-                for path, size in files:
-                    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
-                        info = os.fstat(stream.fileno())
-                        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size == size,
-                                "diagnostic-file-changed")
-                        data = stream.read(size + 1)
-                    require(len(data) == size, "diagnostic-file-changed")
-                    name = path.relative_to(exported).as_posix()
-                    output.writestr(name, data)
-                    inventory.append({"path": name, "bytes": size, "sha256": hashlib.sha256(data).hexdigest()})
+            with diagnostic_directory(exported) as root_descriptor:
+                files = diagnostic_files(exported, DIAGNOSTIC_MAX_BYTES, DIAGNOSTIC_MAX_FILES,
+                                         root_descriptor=root_descriptor)
+                with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+                    for path, expected in files:
+                        relative = path.relative_to(exported)
+                        with os.fdopen(diagnostic_open(root_descriptor, relative, os.O_RDONLY), "rb") as stream:
+                            require(diagnostic_identity(os.fstat(stream.fileno())) == diagnostic_identity(expected),
+                                    "diagnostic-file-changed")
+                            data = stream.read(expected.st_size + 1)
+                            require(diagnostic_identity(os.fstat(stream.fileno())) == diagnostic_identity(expected)
+                                    and len(data) == expected.st_size, "diagnostic-file-changed")
+                        name = relative.as_posix()
+                        output.writestr(name, data)
+                        inventory.append({"path": name, "bytes": expected.st_size,
+                                          "sha256": hashlib.sha256(data).hexdigest()})
             require(archive.stat().st_size <= DIAGNOSTIC_MAX_BYTES + 1024 * 1024, "archive-limit-exceeded")
             require(diagnostic_source() == source, "source-provenance-changed")
             parent = directory / "failure-diagnostics"

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -679,7 +680,7 @@ class DiagnosticRetentionTests(unittest.TestCase):
             stream.truncate(64 * 1024 * 1024)
         files = scopes.diagnostic_files(exported, scopes.DIAGNOSTIC_MAX_BYTES, scopes.DIAGNOSTIC_MAX_FILES)
         self.assertEqual(len(files), 256)
-        self.assertEqual(sum(size for _, size in files), 64 * 1024 * 1024)
+        self.assertEqual(sum(info.st_size for _, info in files), 64 * 1024 * 1024)
         with (exported / "0").open("r+b") as stream:
             stream.truncate(64 * 1024 * 1024 + 1)
         with self.assertRaisesRegex(ValueError, "byte-limit-exceeded"):
@@ -792,6 +793,43 @@ class DiagnosticRetentionTests(unittest.TestCase):
             receipt = self.capture(payloads={"runner.ips": b"allowed"})
         self.assertEqual(receipt["status"], "unavailable")
         self.assertFalse(list(self.directory.glob("failure-diagnostics/*/*.zip")))
+
+    def test_queued_directory_swap_cannot_redirect_scanner(self):
+        root = self.directory / "scan-root"
+        (root / "nested").mkdir(parents=True)
+        (root / "nested/runner.ips").write_bytes(b"allowed")
+        outside = self.directory / "outside-scan"
+        outside.mkdir()
+        (outside / "runner.ips").write_bytes(b"outside")
+        original_scan = os.scandir
+        root_inode = root.stat().st_ino
+        @contextmanager
+        def swapped_scan(descriptor):
+            with original_scan(descriptor) as children:
+                yield children
+            if os.fstat(descriptor).st_ino == root_inode:
+                (root / "nested").rename(root / "original-nested")
+                (root / "nested").symlink_to(outside, target_is_directory=True)
+        with patch.object(scopes.os, "scandir", side_effect=swapped_scan):
+            with self.assertRaises(OSError):
+                scopes.diagnostic_files(root, 64, 10)
+
+    def test_pinned_export_root_does_not_follow_replacement_root_path(self):
+        outside = self.directory / "outside-root"
+        outside.mkdir()
+        (outside / "runner.ips").write_bytes(b"outside")
+        original_inventory = scopes.diagnostic_files
+        def swapped_inventory(root, *args, **kwargs):
+            files = original_inventory(root, *args, **kwargs)
+            if root.name == "exported":
+                root.rename(root.with_name("original-exported"))
+                root.symlink_to(outside, target_is_directory=True)
+            return files
+        with patch.object(scopes, "diagnostic_files", side_effect=swapped_inventory):
+            receipt = self.capture(payloads={"runner.ips": b"allowed"})
+        self.assertEqual(receipt["status"], "captured")
+        with zipfile.ZipFile(self.directory / receipt["archive"]) as archive:
+            self.assertEqual(archive.read("runner.ips"), b"allowed")
 
 
 class BuildMetadataTests(unittest.TestCase):
