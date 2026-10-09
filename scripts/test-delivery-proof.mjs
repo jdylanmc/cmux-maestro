@@ -9,7 +9,7 @@ import { EventEmitter, once } from "node:events";
 import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { start, startManaged, validateSend } from "./delivery-proof/adapter.mjs";
+import { start, startManaged, startReadiness, validateSend } from "./delivery-proof/adapter.mjs";
 
 const base = await fs.realpath("/tmp");
 
@@ -577,6 +577,155 @@ test("actual native loader offers only readiness in an ordinary CMUX session", a
   assert.equal(await f.exists(f.endpoint), null);
 });
 
+test("actual ordinary loader sanitizes join failure without managed fallback", async (t) => {
+  const f = await loaderFixture(t);
+  const privateText = `PRIVATE_READINESS_FAILURE_${f.binding.capability}`;
+  const failed = f.launch({
+    CMUX_MAESTRO_MESSAGE_ROOT: "", CMUX_MAESTRO_MESSAGE_PEER: "",
+    CMUX_MAESTRO_WORKER_ID: "", CMUX_MAESTRO_GENERATION: "",
+    CMUX_MAESTRO_EXECUTION_MODE: "", CMUX_MAESTRO_DIRECT_LAUNCH: "",
+    CMUX_MAESTRO_LAUNCH_PID: "", CMUX_MAESTRO_ORCHESTRATOR: "",
+    FIXTURE_READINESS: "1", FIXTURE_FAIL_JOIN: "1", FIXTURE_PRIVATE_TEXT: privateText,
+  });
+  assert.deepEqual(await f.exited(failed), [1, null]);
+  assert.deepEqual(JSON.parse(await fs.readFile(failed.stage, "utf8")), {
+    options: ["tools"], tools: ["maestro_readiness"],
+  });
+  assert.match(failed.stderr, /\(INITIALIZATION_FAILED\)/);
+  assert.ok(failed.stderr.length < 200);
+  assert.equal(failed.stderr.includes(privateText), false);
+  assert.equal(failed.stderr.includes(f.root), false);
+  assert.equal(await f.exists(f.endpoint), null);
+});
+
+test("ordinary readiness reports only supported self identity without inspecting private state", async () => {
+  const environment = {
+    SESSION_ID: randomUUID(), CMUX_WORKSPACE_ID: randomUUID(), CMUX_SURFACE_ID: randomUUID(),
+  };
+  let tool;
+  let joins = 0;
+  const session = { sessionId: environment.SESSION_ID };
+  const joined = await startReadiness({
+    environment,
+    joinSession: async config => {
+      joins++;
+      assert.deepEqual(Object.keys(config), ["tools"]);
+      assert.deepEqual(config.tools.map(item => item.name), ["maestro_readiness"]);
+      [tool] = config.tools;
+      assert.equal((await tool.handler({}, { sessionId: session.sessionId })).resultType, "failure");
+      return session;
+    },
+  });
+  assert.equal(joined, session);
+  const text = await tool.handler({}, { sessionId: session.sessionId });
+  assert.ok(Buffer.byteLength(text) < 1024);
+  assert.deepEqual(JSON.parse(text), {
+    status: "diagnostic-only",
+    session: { sessionId: session.sessionId, source: "copilot-extension-join" },
+    cmux: { status: "environment-present-unverified" },
+    managed: { status: "unavailable", reason: "launcher-inputs-absent", binding: "not-inspected" },
+    capabilities: {
+      scope: "this-extension", readiness: true, selfSessionIdentity: true,
+      managedIdentity: false, peerDiscovery: false, peerMessaging: false,
+      spawn: false, close: false, inPlaceEnrollment: false,
+    },
+    limits: {
+      account: "not-observed", workspaceAndSurface: "not-verified",
+      otherExtensions: "not-inspected", priorInitializationFailure: "not-diagnosed",
+    },
+  });
+  assert.equal(text.includes(environment.CMUX_WORKSPACE_ID), false);
+  assert.equal(text.includes(environment.CMUX_SURFACE_ID), false);
+  assert.equal(joins, 1);
+});
+
+test("ordinary readiness rejects foreign callers, malformed arguments and session drift", async () => {
+  const session = { sessionId: randomUUID() };
+  let tool;
+  await startReadiness({
+    environment: {
+      SESSION_ID: session.sessionId, CMUX_WORKSPACE_ID: randomUUID(), CMUX_SURFACE_ID: randomUUID(),
+      CMUX_MAESTRO_MESSAGE_ROOT: "/nonexistent/private-route",
+    },
+    joinSession: async config => { [tool] = config.tools; return session; },
+  });
+  assert.equal(JSON.parse(await tool.handler({}, { sessionId: session.sessionId })).managed.reason,
+    "launcher-inputs-incomplete");
+  for (const args of [null, [], "x", { sessionId: session.sessionId }, { enroll: true }]) {
+    assert.equal((await tool.handler(args, { sessionId: session.sessionId })).resultType, "failure");
+  }
+  for (const invocation of [undefined, {}, { sessionId: randomUUID() }]) {
+    assert.equal((await tool.handler({}, invocation)).resultType, "failure");
+  }
+  const originalId = session.sessionId;
+  session.sessionId = randomUUID();
+  assert.equal((await tool.handler({}, { sessionId: originalId })).resultType, "failure");
+});
+
+test("ordinary readiness is inert outside valid CMUX context and for complete managed launches", async () => {
+  const ordinary = {
+    SESSION_ID: randomUUID(), CMUX_WORKSPACE_ID: randomUUID(), CMUX_SURFACE_ID: randomUUID(),
+  };
+  let joins = 0;
+  for (const environment of [
+    {}, { SESSION_ID: ordinary.SESSION_ID },
+    ...Object.keys(ordinary).flatMap(key =>
+      [undefined, "", "../private", "x".repeat(1000)].map(value => ({ ...ordinary, [key]: value }))),
+    { ...ordinary, CMUX_MAESTRO_MESSAGE_ROOT: "/synthetic", CMUX_MAESTRO_MESSAGE_PEER: "1111111111111111",
+      CMUX_MAESTRO_WORKER_ID: randomUUID(), CMUX_MAESTRO_EXECUTION_MODE: "interactive" },
+  ]) {
+    assert.equal(await startReadiness({ environment, joinSession: () => { joins++; } }), null);
+  }
+  assert.equal(joins, 0);
+});
+
+test("ordinary readiness refuses failed or mismatched joins without retry", async () => {
+  const environment = {
+    SESSION_ID: randomUUID(), CMUX_WORKSPACE_ID: randomUUID(), CMUX_SURFACE_ID: randomUUID(),
+  };
+  for (const outcome of ["failed", "mismatch", "missing"]) {
+    let joins = 0;
+    let tool;
+    await assert.rejects(startReadiness({
+      environment,
+      joinSession: async config => {
+        joins++;
+        [tool] = config.tools;
+        if (outcome === "failed") throw new Error("private join failure");
+        return outcome === "missing" ? undefined : { sessionId: randomUUID() };
+      },
+    }));
+    assert.equal(joins, 1);
+    assert.equal((await tool.handler({}, { sessionId: environment.SESSION_ID })).resultType, "failure");
+  }
+});
+
+test("ordinary readiness respects cancellation before join, during join and during tool use", async () => {
+  const environment = {
+    SESSION_ID: randomUUID(), CMUX_WORKSPACE_ID: randomUUID(), CMUX_SURFACE_ID: randomUUID(),
+  };
+  const before = new AbortController();
+  before.abort();
+  await assert.rejects(startReadiness({
+    environment, signal: before.signal, joinSession: () => assert.fail("must not join after abort"),
+  }), { name: "AbortError" });
+  for (const duringJoin of [true, false]) {
+    const abort = new AbortController();
+    let tool;
+    const joining = startReadiness({
+      environment, signal: abort.signal,
+      joinSession: async config => {
+        [tool] = config.tools;
+        if (duringJoin) abort.abort();
+        return { sessionId: environment.SESSION_ID };
+      },
+    });
+    if (duringJoin) await assert.rejects(joining, { name: "AbortError" });
+    else { await joining; abort.abort(); }
+    assert.equal((await tool.handler({}, { sessionId: environment.SESSION_ID })).resultType, "failure");
+  }
+});
+
 test("installed mode discovers arbitrary same-workspace participants and peer replies", async (t) => {
   const f = await managedFixture(t);
   for (const index of [0, 1, 2, 3]) await f.launch(index);
@@ -605,7 +754,7 @@ test("installed mode discovers arbitrary same-workspace participants and peer re
     ["maestro_peers", "maestro_send", "maestro_identity", "maestro_close", "maestro_spawn"]);
 });
 
-test("installed loader is inert outside managed sessions and refuses mismatched bindings before join", async (t) => {
+test("managed initializer is inert outside managed sessions and refuses mismatched bindings before join", async (t) => {
   let joined = false;
   assert.equal(await startManaged({ environment: {}, joinSession: () => { joined = true; } }), null);
   assert.equal(joined, false);
