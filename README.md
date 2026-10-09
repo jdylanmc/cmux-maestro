@@ -1951,6 +1951,50 @@ watchdog and five-second diagnostic containment still armed. The prior stalled
 runs did not capture this evidence, so their underlying cause remains unproven.
 Sampler exit/signal/timeout and reap status are saved independently of a missing
 or unreadable sample file, whose error is retained as `sampleReadError`.
+
+For cancellation diagnosis (#174), the test explicitly injects one
+`CopilotSetupObservation` into its runner and watchdog. Normal runners retain
+`observation == nil`: no observation storage, callbacks, queries or logging
+are enabled automatically. The optional `stall.json.supervision` version 1
+snapshot contains 14 fixed numeric boundary slots:
+
+| Index | Boundary | Index | Boundary |
+| --- | --- | --- | --- |
+| 0 | Test `cancel()` call | 7 | TERM syscall |
+| 1 | Cancellation handler | 8 | KILL syscall |
+| 2 | Synchronous execute | 9 | Exact-child reap |
+| 3 | Exchange poll | 10 | Continuation resume call |
+| 4 | Child-state wait | 11 | Async invoke return edge |
+| 5 | Group quiescence | 12 | Metadata return edge |
+| 6 | Owned-group stop | 13 | Test task-value await |
+
+Each slot retains its own `begin`, `end`, `detailSequence` and last numeric
+`detail`. Zero means not observed; an end greater than its begin means the
+boundary's end marker was reached. The async invoke/metadata markers run at
+their return edges; the existing outer flags separately prove caller receipt.
+Sequence numbers order observations, not elapsed time.
+Repeated queries replace only their own completed slot; an outstanding begin
+cannot be overwritten. `overflow` or `invalidTransition` forbids treating the
+record as complete. `availability: 1` means snapshot lock contention, with no
+boundary data; `0` means available. The failure dump never waits for the
+observation lock, cancellation lock or supervisor to finish.
+
+Detail reasons are 0 unknown, 1 cancellation observed, 2 child running,
+3 child exited, 4 child unavailable, 5 quiescent, 6 living group member,
+7 enumeration unavailable/full, 8 member query unknown and 9 membership changed.
+Result/error/PID/status/code/count fields come only from existing supervisor
+queries and syscalls; a zero `detailSequence` means even zero-valued fields are
+unknown. The snapshot adds no process enumeration or provider data and has a
+tested 8 KiB encoded bound. Serialization runs after releasing observation
+locks. A snapshot may be unavailable while a tiny record update is in progress.
+
+The cancellation phase still begins **before** `task.cancel()`: only slot 0's
+return establishes that it returned, and slot 13's begin establishes the await
+was entered. Resume-return and async-caller progress are distinct; the caller
+may execute before the dispatch worker records resume-return. Existing return
+flags, clock samples and later process queries remain sequential observations.
+These diagnostics neither shorten cleanup nor establish the historical cause.
+
 `test-copilot-setup.sh` also runs disposable Foundation-only controls: successful
 disarming, a stalled injected clock, continued polling of a frozen clock, and
 a real stuck sampler that writes partial output before ignoring termination.
@@ -1965,6 +2009,20 @@ Additional finite controls distinguish living, exited-but-unreaped, and returned
 child contexts from the outer task completing. Changed-start and truncated-group
 controls query only newly owned fixture processes and must retain unknown states.
 Every stalled control still exits 124; successful disarming still exits zero.
+Three synthetic no-metadata-child controls exercise cancellation pending,
+cancellation returned with execute still pending, and a held observation lock.
+They require bounded persisted diagnostics and the original exit 124, not
+successful cancellation or a reproduced native hang. Focused non-UI checks:
+
+```sh
+./scripts/test-copilot-setup.sh --compile-only
+.build/setup-tests/setup-tests --filter CopilotSetupObservationTests
+python3 scripts/test-metadata-watchdog.py \
+  --probe .build/setup-tests/metadata-watchdog-probe \
+  --results-root .build/setup-tests/metadata-watchdog \
+  --mode diagnostic-cancel-pending --mode diagnostic-cancel-returned \
+  --mode diagnostic-lock-held
+```
 
 The navigation response-ordering fixtures inject a cancellation-aware,
 non-expiring deadline through the connection model's navigation dependency.

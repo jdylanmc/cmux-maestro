@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+@testable import CMUXMaestroPreview
 
 // A dedicated thread and condition keep diagnostics independent of the executor
 // under investigation. All mutable observation state is protected by the condition.
@@ -10,6 +11,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
     private let testIdentity: String
     private let limit: Duration
     private let samplerExecutable: URL
+    private let observation: CopilotSetupObservation?
     private var phase = "fixture"
     private var deadline: ContinuousClock.Instant
     private var samples = 0
@@ -23,11 +25,13 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
 
     init(directory: URL, testIdentity: String = MetadataProcessTestWatchdog.test,
          limit: Duration = .seconds(30),
-         samplerExecutable: URL = URL(fileURLWithPath: "/usr/bin/sample")) throws {
+         samplerExecutable: URL = URL(fileURLWithPath: "/usr/bin/sample"),
+         observation: CopilotSetupObservation? = nil) throws {
         self.directory = directory
         self.testIdentity = testIdentity
         self.limit = limit
         self.samplerExecutable = samplerExecutable
+        self.observation = observation
         deadline = ContinuousClock.now.advanced(by: limit)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         Thread.detachNewThread { self.observe() }
@@ -89,13 +93,14 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
             _ = condition.wait(until: Date(timeIntervalSinceNow: 0.1))
         }
         guard !finished else { condition.unlock(); return }
-        let report = Report(
+        var report = Report(
             test: testIdentity, pid: getpid(), phase: phase, deadlineSamples: samples,
             lastSampleAge: lastSample.map { String(describing: $0.duration(to: .now)) },
             sampleStatus: "pending", sample: nil,
             metadataPID: metadataPID, metadataReadiness: metadataReadiness,
             runnerMetadataReturned: runnerMetadataReturned, outerTaskValueReceived: outerTaskValueReceived)
         condition.unlock()
+        report.supervision = observation?.snapshot()
         diagnose(report)
     }
 
@@ -116,6 +121,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         var metadataAtStall: ProcessObservation?
         var runnerMetadataReturned: Bool
         var outerTaskValueReceived: Bool
+        var supervision: CopilotSetupObservation.Snapshot?
     }
 
     struct ProcessRecord: Encodable, Sendable {

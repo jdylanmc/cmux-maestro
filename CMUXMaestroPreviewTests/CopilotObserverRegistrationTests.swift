@@ -2107,11 +2107,13 @@ struct CopilotObserverRegistrationTests {
 
     @Test(arguments: [Duration.zero, .seconds(4)])
     func cancellingMetadataStopsItsOwnedProcessBeforeReturning(launchDelay: Duration) async throws {
+        let observation = CopilotSetupObservation()
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let watchdog = try MetadataProcessTestWatchdog(
             directory: repository.appendingPathComponent(
                 ".build/tests/scoped-results/metadata-diagnostics/\(UUID().uuidString)"),
-            testIdentity: "CMUXMaestroPreviewTests/CopilotObserverRegistrationTests/cancellingMetadataStopsItsOwnedProcessBeforeReturning(launchDelay:)/\(launchDelay)")
+            testIdentity: "CMUXMaestroPreviewTests/CopilotObserverRegistrationTests/cancellingMetadataStopsItsOwnedProcessBeforeReturning(launchDelay:)/\(launchDelay)",
+            observation: observation)
         defer { watchdog.finish() }
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let server = fixture.directory.appendingPathComponent("metadata-waiter")
@@ -2124,7 +2126,7 @@ struct CopilotObserverRegistrationTests {
         let runner = LocalCopilotSetupRunner(terminationGrace: 0.02, deadlineNow: {
             _ = watchdog.now()
             return clock.now()
-        })
+        }, observation: observation)
         watchdog.begin("startup/\(launchDelay)")
         let task = Task {
             defer { clock.finishStartup() }
@@ -2140,8 +2142,12 @@ struct CopilotObserverRegistrationTests {
             let started = await clock.waitForStartup()
             if !started {
                 watchdog.begin("startup-failed-cancellation")
+                observation.begin(.cancelCall)
                 task.cancel()
+                observation.end(.cancelCall)
+                observation.begin(.taskValue)
                 let stopped = await task.value
+                observation.end(.taskValue)
                 watchdog.taskValueReceived()
                 Issue.record("Metadata did not spawn; result=\(stopped)")
                 return
@@ -2154,8 +2160,12 @@ struct CopilotObserverRegistrationTests {
             let readyExists = FileManager.default.fileExists(atPath: ready.path)
             if !readyExists {
                 watchdog.begin("missing-pid-cancellation")
+                observation.begin(.cancelCall)
                 task.cancel()
+                observation.end(.cancelCall)
+                observation.begin(.taskValue)
                 let stopped = await task.value
+                observation.end(.taskValue)
                 watchdog.taskValueReceived()
                 Issue.record("Metadata writer was not ready after spawn; result=\(stopped); sampled=\(clock.wasSampled)")
             }
@@ -2163,8 +2173,12 @@ struct CopilotObserverRegistrationTests {
             let pid = try #require(Int32(String(contentsOf: ready, encoding: .utf8)))
             watchdog.metadataPIDReady(pid)
             watchdog.begin("cancel-and-await-owned-process")
+            observation.begin(.cancelCall)
             task.cancel()
+            observation.end(.cancelCall)
+            observation.begin(.taskValue)
             let result = await task.value
+            observation.end(.taskValue)
             watchdog.taskValueReceived()
             guard case .failed(.cancelled) = result else {
                 Issue.record("Expected metadata cancellation"); return
@@ -2174,8 +2188,12 @@ struct CopilotObserverRegistrationTests {
             #expect(kill(pid, 0) == -1 && errno == ESRCH)
         } catch {
             watchdog.begin("error-cancellation")
+            observation.begin(.cancelCall)
             task.cancel()
+            observation.end(.cancelCall)
+            observation.begin(.taskValue)
             _ = await task.value
+            observation.end(.taskValue)
             watchdog.taskValueReceived()
             throw error
         }
