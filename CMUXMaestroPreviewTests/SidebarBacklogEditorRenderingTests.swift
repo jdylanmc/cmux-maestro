@@ -136,7 +136,7 @@ struct SidebarBacklogEditorRenderingTests {
         let preferences: SidebarPreferences
         let model: SidebarConnectionModel
         let window: NSWindow
-        let hosting: NSHostingView<SidebarView>
+        let hosting: NSHostingView<AnyView>
         private let priorWindows: Set<ObjectIdentifier>
         var hostCalls = 0
 
@@ -170,7 +170,10 @@ struct SidebarBacklogEditorRenderingTests {
             window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 650),
                               styleMask: .titled, backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
-            hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences))
+            hosting = NSHostingView(rootView: AnyView(
+                SidebarView(model: model, preferences: preferences)
+                    .environment(\.accessibilityEnabled, true)
+            ))
             window.contentView = hosting
             model.backlog.update(hierarchy: hierarchy, connected: true, allowed: true,
                                  perform: { [weak self] _ in self?.hostCalls += 1 })
@@ -207,9 +210,18 @@ struct SidebarBacklogEditorRenderingTests {
         func openEditor(usingMenu: Bool) async throws {
             let test = SidebarBacklogEditorRenderingTests()
             await sidebarEventually {
-                test.nodes(self.hosting).contains { $0.identifier == "backlog-\(self.ids.workspaceA)" }
+                self.hosting.layoutSubtreeIfNeeded()
+                self.window.displayIfNeeded()
+                return test.nodes(self.hosting).contains { $0.identifier == "backlog-\(self.ids.workspaceA)" }
             }
             hosting.layoutSubtreeIfNeeded()
+            let exposed = test.nodes(hosting)
+            if !exposed.contains(where: { $0.identifier == "backlog-\(ids.workspaceA)" }) {
+                print("Backlog editor exposed AX: \(exposed.count) nodes; host frame=\(hosting.frame)")
+                for node in exposed.prefix(100) {
+                    print("\(Swift.type(of: node.object)) id=\(node.identifier ?? "-") label=\(node.label ?? "-")")
+                }
+            }
             if usingMenu {
                 let title = try #require(SidebarBacklogEditorRenderingTests.descendants(hosting)
                     .compactMap { $0 as? SidebarTitleNativeButton }

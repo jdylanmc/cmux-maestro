@@ -46,7 +46,8 @@ struct SidebarBacklogRenderingTests {
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 280, height: 650),
                               styleMask: .titled, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences))
+        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
+            .environment(\.accessibilityEnabled, true))
         window.contentView = hosting
         window.orderFront(nil)
         defer {
@@ -158,7 +159,8 @@ struct SidebarBacklogRenderingTests {
             styleMask: .titled, backing: .buffered, defer: false
         )
         window.isReleasedWhenClosed = false
-        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences))
+        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
+            .environment(\.accessibilityEnabled, true))
         window.contentView = hosting
         window.orderFront(nil)
         defer {
