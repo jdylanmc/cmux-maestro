@@ -47,6 +47,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Use one local Joe role-appearance mapping for prospective launches and
+  handoffs, applying the requested Roast, PR Sniper and Shepherd glyphs while
+  preserving explicit human choices and existing unspecified colors. Separate
+  human staffing budgets from installed and source capacity limits (#164).
 - Isolate stored-node admission and retired history by CMUX workspace, retaining
   128 nodes per workspace and distinct bounded host/storage protection. Keep
   multi-workspace saved-state, messaging routes and sidebar projections valid,

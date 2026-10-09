@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
+import io
 import json
 from pathlib import Path
 import re
 import runpy
+import subprocess
+import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,6 +100,69 @@ class RoleAppearanceTests(unittest.TestCase):
         self.assertEqual(metadata["icon"], requested["icon"])
         with self.assertRaises(CONTROLLER["OrchestrationError"]):
             CONTROLLER["resolve_icon"](metadata["icon"])
+
+    def test_actual_native_assignment_forwards_only_requested_appearance(self):
+        ingress = CONTROLLER["command_native_spawn"]
+        for role in ("Roast", "PR Sniper", "Shepherd"):
+            metadata = appearance(role)
+            request = {"identity": {}, "assignment": {
+                "name": role, "cwd": str(ROOT), "task": "Bounded metadata fixture.", **metadata,
+            }}
+            stream = io.TextIOWrapper(io.BytesIO(json.dumps(request).encode()))
+            launch = Mock(return_value={"synthetic": True})
+            with self.subTest(role=role), patch.dict(ingress.__globals__, {
+                "sys": SimpleNamespace(stdin=stream), "command_spawn": launch,
+            }):
+                self.assertEqual(ingress(Path("/unused"), None), {"synthetic": True})
+            launch.assert_called_once()
+            args = launch.call_args.args[0]
+            self.assertEqual(args.icon, metadata["icon"])
+            self.assertEqual(args.color, metadata.get("color"))
+            self.assertIsNone(args.yolo)
+            self.assertIsNone(args.allow_tool)
+            self.assertEqual(args.deny_tool, [])
+            stream.close()
+
+    def test_selector_rejects_invalid_fields_without_policy_or_state_effects(self):
+        self.assertTrue(HELPER.exists(), "Canonical selector must be present after the repair")
+        choose = runpy.run_path(str(HELPER))["appearance_for"]
+        for role, metadata in (
+            ("", {}), ("Roast", {"yolo": True}), ("Roast", {"icon": None}),
+            ("Roast", {"color": ""}), ("Roast", {"icon": "bad\nvalue"}),
+        ):
+            with self.subTest(role=role, metadata=metadata), self.assertRaises(ValueError):
+                choose(role, metadata)
+
+    def test_mapping_failures_are_explicit_and_do_not_fall_back(self):
+        choose = runpy.run_path(str(HELPER))["appearance_for"]
+        with tempfile.TemporaryDirectory() as directory:
+            mapping = Path(directory) / "mapping.json"
+            for payload in (
+                b'{"version":1,"roles":{"roast":{"icon":"fa-fire","icon":"fa-cat"}}}',
+                b'{"version":true,"roles":{"roast":{"icon":"fa-fire"}}}',
+                b'{"version":1,"roles":{"roast":{"color":"red"}}}',
+                b"x" * 32_769,
+            ):
+                mapping.write_bytes(payload)
+                with self.subTest(payload=payload[:80]), patch.dict(choose.__globals__, {"ROLE_MAP": mapping}):
+                    with self.assertRaises(ValueError):
+                        choose("Roast")
+            mapping.unlink()
+            with patch.dict(choose.__globals__, {"ROLE_MAP": mapping}), self.assertRaises(OSError):
+                choose("Roast")
+
+    def test_cli_returns_only_appearance_and_reports_invalid_input_nonzero(self):
+        result = subprocess.run(
+            [sys.executable, str(HELPER), "--role", "PR Sniper", "--color", "blue"],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(json.loads(result.stdout), {"icon": "md-target_account", "color": "blue"})
+        refused = subprocess.run(
+            [sys.executable, str(HELPER), "--role", ""], capture_output=True, text=True,
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(refused.stdout, "")
+        self.assertIn("explicit operational role", refused.stderr)
 
 
 if __name__ == "__main__":
