@@ -565,12 +565,13 @@ class BuildMetadataTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(destination.exists())
 
-    def test_ci_preserves_all_thirteen_validation_commands_without_new_conditions(self):
+    def test_ci_preserves_all_fourteen_validation_commands_without_new_conditions(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
         self.assertEqual(re.findall(r"^        run: (.+)$", workflow, re.MULTILINE), [
             "node --test scripts/test-skill-overrides.mjs",
             "node scripts/check-skill-overrides.mjs",
+            "python3 scripts/test-joe-role-appearance.py",
             "python3 scripts/test-cmux-maestro-orchestrator.py",
             "python3 scripts/test-delivery-proof.py",
             "node --test scripts/test-delivery-proof.mjs",
@@ -585,7 +586,7 @@ class BuildMetadataTests(unittest.TestCase):
         ])
         steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
         run_steps = [step for step in steps if "\n        run:" in step]
-        self.assertEqual(len(run_steps), 13)
+        self.assertEqual(len(run_steps), 14)
         for step in run_steps:
             self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
         self.assertNotIn("continue-on-error", workflow)
