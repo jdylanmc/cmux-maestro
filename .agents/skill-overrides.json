@@ -7,6 +7,7 @@
     ".agents/skills/joe-mode/DELIVERY-PACE.md#target",
     ".agents/skills/cmux-maestro-orchestrate/SKILL.md#bounded-assignment-handoff-and-retention",
     ".agents/skills/squadron/LIFECYCLE.md#cmux-handoff-and-close",
-    ".agents/skills/squadron/LIFECYCLE-SCENARIOS.md#cmux-bounded-worker-scenarios"
+    ".agents/skills/squadron/LIFECYCLE-SCENARIOS.md#cmux-bounded-worker-scenarios",
+    ".agents/skills/joe-mode-cmux/SKILL.md#role-appearance"
   ]
 }

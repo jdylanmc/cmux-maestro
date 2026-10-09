@@ -13,6 +13,8 @@ jobs:
         run: node --test scripts/test-skill-overrides.mjs
       - name: Verify local skill overrides and policy links
         run: node scripts/check-skill-overrides.mjs
+      - name: Verify local Joe role appearance defaults and metadata
+        run: python3 scripts/test-joe-role-appearance.py
       - name: Verify terminal orchestration contracts
         run: python3 scripts/test-cmux-maestro-orchestrator.py
       - name: Verify managed messaging and legacy proof launcher contracts

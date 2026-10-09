@@ -233,7 +233,7 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/joe-mode-cmux/SKILL.md",
-      "computedHash": "04990ae1d653f5f8b32c0dbe62547df89132becdd46f93dfa1766e7212d21a2d"
+      "computedHash": "58a12bedba37fc04ca1ad69c346bb22e3806f43488ccb62d086e98c730c24133"
     },
     "joe-mode-paseo": {
       "source": "jdylanmc/agent-skills",

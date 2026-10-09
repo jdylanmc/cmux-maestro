@@ -60,6 +60,7 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 ```sh
 node --test scripts/test-skill-overrides.mjs
 node scripts/check-skill-overrides.mjs
+python3 scripts/test-joe-role-appearance.py
 python3 scripts/test-cmux-maestro-orchestrator.py
 python3 scripts/test-delivery-proof.py
 node --test scripts/test-delivery-proof.mjs

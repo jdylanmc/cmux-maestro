@@ -56,6 +56,10 @@ Notable changes are recorded using Keep a Changelog categories.
   separately authorized owned close. Retain concrete duties rather than idle
   pools; preserve work and distinguish close acceptance from removal or capacity
   release (#165).
+- Use one local Joe role-appearance mapping for prospective launches and
+  handoffs, applying the requested Roast, PR Sniper and Shepherd glyphs while
+  preserving explicit human choices and existing unspecified colors. Separate
+  human staffing budgets from installed and source capacity limits (#164).
 - Isolate stored-node admission and retired history by CMUX workspace, retaining
   128 nodes per workspace and distinct bounded host/storage protection. Keep
   multi-workspace saved-state, messaging routes and sidebar projections valid,
@@ -116,6 +120,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Request native in-turn steering for managed peer messages instead of waiting
+  for the current turn to finish; preserve legacy proof enqueue and
+  fire-and-forget limits (#163).
 - Refresh lazy preference state when its registered ancestor directory changes,
   preserving read-only initialization and unrelated subitem filtering (#169).
 - Keep valid provider-native reasoning defaults from blocking unrelated model

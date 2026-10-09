@@ -21,12 +21,19 @@ placement never permits a shared writing checkout.
 
 ## Stable role presentation
 
-| Role | Tab label | Maestro icon | Color |
-| --- | --- | --- | --- |
-| Project Manager | `PM · Joe Mode` | `md-meditation` (`󱅻`) | teal |
-| Discovery | `Discovery` | `md-compass_outline` | blue |
-| Developer | `Developer · <delivery>` | `seti-bicep` (``) | purple |
-| Shepherd | `Shepherd` | `md-shield_check_outline` | green |
+| Role | Tab label | Canonical appearance key |
+| --- | --- | --- |
+| Project Manager | `PM · Joe Mode` | `project-manager` |
+| Discovery | `Discovery` | `discovery` |
+| Developer | `Developer · <delivery>` | `developer` |
+| Shepherd | `Shepherd` | `shepherd` |
+| Roast | `Roast · <candidate>` | `roast` |
+| PR Sniper | `PR Sniper` | `pr-sniper` |
+
+Resolve these keys through [role appearance](SKILL.md#role-appearance) and its
+single local mapping before launch or prospective handoff. Do not maintain a
+second glyph/color table here. Explicit human appearance fields take precedence;
+unspecified colors are not guessed or changed on existing sessions.
 
 The glyph and color communicate role only. They grant no permissions and prove
 no execution state.
