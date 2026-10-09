@@ -7,6 +7,79 @@ struct SidebarBacklogTests {
     private let fixtures = SidebarTreeFixtures()
     private let url = "https://example.com/backlog?state=open#issues"
 
+    @Test func savedConfigurationResolvesOnlyItsExactWorkspaceFeedbackWithoutOpening() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let recorder = Recorder()
+        let model = model()
+        model.update(context: context(recorder))
+        model.backlog.open(workspaceID: fixtures.workspaceA, windowID: fixtures.windowID, urlText: nil)
+        #expect(model.backlog.status == .missingURL)
+
+        preferences.setBacklogURL(url, for: fixtures.workspaceB)
+        model.backlog.configurationDidChange(settings: preferences.backlog, notice: preferences.backlogNotice)
+        #expect(model.backlog.status == .missingURL, "Another workspace's save cannot resolve this one.")
+        preferences.setBacklogURL("invalid", for: fixtures.workspaceA)
+        model.backlog.configurationDidChange(settings: preferences.backlog, notice: preferences.backlogNotice)
+        #expect(preferences.backlogNotice == SidebarBacklogSettings.invalidNotice)
+        #expect(model.backlog.status == .missingURL)
+
+        preferences.setBacklogURL(url, for: fixtures.workspaceA)
+        let fresh = fixture.preferences()
+        model.backlog.configurationDidChange(settings: fresh.backlog, notice: fresh.backlogNotice)
+        #expect(fresh.backlog.urlText(for: fixtures.workspaceA) == url)
+        #expect(fresh.backlog.urlText(for: fixtures.workspaceB) == url)
+        #expect(model.backlog.status == nil && model.backlog.statusWorkspaceID == nil)
+        #expect(recorder.actions.isEmpty)
+
+        preferences.setBacklogURL("", for: fixtures.workspaceA)
+        model.backlog.configurationDidChange(settings: preferences.backlog, notice: preferences.backlogNotice)
+        #expect(model.backlog.status == nil, "Removing configuration is not an open attempt.")
+        model.backlog.open(workspaceID: fixtures.workspaceA, windowID: fixtures.windowID, urlText: nil)
+        preferences.resetBacklogs()
+        model.backlog.configurationDidChange(settings: preferences.backlog, notice: preferences.backlogNotice)
+        #expect(model.backlog.status == .missingURL)
+        #expect(recorder.actions.isEmpty)
+    }
+
+    @Test func unsuccessfulConfigurationReadOrSaveDoesNotResolveInvalidFeedback() {
+        let recorder = Recorder()
+        let model = model()
+        model.update(context: context(recorder))
+        model.backlog.open(workspaceID: fixtures.workspaceA, windowID: fixtures.windowID, urlText: "invalid")
+        let settings = SidebarBacklogSettings(urls: [fixtures.workspaceA.uuidString: url])
+        for notice in [SidebarBacklogSettings.invalidNotice, SidebarBacklogSettings.saveNotice,
+                       SidebarBacklogSettings.unreadableNotice] {
+            model.backlog.configurationDidChange(settings: settings, notice: notice)
+            #expect(model.backlog.status == .invalidURL)
+        }
+        model.backlog.configurationDidChange(settings: .init(), notice: nil)
+        #expect(model.backlog.status == .missingURL)
+        #expect(recorder.actions.isEmpty)
+    }
+
+    @Test func configurationChangesPreservePendingAndUnconfirmedRequests() async {
+        let recorder = Recorder(hold: true)
+        let model = model()
+        model.update(context: context(recorder))
+        model.backlog.open(workspaceID: fixtures.workspaceA, windowID: fixtures.windowID, urlText: url)
+        await sidebarEventually { recorder.actions.count == 1 }
+        let pending = model.backlog.pending
+        model.backlog.configurationDidChange(settings: .init(), notice: nil)
+        #expect(model.backlog.status == .opening && model.backlog.pending == pending)
+        model.setVisible(false)
+        model.backlog.configurationDidChange(
+            settings: .init(urls: [fixtures.workspaceA.uuidString: url]), notice: nil
+        )
+        #expect(model.backlog.status == .cancelled)
+        #expect(model.backlog.statusWorkspaceID == fixtures.workspaceA)
+        recorder.reply(.accepted)
+        await Task.yield()
+        #expect(model.backlog.status == .cancelled)
+        #expect(recorder.actions.count == 1)
+    }
+
     @Test func exactSameNamedWorkspacesOpenTheirOwnURLsUsingOnlyTypedBrowserSplits() async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }

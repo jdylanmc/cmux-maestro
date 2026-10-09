@@ -670,6 +670,12 @@ struct SidebarView: View {
             model.setVisible(true)
         }
         .onChange(of: preferences.history) { _, history in model.copilot.updateHistory(history) }
+        .onChange(of: preferences.backlog, initial: true) { _, settings in
+            model.backlog.configurationDidChange(settings: settings, notice: preferences.backlogNotice)
+        }
+        .onChange(of: preferences.backlogNotice) { _, notice in
+            model.backlog.configurationDidChange(settings: preferences.backlog, notice: notice)
+        }
         .onChange(of: preferences.attention) { _, attention in model.copilot.updateAttention(attention) }
         .onChange(of: preferences.layout.revealingIdleTasksIn) { _, workspaces in
             model.copilot.updateIdleTasks(workspaces)

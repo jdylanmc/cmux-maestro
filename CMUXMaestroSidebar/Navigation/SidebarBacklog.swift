@@ -71,6 +71,19 @@ final class SidebarBacklog {
         if pending != nil { finish(.cancelled) }
     }
 
+    func configurationDidChange(settings: SidebarBacklogSettings, notice: String?) {
+        guard pending == nil, notice == nil,
+              status == .missingURL || status == .invalidURL,
+              let workspaceID = statusWorkspaceID else { return }
+        guard let text = settings.urlText(for: workspaceID),
+              SidebarBacklogSettings.validatedURL(text) != nil else {
+            status = .missingURL
+            return
+        }
+        status = nil
+        statusWorkspaceID = nil
+    }
+
     func contains(workspaceID: UUID, windowID: UUID?) -> Bool {
         let topology = SidebarTopology(hierarchy)
         return connected && windowID != nil && topology.windowID == windowID

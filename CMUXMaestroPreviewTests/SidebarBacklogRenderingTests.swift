@@ -103,6 +103,23 @@ struct SidebarBacklogRenderingTests {
         try #require(bitmap.representation(using: .png, properties: [:]))
             .write(to: folder.appendingPathComponent("backlog-\(mode.rawValue)-280.png"))
 
+        preferences.setBacklogURL("", for: identities.workspaceA)
+        model.backlog.open(workspaceID: identities.workspaceA, windowID: identities.windowID, urlText: nil)
+        await sidebarEventually {
+            accessibilityNodes(hosting).contains { $0.identifier == "sidebar-backlog-status" }
+        }
+        #expect(model.backlog.status == .missingURL)
+        let otherReader = fixture.preferences()
+        otherReader.setBacklogURL("https://example.com/configured", for: identities.workspaceA)
+        preferences.refreshBacklogs()
+        await sidebarEventually {
+            model.backlog.status == nil
+                && !accessibilityNodes(hosting).contains { $0.identifier == "sidebar-backlog-status" }
+        }
+        #expect(fixture.preferences().backlog.urlText(for: identities.workspaceA) == "https://example.com/configured")
+        #expect(preferences.backlog.urlText(for: identities.workspaceB) == "https://example.org/second")
+        #expect(opened.count == 2, "Saving and refreshing configuration must not open another browser.")
+
         model.backlog.update(hierarchy: .empty, connected: true, allowed: true,
                              perform: { _ in Issue.record("A vanished target cannot open.") })
         model.replaceHierarchy(with: .empty)
