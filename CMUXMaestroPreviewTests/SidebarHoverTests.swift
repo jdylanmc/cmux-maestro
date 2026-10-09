@@ -5,6 +5,86 @@ import Testing
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarHoverTests {
+    // Exact frozen S27 stress token/path; the six-paragraph History fixture stays in its archive.
+    private var disclosureStressToken: String { String(repeating: "UnbrokenSyntheticIdentifier", count: 16) }
+    private var disclosureStressPath: String { "/demo/stress/\(disclosureStressToken)/workspace" }
+
+    @Test(arguments: [280.0, 350.0, 460.0])
+    func existingPathDisclosureKeepsFullValueCopyAndFieldFocus(width: Double) async throws {
+        #expect(disclosureStressToken.count == 432 && disclosureStressPath.count == 455)
+        let lines = SidebarPresentation.paths(.init(
+            rootPath: .available(disclosureStressPath),
+            projectRootPath: .available(disclosureStressToken),
+            workingDirectory: .available("/short")
+        ), copyable: true)
+        let panel = SidebarHoverPanel(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: 220),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false
+        )
+        panel.isReleasedWhenClosed = false
+        panel.allowsKeyboard = true
+        var writes: [String] = []
+        var focused = false
+        func card(_ id: String, _ fields: [SidebarDetailLine]) -> SidebarHoverCard {
+            SidebarHoverCard(
+                data: .init(id: id, category: "Workspace preview", title: "Synthetic path", lines: fields),
+                close: {}, copyValue: { writes.append($0); return true },
+                copyActionFocusChanged: { focused = $0 }
+            )
+        }
+        let host = NSHostingView(rootView: card("subject-A", lines))
+        panel.contentView = host
+        defer { panel.contentView = nil; panel.close() }
+        func disclosures() -> [NSButton] {
+            descendants(host).compactMap { $0 as? NSButton }
+                .filter { $0.accessibilityIdentifier() == "sidebar-path-disclosure" }
+        }
+        host.layoutSubtreeIfNeeded()
+        await sidebarEventually { disclosures().count == 2 }
+        let toggle = try #require(disclosures().first, "Overflowing existing paths need a visible label-row disclosure")
+        let other = try #require(disclosures().last)
+        #expect(disclosures().count == 2, "Short surface directory must not acquire a dead control")
+        #expect(toggle.accessibilityValue() as? String == "Collapsed")
+        #expect(toggle.accessibilityLabel()?.contains("Workspace path") == true)
+        #expect(!toggle.isHidden && toggle.alphaValue == 1 && writes.isEmpty)
+        let labelOrigin = host.convert(toggle.bounds, from: toggle).origin
+        #expect(panel.makeFirstResponder(toggle))
+        #expect(focused)
+        let enter = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, characters: "\r",
+            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36
+        ))
+        toggle.keyDown(with: enter)
+        await sidebarEventually { toggle.accessibilityValue() as? String == "Expanded" }
+        host.layoutSubtreeIfNeeded()
+        #expect(panel.firstResponder === toggle && disclosures().first === toggle)
+        #expect(other.accessibilityValue() as? String == "Collapsed" && writes.isEmpty)
+        #expect(abs(host.convert(toggle.bounds, from: toggle).origin.y - labelOrigin.y) <= 1)
+        let copy = try #require(descendants(host).compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == "Copy workspace path" })
+        copy.performClick(nil)
+        #expect(writes == [disclosureStressPath])
+        host.rootView = card("subject-A", lines)
+        host.layoutSubtreeIfNeeded()
+        await sidebarEventually { disclosures().first?.accessibilityValue() as? String == "Expanded" }
+        #expect(disclosures().first === toggle && panel.firstResponder === toggle)
+        let space = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, characters: " ",
+            charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49
+        ))
+        toggle.keyDown(with: space)
+        await sidebarEventually { toggle.accessibilityValue() as? String == "Collapsed" }
+        #expect(writes == [disclosureStressPath] && panel.firstResponder === toggle)
+        host.rootView = card("subject-B", lines)
+        host.layoutSubtreeIfNeeded()
+        await sidebarEventually { disclosures().first !== toggle }
+        #expect(disclosures().first?.accessibilityValue() as? String == "Collapsed")
+        #expect(!panel.isVisible)
+        print("PATH133 width=\(width): original 455-path/432-token, independent field, stable control, Enter/Space, exact copy, refresh/replacement")
+    }
+
     private func descendants(_ view: NSView) -> [NSView] {
         view.subviews.flatMap { [$0] + descendants($0) }
     }
