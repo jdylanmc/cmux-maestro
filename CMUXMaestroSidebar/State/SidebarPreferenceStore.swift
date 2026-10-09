@@ -187,7 +187,7 @@ final class SidebarPreferenceStore<Value: SidebarPreferenceValue> {
     }
 }
 
-private nonisolated final class SidebarPreferencePresenter: NSObject, NSFilePresenter, @unchecked Sendable {
+nonisolated final class SidebarPreferencePresenter: NSObject, NSFilePresenter, @unchecked Sendable {
     let presentedItemURL: URL?
     let presentedItemOperationQueue: OperationQueue
     private let changed: @Sendable () -> Void
