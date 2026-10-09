@@ -560,9 +560,18 @@ test("actual native loader diagnostics never print raw exception text or private
   assert.equal(await f.exists(f.endpoint), null);
 });
 
-test("actual native loader offers only readiness in an ordinary CMUX session", async (t) => {
+const ordinaryWorkspace = "abcdef12-abcd-1234-5678-abcdef123456";
+const ordinarySurface = "fedcba21-dcba-4321-8765-fedcba654321";
+for (const [hintCase, workspaceId, surfaceId] of [
+  ["lowercase", ordinaryWorkspace, ordinarySurface],
+  ["uppercase", ordinaryWorkspace.toUpperCase(), ordinarySurface.toUpperCase()],
+  ["uppercase-workspace", ordinaryWorkspace.toUpperCase(), ordinarySurface],
+  ["uppercase-surface", ordinaryWorkspace, ordinarySurface.toUpperCase()],
+  ["mixed-case", "aBcDeF12-aBcD-1234-5678-AbCdEf123456", "fEdCbA21-dCbA-4321-8765-FeDcBa654321"],
+]) test(`actual native loader offers only readiness in an ordinary CMUX session (${hintCase})`, async (t) => {
   const f = await loaderFixture(t);
   const ordinary = f.launch({
+    CMUX_WORKSPACE_ID: workspaceId, CMUX_SURFACE_ID: surfaceId,
     CMUX_MAESTRO_MESSAGE_ROOT: "", CMUX_MAESTRO_MESSAGE_PEER: "",
     CMUX_MAESTRO_WORKER_ID: "", CMUX_MAESTRO_GENERATION: "",
     CMUX_MAESTRO_EXECUTION_MODE: "", CMUX_MAESTRO_DIRECT_LAUNCH: "",
@@ -640,11 +649,12 @@ test("ordinary readiness reports only supported self identity without inspecting
 });
 
 test("ordinary readiness rejects foreign callers, malformed arguments and session drift", async () => {
-  const session = { sessionId: randomUUID() };
+  const session = { sessionId: "abcdef12-1234-5678-9012-abcdef123456" };
   let tool;
   await startReadiness({
     environment: {
-      SESSION_ID: session.sessionId, CMUX_WORKSPACE_ID: randomUUID(), CMUX_SURFACE_ID: randomUUID(),
+      SESSION_ID: session.sessionId,
+      CMUX_WORKSPACE_ID: ordinaryWorkspace.toUpperCase(), CMUX_SURFACE_ID: ordinarySurface.toUpperCase(),
       CMUX_MAESTRO_MESSAGE_ROOT: "/nonexistent/private-route",
     },
     joinSession: async config => { [tool] = config.tools; return session; },
@@ -654,7 +664,8 @@ test("ordinary readiness rejects foreign callers, malformed arguments and sessio
   for (const args of [null, [], "x", { sessionId: session.sessionId }, { enroll: true }]) {
     assert.equal((await tool.handler(args, { sessionId: session.sessionId })).resultType, "failure");
   }
-  for (const invocation of [undefined, {}, { sessionId: randomUUID() }]) {
+  for (const invocation of [undefined, {}, { sessionId: randomUUID() },
+    { sessionId: session.sessionId.toUpperCase() }]) {
     assert.equal((await tool.handler({}, invocation)).resultType, "failure");
   }
   const originalId = session.sessionId;
@@ -664,13 +675,16 @@ test("ordinary readiness rejects foreign callers, malformed arguments and sessio
 
 test("ordinary readiness is inert outside valid CMUX context and for complete managed launches", async () => {
   const ordinary = {
-    SESSION_ID: randomUUID(), CMUX_WORKSPACE_ID: randomUUID(), CMUX_SURFACE_ID: randomUUID(),
+    SESSION_ID: "abcdef12-1234-5678-9012-abcdef123456",
+    CMUX_WORKSPACE_ID: ordinaryWorkspace.toUpperCase(), CMUX_SURFACE_ID: ordinarySurface.toUpperCase(),
   };
   let joins = 0;
   for (const environment of [
     {}, { SESSION_ID: ordinary.SESSION_ID },
     ...Object.keys(ordinary).flatMap(key =>
-      [undefined, "", "../private", "x".repeat(1000)].map(value => ({ ...ordinary, [key]: value }))),
+      [undefined, "", "../private", "x".repeat(1000), "GBCDEF12-1234-5678-9012-ABCDEF123456"]
+        .map(value => ({ ...ordinary, [key]: value }))),
+    { ...ordinary, SESSION_ID: ordinary.SESSION_ID.toUpperCase() },
     { ...ordinary, CMUX_MAESTRO_MESSAGE_ROOT: "/synthetic", CMUX_MAESTRO_MESSAGE_PEER: "1111111111111111",
       CMUX_MAESTRO_WORKER_ID: randomUUID(), CMUX_MAESTRO_EXECUTION_MODE: "interactive" },
   ]) {
@@ -681,9 +695,10 @@ test("ordinary readiness is inert outside valid CMUX context and for complete ma
 
 test("ordinary readiness refuses failed or mismatched joins without retry", async () => {
   const environment = {
-    SESSION_ID: randomUUID(), CMUX_WORKSPACE_ID: randomUUID(), CMUX_SURFACE_ID: randomUUID(),
+    SESSION_ID: "abcdef12-1234-5678-9012-abcdef123456",
+    CMUX_WORKSPACE_ID: ordinaryWorkspace.toUpperCase(), CMUX_SURFACE_ID: ordinarySurface.toUpperCase(),
   };
-  for (const outcome of ["failed", "mismatch", "missing"]) {
+  for (const outcome of ["failed", "mismatch", "case-mismatch", "missing"]) {
     let joins = 0;
     let tool;
     await assert.rejects(startReadiness({
@@ -692,7 +707,9 @@ test("ordinary readiness refuses failed or mismatched joins without retry", asyn
         joins++;
         [tool] = config.tools;
         if (outcome === "failed") throw new Error("private join failure");
-        return outcome === "missing" ? undefined : { sessionId: randomUUID() };
+        return outcome === "missing" ? undefined : {
+          sessionId: outcome === "case-mismatch" ? environment.SESSION_ID.toUpperCase() : randomUUID(),
+        };
       },
     }));
     assert.equal(joins, 1);
@@ -702,7 +719,8 @@ test("ordinary readiness refuses failed or mismatched joins without retry", asyn
 
 test("ordinary readiness respects cancellation before join, during join and during tool use", async () => {
   const environment = {
-    SESSION_ID: randomUUID(), CMUX_WORKSPACE_ID: randomUUID(), CMUX_SURFACE_ID: randomUUID(),
+    SESSION_ID: randomUUID(),
+    CMUX_WORKSPACE_ID: ordinaryWorkspace.toUpperCase(), CMUX_SURFACE_ID: ordinarySurface.toUpperCase(),
   };
   const before = new AbortController();
   before.abort();
