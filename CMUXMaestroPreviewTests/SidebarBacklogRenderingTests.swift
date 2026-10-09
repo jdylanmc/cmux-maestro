@@ -43,24 +43,23 @@ struct SidebarBacklogRenderingTests {
                                 workspaceAllowed: true, surfaceAllowed: true,
                                 perform: { _ in Issue.record("Backlog must not dispatch separate focus commands.") })
         model.setVisible(true)
-        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 280, height: 650),
-                              styleMask: .titled, backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
-            .environment(\.accessibilityEnabled, true))
-        window.contentView = hosting
-        window.orderFront(nil)
+        defer { model.setVisible(false) }
+        let presentation = try SidebarBacklogTestHost(
+            root: SidebarView(model: model, preferences: preferences), width: 280)
+        let window = presentation.window
+        let hosting = presentation.content
         defer {
-            model.setVisible(false)
             for child in window.childWindows ?? [] { child.close() }
-            window.contentView = nil
-            window.close()
+            presentation.close()
         }
         await sidebarEventually { model.orchestration.snapshot.nodes == [node] }
         hosting.layoutSubtreeIfNeeded()
         await sidebarEventually {
-            accessibilityNodes(hosting).contains { $0.identifier == "backlog-\(identities.workspaceA)" }
+            let calibrated = presentation.sampleReadiness()
+            return calibrated && accessibilityNodes(hosting).contains { $0.identifier == "backlog-\(identities.workspaceA)" }
         }
+        presentation.diagnose(stage: "before header action")
+        try #require(presentation.isPresented && presentation.minimalActionPassed)
         hosting.layoutSubtreeIfNeeded()
         let arrow = try #require(accessibilityNodes(hosting).first { $0.identifier == "backlog-\(identities.workspaceA)" })
         let eye = try #require(accessibilityNodes(hosting).first { $0.identifier == "idle-tasks-\(identities.workspaceA)" })

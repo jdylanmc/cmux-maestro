@@ -135,8 +135,9 @@ struct SidebarBacklogEditorRenderingTests {
         let ids = SidebarTreeFixtures()
         let preferences: SidebarPreferences
         let model: SidebarConnectionModel
-        let window: NSWindow
-        let hosting: NSHostingView<AnyView>
+        let presentation: SidebarBacklogTestHost
+        var window: NSWindow { presentation.window }
+        var hosting: NSView { presentation.content }
         private let priorWindows: Set<ObjectIdentifier>
         var hostCalls = 0
 
@@ -167,20 +168,19 @@ struct SidebarBacklogEditorRenderingTests {
             model.copilot.update(topology: SidebarTopology(hierarchy), connected: true)
             model.orchestration.update(topology: SidebarTopology(hierarchy), connected: true)
             priorWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
-            window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 650),
-                              styleMask: .titled, backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            hosting = NSHostingView(rootView: AnyView(
-                SidebarView(model: model, preferences: preferences)
-                    .environment(\.accessibilityEnabled, true)
-            ))
-            window.contentView = hosting
+            do {
+                presentation = try SidebarBacklogTestHost(
+                    root: SidebarView(model: model, preferences: preferences), width: 340)
+            } catch {
+                model.setVisible(false)
+                fixture.cleanup()
+                throw error
+            }
             model.backlog.update(hierarchy: hierarchy, connected: true, allowed: true,
                                  perform: { [weak self] _ in self?.hostCalls += 1 })
             model.navigation.update(topology: SidebarTopology(hierarchy), connected: true,
                                     workspaceAllowed: true, surfaceAllowed: true,
                                     perform: { [weak self] _ in self?.hostCalls += 1 })
-            window.makeKeyAndOrderFront(nil)
         }
 
         var editorWindows: [NSWindow] {
@@ -209,19 +209,14 @@ struct SidebarBacklogEditorRenderingTests {
 
         func openEditor(usingMenu: Bool) async throws {
             let test = SidebarBacklogEditorRenderingTests()
+            defer { diagnoseEditor(stage: "after editor presentation attempt") }
             await sidebarEventually {
-                self.hosting.layoutSubtreeIfNeeded()
-                self.window.displayIfNeeded()
-                return test.nodes(self.hosting).contains { $0.identifier == "backlog-\(self.ids.workspaceA)" }
+                let calibrated = self.presentation.sampleReadiness()
+                return calibrated && test.nodes(self.hosting).contains { $0.identifier == "backlog-\(self.ids.workspaceA)" }
             }
+            diagnoseEditor(stage: "before editor action")
+            try #require(presentation.isPresented && presentation.minimalActionPassed)
             hosting.layoutSubtreeIfNeeded()
-            let exposed = test.nodes(hosting)
-            if !exposed.contains(where: { $0.identifier == "backlog-\(ids.workspaceA)" }) {
-                print("Backlog editor exposed AX: \(exposed.count) nodes; host frame=\(hosting.frame)")
-                for node in exposed.prefix(100) {
-                    print("\(Swift.type(of: node.object)) id=\(node.identifier ?? "-") label=\(node.label ?? "-")")
-                }
-            }
             if usingMenu {
                 let title = try #require(SidebarBacklogEditorRenderingTests.descendants(hosting)
                     .compactMap { $0 as? SidebarTitleNativeButton }
@@ -246,12 +241,41 @@ struct SidebarBacklogEditorRenderingTests {
             _ = try #require(field)
         }
 
+        private func diagnoseEditor(stage: String) {
+            presentation.diagnose(stage: stage)
+            let candidates = NSApp.windows.filter {
+                $0 === window || !priorWindows.contains(ObjectIdentifier($0))
+            }
+            print("Backlog \(stage) windows: \(candidates.count), showing \(min(candidates.count, 16))")
+            for candidate in candidates.prefix(16) {
+                var pending = candidate.contentView.map { [$0] } ?? []
+                var views: [NSView] = []
+                while views.count < 2_048, let view = pending.popLast() {
+                    views.append(view)
+                    pending += view.subviews
+                }
+                if !pending.isEmpty { print("Backlog native-view diagnostics reached the 2048-view bound.") }
+                let fields = views.compactMap { $0 as? NSTextField }
+                let exposed = candidate.contentView.map { SidebarBacklogEditorRenderingTests().nodes($0) } ?? []
+                print("window=\(candidate.windowNumber) root=\(candidate === window) "
+                      + "parent=\(String(describing: candidate.parent?.windowNumber)) visible=\(candidate.isVisible) "
+                      + "key=\(candidate.isKeyWindow) frame=\(candidate.frame) "
+                      + "controller=\(String(describing: candidate.contentViewController.map { Swift.type(of: $0) })) "
+                      + "fields=\(fields.count) exactFields=\(fields.filter { $0.accessibilityIdentifier() == "backlog-url" }.count) "
+                      + "exposedFields=\(exposed.filter { $0.identifier == "backlog-url" }.count)")
+                for field in fields.prefix(32) {
+                    print("fieldType=\(Swift.type(of: field)) id=\(field.accessibilityIdentifier() ?? "-") "
+                          + "editable=\(field.isEditable) enabled=\(field.isEnabled) frame=\(field.frame)")
+                }
+                if fields.count > 32 { print("Backlog field diagnostics limited to first 32 of \(fields.count).") }
+            }
+        }
+
         func close() {
             model.setVisible(false)
             for editor in editorWindows { editor.close() }
             for child in window.childWindows ?? [] { child.close() }
-            window.contentView = nil
-            window.close()
+            presentation.close()
             fixture.cleanup()
         }
     }

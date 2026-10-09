@@ -106,11 +106,25 @@ struct SidebarBacklogTests {
         #expect(model.navigation.status == .idle)
     }
 
-    @Test(arguments: [Set<CmuxExtensionActionScope>(), [.splitSurface], [.openURL], [.selectWorkspace, .selectSurface]])
-    func eachMissingRequiredGrantDeniesWithoutHostEffects(grants: Set<CmuxExtensionActionScope>) {
+    enum MissingGrantCase: String, CaseIterable {
+        case none, splitOnly, urlOnly, selectionOnly
+
+        var grants: Set<CmuxExtensionActionScope> {
+            switch self {
+            case .none: []
+            case .splitOnly: [.splitSurface]
+            case .urlOnly: [.openURL]
+            case .selectionOnly: [.selectWorkspace, .selectSurface]
+            }
+        }
+    }
+
+    @Test(arguments: MissingGrantCase.allCases.map(\.rawValue))
+    func eachMissingRequiredGrantDeniesWithoutHostEffects(name: String) throws {
+        let scenario = try #require(MissingGrantCase(rawValue: name))
         let recorder = Recorder()
         let model = model()
-        model.update(context: context(recorder, grants: grants))
+        model.update(context: context(recorder, grants: scenario.grants))
         model.backlog.open(workspaceID: fixtures.workspaceA, windowID: fixtures.windowID, urlText: url)
         #expect(model.backlog.status == .denied)
         #expect(recorder.actions.isEmpty)
