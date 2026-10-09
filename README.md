@@ -1009,6 +1009,13 @@ probes, and stale evidence never become zero counts. Counts are sampled, not an
 atomic snapshot of concurrent edits. Missing current counts remain unavailable.
 Count freshness uses its own timestamp, independent of branch metadata refreshed
 by older supervisors.
+Hover cards and pinned details reuse one wrapping semantic Git summary, including
+the assigned-directory label, comparison basis and untracked/binary exclusions.
+Large counts wrap instead of widening either detail surface. Text signs and
+accessible descriptions retain meaning without color; user tint does not recolor
+the additions or deletions. Missing current counts remain explicit text, not a
+zero-valued badge. This presentation does not change collection or establish the
+agent's current working directory.
 Only bounded aggregates cross into the sandbox; paths and file contents do not.
 Existing controller versions omit these optional fields. Refresh the native
 integration explicitly to install the new controller; existing supervisors and

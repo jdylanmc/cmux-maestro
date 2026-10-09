@@ -189,6 +189,8 @@ struct SidebarAgentHoverTests {
             #expect(git.allSatisfy { $0.value.hasPrefix("Assigned directory: ") && $0.help == expectedHelp })
             #expect(git.allSatisfy { tooltip.contains("\($0.title): \($0.value)") })
             #expect(git.first { $0.title == "Git changes" }?.value == expectedCounts)
+            #expect(git.first { $0.title == "Git changes" }?.gitChanges == (currentCounts ? changes : nil),
+                    "Every semantic consumer uses the same freshness-gated counts as the textual basis")
             let surfaceDirectory = try #require(lines.first { $0.title == "Surface directory" })
             #expect(surfaceDirectory.value == "/synthetic/independent-host-report")
             #expect(surfaceDirectory.copyableValue == "/synthetic/independent-host-report")
