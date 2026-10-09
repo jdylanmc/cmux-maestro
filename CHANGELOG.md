@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Install the `pull-request` and `create-pull-request` skills project-locally and
+  require agents to use `/pull-request` for PR bodies (what/why/how, evidence,
+  blast radius).
 - Expose bounded own-session readiness diagnostics in ordinary CMUX conversations
   without enabling managed tools, inspecting private bindings, or enrolling the
   session. Report unverified placement and absent/incomplete launcher inputs;

@@ -181,6 +181,12 @@
       "skillPath": ".agents/skills/conflicts/SKILL.md",
       "computedHash": "d2a1a7a4321e511e8b185e8cc52172f275385d8be1dfdbd1ea6f4418d859df78"
     },
+    "create-pull-request": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/create-pull-request/SKILL.md",
+      "computedHash": "f12aa37ebd07a01883176eb38a0b824b056f89d20f09ade83b012459731f57f0"
+    },
     "discovery": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
@@ -283,6 +289,12 @@
       "skillPath": ".agents/skills/poc/SKILL.md",
       "computedHash": "f3a6856f86fdb0e1572bc373bf3c5a9961e1711fa0b6c349b6e24e4c50018722"
     },
+    "pull-request": {
+      "source": "jdylanmc/agent-skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/pull-request/SKILL.md",
+      "computedHash": "12c1ba93b175e9af9c80fa02ee6aa891525910c01167c109f65cec116d55730c"
+    },
     "refactor": {
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
@@ -317,7 +329,7 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/setup/SKILL.md",
-      "computedHash": "9ff257dbd93bb9cb4c844959e1aa5370e32c8a31c6ee5e87b64b69a152f22574"
+      "computedHash": "5c12d2d1829875443048bebcf1673cc82a5626db63dcb3a7dd8112e778ce9d63"
     },
     "shepherd": {
       "source": "jdylanmc/agent-skills",
