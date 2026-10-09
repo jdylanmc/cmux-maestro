@@ -20,6 +20,9 @@ nonisolated struct SidebarIconOverrides: Codable, Equatable, Sendable {
 
     func applying(to snapshot: SidebarOrchestrationSnapshot) throws -> SidebarOrchestrationSnapshot {
         guard version == 1, icons.count <= SidebarOrchestrationReader.maximumNodes,
+              Dictionary(grouping: icons, by: \.workspaceId).values.allSatisfy({
+                  $0.count <= SidebarOrchestrationReader.maximumWorkspaceNodes
+              }),
               Set(icons.map(\.nodeId)).count == icons.count,
               icons.allSatisfy({
                   ($0.iconId != nil || $0.iconColor != nil)
@@ -208,7 +211,8 @@ nonisolated enum SidebarOrchestrationPhase: String, CaseIterable, Hashable, Send
 
 nonisolated enum SidebarOrchestrationReader {
     static let maximumBytes = 1_048_576
-    static let maximumNodes = 128
+    static let maximumNodes = 1024
+    static let maximumWorkspaceNodes = 128
     static let maximumDepth = 8
     static let futureTolerance: TimeInterval = 300
     static let staleInterval: TimeInterval = 60
@@ -244,7 +248,7 @@ nonisolated enum SidebarOrchestrationReader {
         do {
             iconData = try CopilotFileAccess.readStableRegular(
                 at: observer, filename: "icons.json", owner: owner,
-                maximum: 65_536, permissions: 0o600
+                maximum: maximumBytes, permissions: 0o600
             )
         } catch CopilotFileError.missing {
             return snapshot
@@ -254,6 +258,9 @@ nonisolated enum SidebarOrchestrationReader {
 
     static func validate(_ snapshot: SidebarOrchestrationSnapshot, now: Date = Date()) throws {
         guard snapshot.version == 1, snapshot.nodes.count <= maximumNodes,
+              Dictionary(grouping: snapshot.nodes, by: \.workspaceId).values.allSatisfy({
+                  $0.count <= maximumWorkspaceNodes
+              }),
               snapshot.omittedCount >= 0,
               Set(snapshot.nodes.map(\.id)).count == snapshot.nodes.count,
               snapshot.generatedAt <= now.addingTimeInterval(futureTolerance) else {

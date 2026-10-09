@@ -219,13 +219,13 @@ test("malformed and fragmented wire input never uses terminal or readiness APIs"
   assert.equal(f.sends.b[0].mode, "enqueue");
 });
 
-async function managedFixture(t) {
+async function managedFixture(t, owners = [0, 0, 0, 1]) {
   const root = await fs.mkdtemp(path.join(base, "m61-"));
-  const workspaceId = randomUUID();
-  const bindings = [0, 1, 2, 3].map((index) => ({
-    peer: String(index).repeat(16), nodeId: randomUUID(), name: `Participant ${index}`,
-    workspaceId: index === 3 ? randomUUID() : workspaceId,
-    sessionId: randomUUID(), generation: 1, capability: String(index).repeat(64),
+  const workspaces = new Map(owners.map((owner) => [owner, randomUUID()]));
+  const bindings = owners.map((owner, index) => ({
+    peer: index.toString(16).padStart(16, "0"), nodeId: randomUUID(), name: `Participant ${index}`,
+    workspaceId: workspaces.get(owner),
+    sessionId: randomUUID(), generation: 1, capability: (index % 16).toString(16).repeat(64),
   }));
   for (const binding of bindings) {
     await fs.writeFile(path.join(root, `${binding.peer}.json`), JSON.stringify(binding), { mode: 0o600 });
@@ -260,10 +260,68 @@ async function managedFixture(t) {
     });
     adapters.push(adapter);
   }
-  return { root, bindings, tools, sends, events, launch, environment };
+  return { root, bindings, tools, sends, events, launch, environment, adapters };
 }
 
 const managedAddress = (binding) => ({ ...addr(binding), generation: binding.generation });
+
+test("workspace peers and replies survive another workspace's 128 route/socket pairs", async (t) => {
+  const f = await managedFixture(t, [...Array(128).fill(0), 1, 1]);
+  for (const binding of f.bindings.slice(0, 128)) {
+    const server = net.createServer((socket) => socket.destroy());
+    server.listen(path.join(f.root, `${binding.peer}.sock`));
+    await once(server, "listening");
+    await fs.chmod(path.join(f.root, `${binding.peer}.sock`), 0o600);
+    f.adapters.push({ close: () => new Promise((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve())) });
+  }
+  await f.launch(128);
+  await f.launch(129);
+  assert.equal((await fs.readdir(f.root)).length, 260);
+  const response = await f.tools[128].maestro_peers({});
+  assert.equal(typeof response, "string", "valid local peers must not fail from foreign workspace routes");
+  const peers = JSON.parse(response);
+  assert.deepEqual(peers, [{
+    name: f.bindings[129].name, nodeId: f.bindings[129].nodeId,
+    ...managedAddress(f.bindings[129]),
+  }]);
+  assert.equal(JSON.stringify(peers).includes(f.bindings[0].sessionId), false);
+  for (const [sender, recipient] of [[128, 129], [129, 128]]) {
+    const incoming = event(f.events, "send");
+    assert.match(await f.tools[sender].maestro_send({
+      destination: managedAddress(f.bindings[recipient]), body: "Only the local workspace",
+    }), /unconfirmed/);
+    await incoming;
+    const envelope = JSON.parse(f.sends.at(-1).prompt.split("\n").slice(1).join("\n"));
+    assert.deepEqual(envelope.sender, managedAddress(f.bindings[sender]));
+    assert.deepEqual(envelope.destination, managedAddress(f.bindings[recipient]));
+    assert.equal(f.sends.at(-1).index, recipient);
+  }
+  assert.equal(f.sends.length, 2);
+  assert.equal((await f.tools[128].maestro_send({
+    destination: managedAddress(f.bindings[0]), body: "No cross-workspace route",
+  })).resultType, "failure");
+  assert.equal(f.sends.length, 2);
+});
+
+test("managed route scan keeps separate workspace and host safety bounds", async (t) => {
+  const local = await managedFixture(t, Array(129).fill(0));
+  await local.launch(0);
+  assert.equal((await local.tools[0].maestro_peers({})).resultType, "failure");
+  const host = await managedFixture(t, Array.from({ length: 1025 }, (_, i) => Math.floor(i / 128)));
+  await host.launch(0);
+  assert.equal((await host.tools[0].maestro_peers({})).resultType, "failure");
+  await fs.unlink(path.join(host.root, `${host.bindings[1024].peer}.json`));
+  const response = await host.tools[0].maestro_peers({});
+  assert.equal(typeof response, "string", "exact 1024-host bound must allow 128 local participants");
+  const peers = JSON.parse(response);
+  assert.equal(peers.length, 127);
+  assert.ok(peers.every((peer) => peer.workspaceId === host.bindings[0].workspaceId));
+  for (let index = (await fs.readdir(host.root)).length; index < 2049; index++) {
+    await fs.writeFile(path.join(host.root, `unused-${index}`), "", { mode: 0o600 });
+  }
+  assert.equal((await host.tools[0].maestro_peers({})).resultType, "failure");
+});
 
 async function loaderFixture(t) {
   const root = await fs.mkdtemp(path.join(base, "m61-loader-"));

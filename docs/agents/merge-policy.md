@@ -10,7 +10,7 @@ scope nor unattended merge authority.
   four/six-developer quota from another activation or adapter. Bootstrap and
   startup repair each consume a slot while active. Include useful support and
   retained resources within the verified runtime limits; reserve review capacity.
-  Check live-workspace room and the independent global node/depth bounds before
+  Check live-workspace room, workspace stored-node/depth bounds and distinct host safety bounds before
   dispatch. A configurable product ceiling does not increase human authority or
   prove that retained history leaves free nodes.
 - Each independent writer owns a standalone Git worktree and delivery branch.

@@ -868,7 +868,7 @@ The controller's `capacity --workspace <workspace-uuid>` command returns a
 read-only, **advisory** preflight without provider credentials or host RPCs.
 Authenticated `status` also includes the same workspace-wide `capacity` summary,
 including managed roots, workers, retained resources, pending launches, used
-slots, configured limit and remaining global node slots. Pending leases are
+slots, configured limit and workspace stored-node slots. Pending leases are
 already counted through their managed nodes, not added twice. Unknown or stale
 process/terminal ownership is not free capacity.
 
@@ -890,12 +890,42 @@ new admissions until usage permits them. No automatic cleanup or reuse occurs.
 
 A successful preflight reserves nothing. Root and child launch reservations
 recheck the latest limit and exact resource usage inside their exclusive
-transaction. The separate **128-node** and **8-level** bounds still apply, so a
+transaction. The separate **128-node per-workspace** and **8-level** bounds still apply, so a
 configured limit of 128 is not a guarantee of 128 available nodes or demonstrated
-128-provider load. `nodeSlotsRemaining` includes all stored nodes across workspaces,
-including resource-retired history; live-workspace `remaining` alone is not an
+128-provider load. `storedNodes`, `storedNodeLimit` and `nodeSlotsRemaining`
+count only the queried workspace, including resource-retired history and
+registered coordinators. Another workspace's history does not consume these
+slots. Retained terminal records remain separately bounded to 128 per workspace.
+Live-workspace `remaining` alone is not an
 admission check. History exhaustion is not repaired by increasing live capacity,
-closing a tab, or deleting records automatically. Lock acquisition retains the existing 32-session reference
+closing a tab, or deleting records automatically.
+
+Independent **host safety limits** bound the shared store: 1,024 total nodes
+(including leases), 1,024 retained resources, 128 configured workspace-limit
+entries, and 1 MiB each for state and observer/icon output. Preflight exposes
+`hostStoredNodes`, `hostNodeLimit`, `hostNodeSlotsRemaining`,
+`hostRetainedResources`, `hostRetainedResourceLimit`,
+`hostRetainedResourceSlotsRemaining`, `hostStateBytes`,
+`hostStateByteLimit`, `hostStateBytesRemaining`, `hostCapacitySettings` and
+`hostCapacitySettingLimit`. These are distinct from
+workspace allowances; a host protection refusal names its host bound.
+Current byte room is advisory, not a guarantee that a proposed record fits;
+the actual serialized state/projections are checked before external creation.
+There is no automatic pruning, quota bypass, state reset or live migration.
+Schema-1 saved states remain readable. Older installed readers/controllers
+retain their previous bounds until an explicitly authorized upgrade; source
+publication alone does not activate the multi-workspace allowance (#167).
+
+The shared managed-message route scan has matching finite host bounds:
+1,024 private bindings and 2,048 directory entries (route/socket pairs), with
+at most128 participants in the responding workspace. Other-workspace bindings
+are validated but omitted from its peer list; send/receive retain exact address,
+generation, capability and frame/body checks. Legacy proof transport is unchanged.
+Saved schema-1 UUID spellings share a canonical workspace census without
+rewriting ownership records or migrating the store; equivalent case spellings
+cannot obtain separate node/retained allowances.
+
+Lock acquisition retains the existing 32-session reference
 policy: ordinary waits remain bounded to 4 seconds, two-second waits to 8 seconds,
 and zero-wait requests remain immediate, regardless of workspace capacity.
 Upstream activation ordering and installed-runtime validation are separate.

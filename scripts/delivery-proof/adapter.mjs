@@ -8,6 +8,7 @@ import { execFile } from "node:child_process";
 const PEERS = ["a", "b"];
 const MANAGED_PEER = /^[0-9a-f]{16}$/;
 const MAX_PARTICIPANTS = 128;
+const MAX_HOST_PARTICIPANTS = 1024;
 const MAX_BODY = 4096;
 const MAX_FRAME = 8192;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -161,10 +162,10 @@ async function participants(root, own, managed = false) {
     const directory = await fs.opendir(root);
     let entries = 0;
     for await (const entry of directory) {
-      requireCondition(++entries <= MAX_PARTICIPANTS * 2);
+      requireCondition(++entries <= MAX_HOST_PARTICIPANTS * 2);
       if (/^[0-9a-f]{16}\.json$/.test(entry.name)) peers.push(entry.name.slice(0, -5));
     }
-    requireCondition(peers.length <= MAX_PARTICIPANTS);
+    requireCondition(peers.length <= MAX_HOST_PARTICIPANTS);
   }
   for (const peer of peers) {
     let binding;
@@ -176,6 +177,7 @@ async function participants(root, own, managed = false) {
     }
     if (managed && binding.workspaceId !== own.workspaceId) continue;
     requireCondition(binding.workspaceId === own.workspaceId);
+    requireCondition(result.length < MAX_PARTICIPANTS);
     result.push(binding);
   }
   return result;

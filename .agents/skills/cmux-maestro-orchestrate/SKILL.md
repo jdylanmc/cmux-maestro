@@ -254,15 +254,20 @@ and the controller's configured workspace limit, including managed
 coordinators and retained resources; finishing an initial task does not release
 an open interactive session or terminal slot. Reuse an idle worker instead of retrying fanout
 failures in a loop. The #154 source defaults to 32 and permits an authenticated
-workspace coordinator to configure 1 through 128; the independent global
-128-node and depth bounds still apply. Verify installed support before using
+workspace coordinator to configure 1 through 128; the independent workspace
+128-node and depth bounds still apply in #167-capable controllers, with a separate
+1,024-node host safety ceiling and bounded shared storage. Older installed
+controllers retain global128 behavior until explicitly upgraded.
+Verify installed support before using
 `capacity --workspace <exact-workspace-uuid>` for advisory preflight. A successful
 query reserves nothing; actual admission rechecks the latest limit and exact
 resources transactionally. A product ceiling is not the team's dispatch budget.
 Check both `remaining` and `nodeSlotsRemaining`, plus `admissionAvailable`.
-The global node limit includes retained history, even resource-retired nodes;
+The workspace node limit includes retained history, even resource-retired nodes;
 positive live-workspace room does not establish a free node. Exhaustion is not
 permission to erase history, raise a ceiling, or retry fan-out automatically.
+Also check `hostNodeSlotsRemaining` and advisory `hostStateBytesRemaining`;
+host protection is distinct from another workspace consuming your node quota.
 Capacity reconciliation requires CMUX's atomic `surface.list` workspace
 snapshot, not separate pane inventories that can miss a moving terminal.
 Unavailable or malformed inventory blocks launch without freeing resource slots.

@@ -219,6 +219,70 @@ struct SidebarOrchestrationTests {
         }
     }
 
+    @Test func workspaceNodeAllowancesAreIndependentWithinBoundedHostProjection() throws {
+        let now = Date()
+        let first = UUID(), second = UUID()
+        let nodes = [first, second].flatMap { workspace in
+            (0..<128).map { _ in
+                node(run: UUID(), role: "coordinator", parent: nil, workspace: workspace)
+            }
+        }
+        try SidebarOrchestrationReader.validate(.init(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: nodes
+        ))
+        let excess = node(run: UUID(), role: "coordinator", parent: nil, workspace: first)
+        #expect(throws: CopilotFileError.self) {
+            try SidebarOrchestrationReader.validate(.init(
+                version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: nodes + [excess]
+            ))
+        }
+        let hostOverflow = (0..<1025).map { _ in
+            node(run: UUID(), role: "coordinator", parent: nil, workspace: UUID())
+        }
+        #expect(throws: CopilotFileError.self) {
+            try SidebarOrchestrationReader.validate(.init(
+                version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: hostOverflow
+            ))
+        }
+    }
+
+    @Test func legacyWorkspaceUUIDSpellingsShareOneDecodedObserverAllowance() throws {
+        let spelling = "abcdefab-1234-4234-8234-abcdefabcdef"
+        let workspace = try #require(UUID(uuidString: spelling))
+        let nodes = (0..<128).map { _ in
+            node(run: UUID(), role: "coordinator", parent: nil, workspace: workspace)
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: nodes
+        ))
+        var wire = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var entries = try #require(wire["nodes"] as? [[String: Any]])
+        for index in entries.indices {
+            entries[index]["workspaceId"] = index == 127 ? spelling.uppercased() : spelling
+        }
+        wire["nodes"] = entries
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let accepted = try decoder.decode(
+            SidebarOrchestrationSnapshot.self, from: JSONSerialization.data(withJSONObject: wire)
+        )
+        #expect(accepted.nodes.allSatisfy { $0.workspaceId == workspace })
+        try SidebarOrchestrationReader.validate(accepted)
+        var excess = entries[127]
+        excess["id"] = UUID().uuidString
+        excess["runId"] = UUID().uuidString
+        excess["surfaceId"] = UUID().uuidString
+        wire["nodes"] = entries + [excess]
+        let refused = try decoder.decode(
+            SidebarOrchestrationSnapshot.self, from: JSONSerialization.data(withJSONObject: wire)
+        )
+        #expect(throws: CopilotFileError.self) {
+            try SidebarOrchestrationReader.validate(refused)
+        }
+    }
+
     @Test func managedCoordinatorRequiresExactInteractiveSessionIdentity() throws {
         let now = Date()
         let root = SidebarOrchestrationNode(
