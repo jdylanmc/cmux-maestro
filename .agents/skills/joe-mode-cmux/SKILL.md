@@ -134,8 +134,9 @@ Supply `--icon`/`--color` only for explicit human choices or authorized
 carry-forward appearance in the launch plan. Each supplied field wins over its
 default; unspecified fields retain the canonical role defaults. PR Sniper has
 no new color default. Shepherd retains the preexisting local green color;
-only its glyph changes. Unlisted roles keep supplied metadata without inventing
-new defaults. Other existing role defaults remain unchanged.
+only its glyph changes. Developer defaults to gray with its existing bicep glyph.
+Unlisted roles keep supplied metadata without inventing new defaults. Other
+existing role defaults remain unchanged.
 
 Merge the resulting fields into the SAME launch assignment (`name`, `cwd`,
 `task`, and independently authorized policy). Verify the loaded tool declares
