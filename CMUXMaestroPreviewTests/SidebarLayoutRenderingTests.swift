@@ -778,6 +778,50 @@ struct SidebarLayoutRenderingTests {
         #expect((treeHeight - rootHeight) / 4 == SidebarDensity.compact.rowHeight)
     }
 
+    @Test(arguments: [true, false])
+    func observedTurnCompletionUsesGreenStatusSlotWithoutChangingIdentity(managed: Bool) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.selectedMode = .hierarchy
+        let model = await makeManagedModel(
+            fixtures: SidebarTreeFixtures(), nodeCount: 1, attentionKinds: [.turnFinished],
+            includeManaged: managed
+        )
+        defer { model.setVisible(false) }
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try await render(
+            model: model, preferences: preferences, width: 340, height: 500,
+            managed: managed, expectedSessions: 1,
+            destination: folder.appendingPathComponent("turn175-checkbox-\(managed ? "managed" : "unmanaged").png")
+        ) { host in
+            let titles = nativeTitles(in: host).filter { $0.localFocusID?.hasPrefix("surface:") == true }
+            let title = try #require(titles.first)
+            #expect(titles.count == 1)
+            let session = try #require(model.copilot.tree.sessions.first)
+            #expect(session.state == .idle, "Turn completion must not rewrite the primary lifecycle state")
+            #expect(session.attention.contains { $0.kind == .turnFinished })
+            // The native title hosts metadata/status only; its adjacent role/identity glyph is outside this crop.
+            let status = NSRect(x: 0, y: 0, width: 12, height: title.hosting.bounds.height)
+            let bitmap = try #require(title.hosting.bitmapImageRepForCachingDisplay(in: status))
+            title.hosting.cacheDisplay(in: status, to: bitmap)
+            var greenPixels = 0
+            for y in 0..<bitmap.pixelsHigh {
+                for x in 0..<bitmap.pixelsWide {
+                    if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                       color.greenComponent > color.redComponent + 0.15,
+                       color.greenComponent > color.blueComponent + 0.15 {
+                        greenPixels += 1
+                    }
+                }
+            }
+            #expect(greenPixels > 0, "Affirmative completed turn must use the existing green status slot")
+            print("Turn175 completion status: managed=\(managed), greenPixels=\(greenPixels)")
+        }
+    }
+
     @Test(arguments: [true, false], [SidebarMode.hierarchy, .taskboard])
     func ordinaryTurnCompletionAddsNoRowNoticeOrSpace(managed: Bool, mode: SidebarMode) async throws {
         let fixture = try SidebarPreferenceFixture()
