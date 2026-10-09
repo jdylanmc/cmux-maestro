@@ -239,7 +239,7 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/joe-mode-paseo/SKILL.md",
-      "computedHash": "e492de8acaef65d98d3c337685c4c5d40df85dd37f3582c2516859469ceed37c"
+      "computedHash": "3d7342aac896ddc49fb42c51b52bbedc37c1a33a44ac6789b7603ab8cd8936cd"
     },
     "macos-auto-update": {
       "source": "fayazara/macos-app-skills",
@@ -329,7 +329,7 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/ship/SKILL.md",
-      "computedHash": "4da9f4cc0d16c025cfcb4bc9a6854d310de5f5390c30a5c8577b7de1e3635204"
+      "computedHash": "ceb7a14f9bd86a4e9de7c5e44b803de3a7ef35b13345d3f77b500e0ba7968205"
     },
     "specify": {
       "source": "jdylanmc/agent-skills",
@@ -341,7 +341,7 @@
       "source": "jdylanmc/agent-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/squadron/SKILL.md",
-      "computedHash": "48531c62e4a31ab7662ad4650934b20867da01ae93af2c44825b49f568e2f6a0"
+      "computedHash": "b7a871ee55a1ee849fef5cbbc9e445e4c47ebe6f65438260ca9163aecb3ea0c0"
     },
     "status-report": {
       "source": "jdylanmc/agent-skills",
