@@ -38,7 +38,8 @@ struct SidebarDetailLine: Equatable, Identifiable {
     var copyableSessionID: UUID? = nil
     var copyableValue: String? = nil
     var help: String? = nil
-    var id: String { title }
+    var path: SidebarDetailPath? = nil
+    var id: String { path.map { "path-\($0.field.rawValue)" } ?? title }
 
     static func sessionID(_ id: UUID, isParent: Bool = false, canCopy: Bool = true) -> Self {
         .init(title: isParent ? "Parent session ID" : "Session ID", value: id.uuidString,
@@ -55,7 +56,9 @@ extension SidebarSurfaceDirectory {
             title: isParent ? parentTitle : title,
             value: retained ? "Not current for this original session" : directory.pathDisplayText,
             copyableValue: copyable && !retained ? directory.copyablePathValue : nil,
-            help: isParent ? parentHelp : help
+            help: isParent ? parentHelp : help,
+            path: .init(field: isParent ? .parentSurfaceDirectory : .surfaceDirectory,
+                        isAvailable: !retained && directory.copyablePathValue != nil)
         )
     }
 }
@@ -1067,9 +1070,11 @@ enum SidebarPresentation {
     ) -> [SidebarDetailLine] {
         [
             .init(title: "Workspace path", value: paths.rootPath.pathDisplayText,
-                  copyableValue: copyable ? paths.rootPath.copyablePathValue : nil),
+                  copyableValue: copyable ? paths.rootPath.copyablePathValue : nil,
+                  path: .init(field: .workspace, isAvailable: paths.rootPath.copyablePathValue != nil)),
             .init(title: "Project path", value: paths.projectRootPath.pathDisplayText,
-                  copyableValue: copyable ? paths.projectRootPath.copyablePathValue : nil),
+                  copyableValue: copyable ? paths.projectRootPath.copyablePathValue : nil,
+                  path: .init(field: .project, isAvailable: paths.projectRootPath.copyablePathValue != nil)),
             SidebarSurfaceDirectory.line(paths.workingDirectory, isParent: isParent, copyable: copyable)
         ]
     }

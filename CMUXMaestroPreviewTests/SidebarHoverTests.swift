@@ -10,6 +10,194 @@ struct SidebarHoverTests {
     private var disclosureStressPath: String { "/demo/stress/\(disclosureStressToken)/workspace" }
 
     @Test(arguments: [280.0, 350.0, 460.0])
+    func pathCompactHeightUsesActualCaptionAndWidth(width: Double) async throws {
+        let line = try #require(SidebarPresentation.paths(.init(
+            rootPath: .available(disclosureStressPath), projectRootPath: .available(nil),
+            workingDirectory: .unavailable
+        )).first)
+        let host = NSHostingView(rootView: SidebarPathDetailValue(
+            line: line, copy: { _ in Issue.record("Read-only path must not copy"); return false }
+        ).frame(width: width).fixedSize(horizontal: false, vertical: true))
+        let full = NSHostingView(rootView: Text(line.value).font(.caption)
+            .fixedSize(horizontal: false, vertical: true).frame(width: width))
+        let threeLines = NSHostingView(rootView: Text("Ag\nAg\nAg").font(.caption)
+            .fixedSize(horizontal: false, vertical: true).frame(width: width))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: 500),
+            styleMask: .borderless, backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        func button() -> NSButton? {
+            descendants(host).compactMap { $0 as? NSButton }
+                .first { $0.accessibilityIdentifier() == "sidebar-path-disclosure" }
+        }
+        host.layoutSubtreeIfNeeded()
+        await sidebarEventually { button() != nil }
+        let toggle = try #require(button())
+        host.layoutSubtreeIfNeeded()
+        let compact = host.fittingSize.height
+        let budget = threeLines.fittingSize.height
+        let fullHeight = full.fittingSize.height
+        #expect(compact <= 24 + 2 + budget + 1)
+        #expect(fullHeight > budget)
+        #expect(host.fittingSize.width <= width + 1)
+        #expect(!descendants(host).contains { $0.accessibilityIdentifier() == "hover-copy-value" })
+        #expect(toggle.accessibilityPerformPress())
+        await sidebarEventually { toggle.accessibilityValue() as? String == "Expanded" }
+        host.layoutSubtreeIfNeeded()
+        let expanded = host.fittingSize.height
+        #expect(abs(expanded - (24 + 2 + fullHeight)) <= 1,
+                "Expanded path must occupy the complete original display value's actual wrapped height")
+        #expect(expanded > compact)
+        #expect(host.fittingSize.width <= width + 1)
+        #expect(toggle.accessibilityPerformPress())
+        await sidebarEventually { toggle.accessibilityValue() as? String == "Collapsed" }
+        host.layoutSubtreeIfNeeded()
+        #expect(abs(host.fittingSize.height - compact) <= 1)
+        print("PATH133 measured width=\(width) caption threeLines=\(budget) fullValue=\(fullHeight) compactField=\(compact) expandedField=\(expanded)")
+    }
+
+    @Test func pathEligibilityComesFromSourceNotLabelCopyOrSlash() {
+        let values: [HierarchyAvailability<String?>] = [
+            .available(nil), .available(""), .unavailable, .available(disclosureStressToken)
+        ]
+        for source in values {
+            let lines = SidebarPresentation.paths(.init(
+                rootPath: source, projectRootPath: source, workingDirectory: source
+            ))
+            #expect(lines.map { $0.path?.field } == [.workspace, .project, .surfaceDirectory])
+            #expect(lines.allSatisfy { $0.copyableValue == nil })
+            #expect(lines.allSatisfy { $0.path?.isAvailable == (source.copyablePathValue != nil) })
+        }
+        let parent = SidebarSurfaceDirectory.line(.available(disclosureStressPath), isParent: true)
+        #expect(parent.path?.field == .parentSurfaceDirectory && parent.path?.isAvailable == true)
+        let retained = SidebarSurfaceDirectory.line(.available(disclosureStressPath), isParent: true, retained: true)
+        #expect(retained.path?.isAvailable == false && retained.copyableValue == nil)
+        for title in ["Workspace path", "Worktree", "Session ID", "Child history"] {
+            let foreign = SidebarDetailLine(title: title, value: disclosureStressPath, copyableValue: disclosureStressPath)
+            #expect(foreign.path == nil, "Unrelated line titles and slash-shaped values cannot acquire disclosure")
+        }
+    }
+
+    @Test func nativeDisclosureFocusProtectsTheExistingDelayedHoverDismissal() async throws {
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 400, height: 400),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let anchor = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 30))
+        window.contentView = anchor
+        defer { window.contentView = nil; window.close() }
+        var writes = 0
+        let presenter = SidebarHoverPresenter(copyValue: { _ in writes += 1; return true }, showPanel: { _, _, _ in })
+        defer { presenter.detach() }
+        let lines = SidebarPresentation.paths(.init(
+            rootPath: .available(disclosureStressPath), projectRootPath: .available(nil),
+            workingDirectory: .unavailable
+        ))
+        presenter.update(anchor: anchor, data: .init(
+            id: "path-focus", category: "Workspace preview", title: "Synthetic", lines: lines
+        ), group: nil)
+        presenter.hoverAnchor(true)
+        presenter.open(explicit: false)
+        let panel = try #require(presenter.panel)
+        let root = try #require(panel.contentView)
+        root.layoutSubtreeIfNeeded()
+        func disclosure() -> NSButton? {
+            descendants(root).compactMap { $0 as? NSButton }
+                .first { $0.accessibilityIdentifier() == "sidebar-path-disclosure" }
+        }
+        await sidebarEventually { disclosure() != nil }
+        let toggle = try #require(disclosure())
+        presenter.hoverAnchor(false)
+        #expect(panel.makeFirstResponder(toggle))
+        #expect(presenter.state.copyActionFocused)
+        try await Task.sleep(for: .milliseconds(260))
+        #expect(presenter.state.mode == .hover && panel.firstResponder === toggle)
+        #expect(toggle.accessibilityPerformPress())
+        await sidebarEventually { toggle.accessibilityValue() as? String == "Expanded" }
+        presenter.hoverAnchor(false, nameOnly: true)
+        #expect(presenter.state.mode == .hover)
+        #expect(writes == 0)
+        #expect(panel.makeFirstResponder(nil))
+        try await Task.sleep(for: .milliseconds(260))
+        #expect(presenter.state.mode == .hidden)
+    }
+
+    @Test func hoverAndPinnedPathStateStayIndependentAndUnavailableReturnsLocalFocus() async throws {
+        let workspaceID = UUID(), surfaceID = UUID(), windowID = UUID()
+        let raw = NSHomeDirectory() + "/" + disclosureStressToken
+        let long = SidebarPresentation.paths(.init(
+            rootPath: .available(raw), projectRootPath: .available("/short"),
+            workingDirectory: .available("/short")
+        ), copyable: true)
+        try #require(long.first?.value != raw, "Display abbreviation must not replace raw clipboard value")
+        var writes: [String] = []
+        func content(_ session: UUID, _ lines: [SidebarDetailLine]) -> SidebarDetailContent {
+            .init(title: "Synthetic same title", lines: lines, inspection: .init(
+                windowID: windowID, workspaceID: workspaceID, surfaceID: surfaceID,
+                surfaceKind: .terminal, sessionID: session, target: .unmanaged(.session(session))
+            ))
+        }
+        func footer(_ session: UUID, _ lines: [SidebarDetailLine]) -> SidebarPinnedFooter {
+            .init(content: content(session, lines), inspect: {},
+                  copyValue: { writes.append($0); return true })
+        }
+        let subjectA = UUID(), subjectB = UUID()
+        let pinned = NSHostingView(rootView: footer(subjectA, long))
+        let hover = NSHostingView(rootView: SidebarHoverCard(
+            data: .init(id: "independent", category: "Agent preview", title: "Synthetic", lines: long),
+            close: {}, copyValue: { writes.append($0); return true }
+        ))
+        let windows = [pinned as NSView, hover as NSView].map { host in
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 350, height: 220),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+            return window
+        }
+        defer { for window in windows { window.contentView = nil; window.close() } }
+        func disclosure(_ host: NSView) -> NSButton? {
+            descendants(host).compactMap { $0 as? NSButton }
+                .first { $0.accessibilityIdentifier() == "sidebar-path-disclosure" }
+        }
+        await sidebarEventually { disclosure(pinned) != nil && disclosure(hover) != nil }
+        let first = try #require(disclosure(pinned))
+        #expect(first.accessibilityPerformPress())
+        await sidebarEventually { first.accessibilityValue() as? String == "Expanded" }
+        #expect(disclosure(hover)?.accessibilityValue() as? String == "Collapsed")
+        pinned.rootView = footer(subjectA, long)
+        pinned.layoutSubtreeIfNeeded()
+        await sidebarEventually { disclosure(pinned)?.accessibilityValue() as? String == "Expanded" }
+        #expect(disclosure(pinned) === first && writes.isEmpty)
+        let copy = try #require(descendants(pinned).compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == "Copy workspace path" })
+        #expect(copy.accessibilityPerformPress())
+        #expect(writes == [raw])
+        pinned.rootView = footer(subjectB, long)
+        pinned.layoutSubtreeIfNeeded()
+        await sidebarEventually { disclosure(pinned) !== first }
+        let replacement = try #require(disclosure(pinned))
+        #expect(replacement.accessibilityValue() as? String == "Collapsed")
+        #expect(windows[0].makeFirstResponder(replacement))
+        let short = SidebarPresentation.paths(.init(
+            rootPath: .available("/short"), projectRootPath: .available("/short"),
+            workingDirectory: .available("/short")
+        ), copyable: true)
+        pinned.rootView = footer(subjectB, short)
+        pinned.layoutSubtreeIfNeeded()
+        await sidebarEventually { disclosure(pinned) == nil }
+        let fallback = try #require(windows[0].firstResponder as? NSButton)
+        #expect(fallback.accessibilityLabel() == "Copy workspace path")
+        #expect(fallback.canBecomeKeyView)
+        #expect(writes == [raw])
+        #expect(fallback.accessibilityPerformPress())
+        #expect(writes == [raw, "/short"])
+        #expect(disclosure(hover)?.accessibilityValue() as? String == "Collapsed")
+    }
+
+    @Test(arguments: [280.0, 350.0, 460.0])
     func existingPathDisclosureKeepsFullValueCopyAndFieldFocus(width: Double) async throws {
         #expect(disclosureStressToken.count == 432 && disclosureStressPath.count == 455)
         let lines = SidebarPresentation.paths(.init(

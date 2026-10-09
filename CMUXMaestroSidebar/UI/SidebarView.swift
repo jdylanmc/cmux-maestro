@@ -2785,6 +2785,7 @@ struct SidebarPinnedFooter: View {
             .frame(minHeight: 24)
             ScrollView {
                 footerContents
+                    .id(content.inspection?.pathDisclosureSubject)
                     .fixedSize(horizontal: false, vertical: true)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
@@ -2814,7 +2815,11 @@ struct SidebarPinnedFooter: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             ForEach(content.lines.filter { $0.copyableValue != nil }) { line in
-                SidebarSessionDetail(line: line, copyValue: copyValue)
+                if line.path != nil {
+                    SidebarPathDetailValue(line: line, copy: copyValue)
+                } else {
+                    SidebarSessionDetail(line: line, copyValue: copyValue)
+                }
             }
             if let notice = content.notice {
                 Text(notice).sidebarFont(.caption2).foregroundStyle(.secondary)
@@ -2825,12 +2830,18 @@ struct SidebarPinnedFooter: View {
                 ["Branch", "Worktree", "Git evidence", "Git changes", SidebarSurfaceDirectory.title].contains($0.title)
                     && ($0.title != "Git changes" || content.gitChanges == nil)
             }) { line in
-                Text("\(line.title): \(line.value)")
+                if line.path != nil {
+                    if line.copyableValue == nil {
+                        SidebarPathDetailValue(line: line, copy: copyValue, inlineWhenShort: true)
+                    }
+                } else {
+                    Text("\(line.title): \(line.value)")
                     .sidebarFont(.caption2).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
                     .help("\(line.title): \(line.value)" + (line.help.map { ". \($0)" } ?? ""))
                     .accessibilityLabel("\(line.title): \(line.value)")
                     .accessibilityHint(line.help ?? "")
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

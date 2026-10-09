@@ -26,6 +26,11 @@
 		C01000000000000000000004 /* CopilotSnapshotAdapter.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C01000000000000000000012; };
 		C05700000000000000000001 /* SidebarRowActions.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C05700000000000000000011; };
 		C07600000000000000000001 /* SidebarCopyableValue.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C07600000000000000000011; };
+		D13300000000000000000101 /* SidebarDetailPath.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = D13300000000000000000201; };
+		D13300000000000000000102 /* SidebarLabeledValue.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = D13300000000000000000202; };
+		D13300000000000000000103 /* SidebarPathDetailValue.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = D13300000000000000000203; };
+		D13300000000000000000104 /* SidebarPathDisclosureButton.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = D13300000000000000000204; };
+		D13300000000000000000105 /* SidebarInspection+PathDisclosure.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = D13300000000000000000205; };
 		C04600000000000000000001 /* SidebarAgentHoverContent.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C04600000000000000000011; };
 		C05200000000000000000001 /* SidebarHoverCard.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C05200000000000000000011; };
 		C05200000000000000000002 /* SidebarHoverContent.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C05200000000000000000012; };
@@ -157,6 +162,11 @@
 		C01000000000000000000012 /* CopilotSnapshotAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/CopilotSnapshotAdapter.swift; sourceTree = SOURCE_ROOT; };
 		C05700000000000000000011 /* SidebarRowActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarRowActions.swift; sourceTree = SOURCE_ROOT; };
 		C07600000000000000000011 /* SidebarCopyableValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarCopyableValue.swift; sourceTree = SOURCE_ROOT; };
+		D13300000000000000000201 /* SidebarDetailPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarDetailPath.swift; sourceTree = SOURCE_ROOT; };
+		D13300000000000000000202 /* SidebarLabeledValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarLabeledValue.swift; sourceTree = SOURCE_ROOT; };
+		D13300000000000000000203 /* SidebarPathDetailValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarPathDetailValue.swift; sourceTree = SOURCE_ROOT; };
+		D13300000000000000000204 /* SidebarPathDisclosureButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarPathDisclosureButton.swift; sourceTree = SOURCE_ROOT; };
+		D13300000000000000000205 /* SidebarInspection+PathDisclosure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CMUXMaestroSidebar/UI/SidebarInspection+PathDisclosure.swift"; sourceTree = SOURCE_ROOT; };
 		C04600000000000000000011 /* SidebarAgentHoverContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarAgentHoverContent.swift; sourceTree = SOURCE_ROOT; };
 		C05200000000000000000011 /* SidebarHoverCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarHoverCard.swift; sourceTree = SOURCE_ROOT; };
 		C05200000000000000000012 /* SidebarHoverContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarHoverContent.swift; sourceTree = SOURCE_ROOT; };
@@ -316,6 +326,11 @@
 				C05200000000000000000011 /* SidebarHoverCard.swift */,
 				C05700000000000000000011 /* SidebarRowActions.swift */,
 				C07600000000000000000011 /* SidebarCopyableValue.swift */,
+				D13300000000000000000201 /* SidebarDetailPath.swift */,
+				D13300000000000000000202 /* SidebarLabeledValue.swift */,
+				D13300000000000000000203 /* SidebarPathDetailValue.swift */,
+				D13300000000000000000204 /* SidebarPathDisclosureButton.swift */,
+				D13300000000000000000205 /* SidebarInspection+PathDisclosure.swift */,
 				C05200000000000000000012 /* SidebarHoverContent.swift */,
 				C04600000000000000000011 /* SidebarAgentHoverContent.swift */,
 				C09200000000000000000004 /* maestro-icon */,
@@ -638,6 +653,11 @@
 				C05200000000000000000001 /* SidebarHoverCard.swift in Test Sources */,
 				C05700000000000000000001 /* SidebarRowActions.swift in Test Sources */,
 				C07600000000000000000001 /* SidebarCopyableValue.swift in Test Sources */,
+				D13300000000000000000101 /* SidebarDetailPath.swift in Test Sources */,
+				D13300000000000000000102 /* SidebarLabeledValue.swift in Test Sources */,
+				D13300000000000000000103 /* SidebarPathDetailValue.swift in Test Sources */,
+				D13300000000000000000104 /* SidebarPathDisclosureButton.swift in Test Sources */,
+				D13300000000000000000105 /* SidebarInspection+PathDisclosure.swift in Test Sources */,
 				C05200000000000000000002 /* SidebarHoverContent.swift in Test Sources */,
 				C04600000000000000000001 /* SidebarAgentHoverContent.swift in Test Sources */,
 				C03600000000000000000005 /* SidebarOrchestration.swift in Test Sources */,

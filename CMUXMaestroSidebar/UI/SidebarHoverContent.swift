@@ -32,8 +32,10 @@ enum SidebarHoverContent {
             lines.append(.init(title: "Shared surfaces", value: "Metadata unavailable"))
         }
         lines += [
-            .init(title: "Workspace path", value: workspace.rootPath.pathDisplayText),
-            .init(title: "Project path", value: workspace.projectRootPath.pathDisplayText),
+            .init(title: "Workspace path", value: workspace.rootPath.pathDisplayText,
+                  path: .init(field: .workspace, isAvailable: workspace.rootPath.copyablePathValue != nil)),
+            .init(title: "Project path", value: workspace.projectRootPath.pathDisplayText,
+                  path: .init(field: .project, isAvailable: workspace.projectRootPath.copyablePathValue != nil)),
             .init(title: "Workspace ID", value: id.uuidString)
         ]
         return .init(id: "workspace-\(id)", category: "Workspace preview", title: title, subtitle: detail, lines: lines)

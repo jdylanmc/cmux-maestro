@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Expand and collapse overflowing existing path values from a stable label-row
+  control in hover previews and pinned details, preserving independent full-value
+  Copy and field focus. History disclosure remains open (partial #133).
 - Report the exact owned target, operation, installer stage and expected/observed
   presence when LaunchServices verification fails; distinguish unknown query
   state without exposing other registered paths or adding retries. Diagnostic
