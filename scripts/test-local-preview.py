@@ -1122,6 +1122,115 @@ with installer.locked():
     def retired(self):
         return self.app.parent / preview.STATE_NAME / self.receipt()["retired"]["slot"]
 
+    def registration_diagnostic(self, error):
+        prefix = "LaunchServices exact registration verification failed: "
+        self.assertTrue(str(error).startswith(prefix), str(error))
+        return json.loads(str(error)[len(prefix):])
+
+    def test_registration_diagnostic_reports_exact_target_without_registry_contents(self):
+        unrelated = self.root / "private-unrelated.app"
+        self.ops.applications.add(unrelated)
+        for absent in (False, True):
+            with self.subTest(absent=absent):
+                if absent:
+                    self.ops.applications.add(self.old)
+                self.ops.commands.clear()
+                with self.assertRaises(ValueError) as caught:
+                    self.ops.verify_registration(self.old, absent=absent)
+                diagnostic = self.registration_diagnostic(caught.exception)
+                self.assertEqual(diagnostic, {
+                    "operation": "verify", "stage": None, "transaction": None, "phase": None,
+                    "bundleID": metadata.BASE_ID, "target": str(self.old),
+                    "expected": "absent" if absent else "present",
+                    "observed": "present" if absent else "absent",
+                })
+                self.assertNotIn(str(unrelated), str(caught.exception))
+                self.assertEqual(self.ops.commands, [])
+
+    def test_registration_diagnostic_query_failure_is_unknown_not_absence(self):
+        for absent in (False, True):
+            with self.subTest(absent=absent):
+                original = OSError("private query detail /unrelated/secret.app")
+                with patch.object(self.ops, "app_paths", side_effect=original) as query:
+                    with self.assertRaises(ValueError) as caught:
+                        self.ops.verify_registration(self.old, absent=absent)
+                diagnostic = self.registration_diagnostic(caught.exception)
+                self.assertEqual(diagnostic["observed"], "unknown")
+                self.assertEqual(diagnostic["queryError"], "OSError")
+                self.assertEqual(diagnostic["expected"], "absent" if absent else "present")
+                self.assertIs(caught.exception.__cause__, original)
+                self.assertNotIn("private query detail", str(caught.exception))
+                query.assert_called_once_with()
+                self.assertEqual(self.ops.commands, [])
+
+    def test_registration_diagnostic_escapes_target_control_characters(self):
+        target = self.root / "line\nbreak\x1b.app"
+        with self.assertRaises(ValueError) as caught:
+            self.ops.verify_registration(target)
+        diagnostic = self.registration_diagnostic(caught.exception)
+        self.assertEqual(diagnostic["target"], str(target))
+        self.assertNotIn("\n", str(caught.exception))
+        self.assertNotIn("\x1b", str(caught.exception))
+
+    def test_registration_diagnostic_survives_automatic_combined_restoration(self):
+        self.operation("install", self.old)
+        before = self.receipt()
+        integration = self.integration_snapshot()
+        original = self.ops.run
+        failed = False
+
+        def omit_first_publication(command, **kwargs):
+            nonlocal failed
+            result = original(command, **kwargs)
+            if command[:2] == [preview.LSREGISTER, "-f"] and not failed:
+                failed = True
+                self.ops.applications.discard(self.app)
+            return result
+
+        with patch.object(self.ops, "run", side_effect=omit_first_publication):
+            with self.assertRaises(ValueError) as caught:
+                self.operation("install", self.new)
+        diagnostic = self.registration_diagnostic(caught.exception)
+        self.assertEqual(diagnostic, {
+            "operation": "register", "stage": "publish_registration",
+            "transaction": "update", "phase": "ready",
+            "bundleID": metadata.BASE_ID, "target": str(self.app),
+            "expected": "present", "observed": "absent",
+        })
+        self.assertEqual((self.app / "payload").read_text(), "old")
+        self.assertEqual(self.receipt(), {**before, "retired": self.receipt()["retired"]})
+        self.assertEqual(self.integration_snapshot(), integration)
+        self.assertIn("Verified installed preview", self.operation("status"))
+
+    def test_registration_diagnostic_identifies_quiesce_refusal_before_exchange(self):
+        self.operation("install", self.old)
+        before = self.receipt()
+        integration = self.integration_snapshot()
+        original = self.ops.run
+
+        def retain_withdrawn_app(command, **kwargs):
+            result = original(command, **kwargs)
+            if command[:2] == [preview.LSREGISTER, "-u"]:
+                self.ops.applications.add(Path(command[-1]))
+            return result
+
+        self.ops.moves.clear()
+        with patch.object(self.ops, "run", side_effect=retain_withdrawn_app):
+            with self.assertRaises(ValueError) as caught:
+                self.operation("install", self.new)
+        diagnostic = self.registration_diagnostic(caught.exception)
+        self.assertEqual(diagnostic["operation"], "unregister")
+        self.assertEqual(diagnostic["stage"], "quiesce")
+        self.assertEqual(diagnostic["transaction"], "update")
+        self.assertEqual(diagnostic["phase"], "ready")
+        self.assertEqual(diagnostic["target"], str(self.app))
+        self.assertEqual(diagnostic["expected"], "absent")
+        self.assertEqual(diagnostic["observed"], "present")
+        self.assertEqual(self.ops.moves, [])
+        self.assertEqual(self.receipt(), {**before, "retired": self.receipt()["retired"]})
+        self.assertEqual(self.integration_snapshot(), integration)
+        self.assertIn("Verified installed preview", self.operation("status"))
+
     def test_retained_noop_has_no_housekeeping_and_preparation_is_bounded_to_four(self):
         self.operation("install", self.old)
         self.operation("install", self.new)
