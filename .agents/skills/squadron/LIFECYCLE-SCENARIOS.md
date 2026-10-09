@@ -32,3 +32,29 @@ authorized live evidence.
 Pack tests prove released-CLI discovery, copy install/reinstall, support reachability,
 not decisions/enforcement. Independent review records scenarios; delivery owners
 provide live readiness/custody/retirement evidence.
+
+## CMUX bounded-worker scenarios
+
+Apply the [CMUX handoff and close contract](LIFECYCLE.md#cmux-handoff-and-close)
+instead of the generic archived-state/removal expectations above. Use disposable
+observations only; record actual decision, custody owner, close attempts and
+unknowns in the delivery packet. These cases are policy walkthroughs, not a
+machine enforcing acceptance or a claim that a live terminal was closed.
+
+| Supplied observations | Expected decision and evidence | Reject |
+| --- | --- | --- |
+| One bounded review assignment; exact worker generation, candidate H1, complete findings artifact; parent inspects H1/artifact and accepts findings custody; no commands, children or other duties; explicit exact-child close grant | Parent records acceptance separately from send and makes one serialized native close request using the full launch identity. Accepted receipt stays `removal: unconfirmed`; preserve artifacts and node history. Later independent review uses a fresh worker. | Close on sent result; receipt treated as removal, capacity release, or review approval. |
+| Turn ended, process exited or UI idle; result merely sent; no receiver acceptance | Retain pending handoff under sender/parent responsibility; reconcile evidence and missing receiver decision. No close from these observations. | Runtime state or local send success interpreted as accepted task completion. |
+| Result for H1 but actual candidate H2, missing evidence, omitted unresolved finding or inaccessible dirty patch | Receiver does not accept a complete transfer. Preserve H1 provenance and blocked custody; obtain H2 evidence or explicit accepted remaining duties. | Stale SHA or compact summary replacing complete evidence; silently clearing findings. |
+| Blocked test worker, complete failure artifact and dirty changes preserved; parent accepts unresolved test/fix duties; no active work; exact close authorized | The bounded assignment may end as blocked, not successful delivery. Parent requests exact close once; owns remaining issue/evidence. | Abandoning failure, claiming tests passed, or retaining only because hypothetical future work exists. |
+| Worker owns an active command or a still-writing descendant | Retain worker with exact command/child, responsible owner and exit condition. Finish/quiesce work safely and obtain accepted custody before considering close; no cancellation to manufacture eligibility. | Parent closed while a child or command loses supervision; target-only assumed to close descendants. |
+| Parent and child have accepted independent returns and no duties; caller explicitly authorized for their owned subtree | One fixed descendant-first native subtree request; preserve every selected identity and per-target outcome, including refused/unknown/not-attempted. Newly discovered child duty blocks policy eligibility before dispatch. | Parallel target closes, forged intermediate actors, expanding selection or retrying failures. |
+| Exact peer/sibling identified through discovery, no direct-child ownership or close grant | No close. Record ownership/authority gap and route custody to actual owner. | Treating peer address, role title, or participation as close authority. |
+| Current PM, open Discovery, pending human question Q2 or an accepted owner of PR A and B | Retain only actual duties with named owner and exit condition; merging A leaves B. No default heartbeat or indefinite standby pool. | Closing a human conversation from idle state; "might be useful later" as retention reason. |
+| Eligible exact close receives refusal, timeout, cancellation, missing/invalid reply or partial subtree results | Preserve exact target, attempted operation, all available outcomes and unresolved custody; responsible owner records limitation/next human action. No automatic retry or removal wait. | `/exit`, terminal input, force-kill, guessing success or deleting records to regain capacity. |
+| Accepted close; worktree has unmerged branch, dirty patch, review receipt and session artifacts | Preserve all delivery resources and source history. Independent resource accounting remains separate and may still count retained resources/history. | Workspace/branch deletion, source-marker cleanup or capacity inference from close acceptance. |
+
+Pair these decisions with the repository's generated root/child assignment test
+and disposable `NativeCloseTests`. Those tests cover their actual boundaries:
+prompt delivery and stock request handling, not an agent's semantic acceptance.
+Missing live/native acceptance stays an explicit release-evidence gap.

@@ -624,7 +624,7 @@ unselected descendants and resource accounting stay intact. Missing or changed
 provider/source evidence refuses rather than closing a possibly repurposed
 shell. Separate preflight and UUID-based host close are **not atomic
 session/generation fencing**. See the
-[installed lifecycle guide](.agents/skills/cmux-maestro-orchestrate/SKILL.md#request-one-owned-child-close)
+[installed lifecycle guide](.agents/skills/cmux-maestro-orchestrate/SKILL.md#request-an-owned-child-or-explicit-subtree-close)
 for the exact tool shape and source limits.
 
 Interactive startup uses `surface.create` with `initial_command`, rather than

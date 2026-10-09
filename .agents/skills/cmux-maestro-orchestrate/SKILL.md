@@ -252,8 +252,9 @@ Managed workers spawn descendants through the same native `maestro_spawn` tool.
 The adapter binds the actual sender; it is not supplied by the model. Respect the depth
 and the controller's configured workspace limit, including managed
 coordinators and retained resources; finishing an initial task does not release
-an open interactive session or terminal slot. Reuse an idle worker instead of retrying fanout
-failures in a loop. The #154 source defaults to 32 and permits an authenticated
+an open interactive session or terminal slot. Reuse a retained worker only for its
+concrete current duty; do not retry fanout failures or keep a permanent idle pool.
+The #154 source defaults to 32 and permits an authenticated
 workspace coordinator to configure 1 through 128; the independent workspace
 128-node and depth bounds still apply in #167-capable controllers, with a separate
 1,024-node host safety ceiling and bounded shared storage. Older installed
@@ -369,6 +370,46 @@ noninteractive Copilot may deny a tool without offering the human a prompt.
 Dual final-message and helper reports are refused rather than reconciled.
 Reports are self-reported operational evidence, not independent review or
 artifact acceptance. Keep secrets, raw output and full prompts out of summaries.
+
+## Bounded assignment handoff and retention
+
+Default delivery, review, test and investigation workers are short-lived: one
+concrete bounded assignment, accepted handoff, then separately authorized owned
+close. Later independent work uses a fresh bounded worker within actual capacity
+and staffing limits. The primary human conversation and roles with concrete
+current duties are not cleanup targets.
+
+Before any close, preserve the exact result, source commit SHA when applicable,
+full accessible evidence, unresolved findings/provenance and remaining duties in
+the existing delivery artifact. Never invent a commit for an investigation or
+replace evidence with a compact milestone. The receiver inspects the actual
+candidate/artifacts and explicitly accepts scope, unresolved findings and their
+custody. This is a substantive owner decision, not an automatic messaging
+acknowledgment protocol. Send success, idle UI, turn end and process exit prove
+neither accepted completion nor successful delivery.
+
+The owning parent verifies that no active command, child, repair or PR duty will
+be lost. Complete or explicitly transfer duties to an identified accepting owner
+before closing; unknown activity/ownership means retain, not cancel work to
+manufacture eligibility. Retain only a concrete current duty or capability/
+authority gap, with responsible owner, reason and exit condition: active PM,
+open Discovery, pending human decision or actual owned PR scope, not "might be
+useful later." Blocked results can transfer without claiming success.
+
+Use only the exact authorized native close contract below. Serialize requests;
+target-only does not settle descendants, and explicit subtree authorization
+requires reconciling each selected descendant's evidence/duties first. Never
+self-close or close a parent, sibling or peer. Preserve all results, including
+refused, unknown and not-attempted targets, with responsible owner/next action.
+Do not automatically retry, wait for removal, send `/exit`, force-kill, shut down
+a provider or fall back to terminal input.
+
+Close acceptance is not removal or capacity release. Preserve branches,
+worktrees, dirty patches, review receipts, session artifacts and node history;
+independent resource accounting remains separate. No new global close grant,
+daemon, scheduler, completion tracker or cleanup engine follows from this
+guidance. Missing live/native acceptance must remain explicit; disposable
+fixtures and policy walkthroughs are not live operational proof.
 
 ## Request an owned child or explicit subtree close
 

@@ -47,6 +47,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Default local Joe/Maestro delivery, review, test and investigation workers to
+  short-lived assignments, with exact evidence and accepted duty custody before
+  separately authorized owned close. Retain concrete duties rather than idle
+  pools; preserve work and distinguish close acceptance from removal or capacity
+  release (#165).
 - Isolate stored-node admission and retired history by CMUX workspace, retaining
   128 nodes per workspace and distinct bounded host/storage protection. Keep
   multi-workspace saved-state, messaging routes and sidebar projections valid,
