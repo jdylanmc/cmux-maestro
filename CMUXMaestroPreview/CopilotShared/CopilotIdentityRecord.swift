@@ -31,9 +31,17 @@ nonisolated struct CopilotSessionAppearance: Codable, Equatable, Sendable {
     let sessionID: UUID
     var iconId: String?
     var iconColor: String?
+    var petId: String?
+
+    static func validPetID(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 48 && value.utf8.allSatisfy {
+            (97...122).contains($0) || (48...57).contains($0) || $0 == 45
+        }
+    }
 
     var isValid: Bool {
-        version == 1 && (iconId != nil || iconColor != nil)
+        version == 1 && (iconId != nil || iconColor != nil || petId != nil)
+            && (petId.map(Self.validPetID) ?? true)
             && (iconId.map {
                 !$0.isEmpty && $0.utf8.count <= 128 && $0.utf8.allSatisfy {
                     (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95

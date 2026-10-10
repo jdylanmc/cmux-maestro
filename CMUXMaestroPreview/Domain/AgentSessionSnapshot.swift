@@ -264,6 +264,7 @@ nonisolated struct AgentTerminalEvent: Codable, Equatable, Sendable {
 nonisolated struct AgentSessionAppearance: Codable, Equatable, Sendable {
     let iconId: String?
     let iconColor: String?
+    var petId: String? = nil
 }
 
 // Additional evidence, never a reinterpretation of v1's nested childWork.

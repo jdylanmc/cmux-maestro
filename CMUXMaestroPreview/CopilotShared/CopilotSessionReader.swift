@@ -394,6 +394,7 @@ actor CopilotSessionReader {
                 }
                 result.iconId = appearance.iconId
                 result.iconColor = appearance.iconColor
+                result.petId = appearance.petId
             } catch CopilotFileError.missing {
                 // No explicit standalone icon has been chosen.
             } catch {

@@ -214,6 +214,7 @@ nonisolated struct CopilotHookRecorder {
                     guard previous.sessionID == session, previous.isValid else { return diagnose(.unavailable) }
                     selected.iconId = appearance.iconId ?? previous.iconId
                     selected.iconColor = appearance.iconColor ?? previous.iconColor
+                    selected.petId = appearance.petId ?? previous.petId
                 } catch CopilotFileError.missing {
                     // The first own-session choice has no previous appearance.
                 }

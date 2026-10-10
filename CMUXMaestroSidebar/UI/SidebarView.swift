@@ -94,7 +94,7 @@ private extension View {
     }
 }
 
-private extension SidebarTone {
+extension SidebarTone {
     var color: Color {
         switch self {
         case .blue: .blue
@@ -2853,7 +2853,7 @@ struct SidebarPinnedFooter: View {
     private var footerContents: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .top, spacing: 8) {
-                if content.isAgent { SidebarPlaceholderPet() }
+                if content.isAgent { SidebarPetButton(content: content) }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(content.title).sidebarFont(.caption, weight: .semibold).lineLimit(2)
                     if let visual = content.visual {
@@ -2890,36 +2890,6 @@ struct SidebarPinnedFooter: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct SidebarPlaceholderPet: View {
-    var body: some View {
-        Canvas { context, size in
-            // Original two-eared pebble silhouette; no provider asset or runtime pet.
-            var body = Path()
-            body.move(to: CGPoint(x: 5, y: 25))
-            body.addQuadCurve(to: CGPoint(x: 7, y: 12), control: CGPoint(x: 2, y: 17))
-            body.addLine(to: CGPoint(x: 6, y: 3))
-            body.addQuadCurve(to: CGPoint(x: 15, y: 9), control: CGPoint(x: 14, y: 3))
-            body.addQuadCurve(to: CGPoint(x: 23, y: 8), control: CGPoint(x: 19, y: 6))
-            body.addQuadCurve(to: CGPoint(x: 31, y: 2), control: CGPoint(x: 25, y: 2))
-            body.addLine(to: CGPoint(x: 30, y: 13))
-            body.addQuadCurve(to: CGPoint(x: 31, y: 27), control: CGPoint(x: 36, y: 22))
-            body.addQuadCurve(to: CGPoint(x: 27, y: 32), control: CGPoint(x: 31, y: 33))
-            body.addLine(to: CGPoint(x: 23, y: 29))
-            body.addQuadCurve(to: CGPoint(x: 14, y: 30), control: CGPoint(x: 18, y: 32))
-            body.addLine(to: CGPoint(x: 9, y: 33))
-            body.closeSubpath()
-            context.fill(body, with: .color(.secondary.opacity(0.5)))
-            for x: CGFloat in [13, 24] {
-                context.fill(Path(ellipseIn: CGRect(x: x, y: size.height * 0.5, width: 2, height: 3)),
-                             with: .color(.primary))
-            }
-        }
-        .frame(width: 38, height: 38)
-        .accessibilityLabel("Original placeholder pet; no live pet integration")
-        .help("Original placeholder pet; no live pet integration")
     }
 }
 

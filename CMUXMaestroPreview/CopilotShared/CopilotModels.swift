@@ -49,6 +49,7 @@ nonisolated struct CopilotChildWork: Codable, Equatable, Sendable {
 nonisolated struct CopilotSessionObservation: Codable, Equatable, Sendable {
     var iconId: String? = nil
     var iconColor: String? = nil
+    var petId: String? = nil
     let sessionID: UUID
     let surfaceID: UUID
     let launchWorkspaceID: UUID
