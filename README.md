@@ -1148,6 +1148,17 @@ failure shows **Could not copy. Try again.** Changing the GUID clears feedback.
 The small `SidebarCopyableValue` control receives an injected action and knows
 nothing about session lookup, persistence, host navigation, or the pasteboard.
 
+Overflowing existing Workspace path, Project path, Surface directory and Parent
+surface directory values in hover previews and pinned details start as a
+three-line wrapped excerpt, measured at the current width and caption font.
+The label-row **...** button expands or collapses the full permitted display
+value; Copy remains independent and uses the full permitted underlying value.
+Tab reaches disclosure, Enter/Space toggles it, and preview Escape/Shift+Tab
+retain their existing return behavior. Hover and pinned expansion stay separate,
+and replacing the exact subject resets expansion. Short/unavailable values have
+no disclosure action. Git fields and History are not part of this partial #133
+change; the label row is not sticky when an expanded field scrolls offscreen.
+
 Working agents use one 9-point open ring, rotating linearly once per second.
 Reduce Motion keeps the ring static; questions and approval requests use a
 distinct static exclamation mark. Working rows have no shimmer or moving wash.

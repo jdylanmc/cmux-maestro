@@ -31,7 +31,9 @@ struct SidebarHoverCard: View {
                         Text(subtitle).font(.callout).fixedSize(horizontal: false, vertical: true)
                     }
                     ForEach(data.lines) { line in
-                        if let clipboardValue = line.copyableValue {
+                        if line.path != nil {
+                            SidebarPathDetailValue(line: line, copy: copyValue, focusChanged: copyActionFocusChanged)
+                        } else if let clipboardValue = line.copyableValue {
                             SidebarCopyableValue(
                                 value: line.value, label: line.title, clipboardValue: clipboardValue,
                                 copy: copyValue, focusChanged: copyActionFocusChanged
@@ -195,7 +197,9 @@ final class SidebarHoverPanel: NSPanel {
             returnToOrigin()
             return
         }
-        let firstFieldAction = controls.firstIndex { $0.accessibilityIdentifier() == "hover-copy-value" }
+        let firstFieldAction = controls.firstIndex {
+            ["hover-copy-value", "sidebar-path-disclosure"].contains($0.accessibilityIdentifier())
+        }
         if index == firstFieldAction {
             returnToOrigin()
             return
@@ -207,7 +211,7 @@ final class SidebarHoverPanel: NSPanel {
     private var keyboardControls: [NSButton] {
         func visit(_ view: NSView) -> [NSButton] {
             if let button = view as? NSButton,
-               ["hover-close", "hover-copy-value"].contains(button.accessibilityIdentifier()),
+               ["hover-close", "hover-copy-value", "sidebar-path-disclosure"].contains(button.accessibilityIdentifier()),
                button.canBecomeKeyView { return [button] }
             return view.subviews.flatMap(visit)
         }
@@ -292,7 +296,7 @@ final class SidebarHoverPresenter {
             dismiss(restoreFocus: false)
             return
         }
-        if !inside && nameOnly && state.mode == .hover {
+        if !inside && nameOnly && state.mode == .hover && !state.copyActionFocused {
             dismiss(restoreFocus: false)
             return
         }
@@ -441,7 +445,9 @@ final class SidebarHoverPresenter {
                     self.dismiss(restoreFocus: owned)
                     return owned ? nil : event
                 }
-                if self.state.mode == .hover { self.dismiss(restoreFocus: false) }
+                if self.state.mode == .hover && !(event.window === self.panel && self.state.copyActionFocused) {
+                    self.dismiss(restoreFocus: false)
+                }
             } else if event.window !== self.panel {
                 self.dismiss(restoreFocus: false)
             }

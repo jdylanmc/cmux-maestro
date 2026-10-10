@@ -45,6 +45,19 @@ struct SidebarAppKitIsolationTests {
 
 @MainActor
 enum SidebarRenderingEvidence {
+    static func captureNativeBitmap(of view: NSView) throws -> NSBitmapImageRep {
+        // Unchanged point geometry, actual 2x native glyphs rather than resampled 1x pixels.
+        let bitmap = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(view.bounds.width) * 2, pixelsHigh: Int(view.bounds.height) * 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        bitmap.size = view.bounds.size
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return bitmap
+    }
+
     struct Metrics: Codable {
         let width: Double
         let height: Double

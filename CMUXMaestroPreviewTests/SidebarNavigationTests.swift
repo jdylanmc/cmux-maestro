@@ -418,10 +418,13 @@ struct SidebarNavigationTests {
                 revealingIdleTasksIn: [fixtures.workspaceA]
             )
             let expectedPaths: [SidebarDetailLine] = [
-                .init(title: "Workspace path", value: granted ? "/repo/.worktrees/feature" : "Path unavailable"),
-                .init(title: "Project path", value: granted ? "/repo" : "Path unavailable"),
+                .init(title: "Workspace path", value: granted ? "/repo/.worktrees/feature" : "Path unavailable",
+                      path: .init(field: .workspace, isAvailable: granted)),
+                .init(title: "Project path", value: granted ? "/repo" : "Path unavailable",
+                      path: .init(field: .project, isAvailable: granted)),
                 .init(title: "Surface directory", value: granted ? "/repo/.worktrees/feature/src" : "Path unavailable",
-                      help: "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory.")
+                      help: "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory.",
+                      path: .init(field: .surfaceDirectory, isAvailable: granted))
             ]
             let rawPaths = [
                 "Workspace path": "/repo/.worktrees/feature",
@@ -453,14 +456,20 @@ struct SidebarNavigationTests {
                 ))
                 let expected: [SidebarDetailLine]
                 switch selection {
-                case .workspace: expected = Array(expectedPaths.prefix(2))
+                case .workspace:
+                    expected = expectedPaths.prefix(2).map { line in
+                        var result = line
+                        result.path = nil
+                        return result
+                    }
                 case .surface: expected = Array(expectedPaths.suffix(1))
                 case .session: expected = copyable(expectedPaths)
                 case .child:
                     expected = copyable(Array(expectedPaths.prefix(2))) + [
                         .init(title: "Parent surface directory", value: granted ? "/repo/.worktrees/feature/src" : "Path unavailable",
                               copyableValue: granted ? "/repo/.worktrees/feature/src" : nil,
-                              help: "Reported by CMUX for the parent surface; no report time supplied. Not an independently reported child directory.")
+                              help: "Reported by CMUX for the parent surface; no report time supplied. Not an independently reported child directory.",
+                              path: .init(field: .parentSurfaceDirectory, isAvailable: granted))
                     ]
                 }
                 #expect(detail.lines.filter {
