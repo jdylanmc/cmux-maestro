@@ -3,7 +3,7 @@
   "roles": {
     "project-manager": {"icon": "md-meditation", "color": "teal"},
     "discovery": {"icon": "md-compass_outline", "color": "blue"},
-    "developer": {"icon": "seti-bicep", "color": "purple"},
+    "developer": {"icon": "seti-bicep", "color": "gray"},
     "shepherd": {"icon": "fa-cat", "color": "green"},
     "roast": {"icon": "fa-fire", "color": "red"},
     "pr-sniper": {"icon": "md-target_account"}
