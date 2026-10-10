@@ -155,12 +155,37 @@ struct SidebarClarityTests {
     }
 
     @Test func quietMetadataUsesOnlyConciseObservedContext() {
-        #expect(SidebarPresentation.rowMetadata(kind: "Agent", directory: "/synthetic/worktrees/design") == "Agent · design")
+        #expect(SidebarPresentation.rowMetadata(kind: "Agent", directory: "/synthetic/worktrees/design") == "design")
         #expect(SidebarPresentation.rowMetadata(kind: "Terminal", directory: "/synthetic/worktrees/design/") == "Terminal · design")
         #expect(SidebarPresentation.rowMetadata(kind: "Browser") == "Browser")
         #expect(SidebarPresentation.rowMetadata(kind: "Surface", directory: nil) == "Surface")
         #expect(SidebarPresentation.rowMetadata(kind: "Agent", directory: "/synthetic/design",
-                                              activity: "Running a command") == "Agent · Running a command")
+                                              activity: "Running a command") == "Running a command")
+    }
+
+    @Test(arguments: [
+        ("/synthetic/worktrees/design", "design"),
+        ("/synthetic/Agent", "Agent"),
+        ("/synthetic/Agent review/", "Agent review"),
+        ("/synthetic/Agent/long-location-with-Agent-in-its-name", "long-location-with-Agent-in-its-name"),
+        ("/", "/"),
+        ("", "")
+    ])
+    func agentSubtitlePreservesOnlyThePermittedLocation(_ directory: String, _ expected: String) {
+        #expect(SidebarPresentation.rowMetadata(kind: "Agent", directory: directory) == expected)
+    }
+
+    @Test func missingAgentLocationLeavesNoGenericLabelOrSeparator() {
+        #expect(SidebarPresentation.rowMetadata(kind: "Agent") == "")
+        #expect(SidebarPresentation.rowMetadata(kind: "Agent", directory: "") == "")
+        #expect(SidebarPresentation.rowMetadata(kind: "Agent", activity: "Reading Agent guide") == "Reading Agent guide")
+    }
+
+    @Test(arguments: ["Terminal", "Browser", "Surface", "Legacy worker", "Needed context", "Blocked", "Shell", "Skill"])
+    func nonAgentSubtitleKindsKeepTheirExistingLabels(_ kind: String) {
+        #expect(SidebarPresentation.rowMetadata(kind: kind) == kind)
+        #expect(SidebarPresentation.rowMetadata(kind: kind, directory: "/synthetic/Agent") == "\(kind) · Agent")
+        #expect(SidebarPresentation.rowMetadata(kind: kind, activity: "Reading Agent guide") == "\(kind) · Reading Agent guide")
     }
 
     @Test func consolidatedCueKeepsUnknownAndIncompleteEvidenceExplicit() {
