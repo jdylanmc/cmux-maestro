@@ -335,7 +335,7 @@ enum SidebarHeaderAction: String, CaseIterable, Identifiable {
     }
     var unavailable: String? {
         switch self {
-        case .directory: "Opening a directory as a new workspace is not available in this sidebar."
+        case .directory: "CMUX did not open the directory as a workspace. Grant Maestro the workspace-creation permission in CMUX and try again."
         case .beats: "Beats scheduling is not available. No schedule has been created."
         case .fermata: "CMUX Keep Mac Awake access is not available. No power setting has changed."
         case .taskboard, .history, .settings: nil
@@ -503,12 +503,30 @@ struct SidebarView: View {
         }, set: { if let selection = $0 { inspect(selection) } })
     }
 
+    private func openDirectoryAsWorkspace() {
+        guard let open = model.openWorkspaceAtPath else {
+            unavailableHeaderAction = .directory
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Open"
+        panel.message = "Choose a directory to open as a new workspace"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { @MainActor in
+            if await !open(url.path) { unavailableHeaderAction = .directory }
+        }
+    }
+
     private func content(pinnedHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: preferences.layout.density.spacing(6)) {
             SidebarHeader(taskboardActive: preferences.selectedMode == .taskboard,
                           availability: model.orchestration.availability) { action in
                 switch action {
-                case .directory, .beats, .fermata: unavailableHeaderAction = action
+                case .directory: openDirectoryAsWorkspace()
+                case .beats, .fermata: unavailableHeaderAction = action
                 case .taskboard:
                     preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
                 case .history, .settings:
