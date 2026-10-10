@@ -1015,7 +1015,7 @@ enum SidebarPresentation {
         switch session.liveness {
         case .alive:
             if session.state == .idle, session.attention.contains(where: { $0.kind == .turnFinished }) {
-                return .init(title: "Turn finished", symbol: "checkmark.circle", tone: .neutral)
+                return .init(title: "Idle · turn finished", symbol: "checkmark.circle", tone: .neutral)
             }
             return state(session.state)
         case .dead: return process(.dead)

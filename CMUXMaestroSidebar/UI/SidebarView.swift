@@ -172,7 +172,7 @@ struct SidebarActivityBackground: View {
                 if reduceMotion {
                     RoundedRectangle(cornerRadius: 4).fill(SidebarQuestionGlow.lightBlue.opacity(0.14))
                 } else {
-                    TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                    TimelineView(.animation(minimumInterval: 1.0 / 20)) { context in
                         let pulse = 0.5 + 0.5 * sin(context.date.timeIntervalSinceReferenceDate * 1.5)
                         RoundedRectangle(cornerRadius: 4)
                             .fill(SidebarQuestionGlow.lightBlue.opacity(0.06 + 0.14 * pulse))
@@ -251,7 +251,7 @@ struct SidebarQuestionGlow: View {
         if reduceMotion {
             glyph(glow: 0.8)
         } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+            TimelineView(.animation(minimumInterval: 1.0 / 20)) { context in
                 glyph(glow: 0.55 + 0.45 * sin(context.date.timeIntervalSinceReferenceDate * 1.5))
             }
         }
@@ -261,8 +261,8 @@ struct SidebarQuestionGlow: View {
         Image(systemName: "questionmark")
             .font(.system(size: 11, weight: .heavy))
             .foregroundStyle(Self.lightBlue)
-            .shadow(color: Self.lightBlue.opacity(glow), radius: 3)
-            .shadow(color: Self.lightBlue.opacity(glow * 0.7), radius: 6)
+            .shadow(color: Self.lightBlue.opacity(glow), radius: 2)
+            .shadow(color: Self.lightBlue.opacity(glow * 0.7), radius: 2.5)
     }
 }
 
