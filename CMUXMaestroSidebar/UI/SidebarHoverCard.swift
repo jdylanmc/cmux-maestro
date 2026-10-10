@@ -31,7 +31,9 @@ struct SidebarHoverCard: View {
                         Text(subtitle).font(.callout).fixedSize(horizontal: false, vertical: true)
                     }
                     ForEach(data.lines) { line in
-                        if let clipboardValue = line.copyableValue {
+                        if let changes = line.gitChanges {
+                            GitChangeBadge(changes: changes)
+                        } else if let clipboardValue = line.copyableValue {
                             SidebarCopyableValue(
                                 value: line.value, label: line.title, clipboardValue: clipboardValue,
                                 copy: copyValue, focusChanged: copyActionFocusChanged

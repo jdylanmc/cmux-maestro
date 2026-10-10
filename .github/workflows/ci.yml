@@ -57,6 +57,7 @@ jobs:
             .build/tests/scoped-results/**/guide-acceptance/*.log
             .build/tests/scoped-results/**/guide-acceptance/probe.xcresult
             .build/tests/scoped-results/**/guide-acceptance/images/*.png
+            .build/tests/scoped-results/**/failure-diagnostics/*/*.zip
             .build/setup-tests/metadata-watchdog/
           include-hidden-files: true
           if-no-files-found: error

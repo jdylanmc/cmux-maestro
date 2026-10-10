@@ -130,6 +130,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Share wrapping Git summaries across agent hover cards and pinned details, with
+  accessible green additions/red deletions and unchanged assigned-directory,
+  freshness and comparison semantics (#80).
 - Remove the redundant `Agent` subtitle prefix so existing location and activity
   have more room, preserving status, full location help and non-agent labels (#188).
 - Request native in-turn steering for managed peer messages instead of waiting

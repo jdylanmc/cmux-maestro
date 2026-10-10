@@ -277,6 +277,38 @@ invocation. The three original resource/exposure/no-op controls are unchanged.
 This approved producer/validator split does not equate a passing result flag
 with behavioral evidence.
 
+Failed integrated scopes also retain one bounded `xcresulttool export diagnostics`
+archive per exact runner-created `isolated`, `remaining`, or `full-fallback`
+result bundle. `coverage.json` records the invocation, scope, original test exit,
+clean checkout head/tree/raw commit parents, export outcome, archive hash, and
+file sizes/hashes. Clean source must agree before execution and before/after
+capture; all source reads disable Git replacement objects. Missing or changed
+provenance refuses capture. Successful scopes do not
+export. Capture never changes selectors, test deadlines, coverage, or failure
+status, and never retries a test or export.
+
+Only the named bundle is read: no home-directory, `DiagnosticReports`, environment,
+credential, or process-dump collection. Exported diagnostics can contain synthetic
+test output, crash stacks, process names, and runner/source paths; these are
+diagnostic evidence, not a sanitized support report. Raw export staging stays
+outside artifact globs. Inputs reject links/special files and exceed neither
+1 GiB nor 20,000 entries; exported payloads allow at most 256 entries and 64 MiB
+uncompressed, with a 65 MiB archive ceiling per scope (at most two scopes).
+The export subprocess has a separate 30-second deadline. These are publication
+bounds, not an OS disk quota on the export tool's temporary writes.
+Export traversal and payload reads use a pinned root directory descriptor and
+no-follow directory components; file identity/metadata must agree across
+inventory, opening, and reading. Input-bundle and destination checks remain
+preflight checks, not a filesystem snapshot or hostile same-user sandbox:
+the external export tool reopens its input path, and final publication uses the
+private invocation directory. Concurrent mutation outside the pinned export
+boundary is not comprehensively isolated.
+Only completed archives enter `failure-diagnostics/<scope>/<scope>.zip` in the
+existing 14-day `integrated-test-scope-evidence` artifact. Missing, empty, oversized,
+linked, timed-out, or failed exports record an explicit `unavailable` reason;
+an interrupted capture remains `capture-incomplete`. Neither outcome establishes
+a faulting thread, and a later nonreproduction does not erase an earlier crash.
+
 Acceptance uses the original 600x414 AppKit composition (600x350 real guide and
 600x64 minimal subject), explicit accessibility environment, five statuses in
 both appearances, failure/success Copy attempts, and both complete Re-check
@@ -1009,6 +1041,13 @@ probes, and stale evidence never become zero counts. Counts are sampled, not an
 atomic snapshot of concurrent edits. Missing current counts remain unavailable.
 Count freshness uses its own timestamp, independent of branch metadata refreshed
 by older supervisors.
+Hover cards and pinned details reuse one wrapping semantic Git summary, including
+the assigned-directory label, comparison basis and untracked/binary exclusions.
+Large counts wrap instead of widening either detail surface. Text signs and
+accessible descriptions retain meaning without color; user tint does not recolor
+the additions or deletions. Missing current counts remain explicit text, not a
+zero-valued badge. This presentation does not change collection or establish the
+agent's current working directory.
 Only bounded aggregates cross into the sandbox; paths and file contents do not.
 Existing controller versions omit these optional fields. Refresh the native
 integration explicitly to install the new controller; existing supervisors and

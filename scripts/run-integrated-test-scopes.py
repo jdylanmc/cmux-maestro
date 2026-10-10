@@ -2,16 +2,21 @@
 """Hosted-only partition: one blocking-observer regression, then its full complement."""
 import argparse
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import hashlib
 import importlib.util
 import os
 from pathlib import Path
+import re
+import stat
 import subprocess
 import shutil
 import sys
+import tempfile
 import uuid
+import zipfile
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
@@ -25,6 +30,10 @@ SCHEMA = "0.1.0"
 STATUSES = ("Passed", "Failed", "Skipped", "Expected Failure")
 STRUCTURE = ("Device", "Test Plan Configuration")
 DETAILS = ("Failure Message", "Source Code Reference", "Attachment", "Expression", "Test Value", "Runtime Warning")
+DIAGNOSTIC_SCOPES = ("isolated", "remaining", "full-fallback")
+DIAGNOSTIC_EXPORT_SECONDS = 30
+DIAGNOSTIC_MAX_BYTES = 64 * 1024 * 1024
+DIAGNOSTIC_MAX_FILES = 256
 
 
 @dataclass(frozen=True)
@@ -322,6 +331,161 @@ def read_result(bundle, directory, scope, runner):
     return values
 
 
+def diagnostic_source(runner=subprocess.run):
+    """Only public Git object coordinates and a dirty Boolean, never environment or path dumps."""
+    try:
+        root = Path(__file__).resolve().parents[1]
+        result = runner(
+            ["git", "--no-replace-objects", "rev-parse", "HEAD", "HEAD^{tree}"],
+            cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=5)
+        head, tree = result.stdout.splitlines()
+        commit = runner(["git", "--no-replace-objects", "cat-file", "commit", head], cwd=root, check=True,
+                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=5)
+        headers = commit.stdout.split("\n\n", 1)[0].splitlines()
+        parents = [line.removeprefix("parent ") for line in headers if line.startswith("parent ")]
+        require(headers and headers[0] == "tree " + tree, "source-tree-mismatch")
+        require(all(re.fullmatch(r"[0-9a-f]{40}", value) for value in [head, tree, *parents]),
+                "invalid-source-coordinates")
+        status = runner(["git", "--no-replace-objects", "status", "--porcelain", "--untracked-files=normal"],
+                        cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=5)
+        return {"status": "available", "head": head, "tree": tree,
+                "parents": parents, "dirty": bool(status.stdout)}
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        return {"status": "unavailable", "reason": type(error).__name__}
+
+
+@contextmanager
+def diagnostic_directory(root, descriptor=None):
+    if descriptor is None:
+        require(root.is_dir() and not root.is_symlink(), "missing-or-linked-directory")
+        descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    else:
+        descriptor = os.dup(descriptor)
+    try:
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+def diagnostic_open(root_descriptor, relative, flags):
+    """Resolve every component beneath the pinned export root without following links."""
+    require(not relative.is_absolute() and ".." not in relative.parts, "invalid-diagnostic-relative-path")
+    parent = os.dup(root_descriptor)
+    try:
+        for component in relative.parts[:-1]:
+            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        if not relative.parts:
+            return os.dup(parent)
+        return os.open(relative.name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    finally:
+        os.close(parent)
+
+
+def diagnostic_identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def diagnostic_files(root, maximum_bytes, maximum_entries, *, root_descriptor=None):
+    """Reject links/special files and oversized trees before exporting or publishing."""
+    files = []
+    total = entries = 0
+    with diagnostic_directory(root, root_descriptor) as root_descriptor:
+        pending = [(Path(), os.fstat(root_descriptor))]
+        while pending:
+            relative, expected = pending.pop()
+            descriptor = diagnostic_open(root_descriptor, relative, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                actual = os.fstat(descriptor)
+                require((actual.st_dev, actual.st_ino) == (expected.st_dev, expected.st_ino),
+                        "diagnostic-directory-changed")
+                with os.scandir(descriptor) as children:
+                    for child in children:
+                        entries += 1
+                        require(entries <= maximum_entries, "entry-limit-exceeded")
+                        info = child.stat(follow_symlinks=False)
+                        path = relative / child.name
+                        if stat.S_ISDIR(info.st_mode):
+                            pending.append((path, info))
+                        else:
+                            require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1, "linked-or-special-file")
+                            total += info.st_size
+                            require(total <= maximum_bytes, "byte-limit-exceeded")
+                            files.append((root / path, info))
+            finally:
+                os.close(descriptor)
+    require(files, "empty-diagnostic-data")
+    return sorted(files)
+
+
+def capture_failure_diagnostics(directory, scope, source, runner=subprocess.run):
+    """One bounded export from an exact runner-created result; failure remains failure."""
+    receipt = {"scope": scope, "invocation": directory.name, "source": source, "status": "unavailable",
+               "limits": {"exportSeconds": DIAGNOSTIC_EXPORT_SECONDS,
+                          "uncompressedBytes": DIAGNOSTIC_MAX_BYTES, "entries": DIAGNOSTIC_MAX_FILES}}
+    try:
+        require(scope in DIAGNOSTIC_SCOPES, "invalid-scope")
+        require(not directory.is_symlink() and directory.resolve() == directory, "invalid-invocation-path")
+        require(source.get("status") == "available" and source.get("dirty") is False,
+                "clean-source-provenance-unavailable")
+        require(diagnostic_source() == source, "source-provenance-changed")
+        bundle = directory / (scope + ".xcresult")
+        receipt["resultBundle"] = bundle.name
+        # Raw bundles may include large attachments; only bounded diagnostics are published.
+        diagnostic_files(bundle, 1024 * 1024 * 1024, 20_000)
+        with tempfile.TemporaryDirectory(prefix="cmux-integrated-diagnostics-") as temporary:
+            scratch = Path(temporary)
+            exported = scratch / "exported"
+            result = runner(
+                ["xcrun", "xcresulttool", "export", "diagnostics", "--path", str(bundle),
+                 "--output-path", str(exported)],
+                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=DIAGNOSTIC_EXPORT_SECONDS)
+            receipt["exportExitCode"] = result.returncode
+            require(result.returncode == 0, "diagnostic-export-failed")
+            inventory = []
+            archive = scratch / "diagnostics.zip"
+            with diagnostic_directory(exported) as root_descriptor:
+                files = diagnostic_files(exported, DIAGNOSTIC_MAX_BYTES, DIAGNOSTIC_MAX_FILES,
+                                         root_descriptor=root_descriptor)
+                with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+                    for path, expected in files:
+                        relative = path.relative_to(exported)
+                        with os.fdopen(diagnostic_open(root_descriptor, relative, os.O_RDONLY), "rb") as stream:
+                            require(diagnostic_identity(os.fstat(stream.fileno())) == diagnostic_identity(expected),
+                                    "diagnostic-file-changed")
+                            data = stream.read(expected.st_size + 1)
+                            require(diagnostic_identity(os.fstat(stream.fileno())) == diagnostic_identity(expected)
+                                    and len(data) == expected.st_size, "diagnostic-file-changed")
+                        name = relative.as_posix()
+                        output.writestr(name, data)
+                        inventory.append({"path": name, "bytes": expected.st_size,
+                                          "sha256": hashlib.sha256(data).hexdigest()})
+            require(archive.stat().st_size <= DIAGNOSTIC_MAX_BYTES + 1024 * 1024, "archive-limit-exceeded")
+            require(diagnostic_source() == source, "source-provenance-changed")
+            parent = directory / "failure-diagnostics"
+            require(not parent.is_symlink(), "linked-diagnostic-destination")
+            parent.mkdir(exist_ok=True)
+            destination = parent / scope
+            require(not destination.exists(), "diagnostic-destination-exists")
+            # Each scope owns a distinct subdirectory; no pre-existing archive can masquerade as this capture.
+            destination.mkdir()
+            target = destination / (scope + ".zip")
+            partial = destination / "archive.partial"
+            shutil.copyfile(archive, partial)
+            partial.replace(target)
+            receipt.update(status="captured", archive=target.relative_to(directory).as_posix(),
+                           archiveBytes=target.stat().st_size,
+                           archiveSHA256=hashlib.sha256(target.read_bytes()).hexdigest(), files=inventory)
+    except (ValueError, OSError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
+        receipt["status"] = "unavailable"
+        receipt["reason"] = str(error) if isinstance(error, ValueError) else type(error).__name__
+        print(f"Integrated {scope} diagnostics unavailable: {receipt['reason']}", file=sys.stderr)
+    return receipt
+
+
 def hosted_test_environment(inherited):
     environment = dict(inherited)
     for name in list(environment):
@@ -427,6 +591,7 @@ def run(command, directory, runner=subprocess.run):
                 "optionalBenchmark": {"identity": BENCHMARK_SELECTOR, "environmentVariable": BENCHMARK_FLAG,
                                       "environmentValue": benchmark_flag, "enabled": benchmark_enabled}}
     evidence_path = directory / "coverage.json"
+    source = diagnostic_source()
 
     def save():
         evidence_path.write_text(json.dumps(evidence, indent=2) + "\n")
@@ -488,6 +653,21 @@ def run(command, directory, runner=subprocess.run):
                and remaining_summary is not None and remaining_summary.get("result") == "Passed"
                and remaining_summary.get("failedTests") == 0)
     evidence["passed"] = success
+    evidence["failureDiagnostics"] = []
+    save()
+    for name, code, summary, validation_error in (
+        ("isolated", isolated.returncode, isolated_summary, "isolatedValidationError"),
+        (scope, remaining.returncode, remaining_summary, "remainingValidationError"),
+    ):
+        if code or validation_error in evidence or summary is None or summary.get("result") != "Passed":
+            evidence["failureDiagnostics"].append(
+                {"scope": name, "status": "capture-incomplete", "testExitCode": code,
+                 "invocation": directory.name, "source": source})
+            save()
+            receipt = capture_failure_diagnostics(directory, name, source, runner)
+            receipt["testExitCode"] = code
+            evidence["failureDiagnostics"][-1] = receipt
+            save()
     if evidence["selectorVerifiedByHostedResult"] and "remainingCounts" in evidence:
         evidence["combinedExecutedTestCount"] = (
             evidence["isolatedCounts"]["executionCounts"]["totalTestCount"]

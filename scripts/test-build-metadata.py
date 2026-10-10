@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ import sys
 import unittest
 from unittest.mock import patch
 import uuid
+import zipfile
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
@@ -179,6 +181,35 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertTrue(evidence["selectorVerifiedByHostedResult"])
         self.assertEqual(evidence["remainingCounts"]["passedTests"], 1)
         self.assertFalse(evidence["passed"])
+
+    def test_failed_scope_has_explicit_diagnostic_retention_receipt(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                        self.report([("OtherSuite/crashed()", "Failed")]), remaining_exit=65)
+        self.assertEqual(result, 1)
+        retained = evidence.get("failureDiagnostics", [])
+        self.assertEqual([item["scope"] for item in retained], ["remaining"])
+        self.assertIn(retained[0]["status"], ["captured", "unavailable"])
+        self.assertFalse(evidence["passed"], "Diagnostic capture cannot upgrade the original test failure.")
+
+    def test_diagnostics_select_only_failed_executed_scopes(self):
+        scenarios = [
+            (self.report([(scopes.TEST, "Passed")]), self.report([("Other/test()", "Passed")]), 0, []),
+            (self.report([(scopes.TEST, "Passed")]), self.report([("Other/test()", "Failed")]), 0, ["remaining"]),
+            (self.report([(scopes.TEST, "Passed")]), self.report([("Other/test()", "Passed")]), 65, ["isolated"]),
+            (self.report([("Wrong/test()", "Failed")]),
+             self.report([(scopes.TEST, "Failed"), ("Other/test()", "Passed")]), 65, ["isolated", "full-fallback"]),
+        ]
+        for isolated, remaining, isolated_exit, expected in scenarios:
+            with self.subTest(expected=expected), patch.object(
+                    scopes, "capture_failure_diagnostics",
+                    side_effect=lambda directory, scope, source, runner: {"scope": scope, "status": "captured"}) as capture:
+                result, evidence = self.execute(isolated, remaining, isolated_exit=isolated_exit)
+                self.assertEqual([call.args[1] for call in capture.call_args_list], expected)
+                self.assertEqual(result, int(bool(expected)))
+                self.assertEqual([item["scope"] for item in evidence["failureDiagnostics"]], expected)
+                self.assertEqual(sum("test-without-building" in command for command in self.commands), 2)
+            shutil.rmtree(self.directory / "results")
+            self.commands.clear()
 
     def test_zero_or_wrong_selection_never_excludes_or_counts_as_success(self):
         for entries in ([], [("OtherSuite/notTheRegression()", "Passed")]):
@@ -529,6 +560,278 @@ class IntegratedTestScopeTests(unittest.TestCase):
                     scopes.validate_remaining(summary, tree, benchmark_enabled=False)
 
 
+class DiagnosticRetentionTests(unittest.TestCase):
+    SOURCE = {"status": "available", "head": "a" * 40, "tree": "b" * 40,
+              "parents": ["c" * 40, "d" * 40], "dirty": False}
+
+    def setUp(self):
+        self.directory = (ROOT / ".build/metadata-tests" / ("scopes-" + str(uuid.uuid4()))).resolve()
+        self.directory.mkdir(parents=True)
+        for scope in scopes.DIAGNOSTIC_SCOPES:
+            bundle = self.directory / (scope + ".xcresult")
+            bundle.mkdir()
+            (bundle / "Data").write_bytes(b"synthetic result")
+        self.commands = []
+
+    def tearDown(self):
+        shutil.rmtree(self.directory)
+
+    def capture(self, scope="remaining", *, payloads=None, exit_code=0, error=None, mutate=None, sources=None):
+        def runner(command, **kwargs):
+            self.commands.append((command, kwargs))
+            if error:
+                raise error
+            exported = Path(command[command.index("--output-path") + 1])
+            self.assertFalse(exported.is_relative_to(self.directory.parent),
+                             "Partial raw exports must stay outside existing recursive upload globs.")
+            exported.mkdir()
+            for name, data in ({"runner.ips": b"synthetic faulting thread"} if payloads is None else payloads).items():
+                path = exported / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+            if mutate:
+                mutate(exported)
+            return subprocess.CompletedProcess(command, exit_code)
+        with patch.object(scopes, "diagnostic_source", side_effect=sources or [self.SOURCE, self.SOURCE]), \
+                patch("builtins.print"):
+            return scopes.capture_failure_diagnostics(self.directory, scope, self.SOURCE, runner)
+
+    def test_each_exact_scope_publishes_bounded_hashed_archive_and_provenance(self):
+        for scope in scopes.DIAGNOSTIC_SCOPES:
+            with self.subTest(scope=scope):
+                receipt = self.capture(scope)
+                self.assertEqual(receipt["status"], "captured")
+                self.assertEqual(receipt["source"], self.SOURCE)
+                self.assertEqual(receipt["invocation"], self.directory.name)
+                self.assertEqual(receipt["resultBundle"], scope + ".xcresult")
+                archive = self.directory / receipt["archive"]
+                self.assertEqual(receipt["archiveSHA256"], hashlib.sha256(archive.read_bytes()).hexdigest())
+                self.assertEqual(receipt["archiveBytes"], archive.stat().st_size)
+                with zipfile.ZipFile(archive) as result:
+                    self.assertEqual(result.namelist(), ["runner.ips"])
+                    self.assertEqual(result.read("runner.ips"), b"synthetic faulting thread")
+                self.assertEqual(receipt["files"], [{
+                    "path": "runner.ips", "bytes": 25,
+                    "sha256": hashlib.sha256(b"synthetic faulting thread").hexdigest()}])
+                command, options = self.commands[-1]
+                self.assertEqual(command[:6], ["xcrun", "xcresulttool", "export", "diagnostics", "--path",
+                                               str(self.directory / (scope + ".xcresult"))])
+                self.assertEqual(options["timeout"], 30)
+                self.assertEqual(options["stdout"], subprocess.DEVNULL)
+                self.assertEqual(options["stderr"], subprocess.DEVNULL)
+        self.assertEqual(len(self.commands), 3, "One export per exact failed scope; no retries.")
+
+    def test_missing_bundle_invalid_scope_and_dirty_or_changed_source_never_export(self):
+        (self.directory / "remaining.xcresult/Data").unlink()
+        (self.directory / "remaining.xcresult").rmdir()
+        for scope in ("remaining", "../guide-acceptance/probe"):
+            with self.subTest(scope=scope):
+                self.assertEqual(self.capture(scope)["status"], "unavailable")
+        for source in ({**self.SOURCE, "dirty": True}, {"status": "unavailable"},
+                       {**self.SOURCE, "head": "e" * 40}):
+            with self.subTest(source=source):
+                self.assertEqual(self.capture("isolated", sources=[source])["reason"], "source-provenance-changed")
+        with patch("builtins.print"):
+            receipt = scopes.capture_failure_diagnostics(
+                self.directory, "isolated", {**self.SOURCE, "dirty": True},
+                lambda *args, **kwargs: self.fail("Dirty source must not export."))
+        self.assertEqual(receipt["reason"], "clean-source-provenance-unavailable")
+        self.assertEqual(self.commands, [])
+
+    def test_export_failures_are_explicit_and_never_publish_partial_data(self):
+        cases = [
+            ({"exit_code": 65}, "diagnostic-export-failed"),
+            ({"error": subprocess.TimeoutExpired("synthetic export", 30)}, "TimeoutExpired"),
+            ({"error": OSError("private path must not appear")}, "OSError"),
+            ({"payloads": {}}, "empty-diagnostic-data"),
+            ({"sources": [self.SOURCE, {**self.SOURCE, "tree": "e" * 40}]}, "source-provenance-changed"),
+        ]
+        for arguments, reason in cases:
+            with self.subTest(reason=reason):
+                receipt = self.capture(**arguments)
+                self.assertEqual(receipt["status"], "unavailable")
+                self.assertEqual(receipt["reason"], reason)
+                self.assertFalse(list(self.directory.glob("failure-diagnostics/*/*.zip")))
+
+    def test_exact_byte_and_entry_limits_and_link_rejection(self):
+        with patch.object(scopes, "DIAGNOSTIC_MAX_BYTES", 8), patch.object(scopes, "DIAGNOSTIC_MAX_FILES", 2):
+            for payloads, reason in (({"a": b"123456789"}, "byte-limit-exceeded"),
+                                     ({"a": b"", "b": b"", "c": b""}, "entry-limit-exceeded")):
+                with self.subTest(reason=reason):
+                    self.assertEqual(self.capture(payloads=payloads)["reason"], reason)
+            receipt = self.capture(payloads={"a": b"1234", "b": b"5678"})
+            self.assertEqual(receipt["status"], "captured")
+            self.assertEqual(sum(item["bytes"] for item in receipt["files"]), 8)
+        for mutate in (
+            lambda root: (root / "link").symlink_to(self.directory / "isolated.xcresult/Data"),
+            lambda root: (root / "link").symlink_to(self.directory, target_is_directory=True),
+            lambda root: os.link(root / "runner.ips", root / "hardlink"),
+            lambda root: os.mkfifo(root / "fifo"),
+        ):
+            with self.subTest(mutate=mutate):
+                self.assertEqual(self.capture("isolated", mutate=mutate)["reason"], "linked-or-special-file")
+
+    def test_real_publication_limits_accept_boundary_and_reject_one_over(self):
+        exported = self.directory / "boundary"
+        exported.mkdir()
+        for index in range(256):
+            (exported / str(index)).touch()
+        with (exported / "0").open("wb") as stream:
+            stream.truncate(64 * 1024 * 1024)
+        files = scopes.diagnostic_files(exported, scopes.DIAGNOSTIC_MAX_BYTES, scopes.DIAGNOSTIC_MAX_FILES)
+        self.assertEqual(len(files), 256)
+        self.assertEqual(sum(info.st_size for _, info in files), 64 * 1024 * 1024)
+        with (exported / "0").open("r+b") as stream:
+            stream.truncate(64 * 1024 * 1024 + 1)
+        with self.assertRaisesRegex(ValueError, "byte-limit-exceeded"):
+            scopes.diagnostic_files(exported, scopes.DIAGNOSTIC_MAX_BYTES, scopes.DIAGNOSTIC_MAX_FILES)
+        (exported / "0").write_bytes(b"")
+        (exported / "256").touch()
+        with self.assertRaisesRegex(ValueError, "entry-limit-exceeded"):
+            scopes.diagnostic_files(exported, scopes.DIAGNOSTIC_MAX_BYTES, scopes.DIAGNOSTIC_MAX_FILES)
+
+    def test_linked_input_bundle_and_existing_destination_refuse(self):
+        bundle = self.directory / "remaining.xcresult"
+        shutil.rmtree(bundle)
+        bundle.symlink_to(self.directory / "isolated.xcresult", target_is_directory=True)
+        self.assertEqual(self.capture()["reason"], "missing-or-linked-directory")
+        self.assertEqual(self.commands, [])
+        destination = self.directory / "failure-diagnostics/isolated"
+        destination.mkdir(parents=True)
+        self.assertEqual(self.capture("isolated")["reason"], "diagnostic-destination-exists")
+        self.assertFalse(list(destination.iterdir()))
+
+    def test_archive_copy_failure_does_not_publish_zip(self):
+        def fail_copy(source, target):
+            target.write_bytes(b"partial")
+            raise OSError("synthetic disk error")
+        with patch.object(scopes.shutil, "copyfile", side_effect=fail_copy):
+            self.assertEqual(self.capture()["reason"], "OSError")
+        self.assertFalse(list(self.directory.glob("failure-diagnostics/*/*.zip")))
+
+    def test_source_reads_raw_merge_parents_and_never_records_commit_message_or_dirty_paths(self):
+        commands = []
+        def runner(command, **kwargs):
+            commands.append(command)
+            output = (self.SOURCE["head"] + "\n" + self.SOURCE["tree"] + "\n" if "rev-parse" in command else
+                      "tree " + self.SOURCE["tree"] + "\nparent " + "c" * 40 + "\nparent " + "d" * 40
+                      + "\nauthor Synthetic\n\nprivate message\n" if "cat-file" in command else " M private-path\n")
+            self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
+            self.assertEqual(kwargs["timeout"], 5)
+            return subprocess.CompletedProcess(command, 0, stdout=output)
+        source = scopes.diagnostic_source(runner)
+        self.assertEqual(source, {**self.SOURCE, "dirty": True})
+        self.assertNotIn("private", json.dumps(source))
+        self.assertEqual(commands[1], ["git", "--no-replace-objects", "cat-file", "commit", self.SOURCE["head"]])
+
+    def test_unavailable_source_is_not_a_success_shaped_coordinate(self):
+        for error in (OSError("private"), subprocess.TimeoutExpired("private", 5)):
+            with self.subTest(error=error):
+                def runner(*args, **kwargs):
+                    raise error
+                self.assertEqual(scopes.diagnostic_source(runner),
+                                 {"status": "unavailable", "reason": type(error).__name__})
+        malformed = lambda command, **kwargs: subprocess.CompletedProcess(command, 0, stdout="invalid")
+        self.assertEqual(scopes.diagnostic_source(malformed)["status"], "unavailable")
+
+    def test_replacement_ref_cannot_hide_dirty_raw_source(self):
+        root = self.directory / "synthetic-git"
+        root.mkdir()
+        def git(*arguments):
+            return subprocess.run(
+                ["git", "-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid",
+                 "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", *arguments],
+                cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+        git("init", "--quiet")
+        (root / "source").write_text("original\n")
+        git("add", "source")
+        git("commit", "--quiet", "-m", "original")
+        head, tree = git("rev-parse", "HEAD", "HEAD^{tree}").splitlines()
+        (root / "source").write_text("different\n")
+        git("add", "source")
+        git("commit", "--quiet", "-m", "different")
+        replacement = git("rev-parse", "HEAD")
+        git("update-ref", "HEAD", head)
+        git("replace", head, replacement)
+        def runner(command, **kwargs):
+            return subprocess.run(command, **{**kwargs, "cwd": root})
+        source = scopes.diagnostic_source(runner)
+        self.assertEqual((source["head"], source["tree"]), (head, tree))
+        self.assertEqual(git("--no-replace-objects", "status", "--porcelain"), "M  source")
+        self.assertTrue(source["dirty"], "Raw coordinates must use raw dirty-state interpretation.")
+        with patch("builtins.print"):
+            receipt = scopes.capture_failure_diagnostics(
+                self.directory, "remaining", source,
+                lambda *args, **kwargs: self.fail("Raw dirty source must never export."))
+        self.assertEqual(receipt["reason"], "clean-source-provenance-unavailable")
+
+    def test_ancestor_swap_after_inventory_cannot_read_outside_export(self):
+        outside = self.directory / "outside-export"
+        outside.mkdir()
+        (outside / "runner.ips").write_bytes(b"outside")
+        original_inventory = scopes.diagnostic_files
+        def swapped_inventory(root, *args, **kwargs):
+            files = original_inventory(root, *args, **kwargs)
+            if root.name == "exported":
+                (root / "nested").rename(root / "original-nested")
+                (root / "nested").symlink_to(outside, target_is_directory=True)
+            return files
+        with patch.object(scopes, "diagnostic_files", side_effect=swapped_inventory):
+            receipt = self.capture(payloads={"nested/runner.ips": b"allowed"})
+        self.assertEqual(receipt["status"], "unavailable")
+        self.assertFalse(list(self.directory.glob("failure-diagnostics/*/*.zip")))
+
+    def test_same_size_file_replacement_after_inventory_is_rejected(self):
+        original_inventory = scopes.diagnostic_files
+        def swapped_inventory(root, *args, **kwargs):
+            files = original_inventory(root, *args, **kwargs)
+            if root.name == "exported":
+                (root / "replacement").write_bytes(b"changed")
+                (root / "replacement").replace(root / "runner.ips")
+            return files
+        with patch.object(scopes, "diagnostic_files", side_effect=swapped_inventory):
+            receipt = self.capture(payloads={"runner.ips": b"allowed"})
+        self.assertEqual(receipt["status"], "unavailable")
+        self.assertFalse(list(self.directory.glob("failure-diagnostics/*/*.zip")))
+
+    def test_queued_directory_swap_cannot_redirect_scanner(self):
+        root = self.directory / "scan-root"
+        (root / "nested").mkdir(parents=True)
+        (root / "nested/runner.ips").write_bytes(b"allowed")
+        outside = self.directory / "outside-scan"
+        outside.mkdir()
+        (outside / "runner.ips").write_bytes(b"outside")
+        original_scan = os.scandir
+        root_inode = root.stat().st_ino
+        @contextmanager
+        def swapped_scan(descriptor):
+            with original_scan(descriptor) as children:
+                yield children
+            if os.fstat(descriptor).st_ino == root_inode:
+                (root / "nested").rename(root / "original-nested")
+                (root / "nested").symlink_to(outside, target_is_directory=True)
+        with patch.object(scopes.os, "scandir", side_effect=swapped_scan):
+            with self.assertRaises(OSError):
+                scopes.diagnostic_files(root, 64, 10)
+
+    def test_pinned_export_root_does_not_follow_replacement_root_path(self):
+        outside = self.directory / "outside-root"
+        outside.mkdir()
+        (outside / "runner.ips").write_bytes(b"outside")
+        original_inventory = scopes.diagnostic_files
+        def swapped_inventory(root, *args, **kwargs):
+            files = original_inventory(root, *args, **kwargs)
+            if root.name == "exported":
+                root.rename(root.with_name("original-exported"))
+                root.symlink_to(outside, target_is_directory=True)
+            return files
+        with patch.object(scopes, "diagnostic_files", side_effect=swapped_inventory):
+            receipt = self.capture(payloads={"runner.ips": b"allowed"})
+        self.assertEqual(receipt["status"], "captured")
+        with zipfile.ZipFile(self.directory / receipt["archive"]) as archive:
+            self.assertEqual(archive.read("runner.ips"), b"allowed")
+
+
 class BuildMetadataTests(unittest.TestCase):
     def test_generated_guide_reference_is_exact_digest_only_and_fails_on_drift(self):
         self.fixture("tests")
@@ -611,6 +914,7 @@ class BuildMetadataTests(unittest.TestCase):
              "            .build/tests/scoped-results/**/guide-acceptance/*.log\n"
              "            .build/tests/scoped-results/**/guide-acceptance/probe.xcresult\n"
              "            .build/tests/scoped-results/**/guide-acceptance/images/*.png\n"
+             "            .build/tests/scoped-results/**/failure-diagnostics/*/*.zip\n"
              "            .build/setup-tests/metadata-watchdog/"),
             ("Upload synthetic sidebar layout renders", "sidebar-layout-offscreen",
              ".build/layout-validation/offscreen/*.png"),

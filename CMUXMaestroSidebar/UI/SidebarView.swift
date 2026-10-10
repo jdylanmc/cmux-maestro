@@ -1400,20 +1400,45 @@ struct GitChangeBadge: View {
     let changes: SidebarGitChanges
 
     var body: some View {
-        HStack(spacing: 4) {
-            Text(SidebarPresentation.assignedGitTitle).foregroundStyle(.secondary)
-            Text("\(changes.files) \(changes.files == 1 ? "file" : "files")")
-                .foregroundStyle(.secondary)
-            Text("+\(changes.insertions)").foregroundStyle(SidebarTone.attention.color)
-            Text("−\(changes.deletions)").foregroundStyle(.red)
-        }
+        Text("\(SidebarPresentation.assignedGitTitle): \(fileCount) · \(additions) / \(deletions) \(basisAndExclusions)")
         .sidebarFont(.caption2)
+        .foregroundStyle(.secondary)
         .monospacedDigit()
-        .fixedSize()
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(SidebarPresentation.assignedGitChangesDescription(changes))
         .accessibilityHint(SidebarPresentation.assignedGitHelp)
         .help(SidebarPresentation.assignedGitChangesDescription(changes) + ". " + SidebarPresentation.assignedGitHelp)
+    }
+
+    private var fileCount: String {
+        changes.files == 1
+            ? String(localized: "sidebar.git.changedFile", defaultValue: "1 changed file")
+            : String(localized: "sidebar.git.changedFiles", defaultValue: "\(changes.files) changed files")
+    }
+
+    private var additions: Text {
+        Text("+\(changes.insertions)").foregroundColor(SidebarTone.attention.color)
+    }
+
+    private var deletions: Text {
+        Text("−\(changes.deletions)").foregroundColor(Color(nsColor: Self.deletionColor))
+    }
+
+    private var basisAndExclusions: String {
+        String(
+            localized: "sidebar.git.basisAndExclusions",
+            defaultValue: "lines vs HEAD. Includes \(changes.untrackedFiles) untracked and \(changes.binaryFiles) binary files; their lines and submodule contents are excluded."
+        )
+    }
+
+    // System red is too light for caption-sized text on the light sidebar background.
+    static let deletionColor = NSColor(name: nil) { appearance in
+        if appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua {
+            return NSColor(srgbRed: 0.98, green: 0.43, blue: 0.39, alpha: 1)
+        }
+        return NSColor(srgbRed: 0.70, green: 0.12, blue: 0.10, alpha: 1)
     }
 }
 
@@ -2827,7 +2852,8 @@ struct SidebarPinnedFooter: View {
             }) { line in
                 Text("\(line.title): \(line.value)")
                     .sidebarFont(.caption2).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle)
+                    .lineLimit(line.title == "Git changes" ? nil : 1).truncationMode(.middle)
+                    .fixedSize(horizontal: false, vertical: true)
                     .help("\(line.title): \(line.value)" + (line.help.map { ". \($0)" } ?? ""))
                     .accessibilityLabel("\(line.title): \(line.value)")
                     .accessibilityHint(line.help ?? "")

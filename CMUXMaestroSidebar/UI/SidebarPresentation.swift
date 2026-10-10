@@ -27,7 +27,7 @@ struct SidebarDetailContent: Equatable {
     var lines: [SidebarDetailLine] = []
     var notice: String? = nil
     var isAgent = false
-    var gitChanges: SidebarGitChanges? = nil
+    var gitChanges: SidebarGitChanges? { lines.compactMap(\.gitChanges).first }
     var inspection: SidebarInspection? = nil
     var otherActivity: [SidebarCopilotNode] = []
 }
@@ -38,7 +38,13 @@ struct SidebarDetailLine: Equatable, Identifiable {
     var copyableSessionID: UUID? = nil
     var copyableValue: String? = nil
     var help: String? = nil
+    var gitChanges: SidebarGitChanges? = nil
     var id: String { title }
+
+    static func assignedGitChanges(_ changes: SidebarGitChanges?) -> Self {
+        .init(title: "Git changes", value: SidebarPresentation.assignedGitChangesDescription(changes),
+              help: SidebarPresentation.assignedGitHelp, gitChanges: changes)
+    }
 
     static func sessionID(_ id: UUID, isParent: Bool = false, canCopy: Bool = true) -> Self {
         .init(title: isParent ? "Parent session ID" : "Session ID", value: id.uuidString,
@@ -539,7 +545,6 @@ enum SidebarPresentation {
             ])
             result.lines = managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { fields.contains($0.title) }
-            result.gitChanges = node.currentGitChanges(at: now)
             if !result.lines.contains(where: { $0.title == "Session ID" }) {
                 result.lines.append(.sessionID(session.id))
             }
@@ -1118,10 +1123,7 @@ enum SidebarPresentation {
         result = result.map {
             .init(title: $0.title, value: assignedGitValue($0.value), help: assignedGitHelp)
         }
-        result.append(.init(
-            title: "Git changes", value: assignedGitChangesDescription(node.currentGitChanges(at: now)),
-            help: assignedGitHelp
-        ))
+        result.append(.assignedGitChanges(node.currentGitChanges(at: now)))
         return result
     }
 
