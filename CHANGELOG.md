@@ -6,6 +6,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Configure an explicit backlog URL for each exact workspace and open it from
+  the adjacent arrow or keyboard menu in a new CMUX browser split. Preserve
+  unrelated tabs and report missing configuration, denied permissions and stale
+  targets; replacement workspace identities start unconfigured (#45).
+
 - Report the exact owned target, operation, installer stage and expected/observed
   presence when LaunchServices verification fails; distinguish unknown query
   state without exposing other registered paths or adding retries. Diagnostic

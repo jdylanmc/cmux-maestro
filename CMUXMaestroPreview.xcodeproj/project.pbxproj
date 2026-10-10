@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B04500000000000000000101 = {isa = PBXBuildFile; fileRef = B04500000000000000000201; };
+		B04500000000000000000102 = {isa = PBXBuildFile; fileRef = B04500000000000000000202; };
+		B04500000000000000000103 = {isa = PBXBuildFile; fileRef = B04500000000000000000203; };
+		B04500000000000000000104 = {isa = PBXBuildFile; fileRef = B04500000000000000000204; };
 		D14400000000000000000101 = {isa = PBXBuildFile; fileRef = D14400000000000000000201; };
 		D14400000000000000000102 = {isa = PBXBuildFile; fileRef = D14400000000000000000202; };
 		D14400000000000000000103 = {isa = PBXBuildFile; fileRef = D14400000000000000000203; };
@@ -140,6 +144,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B04500000000000000000201 /* SidebarBacklogSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarBacklogSettings.swift; sourceTree = SOURCE_ROOT; };
+		B04500000000000000000202 /* SidebarBacklog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Navigation/SidebarBacklog.swift; sourceTree = SOURCE_ROOT; };
+		B04500000000000000000203 /* SidebarWorkspaceBacklog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarWorkspaceBacklog.swift; sourceTree = SOURCE_ROOT; };
+		B04500000000000000000204 /* SidebarBacklogEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarBacklogEditor.swift; sourceTree = SOURCE_ROOT; };
 		D14400000000000000000201 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroGuideUIHost/GuideAcceptanceFixture.swift; sourceTree = SOURCE_ROOT; };
 		D14400000000000000000202 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroGuideUITests/GuideAcceptanceTests.swift; sourceTree = SOURCE_ROOT; };
 		D14400000000000000000203 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreviewTests/GuideAcceptanceEvidence.swift; sourceTree = SOURCE_ROOT; };
@@ -303,6 +311,10 @@
 		A3685BE02FCA3AEE00009F1B = {
 			isa = PBXGroup;
 			children = (
+				B04500000000000000000201 /* SidebarBacklogSettings.swift */,
+				B04500000000000000000202 /* SidebarBacklog.swift */,
+				B04500000000000000000203 /* SidebarWorkspaceBacklog.swift */,
+				B04500000000000000000204 /* SidebarBacklogEditor.swift */,
 				D15500000000000000000005 /* Guide UI validation */,
 				C05400000000000000000004 /* adapter.mjs */,
 				C05400000000000000000005 /* extension.mjs */,
@@ -627,6 +639,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B04500000000000000000101 /* SidebarBacklogSettings.swift in Test Sources */,
+				B04500000000000000000102 /* SidebarBacklog.swift in Test Sources */,
+				B04500000000000000000103 /* SidebarWorkspaceBacklog.swift in Test Sources */,
+				B04500000000000000000104 /* SidebarBacklogEditor.swift in Test Sources */,
 				C01000000000000000000002 /* AgentSessionSnapshot.swift in Test Sources */,
 				C01000000000000000000004 /* CopilotSnapshotAdapter.swift in Test Sources */,
 				C09100000000000000000005 /* SidebarView.swift in Test Sources */,

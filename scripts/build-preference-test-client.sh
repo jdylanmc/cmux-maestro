@@ -20,6 +20,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete \
     "$ROOT/CMUXMaestroSidebar/State/SidebarPreferenceStore.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarPreferences.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarIconPreferences.swift" \
+    "$ROOT/CMUXMaestroSidebar/State/SidebarBacklogSettings.swift" \
     "$ROOT/CMUXMaestroSidebar/UI/SidebarIconModels.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarLayout.swift" \
     "$ROOT/CMUXMaestroPreviewTests/PreferenceAttentionFixture.swift" \

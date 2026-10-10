@@ -606,6 +606,14 @@ struct SidebarView: View {
                 }
             }
 
+            if let message = preferences.backlogNotice ?? model.backlog.status?.message {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, preferences.layout.density.spacing(5))
+                    .accessibilityIdentifier("sidebar-backlog-status")
+            }
             if let message = model.navigation.status.message, model.navigation.status != .selected {
                 Text(message)
                     .font(.caption)
@@ -627,6 +635,7 @@ struct SidebarView: View {
         .padding(.vertical, preferences.layout.density.spacing(10))
         .padding(.bottom, Self.hostFooterClearance)
         .environment(preferences)
+        .environment(model.backlog)
         .environment(\.sidebarHoverGroup, hoverGroup)
         .environment(\.sidebarAgentHoverProvider, { target in
             let connected: Bool
@@ -653,6 +662,7 @@ struct SidebarView: View {
         .onAppear {
             preferences.refreshLayout()
             preferences.refreshIcons()
+            preferences.refreshBacklogs()
             model.copilot.updateHistory(preferences.history)
             model.copilot.updateAttention(preferences.attention)
             model.copilot.updateIdleTasks(preferences.layout.revealingIdleTasksIn)
@@ -660,6 +670,12 @@ struct SidebarView: View {
             model.setVisible(true)
         }
         .onChange(of: preferences.history) { _, history in model.copilot.updateHistory(history) }
+        .onChange(of: preferences.backlog, initial: true) { _, settings in
+            model.backlog.configurationDidChange(settings: settings, notice: preferences.backlogNotice)
+        }
+        .onChange(of: preferences.backlogNotice) { _, notice in
+            model.backlog.configurationDidChange(settings: preferences.backlog, notice: notice)
+        }
         .onChange(of: preferences.attention) { _, attention in model.copilot.updateAttention(attention) }
         .onChange(of: preferences.layout.revealingIdleTasksIn) { _, workspaces in
             model.copilot.updateIdleTasks(workspaces)
@@ -704,6 +720,7 @@ struct SidebarView: View {
             if phase == .active {
                 preferences.refreshLayout()
                 preferences.refreshIcons()
+                preferences.refreshBacklogs()
             }
         }
         .onDisappear { model.setVisible(false) }
@@ -1442,10 +1459,9 @@ private struct WorkspaceOutlineHeader: View {
                     }
                     SidebarWorkspaceTaskEye(workspaceID: workspace.id)
                 }
-                .sidebarRowActions(title: "workspace \(title)", groups: [
+                .sidebarWorkspaceBacklog(workspaceID: workspace.id, windowID: hierarchy.windowID, title: title, groups: [
                     .init(title: "Navigation", actions: [
-                        .focus(.workspace(workspace.id), navigation: navigation, prepareSeen: prepareSeen),
-                        .unavailable("Open backlog…", "Workspace backlog is not available.")
+                        .focus(.workspace(workspace.id), navigation: navigation, prepareSeen: prepareSeen)
                     ]), .placement, .lifecycle()
                 ])
                 .padding(.vertical, 5)
@@ -1591,8 +1607,7 @@ private struct WorkspaceRow: View {
                 .focus(.workspace(workspace.id), navigation: navigation, prepareSeen: prepareSeen),
                 .init(title: expanded ? "Collapse workspace" : "Expand workspace",
                       perform: { setExpanded(.workspace(workspace.id), !expanded) }),
-                .init(title: "Workspace details", perform: { selection = .workspace(workspace.id) }),
-                .unavailable("Open backlog…", "Workspace backlog is not available.")
+                .init(title: "Workspace details", perform: { selection = .workspace(workspace.id) })
             ]),
             .placement, .lifecycle()
         ]
@@ -1640,7 +1655,7 @@ private struct WorkspaceRow: View {
                 }
                 SidebarWorkspaceTaskEye(workspaceID: workspace.id)
             }
-            .sidebarRowActions(title: "workspace \(title)", groups: actions)
+            .sidebarWorkspaceBacklog(workspaceID: workspace.id, windowID: hierarchy.windowID, title: title, groups: actions)
             .padding(.vertical, 5)
             .overlay(alignment: .bottom) { Divider() }
             .padding(.bottom, 5)

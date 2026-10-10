@@ -37,6 +37,37 @@ runtime-directory collection.
 
 ## One-time setup
 
+### Workspace backlog shortcut
+
+Use the arrow beside a workspace's eye, or **Shift-F10** on its title followed by
+**Backlog > Configure backlog URL...**, to set an explicit HTTP(S) URL.
+**Save** only saves; **Open backlog** requests a new right-hand CMUX browser split
+for that exact workspace. Existing tabs are not navigated and there is no system
+browser fallback. The stock split selects the workspace and anchor and clears
+split zoom. Nothing opens on hover or when settings change.
+
+URLs are stored in the sidebar extension's Application Support
+`CMUXMaestroPreview/sidebar-backlog.json`, using the existing coordinated
+preferences store. Bindings use workspace UUIDs, never names, directories or
+branches. Two identically named workspaces can have different URLs. A replacement
+UUID starts unconfigured; the same UUID recovers its saved value. CMUX's identity
+continuity across recreation or restoration is not assumed. **Remove URL**
+removes only that binding; unreadable settings are preserved until the explicit
+**Reset all backlog settings** confirmation.
+
+Opening requires CMUX's **Split surfaces** (`splitSurface`) and **Open URLs**
+(`openURL`) grants. These are coarse host capabilities (split permission also
+covers terminal splits); the shortcut uses only the typed browser-split action.
+Maestro requests these scopes but never approves them. Missing/invalid URLs,
+denial, disconnection and unavailable targets appear visibly. The anchor is
+the workspace's unique focused surface, or its first unambiguous current
+surface if none is focused; a captured vanished target is not substituted.
+Acceptance confirms the host request, not page load or tracker authentication.
+Cancellation or a missing response does not prove rollback; check CMUX before
+manually opening again.
+
+### Installation
+
 1. Use the [alpha installer](#install-a-stable-local-preview). Normal install
    and update include Copilot automatically; a separate setup action is not
    required. The installer uses its configured `PATH`, or an explicit trusted

@@ -30,6 +30,22 @@ extension SidebarConnectionModel {
         let topology = SidebarTopology(hierarchy)
         copilot.update(topology: topology, connected: true)
         orchestration.update(topology: topology, connected: true)
+        backlog.update(
+            hierarchy: hierarchy, connected: true,
+            allowed: context.grantedActionScopes.isSuperset(of: [.splitSurface, .openURL]),
+            perform: { request in
+                do {
+                    try await context.host.splitBrowser(
+                        workspaceID: request.workspaceID, surfaceID: request.surfaceID,
+                        direction: .right, url: request.url
+                    )
+                } catch CmuxSidebarActionError.cancelled {
+                    throw SidebarBacklog.Failure.cancelled
+                } catch {
+                    throw SidebarBacklog.Failure.rejected
+                }
+            }
+        )
         navigation.update(
             topology: topology,
             connected: true,
