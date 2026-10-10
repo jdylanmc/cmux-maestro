@@ -2458,6 +2458,24 @@ or corrupt receipts are refused rather than guessed or deleted. Preserve the
 receipt, apps and original checkout/source while a transaction is pending.
 Do not manually shuffle slots or remove metadata to force an update.
 
+When exact LaunchServices verification fails, the error includes a single JSON
+diagnostic: the operation (`verify`, `register`, `unregister`, `ensure-existing`
+or `ensure-completed`), installer stage, transaction kind/phase, bundle ID, exact
+target, and expected/observed presence. A failed query reports `observed: unknown`
+and its exception class, never verified absence. The diagnostic uses the same
+query result as the guard; it does not requery, dump registry contents or list
+other application paths. Target strings are JSON-escaped. Direct adapter checks
+without installer context report null stage/transaction/phase.
+
+These diagnostics identify the failing check, not its cause or an installation
+repair (#185). They cover the LaunchServices check in `verify_registration`;
+earlier mutation/query failures and extension verification retain their existing
+errors. Automatic restoration preserves the original diagnostic; if restoration
+also fails, both failures remain in the error and the journal remains available.
+Preserve the complete failure output. Successful later `status` verification
+does not establish why the original installation failed. A new live installation
+or recovery still requires its own authorization; diagnostics add no retry.
+
 Only an existing, normal, non-root user's real home is used; `HOME` overrides
 are not install roots. Symlink components, foreign ownership, group/world
 writable paths, escaping bundle symlinks and hard-linked files are refused.
