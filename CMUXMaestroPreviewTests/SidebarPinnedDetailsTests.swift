@@ -828,7 +828,7 @@ struct SidebarPinnedDetailsTests {
         #expect(!source.contains("selectionDetails"))
         let footer = try #require(source.components(separatedBy: "struct SidebarPinnedFooter: View").last?
             .components(separatedBy: "private struct PathDetail").first)
-        #expect(footer.contains("if content.isAgent { SidebarPlaceholderPet() }"))
+        #expect(footer.contains("if content.isAgent { SidebarPetButton(content: content) }"))
         for forbidden in ["SidebarCloseButton", "prepareSeen(", "FocusButton", ".onHover", "RoundedRectangle"] {
             #expect(!footer.contains(forbidden))
         }

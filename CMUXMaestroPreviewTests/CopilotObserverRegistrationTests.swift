@@ -215,7 +215,7 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
                 installed = true
                 nativeEnabled = true
                 for name in ["plugin.json", "hooks.json", "skills/cmux-maestro-orchestrate/SKILL.md",
-                             "skills/maestro-icon/SKILL.md", "skills/maestro/SKILL.md"] {
+                             "skills/maestro-icon/SKILL.md", "skills/maestro-pet/SKILL.md", "skills/maestro/SKILL.md"] {
                     let source = fixture.source.appendingPathComponent(name)
                     let target = fixture.cache.appendingPathComponent(name)
                     if FileManager.default.fileExists(atPath: source.path) {
@@ -395,7 +395,7 @@ private actor CheckpointProcessProvider: CopilotSetupProcessRunner {
             } else {
                 guard arguments.last == root.appendingPathComponent("plugin").path else { return .exited(3) }
                 for name in ["plugin.json", "hooks.json", "skills/cmux-maestro-orchestrate/SKILL.md",
-                             "skills/maestro-icon/SKILL.md", "skills/maestro/SKILL.md"] {
+                             "skills/maestro-icon/SKILL.md", "skills/maestro-pet/SKILL.md", "skills/maestro/SKILL.md"] {
                     let source = root.appendingPathComponent("plugin/\(name)")
                     let target = cache.appendingPathComponent(name)
                     if FileManager.default.fileExists(atPath: source.path) {
@@ -544,6 +544,7 @@ final class InstallCheckpointFixture: @unchecked Sendable {
         try fixture.write(Data("#!/usr/bin/env python3\n".utf8), to: resources.appendingPathComponent("controller.py"))
         try fixture.write(Data("---\nname: cmux-maestro-orchestrate\n---\n".utf8), to: resources.appendingPathComponent("SKILL.md"))
         try fixture.write(Data("---\nname: maestro-icon\n---\n".utf8), to: resources.appendingPathComponent("maestro-icon/SKILL.md"))
+        try fixture.write(Data("---\nname: maestro-pet\n---\n".utf8), to: resources.appendingPathComponent("maestro-pet/SKILL.md"))
         for name in ["adapter.mjs", "extension.mjs"] {
             try FileManager.default.copyItem(at: repository.appendingPathComponent("scripts/delivery-proof/\(name)"),
                                              to: resources.appendingPathComponent(name))

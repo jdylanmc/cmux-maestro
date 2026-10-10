@@ -1010,6 +1010,7 @@ struct CopilotSetupTests {
         let sources = [
             ("cmux-maestro-orchestrate", ".agents/skills/cmux-maestro-orchestrate/SKILL.md"),
             ("maestro-icon", ".agents/skills/maestro-icon/SKILL.md"),
+            ("maestro-pet", ".agents/skills/maestro-pet/SKILL.md"),
         ]
         for (name, path) in sources {
             let text = try String(contentsOf: repository.appendingPathComponent(path), encoding: .utf8)
@@ -1049,6 +1050,10 @@ struct CopilotSetupTests {
         try FileManager.default.createDirectory(at: iconSkillDirectory, withIntermediateDirectories: true)
         let iconSkill = iconSkillDirectory.appendingPathComponent("SKILL.md")
         try Data("---\nname: maestro-icon\n---\n".utf8).write(to: iconSkill)
+        let petSkillDirectory = directory.appendingPathComponent("maestro-pet", isDirectory: true)
+        try FileManager.default.createDirectory(at: petSkillDirectory, withIntermediateDirectories: true)
+        let petSkill = petSkillDirectory.appendingPathComponent("SKILL.md")
+        try Data("---\nname: maestro-pet\n---\n".utf8).write(to: petSkill)
         for name in ["adapter.mjs", "extension.mjs"] {
             try FileManager.default.copyItem(
                 at: repository.appendingPathComponent("scripts/delivery-proof/\(name)"),
@@ -1078,6 +1083,8 @@ struct CopilotSetupTests {
             == Data(contentsOf: skill))
         #expect(try Data(contentsOf: plugin.appendingPathComponent("skills/maestro-icon/SKILL.md"))
             == Data(contentsOf: iconSkill))
+        #expect(try Data(contentsOf: plugin.appendingPathComponent("skills/maestro-pet/SKILL.md"))
+            == Data(contentsOf: petSkill))
         #expect(!FileManager.default.fileExists(atPath: plugin.appendingPathComponent("skills/maestro").path))
         let native = local.nativeExtensions.appendingPathComponent("maestro")
         #expect(try Data(contentsOf: native.appendingPathComponent("extension.mjs"))

@@ -14,7 +14,7 @@ root = home / "Library/Application Support/CMUXMaestroPreview/Copilot"
 cache = provider / "installed-plugins/_direct/plugin"
 installed = provider / ".fixture-provider-installed"
 names = ("plugin.json", "hooks.json", "skills/cmux-maestro-orchestrate/SKILL.md",
-         "skills/maestro-icon/SKILL.md", "skills/maestro/SKILL.md")
+         "skills/maestro-icon/SKILL.md", "skills/maestro-pet/SKILL.md", "skills/maestro/SKILL.md")
 
 
 def plugin():

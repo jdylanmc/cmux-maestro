@@ -640,7 +640,8 @@ struct SidebarMotionTests {
             .appendingPathComponent(".build/layout-validation/offscreen")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         for (name, reduceMotion, needsInput) in [
-            ("working", false, false), ("reduced-motion", true, false), ("needs-input", false, true)
+            ("working", false, false), ("reduced-motion", true, false), ("needs-input", false, true),
+            ("needs-input-reduced-motion", true, true)
         ] {
             let host = NSHostingView(rootView:
                 HStack {
@@ -670,8 +671,8 @@ struct SidebarMotionTests {
             let left = differences(first, second, columns: 0..<40)
             let rest = differences(first, second, columns: 40..<first.pixelsWide)
             #expect(rest == 0, "No row shimmer or text motion: \(name)")
-            if name == "working" {
-                #expect(left > 0, "The actual native working ring advances while hosted")
+            if name == "working" || name == "needs-input" {
+                #expect(left > 0, "The native status badge animates inside its lane while hosted: \(name)")
             } else {
                 #expect(left == 0, "Static negative control: \(name)")
             }

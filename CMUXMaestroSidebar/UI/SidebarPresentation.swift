@@ -27,6 +27,9 @@ struct SidebarDetailContent: Equatable {
     var lines: [SidebarDetailLine] = []
     var notice: String? = nil
     var isAgent = false
+    var needsInput = false
+    var petSessionID: UUID? = nil
+    var petChoice: String? = nil
     var gitChanges: SidebarGitChanges? { lines.compactMap(\.gitChanges).first }
     var inspection: SidebarInspection? = nil
     var otherActivity: [SidebarCopilotNode] = []
@@ -655,7 +658,10 @@ enum SidebarPresentation {
                 lines: managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now),
                 notice: retained ? "Work context. \(retainedFocusUnavailable)"
                     : current ? nil : "Managed observation is stale. Last-known metadata is not live state.",
-                isAgent: true
+                isAgent: true,
+                needsInput: managedNeedsInput(node, tree: tree, now: now),
+                petSessionID: managedSession(for: node, in: tree, now: now)?.id,
+                petChoice: managedSession(for: node, in: tree, now: now)?.petId
             )
         case .unmanaged(let selection):
             switch selection {
@@ -692,14 +698,17 @@ enum SidebarPresentation {
                     )
                     return .init(title: child.name, lines: nodeDetails(child, session: session) + [
                         .init(title: "Placement", value: "Observed child; native placement belongs to its parent session")
-                    ] + context, notice: notice, isAgent: child.kind == .subagent)
+                    ] + context, notice: notice, isAgent: child.kind == .subagent,
+                    needsInput: needsInput(child.attention))
                 }
                 let context = retained ? [] : paths(
                     hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     copyable: true
                 )
                 return .init(title: "Copilot · \(session.shortID)", lines: sessionDetails(session) + context,
-                             notice: notice, isAgent: true, otherActivity: session.secondaryActivity)
+                             notice: notice, isAgent: true, needsInput: needsInput(session.attention),
+                             petSessionID: session.id, petChoice: session.petId,
+                             otherActivity: session.secondaryActivity)
             }
         }
     }
@@ -819,6 +828,7 @@ enum SidebarPresentation {
 
     static func attention(_ signals: [AgentAttention], state: AgentWorkState, degraded: Bool) -> [String] {
         var result = AgentAttentionKind.allCases.compactMap { kind -> String? in
+            guard kind != .turnFinished, kind != .answer else { return nil }
             let count = signals.filter { $0.kind == kind }.count
             guard count > 0 else { return nil }
             return kind.title + (count > 1 ? " (\(count))" : "")
@@ -1003,7 +1013,11 @@ enum SidebarPresentation {
         }
         if session.state == .blocked { return state(.blocked) }
         switch session.liveness {
-        case .alive: return state(session.state)
+        case .alive:
+            if session.state == .idle, session.attention.contains(where: { $0.kind == .turnFinished }) {
+                return .init(title: "Idle · turn finished", symbol: "checkmark.circle", tone: .neutral)
+            }
+            return state(session.state)
         case .dead: return process(.dead)
         case .ambiguous: return .init(title: "Unconfirmed owner", symbol: "circle.dashed", tone: .neutral)
         case .unknown: return .init(title: "State unavailable", symbol: "circle.dashed", tone: .neutral)

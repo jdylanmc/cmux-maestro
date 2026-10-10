@@ -94,7 +94,7 @@ private extension View {
     }
 }
 
-private extension SidebarTone {
+extension SidebarTone {
     var color: Color {
         switch self {
         case .blue: .blue
@@ -163,10 +163,22 @@ struct SidebarTerminalIcon: View {
 
 struct SidebarActivityBackground: View {
     let visual: SidebarVisual
+    var needsInput = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
-            if visual.tone == .red {
+            if needsInput {
+                if reduceMotion {
+                    RoundedRectangle(cornerRadius: 4).fill(SidebarQuestionGlow.lightBlue.opacity(0.14))
+                } else {
+                    TimelineView(.animation(minimumInterval: 1.0 / 20)) { context in
+                        let pulse = 0.5 + 0.5 * sin(context.date.timeIntervalSinceReferenceDate * 1.5)
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(SidebarQuestionGlow.lightBlue.opacity(0.06 + 0.14 * pulse))
+                    }
+                }
+            } else if visual.tone == .red {
                 RoundedRectangle(cornerRadius: 4).fill(.red.opacity(0.065))
             } else {
                 Color.clear
@@ -210,7 +222,7 @@ struct SidebarStateBadge: View {
     var body: some View {
         Group {
             if needsInput {
-                Image(systemName: "exclamationmark").font(.system(size: 10, weight: .bold))
+                SidebarQuestionGlow(reduceMotion: reduceMotion)
             } else if visual.tone == .green {
                 if reduceMotion {
                     SidebarWorkingRing(rotation: 0)
@@ -223,11 +235,36 @@ struct SidebarStateBadge: View {
                 Image(systemName: visual.symbol).font(.system(size: 10, weight: .semibold))
             }
         }
-        .foregroundStyle(needsInput ? SidebarTone.red.color : visual.tone.color)
+        .foregroundStyle(needsInput ? SidebarQuestionGlow.lightBlue : visual.tone.color)
         .frame(width: 12, height: 14)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(detail ?? SidebarPresentation.statusDescription(visual, needsInput: needsInput))
         .help(detail ?? SidebarPresentation.statusDescription(visual, needsInput: needsInput))
+    }
+}
+
+struct SidebarQuestionGlow: View {
+    let reduceMotion: Bool
+    static let lightBlue = Color(red: 0.45, green: 0.75, blue: 1.0)
+
+    var body: some View {
+        if reduceMotion {
+            glyph(glow: 0.8)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 20)) { context in
+                glyph(glow: 0.55 + 0.45 * sin(context.date.timeIntervalSinceReferenceDate * 1.5))
+            }
+        }
+    }
+
+    private func glyph(glow: Double) -> some View {
+        Image(systemName: "questionmark")
+            .font(.system(size: 11, weight: .heavy))
+            .foregroundStyle(Self.lightBlue)
+            .shadow(color: Self.lightBlue.opacity(glow), radius: 2)
+            .shadow(color: Self.lightBlue.opacity(glow * 0.7), radius: 2.5)
+            .frame(width: 14, height: 16)
+            .clipped()
     }
 }
 
@@ -311,7 +348,7 @@ private struct WorkspaceAttentionLabel: View {
 }
 
 enum SidebarHeaderAction: String, CaseIterable, Identifiable {
-    case directory, beats, taskboard, history, settings, fermata
+    case directory, beats, taskboard, history, settings
     var id: Self { self }
     var title: String {
         switch self {
@@ -320,24 +357,21 @@ enum SidebarHeaderAction: String, CaseIterable, Identifiable {
         case .taskboard: "Taskboard"
         case .history: "History"
         case .settings: "Maestro settings"
-        case .fermata: "Fermata"
         }
     }
-    var symbol: String? {
+    var symbol: String {
         switch self {
         case .directory: "folder.badge.plus"
         case .beats: "music.note"
         case .taskboard: "rectangle.split.3x1"
         case .history: "clock.arrow.circlepath"
         case .settings: "gearshape"
-        case .fermata: nil
         }
     }
     var unavailable: String? {
         switch self {
-        case .directory: "Opening a directory as a new workspace is not available in this sidebar."
+        case .directory: "CMUX did not open the directory as a workspace. Grant Maestro the workspace-creation permission in CMUX and try again."
         case .beats: "Beats scheduling is not available. No schedule has been created."
-        case .fermata: "CMUX Keep Mac Awake access is not available. No power setting has changed."
         case .taskboard, .history, .settings: nil
         }
     }
@@ -376,14 +410,8 @@ struct SidebarHeader: View {
                     } else {
                         Button { activate(action) } label: {
                             VStack(spacing: 2) {
-                                Group {
-                                    if let symbol = action.symbol {
-                                        Image(systemName: symbol).font(.system(size: 14))
-                                    } else {
-                                        SidebarFermata().stroke(lineWidth: 1.5).frame(width: 16, height: 12)
-                                    }
-                                }
-                                .frame(height: 18)
+                                Image(systemName: action.symbol).font(.system(size: 14))
+                                    .frame(height: 18)
                                 Capsule().fill(Color.clear).frame(width: 12, height: 2)
                             }
                             .frame(width: 28, height: 28)
@@ -398,16 +426,6 @@ struct SidebarHeader: View {
             }
             .fixedSize()
         }
-    }
-}
-
-private struct SidebarFermata: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.addArc(center: CGPoint(x: rect.midX, y: rect.maxY - 2), radius: rect.width * 0.45,
-                    startAngle: .degrees(180), endAngle: .degrees(0), clockwise: false)
-        path.addEllipse(in: CGRect(x: rect.midX - 1, y: rect.maxY - 3, width: 2, height: 2))
-        return path
     }
 }
 
@@ -503,12 +521,30 @@ struct SidebarView: View {
         }, set: { if let selection = $0 { inspect(selection) } })
     }
 
+    private func openDirectoryAsWorkspace() {
+        guard let open = model.openWorkspaceAtPath else {
+            unavailableHeaderAction = .directory
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Open"
+        panel.message = "Choose a directory to open as a new workspace"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { @MainActor in
+            if await !open(url.path) { unavailableHeaderAction = .directory }
+        }
+    }
+
     private func content(pinnedHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: preferences.layout.density.spacing(6)) {
             SidebarHeader(taskboardActive: preferences.selectedMode == .taskboard,
                           availability: model.orchestration.availability) { action in
                 switch action {
-                case .directory, .beats, .fermata: unavailableHeaderAction = action
+                case .directory: openDirectoryAsWorkspace()
+                case .beats: unavailableHeaderAction = action
                 case .taskboard:
                     preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
                 case .history, .settings:
@@ -540,15 +576,6 @@ struct SidebarView: View {
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("managed-source-notice")
-            }
-            if attentionSummary.total > 0 {
-                HStack {
-                    Label(SidebarCountText.attention(attentionSummary.total), systemImage: "exclamationmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(SidebarTone.red.color)
-                        .help(attentionSummary.detail)
-                    Spacer(minLength: 0)
-                }
             }
             if let notice = preferences.historyNotice {
                 Text(notice)
@@ -1351,7 +1378,8 @@ private struct ManagedNodeRow: View {
         }
         .frame(minHeight: density.rowHeight)
         .sidebarRowActions(title: node.label, groups: actions)
-        .background { SidebarActivityBackground(visual: stateVisual) }
+        .background { SidebarActivityBackground(visual: stateVisual,
+                                                needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate)) }
         .modifier(SidebarFocusBorder(workspaceID: node.workspaceId, surfaceID: node.surfaceId, enabled: !isRetainedRecord))
         .padding(.leading, density.indentation(depth: depth, unresolved: false, width: contentWidth))
         .background {
@@ -1669,8 +1697,6 @@ private struct WorkspaceRow: View {
             .padding(.vertical, 5)
             .overlay(alignment: .bottom) { Divider() }
             .padding(.bottom, 5)
-            WorkspaceAttentionLabel(summary: attentionSummary)
-                .padding(.leading, SidebarPresentation.minimumControlSize + 5)
             if expanded {
                 managedContent(.primary)
                 switch workspace.surfaces {
@@ -1841,7 +1867,8 @@ private struct SurfaceRow: View {
             .sidebarRowActions(title: title, groups: actions)
             .background {
                 if let singleSession {
-                    SidebarActivityBackground(visual: SidebarPresentation.sessionState(singleSession))
+                    SidebarActivityBackground(visual: SidebarPresentation.sessionState(singleSession),
+                                              needsInput: SidebarPresentation.needsInput(singleSession.attention))
                 }
             }
             .modifier(SidebarFocusBorder(workspaceID: workspaceID, surfaceID: surface.id))
@@ -1966,7 +1993,8 @@ private struct CopilotSessionRow: View {
             }
             .frame(minHeight: density.rowHeight)
             .sidebarRowActions(title: "Copilot \(session.shortID)", groups: actions)
-            .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session)) }
+            .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session),
+                                                needsInput: SidebarPresentation.needsInput(session.attention)) }
             CopilotSessionContents(
                 session: session, expanded: expanded,
                 navigation: navigation, layout: layout, setExpanded: setExpanded,
@@ -2444,7 +2472,7 @@ private struct CopilotWorkRow: View {
         }
 
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background { SidebarActivityBackground(visual: stateVisual) }
+        .background { SidebarActivityBackground(visual: stateVisual, needsInput: SidebarPresentation.needsInput(node.attention)) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("\(taskboard ? "taskboard" : "copilot")-child-\(session.id)-\(node.id)")
     }
@@ -2675,7 +2703,8 @@ private struct TaskboardSessionRow: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("taskboard-session-attention-\(session.id)")
-        .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session)) }
+        .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session),
+                                                needsInput: SidebarPresentation.needsInput(session.attention)) }
         .modifier(SidebarFocusBorder(workspaceID: session.workspaceID, surfaceID: session.surfaceID, enabled: !retained))
     }
 }
@@ -2688,10 +2717,13 @@ private struct AttentionSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(SidebarPresentation.attention(attention, state: state, degraded: degraded), id: \.self) { text in
-                Label(text, systemImage: state == .blocked ? "pause.circle" : "exclamationmark.circle")
+                let asking = attention.contains(where: { $0.kind.isBlocking })
+                    && !attention.contains(where: { $0.kind == .error }) && state != .failed
+                Label(text, systemImage: asking ? "questionmark.circle" : state == .blocked ? "pause.circle" : "exclamationmark.circle")
                     .sidebarFont(.caption)
-                    .foregroundStyle(state == .blocked || state == .failed
-                                     || attention.contains(where: { $0.kind.isBlocking || $0.kind == .error })
+                    .foregroundStyle(asking ? SidebarTone.teal.color
+                                     : state == .blocked || state == .failed
+                                     || attention.contains(where: { $0.kind == .error })
                                      ? SidebarTone.red.color : SidebarTone.attention.color)
             }
         }
@@ -2823,7 +2855,7 @@ struct SidebarPinnedFooter: View {
     private var footerContents: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .top, spacing: 8) {
-                if content.isAgent { SidebarPlaceholderPet() }
+                if content.isAgent { SidebarPetButton(content: content) }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(content.title).sidebarFont(.caption, weight: .semibold).lineLimit(2)
                     if let visual = content.visual {
@@ -2860,36 +2892,6 @@ struct SidebarPinnedFooter: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct SidebarPlaceholderPet: View {
-    var body: some View {
-        Canvas { context, size in
-            // Original two-eared pebble silhouette; no provider asset or runtime pet.
-            var body = Path()
-            body.move(to: CGPoint(x: 5, y: 25))
-            body.addQuadCurve(to: CGPoint(x: 7, y: 12), control: CGPoint(x: 2, y: 17))
-            body.addLine(to: CGPoint(x: 6, y: 3))
-            body.addQuadCurve(to: CGPoint(x: 15, y: 9), control: CGPoint(x: 14, y: 3))
-            body.addQuadCurve(to: CGPoint(x: 23, y: 8), control: CGPoint(x: 19, y: 6))
-            body.addQuadCurve(to: CGPoint(x: 31, y: 2), control: CGPoint(x: 25, y: 2))
-            body.addLine(to: CGPoint(x: 30, y: 13))
-            body.addQuadCurve(to: CGPoint(x: 31, y: 27), control: CGPoint(x: 36, y: 22))
-            body.addQuadCurve(to: CGPoint(x: 27, y: 32), control: CGPoint(x: 31, y: 33))
-            body.addLine(to: CGPoint(x: 23, y: 29))
-            body.addQuadCurve(to: CGPoint(x: 14, y: 30), control: CGPoint(x: 18, y: 32))
-            body.addLine(to: CGPoint(x: 9, y: 33))
-            body.closeSubpath()
-            context.fill(body, with: .color(.secondary.opacity(0.5)))
-            for x: CGFloat in [13, 24] {
-                context.fill(Path(ellipseIn: CGRect(x: x, y: size.height * 0.5, width: 2, height: 3)),
-                             with: .color(.primary))
-            }
-        }
-        .frame(width: 38, height: 38)
-        .accessibilityLabel("Original placeholder pet; no live pet integration")
-        .help("Original placeholder pet; no live pet integration")
     }
 }
 

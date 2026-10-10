@@ -38,6 +38,7 @@
 		C09300000000000000000001 /* CopilotAssetEnvelope.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C09300000000000000000003; };
 		C09300000000000000000002 /* CopilotAssetEnvelope.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09300000000000000000003; };
 		C09200000000000000000003 /* maestro-icon in Resources */ = {isa = PBXBuildFile; fileRef = C09200000000000000000004; };
+		C0A100000000000000000003 /* maestro-pet in Resources */ = {isa = PBXBuildFile; fileRef = C0A100000000000000000004; };
 		C09200000000000000000001 /* NerdFonts in Test Resources */ = {isa = PBXBuildFile; fileRef = C09200000000000000000002; };
 		C09200000000000000000005 /* NerdFonts in App Resources */ = {isa = PBXBuildFile; fileRef = C09200000000000000000002; };
 		C09200000000000000000006 /* NerdFonts in Sidebar Resources */ = {isa = PBXBuildFile; fileRef = C09200000000000000000002; };
@@ -81,6 +82,8 @@
 		D10500000000000000000003 /* CmuxExtensionKit in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE47000000000000000002 /* CmuxExtensionKit */; };
 		D10400000000000000000001 /* SidebarPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10400000000000000000003 /* SidebarPreferences.swift */; };
 		D12700000000000000000001 /* SidebarPreferenceStore.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = D12700000000000000000002; };
+		C0A200000000000000000001 /* SidebarPetStore.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0A200000000000000000002; };
+		C0A200000000000000000003 /* SidebarPetViews.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0A200000000000000000004; };
 		D11400000000000000000001 /* SidebarPresentation.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = D11400000000000000000002; };
 		D10400000000000000000002 /* SidebarConnectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10400000000000000000004 /* SidebarConnectionState.swift */; };
 /* End PBXBuildFile section */
@@ -168,6 +171,7 @@
 		C05400000000000000000005 /* extension.mjs */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = scripts/delivery-proof/extension.mjs; sourceTree = SOURCE_ROOT; };
 		C09300000000000000000003 /* CopilotAssetEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/CopilotAssetEnvelope.swift; sourceTree = SOURCE_ROOT; };
 		C09200000000000000000004 /* maestro-icon */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ".agents/skills/maestro-icon"; sourceTree = SOURCE_ROOT; };
+		C0A100000000000000000004 /* maestro-pet */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ".agents/skills/maestro-pet"; sourceTree = SOURCE_ROOT; };
 		C09200000000000000000002 /* NerdFonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/NerdFonts; sourceTree = SOURCE_ROOT; };
 		C09200000000000000000008 /* SidebarGlyphs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarGlyphs.swift; sourceTree = SOURCE_ROOT; };
 		C03600000000000000000003 /* cmux-maestro-orchestrator.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = scripts/cmux-maestro-orchestrator.py; sourceTree = SOURCE_ROOT; };
@@ -195,6 +199,8 @@
 		A3685C242FCA3B2500009F1B /* CMUX Maestro Preview Extension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.extensionkit-extension"; includeInIndex = 0; path = "CMUX Maestro Preview Extension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		D10400000000000000000003 /* SidebarPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarPreferences.swift; sourceTree = SOURCE_ROOT; };
 		D12700000000000000000002 /* SidebarPreferenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarPreferenceStore.swift; sourceTree = SOURCE_ROOT; };
+		C0A200000000000000000002 /* SidebarPetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarPetStore.swift; sourceTree = SOURCE_ROOT; };
+		C0A200000000000000000004 /* SidebarPetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarPetViews.swift; sourceTree = SOURCE_ROOT; };
 		D11400000000000000000002 /* SidebarPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarPresentation.swift; sourceTree = SOURCE_ROOT; };
 		D10400000000000000000004 /* SidebarConnectionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Connection/SidebarConnectionState.swift; sourceTree = SOURCE_ROOT; };
 		D10500000000000000000004 /* HierarchySnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Hierarchy/HierarchySnapshot.swift; sourceTree = SOURCE_ROOT; };
@@ -319,6 +325,7 @@
 				C05200000000000000000012 /* SidebarHoverContent.swift */,
 				C04600000000000000000011 /* SidebarAgentHoverContent.swift */,
 				C09200000000000000000004 /* maestro-icon */,
+				C0A100000000000000000004 /* maestro-pet */,
 				C03600000000000000000003 /* cmux-maestro-orchestrator.py */,
 				C03600000000000000000004 /* SKILL.md */,
 				C03600000000000000000006 /* SidebarOrchestration.swift */,
@@ -361,6 +368,8 @@
 				C08100000000000000000003 /* AgentSignals.swift */,
 				D10400000000000000000003 /* SidebarPreferences.swift */,
 				D12700000000000000000002 /* SidebarPreferenceStore.swift */,
+				C0A200000000000000000002 /* SidebarPetStore.swift */,
+				C0A200000000000000000004 /* SidebarPetViews.swift */,
 				D11400000000000000000002 /* SidebarPresentation.swift */,
 				D10400000000000000000004 /* SidebarConnectionState.swift */,
 				D10500000000000000000004 /* HierarchySnapshot.swift */,
@@ -571,6 +580,7 @@
 			files = (
 				C03600000000000000000001 /* cmux-maestro-orchestrator.py in Resources */,
 				C09200000000000000000003 /* maestro-icon in Resources */,
+				C0A100000000000000000003 /* maestro-pet in Resources */,
 				C05400000000000000000001 /* adapter.mjs in Resources */,
 				C05400000000000000000002 /* extension.mjs in Resources */,
 				C09200000000000000000005 /* NerdFonts in App Resources */,
@@ -645,6 +655,8 @@
 				C09100000000000000000001 /* SidebarLayout.swift in Test Sources */,
 				C09100000000000000000002 /* SidebarBranchSummary.swift in Test Sources */,
 				D12700000000000000000001 /* SidebarPreferenceStore.swift in Test Sources */,
+				C0A200000000000000000001 /* SidebarPetStore.swift in Test Sources */,
+				C0A200000000000000000003 /* SidebarPetViews.swift in Test Sources */,
 				D11400000000000000000001 /* SidebarPresentation.swift in Test Sources */,
 				D10400000000000000000002 /* SidebarConnectionState.swift in Sources */,
 				D10500000000000000000001 /* HierarchySnapshot.swift in Sources */,

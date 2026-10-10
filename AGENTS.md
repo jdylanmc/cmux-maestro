@@ -124,8 +124,8 @@ upstream notices and the dependency attribution in
 [`.agents/THIRD_PARTY_NOTICES.md`](.agents/THIRD_PARTY_NOTICES.md); these notices
 do not select a license for the Maestro product.
 
-The repository-owned `macos-build`, `cmux-maestro-orchestrate`, and
-`maestro-icon` skills are maintained here. Preserve those local adaptations
+The repository-owned `macos-build`, `cmux-maestro-orchestrate`,
+`maestro-icon`, `maestro-pet`, and `wrap-up` skills are maintained here. Preserve those local adaptations
 when restoring or refreshing dependencies.
 
 Workflow skills from `jdylanmc/agent-skills` are installed project-locally for

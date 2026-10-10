@@ -15,6 +15,11 @@ final class SidebarConnectionModel {
     let orchestration: SidebarOrchestrationPolling
     let navigation: SidebarNavigation
     private var latestSequence: UInt64?
+    private(set) var openWorkspaceAtPath: (@MainActor (String) async -> Bool)?
+
+    func setOpenWorkspaceAtPath(_ action: (@MainActor (String) async -> Bool)?) {
+        openWorkspaceAtPath = action
+    }
 
     init(
         copilot: SidebarCopilotPolling? = nil,

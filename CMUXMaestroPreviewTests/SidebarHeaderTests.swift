@@ -6,13 +6,13 @@ import Testing
 @Suite(SidebarAppKitTestScope())
 struct SidebarHeaderTests {
     @Test func exactHeaderOrderAndUnavailableReasonsDoNotClaimCapabilities() throws {
-        #expect(SidebarHeaderAction.allCases == [.directory, .beats, .taskboard, .history, .settings, .fermata])
+        #expect(SidebarHeaderAction.allCases == [.directory, .beats, .taskboard, .history, .settings])
         #expect(SidebarHeaderAction.allCases.map(\.title) == [
-            "Open directory as new workspace", "Beats", "Taskboard", "History", "Maestro settings", "Fermata"
+            "Open directory as new workspace", "Beats", "Taskboard", "History", "Maestro settings"
         ])
         for action in SidebarHeaderAction.allCases {
-            if let symbol = action.symbol { #expect(NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil) }
-            #expect((action.unavailable != nil) == [.directory, .beats, .fermata].contains(action))
+            #expect(NSImage(systemSymbolName: action.symbol, accessibilityDescription: nil) != nil)
+            #expect((action.unavailable != nil) == [.directory, .beats].contains(action))
         }
         var actions: [SidebarHeaderAction] = []
         let header = SidebarHeader(taskboardActive: false, activate: { actions.append($0) })
@@ -39,7 +39,7 @@ struct SidebarHeaderTests {
         #expect(host.fittingSize.width <= CGFloat(width) && host.fittingSize.height <= 40)
         #expect(!window.isVisible)
         let buttons = descendants(host).compactMap { $0 as? NSButton }
-        try #require(buttons.count == 6)
+        try #require(buttons.count == 5)
         let frames = buttons.map { host.convert($0.bounds, from: $0) }
         #expect(frames.allSatisfy { $0.size == CGSize(width: 28, height: 28) && host.bounds.contains($0) })
         for index in 1..<frames.count {

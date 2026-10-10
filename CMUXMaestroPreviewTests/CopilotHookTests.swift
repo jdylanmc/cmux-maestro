@@ -346,6 +346,7 @@ struct CopilotHookTests: Sendable {
         ])
         #expect(grants.allSatisfy { $0.hasPrefix("/") && $0.hasSuffix("/") })
         #expect(plist["com.apple.security.app-sandbox"] as? Bool == true)
-        #expect(plist.count == 2)
+        #expect(plist["com.apple.security.files.user-selected.read-only"] as? Bool == true)
+        #expect(plist.count == 3)
     }
 }

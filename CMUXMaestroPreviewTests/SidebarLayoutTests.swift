@@ -572,8 +572,12 @@ struct SidebarLayoutTests {
         #expect(!view.contains("@State private var collapsed"))
         #expect(!view.contains("withAnimation"))
         let workingRingSchedule = "TimelineView(.animation(minimumInterval: 1.0 / 30))"
+        let askingSchedule = "TimelineView(.animation(minimumInterval: 1.0 / 20))"
         #expect(view.components(separatedBy: workingRingSchedule).count == 2)
-        #expect(!view.replacingOccurrences(of: workingRingSchedule, with: "").contains(".animation("))
+        // The question-mark badge and its row tint are the only other sanctioned motion.
+        #expect(view.components(separatedBy: askingSchedule).count == 3)
+        #expect(!view.replacingOccurrences(of: workingRingSchedule, with: "")
+            .replacingOccurrences(of: askingSchedule, with: "").contains(".animation("))
         #expect(!view.contains(".phaseAnimator"))
         #expect(view.contains("@Environment(\\.accessibilityReduceMotion)"))
         #expect(SidebarBranchSummary(sessions: [], complete: false).incomplete)

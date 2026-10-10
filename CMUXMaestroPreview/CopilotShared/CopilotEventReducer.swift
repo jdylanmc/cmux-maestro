@@ -737,8 +737,17 @@ nonisolated struct CopilotEventReducer: Sendable {
                 ), validatedStart: true)
             }
             observeToolCausality(event)
+            // Current Copilot builds emit no user_input.requested event; the
+            // ask_user tool lifetime is the only evidence of a pending question.
+            if event.toolName == "ask_user", !ended {
+                let key = Request(owner: Owner(agentID: event.agentID), kind: .answer, id: tool)
+                if pending[key] == nil, pending.count < maximumRelationships {
+                    pending[key] = signal(.answer, event: event)
+                }
+            }
         case "tool.execution_complete":
             guard let tool = event.toolCallID else { return }
+            pending.removeValue(forKey: Request(owner: Owner(agentID: event.agentID), kind: .answer, id: tool))
             guard let invocation = toolOwners[tool] else {
                 remember("tool:\(tool)")
                 return

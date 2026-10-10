@@ -329,16 +329,19 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
     func resources(root: URL, helper: URL, controller: URL, skill: URL,
                    helperExecutable: URL? = nil) throws -> CopilotPluginResources {
         let iconSkill = skill.deletingLastPathComponent().appendingPathComponent("maestro-icon/SKILL.md")
+        let petSkill = skill.deletingLastPathComponent().appendingPathComponent("maestro-pet/SKILL.md")
         let resources = skill.deletingLastPathComponent()
         let adapterData = try boundedResource(resources.appendingPathComponent("adapter.mjs"), maximum: 65_536)
         let loaderData = try boundedResource(resources.appendingPathComponent("extension.mjs"), maximum: 8192)
         guard FileManager.default.isExecutableFile(atPath: (helperExecutable ?? helper).path),
               FileManager.default.isReadableFile(atPath: controller.path),
               FileManager.default.isReadableFile(atPath: skill.path),
-              FileManager.default.isReadableFile(atPath: iconSkill.path) else {
+              FileManager.default.isReadableFile(atPath: iconSkill.path),
+              FileManager.default.isReadableFile(atPath: petSkill.path) else {
             throw HookFiles.Failure.unavailable
         }
         let iconSkillData = try boundedResource(iconSkill, maximum: 65_536)
+        let petSkillData = try boundedResource(petSkill, maximum: 65_536)
         let glyphRoot = skill.deletingLastPathComponent().appendingPathComponent("NerdFonts", isDirectory: true)
         let glyphFiles: [(String, Int)] = [
             ("glyphnames.json", 2_097_152), ("presets.json", 32_768), ("manifest.json", 8_192),
@@ -362,6 +365,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         var writes: [CopilotPluginResources.Write] = [
             .init(file: plugin.appendingPathComponent("skills/cmux-maestro-orchestrate/SKILL.md"), data: skillData),
             .init(file: plugin.appendingPathComponent("skills/maestro-icon/SKILL.md"), data: iconSkillData),
+            .init(file: plugin.appendingPathComponent("skills/maestro-pet/SKILL.md"), data: petSkillData),
             .init(file: bin.appendingPathComponent("identity-helper.json"),
                   data: try JSONSerialization.data(withJSONObject: ["helper": helper.path], options: [.sortedKeys])),
             .init(file: bin.appendingPathComponent("cmux-maestro-orchestrator"), data: controllerData,

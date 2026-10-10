@@ -30,6 +30,19 @@ extension SidebarConnectionModel {
         let topology = SidebarTopology(hierarchy)
         copilot.update(topology: topology, connected: true)
         orchestration.update(topology: topology, connected: true)
+        if context.grantedActionScopes.isSuperset(of: [.createWorkspace, .createWorkspaceWithPath]) {
+            let host = context.host
+            setOpenWorkspaceAtPath { (path: String) async -> Bool in
+                do {
+                    try await host.createWorkspace(at: path, select: true)
+                    return true
+                } catch {
+                    return false
+                }
+            }
+        } else {
+            setOpenWorkspaceAtPath(nil)
+        }
         navigation.update(
             topology: topology,
             connected: true,
