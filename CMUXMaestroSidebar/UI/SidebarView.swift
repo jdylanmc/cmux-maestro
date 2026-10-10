@@ -223,7 +223,7 @@ struct SidebarStateBadge: View {
                 Image(systemName: visual.symbol).font(.system(size: 10, weight: .semibold))
             }
         }
-        .foregroundStyle(needsInput ? SidebarTone.red.color : visual.tone.color)
+        .foregroundStyle(needsInput ? SidebarTone.teal.color : visual.tone.color)
         .frame(width: 12, height: 14)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(detail ?? SidebarPresentation.statusDescription(visual, needsInput: needsInput))
@@ -247,8 +247,9 @@ struct SidebarQuestionGlow: View {
     private func glyph(glow: Double) -> some View {
         Image(systemName: "questionmark")
             .font(.system(size: 11, weight: .heavy))
-            .shadow(color: SidebarTone.red.color.opacity(glow), radius: 3)
-            .shadow(color: SidebarTone.red.color.opacity(glow * 0.7), radius: 6)
+            .foregroundStyle(SidebarTone.teal.color)
+            .shadow(color: SidebarTone.teal.color.opacity(glow), radius: 3)
+            .shadow(color: SidebarTone.teal.color.opacity(glow * 0.7), radius: 6)
     }
 }
 
@@ -560,15 +561,6 @@ struct SidebarView: View {
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("managed-source-notice")
-            }
-            if attentionSummary.total > 0 {
-                HStack {
-                    Label(SidebarCountText.attention(attentionSummary.total), systemImage: "exclamationmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(SidebarTone.red.color)
-                        .help(attentionSummary.detail)
-                    Spacer(minLength: 0)
-                }
             }
             if let notice = preferences.historyNotice {
                 Text(notice)
@@ -1689,8 +1681,6 @@ private struct WorkspaceRow: View {
             .padding(.vertical, 5)
             .overlay(alignment: .bottom) { Divider() }
             .padding(.bottom, 5)
-            WorkspaceAttentionLabel(summary: attentionSummary)
-                .padding(.leading, SidebarPresentation.minimumControlSize + 5)
             if expanded {
                 managedContent(.primary)
                 switch workspace.surfaces {
@@ -2708,10 +2698,13 @@ private struct AttentionSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(SidebarPresentation.attention(attention, state: state, degraded: degraded), id: \.self) { text in
-                Label(text, systemImage: state == .blocked ? "pause.circle" : "exclamationmark.circle")
+                let asking = attention.contains(where: { $0.kind.isBlocking })
+                    && !attention.contains(where: { $0.kind == .error }) && state != .failed
+                Label(text, systemImage: asking ? "questionmark.circle" : state == .blocked ? "pause.circle" : "exclamationmark.circle")
                     .sidebarFont(.caption)
-                    .foregroundStyle(state == .blocked || state == .failed
-                                     || attention.contains(where: { $0.kind.isBlocking || $0.kind == .error })
+                    .foregroundStyle(asking ? SidebarTone.teal.color
+                                     : state == .blocked || state == .failed
+                                     || attention.contains(where: { $0.kind == .error })
                                      ? SidebarTone.red.color : SidebarTone.attention.color)
             }
         }

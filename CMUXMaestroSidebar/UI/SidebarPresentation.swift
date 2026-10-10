@@ -819,7 +819,7 @@ enum SidebarPresentation {
 
     static func attention(_ signals: [AgentAttention], state: AgentWorkState, degraded: Bool) -> [String] {
         var result = AgentAttentionKind.allCases.compactMap { kind -> String? in
-            guard kind != .turnFinished else { return nil }
+            guard kind != .turnFinished, kind != .answer else { return nil }
             let count = signals.filter { $0.kind == kind }.count
             guard count > 0 else { return nil }
             return kind.title + (count > 1 ? " (\(count))" : "")
