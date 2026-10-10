@@ -11,7 +11,8 @@ struct SidebarHoverTests {
 
     @Test(arguments: [280.0, 350.0, 460.0], [SidebarDensity.compact, .comfortable])
     func readOnlyPinnedPathsUseFittingInlineOrFullWrappedCompact(width: Double, density: SidebarDensity) async throws {
-        let font: Font = density == .compact ? .caption2 : .caption
+        // The existing sidebar style specifies regular weight, not the text style's default weight.
+        let font = Font.system(density == .compact ? .caption2 : .caption).weight(.regular)
         func textHeight(_ text: String) -> CGFloat {
             let reference = NSHostingView(rootView: Text(text).font(font)
                 .fixedSize(horizontal: false, vertical: true).frame(width: width))
@@ -92,14 +93,14 @@ struct SidebarHoverTests {
             let output = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent(".build/layout-validation/offscreen")
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let bitmap = try SidebarRenderingEvidence.captureNativeBitmap(of: host)
+            #expect(bitmap.pixelsWide == Int(width) * 2)
+            #expect(bitmap.pixelsHigh == Int(host.bounds.height) * 2)
             let image = output.appendingPathComponent("path133-\(Int(width))-\(density)-\(name).png")
             try #require(bitmap.representation(using: .png, properties: [:])).write(to: image)
-            let recognized = try SidebarRenderingEvidence.recognizedLines(
-                in: image, dark: false, naturalLanguage: true
-            ).joined(separator: " ")
-            #expect(recognized.contains("Synthetic") && recognized.contains("Surface directory"))
+            let recognized = try SidebarRenderingEvidence.recognizedNativeLines(in: image).joined(separator: " ")
+            #expect(recognized.contains("Synthetic") && recognized.contains("Surface directory"),
+                    "Native-scale text recognition: \(recognized)")
         }
     }
 

@@ -1485,16 +1485,7 @@ struct SidebarPinnedDetailsTests {
     }
 
     private func capture(_ view: NSView) throws -> NSBitmapImageRep {
-        // Match the layout/copy renderers: unchanged point geometry, actual 2x native glyphs.
-        let bitmap = try #require(NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: Int(view.bounds.width) * 2, pixelsHigh: Int(view.bounds.height) * 2,
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
-            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
-        ))
-        bitmap.size = view.bounds.size
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        return bitmap
+        try SidebarRenderingEvidence.captureNativeBitmap(of: view)
     }
 
     private func views(_ view: NSView) -> [NSView] {
