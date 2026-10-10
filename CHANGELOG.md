@@ -130,6 +130,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Replace routine Turn finished notice lines with a noninteractive green checked-box
+  in the compact status slot. Restore the spinner on new work; preserve actionable
+  notices, primary state and truthful stale/unknown fallbacks (#175).
 - Request native in-turn steering for managed peer messages instead of waiting
   for the current turn to finish; preserve legacy proof enqueue and
   fire-and-forget limits (#163).

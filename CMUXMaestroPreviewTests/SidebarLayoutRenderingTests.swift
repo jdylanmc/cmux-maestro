@@ -778,6 +778,134 @@ struct SidebarLayoutRenderingTests {
         #expect((treeHeight - rootHeight) / 4 == SidebarDensity.compact.rowHeight)
     }
 
+    @Test(arguments: [true, false])
+    func observedTurnCompletionUsesGreenStatusSlotWithoutChangingIdentity(managed: Bool) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.selectedMode = .hierarchy
+        let model = await makeManagedModel(
+            fixtures: SidebarTreeFixtures(), nodeCount: 1, attentionKinds: [.turnFinished],
+            includeManaged: managed
+        )
+        defer { model.setVisible(false) }
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try await render(
+            model: model, preferences: preferences, width: 340, height: 500,
+            managed: managed, expectedSessions: 1,
+            destination: folder.appendingPathComponent("turn175-checkbox-\(managed ? "managed" : "unmanaged").png")
+        ) { host in
+            let titles = nativeTitles(in: host).filter { $0.localFocusID?.hasPrefix("surface:") == true }
+            let title = try #require(titles.first)
+            #expect(titles.count == 1)
+            let session = try #require(model.copilot.tree.sessions.first)
+            #expect(session.state == .idle, "Turn completion must not rewrite the primary lifecycle state")
+            #expect(session.attention.contains { $0.kind == .turnFinished })
+            #expect(title.toolTip?.contains(SidebarPresentation.turnFinishedDescription) == true)
+            #expect((title.accessibilityValue() as? String)?.contains(SidebarPresentation.turnFinishedDescription) == true)
+            // The native title hosts metadata/status only; its adjacent role/identity glyph is outside this crop.
+            let status = NSRect(x: 0, y: 0, width: 12, height: title.hosting.bounds.height)
+            let bitmap = try #require(title.hosting.bitmapImageRepForCachingDisplay(in: status))
+            title.hosting.cacheDisplay(in: status, to: bitmap)
+            var greenPixels = 0
+            for y in 0..<bitmap.pixelsHigh {
+                for x in 0..<bitmap.pixelsWide {
+                    if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                       color.greenComponent > color.redComponent + 0.15,
+                       color.greenComponent > color.blueComponent + 0.15 {
+                        greenPixels += 1
+                    }
+                }
+            }
+            #expect(greenPixels > 0, "Affirmative completed turn must use the existing green status slot")
+            print("Turn175 completion status: managed=\(managed), greenPixels=\(greenPixels)")
+        }
+    }
+
+    @Test(arguments: [true, false], [SidebarMode.hierarchy, .taskboard])
+    func ordinaryTurnCompletionAddsNoRowNoticeOrSpace(managed: Bool, mode: SidebarMode) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.setRetention(.never)
+        preferences.showEnded = true
+        preferences.selectedMode = mode
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        for density in SidebarDensity.allCases {
+            preferences.setDensity(density)
+            var captures: [[CGRect]] = []
+            let actionable: [(AgentAttentionKind, String)] = [
+                (.permission, "Waiting for permission"), (.answer, "Waiting for answer"),
+                (.error, "Error reported"), (.aborted, "Aborted")
+            ]
+            let scenarios: [([AgentAttentionKind], String?)] = [([], nil), ([.turnFinished], nil)]
+                + actionable.flatMap { kind, title in [([kind], title), ([kind, .turnFinished], title)] }
+            for (index, scenario) in scenarios.enumerated() {
+                let (signals, expectedNotice) = scenario
+                let model = await makeManagedModel(
+                    fixtures: SidebarTreeFixtures(), nodeCount: 2, attentionKinds: signals,
+                    includeManaged: managed, includeAttentionChild: true
+                )
+                defer { model.setVisible(false) }
+                let destination = folder.appendingPathComponent(
+                    "turn175-\(managed ? "managed" : "unmanaged")-\(mode.rawValue)-\(density.rawValue)-\(index).png"
+                )
+                var frames: [CGRect] = []
+                try await render(
+                    model: model, preferences: preferences, width: 340, height: 1200,
+                    managed: managed, expectedSessions: 2, destination: destination
+                ) { host in
+                    #expect(model.copilot.tree.sessions.allSatisfy {
+                        Set($0.outlineNodes.map(\.id)) == ["notice-activity", "notice-child"]
+                    }, "Completed activity must remain as ancestor context even without an attention signal")
+                    let titles = nativeTitles(in: host).filter { $0.localFocusID?.hasPrefix("surface:") == true }
+                    #expect(titles.count == 2, "Both exact agent surface titles must remain mounted")
+                    func taskNames(in view: NSView) -> [NSTextField] {
+                        view.subviews.flatMap { child in
+                            if let field = child as? NSTextField, field.accessibilityIdentifier() == "internal-task-name" {
+                                return [field]
+                            }
+                            return taskNames(in: child)
+                        }
+                    }
+                    let children = taskNames(in: host)
+                    #expect(children.count == 2, "Subagents are internal task text fields, not title buttons")
+                    #expect(children.allSatisfy { $0.stringValue == "Notice child" && ($0.toolTip?.contains("Finished") == true) },
+                            "Completed child identity and primary state remain intact")
+                    let activities = nativeTitles(in: host).filter {
+                        $0.accessibilityLabel()?.contains("Notice activity") == true
+                    }
+                    #expect(activities.count == 2, "Both child activity rows must actually render")
+                    frames = titles.map { host.convert($0.bounds, from: $0) }
+                        + children.map { host.convert($0.bounds, from: $0) }
+                        + activities.map { host.convert($0.bounds, from: $0) }
+                }
+                let text = try SidebarRenderingEvidence.recognizedLines(
+                    in: destination, naturalLanguage: true
+                ).joined(separator: "\n")
+                #expect(text.contains("Notice child"), "Positive OCR control: child identity remains visible")
+                #expect(text.contains("Notice activity"), "Positive OCR control: activity identity remains visible")
+                #expect(!text.localizedCaseInsensitiveContains("Turn finished"),
+                        "Routine completion must not render a secondary label or icon line")
+                if let expectedNotice {
+                    #expect(text.contains(expectedNotice), "Each actionable notice must remain visible alongside completion")
+                }
+                captures.append(frames)
+            }
+            #expect(captures[0] == captures[1],
+                    "Routine completion must not move titles or reserve additional row spacing")
+            for index in stride(from: 2, to: captures.count, by: 2) {
+                #expect(captures[index] == captures[index + 1],
+                        "Removing completion must retain exactly each actionable notice's spacing")
+            }
+        }
+    }
+
     @Test func activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes() async throws {
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/layout-validation/offscreen")
@@ -925,7 +1053,8 @@ struct SidebarLayoutRenderingTests {
     }
 
     private func makeManagedModel(
-        fixtures: SidebarTreeFixtures, nodeCount: Int = 6, mixed: Bool = false, focusFirst: Bool = false
+        fixtures: SidebarTreeFixtures, nodeCount: Int = 6, mixed: Bool = false, focusFirst: Bool = false,
+        attentionKinds: [AgentAttentionKind]? = nil, includeManaged: Bool = true, includeAttentionChild: Bool = false
     ) async -> SidebarConnectionModel {
         let workspace = fixtures.workspaceA
         let surfaces = (0..<nodeCount).map { _ in UUID() }
@@ -1017,7 +1146,8 @@ struct SidebarLayoutRenderingTests {
         let orchestration = SidebarOrchestrationPolling(
             read: {
                 SidebarOrchestrationSnapshot(
-                    version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: nestedNodes
+                    version: 1, generatedAt: now, complete: true, omittedCount: 0,
+                    nodes: includeManaged ? nestedNodes : []
                 )
             },
             pause: { try await Task.sleep(for: .seconds(60)) }
@@ -1035,7 +1165,25 @@ struct SidebarLayoutRenderingTests {
                         state: node.availability == "busy" ? .working : .idle,
                         model: node.role == "coordinator"
                             ? "coordinator-model" : "worker-model",
-                        children: [], observedAt: now
+                        children: includeAttentionChild ? [
+                            CopilotChildWork(
+                                id: "notice-child", parentID: "notice-activity", kind: .subagent, name: "Notice child",
+                                state: .completed, model: nil,
+                                attention: attentionKinds?.map {
+                                    .init(kind: $0, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
+                                }
+                            ),
+                            CopilotChildWork(
+                                id: "notice-activity", parentID: nil, kind: .skill, name: "Notice activity",
+                                state: .completed, model: nil,
+                                attention: attentionKinds?.map {
+                                    .init(kind: $0, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
+                                }
+                            )
+                        ] : [], observedAt: now,
+                        attention: attentionKinds?.map {
+                            .init(kind: $0, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
+                        }
                     )
                 } + extraObservations, issues: mixed ? [.loadingHistory] : [], isComplete: !mixed)
             },

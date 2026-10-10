@@ -1189,6 +1189,35 @@ struct SidebarClarityTests {
         #expect(!SidebarPresentation.collapsed(summary)[0].contains("0"))
     }
 
+    @Test func rowNoticesOmitOnlyRoutineCompletionWithoutChangingDetailedEvidence() {
+        let completion = signal(.turnFinished)
+        for state: AgentWorkState in [.queued, .working, .idle, .blocked, .completed, .failed, .cancelled, .unknown] {
+            #expect(SidebarPresentation.rowAttention([completion], state: state, degraded: false)
+                    == (state == .blocked ? ["Blocking reason unavailable"] : []))
+        }
+        #expect(SidebarPresentation.rowAttention([completion], state: .idle, degraded: true)
+                == ["Attention evidence incomplete"])
+        #expect(SidebarPresentation.rowAttention([completion], state: .blocked, degraded: true)
+                == ["Blocking reason unavailable", "Attention evidence incomplete"])
+        let actionable: [(AgentAttentionKind, String)] = [
+            (.permission, "Waiting for permission"), (.answer, "Waiting for answer"),
+            (.error, "Error reported"), (.aborted, "Aborted")
+        ]
+        for (kind, title) in actionable {
+            #expect(SidebarPresentation.rowAttention([completion, signal(kind)], state: .completed, degraded: false)
+                    == [title])
+            #expect(SidebarPresentation.rowAttention([completion, signal(kind)], state: .failed, degraded: true)
+                    == [title, "Attention evidence incomplete"])
+        }
+        #expect(SidebarPresentation.rowAttention(
+            [completion, signal(.error), signal(.error)], state: .completed, degraded: false
+        ) == ["Error reported (2)"])
+        #expect(SidebarPresentation.attention([completion], state: .idle, degraded: false) == ["Turn finished"])
+        #expect(SidebarPresentation.attentionDetails([completion]).contains {
+            $0.value == "Main turn only; background work may continue."
+        })
+    }
+
     @Test func selectionMetadataShowsOnlyObservedModelAndGrantedPaths() throws {
         let ended = node(state: .completed)
         let session = try #require(makeTree(nodes: [ended]).sessions.first)
@@ -1402,6 +1431,176 @@ struct SidebarClarityTests {
             #expect(!label.contains(".popover"))
             #expect(!label.contains("SidebarItemIcon"))
         }
+    }
+
+    @Test func inlineCompletionTransitionsPreservePrimaryStateAndRequireAffirmativeEvidence() throws {
+        for state in [AgentWorkState.working, .idle, .working, .completed, .unknown, .queued, .blocked, .failed, .cancelled] {
+            let tree = completionTree(state: state)
+            let session = try #require(tree.sessions.first)
+            let finished = SidebarPresentation.sessionTurnFinished(session, tree: tree, now: now)
+            #expect(finished == [.idle, .completed].contains(state))
+            #expect(SidebarPresentation.sessionState(session) == SidebarPresentation.state(state))
+            let badge = SidebarStateBadge(visual: SidebarPresentation.sessionState(session), turnFinished: finished)
+            #expect(badge.showsTurnCompletion == finished)
+            #expect(badge.statusDescription == (finished ? SidebarPresentation.turnFinishedDescription
+                                                       : SidebarPresentation.state(state).title))
+        }
+        for state in [AgentWorkState.idle, .completed, .unknown] {
+            let tree = completionTree(state: state, attention: [])
+            #expect(!SidebarPresentation.sessionTurnFinished(try #require(tree.sessions.first), tree: tree, now: now))
+        }
+        #expect(SidebarPresentation.turnFinishedSymbol == "checkmark.square.fill")
+        #expect(NSImage(systemSymbolName: SidebarPresentation.turnFinishedSymbol, accessibilityDescription: nil) != nil)
+        #expect(SidebarPresentation.turnFinishedDescription == "Turn finished. Main turn only; background work may continue.")
+        #expect(!SidebarStateBadge(visual: SidebarPresentation.state(.working), turnFinished: true).showsTurnCompletion)
+        #expect(!SidebarStateBadge(visual: SidebarPresentation.state(.blocked), turnFinished: true).showsTurnCompletion)
+        #expect(!SidebarStateBadge(visual: SidebarPresentation.state(.idle), needsInput: true, turnFinished: true).showsTurnCompletion)
+    }
+
+    @Test func inlineCompletionCannotMaskAttentionOrRepresentedWork() throws {
+        for kind in AgentAttentionKind.allCases where kind != .turnFinished {
+            let tree = completionTree(attention: [signal(.turnFinished), signal(kind)])
+            #expect(!SidebarPresentation.sessionTurnFinished(try #require(tree.sessions.first), tree: tree, now: now))
+            let childTree = completionTree(nodes: [node(state: .completed, attention: [signal(kind)])])
+            #expect(!SidebarPresentation.sessionTurnFinished(try #require(childTree.sessions.first), tree: childTree, now: now))
+        }
+        for state in [AgentWorkState.working, .queued, .blocked, .failed, .unknown] {
+            let tree = completionTree(nodes: [node(state: state)])
+            var projected = try #require(tree.sessions.first)
+            projected.nodes = []
+            #expect(!SidebarPresentation.sessionTurnFinished(projected, tree: tree, now: now),
+                    "Filtering/collapsing child rows must not turn their parent into a completion check")
+        }
+        for kind in [AgentActivityKind.executing, .planning, .reviewing, .waiting, .unknown] {
+            var tree = completionTree()
+            tree.sessions[0].activity = .init(kind: kind, lastEventAt: now)
+            #expect(!SidebarPresentation.sessionTurnFinished(tree.sessions[0], tree: tree, now: now))
+        }
+        var newerActivity = completionTree()
+        newerActivity.sessions[0].activity = .init(kind: .idle, lastEventAt: now.addingTimeInterval(0.5))
+        #expect(!SidebarPresentation.sessionTurnFinished(newerActivity.sessions[0], tree: newerActivity, now: now))
+        var degraded = completionTree()
+        degraded.sessions[0].attentionDegraded = true
+        #expect(!SidebarPresentation.sessionTurnFinished(degraded.sessions[0], tree: degraded, now: now))
+        var child = node(state: .completed)
+        child.attentionDegraded = true
+        let childTree = completionTree(nodes: [child])
+        #expect(!SidebarPresentation.sessionTurnFinished(try #require(childTree.sessions.first), tree: childTree, now: now))
+    }
+
+    @Test func inlineCompletionRejectsGapsOldObservationsAndOtherSubjects() throws {
+        let original = completionTree()
+        let session = try #require(original.sessions.first)
+        for availability in [SidebarCopilotAvailability.waiting, .loading, .partial, .unavailable, .hidden, .disconnected] {
+            var tree = original
+            tree.availability = availability
+            #expect(!SidebarPresentation.sessionTurnFinished(session, tree: tree, now: now))
+        }
+        #expect(!SidebarPresentation.sessionTurnFinished(session, tree: original, now: now.addingTimeInterval(9)))
+        var tree = original
+        tree.generatedAt = nil
+        #expect(!SidebarPresentation.sessionTurnFinished(session, tree: tree, now: now))
+        tree = original
+        tree.issues = [.loadingHistory]
+        #expect(!SidebarPresentation.sessionTurnFinished(session, tree: tree, now: now))
+        tree = completionTree(observedAt: now.addingTimeInterval(-9))
+        #expect(!SidebarPresentation.sessionTurnFinished(tree.sessions[0], tree: tree, now: now))
+        tree = original
+        tree.sessions[0].internalTaskCountsIncomplete = true
+        #expect(!SidebarPresentation.sessionTurnFinished(tree.sessions[0], tree: tree, now: now))
+        tree = original
+        tree.sessions[0].hasUncountedChildren = true
+        #expect(!SidebarPresentation.sessionTurnFinished(tree.sessions[0], tree: tree, now: now))
+        tree = original
+        tree.sessions.append(session)
+        #expect(!SidebarPresentation.sessionTurnFinished(session, tree: tree, now: now))
+        tree = completionTree(id: fixtures.otherSessionID)
+        #expect(!SidebarPresentation.sessionTurnFinished(session, tree: tree, now: now))
+        tree = completionTree(surface: fixtures.surfaceB)
+        #expect(!SidebarPresentation.sessionTurnFinished(session, tree: tree, now: now))
+        tree = completionTree(liveness: .dead)
+        #expect(!SidebarPresentation.sessionTurnFinished(tree.sessions[0], tree: tree, now: now))
+        #expect(!SidebarPresentation.sessionTurnFinished(tree.sessions[0], tree: original, now: now))
+        let retained = SidebarCopilotTree.statusOnly(session, retainingStatus: true)
+        #expect(!SidebarPresentation.sessionTurnFinished(retained, tree: original, now: now))
+        for timestamp in [nil, now.addingTimeInterval(2)] {
+            tree = completionTree(attention: [.init(kind: .turnFinished, evidence: signal(.turnFinished).evidence, occurredAt: timestamp)])
+            #expect(!SidebarPresentation.sessionTurnFinished(tree.sessions[0], tree: tree, now: now))
+        }
+        var incomplete = makeTree(nodes: [], complete: false, omittedActive: 1)
+        incomplete.availability = .ready
+        incomplete.sessions[0].attention = [signal(.turnFinished)]
+        #expect(!SidebarPresentation.sessionTurnFinished(incomplete.sessions[0], tree: incomplete, now: now))
+        tree = completionTree(state: .working)
+        #expect(!SidebarPresentation.sessionTurnFinished(session, tree: tree, now: now), "An old idle row cannot borrow newer evidence")
+    }
+
+    @Test func inlineCompletionUsesExactManagedAndChildSubjects() throws {
+        let tree = completionTree()
+        let coordinator = managedNode(role: "coordinator", surface: fixtures.surfaceA, sessionID: fixtures.sessionID)
+        #expect(SidebarPresentation.managedTurnFinished(coordinator, availability: .ready, tree: tree, now: now))
+        #expect(!SidebarPresentation.managedTurnFinished(coordinator, availability: .stale, tree: tree, now: now))
+        #expect(!SidebarPresentation.managedTurnFinished(coordinator, availability: .partial, tree: tree, now: now))
+        let other = managedNode(role: "coordinator", surface: fixtures.surfaceA, sessionID: fixtures.otherSessionID)
+        #expect(!SidebarPresentation.managedTurnFinished(other, availability: .ready, tree: tree, now: now))
+        let legacy = managedNode(role: "worker", surface: fixtures.surfaceA, sessionID: fixtures.sessionID, phase: "reported-completed")
+        #expect(!SidebarPresentation.managedTurnFinished(legacy, availability: .ready, tree: tree, now: now))
+        let managedChild = SidebarOrchestrationNode(
+            id: UUID(), runId: coordinator.runId, parentId: coordinator.id, role: "worker", label: "Independent child",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceB, generation: 1,
+            phase: "turn-running", availability: "busy", copilotSessionId: fixtures.otherSessionID,
+            executionMode: .interactive, createdAt: now, updatedAt: now
+        )
+        for state in [AgentWorkState.idle, .completed, .working, .blocked, .failed, .unknown] {
+            var represented = tree
+            represented.sessions += completionTree(state: state, id: fixtures.otherSessionID, surface: fixtures.surfaceB).sessions
+            #expect(SidebarPresentation.managedTurnFinished(
+                coordinator, availability: .ready, tree: represented, now: now, managedNodes: [coordinator, managedChild]
+            ) == [.idle, .completed].contains(state),
+                    "Use observed child work, not a long-lived interactive process's active phase")
+        }
+        #expect(!SidebarPresentation.managedTurnFinished(
+            coordinator, availability: .ready, tree: tree, now: now, managedNodes: [coordinator, managedChild]
+        ), "Missing child observation is not evidence that its represented work finished")
+        let staleChild = SidebarOrchestrationNode(
+            id: managedChild.id, runId: coordinator.runId, parentId: coordinator.id, role: "worker", label: "Old outcome",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceB, generation: 1,
+            phase: "reported-completed", availability: "idle", copilotSessionId: fixtures.otherSessionID,
+            createdAt: now.addingTimeInterval(-600), updatedAt: now.addingTimeInterval(-600)
+        )
+        #expect(!SidebarPresentation.managedTurnFinished(
+            coordinator, availability: .ready, tree: tree, now: now, managedNodes: [coordinator, staleChild]
+        ), "A stale terminal phase cannot prove that represented work is no longer running")
+
+        var child = node(state: .completed)
+        var childTree = completionTree(nodes: [child])
+        #expect(!SidebarPresentation.childTurnFinished(child, session: childTree.sessions[0], tree: childTree, now: now),
+                "A parent's turn evidence never supplies its child's check")
+        child.attention = [signal(.turnFinished)]
+        childTree = completionTree(state: .working, nodes: [child, node(state: .working)])
+        #expect(SidebarPresentation.childTurnFinished(child, session: childTree.sessions[0], tree: childTree, now: now),
+                "An independent sibling does not take ownership of this child's finished turn")
+        let descendant = SidebarCopilotNode(
+            id: "busy-shell", parentID: child.id, depth: 1, kind: .shell, name: "Busy shell",
+            state: .working, model: nil, ancestryUnresolved: false, hasChildren: false
+        )
+        childTree.sessions[0].nodes.append(descendant)
+        #expect(!SidebarPresentation.childTurnFinished(child, session: childTree.sessions[0], tree: childTree, now: now),
+                "A represented running shell wins over its ancestor's completion")
+        childTree.sessions[0].nodes = [child, child]
+        #expect(!SidebarPresentation.childTurnFinished(child, session: childTree.sessions[0], tree: childTree, now: now))
+    }
+
+    private func completionTree(
+        state: AgentWorkState = .idle, attention: [AgentAttention]? = nil, nodes: [SidebarCopilotNode] = [],
+        observedAt: Date? = nil, id: UUID? = nil, surface: UUID? = nil, liveness: AgentProcessLiveness = .alive
+    ) -> SidebarCopilotTree {
+        .init(availability: .ready, sessions: [
+            .init(id: id ?? fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: surface ?? fixtures.surfaceA,
+                  liveness: liveness, state: state, model: nil, observedAt: observedAt ?? now, nodes: nodes,
+                  childrenComplete: true, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0,
+                  attention: attention ?? [signal(.turnFinished)])
+        ], issues: [], generatedAt: now)
     }
 
     private func node(state: AgentWorkState, attention: [AgentAttention] = []) -> SidebarCopilotNode {
