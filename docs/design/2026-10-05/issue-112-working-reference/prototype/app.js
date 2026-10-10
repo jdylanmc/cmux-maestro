@@ -35,8 +35,10 @@ const colors = [
   ["Silver", "#c5cdd8"], ["Green", "#70d99b"], ["Mint", "#79d7cc"], ["Blue", "#8caef7"],
   ["Violet", "#b5a0ee"], ["Rose", "#e8a2c5"], ["Red", "#ed8890"]
 ];
-const petNames = ["Sprout", "Pebble", "Orbit"];
+let petNotice = "";
+const petNames = ["Maestro", "Sprout", "Pebble", "Orbit"];
 function pet(name) {
+  if (name === "Maestro") return '<svg class="pet pet-maestro" viewBox="0 0 58 64" aria-hidden="true"><path d="M29 10V4" stroke="#263341" stroke-width="2"/><circle cx="29" cy="4" r="2.6" fill="#73bfff" stroke="#263341"/><rect x="9" y="23" width="4" height="12" rx="2" fill="#b0bcce" stroke="#263341"/><rect x="45" y="23" width="4" height="12" rx="2" fill="#b0bcce" stroke="#263341"/><rect x="12" y="10" width="34" height="40" rx="11" fill="#e2e8f0" stroke="#263341" stroke-width="2"/><rect x="17" y="20" width="24" height="15" rx="6" fill="#182234" stroke="#263341"/><rect x="21" y="24" width="6" height="7" rx="2.5" fill="#73bfff"/><rect x="31" y="24" width="6" height="7" rx="2.5" fill="#73bfff"/><path d="M24 43h10" stroke="#263341" stroke-width="2" stroke-linecap="round"/></svg>';
   const shapes = {
     Sprout: '<path d="M27 23V12M27 15Q10 16 13 5Q26 3 27 15M27 12Q40 12 41 3Q28 0 27 12" stroke="#70d99b" fill="#47876c"/><rect x="12" y="23" width="30" height="29" rx="10" fill="#92bfa4"/><path d="M16 49v6m22-6v6" stroke="#92bfa4" stroke-width="6"/>',
     Pebble: '<path d="M9 40 13 19 27 11 43 23 47 44 34 53 18 51Z" fill="#b5a0ee"/><path d="m17 22 9-5" stroke="#d3c9f2" stroke-width="3"/>',
@@ -146,7 +148,7 @@ const initialState = () => ({
   version: 2, active: "implementer", grouping: "worktrees",
   collapsed: { "design:main": true }, workspaceCollapsed: { scratch: true, stress: true }, ancestryCollapsed: {}, paneCollapsed: {}, tabOrder: {},
   icons: {}, pets: {}, tags: {}, panes: {}, paneSelected: {}, agentChoices: {}, dismissed: {}, showEnded: false, petHidden: {}, workspaceOrder: ["design", "scratch", "stress"], stressLongName: false,
-  utilityTabs: {}, beats: initialBeats(), selectedBeat: "beat-review", beatClock: Date.UTC(2026, 8, 25, 20, 0), beatAvailability: {}, fermata: false, workspaceFinished: {}, sidebarOrders: {}, createdDirectories: [], tagColors: {}, taskDismissals: {}, taskGroupsCollapsed: {}
+  utilityTabs: {}, beats: initialBeats(), selectedBeat: "beat-review", beatClock: Date.UTC(2026, 8, 25, 20, 0), beatAvailability: {}, workspaceFinished: {}, sidebarOrders: {}, createdDirectories: [], tagColors: {}, taskDismissals: {}, taskGroupsCollapsed: {}
 });
 let state = initialState();
 let startupNotice = "";
@@ -282,7 +284,7 @@ function iconFor(surface) {
 }
 function resolvedPet(surface) {
   const choice = state.pets[surface.id];
-  return choice?.mode === "default" ? "Sprout" : choice?.mode === "custom" && petNames.includes(choice.name) ? choice.name : state.agentChoices[surface.id]?.pet || surface.pet || "Sprout";
+  return choice?.mode === "default" ? "Maestro" : choice?.mode === "custom" && petNames.includes(choice.name) ? choice.name : state.agentChoices[surface.id]?.pet || surface.pet || "Maestro";
 }
 const stateLabel = item => ({ working: "Working", idle: "Idle", input: "Needs input", blocked: "Blocked", done: "Finished", failed: "Failed", cancelled: "Cancelled", unknown: "Unknown" }[item.state]);
 const dot = item => `<span class="state-dot ${item.state}" role="img" aria-label="${stateLabel(item)}" title="${stateLabel(item)}"></span>`;
@@ -397,7 +399,7 @@ const panelType = item => item.kind === "tool" ? item.name : item.kind === "brow
 function renderRow(item, ordinal = null, container = null, kind = "row", includeTasks = true) {
   const sortable = container ? sortAttributes(kind, item.id, container) : "";
   if (item.kind === "tool") return `<div class="surface-row ${state.active === item.id ? "selected" : ""}" data-row="${item.id}" ${sortable} ${ordinal === null ? "" : `data-native-surface="${item.id}"`}><button class="identity-icon" data-focus="${item.id}" aria-label="Open ${item.name}">${iconFor(item)}</button><button class="row-main" data-focus="${item.id}"><span class="row-name">${item.name}</span><span class="row-meta">All workspaces · view only</span></button><button class="row-accessory" data-tool-move="${item.tool}" aria-label="Move ${item.name} tab">⇄</button></div>`;
-  return `<div class="${item.kind === "agent" ? "agent-row" : "surface-row"} ${state.active === item.id ? "selected" : ""}" data-row="${item.id}" data-hover="${item.id}" ${sortable} ${ordinal === null ? "" : `data-native-surface="${item.id}"`}>
+  return `<div class="${item.kind === "agent" ? "agent-row" : "surface-row"} ${item.state === "input" ? "needs-input" : ""} ${state.active === item.id ? "selected" : ""}" data-row="${item.id}" data-hover="${item.id}" ${sortable} ${ordinal === null ? "" : `data-native-surface="${item.id}"`}>
     <button class="identity-icon" data-icon="${item.id}" aria-label="Choose icon for ${escapeHTML(item.name)}" title="Right-click to choose icon">${iconFor(item)}</button>
     <button class="row-main" data-focus="${item.id}" ${state.active === item.id ? 'aria-current="true"' : ""} ${ordinal === null ? "" : `aria-label="${escapeHTML(item.name)}, tab ${ordinal}, ${panelType(item)} panel"`}><span class="row-title"><span class="row-name">${escapeHTML(item.name)}</span>${tagMarkup(item, true)}</span><span class="row-meta">${dot(item)}<span>${ordinal !== null ? `${panelType(item)} panel` : item.kind === "agent" ? escapeHTML(item.task) : item.kind === "browser" ? item.url : `Pane ${paneFor(item)}`}</span></span></button>
     <button class="row-accessory" data-menu="${item.id}" aria-label="Actions for ${escapeHTML(item.name)}">···</button>
@@ -650,8 +652,6 @@ function render() {
     if (state.active === `tool-${button.dataset.openTool}`) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
-  $("#fermata-button").setAttribute("aria-pressed", String(state.fermata));
-  $("#fermata-button").title = `Fermata · Keep Mac Awake ${state.fermata ? "on" : "off"} (simulated)`;
   renderPinned(); renderStage();
 }
 function focusItem(id) {
@@ -716,7 +716,7 @@ function renderPicker() {
   $("#picker-title").textContent = item.name;
   if (pickerType === "pet") {
     const name = resolvedPet(item), mode = state.pets[item.id]?.mode || "agent";
-    $("#picker-content").innerHTML = `<div class="pet-grid">${petNames.map(n => `<button class="pet-choice" data-pet-choice="${n}" aria-pressed="${n === name}">${pet(n)}<span>${n}</span></button>`).join("")}</div><p class="picker-status">${mode === "agent" ? "Following agent selection" : mode === "default" ? "Default · human controlled" : "Your choice · agent updates cannot replace it"}</p><p class="pet-note">Original placeholder pets. Actual Codex artwork is not included.</p><div class="reset-actions"><button data-pet-reset="default">Reset to default</button><button data-pet-reset="agent">Reset to agent selection</button><button data-pet-hide>${state.petHidden[item.id] ? "Show pet" : "Hide pet for this agent"}</button></div>`;
+    $("#picker-content").innerHTML = `<div class="pet-grid">${petNames.map(n => `<button class="pet-choice" data-pet-choice="${n}" aria-pressed="${n === name}">${pet(n)}<span>${n}</span></button>`).join("")}</div><p class="picker-status">${mode === "agent" ? "Following agent selection" : mode === "default" ? "Default · human controlled" : "Your choice · agent updates cannot replace it"}</p><p class="pet-note">Maestro is the bundled original pet; the others are placeholders. An agent-made pet works only for its session until you save it. Actual Codex catalog artwork is not included.</p><p class="pet-note">${petNotice || 'Find more: <a href="https://codexpets.org/gallery" target="_blank" rel="noreferrer">Codex Pets gallery ↗</a>'}</p><div class="reset-actions"><button data-pet-upload>Upload pet… (simulated)</button><button data-pet-save>Save to my pets (simulated)</button><button data-pet-reset="agent">Reset to agent's pet</button></div>`;
   } else {
     const selected = resolvedIcon(item), mode = state.icons[item.id]?.mode || (item.kind === "agent" ? "agent" : "default");
     $("#picker-content").innerHTML = `<input id="icon-search" class="picker-search" type="search" placeholder="Search icons…" aria-label="Search icons" value="${escapeHTML(iconQuery)}"><div id="icon-grid" class="icon-grid">${iconChoices(selected)}</div><div class="picker-label">COLOR</div><div class="palette">${colors.map(([name, color]) => `<button class="swatch" style="--swatch:${color}" data-color="${color}" aria-label="${name}" aria-pressed="${selected.color === color}"></button>`).join("")}</div><p class="picker-status">${mode === "agent" ? "Following agent selection" : mode === "default" ? "Default appearance · human controlled" : mode === "favicon" ? "Website icon · native colors (simulated)" : "Your choice · agent updates cannot replace it"}</p><div class="reset-actions">${item.kind === "browser" ? '<button data-icon-reset="favicon" class="primary">Use website favicon</button>' : ""}<button data-icon-reset="default">Reset to default</button>${item.kind === "agent" ? '<button data-icon-reset="agent">Reset to agent selection</button>' : ""}</div>`;
@@ -906,6 +906,8 @@ document.addEventListener("click", async event => {
   if (d.iconReset) { if (d.iconReset === "agent") delete state.icons[pickerTarget]; else state.icons[pickerTarget] = { mode: d.iconReset }; commit(); renderPicker(); return; }
   if (d.petChoice) { state.pets[pickerTarget] = { mode: "custom", name: d.petChoice }; state.petHidden[pickerTarget] = false; commit(); renderPicker(); return; }
   if (d.petReset) { if (d.petReset === "agent") delete state.pets[pickerTarget]; else state.pets[pickerTarget] = { mode: "default" }; state.petHidden[pickerTarget] = false; commit(); renderPicker(); return; }
+  if ("petUpload" in d) { petNotice = "Simulated: the app opens a file chooser for a Codex pet folder or 1536×1872 sheet."; renderPicker(); return; }
+  if ("petSave" in d) { petNotice = "Simulated: saves this agent-made pet to your pets so any agent can use it."; renderPicker(); return; }
   if ("petHide" in d) { state.petHidden[pickerTarget] = !state.petHidden[pickerTarget]; commit(); renderPicker(); }
 });
 document.addEventListener("contextmenu", event => {

@@ -6,6 +6,18 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Show an animated Codex-format pet (1536×1872, 8×9 cells) in pinned details,
+  with a bundled original Maestro robot-head default, a per-agent picker,
+  **Upload pet…**, gallery links, **Save to my pets** and **Reset to agent's
+  pet**. Add the bundled `maestro-pet` skill (wraps `hatch-pet`) and the
+  `pets`/`pet` orchestrator commands so an agent can add and choose a pet for its
+  own session after native ownership proof; agent-made pets are session-scoped
+  until saved. Add the `files.user-selected.read-only` sandbox entitlement for the
+  upload picker.
+- Open a directory as a new workspace from the header folder action, through the
+  new `createWorkspace`/`createWorkspaceWithPath` action scopes.
+- Add the repository-owned `wrap-up` skill: freeze scope, true-up with main, pass
+  every gate, reconcile docs and the visual POC, and deliver one undrafted PR.
 - Report the exact owned target, operation, installer stage and expected/observed
   presence when LaunchServices verification fails; distinguish unknown query
   state without exposing other registered paths or adding retries. Diagnostic
@@ -58,6 +70,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Show a pending question as a slowly pulsing light-blue question-mark badge and
+  row tint instead of a spinner, an error-colored label or a "Waiting for
+  answer" line; remove the redundant global and workspace-level needs-input
+  summaries. Show turn finished as a checkmark badge instead of a text line.
 - Default prospective Joe/Maestro Developer workers to gray, retaining the
   bicep icon, explicit human overrides and all other role defaults. Existing
   sessions are unchanged (#164).
@@ -128,8 +144,16 @@ Notable changes are recorded using Keep a Changelog categories.
 - Use all open GitHub Issues in `jdylanmc/cmux-maestro` as the default backlog,
   with explicit issue or epic narrowing.
 
+### Removed
+
+- Remove the Fermata header placeholder: CMUX exposes no keep-awake control to
+  sidebar extensions.
+
 ### Fixed
 
+- Detect pending questions again: current Copilot builds emit no
+  `user_input.requested` event, so an in-flight `ask_user` call now counts as a
+  pending answer until it completes.
 - Share wrapping Git summaries across agent hover cards and pinned details, with
   accessible green additions/red deletions and unchanged assigned-directory,
   freshness and comparison semantics (#80).

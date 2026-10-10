@@ -1085,8 +1085,9 @@ same pane. Agent metadata remains separate and untouched. The sandbox stores the
 bounded, coordinated preferences in its own Application Support
 `CMUXMaestroPreview/sidebar-icons.json`; no additional filesystem or network grant
 is required. Read/write failures are visible; **Sidebar settings > Reset all icon
-preferences** is the explicit recovery action. Pets and favicon fetching are not
-part of this picker.
+preferences** is the explicit recovery action. Pets have their own picker (see
+[Pets](#pets-cmux-maestro-nativemaestro-pet)); favicon fetching is not part of
+either picker.
 
 `SidebarIconPicker` is a controlled, reusable SwiftUI view: inject a
 `SidebarGlyphCatalog`, `SidebarIconChoice`, source/notice text, and callbacks for
@@ -1155,12 +1156,13 @@ session; unknown or ambiguous owners still prevent a unique current identity.
 Reused surfaces, stale membership and matching titles never establish
 ownership. Existing observation expiry updates the footer without a new timer.
 
-The flush footer uses native adaptive colors and one small, original
-**placeholder pet** silhouette for verified agents only. It is not a functioning
-pet integration or a provider asset. Metadata is bounded and scrollable; verified
+The flush footer uses native adaptive colors and shows the verified agent's animated
+Codex-format pet (the bundled original Maestro robot head by default; see
+[Pets](#pets-cmux-maestro-nativemaestro-pet)). Clicking it opens the pet picker. Ordinary
+terminals and browsers show no pet. Metadata is bounded and scrollable; verified
 Git counts use the existing compact badge, full paths remain in Details, and the existing
 session-ID copy control stays near identity. No context percentages, elapsed
-durations, tags, pet preferences or lifecycle controls are added.
+durations, tags or lifecycle controls are added.
 Steady connection success adds no label or row, leaving the footer lower while
 preserving the host's 50-point clearance. Waiting, disconnection and navigation
 errors or permission summaries remain visible.
@@ -1632,8 +1634,11 @@ still cannot publish unvalidated replacement state.
 
 ## Attention and safe activity
 
-Both views distinguish **Waiting for permission** from **Waiting for answer**,
-on the session or child that owns the durable request. Pairing uses request kind,
+Both views distinguish permission requests from questions on the session or child
+that owns the durable request. A pending question (an in-flight `ask_user` call, since
+current Copilot builds emit no `user_input.requested` event) is shown by a slowly pulsing
+light-blue question-mark badge and a matching row tint, not by a text label or an error
+color; a permission request keeps its **Waiting for permission** line. Pairing uses request kind,
 owner and request ID; a completion for another owner or kind cannot clear it.
 Hook-resolved permissions do not block. Repeated/late request identities cannot
 reopen a resolved request. Rejected stale abort/error evidence cannot erase a
@@ -1643,8 +1648,8 @@ question remains pending even if a different permission has a newer timestamp.
 Hook resolution uses the exact kind/owner/request identity, including when it
 arrives after another request or a new turn.
 
-The compact **Needs attention** affordance includes outstanding requests and
-nonblocking outcomes. **Acknowledge** records only the latter locally in the
+The compact **needs attention** count on collapsed branches includes outstanding requests
+and nonblocking outcomes; the header and workspace rows add no separate needs-input line. **Acknowledge** records only the latter locally in the
 native sidebar. **Acknowledge all** uses the current-window projection, including
 collapsed branches but excluding off-window or display-capped rows. An owner
 with a pending request is never eligible, even if it also has an outcome.
@@ -1652,7 +1657,9 @@ Neither acknowledgement, history dismissal nor focus sends approval, answers,
 cancellation or any agent-control command. CMUX unread counts are untouched.
 
 **Turn finished** means a matching primary `assistant.turn_end` was recorded,
-not that the session or its background children finished. Root errors/aborts
+not that the session or its background children finished. It is shown as a checkmark
+state badge on the idle session, with no separate text line (its accessibility label
+remains "Turn finished"). Root errors/aborts
 likewise do not end or unblock unrelated children. Process liveness, work state
 and attention remain independent. Process presence, idle time, file modification
 time and expired history never imply success, progress, or a hung agent.
