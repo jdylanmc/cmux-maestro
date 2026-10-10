@@ -819,6 +819,7 @@ enum SidebarPresentation {
 
     static func attention(_ signals: [AgentAttention], state: AgentWorkState, degraded: Bool) -> [String] {
         var result = AgentAttentionKind.allCases.compactMap { kind -> String? in
+            guard kind != .turnFinished else { return nil }
             let count = signals.filter { $0.kind == kind }.count
             guard count > 0 else { return nil }
             return kind.title + (count > 1 ? " (\(count))" : "")
@@ -1003,7 +1004,11 @@ enum SidebarPresentation {
         }
         if session.state == .blocked { return state(.blocked) }
         switch session.liveness {
-        case .alive: return state(session.state)
+        case .alive:
+            if session.state == .idle, session.attention.contains(where: { $0.kind == .turnFinished }) {
+                return .init(title: "Turn finished", symbol: "checkmark.circle", tone: .neutral)
+            }
+            return state(session.state)
         case .dead: return process(.dead)
         case .ambiguous: return .init(title: "Unconfirmed owner", symbol: "circle.dashed", tone: .neutral)
         case .unknown: return .init(title: "State unavailable", symbol: "circle.dashed", tone: .neutral)
