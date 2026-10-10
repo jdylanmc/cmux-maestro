@@ -1422,6 +1422,22 @@ show only their own synthetic windows. These are view captures, not a desktop ca
 CMUX-host visual proof, system VoiceOver verification or a checked-in OS/font
 golden-image comparison. No transcripts, real workspace paths or desktop images are uploaded.
 
+## Pets: `/cmux-maestro-native:maestro-pet`
+
+The active agent's pinned details show an animated Codex-format pet (1536×1872 PNG/WebP,
+8×9 cells of 192×208). Every agent starts with the bundled, original **Maestro** robot-head
+pet, animated by state: idle, working, needs input, turn finished and blocked/failed.
+Click the pet to open a picker of the bundled pet, pets you saved or uploaded, and the pet
+this agent made for itself. **Upload pet…** accepts a Codex pet folder (`pet.json` plus
+spritesheet) or a bare sheet; the picker also links to online Codex pet galleries.
+
+The bundled `maestro-pet` skill wraps `hatch-pet` for creation. An agent adds a pet with
+`cmux-maestro-orchestrator pet --self --session-id … --add <folder>`, which validates the
+format and selects it only after the native identity helper proves session ownership.
+An agent-made pet is **scoped to that session**; use **Save to my pets** in the picker to
+keep it for every agent. Precedence is your choice, then the agent's choice, then Maestro;
+**Reset to agent's pet** removes your choice. Reduce Motion shows a still frame.
+
 ## Choose your session icon: `/cmux-maestro-native:maestro-icon`
 
 The bundled `/cmux-maestro-native:maestro-icon` skill searches the local Nerd Fonts catalog and saves

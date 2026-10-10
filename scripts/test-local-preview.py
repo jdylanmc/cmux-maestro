@@ -482,6 +482,8 @@ else:
             shutil.copytree(ROOT / "Resources/NerdFonts", resources / "NerdFonts")
             (resources / "maestro-icon").mkdir()
             (resources / "maestro-icon/SKILL.md").write_text("---\nname: maestro-icon\n---\n")
+            (resources / "maestro-pet").mkdir()
+            (resources / "maestro-pet/SKILL.md").write_text("---\nname: maestro-pet\n---\n")
             (resources / "cmux-maestro-orchestrator.py").write_text("#!/usr/bin/env python3\n# " + app.stem + "\n")
 
     def integration_snapshot(self):

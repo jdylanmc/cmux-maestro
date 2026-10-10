@@ -47,7 +47,7 @@ struct SidebarPetButton: View {
         let state = SidebarPetState.resolve(visual: content.visual, needsInput: content.needsInput)
         let name = store.descriptor(petID, session: content.petSessionID)?.displayName ?? "Maestro"
         Button { showingPicker = true } label: {
-            SidebarPetView(petID: petID, session: content.petSessionID, state: state, width: 46)
+            SidebarPetView(petID: petID, session: content.petSessionID, state: state, width: 38)
         }
         .buttonStyle(.plain)
         .help("\(name) · \(state.title). Click to choose a pet.")

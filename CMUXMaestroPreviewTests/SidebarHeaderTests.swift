@@ -39,7 +39,7 @@ struct SidebarHeaderTests {
         #expect(host.fittingSize.width <= CGFloat(width) && host.fittingSize.height <= 40)
         #expect(!window.isVisible)
         let buttons = descendants(host).compactMap { $0 as? NSButton }
-        try #require(buttons.count == 6)
+        try #require(buttons.count == 5)
         let frames = buttons.map { host.convert($0.bounds, from: $0) }
         #expect(frames.allSatisfy { $0.size == CGSize(width: 28, height: 28) && host.bounds.contains($0) })
         for index in 1..<frames.count {

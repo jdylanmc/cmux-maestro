@@ -14,6 +14,7 @@ import re
 import runpy
 from pathlib import Path
 import secrets
+import shutil
 import selectors
 import signal
 import shlex
@@ -3872,13 +3873,7 @@ def command_follow_up(args, root, cmux):
     return mutate(root, queue)
 
 
-def command_self_icon(args):
-    if args.actor_id is not None or args.token is not None:
-        raise OrchestrationError("Self-session selection cannot use a managed actor or token.")
-    session = canonical_uuid(args.session_id, "current session ID")
-    if args.icon is None and args.color is None:
-        raise OrchestrationError("Choose a glyph, a color, or both.")
-    glyph = resolve_icon(args.icon) if args.icon is not None else None
+def identity_helper_path(feature):
     config_path = Path(__file__).resolve().parent / "identity-helper.json"
     try:
         descriptor = os.open(config_path, os.O_RDONLY | os.O_NOFOLLOW)
@@ -3892,8 +3887,18 @@ def command_self_icon(args):
         if set(config) != {"helper"} or not isinstance(config["helper"], str) or not Path(config["helper"]).is_absolute():
             raise ValueError()
     except (OSError, ValueError, TypeError) as error:
-        raise OrchestrationError("Refresh Maestro integration to enable standalone session icons.") from error
-    helper = trusted_executable("CMUX_MAESTRO_IDENTITY_HELPER", config["helper"])
+        raise OrchestrationError(f"Refresh Maestro integration to enable {feature}.") from error
+    return trusted_executable("CMUX_MAESTRO_IDENTITY_HELPER", config["helper"])
+
+
+def command_self_icon(args):
+    if args.actor_id is not None or args.token is not None:
+        raise OrchestrationError("Self-session selection cannot use a managed actor or token.")
+    session = canonical_uuid(args.session_id, "current session ID")
+    if args.icon is None and args.color is None:
+        raise OrchestrationError("Choose a glyph, a color, or both.")
+    glyph = resolve_icon(args.icon) if args.icon is not None else None
+    helper = identity_helper_path("standalone session icons")
     arguments = [helper, "icon", "--session-id", session]
     if glyph is not None:
         arguments += ["--icon", glyph]
@@ -3911,6 +3916,168 @@ def command_self_icon(args):
     ) or (args.color is not None and value.get("iconColor") != args.color):
         raise OrchestrationError("The identity helper returned a mismatched selection.")
     return {key: value[key] for key in ("sessionId", "iconId", "iconColor") if key in value}
+
+
+PET_SIZE = (1536, 1872)
+PET_MAX_BYTES = 10 * 1024 * 1024
+PET_MAX_PER_SESSION = 8
+PET_DEFAULT_ID = "maestro"
+PET_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def pet_session_root(session):
+    return (Path.home() / "Library/Application Support/CMUXMaestroPreview/Copilot/pets/sessions"
+            / session)
+
+
+def image_size(data):
+    """Pixel size of a PNG or WebP image without third-party libraries."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR":
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        kind = data[12:16]
+        if kind == b"VP8X":
+            return (int.from_bytes(data[24:27], "little") + 1, int.from_bytes(data[27:30], "little") + 1)
+        if kind == b"VP8L" and data[20:21] == b"\x2f":
+            bits = int.from_bytes(data[21:25], "little")
+            return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+        if kind == b"VP8 " and data[23:26] == b"\x9d\x01\x2a":
+            return (int.from_bytes(data[26:28], "little") & 0x3FFF,
+                    int.from_bytes(data[28:30], "little") & 0x3FFF)
+    return None
+
+
+def pet_slug(value):
+    slug = "-".join(part for part in re.sub(r"[^a-z0-9]+", "-", str(value).lower()).split("-") if part)
+    return slug[:48].strip("-")
+
+
+def read_pet_source(source, requested_id):
+    path = Path(source).expanduser()
+    if path.name == "pet.json" and path.is_file():
+        path = path.parent
+    if path.is_symlink() and not path.is_dir():
+        path = path.resolve()
+    if path.is_dir():
+        manifest_path = path / "pet.json"
+        try:
+            manifest = json.loads(manifest_path.read_bytes()[:65536])
+        except (OSError, ValueError) as error:
+            raise OrchestrationError("The pet folder needs a readable pet.json.") from error
+        if not isinstance(manifest, dict):
+            raise OrchestrationError("pet.json must be a JSON object.")
+        name = manifest.get("spritesheetPath")
+        if not isinstance(name, str) or not name or Path(name).name != name or name.startswith("."):
+            raise OrchestrationError("pet.json spritesheetPath must be a file inside the pet folder.")
+        sheet = path / name
+        display = str(manifest.get("displayName") or manifest.get("id") or path.name)[:64]
+        description = str(manifest.get("description") or "")[:200]
+        identifier = pet_slug(requested_id or manifest.get("id") or display)
+    elif path.is_file():
+        sheet, display, description = path, path.stem[:64], ""
+        identifier = pet_slug(requested_id or path.stem)
+    else:
+        raise OrchestrationError("The pet path does not exist.")
+    if sheet.suffix.lower() not in (".webp", ".png"):
+        raise OrchestrationError("The spritesheet must be a PNG or WebP image.")
+    try:
+        info = sheet.stat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size <= 0 or info.st_size > PET_MAX_BYTES:
+            raise OrchestrationError("The spritesheet must be a regular file under 10 MB.")
+        data = sheet.read_bytes()
+    except OSError as error:
+        raise OrchestrationError("The spritesheet could not be read.") from error
+    if image_size(data) != PET_SIZE:
+        raise OrchestrationError(
+            f"The spritesheet must be exactly {PET_SIZE[0]}x{PET_SIZE[1]} pixels (8 columns x 9 rows of 192x208 cells).")
+    if not identifier or not PET_ID_PATTERN.fullmatch(identifier) or identifier == PET_DEFAULT_ID:
+        identifier = pet_slug(f"{identifier or 'pet'}-custom")
+    return identifier, display, description, data, sheet.suffix.lower()
+
+
+def private_directory(path):
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise OrchestrationError("The Maestro pet library is not a private directory.")
+
+
+def write_private(path, data):
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(4)}")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def list_session_pets(session):
+    root = pet_session_root(session)
+    pets = []
+    if root.is_dir() and not root.is_symlink():
+        for folder in sorted(root.iterdir()):
+            try:
+                manifest = json.loads((folder / "pet.json").read_bytes()[:65536])
+                pets.append({"petId": folder.name, "displayName": manifest.get("displayName", folder.name)})
+            except (OSError, ValueError):
+                continue
+    return pets
+
+
+def command_pets(args):
+    session = canonical_uuid(args.session_id, "current session ID") if args.session_id else None
+    return {"default": PET_DEFAULT_ID, "contract": f"{PET_SIZE[0]}x{PET_SIZE[1]} PNG/WebP, 8x9 cells of 192x208",
+            "sessionPets": list_session_pets(session) if session else []}
+
+
+def command_self_pet(args):
+    if not args.own_session:
+        raise OrchestrationError("Pets are chosen with --self for your own session.")
+    session = canonical_uuid(args.session_id, "current session ID")
+    if args.add is None and args.pet_id is None:
+        raise OrchestrationError("Give --pet-id to select a pet, or --add PATH to add and select one.")
+    installed = None
+    created = False
+    if args.add is not None:
+        identifier, display, description, data, extension = read_pet_source(args.add, args.pet_id)
+        existing = {pet["petId"] for pet in list_session_pets(session)}
+        if identifier not in existing and len(existing) >= PET_MAX_PER_SESSION:
+            raise OrchestrationError("This session already has the maximum number of its own pets.")
+        folder = pet_session_root(session) / identifier
+        created = not folder.exists()
+        private_directory(folder)
+        write_private(folder / f"spritesheet{extension}", data)
+        write_private(folder / "pet.json", json.dumps({
+            "id": identifier, "displayName": display, "description": description,
+            "spritesheetPath": f"spritesheet{extension}"}, sort_keys=True).encode())
+        installed = identifier
+    chosen = installed or args.pet_id
+    if chosen != PET_DEFAULT_ID and (not PET_ID_PATTERN.fullmatch(chosen or "")
+                                     or chosen not in {pet["petId"] for pet in list_session_pets(session)}):
+        raise OrchestrationError("That pet is not available to this session. Use --add PATH first.")
+    helper = identity_helper_path("session pets")
+
+    def discard():
+        if installed is not None and created:
+            shutil.rmtree(pet_session_root(session) / installed, ignore_errors=True)
+
+    try:
+        process = subprocess.run([helper, "icon", "--session-id", session, "--pet", chosen],
+                                 capture_output=True, text=True, timeout=5)
+        value = json.loads(process.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+        discard()
+        raise OrchestrationError("Own-session identity verification did not complete.") from error
+    if process.returncode != 0 or not isinstance(value, dict) or value.get("ok") is not True:
+        discard()
+        raise OrchestrationError("This caller could not prove ownership of that session; no pet was selected.")
+    if str(value.get("sessionId", "")).lower() != session or value.get("petId") != chosen:
+        raise OrchestrationError("The identity helper returned a mismatched selection.")
+    return {"sessionId": session, "petId": chosen, "added": installed is not None,
+            "scope": "this session only until saved from the Maestro pet picker"}
 
 
 def command_icon(args, root, cmux):
@@ -4313,6 +4480,13 @@ def parser():
     icon.add_argument("--session-id")
     icon.add_argument("--icon")
     icon.add_argument("--color", choices=ICON_COLORS)
+    pets = commands.add_parser("pets", help="List the default pet and this session's own pets")
+    pets.add_argument("--session-id")
+    pet = commands.add_parser("pet", help="Add and/or choose a Codex pet for your own session")
+    pet.add_argument("--self", action="store_true", dest="own_session")
+    pet.add_argument("--session-id")
+    pet.add_argument("--pet-id")
+    pet.add_argument("--add", metavar="PATH")
     runtime = commands.add_parser("runtime")
     runtime.add_argument("--worker-id", required=True)
     runtime.add_argument("--token")
@@ -4343,6 +4517,12 @@ def main(argv=None):
             return 0
         if args.command == "icons":
             print(json.dumps({"ok": True, **command_icons(args)}, sort_keys=True))
+            return 0
+        if args.command == "pets":
+            print(json.dumps({"ok": True, **command_pets(args)}, sort_keys=True))
+            return 0
+        if args.command == "pet":
+            print(json.dumps({"ok": True, **command_self_pet(args)}, sort_keys=True))
             return 0
         if args.command == "icon" and args.own_session:
             print(json.dumps({"ok": True, **command_self_icon(args)}, sort_keys=True))
