@@ -210,7 +210,7 @@ struct SidebarStateBadge: View {
     var body: some View {
         Group {
             if needsInput {
-                Image(systemName: "exclamationmark").font(.system(size: 10, weight: .bold))
+                SidebarQuestionGlow(reduceMotion: reduceMotion)
             } else if visual.tone == .green {
                 if reduceMotion {
                     SidebarWorkingRing(rotation: 0)
@@ -228,6 +228,27 @@ struct SidebarStateBadge: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(detail ?? SidebarPresentation.statusDescription(visual, needsInput: needsInput))
         .help(detail ?? SidebarPresentation.statusDescription(visual, needsInput: needsInput))
+    }
+}
+
+struct SidebarQuestionGlow: View {
+    let reduceMotion: Bool
+
+    var body: some View {
+        if reduceMotion {
+            glyph(glow: 0.8)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                glyph(glow: 0.55 + 0.45 * sin(context.date.timeIntervalSinceReferenceDate * 2.6))
+            }
+        }
+    }
+
+    private func glyph(glow: Double) -> some View {
+        Image(systemName: "questionmark")
+            .font(.system(size: 11, weight: .heavy))
+            .shadow(color: SidebarTone.red.color.opacity(glow), radius: 3)
+            .shadow(color: SidebarTone.red.color.opacity(glow * 0.7), radius: 6)
     }
 }
 
