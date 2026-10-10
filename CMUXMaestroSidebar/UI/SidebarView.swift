@@ -163,10 +163,22 @@ struct SidebarTerminalIcon: View {
 
 struct SidebarActivityBackground: View {
     let visual: SidebarVisual
+    var needsInput = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
-            if visual.tone == .red {
+            if needsInput {
+                if reduceMotion {
+                    RoundedRectangle(cornerRadius: 4).fill(SidebarQuestionGlow.lightBlue.opacity(0.14))
+                } else {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                        let pulse = 0.5 + 0.5 * sin(context.date.timeIntervalSinceReferenceDate * 1.5)
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(SidebarQuestionGlow.lightBlue.opacity(0.06 + 0.14 * pulse))
+                    }
+                }
+            } else if visual.tone == .red {
                 RoundedRectangle(cornerRadius: 4).fill(.red.opacity(0.065))
             } else {
                 Color.clear
@@ -223,7 +235,7 @@ struct SidebarStateBadge: View {
                 Image(systemName: visual.symbol).font(.system(size: 10, weight: .semibold))
             }
         }
-        .foregroundStyle(needsInput ? SidebarTone.teal.color : visual.tone.color)
+        .foregroundStyle(needsInput ? SidebarQuestionGlow.lightBlue : visual.tone.color)
         .frame(width: 12, height: 14)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(detail ?? SidebarPresentation.statusDescription(visual, needsInput: needsInput))
@@ -233,13 +245,14 @@ struct SidebarStateBadge: View {
 
 struct SidebarQuestionGlow: View {
     let reduceMotion: Bool
+    static let lightBlue = Color(red: 0.45, green: 0.75, blue: 1.0)
 
     var body: some View {
         if reduceMotion {
             glyph(glow: 0.8)
         } else {
             TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
-                glyph(glow: 0.55 + 0.45 * sin(context.date.timeIntervalSinceReferenceDate * 2.6))
+                glyph(glow: 0.55 + 0.45 * sin(context.date.timeIntervalSinceReferenceDate * 1.5))
             }
         }
     }
@@ -247,9 +260,9 @@ struct SidebarQuestionGlow: View {
     private func glyph(glow: Double) -> some View {
         Image(systemName: "questionmark")
             .font(.system(size: 11, weight: .heavy))
-            .foregroundStyle(SidebarTone.teal.color)
-            .shadow(color: SidebarTone.teal.color.opacity(glow), radius: 3)
-            .shadow(color: SidebarTone.teal.color.opacity(glow * 0.7), radius: 6)
+            .foregroundStyle(Self.lightBlue)
+            .shadow(color: Self.lightBlue.opacity(glow), radius: 3)
+            .shadow(color: Self.lightBlue.opacity(glow * 0.7), radius: 6)
     }
 }
 
@@ -1363,7 +1376,8 @@ private struct ManagedNodeRow: View {
         }
         .frame(minHeight: density.rowHeight)
         .sidebarRowActions(title: node.label, groups: actions)
-        .background { SidebarActivityBackground(visual: stateVisual) }
+        .background { SidebarActivityBackground(visual: stateVisual,
+                                                needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate)) }
         .modifier(SidebarFocusBorder(workspaceID: node.workspaceId, surfaceID: node.surfaceId, enabled: !isRetainedRecord))
         .padding(.leading, density.indentation(depth: depth, unresolved: false, width: contentWidth))
         .background {
@@ -1851,7 +1865,8 @@ private struct SurfaceRow: View {
             .sidebarRowActions(title: title, groups: actions)
             .background {
                 if let singleSession {
-                    SidebarActivityBackground(visual: SidebarPresentation.sessionState(singleSession))
+                    SidebarActivityBackground(visual: SidebarPresentation.sessionState(singleSession),
+                                              needsInput: SidebarPresentation.needsInput(singleSession.attention))
                 }
             }
             .modifier(SidebarFocusBorder(workspaceID: workspaceID, surfaceID: surface.id))
@@ -1976,7 +1991,8 @@ private struct CopilotSessionRow: View {
             }
             .frame(minHeight: density.rowHeight)
             .sidebarRowActions(title: "Copilot \(session.shortID)", groups: actions)
-            .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session)) }
+            .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session),
+                                                needsInput: SidebarPresentation.needsInput(session.attention)) }
             CopilotSessionContents(
                 session: session, expanded: expanded,
                 navigation: navigation, layout: layout, setExpanded: setExpanded,
@@ -2454,7 +2470,7 @@ private struct CopilotWorkRow: View {
         }
 
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background { SidebarActivityBackground(visual: stateVisual) }
+        .background { SidebarActivityBackground(visual: stateVisual, needsInput: SidebarPresentation.needsInput(node.attention)) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("\(taskboard ? "taskboard" : "copilot")-child-\(session.id)-\(node.id)")
     }
@@ -2685,7 +2701,8 @@ private struct TaskboardSessionRow: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("taskboard-session-attention-\(session.id)")
-        .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session)) }
+        .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session),
+                                                needsInput: SidebarPresentation.needsInput(session.attention)) }
         .modifier(SidebarFocusBorder(workspaceID: session.workspaceID, surfaceID: session.surfaceID, enabled: !retained))
     }
 }
