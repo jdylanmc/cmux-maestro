@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import fnmatch
 import importlib.util
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -9,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 import uuid
@@ -21,8 +24,286 @@ spec.loader.exec_module(metadata)
 scope_spec = importlib.util.spec_from_file_location("integrated_scopes", ROOT / "scripts/run-integrated-test-scopes.py")
 scopes = importlib.util.module_from_spec(scope_spec)
 scope_spec.loader.exec_module(scopes)
+row_spec = importlib.util.spec_from_file_location("row_input", ROOT / "scripts/run-row-input-tests.py")
+row_input = importlib.util.module_from_spec(row_spec)
+row_spec.loader.exec_module(row_input)
 BENCHMARK_TEST = "CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()"
 BENCHMARK_FLAG = "CMUX_MAESTRO_READER_BENCHMARK"
+
+
+class RowInputVenueTests(unittest.TestCase):
+    def report(self, methods=None, status="Passed"):
+        methods = row_input.METHODS if methods is None else methods
+        entries = [(f"RowInputUITests/{name}()", status) for name in methods]
+        summary, tests = IntegratedTestScopeTests.report(entries)
+        bundle = tests["testNodes"][0]
+        bundle.update(nodeType="UI test bundle", name=row_input.TARGET,
+                      nodeIdentifierURL="test://com.apple.xcode/CMUXMaestroPreview/" + row_input.TARGET)
+        for node in bundle["children"]:
+            node["nodeIdentifierURL"] = bundle["nodeIdentifierURL"] + "/" + node["nodeIdentifier"].removesuffix("()")
+        suite = {"nodeType": "Test Suite", "name": "RowInputUITests",
+                 "nodeIdentifierURL": bundle["nodeIdentifierURL"] + "/RowInputUITests",
+                 "children": bundle["children"]}
+        bundle["children"] = [suite]
+        tests["testNodes"] = [{"nodeType": "Test Plan", "name": "CMUXMaestroRowInput", "children": [bundle]}]
+        return summary, tests
+
+    @staticmethod
+    def bundle(tests):
+        return tests["testNodes"][0]["children"][0]
+
+    def test_project_plan_target_suite_and_method_remain_independently_bound(self):
+        for level in ("plan", "bundle", "suite", "case"):
+            for field in ("name", "nodeIdentifierURL"):
+                if level == "plan" and field == "nodeIdentifierURL":
+                    continue
+                summary, tests = self.report()
+                bundle = self.bundle(tests)
+                suite = bundle["children"][0]
+                node = {"plan": tests["testNodes"][0], "bundle": bundle,
+                        "suite": suite, "case": suite["children"][0]}[level]
+                if level == "case" and field == "name":
+                    field = "nodeIdentifier"
+                node[field] += "-foreign"
+                with self.subTest(level=level, field=field), self.assertRaises(ValueError):
+                    row_input.validate_results(summary, tests)
+        for level in ("bundle", "suite", "case"):
+            summary, tests = self.report()
+            bundle = self.bundle(tests)
+            suite = bundle["children"][0]
+            node = {"bundle": bundle, "suite": suite, "case": suite["children"][0]}[level]
+            del node["nodeIdentifierURL"]
+            with self.subTest(missingURL=level), self.assertRaises(ValueError):
+                row_input.validate_results(summary, tests)
+
+    def settings(self):
+        return [{"target": name, "buildSettings": {
+            "PRODUCT_BUNDLE_IDENTIFIER": identifier,
+            "CODE_SIGNING_ALLOWED": "NO", "CODE_SIGNING_REQUIRED": "NO",
+            "SKIP_INSTALL": "YES", "ENABLE_APP_SANDBOX": "NO",
+            "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG CMUX_VALIDATION",
+            "TEST_TARGET_NAME": "CMUXMaestroRowInputFixture",
+            "INFOPLIST_KEY_LSUIElement": "YES",
+        }} for name, identifier in metadata.ROW_INPUT_TARGETS.items()]
+
+    def test_row_fixture_must_be_an_accessory_before_launch(self):
+        for value in (None, "NO"):
+            rows = self.settings()
+            fixture = next(row["buildSettings"] for row in rows if row["target"] == "CMUXMaestroRowInputFixture")
+            if value is None:
+                fixture.pop("INFOPLIST_KEY_LSUIElement")
+            else:
+                fixture["INFOPLIST_KEY_LSUIElement"] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                metadata.verify_row_input_settings(rows)
+
+    def test_exact_six_ui_cases_pass_once(self):
+        counts = row_input.validate_results(*self.report())
+        self.assertEqual(counts["passedTests"], 6)
+
+    def test_strict_suite_is_explicit_and_does_not_change_flat_guide_contract(self):
+        summary, tests = self.report()
+        bundle = self.bundle(tests)
+        bundle["children"] = bundle["children"][0]["children"]
+        selected = scopes.cases(tests, expected_project="CMUXMaestroPreview",
+                                expected_plan="CMUXMaestroRowInput")
+        self.assertEqual(len(selected), 6)
+        self.assertTrue(all(case.identity.endswith("()") for case in selected))
+        with self.assertRaisesRegex(ValueError, "suite ancestry"):
+            row_input.validate_results(summary, tests)
+        for expectations in ({}, {"expected_project": "CMUXMaestroPreview"},
+                             {"expected_plan": "CMUXMaestroRowInput"}):
+            with self.subTest(expectations=expectations), self.assertRaisesRegex(
+                    ValueError, "explicit project and test-plan"):
+                scopes.cases(tests, strict_suite=True, **expectations)
+
+    def test_row_accepts_both_ui_url_spellings_without_mutating_evidence(self):
+        for suffix in ("", "()"):
+            summary, tests = self.report()
+            nodes = self.bundle(tests)["children"][0]["children"]
+            for node in nodes:
+                node["nodeIdentifierURL"] += suffix
+            original = json.dumps(tests, sort_keys=True)
+            with self.subTest(suffix=suffix):
+                self.assertEqual(row_input.validate_results(summary, tests)["passedTests"], 6)
+                self.assertEqual(json.dumps(tests, sort_keys=True), original)
+
+    def test_row_retains_main_method_metadata_guards(self):
+        for field in ("name", "nodeIdentifier"):
+            for value in (None, "", "unrelatedMethod()"):
+                summary, tests = self.report()
+                node = self.bundle(tests)["children"][0]["children"][0]
+                if value is None:
+                    del node[field]
+                else:
+                    node[field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    row_input.validate_results(summary, tests)
+
+    def test_nested_foreign_or_duplicate_plan_cannot_supply_required_cases(self):
+        for name in ("UnapprovedPlan", "CMUXMaestroRowInput"):
+            summary, tests = self.report()
+            root = tests["testNodes"][0]
+            root["children"] = [{"nodeType": "Test Plan", "name": name, "children": root["children"]}]
+            with self.subTest(nestedPlan=name), self.assertRaises(ValueError):
+                row_input.validate_results(summary, tests)
+
+    def test_failed_hosted_cases_are_observed_but_never_accepted(self):
+        summary, tests = self.report(status="Failed")
+        selected = row_input.observed_cases(tests)
+        self.assertEqual(len(selected), 6)
+        self.assertTrue(all(case.status == "Failed" and case.executions == ((None, "Failed"),)
+                            for case in selected))
+        self.assertEqual(scopes.reconcile(summary, selected)["failedTests"], 6)
+        with self.assertRaisesRegex(ValueError, "must each pass once"):
+            row_input.validate_results(summary, tests)
+
+    def test_only_empty_xctest_argument_suffix_is_normalized(self):
+        summary, tests = self.report()
+        case = self.bundle(tests)["children"][0]["children"][0]
+        case["nodeIdentifier"] = case["nodeIdentifier"].removesuffix("()") + "(foreign:)"
+        with self.assertRaisesRegex(ValueError, "identifier and URL disagree"):
+            row_input.validate_results(summary, tests)
+
+    def test_extraction_failure_preserves_full_stderr_in_uploaded_artifacts(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        job = workflow.split("\n  row-input:\n", 1)[1].split("\n  validate:\n", 1)[0]
+        patterns = [line.strip() for line in job.splitlines()
+                    if line.strip().startswith(".build/row-input/")]
+        message = "synthetic extractor failure:" + "X" * 5000 + ":TAIL_SENTINEL"
+        for failed_kind in ("summary", "tests"):
+            def extract(command, **kwargs):
+                if command[4] == failed_kind:
+                    raise subprocess.CalledProcessError(65, command, stderr=message)
+                return subprocess.CompletedProcess(command, 0, stdout="{}")
+
+            with self.subTest(kind=failed_kind), \
+                    tempfile.TemporaryDirectory(prefix="row-input-extraction-") as temporary:
+                directory = Path(temporary)
+                printed = io.StringIO()
+                with patch("sys.stderr", printed), self.assertRaises(subprocess.CalledProcessError) as failure:
+                    scopes.read_result(directory / "row-input.xcresult", directory, "row-input", extract)
+                self.assertEqual(failure.exception.returncode, 65)
+                error = directory / f"row-input-{failed_kind}.error"
+                self.assertEqual(error.read_text(), message)
+                self.assertNotIn("TAIL_SENTINEL", printed.getvalue())
+                artifact_path = f".build/row-input/run-fixture/{error.name}"
+                self.assertTrue(any(fnmatch.fnmatchcase(artifact_path, pattern) for pattern in patterns),
+                                f"Full extractor stderr is excluded from CI artifacts: {artifact_path}")
+
+    def test_zero_missing_extra_and_wrong_target_cannot_pass(self):
+        for methods in (set(), set(list(row_input.METHODS)[1:]), row_input.METHODS | {"testUnapproved"}):
+            with self.subTest(methods=methods), self.assertRaises(ValueError):
+                row_input.validate_results(*self.report(methods))
+        summary, tests = self.report()
+        self.bundle(tests)["name"] = "CMUXMaestroPreviewTests"
+        with self.assertRaises(ValueError):
+            row_input.validate_results(summary, tests)
+
+    def test_failed_skipped_expected_failure_and_duplicate_are_not_success(self):
+        for status in ("Failed", "Skipped", "Expected Failure"):
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                row_input.validate_results(*self.report(status=status))
+        summary, tests = self.report()
+        suite = self.bundle(tests)["children"][0]
+        suite["children"].append(suite["children"][0])
+        with self.assertRaises(ValueError):
+            row_input.validate_results(summary, tests)
+
+    def test_repetition_and_miscount_are_rejected(self):
+        summary, tests = self.report()
+        self.bundle(tests)["children"][0]["children"][0]["children"] = [
+            {"nodeType": "Repetition", "result": "Passed"}]
+        with self.assertRaises(ValueError):
+            row_input.validate_results(summary, tests)
+        summary, tests = self.report()
+        summary["passedTests"] -= 1
+        with self.assertRaises(ValueError):
+            row_input.validate_results(summary, tests)
+
+    def test_nonhosted_refuses_before_any_subprocess_or_ui_access(self):
+        for environment in ({}, {"GITHUB_ACTIONS": "true"}, {"RUNNER_ENVIRONMENT": "github-hosted"},
+                            {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted"}):
+            with self.subTest(environment=environment), patch.dict(os.environ, environment, clear=True), \
+                    patch.object(row_input.subprocess, "run") as run, \
+                    patch.object(row_input.subprocess, "check_output") as output:
+                with self.assertRaises(ValueError):
+                    row_input.run(False)
+                run.assert_not_called()
+                output.assert_not_called()
+        row_input.require_hosted({"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted"})
+
+    def test_fixed_namespace_and_noninstallation_settings(self):
+        metadata.verify_row_input_settings(self.settings())
+        for index in (0, 1):
+            for key, value in (
+                ("PRODUCT_BUNDLE_IDENTIFIER", metadata.BASE_ID),
+                ("CODE_SIGNING_ALLOWED", "YES"), ("CODE_SIGNING_REQUIRED", "YES"),
+                ("SKIP_INSTALL", "NO"), ("ENABLE_APP_SANDBOX", "YES"),
+            ):
+                rows = self.settings()
+                rows[index]["buildSettings"][key] = value
+                with self.subTest(index=index, key=key), self.assertRaises(ValueError):
+                    metadata.verify_row_input_settings(rows)
+        for rows in ([], self.settings()[:1], self.settings()[1:]):
+            with self.assertRaises(ValueError):
+                metadata.verify_row_input_settings(rows)
+        rows = self.settings()
+        rows[0]["buildSettings"]["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = "DEBUG"
+        with self.assertRaises(ValueError):
+            metadata.verify_row_input_settings(rows)
+        rows = self.settings()
+        rows[1]["buildSettings"]["TEST_TARGET_NAME"] = "CMUXMaestroPreview"
+        with self.assertRaises(ValueError):
+            metadata.verify_row_input_settings(rows)
+
+    def test_built_product_namespace_rejects_production_ids_and_embedded_helpers(self):
+        with tempfile.TemporaryDirectory(prefix="row-input-metadata-") as temporary:
+            products = Path(temporary)
+            fixture = products / "CMUXMaestroRowInputFixture.app"
+            runner = products / "CMUXMaestroRowInputUITests-Runner.app"
+            tests = runner / "Contents/PlugIns/CMUXMaestroRowInputUITests.xctest"
+            bundles = [
+                (fixture, "CMUXMaestroRowInputFixture", metadata.ROW_INPUT_TARGETS["CMUXMaestroRowInputFixture"], "APPL"),
+                (tests, "CMUXMaestroRowInputUITests", metadata.ROW_INPUT_TARGETS["CMUXMaestroRowInputUITests"], "BNDL"),
+                (runner, "CMUXMaestroRowInputUITests-Runner",
+                 metadata.ROW_INPUT_TARGETS["CMUXMaestroRowInputUITests"] + ".xctrunner", "APPL"),
+            ]
+            for path, executable, identifier, kind in bundles:
+                (path / "Contents/MacOS").mkdir(parents=True, exist_ok=True)
+                (path / "Contents/MacOS" / executable).write_text("metadata-only fixture; never executed")
+                (path / "Contents/Info.plist").write_bytes(plistlib.dumps({
+                    "CFBundleIdentifier": identifier, "CFBundlePackageType": kind, "CFBundleExecutable": executable,
+                    **({"LSUIElement": True} if path == fixture else {}),
+                }))
+            metadata.verify_row_input_products(products)
+            fixture_info = fixture / "Contents/Info.plist"
+            original_fixture_info = fixture_info.read_bytes()
+            for value in (None, False, "YES"):
+                value_info = plistlib.loads(original_fixture_info)
+                if value is None:
+                    value_info.pop("LSUIElement")
+                else:
+                    value_info["LSUIElement"] = value
+                fixture_info.write_bytes(plistlib.dumps(value_info))
+                with self.subTest(accessoryFlag=value), self.assertRaises(ValueError):
+                    metadata.verify_row_input_products(products)
+            fixture_info.write_bytes(original_fixture_info)
+            for path, _, _, _ in bundles:
+                info = path / "Contents/Info.plist"
+                original = info.read_bytes()
+                value = plistlib.loads(original)
+                value["CFBundleIdentifier"] = metadata.BASE_ID
+                info.write_bytes(plistlib.dumps(value))
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    metadata.verify_row_input_products(products)
+                info.write_bytes(original)
+            for directory in ("Helpers", "Extensions"):
+                path = fixture / "Contents" / directory
+                path.mkdir()
+                with self.subTest(directory=directory), self.assertRaises(ValueError):
+                    metadata.verify_row_input_products(products)
+                path.rmdir()
 
 
 class IntegratedTestScopeTests(unittest.TestCase):
@@ -565,9 +846,42 @@ class BuildMetadataTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(destination.exists())
 
-    def test_ci_preserves_all_fourteen_validation_commands_without_new_conditions(self):
+    def _workflow_with_plain_integrated_command(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
+        hosted_step = (
+            "      - name: Run integrated Swift tests\n"
+            "        run: |\n"
+            "          unset TEST_RUNNER_GITHUB_ACTIONS TEST_RUNNER_RUNNER_ENVIRONMENT\n"
+            '          if [ "${GITHUB_ACTIONS-}" = true ] && [ "${RUNNER_ENVIRONMENT-}" = github-hosted ]; then\n'
+            '            export TEST_RUNNER_GITHUB_ACTIONS="$GITHUB_ACTIONS"\n'
+            '            export TEST_RUNNER_RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT"\n'
+            "          fi\n"
+            "          printf 'row-lift-native-input workflow: GITHUB_ACTIONS=%s; RUNNER_ENVIRONMENT=%s\\n' "
+            '"${GITHUB_ACTIONS-<unset>}" "${RUNNER_ENVIRONMENT-<unset>}"\n'
+            "          ./scripts/test.sh\n"
+        )
+        self.assertEqual(workflow.count(hosted_step), 1)
+        return workflow.replace(hosted_step, (
+            "      - name: Run integrated Swift tests\n"
+            "        run: ./scripts/test.sh\n"
+        ))
+
+    def test_ci_preserves_all_fourteen_validation_commands_without_new_conditions(self):
+        workflow = self._workflow_with_plain_integrated_command()
+        self.assertNotIn("continue-on-error", workflow)
+        self.assertEqual(workflow.count("\n  validate:\n"), 1)
+        self.assertEqual(workflow.count("\n  row-input:\n"), 1)
+        row_job, workflow = workflow.split("\n  validate:\n")
+        self.assertIn("\n    runs-on: macos-latest\n", row_job)
+        self.assertNotIn("\n    if:", row_job)
+        self.assertNotIn("\n    needs:", row_job)
+        row_steps = re.findall(r"^      - .*?(?=^      - |\Z)", row_job, re.MULTILINE | re.DOTALL)
+        row_runs = [step for step in row_steps if "\n        run:" in step]
+        self.assertEqual([step.splitlines()[1] for step in row_runs], [
+            "        run: ./scripts/fetch-sdk.sh", "        run: ./scripts/test-row-input.sh",
+        ])
+        self.assertTrue(all(len(step.splitlines()) == 2 for step in row_runs))
         self.assertEqual(re.findall(r"^        run: (.+)$", workflow, re.MULTILINE), [
             "node --test scripts/test-skill-overrides.mjs",
             "node scripts/check-skill-overrides.mjs",
@@ -592,13 +906,69 @@ class BuildMetadataTests(unittest.TestCase):
         self.assertNotIn("continue-on-error", workflow)
 
     def test_ci_documentation_tracks_the_guarded_validation_commands(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0]
+        workflow = self._workflow_with_plain_integrated_command()
+        workflow = workflow.split("\n  validate:\n", 1)[1]
         commands = re.findall(r"^        run: (.+)$", workflow, re.MULTILINE)
         policy = (ROOT / "docs/agents/merge-policy.md").read_text()
         section = policy.split("## Actual CI and formatting gates", 1)[1]
         documented = section.split("```sh\n", 1)[1].split("\n```", 1)[0].splitlines()
         self.assertEqual(documented, commands)
+
+    def test_ci_marker_wrapper_rejects_command_skip_and_failure_mutations(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        title = "      - name: Run integrated Swift tests\n"
+        mutations = [
+            ("          ./scripts/test.sh\n", "          ./scripts/build-unsigned.sh\n"),
+            (title, title + "        if: false\n"),
+            (title, title + "        continue-on-error: true\n"),
+            ("          ./scripts/test.sh\n", "          ./scripts/test.sh || true\n"),
+        ]
+        for original, replacement in mutations:
+            with self.subTest(replacement=replacement):
+                self.assertEqual(workflow.count(original), 1)
+                with patch.object(Path, "read_text", return_value=workflow.replace(original, replacement)):
+                    with self.assertRaises(AssertionError):
+                        self.test_ci_preserves_all_fourteen_validation_commands_without_new_conditions()
+
+    def test_ci_forwards_only_inherited_hosted_markers_and_preserves_test_exit(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        step = workflow.split("      - name: Run integrated Swift tests\n", 1)[1].split("      - name:", 1)[0]
+        self.assertTrue(step.startswith("        run: |\n"))
+        script = "\n".join(line[10:] for line in step.splitlines()[1:])
+        stub = self.directory / "scripts/test.sh"
+        stub.parent.mkdir()
+        stub.write_text(
+            '#!/bin/bash\nprintf "%s\\n" "${TEST_RUNNER_GITHUB_ACTIONS-<unset>}" '
+            '"${TEST_RUNNER_RUNNER_ENVIRONMENT-<unset>}"\nexit "${FIXTURE_EXIT_CODE:?}"\n'
+        )
+        stub.chmod(0o700)
+        cases = [
+            {},
+            {"GITHUB_ACTIONS": "true"},
+            {"RUNNER_ENVIRONMENT": "github-hosted"},
+            {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted"},
+            {"GITHUB_ACTIONS": "false", "RUNNER_ENVIRONMENT": "self-hosted"},
+            {"GITHUB_ACTIONS": "false", "RUNNER_ENVIRONMENT": "github-hosted"},
+            {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted"},
+            {"GITHUB_ACTIONS": "", "RUNNER_ENVIRONMENT": ""},
+        ]
+        for values in cases:
+            for exit_code in (0, 7):
+                with self.subTest(inherited=values, exit_code=exit_code):
+                    environment = dict(os.environ)
+                    for key, stale in (("GITHUB_ACTIONS", "true"), ("RUNNER_ENVIRONMENT", "github-hosted")):
+                        environment.pop(key, None)
+                        environment["TEST_RUNNER_" + key] = stale
+                    environment.update(values, FIXTURE_EXIT_CODE=str(exit_code))
+                    result = subprocess.run(
+                        ["/bin/bash", "-e", "-o", "pipefail", "-c", script],
+                        cwd=self.directory, env=environment, capture_output=True, text=True, timeout=5,
+                    )
+                    self.assertEqual(result.returncode, exit_code, result.stderr)
+                    expected = (["true", "github-hosted"] if values == {
+                        "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+                    } else ["<unset>", "<unset>"])
+                    self.assertEqual(result.stdout.splitlines()[-2:], expected)
 
     def test_ci_always_uploads_json_evidence_and_retains_required_png_artifact(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -630,22 +1000,45 @@ class BuildMetadataTests(unittest.TestCase):
                 ])
 
     def test_ci_collects_final_metadata_diagnostics_after_both_producers(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
+        workflow = self._workflow_with_plain_integrated_command()
         steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
         uploads = [(index, step) for index, step in enumerate(steps)
                    if "          name: integrated-test-scope-evidence\n" in step]
         self.assertEqual(len(uploads), 1, "One final upload must collect both diagnostic producers.")
         upload_index, upload = uploads[0]
         for command in ("./scripts/test.sh", "./scripts/test-copilot-setup.sh"):
-            with self.subTest(producer=command):
-                producers = [index for index, step in enumerate(steps) if f"        run: {command}\n" in step]
-                self.assertEqual(len(producers), 1)
-                self.assertLess(producers[0], upload_index, "An earlier upload cannot retain later partial diagnostics.")
+            producers = [index for index, step in enumerate(steps) if f"        run: {command}\n" in step]
+            self.assertEqual(len(producers), 1, f"Expected one diagnostic producer: {command}")
+            self.assertLess(producers[0], upload_index, "An earlier upload cannot retain later partial diagnostics.")
         setup = (ROOT / "scripts/test-copilot-setup.sh").read_text()
         self.assertIn('OUTPUT="$ROOT/.build/setup-tests"', setup)
         self.assertIn('--results-root "$OUTPUT/metadata-watchdog"', setup)
         self.assertIn("            .build/setup-tests/metadata-watchdog/\n", upload)
+
+    def test_ci_final_diagnostics_reject_missing_duplicate_and_late_producers(self):
+        self.test_ci_collects_final_metadata_diagnostics_after_both_producers()
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        setup = (
+            "      - name: Verify Settings guide and setup process isolation\n"
+            "        run: ./scripts/test-copilot-setup.sh\n"
+        )
+        mutations = [
+            workflow.replace("          ./scripts/test.sh\n", ""),
+            workflow.replace(setup, ""),
+            workflow.replace(setup, setup + setup),
+            workflow.replace(setup, "") + setup,
+            workflow.replace("            .build/setup-tests/metadata-watchdog/\n", ""),
+        ]
+        original_read = Path.read_text
+        for index, altered in enumerate(mutations):
+            def read_text(path, *args, **kwargs):
+                if path == ROOT / ".github/workflows/ci.yml":
+                    return altered
+                return original_read(path, *args, **kwargs)
+
+            with self.subTest(mutation=index), patch.object(Path, "read_text", read_text):
+                with self.assertRaises(AssertionError):
+                    self.test_ci_collects_final_metadata_diagnostics_after_both_producers()
 
     def test_app_bridge_markers_are_wired_as_input_plist_in_both_configurations(self):
         project = json.loads(subprocess.check_output([
@@ -948,6 +1341,13 @@ class BuildMetadataTests(unittest.TestCase):
                 continue
             for config_id in objects[target["buildConfigurationList"]]["buildConfigurations"]:
                 settings = objects[config_id]["buildSettings"]
+                if target["name"] in metadata.ROW_INPUT_TARGETS:
+                    self.assertEqual(settings["PRODUCT_BUNDLE_IDENTIFIER"],
+                                     metadata.ROW_INPUT_TARGETS[target["name"]])
+                    self.assertEqual(settings["CODE_SIGNING_ALLOWED"], "NO")
+                    self.assertEqual(settings["CODE_SIGNING_REQUIRED"], "NO")
+                    self.assertEqual(settings["SKIP_INSTALL"], "YES")
+                    continue
                 self.assertEqual(settings["CMUX_BUNDLE_ID_SUFFIX"], "")
                 if target["name"] != "CMUXMaestroPreviewTests":
                     self.assertEqual(settings["CURRENT_PROJECT_VERSION"], metadata.APP_BUILD_VERSION)

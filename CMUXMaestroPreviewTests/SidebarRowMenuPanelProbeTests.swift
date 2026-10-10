@@ -1,0 +1,1253 @@
+import AppKit
+import Testing
+import os
+
+// Hosted causal probe only: a test-owned panel, not an integrated NSMenu replacement or parity proof.
+@MainActor
+@Suite(SidebarAppKitTestScope())
+struct SidebarRowMenuPanelProbeTests {
+    @Test(.enabled(if: SidebarRowMenuPanelProbeTests.hostedInputEnabled),
+          arguments: [Completion.ownerPointerCancel, .foreignPointerCancel, .escape])
+    func keyboardOpenedPanelObservesDispatchedInput(_ completion: Completion) async throws {
+        let environment = ProcessInfo.processInfo.environment
+        print("row-menu-panel-probe body: \(completion.rawValue); "
+              + "GITHUB_ACTIONS=\(environment["GITHUB_ACTIONS"] ?? "<unset>"); "
+              + "RUNNER_ENVIRONMENT=\(environment["RUNNER_ENVIRONMENT"] ?? "<unset>")")
+        try #require(environment["GITHUB_ACTIONS"] == "true")
+        try #require(environment["RUNNER_ENVIRONMENT"] == "github-hosted")
+        let application = NSApplication.shared
+        let fixture = Fixture()
+        let probe = Probe(fixture: fixture)
+        defer {
+            probe.stop()
+            probe.report(completion)
+            fixture.close()
+        }
+        fixture.title.showActions = { [weak probe] in probe?.show() }
+        application.activate()
+        fixture.foreign.orderFront(nil)
+        fixture.owner.makeKeyAndOrderFront(nil)
+        try #require(fixture.owner.isKeyWindow)
+        try #require(fixture.owner.makeFirstResponder(fixture.title))
+        let responder = try #require(fixture.owner.firstResponder)
+        let geometry = fixture.geometry
+        let foreignBefore = fixture.foreignAnchor.keyboardInteraction
+        try #require(!fixture.anchor.keyboardInteraction && !fixture.sibling.keyboardInteraction)
+        try #require(!foreignBefore)
+        let f10 = try #require(UnicodeScalar(NSF10FunctionKey))
+        let opening = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .shift,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: fixture.owner.windowNumber,
+            context: nil, characters: String(f10), charactersIgnoringModifiers: String(f10),
+            isARepeat: false, keyCode: 109
+        ))
+        // Only the opening is sent synchronously; completion must reach the ordinary app event loop.
+        probe.sendOpening(opening)
+        try #require(probe.opens == 1 && probe.active && probe.showReturned)
+        try #require(probe.panel.isVisible && probe.panel.parent === fixture.owner)
+        try #require(fixture.owner.childWindows?.contains(where: { $0 === probe.panel }) == true)
+        try #require(!probe.panel.canBecomeKey && !probe.panel.canBecomeMain)
+        try #require(!probe.panel.isKeyWindow && !probe.panel.isMainWindow)
+        try #require(fixture.owner.isKeyWindow && fixture.owner.firstResponder === responder)
+        try #require(fixture.anchor.keyboardInteraction && fixture.sibling.keyboardInteraction)
+        try #require(fixture.anchor.keyboardFocused)
+        try #require(fixture.previewDismissals == 1)
+        let dismissalsAfterOpening = fixture.previewDismissals
+        let input = try fixture.completionEvent(completion, outside: probe.panel)
+        await probe.postAndAwait(input)
+
+        #expect(probe.completionObserved && !probe.timedOut && !probe.failed)
+        #expect(probe.opens == 1 && probe.closes == 1 && probe.posts == 1)
+        #expect(probe.completionCallbacks == 1 && !probe.overflowed)
+        #expect(probe.trace.count <= 64)
+        let postedTrace = probe.trace.first(where: \.postedObject)
+        let observed = try #require(postedTrace)
+        #expect(probe.trace.filter(\.postedObject).count == 1 && observed.ownedVisible)
+        #expect(observed.after != nil)
+        #expect(observed.event == ObjectIdentifier(input))
+        #expect(observed.window == input.window.map { ObjectIdentifier($0) })
+        #expect(observed.windowNumber == input.windowNumber && observed.type == input.type.rawValue)
+        #expect(probe.observedSequence > 0 && probe.observedSequence < probe.closeSequence)
+        #expect(!probe.active && !probe.panel.isVisible && probe.panel.parent == nil)
+        #expect(fixture.owner.childWindows?.contains(where: { $0 === probe.panel }) != true)
+        #expect(!probe.panel.isKeyWindow && !probe.panel.isMainWindow)
+        #expect(fixture.owner.firstResponder === responder, "Do not repair focus before observing it")
+        #expect(fixture.geometry == geometry)
+        #expect(fixture.title.focusRingType == .exterior && !fixture.title.isBordered)
+        #expect(fixture.presenter.liftEligible && fixture.siblingPresenter.liftEligible
+                && fixture.foreignPresenter.liftEligible)
+        #expect(fixture.activations == 0 && fixture.actions == 0 && fixture.previewOpenings == 0)
+        #expect(fixture.previewDismissals == dismissalsAfterOpening,
+                "The real title dismisses preview once on opening, not again on panel cancellation")
+        #expect(fixture.foreignAnchor.keyboardInteraction == foreignBefore)
+        if completion == .ownerPointerCancel {
+            #expect(probe.closeReason == "owner-pointer" && observed.target == "owner")
+            #expect(probe.broadcasts == 1)
+            #expect(probe.observedSequence < probe.broadcastSequence
+                    && probe.broadcastSequence < probe.closeSequence)
+            #expect(!fixture.anchor.keyboardInteraction && !fixture.sibling.keyboardInteraction)
+            #expect(!fixture.anchor.keyboardFocused && fixture.owner.isKeyWindow)
+        } else {
+            #expect(probe.broadcasts == 0 && probe.broadcastSequence == 0)
+            #expect(fixture.anchor.keyboardInteraction && fixture.sibling.keyboardInteraction)
+            if completion == .escape {
+                #expect(probe.closeReason == "escape" && observed.target == "owner" && observed.keyCode == 53)
+                #expect(fixture.owner.isKeyWindow && fixture.anchor.keyboardFocused)
+            } else {
+                #expect(probe.closeReason == "foreign-pointer" && observed.target == "foreign")
+            }
+        }
+        #expect(!probe.takeBackInput(), "Queued input is not a normally dispatched completion")
+    }
+
+    enum Completion: String, Sendable {
+        case ownerPointerCancel, foreignPointerCancel, escape
+    }
+
+    nonisolated private static var hostedInputEnabled: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        let actions = environment["GITHUB_ACTIONS"]
+        let runner = environment["RUNNER_ENVIRONMENT"]
+        let enabled = actions == "true" && runner == "github-hosted"
+        print("row-menu-panel-probe gate: GITHUB_ACTIONS=\(actions ?? "<unset>"); "
+              + "RUNNER_ENVIRONMENT=\(runner ?? "<unset>"); enabled=\(enabled)")
+        return enabled
+    }
+
+    @MainActor
+    private final class Panel: NSPanel {
+        override var canBecomeKey: Bool { false }
+        override var canBecomeMain: Bool { false }
+    }
+
+    @MainActor
+    private final class Fixture {
+        let owner = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 360, height: 260),
+                             styleMask: [.titled], backing: .buffered, defer: false)
+        let foreign = NSWindow(contentRect: NSRect(x: 600, y: 100, width: 360, height: 260),
+                               styleMask: [.titled], backing: .buffered, defer: false)
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 260))
+        let anchor = SidebarRowMenuAnchorView(frame: NSRect(x: 10, y: 190, width: 330, height: 46))
+        let sibling = SidebarRowMenuAnchorView(frame: NSRect(x: 10, y: 110, width: 330, height: 46))
+        let foreignAnchor = SidebarRowMenuAnchorView(frame: NSRect(x: 10, y: 190, width: 330, height: 46))
+        let title = SidebarTitleNativeButton(frame: NSRect(x: 40, y: 198, width: 180, height: 30))
+        let presenter = SidebarRowMenuPresenter()
+        let siblingPresenter = SidebarRowMenuPresenter()
+        let foreignPresenter = SidebarRowMenuPresenter()
+        var previewDismissals = 0
+        var previewOpenings = 0
+        var activations = 0
+        var actions = 0
+
+        var geometry: [NSRect] {
+            [owner.frame, foreign.frame, root.frame, root.bounds,
+             anchor.frame, anchor.bounds, sibling.frame, sibling.bounds,
+             foreignAnchor.frame, foreignAnchor.bounds, title.frame, title.bounds]
+        }
+
+        init() {
+            owner.isReleasedWhenClosed = false
+            foreign.isReleasedWhenClosed = false
+            for (anchor, presenter) in [(anchor, presenter), (sibling, siblingPresenter),
+                                         (foreignAnchor, foreignPresenter)] {
+                anchor.presenter = presenter
+                presenter.anchor = anchor
+                presenter.liftEligible = true
+            }
+            root.addSubview(anchor)
+            root.addSubview(sibling)
+            root.addSubview(title)
+            owner.contentView = root
+            let foreignRoot = NSView(frame: root.frame)
+            foreignRoot.addSubview(foreignAnchor)
+            foreign.contentView = foreignRoot
+            presenter.groups = [.init(title: "Fixture actions", actions: [
+                .init(title: "Count action", perform: { [weak self] in self?.actions += 1 })
+            ])]
+            presenter.preview = { [weak self] in self?.previewOpenings += 1; return true }
+            title.activate = { [weak self] in self?.activations += 1 }
+            title.preview.dismiss = { [weak self] in self?.previewDismissals += 1 }
+            title.preview.enter = { [weak self] in self?.previewOpenings += 1; return true }
+        }
+
+        func completionEvent(_ completion: Completion, outside panel: Panel) throws -> NSEvent {
+            if completion == .escape {
+                return try #require(NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: owner.windowNumber,
+                    context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                    isARepeat: false, keyCode: 53
+                ))
+            }
+            let window = completion == .ownerPointerCancel ? owner : foreign
+            let point = NSPoint(x: 350, y: 250)
+            let screenPoint = window.convertPoint(toScreen: point)
+            let content = try #require(window.contentView)
+            let screen = try #require(window.screen)
+            try #require(content.bounds.contains(content.convert(point, from: nil)))
+            try #require(screen.visibleFrame.contains(screenPoint) && !panel.frame.contains(screenPoint))
+            for row in [anchor, sibling, foreignAnchor] where row.window === window {
+                try #require(!row.bounds.contains(row.convert(point, from: nil)))
+            }
+            return try #require(NSEvent.mouseEvent(
+                with: .leftMouseDown, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            ))
+        }
+
+        func close() {
+            title.showActions = nil
+            title.activate = {}
+            title.preview = SidebarPreviewInteraction()
+            anchor.detach()
+            sibling.detach()
+            foreignAnchor.detach()
+            owner.contentView = nil
+            foreign.contentView = nil
+            owner.close()
+            foreign.close()
+        }
+    }
+
+    @MainActor
+    private final class Probe {
+        // Temporary value-only provenance: never used to match, accept, or recover input.
+        struct InputDiagnostic {
+            let sampledAt: TimeInterval
+            let event: ObjectIdentifier
+            let type: UInt
+            let timestamp: TimeInterval
+            let window: ObjectIdentifier?
+            let windowNumber: Int
+            let modifierFlags: UInt
+            let locationInWindow: NSPoint?
+            let locationAvailability: String
+            let key: (code: UInt16, isRepeat: Bool)?
+            let mouse: (number: Int, button: Int, clicks: Int, pressure: Float)?
+            let eventWindow: WindowDiagnostic?
+            let owner: WindowDiagnostic
+            let foreign: WindowDiagnostic
+            let panel: WindowDiagnostic
+
+            init(_ event: NSEvent, fixture: Fixture, panel: Panel) {
+                sampledAt = ProcessInfo.processInfo.systemUptime
+                self.event = ObjectIdentifier(event)
+                type = event.type.rawValue
+                timestamp = event.timestamp
+                let window = event.window
+                self.window = window.map { ObjectIdentifier($0) }
+                windowNumber = event.windowNumber
+                modifierFlags = event.modifierFlags.rawValue
+                switch event.type {
+                case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+                     .otherMouseDown, .otherMouseUp:
+                    locationInWindow = event.locationInWindow
+                    locationAvailability = "mouse-window-base-or-screen-if-window-nil"
+                    mouse = (event.eventNumber, event.buttonNumber, event.clickCount, event.pressure)
+                    key = nil
+                case .keyDown, .keyUp:
+                    // AppKit documents locationInWindow as undefined for non-mouse events.
+                    locationInWindow = nil
+                    locationAvailability = "undefined-for-non-mouse"
+                    key = (event.keyCode, event.isARepeat)
+                    mouse = nil
+                default:
+                    locationInWindow = nil
+                    locationAvailability = "not-sampled-for-this-type"
+                    key = nil
+                    mouse = nil
+                }
+                let point = locationInWindow
+                eventWindow = window.map { WindowDiagnostic($0, point: point) }
+                owner = WindowDiagnostic(fixture.owner, point: point)
+                foreign = WindowDiagnostic(fixture.foreign, point: point)
+                self.panel = WindowDiagnostic(panel, point: point)
+            }
+        }
+
+        struct WindowDiagnostic {
+            let window: ObjectIdentifier
+            let number: Int
+            let frame: NSRect
+            let contentRect: NSRect
+            let content: ObjectIdentifier?
+            let contentFrame: NSRect?
+            let contentBounds: NSRect?
+            let contentFlipped: Bool?
+            let contentBoundsInWindow: NSRect?
+            let contentBoundsOnScreen: NSRect?
+            let screen: ObjectIdentifier?
+            let screenFrame: NSRect?
+            let screenVisibleFrame: NSRect?
+            let backingScale: CGFloat
+            let windowBaseOriginOnScreen: NSPoint
+            // These interpret the sampled mouse point in each named window, not inferred event ownership.
+            let pointInContent: NSPoint?
+            let pointOnScreen: NSPoint?
+            let pointScreenRoundTrip: NSPoint?
+
+            init(_ window: NSWindow, point: NSPoint?) {
+                self.window = ObjectIdentifier(window)
+                number = window.windowNumber
+                frame = window.frame
+                contentRect = window.contentRect(forFrameRect: window.frame)
+                let content = window.contentView
+                self.content = content.map { ObjectIdentifier($0) }
+                contentFrame = content?.frame
+                contentBounds = content?.bounds
+                contentFlipped = content?.isFlipped
+                let boundsInWindow = content.map { $0.convert($0.bounds, to: nil) }
+                contentBoundsInWindow = boundsInWindow
+                contentBoundsOnScreen = boundsInWindow.map { window.convertToScreen($0) }
+                let screen = window.screen
+                self.screen = screen.map { ObjectIdentifier($0) }
+                screenFrame = screen?.frame
+                screenVisibleFrame = screen?.visibleFrame
+                backingScale = window.backingScaleFactor
+                windowBaseOriginOnScreen = window.convertPoint(toScreen: .zero)
+                pointInContent = point.flatMap { content?.convert($0, from: nil) }
+                let screenPoint = point.map { window.convertPoint(toScreen: $0) }
+                pointOnScreen = screenPoint
+                pointScreenRoundTrip = screenPoint.map { window.convertPoint(fromScreen: $0) }
+            }
+        }
+
+        struct State {
+            let ownerKeyboard: Bool
+            let siblingKeyboard: Bool
+            let foreignKeyboard: Bool
+            let ownerFocused: Bool
+            let ownerKey: Bool
+            let titleResponder: Bool
+
+            init(_ fixture: Fixture) {
+                ownerKeyboard = fixture.anchor.keyboardInteraction
+                siblingKeyboard = fixture.sibling.keyboardInteraction
+                foreignKeyboard = fixture.foreignAnchor.keyboardInteraction
+                ownerFocused = fixture.anchor.keyboardFocused
+                ownerKey = fixture.owner.isKeyWindow
+                titleResponder = fixture.owner.firstResponder === fixture.title
+            }
+        }
+
+        struct Record {
+            let sequence: Int
+            let event: ObjectIdentifier
+            let type: UInt
+            let window: ObjectIdentifier?
+            let windowNumber: Int
+            let target: String
+            let timestamp: TimeInterval
+            let location: NSPoint
+            let keyCode: UInt16?
+            let postedObject: Bool
+            let panel: ObjectIdentifier
+            let ownedVisible: Bool
+            let before: State
+            let diagnostic: InputDiagnostic
+            var after: State?
+            var route = "pass"
+        }
+
+        let fixture: Fixture
+        let panel = Panel(contentRect: NSRect(x: 130, y: 135, width: 180, height: 60),
+                          styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        private var monitor: Any?
+        private var observers: [NSObjectProtocol] = []
+        private var postedEvent: NSEvent?
+        private var suppliedDiagnostic: InputDiagnostic?
+        private var beforePostDiagnostic: InputDiagnostic?
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var deadlineTask: Task<Void, Never>?
+        private var dispatchCompletionTask: Task<Void, Never>?
+        private var completionDeadline: ContinuousClock.Instant?
+        private var shownAt: TimeInterval?
+        private var sequence = 0
+        private(set) var active = false
+        private(set) var showReturned = false
+        private(set) var opens = 0
+        private(set) var closes = 0
+        private(set) var posts = 0
+        private(set) var broadcasts = 0
+        private(set) var completionCallbacks = 0
+        private(set) var completionObserved = false
+        private(set) var timedOut = false
+        private(set) var failed = false
+        private(set) var overflowed = false
+        private(set) var observedSequence = 0
+        private(set) var broadcastSequence = 0
+        private(set) var closeSequence = 0
+        private(set) var trace: [Record] = []
+        private(set) var closeReason = "none"
+
+        init(fixture: Fixture) {
+            self.fixture = fixture
+            panel.isReleasedWhenClosed = false
+            panel.hidesOnDeactivate = false
+            panel.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 180, height: 60))
+        }
+
+        func show() {
+            guard opens == 0, !active, fixture.anchor.window === fixture.owner,
+                  fixture.owner.firstResponder === fixture.title else {
+                fail("Opening lacked the exact original row/window/responder")
+                return
+            }
+            opens += 1
+            active = true
+            shownAt = ProcessInfo.processInfo.systemUptime
+            monitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.keyDown, .keyUp, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+                           .leftMouseUp, .rightMouseUp, .otherMouseUp]
+            ) { [weak self] event in
+                guard let self else { return event }
+                return self.observe(event)
+            }
+            let center = NotificationCenter.default
+            for window in [fixture.owner, panel] {
+                observers.append(center.addObserver(
+                    forName: NSWindow.willCloseNotification, object: window, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.lifecycleEnded("owned-window-close") }
+                })
+            }
+            observers.append(center.addObserver(
+                forName: NSApplication.didResignActiveNotification, object: NSApp, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.lifecycleEnded("application-resigned") }
+            })
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification] {
+                observers.append(center.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.lifecycleEnded("panel-took-focus") }
+                })
+            }
+            fixture.owner.addChildWindow(panel, ordered: .above)
+            panel.orderFront(nil)
+            showReturned = true
+        }
+
+        private enum DeadlineState { case armed, disarmed, expired }
+
+        func sendOpening(_ event: NSEvent) {
+            // Short synchronous CAS only: contain this actual sendEvent, never scope serialization.
+            let state = OSAllocatedUnfairLock(initialState: DeadlineState.armed)
+            let limit = DispatchTime.now() + 10
+            let watchdog = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
+            watchdog.schedule(deadline: limit)
+            watchdog.setEventHandler {
+                let expired = state.withLock { value in
+                    guard value == .armed else { return false }
+                    value = .expired
+                    return true
+                }
+                if expired {
+                    fatalError("Hosted panel probe opening exceeded its ten-second hard deadline; proof unavailable")
+                }
+            }
+            watchdog.resume()
+            defer {
+                let disarmed = state.withLock { value in
+                    guard value != .expired, DispatchTime.now().uptimeNanoseconds < limit.uptimeNanoseconds else {
+                        value = .expired
+                        return false
+                    }
+                    value = .disarmed
+                    return true
+                }
+                watchdog.cancel()
+                if !disarmed {
+                    fatalError("Hosted panel probe opening returned after its hard deadline; proof unavailable")
+                }
+            }
+            NSApp.sendEvent(event)
+        }
+
+        func postAndAwait(_ event: NSEvent) async {
+            suppliedDiagnostic = InputDiagnostic(event, fixture: fixture, panel: panel)
+            guard active, showReturned, posts == 0, !failed else {
+                fail("Cannot post completion without one successfully opened live panel")
+                return
+            }
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+                postedEvent = event
+                posts += 1
+                beforePostDiagnostic = InputDiagnostic(event, fixture: fixture, panel: panel)
+                NSApp.postEvent(event, atStart: false)
+                let limit = ContinuousClock.now.advanced(by: .seconds(2))
+                completionDeadline = limit
+                deadlineTask = Task { @MainActor [weak self] in
+                    do {
+                        try await ContinuousClock().sleep(until: limit)
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        self?.fail("Completion deadline failed: \(error)")
+                        self?.close("deadline-error")
+                        self?.finish()
+                        return
+                    }
+                    guard let self else { return }
+                    self.timedOut = true
+                    self.fail("Normal app dispatch did not complete within two seconds; no dispatch substitute")
+                    self.close("deadline")
+                    self.finish()
+                }
+            }
+        }
+
+        private func observe(_ event: NSEvent) -> NSEvent? {
+            guard active else { return event }
+            guard trace.count < 64 else {
+                if !overflowed { fail("Panel lifetime input trace exceeded 64 records") }
+                overflowed = true
+                return event
+            }
+            sequence += 1
+            let index = trace.count
+            let window = event.window
+            let ownedVisible = panel.parent === fixture.owner && panel.isVisible
+                && fixture.owner.childWindows?.contains(where: { $0 === panel }) == true
+            trace.append(Record(
+                sequence: sequence, event: ObjectIdentifier(event), type: event.type.rawValue,
+                window: window.map { ObjectIdentifier($0) }, windowNumber: event.windowNumber,
+                target: window === fixture.owner ? "owner" : window === fixture.foreign ? "foreign"
+                    : window === panel ? "panel" : "other-or-nil",
+                timestamp: event.timestamp, location: event.locationInWindow,
+                keyCode: event.type == .keyDown || event.type == .keyUp ? event.keyCode : nil,
+                postedObject: event === postedEvent, panel: ObjectIdentifier(panel),
+                ownedVisible: ownedVisible, before: State(fixture),
+                diagnostic: InputDiagnostic(event, fixture: fixture, panel: panel)
+            ))
+            defer { trace[index].after = State(fixture) }
+            guard event === postedEvent else {
+                if window === fixture.owner || window === fixture.foreign || window === panel {
+                    fail("Unexpected fixture input during the one-posted-event panel lifetime")
+                }
+                return event
+            }
+            completionCallbacks += 1
+            observedSequence = sequence
+            guard completionCallbacks == 1, ownedVisible, !panel.isKeyWindow, !panel.isMainWindow,
+                  fixture.anchor.window === fixture.owner, let shownAt, event.timestamp >= shownAt,
+                  let window, event.windowNumber == window.windowNumber,
+                  let completionDeadline, ContinuousClock.now < completionDeadline else {
+                fail("Completion lacked exact live panel/event/window/deadline provenance")
+                return event
+            }
+            if event.type == .leftMouseDown,
+               window === fixture.owner || window === fixture.foreign {
+                let point = event.locationInWindow
+                guard !panel.frame.contains(window.convertPoint(toScreen: point)),
+                      let content = window.contentView,
+                      content.bounds.contains(content.convert(point, from: nil)),
+                      ![fixture.anchor, fixture.sibling, fixture.foreignAnchor].contains(where: {
+                          $0.window === window && $0.bounds.contains($0.convert(point, from: nil))
+                      }) else {
+                    fail("Observed pointer is not outside the exact panel and row hit regions")
+                    return event
+                }
+                if window === fixture.owner {
+                    trace[index].route = "owner-pointer/broadcast/consume"
+                    sequence += 1
+                    broadcastSequence = sequence
+                    broadcasts += 1
+                    fixture.anchor.observeInput(event)
+                    completionObserved = true
+                    close("owner-pointer")
+                    finishAfterDispatch()
+                    return nil
+                }
+                trace[index].route = "foreign-pointer/pass"
+                completionObserved = true
+                close("foreign-pointer")
+                finishAfterDispatch()
+                return event
+            }
+            if event.type == .keyDown, event.keyCode == 53, window === fixture.owner {
+                trace[index].route = "owner-escape/consume"
+                completionObserved = true
+                close("escape")
+                finishAfterDispatch()
+                return nil
+            }
+            fail("The actual completion event did not match any permitted causal route")
+            return event
+        }
+
+        private func finishAfterDispatch() {
+            // Resume after the monitor returns, allowing the foreign event's ordinary dispatch.
+            dispatchCompletionTask = Task { @MainActor [weak self] in
+                guard !Task.isCancelled, let self else { return }
+                self.dispatchCompletionTask = nil
+                if let limit = self.completionDeadline, ContinuousClock.now >= limit {
+                    self.timedOut = true
+                    self.fail("Completion returned after the two-second monotonic budget")
+                }
+                self.finish()
+            }
+        }
+
+        private func finish() {
+            deadlineTask?.cancel()
+            deadlineTask = nil
+            let waiting = continuation
+            continuation = nil
+            waiting?.resume()
+        }
+
+        private func lifecycleEnded(_ reason: String) {
+            guard active else { return }
+            fail("Panel lifetime ended without completion input: \(reason)")
+            close(reason)
+            finishAfterDispatch()
+        }
+
+        private func close(_ reason: String) {
+            guard active else { return }
+            sequence += 1
+            closeSequence = sequence
+            closeReason = reason
+            closes += 1
+            active = false
+            if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers.removeAll()
+            if panel.parent === fixture.owner {
+                fixture.owner.removeChildWindow(panel)
+            } else {
+                fail("Exact panel lost its recorded parent; no replacement ownership inferred")
+            }
+            panel.orderOut(nil)
+            panel.close()
+        }
+
+        private func fail(_ message: String) {
+            failed = true
+            Issue.record("\(message)")
+        }
+
+        func takeBackInput() -> Bool {
+            guard let postedEvent else { return false }
+            var retained: [NSEvent] = []
+            var found = false
+            defer {
+                for event in retained.reversed() { NSApp.postEvent(event, atStart: true) }
+                self.postedEvent = nil
+            }
+            // Cleanup only, after observation: remove exact identity, preserve unrelated queue order.
+            for _ in 0..<128 {
+                guard let event = NSApp.nextEvent(matching: .any, until: .distantPast,
+                                                 inMode: .default, dequeue: true) else { return found }
+                if event === postedEvent {
+                    found = true
+                } else {
+                    retained.append(event)
+                    if event.type == postedEvent.type && event.window === postedEvent.window {
+                        fail("Ambiguous queued fixture input retained; identity was not the posted object")
+                    }
+                }
+            }
+            fatalError("Hosted panel probe queue exceeded 128-event cleanup bound; proof unavailable")
+        }
+
+        func stop() {
+            if active { close("fixture-cleanup") }
+            dispatchCompletionTask?.cancel()
+            dispatchCompletionTask = nil
+            finish()
+            if takeBackInput() { fail("Fixture cleanup recovered unconsumed posted input") }
+            panel.contentView = nil
+        }
+
+        func report(_ completion: Completion) {
+            print("row-menu-panel-probe supplied: \(completion.rawValue); \(String(describing: suppliedDiagnostic))")
+            print("row-menu-panel-probe before-post: \(completion.rawValue); \(String(describing: beforePostDiagnostic))")
+            for record in trace {
+                print("row-menu-panel-probe trace: \(completion.rawValue); \(record)")
+            }
+            print("row-menu-panel-probe result: \(completion.rawValue); opens=\(opens); closes=\(closes); "
+                  + "posts=\(posts); completionCallbacks=\(completionCallbacks); observed=\(completionObserved); "
+                  + "broadcasts=\(broadcasts); observation/broadcast/close="
+                  + "\(observedSequence)/\(broadcastSequence)/\(closeSequence); reason=\(closeReason); "
+                  + "timeout=\(timedOut); failed=\(failed); traceCount=\(trace.count); overflow=\(overflowed); "
+                  + "state=\(State(fixture)); activations=\(fixture.activations); actions=\(fixture.actions); "
+                  + "previewOpenings=\(fixture.previewOpenings); previewDismissals=\(fixture.previewDismissals)")
+        }
+    }
+}
+
+// BEGIN ADDITIVE PUBLIC-PAYLOAD COMPANION
+// Removing this suffix recovers the complete d247 probe. The original identity oracle remains red.
+extension SidebarRowMenuPanelProbeTests {
+    @Test(.enabled(if: SidebarRowMenuPanelProbeTests.hostedInputEnabled),
+          arguments: [Completion.ownerPointerCancel, .foreignPointerCancel, .escape])
+    func keyboardOpenedPanelObservesPublicPayloadCompanion(_ completion: Completion) async throws {
+        let environment = ProcessInfo.processInfo.environment
+        print("row-menu-payload-companion body: \(completion.rawValue); "
+              + "GITHUB_ACTIONS=\(environment["GITHUB_ACTIONS"] ?? "<unset>"); "
+              + "RUNNER_ENVIRONMENT=\(environment["RUNNER_ENVIRONMENT"] ?? "<unset>")")
+        try #require(environment["GITHUB_ACTIONS"] == "true")
+        try #require(environment["RUNNER_ENVIRONMENT"] == "github-hosted")
+        let application = NSApplication.shared
+        let fixture = Fixture()
+        let probe = PayloadCompanion(fixture: fixture, completion: completion)
+        defer {
+            probe.stop()
+            probe.report()
+            fixture.close()
+        }
+        fixture.title.showActions = { [weak probe] in probe?.show() }
+        application.activate()
+        fixture.foreign.orderFront(nil)
+        fixture.owner.makeKeyAndOrderFront(nil)
+        try #require(fixture.owner.isKeyWindow)
+        try #require(fixture.owner.makeFirstResponder(fixture.title))
+        let responder = try #require(fixture.owner.firstResponder)
+        let geometry = fixture.geometry
+        let foreignBefore = fixture.foreignAnchor.keyboardInteraction
+        try #require(!fixture.anchor.keyboardInteraction && !fixture.sibling.keyboardInteraction)
+        try #require(!foreignBefore)
+        let f10 = try #require(UnicodeScalar(NSF10FunctionKey))
+        let opening = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .shift,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: fixture.owner.windowNumber,
+            context: nil, characters: String(f10), charactersIgnoringModifiers: String(f10),
+            isARepeat: false, keyCode: 109
+        ))
+        probe.sendOpening(opening)
+        try #require(probe.opens == 1 && probe.active && probe.showReturned)
+        try #require(probe.panel.isVisible && probe.panel.parent === fixture.owner)
+        try #require(fixture.owner.childWindows?.contains(where: { $0 === probe.panel }) == true)
+        try #require(!probe.panel.canBecomeKey && !probe.panel.canBecomeMain)
+        try #require(!probe.panel.isKeyWindow && !probe.panel.isMainWindow)
+        try #require(fixture.owner.isKeyWindow && fixture.owner.firstResponder === responder)
+        try #require(fixture.anchor.keyboardInteraction && fixture.sibling.keyboardInteraction)
+        try #require(fixture.anchor.keyboardFocused)
+        try #require(fixture.previewDismissals == 1)
+        let dismissalsAfterOpening = fixture.previewDismissals
+        let input = try probe.makeInput()
+        await probe.postAndAwait(input)
+
+        #expect(probe.completionObserved && !probe.timedOut && !probe.failed)
+        #expect(probe.opens == 1 && probe.closes == 1 && probe.posts == 1)
+        #expect(probe.completionCallbacks == 1 && !probe.overflowed)
+        #expect(probe.trace.count <= 64)
+        let acceptedTrace = probe.trace.first(where: \.accepted)
+        let observed = try #require(acceptedTrace)
+        #expect(probe.trace.filter(\.accepted).count == 1 && observed.sample.lifetime == .visible)
+        #expect(observed.after != nil)
+        // A local monitor may receive a copy. This companion proves payload correlation, not wrapper identity.
+        #expect(observed.sample.tag == probe.token && probe.token != 0)
+        #expect(observed.sample.scope?.window == input.window.map { ObjectIdentifier($0) })
+        #expect(observed.sample.scope?.windowNumber == input.windowNumber)
+        #expect(observed.type == input.type.rawValue)
+        #expect(probe.observedSequence > 0 && probe.observedSequence < probe.closeSequence)
+        #expect(!probe.active && !probe.panel.isVisible && probe.panel.parent == nil)
+        #expect(fixture.owner.childWindows?.contains(where: { $0 === probe.panel }) != true)
+        #expect(!probe.panel.isKeyWindow && !probe.panel.isMainWindow)
+        #expect(fixture.owner.firstResponder === responder, "Do not repair focus before observing it")
+        #expect(fixture.geometry == geometry)
+        #expect(fixture.title.focusRingType == .exterior && !fixture.title.isBordered)
+        #expect(fixture.presenter.liftEligible && fixture.siblingPresenter.liftEligible
+                && fixture.foreignPresenter.liftEligible)
+        #expect(fixture.activations == 0 && fixture.actions == 0 && fixture.previewOpenings == 0)
+        #expect(fixture.previewDismissals == dismissalsAfterOpening,
+                "The real title dismisses preview once on opening, not again on panel cancellation")
+        #expect(fixture.foreignAnchor.keyboardInteraction == foreignBefore)
+        if completion == .ownerPointerCancel {
+            #expect(probe.closeReason == "owner-pointer" && observed.target == "owner")
+            #expect(probe.broadcasts == 1)
+            #expect(probe.observedSequence < probe.broadcastSequence
+                    && probe.broadcastSequence < probe.closeSequence)
+            #expect(!fixture.anchor.keyboardInteraction && !fixture.sibling.keyboardInteraction)
+            #expect(!fixture.anchor.keyboardFocused && fixture.owner.isKeyWindow)
+        } else {
+            #expect(probe.broadcasts == 0 && probe.broadcastSequence == 0)
+            #expect(fixture.anchor.keyboardInteraction && fixture.sibling.keyboardInteraction)
+            if completion == .escape {
+                #expect(probe.closeReason == "escape" && observed.target == "owner"
+                        && observed.sample.keyCode == 53)
+                #expect(fixture.owner.isKeyWindow && fixture.anchor.keyboardFocused)
+            } else {
+                #expect(probe.closeReason == "foreign-pointer" && observed.target == "foreign")
+                #expect(observed.route == "foreign-pointer/pass" && probe.dispatchReturned)
+                #expect(probe.foreignReceipts == 1, "The ordinary dispatcher must reach the foreign content view")
+            }
+        }
+        #expect(!probe.takeBackInput(), "Queued input is not a normally dispatched completion")
+    }
+
+    @MainActor
+    private final class PayloadCompanion {
+        typealias Ownership = SidebarPanelInputOwnership
+
+        @MainActor
+        private final class PointerReceiver: NSView {
+            var received: ((NSEvent) -> Void)?
+            // The one foreign-window click must dispatch, not merely activate its non-key window.
+            override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+            override func mouseDown(with event: NSEvent) { received?(event) }
+        }
+
+        struct Record {
+            let event: ObjectIdentifier
+            let sameWrapper: Bool
+            let type: UInt
+            let target: String
+            let sample: Ownership.Sample
+            let before: Probe.State
+            var accepted = false
+            var route = "pass"
+            var after: Probe.State?
+        }
+
+        // Main-actor allocation is collision-free within this test process; no token is recycled.
+        private static var nextToken = Int64.random(in: 1...(Int64.max / 2))
+        let token: Int64
+        let caseID = UUID()
+        let fixture: Fixture
+        let completion: Completion
+        let panel = Panel(contentRect: NSRect(x: 130, y: 135, width: 180, height: 60),
+                          styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        private var monitor: Any?
+        private var observers: [NSObjectProtocol] = []
+        private var ownership: Ownership?
+        private var postedEvent: NSEvent?
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var deadlineTask: Task<Void, Never>?
+        private var dispatchTask: Task<Void, Never>?
+        private var postedAt: ContinuousClock.Instant?
+        private var shownAt: TimeInterval?
+        private var sequence = 0
+        private var lifecycle: Ownership.Lifecycle
+        private let foreignContent: NSView?
+        private let panelContent = NSView(frame: NSRect(x: 0, y: 0, width: 180, height: 60))
+        private var pointerReceiver: PointerReceiver?
+        private(set) var active = false
+        private(set) var showReturned = false
+        private(set) var opens = 0
+        private(set) var closes = 0
+        private(set) var posts = 0
+        private(set) var broadcasts = 0
+        private(set) var completionCallbacks = 0
+        private(set) var completionObserved = false
+        private(set) var dispatchReturned = false
+        private(set) var foreignReceipts = 0
+        private(set) var timedOut = false
+        private(set) var failed = false
+        private(set) var overflowed = false
+        private(set) var observedSequence = 0
+        private(set) var broadcastSequence = 0
+        private(set) var closeSequence = 0
+        private(set) var trace: [Record] = []
+        private(set) var closeReason = "none"
+
+        init(fixture: Fixture, completion: Completion) {
+            self.fixture = fixture
+            self.completion = completion
+            foreignContent = fixture.foreign.contentView
+            lifecycle = Ownership.Lifecycle(
+                owner: ObjectIdentifier(fixture.owner), foreign: ObjectIdentifier(fixture.foreign),
+                panel: ObjectIdentifier(panel)
+            )
+            precondition(Self.nextToken < Int64.max, "Companion token space exhausted")
+            token = Self.nextToken
+            Self.nextToken += 1
+            panel.isReleasedWhenClosed = false
+            panel.hidesOnDeactivate = false
+            panel.contentView = panelContent
+            if completion == .foreignPointerCancel {
+                let receiver = PointerReceiver(frame: NSRect(x: 340, y: 240, width: 20, height: 20))
+                receiver.received = { [weak self] event in self?.receivedForeignPointer(event) }
+                fixture.foreign.contentView?.addSubview(receiver)
+                pointerReceiver = receiver
+            }
+        }
+
+        private var destination: NSWindow {
+            completion == .foreignPointerCancel ? fixture.foreign : fixture.owner
+        }
+
+        private func scope(_ window: NSWindow) -> Ownership.Scope? {
+            guard let content = window.contentView else { return nil }
+            let rows = [fixture.anchor, fixture.sibling, fixture.foreignAnchor].filter { $0.window === window }
+            return Ownership.Scope(
+                caseID: caseID, fixture: ObjectIdentifier(fixture), owner: ObjectIdentifier(fixture.owner),
+                window: ObjectIdentifier(window), windowNumber: window.windowNumber,
+                panel: ObjectIdentifier(panel), anchor: ObjectIdentifier(fixture.anchor),
+                content: ObjectIdentifier(content), rows: rows.map { ObjectIdentifier($0) }
+            )
+        }
+
+        private var lifetime: Ownership.Lifetime {
+            lifecycle.sample(
+                fixtureIntact: NSApp.isActive && fixture.owner.isVisible && fixture.foreign.isVisible
+                    && fixture.owner.contentView === fixture.root
+                    && foreignContent != nil && fixture.foreign.contentView === foreignContent
+                    && panel.contentView === panelContent
+                    && fixture.anchor.window === fixture.owner && fixture.sibling.window === fixture.owner
+                    && fixture.foreignAnchor.window === fixture.foreign && fixture.title.window === fixture.owner
+                    && !panel.canBecomeKey && !panel.canBecomeMain && !panel.isKeyWindow && !panel.isMainWindow,
+                panelVisibleAttached: active && panel.parent === fixture.owner && panel.isVisible
+                    && fixture.owner.childWindows?.contains(where: { $0 === panel }) == true,
+                panelHiddenDetached: !active && closes == 1 && panel.parent == nil && !panel.isVisible
+                    && fixture.owner.childWindows?.contains(where: { $0 === panel }) != true
+            )
+        }
+
+        private func sample(_ event: NSEvent) -> Ownership.Sample {
+            let cg = event.cgEvent
+            let window = event.window
+            var actualScope = window.flatMap { scope($0) }
+            // Both the resolved object and the event's numeric annotation must match.
+            if window?.windowNumber != event.windowNumber { actualScope = nil }
+            var mouse: Ownership.Mouse?
+            if event.type == .leftMouseDown, let window, let content = window.contentView,
+               let screen = window.screen {
+                let point = event.locationInWindow
+                mouse = Ownership.Mouse(
+                    point: point, screenPoint: window.convertPoint(toScreen: point),
+                    unflippedPoint: cg?.unflippedLocation,
+                    contentBounds: content.convert(content.bounds, to: nil), panelBounds: panel.frame,
+                    rowBounds: [fixture.anchor, fixture.sibling, fixture.foreignAnchor]
+                        .filter { $0.window === window }.map { $0.convert($0.bounds, to: nil) },
+                    visibleScreen: screen.visibleFrame,
+                    button: event.buttonNumber, clicks: event.clickCount, pressure: event.pressure
+                )
+            }
+            let key = event.type == .keyDown || event.type == .keyUp
+            return Ownership.Sample(
+                tag: cg?.getIntegerValueField(.eventSourceUserData), scope: actualScope, lifetime: lifetime,
+                kind: event.type == .leftMouseDown ? .leftMouseDown : event.type == .keyDown ? .keyDown : .other,
+                flags: event.modifierFlags.rawValue, timestamp: event.timestamp,
+                elapsed: postedAt.map { $0.duration(to: .now) } ?? .zero,
+                mouse: mouse, keyCode: key ? event.keyCode : nil, isRepeat: key ? event.isARepeat : nil
+            )
+        }
+
+        func makeInput() throws -> NSEvent {
+            try #require(active && showReturned && ownership == nil && posts == 0 && !failed)
+            let shownAt = try #require(shownAt)
+            let expectedScope = try #require(scope(destination))
+            let original = try fixture.completionEvent(completion, outside: panel)
+            let corresponding = try #require(original.cgEvent, "No documented corresponding CGEvent")
+            let point: NSPoint? = completion == .escape ? nil : NSPoint(x: 350, y: 250)
+            if let point { try #require(original.locationInWindow == point) }
+            let screenPoint = point.map { destination.convertPoint(toScreen: $0) }
+            let input: NSEvent
+            let construction: String
+            if completion == .escape {
+                let copy = try #require(corresponding.copy(), "Could not independently copy the CGEvent")
+                try #require(copy !== corresponding)
+                copy.setIntegerValueField(.eventSourceUserData, value: token)
+                input = try #require(NSEvent(cgEvent: copy), "Public CGEvent bridge unavailable")
+                construction = "copy-bridge"
+            } else {
+                // The hosted bridge changed window coordinates. Keep this owned factory event;
+                // the fresh sample below must prove tag retention and both coordinate representations.
+                corresponding.setIntegerValueField(.eventSourceUserData, value: token)
+                input = original
+                construction = "tagged-factory"
+            }
+            let candidate = Ownership(
+                token: token, scope: expectedScope,
+                kind: completion == .escape ? .keyDown : .leftMouseDown,
+                shownAt: shownAt, expectedPoint: point, expectedScreenPoint: screenPoint
+            )
+            let prepared = sample(input)
+            print("row-menu-payload-companion prepared: \(completion.rawValue); route=\(construction); \(prepared)")
+            try #require(input.window === destination && input.windowNumber == destination.windowNumber)
+            try #require(candidate.canAccept(prepared), "Prepared event lost exact window, payload or geometry")
+            ownership = candidate
+            return input
+        }
+
+        func show() {
+            guard opens == 0, !active, fixture.anchor.window === fixture.owner,
+                  fixture.owner.firstResponder === fixture.title else {
+                fail("Opening lacked the exact original row/window/responder")
+                return
+            }
+            opens += 1
+            active = true
+            shownAt = ProcessInfo.processInfo.systemUptime
+            monitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.keyDown, .keyUp, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+                           .leftMouseUp, .rightMouseUp, .otherMouseUp]
+            ) { [weak self] event in
+                guard let self else { return event }
+                return self.observe(event)
+            }
+            guard monitor != nil else {
+                fail("Could not install companion local monitor")
+                close("monitor-unavailable")
+                return
+            }
+            let center = NotificationCenter.default
+            for window in [fixture.owner, fixture.foreign, panel] {
+                let identity = ObjectIdentifier(window)
+                observers.append(center.addObserver(
+                    forName: NSWindow.willCloseNotification, object: window, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, self.lifecycle.windowClosed(identity) else { return }
+                        self.lifecycleEnded("fixture-window-close")
+                    }
+                })
+            }
+            observers.append(center.addObserver(
+                forName: NSApplication.didResignActiveNotification, object: NSApp, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.lifecycleEnded("application-resigned") }
+            })
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification] {
+                observers.append(center.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.lifecycleEnded("panel-took-focus") }
+                })
+            }
+            fixture.owner.addChildWindow(panel, ordered: .above)
+            panel.orderFront(nil)
+            showReturned = true
+        }
+
+        private enum DeadlineState { case armed, disarmed, expired }
+
+        func sendOpening(_ event: NSEvent) {
+            // Short synchronous CAS contains only the real opening sendEvent, as in the original probe.
+            let state = OSAllocatedUnfairLock(initialState: DeadlineState.armed)
+            let limit = DispatchTime.now() + 10
+            let watchdog = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
+            watchdog.schedule(deadline: limit)
+            watchdog.setEventHandler {
+                let expired = state.withLock { value in
+                    guard value == .armed else { return false }
+                    value = .expired
+                    return true
+                }
+                if expired { fatalError("Hosted companion opening exceeded ten-second hard deadline") }
+            }
+            watchdog.resume()
+            defer {
+                let disarmed = state.withLock { value in
+                    guard value != .expired, DispatchTime.now().uptimeNanoseconds < limit.uptimeNanoseconds else {
+                        value = .expired
+                        return false
+                    }
+                    value = .disarmed
+                    return true
+                }
+                watchdog.cancel()
+                if !disarmed { fatalError("Hosted companion opening returned after hard deadline") }
+            }
+            NSApp.sendEvent(event)
+        }
+
+        func postAndAwait(_ event: NSEvent) async {
+            guard active, showReturned, posts == 0, !failed,
+                  ownership?.canAccept(sample(event)) == true else {
+                fail("Cannot post completion without exact live public-payload provenance")
+                return
+            }
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+                postedEvent = event
+                posts += 1
+                NSApp.postEvent(event, atStart: false)
+                let start = ContinuousClock.now
+                postedAt = start
+                let limit = start.advanced(by: .seconds(2))
+                deadlineTask = Task { @MainActor [weak self] in
+                    do {
+                        try await ContinuousClock().sleep(until: limit)
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        self?.fail("Completion deadline failed: \(error)")
+                        self?.close("deadline-error")
+                        self?.finish()
+                        return
+                    }
+                    guard let self else { return }
+                    self.timedOut = true
+                    self.fail("Normal app dispatch did not complete within two seconds")
+                    self.close("deadline")
+                    self.finish()
+                }
+            }
+        }
+
+        private func observe(_ event: NSEvent) -> NSEvent? {
+            guard active else { return event }
+            guard trace.count < 64 else {
+                if !overflowed { fail("Companion input trace exceeded 64 records") }
+                overflowed = true
+                return event
+            }
+            sequence += 1
+            let index = trace.count
+            let observed = sample(event)
+            trace.append(Record(
+                event: ObjectIdentifier(event), sameWrapper: event === postedEvent, type: event.type.rawValue,
+                target: event.window === fixture.owner ? "owner" : event.window === fixture.foreign ? "foreign"
+                    : "other-or-nil",
+                sample: observed, before: Probe.State(fixture)
+            ))
+            defer { trace[index].after = Probe.State(fixture) }
+            guard posts == 1, postedAt != nil, !failed, ownership?.accept(observed) == true else {
+                if observed.tag == token || event.window === fixture.owner
+                    || event.window === fixture.foreign || event.window === panel {
+                    fail("Companion rejected ambiguous, expired or non-owned fixture input")
+                }
+                return event
+            }
+            trace[index].accepted = true
+            completionCallbacks += 1
+            observedSequence = sequence
+            completionObserved = true
+            switch completion {
+            case .ownerPointerCancel:
+                trace[index].route = "owner-pointer/broadcast/consume"
+                sequence += 1
+                broadcastSequence = sequence
+                broadcasts += 1
+                fixture.anchor.observeInput(event)
+                close("owner-pointer")
+            case .foreignPointerCancel:
+                trace[index].route = "foreign-pointer/pass"
+                close("foreign-pointer")
+            case .escape:
+                trace[index].route = "owner-escape/consume"
+                close("escape")
+            }
+            // No sendEvent/dequeue or direct model completion: the foreign event returns to AppKit.
+            dispatchTask = Task { @MainActor [weak self] in
+                guard !Task.isCancelled, let self else { return }
+                self.dispatchTask = nil
+                self.dispatchReturned = true
+                if let start = self.postedAt, start.duration(to: .now) >= .seconds(2) {
+                    self.timedOut = true
+                    self.fail("Completion returned after the two-second monotonic budget")
+                }
+                self.finish()
+            }
+            return completion == .foreignPointerCancel ? event : nil
+        }
+
+        private func finish() {
+            deadlineTask?.cancel()
+            deadlineTask = nil
+            let waiting = continuation
+            continuation = nil
+            waiting?.resume()
+        }
+
+        private func receivedForeignPointer(_ event: NSEvent) {
+            let received = sample(event)
+            guard completion == .foreignPointerCancel, event.window === fixture.foreign,
+                  completionObserved,
+                  ownership?.canReceiveAfterClose(received, previousReceipts: foreignReceipts) == true else {
+                fail("Foreign content received input without exact accepted companion provenance")
+                return
+            }
+            foreignReceipts += 1
+        }
+
+        private func lifecycleEnded(_ reason: String) {
+            guard lifecycle.invalidate() else { return }
+            fail("Companion fixture lifetime ended: \(reason)")
+            close(reason)
+            finish()
+        }
+
+        private func close(_ reason: String) {
+            guard active else { return }
+            sequence += 1
+            closeSequence = sequence
+            closeReason = reason
+            closes += 1
+            active = false
+            if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+            if panel.parent === fixture.owner {
+                fixture.owner.removeChildWindow(panel)
+            } else {
+                _ = lifecycle.invalidate()
+                fail("Exact companion panel lost its parent")
+            }
+            panel.orderOut(nil)
+            // Retain fixture observers: reentrant owner/foreign close or resignation is never expected.
+            lifecycle.beginPanelClose()
+            panel.close()
+            lifecycle.endPanelClose()
+            if lifecycle.invalidated { fail("Companion panel closed with an invalid fixture lifetime") }
+        }
+
+        private func fail(_ message: String) {
+            failed = true
+            Issue.record("\(message)")
+        }
+
+        func takeBackInput() -> Bool {
+            guard postedEvent != nil else { return false }
+            var retained: [NSEvent] = []
+            var found = false
+            defer {
+                for event in retained.reversed() { NSApp.postEvent(event, atStart: true) }
+                postedEvent = nil
+            }
+            for _ in 0..<128 {
+                guard let event = NSApp.nextEvent(matching: .any, until: .distantPast,
+                                                 inMode: .default, dequeue: true) else { return found }
+                let observed = sample(event)
+                switch ownership?.cleanup(observed) {
+                case .removeAndFail:
+                    found = true
+                    fail("Companion recovered queued input; this is not observed dispatch")
+                case .retainAndFail:
+                    retained.append(event)
+                    fail("Ambiguous companion queue input retained in original order")
+                case .unrelated:
+                    retained.append(event)
+                    if event.window === fixture.owner || event.window === fixture.foreign || event.window === panel {
+                        fail("Unowned fixture queue input retained in original order")
+                    }
+                case nil:
+                    retained.append(event)
+                    fail("Companion cleanup has no ownership reservation")
+                }
+            }
+            fatalError("Hosted companion queue exceeded 128-event cleanup bound; proof unavailable")
+        }
+
+        func stop() {
+            if active { close("fixture-cleanup") }
+            dispatchTask?.cancel()
+            dispatchTask = nil
+            finish()
+            _ = takeBackInput()
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers.removeAll()
+            lifecycle.stopObserving()
+            pointerReceiver?.received = nil
+            pointerReceiver?.removeFromSuperview()
+            pointerReceiver = nil
+            panel.contentView = nil
+        }
+
+        func report() {
+            for record in trace {
+                print("row-menu-payload-companion trace: \(completion.rawValue); \(record)")
+            }
+            print("row-menu-payload-companion result: \(completion.rawValue); token=\(token); case=\(caseID); "
+                  + "opens=\(opens); closes=\(closes); posts=\(posts); completionCallbacks=\(completionCallbacks); "
+                  + "observed=\(completionObserved); dispatchReturned=\(dispatchReturned); "
+                  + "foreignReceipts=\(foreignReceipts); broadcasts=\(broadcasts); "
+                  + "observation/broadcast/close=\(observedSequence)/\(broadcastSequence)/\(closeSequence); "
+                  + "reason=\(closeReason); timeout=\(timedOut); failed=\(failed); traceCount=\(trace.count); "
+                  + "overflow=\(overflowed); state=\(Probe.State(fixture)); activations=\(fixture.activations); "
+                  + "actions=\(fixture.actions); previewOpenings=\(fixture.previewOpenings); "
+                  + "previewDismissals=\(fixture.previewDismissals)")
+        }
+    }
+}

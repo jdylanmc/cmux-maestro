@@ -546,7 +546,7 @@ struct SidebarLayoutTests {
         try #require(condition(), "Existing layout observation did not converge from file presentation", sourceLocation: sourceLocation)
     }
 
-    @Test func narrowLayoutValuesKeepControlsAndStatusRoomWithoutDecorativeAnimation() throws {
+    @Test func narrowLayoutValuesKeepControlsAndStatusRoomWithOnlyScopedAnimation() throws {
         #expect(SidebarDensity.allCases.map(\.title) == ["Compact", "Comfortable"])
         #expect(SidebarDensity.compact.spacing(10) == 10)
         #expect(SidebarDensity.comfortable.spacing(10) == 13.5)
@@ -575,11 +575,37 @@ struct SidebarLayoutTests {
         #expect(view.components(separatedBy: workingRingSchedule).count == 2)
         #expect(!view.replacingOccurrences(of: workingRingSchedule, with: "").contains(".animation("))
         #expect(!view.contains(".phaseAnimator"))
+        let lift = try String(
+            contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarRowLiftSurface.swift"), encoding: .utf8
+        )
+        let rowLiftTransition = ".animation(reduceMotion ? nil : .easeOut(duration: SidebarRowLiftStyle.duration), value: lifted)"
+        #expect(lift.components(separatedBy: rowLiftTransition).count == 2)
+        #expect(!lift.replacingOccurrences(of: rowLiftTransition, with: "").contains(".animation("))
+        #expect(!lift.contains("withAnimation"))
+        #expect(!lift.contains(".phaseAnimator"))
+        let rowActions = try String(
+            contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarRowActions.swift"), encoding: .utf8
+        )
+        #expect(!rowActions.contains(".animation("))
+        #expect(!rowActions.contains("withAnimation"))
+        #expect(!rowActions.contains(".phaseAnimator"))
+        let controlFocus = try String(
+            contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarRowControlFocus.swift"), encoding: .utf8
+        )
+        #expect(!controlFocus.contains(".animation("))
+        #expect(!controlFocus.contains("withAnimation"))
+        #expect(!controlFocus.contains(".phaseAnimator"))
         #expect(view.contains("@Environment(\\.accessibilityReduceMotion)"))
         #expect(SidebarBranchSummary(sessions: [], complete: false).incomplete)
         #expect(view.contains("model.navigation.permissionSummary"))
         #expect(view.contains("model.copilot.updateHistory(preferences.history)"))
         #expect(view.contains("model.copilot.updateAttention(preferences.attention)"))
+        #expect(lift.contains(".allowsHitTesting(false)") && lift.contains(".accessibilityHidden(true)"))
+        for forbidden in [".offset(", ".scaleEffect(", ".rotationEffect("] {
+            #expect(!lift.contains(forbidden))
+            #expect(!rowActions.contains(forbidden))
+            #expect(!controlFocus.contains(forbidden))
+        }
     }
 
     private func tree(moved: Bool = false, partial: Bool = false) -> SidebarCopilotTree {

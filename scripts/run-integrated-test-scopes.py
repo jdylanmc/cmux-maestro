@@ -133,9 +133,11 @@ def identifier_path(value):
     return unquote(parsed.path).strip("/")
 
 
-def cases(document, *, expected_plan=None, expected_project=None):
+def cases(document, *, expected_plan=None, expected_project=None, strict_suite=False):
     require(isinstance(document, dict), "Invalid xcresult test document.")
     require(isinstance(document.get("testNodes"), list), "Missing xcresult test tree.")
+    require(not strict_suite or (expected_project is not None and expected_plan is not None),
+            "Strict suite evidence requires explicit project and test-plan expectations.")
     if expected_plan is not None:
         require(len(document["testNodes"]) == 1
                 and isinstance(document["testNodes"][0], dict)
@@ -144,9 +146,11 @@ def cases(document, *, expected_plan=None, expected_project=None):
                 "Unexpected test plan.")
     result = []
 
-    def visit(node, bundle=None, plan=None, bundle_path=None, ui_bundle=False):
+    def visit(node, bundle=None, plan=None, bundle_path=None, suite_path=None, ui_bundle=False):
         require(isinstance(node, dict), "Invalid xcresult test node.")
         if node.get("nodeType") == "Test Plan":
+            require(not strict_suite or plan is None,
+                    "Nested or repeated test plans are not authorized.")
             require(isinstance(node.get("name"), str) and node["name"], "Missing test plan name.")
             plan = node["name"]
         if node.get("nodeType") in ("Unit test bundle", "UI test bundle"):
@@ -155,11 +159,18 @@ def cases(document, *, expected_plan=None, expected_project=None):
             ui_bundle = node["nodeType"] == "UI test bundle"
             project = expected_project if expected_project is not None else plan
             bundle_path = (project + "/" if project else "") + bundle
+            suite_path = None
             require(expected_project is None or node.get("nodeIdentifierURL"),
                     "Missing test bundle project URL.")
             if node.get("nodeIdentifierURL"):
                 require(identifier_path(node["nodeIdentifierURL"]) == bundle_path,
                         "Test bundle URL disagrees with its plan/target ancestry.")
+        if node.get("nodeType") == "Test Suite" and strict_suite:
+            require(bundle_path and isinstance(node.get("name"), str) and node["name"],
+                    "Test suite has no attributable target/name.")
+            suite_path = (suite_path or bundle_path) + "/" + node["name"]
+            require(identifier_path(node.get("nodeIdentifierURL")) == suite_path,
+                    "Test suite URL disagrees with its project/target ancestry.")
         if node.get("nodeType") == "Test Case":
             identifier = node.get("nodeIdentifier")
             url = node.get("nodeIdentifierURL")
@@ -171,9 +182,13 @@ def cases(document, *, expected_plan=None, expected_project=None):
                         "Missing UI test method identifier.")
                 require(isinstance(node.get("name"), str) and node["name"],
                         "Missing UI test method name.")
+            if strict_suite:
+                require(url and suite_path, "Test case lacks its URL or suite ancestry.")
             if url:
                 path = identifier_path(url)
                 require(path.startswith(bundle_path + "/"), "Test URL is outside its plan/target ancestry.")
+                if strict_suite:
+                    require(path.startswith(suite_path + "/"), "Test URL is outside its suite ancestry.")
                 local = path[len(bundle_path) + 1:]
                 if (ui_bundle and not local.endswith("()")
                         and node.get("name") == local.rsplit("/", 1)[-1] + "()"):
@@ -197,7 +212,7 @@ def cases(document, *, expected_plan=None, expected_project=None):
         require(node.get("nodeType") in ("Test Plan", "Unit test bundle", "UI test bundle", "Test Suite") + STRUCTURE,
                 "Execution node appeared outside a logical test.")
         for child in children(node):
-            visit(child, bundle, plan, bundle_path, ui_bundle)
+            visit(child, bundle, plan, bundle_path, suite_path, ui_bundle)
 
     for node in document["testNodes"]:
         visit(node)

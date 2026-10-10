@@ -1890,7 +1890,7 @@ continued history updates remain part of deployment acceptance.
 ./scripts/test.sh
 ```
 
-`test.sh` is the full-coverage entrypoint. It builds once, runs the unchanged
+`test.sh` is the integrated Swift full-coverage entrypoint. It builds once, runs the unchanged
 blocking-observer concurrency regression alone in the integrated host, verifies
 its exact identity/count from the hosted xcresult, then runs all other tests
 from that same build without suite serialization. Both scopes must pass.
@@ -1902,6 +1902,71 @@ remains opt-in. Its exact skip is attributed only when
 Enabled runs require its exact identity with one nonparameterized passed
 execution; an absent benchmark also fails coverage. No other optional-test
 exception is inferred.
+
+The separate required `row-input` CI job runs `./scripts/test-row-input.sh`.
+Its `CMUXMaestroRowInput` scheme builds a validation-only application and an
+XCTest UI-test target, separate from the integrated Swift test-count partition.
+All six named cases must execute exactly once and pass; missing, skipped,
+repeated, or expected-failure cases cannot pass the venue. The current
+fourteen-command integrated job and its existing native tests remain required,
+even while their unresolved input experiments are red.
+
+Row results explicitly require suite ancestry in the shared result parser:
+exact project/plan, attributable suite and case URLs, no nested plans, and
+matching method names/identifiers. The guide venue retains its existing flat
+bundle/case contract. Both preserve raw result evidence and accept matching
+XCTest URL spellings with or without the empty `()` suffix.
+
+`./scripts/test-row-input.sh --build-only` compiles both actual new targets
+locally without launching either. It requires full Xcode and the already fetched
+pinned SDK. Without that flag, the script, UI-test setup, and fixture entry point
+each refuse non-GitHub-hosted execution; do not spoof the hosted markers locally.
+The fixture uses fixed `.Validation.RowInputFixture` and
+`.Validation.RowInputUITests` bundle identifiers, embeds no extension or
+installer helper, and has no production-app startup path, saved-state loading,
+preference writes, session reads, or installation action.
+
+The fixture compiles the existing sidebar sources and shared dependencies without
+the extension entry point, rather than copying or replacing the production menu.
+It instantiates only `SidebarRowActions`, `SidebarTitleButton`, and their shared
+row decoration in two exact, named fixture windows. Complete XCUITest element
+clicks, Shift-F10, Escape, native menu traversal/action, title activation and Tab
+exercise those controls; there is no `CGEvent` construction/posting, local event
+replacement, fitted coordinate, or blanket focus/modality reset. Read-only,
+bounded accessibility snapshots inspect the real anchors, responders, window
+identity, geometry, menu notifications and action/click counters. Window-level
+input observations deliberately do not claim to see events consumed by native
+menu tracking. The no-menu complete-click control establishes actual down/up
+receipt in each fixture window; menu cancellation does not assume AppKit delivers
+both events to that receiver.
+
+Each invocation preserves source hashes, command logs, six-case counts and the
+complete xcresult (including snapshot/render attachments) under
+`.build/row-input/`, uploaded as `row-input-xcuitest-evidence`. Result attribution
+checks the `CMUXMaestroRowInput` plan separately from the
+`CMUXMaestroPreview` project in XCTest identifier URLs, retaining exact target,
+suite, method and execution-count checks. Version 3 fixture snapshots expose the
+first lifetime invalidation, current attachment/visibility checks, and bounded
+display geometry, scale and color-profile digests at setup, first invalidation
+and sampling. These observations do not clear invalidation or weaken the
+required `live` assertion. Compilation is not
+native acceptance. Hosted results and independent review must establish the new
+venue and any future replacement of unsupported older oracles; this addition
+does not waive their failures, prove all native invalidation interleavings, or
+prove the entire visual-feature contract.
+
+The fixture launches as an `LSUIElement` accessory application, without a Dock
+entry or application menu bar. This avoids adding a fixture icon to the Dock
+while measuring display geometry; its actual window activation, native context
+menus, input routes and unconditional screen-change invalidation remain required.
+After launch, XCUITest explicitly activates the exact fixture and uses its single
+two-second setup wait for foreground readiness, then checks both named windows
+before the initial sample. This replaces the window-existence wait rather than
+adding a second wait budget. The fixture's cooperative AppKit activation request
+alone is not proof of activation. This setup does not retry activation after
+input or clear any lifetime invalidation.
+Build settings, built metadata and fixture startup enforce this validation-only
+policy. The containing application and sidebar policies are unchanged.
 
 The metadata supervision regression has a test-only, executor-independent
 30-second bound for each subcase. A stall records the subcase, real deadline

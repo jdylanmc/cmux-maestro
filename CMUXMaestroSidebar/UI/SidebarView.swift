@@ -1347,10 +1347,11 @@ private struct ManagedNodeRow: View {
                 .help("Dismiss this failed result from the sidebar. Does not close its terminal or stop anything.")
                 .accessibilityLabel("Dismiss failed result for \(node.label)")
                 .accessibilityIdentifier("dismiss-managed-\(node.id)-\(node.generation)")
+                .modifier(SidebarRowControlFocus())
             }
         }
         .frame(minHeight: density.rowHeight)
-        .sidebarRowActions(title: node.label, groups: actions)
+        .sidebarRowActions(title: node.label, groups: actions, liftEligible: !isRetainedRecord)
         .background { SidebarActivityBackground(visual: stateVisual) }
         .modifier(SidebarFocusBorder(workspaceID: node.workspaceId, surfaceID: node.surfaceId, enabled: !isRetainedRecord))
         .padding(.leading, density.indentation(depth: depth, unresolved: false, width: contentWidth))
@@ -1813,7 +1814,8 @@ private struct SurfaceRow: View {
                 if surface.unreadCount > 0 { UnreadBadge(count: surface.unreadCount) }
             }
             .frame(minHeight: density.rowHeight)
-            .sidebarRowActions(title: title, groups: actions)
+            .sidebarRowActions(title: title, groups: actions, liftEligible:
+                singleSession != nil || [.agentSession, .terminal, .browser].contains(surface.kind))
             .background {
                 if let singleSession {
                     SidebarActivityBackground(visual: SidebarPresentation.sessionState(singleSession))
@@ -1940,7 +1942,7 @@ private struct CopilotSessionRow: View {
                 }
             }
             .frame(minHeight: density.rowHeight)
-            .sidebarRowActions(title: "Copilot \(session.shortID)", groups: actions)
+            .sidebarRowActions(title: "Copilot \(session.shortID)", groups: actions, liftEligible: !focusUnavailable)
             .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session)) }
             CopilotSessionContents(
                 session: session, expanded: expanded,
@@ -2970,6 +2972,7 @@ private struct ExpandButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(expanded ? "Collapse" : "Expand") \(label)")
+        .modifier(SidebarRowControlFocus())
         .accessibilityValue(expanded ? "Expanded" : "Collapsed")
         .accessibilityHint(expanded
             ? "Hides branch details, keeping running, blocked and attention summaries. Does not dismiss or acknowledge work."
