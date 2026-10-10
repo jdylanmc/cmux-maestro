@@ -215,7 +215,7 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
                 installed = true
                 nativeEnabled = true
                 for name in ["plugin.json", "hooks.json", "skills/cmux-maestro-orchestrate/SKILL.md",
-                             "skills/maestro-icon/SKILL.md", "skills/maestro/SKILL.md"] {
+                             "skills/maestro-icon/SKILL.md", "skills/maestro-pet/SKILL.md", "skills/maestro/SKILL.md"] {
                     let source = fixture.source.appendingPathComponent(name)
                     let target = fixture.cache.appendingPathComponent(name)
                     if FileManager.default.fileExists(atPath: source.path) {
@@ -395,7 +395,7 @@ private actor CheckpointProcessProvider: CopilotSetupProcessRunner {
             } else {
                 guard arguments.last == root.appendingPathComponent("plugin").path else { return .exited(3) }
                 for name in ["plugin.json", "hooks.json", "skills/cmux-maestro-orchestrate/SKILL.md",
-                             "skills/maestro-icon/SKILL.md", "skills/maestro/SKILL.md"] {
+                             "skills/maestro-icon/SKILL.md", "skills/maestro-pet/SKILL.md", "skills/maestro/SKILL.md"] {
                     let source = root.appendingPathComponent("plugin/\(name)")
                     let target = cache.appendingPathComponent(name)
                     if FileManager.default.fileExists(atPath: source.path) {
