@@ -1199,6 +1199,11 @@ Identity colors do not change this treatment. Icons have no wand decoration;
 choosing an icon or role preset does not imply orchestration ownership.
 Both densities use a single-line name and one quiet metadata line: 11/9-point
 type in 46-point Compact rows, 12/10-point type in 52-point Comfortable rows.
+Agent metadata omits the generic `Agent` prefix and separator, leaving the
+existing location or activity beside the unchanged status slot. Missing context
+adds no placeholder or separator. Literal `Agent` text in names and locations,
+ordinary Terminal/Browser labels, full location help and keyboard-accessible
+agent previews remain unchanged; no new current-worktree inference is made.
 Routine Unknown, State unavailable and Last verified prose moves to full help,
 accessibility and details, not a third row. Unknown/stale states retain a static
 dashed cue, never an idle or working claim; incomplete child-history context

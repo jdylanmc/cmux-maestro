@@ -427,10 +427,11 @@ enum SidebarPresentation {
     }
 
     static func rowMetadata(kind: String, directory: String? = nil, activity: String? = nil) -> String {
-        if let activity { return "\(kind) · \(activity)" }
-        guard let directory, !directory.isEmpty else { return kind }
+        let prefix = kind == "Agent" ? "" : "\(kind) · "
+        if let activity { return "\(prefix)\(activity)" }
+        guard let directory, !directory.isEmpty else { return kind == "Agent" ? "" : kind }
         let context = SidebarPathDisplay.text(directory).split(separator: "/").last.map(String.init) ?? "/"
-        return "\(kind) · \(context)"
+        return "\(prefix)\(context)"
     }
 
     static func managedNeedsInput(_ node: SidebarOrchestrationNode, tree: SidebarCopilotTree, now: Date) -> Bool {
