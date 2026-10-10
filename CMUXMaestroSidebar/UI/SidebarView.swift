@@ -311,7 +311,7 @@ private struct WorkspaceAttentionLabel: View {
 }
 
 enum SidebarHeaderAction: String, CaseIterable, Identifiable {
-    case directory, beats, taskboard, history, settings, fermata
+    case directory, beats, taskboard, history, settings
     var id: Self { self }
     var title: String {
         switch self {
@@ -320,24 +320,21 @@ enum SidebarHeaderAction: String, CaseIterable, Identifiable {
         case .taskboard: "Taskboard"
         case .history: "History"
         case .settings: "Maestro settings"
-        case .fermata: "Fermata"
         }
     }
-    var symbol: String? {
+    var symbol: String {
         switch self {
         case .directory: "folder.badge.plus"
         case .beats: "music.note"
         case .taskboard: "rectangle.split.3x1"
         case .history: "clock.arrow.circlepath"
         case .settings: "gearshape"
-        case .fermata: nil
         }
     }
     var unavailable: String? {
         switch self {
         case .directory: "CMUX did not open the directory as a workspace. Grant Maestro the workspace-creation permission in CMUX and try again."
         case .beats: "Beats scheduling is not available. No schedule has been created."
-        case .fermata: "CMUX Keep Mac Awake access is not available. No power setting has changed."
         case .taskboard, .history, .settings: nil
         }
     }
@@ -376,14 +373,8 @@ struct SidebarHeader: View {
                     } else {
                         Button { activate(action) } label: {
                             VStack(spacing: 2) {
-                                Group {
-                                    if let symbol = action.symbol {
-                                        Image(systemName: symbol).font(.system(size: 14))
-                                    } else {
-                                        SidebarFermata().stroke(lineWidth: 1.5).frame(width: 16, height: 12)
-                                    }
-                                }
-                                .frame(height: 18)
+                                Image(systemName: action.symbol).font(.system(size: 14))
+                                    .frame(height: 18)
                                 Capsule().fill(Color.clear).frame(width: 12, height: 2)
                             }
                             .frame(width: 28, height: 28)
@@ -398,16 +389,6 @@ struct SidebarHeader: View {
             }
             .fixedSize()
         }
-    }
-}
-
-private struct SidebarFermata: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.addArc(center: CGPoint(x: rect.midX, y: rect.maxY - 2), radius: rect.width * 0.45,
-                    startAngle: .degrees(180), endAngle: .degrees(0), clockwise: false)
-        path.addEllipse(in: CGRect(x: rect.midX - 1, y: rect.maxY - 3, width: 2, height: 2))
-        return path
     }
 }
 
@@ -526,7 +507,7 @@ struct SidebarView: View {
                           availability: model.orchestration.availability) { action in
                 switch action {
                 case .directory: openDirectoryAsWorkspace()
-                case .beats, .fermata: unavailableHeaderAction = action
+                case .beats: unavailableHeaderAction = action
                 case .taskboard:
                     preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
                 case .history, .settings:

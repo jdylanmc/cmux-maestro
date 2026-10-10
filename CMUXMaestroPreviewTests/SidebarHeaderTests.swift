@@ -6,13 +6,13 @@ import Testing
 @Suite(SidebarAppKitTestScope())
 struct SidebarHeaderTests {
     @Test func exactHeaderOrderAndUnavailableReasonsDoNotClaimCapabilities() throws {
-        #expect(SidebarHeaderAction.allCases == [.directory, .beats, .taskboard, .history, .settings, .fermata])
+        #expect(SidebarHeaderAction.allCases == [.directory, .beats, .taskboard, .history, .settings])
         #expect(SidebarHeaderAction.allCases.map(\.title) == [
-            "Open directory as new workspace", "Beats", "Taskboard", "History", "Maestro settings", "Fermata"
+            "Open directory as new workspace", "Beats", "Taskboard", "History", "Maestro settings"
         ])
         for action in SidebarHeaderAction.allCases {
-            if let symbol = action.symbol { #expect(NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil) }
-            #expect((action.unavailable != nil) == [.directory, .beats, .fermata].contains(action))
+            #expect(NSImage(systemSymbolName: action.symbol, accessibilityDescription: nil) != nil)
+            #expect((action.unavailable != nil) == [.directory, .beats].contains(action))
         }
         var actions: [SidebarHeaderAction] = []
         let header = SidebarHeader(taskboardActive: false, activate: { actions.append($0) })

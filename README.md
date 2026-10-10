@@ -1224,13 +1224,14 @@ source diagnostics remain in details. Glyphs have 2 pt insets in their existing
 Standalone state keys retain pause/check/error symbols for blocked, finished and
 failed states. Workspace headers have a boxed disclosure;
 their trailing ellipsis menu offers Focus, Expand/Collapse and Details as separate
-actions. The six header shortcuts are directory-plus, Beats, Taskboard, History,
-Maestro settings and Fermata, in that order. Settings reuses the existing sidebar
+actions. The five header shortcuts are directory-plus, Beats, Taskboard, History
+and Maestro settings, in that order. Directory-plus opens a folder picker and asks
+CMUX to create a workspace there (requires the workspace-creation action grants). Settings reuses the existing sidebar
 preferences; History opens the same popover at completed-work controls.
 Taskboard temporarily toggles the existing sidebar view (its underline and
 accessible state indicate selection); activate it again to return to the outline.
-Reusable utility hosting is not implemented. Directory, Beats and Fermata explain
-their unavailability without creating workspaces, schedules or power assertions.
+Reusable utility hosting is not implemented. Beats explains its unavailability
+without creating a schedule. Keep-awake is not exposed by CMUX, so there is no Fermata control.
 Settings and the separate Details inspector popover have explicit Close controls.
 The keyboard-accessible inspector scrolls independently, preserves full metadata
 and Other activity, and revalidates window, placement, session, run and generation
