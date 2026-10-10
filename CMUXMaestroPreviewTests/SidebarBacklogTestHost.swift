@@ -25,13 +25,13 @@ final class SidebarBacklogTestHost {
         let validationBuild = false
         #endif
         let environment = ProcessInfo.processInfo.environment
-        let app = NSApplication.shared
         try #require(validationBuild, "Backlog calibration requires CMUX_VALIDATION.")
         try #require(Bundle.main.bundleIdentifier == "com.jdylanmc.CMUXMaestroPreview.Validation.Tests",
                      "Backlog calibration requires the exact isolated validation app.")
         try #require(environment["GITHUB_ACTIONS"] == "true"
                      && environment["RUNNER_ENVIRONMENT"] == "github-hosted",
                      "Backlog calibration requires the existing GitHub-hosted venue.")
+        let app = NSApplication.shared
         try #require(app.isRunning, "Backlog calibration requires a running public app lifecycle.")
         originalPolicy = app.activationPolicy()
         wasActive = app.isActive
