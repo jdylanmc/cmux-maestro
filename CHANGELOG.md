@@ -6,6 +6,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Report the exact owned target, operation, installer stage and expected/observed
+  presence when LaunchServices verification fails; distinguish unknown query
+  state without exposing other registered paths or adding retries. Diagnostic
+  improvement only; the original installation failure remains unresolved (#185).
 - Install the `pull-request` and `create-pull-request` skills project-locally and
   require agents to use `/pull-request` for PR bodies (what/why/how, evidence,
   blast radius).

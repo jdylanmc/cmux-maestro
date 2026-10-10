@@ -2,6 +2,7 @@
 """Synthetic filesystem/registries and owned test processes; no live app or CLI mutation."""
 
 import importlib.util
+import io
 import fcntl
 import errno
 import json
@@ -1121,6 +1122,166 @@ with installer.locked():
 
     def retired(self):
         return self.app.parent / preview.STATE_NAME / self.receipt()["retired"]["slot"]
+
+    def registration_diagnostic(self, error):
+        prefix = "LaunchServices exact registration verification failed: "
+        self.assertTrue(str(error).startswith(prefix), str(error))
+        return json.loads(str(error)[len(prefix):])
+
+    def test_registration_diagnostic_reports_exact_target_without_registry_contents(self):
+        unrelated = self.root / "private-unrelated.app"
+        self.ops.applications.add(unrelated)
+        for absent in (False, True):
+            with self.subTest(absent=absent):
+                if absent:
+                    self.ops.applications.add(self.old)
+                self.ops.commands.clear()
+                with self.assertRaises(ValueError) as caught:
+                    self.ops.verify_registration(self.old, absent=absent)
+                diagnostic = self.registration_diagnostic(caught.exception)
+                self.assertEqual(diagnostic, {
+                    "operation": "verify", "stage": None, "transaction": None, "phase": None,
+                    "bundleID": metadata.BASE_ID, "target": str(self.old),
+                    "expected": "absent" if absent else "present",
+                    "observed": "present" if absent else "absent",
+                })
+                self.assertNotIn(str(unrelated), str(caught.exception))
+                self.assertEqual(self.ops.commands, [])
+
+    def test_registration_diagnostic_query_failure_is_unknown_not_absence(self):
+        for absent in (False, True):
+            with self.subTest(absent=absent):
+                original = OSError("private query detail /unrelated/secret.app")
+                with patch.object(self.ops, "app_paths", side_effect=original) as query:
+                    with self.assertRaises(ValueError) as caught:
+                        self.ops.verify_registration(self.old, absent=absent)
+                diagnostic = self.registration_diagnostic(caught.exception)
+                self.assertEqual(diagnostic["observed"], "unknown")
+                self.assertEqual(diagnostic["queryError"], "OSError")
+                self.assertEqual(diagnostic["expected"], "absent" if absent else "present")
+                self.assertIs(caught.exception.__cause__, original)
+                self.assertNotIn("private query detail", str(caught.exception))
+                query.assert_called_once_with()
+                self.assertEqual(self.ops.commands, [])
+
+    def test_registration_diagnostic_escapes_target_control_characters(self):
+        target = self.root / "line\nbreak\x1b.app"
+        with self.assertRaises(ValueError) as caught:
+            self.ops.verify_registration(target)
+        diagnostic = self.registration_diagnostic(caught.exception)
+        self.assertEqual(diagnostic["target"], str(target))
+        self.assertNotIn("\n", str(caught.exception))
+        self.assertNotIn("\x1b", str(caught.exception))
+
+    def test_registration_diagnostic_survives_automatic_combined_restoration(self):
+        self.operation("install", self.old)
+        before = self.receipt()
+        integration_path = self.home / ".copilot/synthetic-owned-integration.json"
+        integration = integration_path.read_bytes()
+        original = self.ops.run
+        failed = False
+
+        def omit_first_publication(command, **kwargs):
+            nonlocal failed
+            result = original(command, **kwargs)
+            if command[:2] == [preview.LSREGISTER, "-f"] and not failed:
+                failed = True
+                self.ops.applications.discard(self.app)
+            return result
+
+        with patch.object(self.ops, "run", side_effect=omit_first_publication):
+            with self.assertRaises(ValueError) as caught:
+                self.operation("install", self.new)
+        diagnostic = self.registration_diagnostic(caught.exception)
+        self.assertEqual(diagnostic, {
+            "operation": "register", "stage": "publish_registration",
+            "transaction": "update", "phase": "ready",
+            "bundleID": metadata.BASE_ID, "target": str(self.app),
+            "expected": "present", "observed": "absent",
+        })
+        self.assertEqual((self.app / "payload").read_text(), "old")
+        self.assertEqual(self.receipt(), {**before, "retired": self.receipt()["retired"]})
+        self.assertEqual(integration_path.read_bytes(), integration)
+        self.assertFalse((self.home / ".copilot/synthetic-install-checkpoint.json").exists())
+        self.assertIn("Verified installed preview", self.operation("status"))
+
+    def test_registration_diagnostic_identifies_quiesce_refusal_before_exchange(self):
+        self.operation("install", self.old)
+        before = self.receipt()
+        integration_path = self.home / ".copilot/synthetic-owned-integration.json"
+        integration = integration_path.read_bytes()
+        original = self.ops.run
+
+        def retain_withdrawn_app(command, **kwargs):
+            result = original(command, **kwargs)
+            if command[:2] == [preview.LSREGISTER, "-u"]:
+                self.ops.applications.add(Path(command[-1]))
+            return result
+
+        self.ops.moves.clear()
+        with patch.object(self.ops, "run", side_effect=retain_withdrawn_app):
+            with self.assertRaises(ValueError) as caught:
+                self.operation("install", self.new)
+        diagnostic = self.registration_diagnostic(caught.exception)
+        self.assertEqual(diagnostic["operation"], "unregister")
+        self.assertEqual(diagnostic["stage"], "quiesce")
+        self.assertEqual(diagnostic["transaction"], "update")
+        self.assertEqual(diagnostic["phase"], "ready")
+        self.assertEqual(diagnostic["target"], str(self.app))
+        self.assertEqual(diagnostic["expected"], "absent")
+        self.assertEqual(diagnostic["observed"], "present")
+        self.assertEqual(self.ops.moves, [])
+        self.assertEqual(self.receipt(), {**before, "retired": self.receipt()["retired"]})
+        self.assertEqual(integration_path.read_bytes(), integration)
+        self.assertFalse((self.home / ".copilot/synthetic-install-checkpoint.json").exists())
+        self.assertIn("Verified installed preview", self.operation("status"))
+
+    def test_registration_diagnostic_preserves_both_failures_and_pending_journal(self):
+        self.operation("install", self.old)
+        original = self.ops.run
+
+        def omit_publication(command, **kwargs):
+            result = original(command, **kwargs)
+            if command[:2] == [preview.LSREGISTER, "-f"]:
+                self.ops.applications.discard(self.app)
+            return result
+
+        with patch.object(self.ops, "run", side_effect=omit_publication):
+            with self.assertRaises(preview.InstallRestorationError) as caught:
+                self.operation("install", self.new)
+        message = str(caught.exception)
+        self.assertEqual(message.count("LaunchServices exact registration verification failed: "), 2)
+        self.assertIn('"phase": "ready"', message)
+        self.assertIn('"phase": "reverting"', message)
+        self.assertEqual(message.count('"stage": "publish_registration"'), 2)
+        self.assertEqual(self.receipt()["transaction"]["phase"], "reverting")
+        self.assertTrue((self.home / ".copilot/synthetic-install-checkpoint.json").exists())
+        self.assertEqual((self.app / "payload").read_text(), "old")
+
+    def test_registration_diagnostic_cli_status_is_nonzero_and_read_only(self):
+        self.operation("install", self.old)
+        before = self.receipt()
+        self.ops.applications.discard(self.app)
+        self.ops.commands.clear()
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.object(preview.pwd, "getpwuid", return_value=SimpleNamespace(pw_dir=str(self.home))), \
+                patch.object(preview, "MacOperations", return_value=self.ops), \
+                patch.object(sys, "argv", ["local-preview.py", "status"]), \
+                patch.object(sys, "stdout", stdout), patch.object(sys, "stderr", stderr):
+            result = preview.main()
+        self.assertEqual(result, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        diagnostic = self.registration_diagnostic(ValueError(
+            stderr.getvalue().splitlines()[0].removeprefix("Local preview operation incomplete: ")))
+        self.assertEqual(diagnostic["stage"], "status")
+        self.assertIsNone(diagnostic["transaction"])
+        self.assertIsNone(diagnostic["phase"])
+        self.assertEqual(diagnostic["target"], str(self.app))
+        self.assertEqual(diagnostic["expected"], "present")
+        self.assertEqual(diagnostic["observed"], "absent")
+        self.assertEqual(self.receipt(), before)
+        self.assertFalse(any(command[0] in (preview.LSREGISTER, "/usr/bin/pluginkit")
+                             for command in self.ops.commands))
 
     def test_retained_noop_has_no_housekeeping_and_preparation_is_bounded_to_four(self):
         self.operation("install", self.old)
