@@ -14,6 +14,7 @@ final class SidebarBacklogTestHost {
     private let minimalPressCount: () -> Int
     private var attemptedMinimalPress = false
     private var closed = false
+    private var recordedFailure = false
     private(set) var minimalActionPassed = false
 
     var content: NSView { sidebar.view }
@@ -120,6 +121,128 @@ final class SidebarBacklogTestHost {
                       + "role=\(node.role ?? "-") label=\(node.label ?? "-")")
             }
         }
+    }
+
+    enum FailedPrecondition: String { case arrow, editorField }
+
+    // Called only while rethrowing an already-recorded required-precondition failure.
+    func diagnoseFailure(_ failure: FailedPrecondition, excluding priorWindows: Set<ObjectIdentifier> = []) {
+        guard !recordedFailure else {
+            print("Backlog failure diagnostics unavailable: already recorded for this host.")
+            return
+        }
+        recordedFailure = true
+        guard content.window === window, window.contentViewController === container else {
+            print("Backlog failure diagnostics unavailable: root ownership changed.")
+            return
+        }
+        let prefix = "backlog-failure-\(window.windowNumber)-\(failure.rawValue)"
+        captureFailure(content, named: prefix + "-root")
+        inspectFailureBoundary(content)
+        guard failure == .editorField else { return }
+        let children = window.childWindows ?? []
+        guard children.count == 1, let child = children.first,
+              child.parent === window, child.isVisible, !child.isSheet,
+              !priorWindows.contains(ObjectIdentifier(child)),
+              let controller = child.contentViewController, controller.view.window === child,
+              let view = child.contentView else {
+            print("Backlog failure popover unavailable: expected one new visible owned child; children=\(children.count).")
+            return
+        }
+        // The failed field lookup follows the production editor action. Never scan other app windows.
+        captureFailure(view, named: prefix + "-owned-popover")
+        inspectFailureBoundary(view)
+    }
+
+    private func captureFailure(_ view: NSView, named name: String) {
+        let bounds = view.bounds
+        guard bounds.width.isFinite, bounds.height.isFinite,
+              bounds.width > 0, bounds.height > 0, bounds.width <= 1_024, bounds.height <= 1_024,
+              let bitmap = view.bitmapImageRepForCachingDisplay(in: bounds),
+              bitmap.pixelsWide > 0, bitmap.pixelsWide <= 2_048,
+              bitmap.pixelsHigh > 0, bitmap.pixelsHigh <= 2_048 else {
+            print("Backlog failure image unavailable: unsupported or oversized view/bitmap.")
+            return
+        }
+        view.cacheDisplay(in: bounds, to: bitmap)
+        guard let data = bitmap.representation(using: .png, properties: [:]),
+              data.count <= 8 * 1_024 * 1_024 else {
+            print("Backlog failure image unavailable: PNG encoding failed or exceeded 8 MiB.")
+            return
+        }
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try data.write(to: folder.appendingPathComponent(name + ".png"), options: .atomic)
+            print("Backlog diagnostic-only image: \(name).png (\(bitmap.pixelsWide)x\(bitmap.pixelsHigh)).")
+        } catch {
+            let error = error as NSError
+            print("Backlog failure image unavailable: \(bounded(error.domain)) code=\(error.code).")
+        }
+    }
+
+    private func inspectFailureBoundary(_ root: NSView) {
+        let attributes: [(NSAccessibility.Attribute, String)] = [
+            (.identifier, "accessibilityIdentifier"),
+            (.children, "accessibilityChildren"),
+            (.contents, "accessibilityContents"),
+            (.childrenInNavigationOrderAttribute, "accessibilityChildrenInNavigationOrder")
+        ]
+        var pending: [NSObject] = [root]
+        var visited = Set<ObjectIdentifier>()
+        var truncated = false
+        while visited.count < 64, let object = pending.popLast() {
+            guard visited.insert(ObjectIdentifier(object)).inserted else { continue }
+            print("Backlog failure AX[\(visited.count)] type=\(bounded(String(reflecting: Swift.type(of: object)), limit: 128))")
+            let namesSelector = NSSelectorFromString("accessibilityAttributeNames")
+            let names = object.responds(to: namesSelector)
+                ? object.perform(namesSelector)?.takeUnretainedValue() as? [String] : nil
+            let advertised = Array((names ?? []).prefix(256))
+            if let names, names.count > advertised.count {
+                truncated = true
+                print("  legacy attribute names truncated: \(advertised.count)/\(names.count).")
+            }
+            let legacySelector = NSSelectorFromString("accessibilityAttributeValue:")
+            for (attribute, getter) in attributes {
+                let selector = NSSelectorFromString(getter)
+                let hasModern = object.responds(to: selector)
+                let modern = hasModern ? object.perform(selector)?.takeUnretainedValue() : nil
+                let hasLegacy = advertised.contains(attribute.rawValue) && object.responds(to: legacySelector)
+                let legacy = hasLegacy
+                    ? object.perform(legacySelector, with: attribute.rawValue)?.takeUnretainedValue() : nil
+                for (route, available, value) in [("modern", hasModern, modern), ("legacy", hasLegacy, legacy)] {
+                    let key = "\(attribute.rawValue) \(route)"
+                    guard available else { print("  \(key): unavailable"); continue }
+                    if attribute == .identifier {
+                        let text = (value as? String).map { bounded($0) } ?? "nil/non-string"
+                        print("  \(key): \(text)")
+                    } else if let values = value as? [Any] {
+                        let sample = Array(values.prefix(32))
+                        if values.count > sample.count { truncated = true }
+                        print("  \(key): records=\(values.count) sampled=\(sample.count)"
+                              + (values.count > sample.count ? " truncated" : ""))
+                        let objects = sample.compactMap { $0 as? NSObject }
+                        if objects.count != sample.count {
+                            print("    unavailable: \(sample.count - objects.count) non-NSObject children")
+                        }
+                        let capacity = 256 - pending.count
+                        if objects.count > capacity { truncated = true }
+                        pending.append(contentsOf: objects.prefix(capacity))
+                    } else {
+                        print("  \(key): nil/non-array")
+                    }
+                }
+            }
+        }
+        print("Backlog failure AX boundary inspected=\(visited.count) pending=\(pending.count) "
+              + "truncated=\(truncated || !pending.isEmpty). Diagnostic edges are never acceptance nodes.")
+    }
+
+    private func bounded(_ text: String, limit: Int = 256) -> String {
+        let sample = Array(text.utf8.prefix(limit + 1))
+        let clipped = String(decoding: sample.prefix(limit), as: UTF8.self)
+        return String(reflecting: clipped) + (sample.count > limit ? " [truncated]" : "")
     }
 
     func close() {

@@ -233,12 +233,23 @@ struct SidebarBacklogEditorRenderingTests {
                 let presenter = try #require(configure.target as? SidebarRowMenuPresenter)
                 presenter.invoke(configure)
             } else {
-                let arrow = try #require(test.nodes(hosting).first { $0.identifier == "backlog-\(ids.workspaceA)" })
+                let arrow: Accessible
+                do {
+                    arrow = try #require(test.nodes(hosting).first { $0.identifier == "backlog-\(ids.workspaceA)" })
+                } catch {
+                    presentation.diagnoseFailure(.arrow)
+                    throw error
+                }
                 #expect(arrow.press())
                 #expect(model.backlog.status == .missingURL)
             }
             await sidebarEventually { self.field != nil }
-            _ = try #require(field)
+            do {
+                _ = try #require(field)
+            } catch {
+                presentation.diagnoseFailure(.editorField, excluding: priorWindows)
+                throw error
+            }
         }
 
         private func diagnoseEditor(stage: String) {

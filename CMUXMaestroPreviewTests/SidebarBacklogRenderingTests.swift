@@ -61,7 +61,13 @@ struct SidebarBacklogRenderingTests {
         presentation.diagnose(stage: "before header action")
         try #require(presentation.isPresented && presentation.minimalActionPassed)
         hosting.layoutSubtreeIfNeeded()
-        let arrow = try #require(accessibilityNodes(hosting).first { $0.identifier == "backlog-\(identities.workspaceA)" })
+        let arrow: Accessible
+        do {
+            arrow = try #require(accessibilityNodes(hosting).first { $0.identifier == "backlog-\(identities.workspaceA)" })
+        } catch {
+            presentation.diagnoseFailure(.arrow)
+            throw error
+        }
         let eye = try #require(accessibilityNodes(hosting).first { $0.identifier == "idle-tasks-\(identities.workspaceA)" })
         let arrowFrame = try #require(arrow.frame), eyeFrame = try #require(eye.frame)
         #expect(arrowFrame.width >= 24 && arrowFrame.height >= 24)
