@@ -58,6 +58,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Default prospective Joe/Maestro Developer workers to gray, retaining the
+  bicep icon, explicit human overrides and all other role defaults. Existing
+  sessions are unchanged (#164).
 - Default local Joe/Maestro delivery, review, test and investigation workers to
   short-lived assignments, with exact evidence and accepted duty custody before
   separately authorized owned close. Retain concrete duties rather than idle
