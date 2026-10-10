@@ -263,6 +263,8 @@ struct SidebarQuestionGlow: View {
             .foregroundStyle(Self.lightBlue)
             .shadow(color: Self.lightBlue.opacity(glow), radius: 2)
             .shadow(color: Self.lightBlue.opacity(glow * 0.7), radius: 2.5)
+            .frame(width: 14, height: 16)
+            .clipped()
     }
 }
 
