@@ -101,6 +101,45 @@ class RowInputVenueTests(unittest.TestCase):
         counts = row_input.validate_results(*self.report())
         self.assertEqual(counts["passedTests"], 6)
 
+    def test_strict_suite_is_explicit_and_does_not_change_flat_guide_contract(self):
+        summary, tests = self.report()
+        bundle = self.bundle(tests)
+        bundle["children"] = bundle["children"][0]["children"]
+        selected = scopes.cases(tests, expected_project="CMUXMaestroPreview",
+                                expected_plan="CMUXMaestroRowInput")
+        self.assertEqual(len(selected), 6)
+        self.assertTrue(all(case.identity.endswith("()") for case in selected))
+        with self.assertRaisesRegex(ValueError, "suite ancestry"):
+            row_input.validate_results(summary, tests)
+        for expectations in ({}, {"expected_project": "CMUXMaestroPreview"},
+                             {"expected_plan": "CMUXMaestroRowInput"}):
+            with self.subTest(expectations=expectations), self.assertRaisesRegex(
+                    ValueError, "explicit project and test-plan"):
+                scopes.cases(tests, strict_suite=True, **expectations)
+
+    def test_row_accepts_both_ui_url_spellings_without_mutating_evidence(self):
+        for suffix in ("", "()"):
+            summary, tests = self.report()
+            nodes = self.bundle(tests)["children"][0]["children"]
+            for node in nodes:
+                node["nodeIdentifierURL"] += suffix
+            original = json.dumps(tests, sort_keys=True)
+            with self.subTest(suffix=suffix):
+                self.assertEqual(row_input.validate_results(summary, tests)["passedTests"], 6)
+                self.assertEqual(json.dumps(tests, sort_keys=True), original)
+
+    def test_row_retains_main_method_metadata_guards(self):
+        for field in ("name", "nodeIdentifier"):
+            for value in (None, "", "unrelatedMethod()"):
+                summary, tests = self.report()
+                node = self.bundle(tests)["children"][0]["children"][0]
+                if value is None:
+                    del node[field]
+                else:
+                    node[field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    row_input.validate_results(summary, tests)
+
     def test_nested_foreign_or_duplicate_plan_cannot_supply_required_cases(self):
         for name in ("UnapprovedPlan", "CMUXMaestroRowInput"):
             summary, tests = self.report()
@@ -868,6 +907,7 @@ class BuildMetadataTests(unittest.TestCase):
 
     def test_ci_documentation_tracks_the_guarded_validation_commands(self):
         workflow = self._workflow_with_plain_integrated_command()
+        workflow = workflow.split("\n  validate:\n", 1)[1]
         commands = re.findall(r"^        run: (.+)$", workflow, re.MULTILINE)
         policy = (ROOT / "docs/agents/merge-policy.md").read_text()
         section = policy.split("## Actual CI and formatting gates", 1)[1]

@@ -82,7 +82,7 @@ merely a successful artifact upload.
 The separate required `row-input` job also runs `./scripts/test-row-input.sh`
 against its validation-only application and XCUITest target. All six named
 cases must pass once with complete `row-input-xcuitest-evidence`; this supplements,
-not replaces, the eleven-command integrated gate or its unresolved native tests.
+not replaces, the fourteen-command integrated gate or its unresolved native tests.
 Local `--build-only` compilation is permitted without UI execution and is not
 hosted acceptance.
 

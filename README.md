@@ -1907,9 +1907,15 @@ The separate required `row-input` CI job runs `./scripts/test-row-input.sh`.
 Its `CMUXMaestroRowInput` scheme builds a validation-only application and an
 XCTest UI-test target, separate from the integrated Swift test-count partition.
 All six named cases must execute exactly once and pass; missing, skipped,
-repeated, or expected-failure cases cannot pass the venue. The original
-eleven-command job and its existing native tests remain unchanged and required,
+repeated, or expected-failure cases cannot pass the venue. The current
+fourteen-command integrated job and its existing native tests remain required,
 even while their unresolved input experiments are red.
+
+Row results explicitly require suite ancestry in the shared result parser:
+exact project/plan, attributable suite and case URLs, no nested plans, and
+matching method names/identifiers. The guide venue retains its existing flat
+bundle/case contract. Both preserve raw result evidence and accept matching
+XCTest URL spellings with or without the empty `()` suffix.
 
 `./scripts/test-row-input.sh --build-only` compiles both actual new targets
 locally without launching either. It requires full Xcode and the already fetched

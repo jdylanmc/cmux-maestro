@@ -149,7 +149,7 @@ def cases(document, *, expected_plan=None, expected_project=None, strict_suite=F
     def visit(node, bundle=None, plan=None, bundle_path=None, suite_path=None, ui_bundle=False):
         require(isinstance(node, dict), "Invalid xcresult test node.")
         if node.get("nodeType") == "Test Plan":
-            require(expected_plan is None or plan is None,
+            require(not strict_suite or plan is None,
                     "Nested or repeated test plans are not authorized.")
             require(isinstance(node.get("name"), str) and node["name"], "Missing test plan name.")
             plan = node["name"]
