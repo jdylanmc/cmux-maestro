@@ -47,7 +47,10 @@ const path = require("node:path");
       state.createdDirectories.push(record);
       state.workspaceOrder.push(record.id);
       state.workspaceCollapsed[record.id] = true;
-      state.utilityTabs.beats = { workspace: record.id, pane: 2 };
+      state.utilityTabs.taskboard = { workspace: record.id, pane: 2 };
+      state.utilityTabs.beats = { workspace: record.id, pane: 1 };
+      state.beats = [{ id: "legacy-beat", agentId: "reviewer", cron: "*/10 * * * *", prompt: "Legacy prompt", enabled: true, pending: true, pendingSince: 1, lastAttempt: 2, lastDelivered: 3, deliveries: 4, skipped: 5, error: "", events: [{ at: 1, message: "old" }] }];
+      state.beatClock = 1; state.beatAvailability = { reviewer: "busy" }; state.selectedBeat = "legacy-beat";
       save();
     });
     await page.reload();
@@ -55,7 +58,12 @@ const path = require("node:path");
       state.workspaceOrder.join(",") === "scratch,design,directory-00000000-0000-4000-8000-000000000001,stress" &&
       state.workspaceCollapsed.stress && state.icons.implementer.glyph === "leaf" &&
       state.tags.implementer[0] === "preserve-this" && Object.keys(state.taskDismissals).length === 1 &&
-      state.utilityTabs.beats.workspace === state.createdDirectories[0].id
+      state.utilityTabs.taskboard.workspace === state.createdDirectories[0].id
+    ));
+    check("Legacy Beats tab entry and queue/simulator fields are dropped, not rejected", await page.evaluate(() =>
+      !("beats" in state.utilityTabs) && !("beatClock" in state) && !("beatAvailability" in state) && !("selectedBeat" in state) &&
+      state.beats.length === 1 && state.beats[0].id === "legacy-beat" && state.beats[0].prompt === "Legacy prompt" &&
+      !["pending", "events", "deliveries", "skipped", "error", "lastAttempt"].some(key => key in state.beats[0])
     ));
     await page.reload();
     check("Migration persists once without duplicating Stress testing", await page.evaluate(() => state.workspaceOrder.filter(id => id === "stress").length === 1 && startupNotice === ""));
@@ -188,10 +196,14 @@ const path = require("node:path");
     const terminalHover = await measure("#hover-card", "Terminal hover preview");
     await page.keyboard.press("Escape");
     check("Long browser and terminal rows remain actual selectable surfaces", await page.locator("#pinned-details").getAttribute("data-active") === "stress-terminal-3");
-    await page.locator("#beats-button").click();
+    await page.locator("#taskboard-button").click();
     await page.reload();
-    check("Utility view placement in Stress testing survives reload", await page.evaluate(() => state.utilityTabs.beats.workspace === "stress" && state.active === "tool-beats"));
-    await page.locator('#native-layout [data-close-tool="beats"]').click();
+    check("Utility view placement in Stress testing survives reload", await page.evaluate(() => state.utilityTabs.taskboard.workspace === "stress" && state.active === "tool-taskboard"));
+    await page.locator("#beats-button").click();
+    check("Beats opens as an anchored popover over the stress layout, never as a tab", await page.locator("#beats-popover").isVisible() && await page.evaluate(() => !("beats" in state.utilityTabs) && state.active === "tool-taskboard"));
+    await page.keyboard.press("Escape");
+    check("Escape closes the Beats popover", !await page.locator("#beats-popover").isVisible());
+    await page.locator('#native-layout [data-close-tool="taskboard"]').click();
     await page.locator("#reset-demo").click();
     check("Reset preserves the complete stress fixture and returns to the readable demo", await page.evaluate(() => surfaces.filter(item => item.workspace === "stress").length === 65 && state.workspaceCollapsed.stress && !state.stressLongName && state.active === "implementer"));
     check("No runtime errors under the stress fixture", errors.length === 0);

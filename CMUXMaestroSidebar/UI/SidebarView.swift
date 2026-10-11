@@ -580,20 +580,20 @@ struct SidebarView: View {
     }
 
     @ViewBuilder private var headerPopover: some View {
-                if showingHistory {
-                historySettings
-            } else if showingBeats {
-                SidebarBeatsPanel(targets: beatTargets) { showingBeats = false }
-            } else if let action = unavailableHeaderAction, let reason = action.unavailable {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(action.title).font(.headline)
-                    Text(reason).font(.callout).fixedSize(horizontal: false, vertical: true)
-                    Button("Close") { unavailableHeaderAction = nil }
-                        .keyboardShortcut(.cancelAction)
-                }
-                .padding(14)
-                .frame(width: 260)
+        if showingHistory {
+            historySettings
+        } else if showingBeats {
+            SidebarBeatsPanel(targets: beatTargets) { showingBeats = false }
+        } else if let action = unavailableHeaderAction, let reason = action.unavailable {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(action.title).font(.headline)
+                Text(reason).font(.callout).fixedSize(horizontal: false, vertical: true)
+                Button("Close") { unavailableHeaderAction = nil }
+                    .keyboardShortcut(.cancelAction)
             }
+            .padding(14)
+            .frame(width: 260)
+        }
     }
 
     private func content(pinnedHeight: CGFloat) -> some View {

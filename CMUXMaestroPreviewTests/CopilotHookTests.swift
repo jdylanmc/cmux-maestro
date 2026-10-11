@@ -362,6 +362,8 @@ struct CopilotHookTests: Sendable {
         #expect(grants.allSatisfy { $0.hasPrefix("/") && $0.hasSuffix("/") })
         #expect(plist["com.apple.security.app-sandbox"] as? Bool == true)
         #expect(plist["com.apple.security.files.user-selected.read-only"] as? Bool == true)
-        #expect(plist.count == 3)
+        let writes = try #require(plist["com.apple.security.temporary-exception.files.home-relative-path.read-write"] as? [String])
+        #expect(writes == ["/Library/Application Support/CMUXMaestroPreview/Beats/"])
+        #expect(plist.count == 4)
     }
 }

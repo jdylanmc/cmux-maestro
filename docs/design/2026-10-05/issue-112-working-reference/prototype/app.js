@@ -148,7 +148,7 @@ const initialState = () => ({
   version: 2, active: "implementer", grouping: "worktrees",
   collapsed: { "design:main": true }, workspaceCollapsed: { scratch: true, stress: true }, ancestryCollapsed: {}, paneCollapsed: {}, tabOrder: {},
   icons: {}, pets: {}, tags: {}, panes: {}, paneSelected: {}, agentChoices: {}, dismissed: {}, showEnded: false, petHidden: {}, workspaceOrder: ["design", "scratch", "stress"], stressLongName: false,
-  utilityTabs: {}, beats: initialBeats(), selectedBeat: "beat-review", beatClock: Date.UTC(2026, 8, 25, 20, 0), beatAvailability: {}, workspaceFinished: {}, sidebarOrders: {}, createdDirectories: [], tagColors: {}, taskDismissals: {}, taskGroupsCollapsed: {}
+  utilityTabs: {}, beats: initialBeats(), workspaceFinished: {}, sidebarOrders: {}, createdDirectories: [], tagColors: {}, taskDismissals: {}, taskGroupsCollapsed: {}
 });
 let state = initialState();
 let startupNotice = "";
@@ -170,8 +170,9 @@ try {
     const removedSelection = ["unknown-agent", "stale-agent"].includes(saved.active);
     if (removedSelection) {
       saved.active = "implementer";
-      startupNotice = "Edge-case demo agents removed. Selected Sidebar implementer; saved Beats and preferences retained.";
+      startupNotice = "Edge-case demo agents removed. Selected Sidebar implementer; saved preferences retained.";
     }
+    migrateLegacyBeatState(saved);
     const maps = ["collapsed", "workspaceCollapsed", "ancestryCollapsed", "icons", "pets", "tags", "panes", "petHidden", "paneSelected", "agentChoices"];
     const taskDismissalsValid = saved.taskDismissals === undefined || (saved.taskDismissals !== null && typeof saved.taskDismissals === "object" && !Array.isArray(saved.taskDismissals) && Object.values(saved.taskDismissals).every(value => value === true));
     const taskGroupsValid = saved.taskGroupsCollapsed === undefined || (saved.taskGroupsCollapsed !== null && typeof saved.taskGroupsCollapsed === "object" && !Array.isArray(saved.taskGroupsCollapsed) && Object.values(saved.taskGroupsCollapsed).every(value => typeof value === "boolean"));
@@ -619,7 +620,7 @@ function renderPinned() {
   const item = byId(state.active);
   $("#pinned-details").dataset.active = item.id;
   if (item.kind === "tool") {
-    $("#pinned-details").innerHTML = `<div class="pinned-heading"><span>Active tab</span><span>Prototype</span></div><div class="tool-pinned">${iconFor(item)}<div><b>${item.name}</b><p>${escapeHTML(workspaces.find(workspace => workspace.id === item.workspace).name)} · Pane ${paneFor(item)}</p></div></div><p class="session-note">A movable view. Closing this tab does not change agents or schedules.</p>`;
+    $("#pinned-details").innerHTML = `<div class="pinned-heading"><span>Active tab</span><span>Prototype</span></div><div class="tool-pinned">${iconFor(item)}<div><b>${item.name}</b><p>${escapeHTML(workspaces.find(workspace => workspace.id === item.workspace).name)} · Pane ${paneFor(item)}</p></div></div><p class="session-note">A movable view. Closing this tab does not change agents.</p>`;
     return;
   }
   $("#pinned-details").innerHTML = `<div class="pinned-heading"><span class="eyebrow">Active window · pinned</span><span>Demo metadata</span></div>
@@ -652,7 +653,7 @@ function render() {
     if (state.active === `tool-${button.dataset.openTool}`) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
-  renderPinned(); renderStage();
+  renderPinned(); renderStage(); renderBeatsPopover();
 }
 function focusItem(id) {
   const item = byId(id);
