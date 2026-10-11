@@ -63,7 +63,6 @@ struct SidebarHoverCard: View {
                     .font(.caption2).foregroundStyle(.secondary)
                     .accessibilityIdentifier("hover-rename-hint")
             }
-            Text("Preview only").font(.caption2).foregroundStyle(.secondary)
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

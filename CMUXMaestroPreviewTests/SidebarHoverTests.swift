@@ -740,7 +740,7 @@ struct SidebarHoverTests {
             try #require(bitmap.representation(using: .png, properties: [:])).write(to: image)
             let text = try SidebarRenderingEvidence.recognizedLines(in: image, dark: dark, naturalLanguage: true).joined(separator: " ")
             #expect(text.contains("Maestro design"))
-            #expect(text.contains("Preview only"))
+            #expect(text.contains("rename"))
         }
         #expect(preferences.history == before.0 && preferences.attention == before.1)
         #expect(preferences.layout == before.2 && preferences.icons == before.3)

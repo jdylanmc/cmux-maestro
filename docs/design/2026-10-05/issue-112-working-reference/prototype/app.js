@@ -687,7 +687,7 @@ function showHover(id, anchor, isWorkspace = false) {
   if (isWorkspace) {
     const workspace = workspaces.find(w => w.id === id);
     const agents = surfaces.filter(s => s.workspace === id && s.kind === "agent" && !state.dismissed[s.id]);
-    card.innerHTML = `<span class="eyebrow">WORKSPACE PREVIEW</span><h3>${escapeHTML(workspace.name)}</h3><p>${escapeHTML(workspace.subtitle)}</p><p>${agents.length} agents · ${agents.filter(a => a.state === "working").length} working</p><p>${workspace.backlog || "No backlog configured"}</p><footer>Preview only · active window stays pinned</footer>`;
+    card.innerHTML = `<span class="eyebrow">WORKSPACE PREVIEW</span><h3>${escapeHTML(workspace.name)}</h3><p>${escapeHTML(workspace.subtitle)}</p><p>${agents.length} agents · ${agents.filter(a => a.state === "working").length} working</p><p>${workspace.backlog || "No backlog configured"}</p><footer>Active window stays pinned</footer>`;
   } else {
     const item = byId(id);
     const showPet = item.kind === "agent" && !state.petHidden[item.id];
