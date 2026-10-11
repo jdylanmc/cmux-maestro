@@ -4080,6 +4080,302 @@ def command_self_pet(args):
             "scope": "this session only until saved from the Maestro pet picker"}
 
 
+# --- Beats: recurring prompts for exact agent sessions -------------------------
+# Policy lives in issue #42. Definitions persist in one local store; this module
+# owns cron evaluation and exact-self management. The CMUX-lifetime clock and the
+# human UI use the same store and rules.
+BEATS_VERSION = 1
+BEATS_MAX_TOTAL = 256
+BEATS_MAX_PER_SESSION = 16
+BEATS_MAX_PROMPT_BYTES = 4096
+BEATS_MAX_STORE_BYTES = 1024 * 1024
+BEATS_FIELDS = frozenset((
+    "id", "sessionId", "cron", "prompt", "enabled", "recoveryGate", "targetEnded",
+    "lastFiredMinute", "createdAt", "updatedAt", "revision",
+))
+CRON_FIELD_RANGES = (("minute", 0, 59), ("hour", 0, 23), ("day", 1, 31), ("month", 1, 12), ("weekday", 0, 7))
+CRON_ITEM = re.compile(r"^(\*|\d{1,2}(?:-\d{1,2})?)(?:/(\d{1,2}))?$")
+DAYS_IN_MONTH = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
+
+class CronSpec:
+    """Five numeric fields: minute hour day-of-month month weekday, evaluated in local time."""
+
+    def __init__(self, expression):
+        self.expression = expression
+        fields = expression.split()
+        sets, stars = [], []
+        for text, (name, low, high) in zip(fields, CRON_FIELD_RANGES):
+            values = set()
+            for item in text.split(","):
+                match = CRON_ITEM.fullmatch(item)
+                if not match:
+                    raise OrchestrationError(
+                        f"Cron {name} field is invalid. Use numbers, ranges, lists and steps only (for example */15 or 1-5).")
+                base, step = match.group(1), match.group(2)
+                if base == "*":
+                    first, last = low, high
+                elif "-" in base:
+                    first, last = (int(part) for part in base.split("-"))
+                else:
+                    if step is not None:
+                        raise OrchestrationError(f"Cron {name} step needs * or a range.")
+                    first = last = int(base)
+                if not (low <= first <= last <= high):
+                    raise OrchestrationError(f"Cron {name} values must be {low}-{high}.")
+                increment = int(step) if step is not None else 1
+                if increment < 1:
+                    raise OrchestrationError(f"Cron {name} step must be at least 1.")
+                values.update(range(first, last + 1, increment))
+            if name == "weekday":
+                values = {value % 7 for value in values}
+            sets.append(frozenset(values))
+            stars.append(text.startswith("*"))
+        self.minutes, self.hours, self.days, self.months, self.weekdays = sets
+        self.day_star, self.weekday_star = stars[2], stars[4]
+        if not self.day_star and self.weekday_star:
+            if not any(day <= DAYS_IN_MONTH[month - 1] for month in self.months for day in self.days):
+                raise OrchestrationError("That cron expression can never match a real date.")
+
+    def matches_day(self, month, day, weekday):
+        """weekday: cron numbering, 0 = Sunday."""
+        if month not in self.months:
+            return False
+        day_ok, weekday_ok = day in self.days, weekday in self.weekdays
+        if self.day_star and self.weekday_star:
+            return True
+        if self.day_star:
+            return weekday_ok
+        if self.weekday_star:
+            return day_ok
+        return day_ok or weekday_ok
+
+    def matches(self, local):
+        """local: a time.struct_time in the Mac's current local time zone."""
+        return (local.tm_min in self.minutes and local.tm_hour in self.hours
+                and self.matches_day(local.tm_mon, local.tm_mday, (local.tm_wday + 1) % 7))
+
+
+def parse_cron(expression):
+    if not isinstance(expression, str) or not expression.strip() or len(expression) > 100 \
+            or any(ord(character) < 32 and character not in "\t" for character in expression):
+        raise OrchestrationError("Cron must be five space-separated numeric fields: minute hour day month weekday.")
+    if len(expression.split()) != 5:
+        raise OrchestrationError("Cron must have exactly five fields: minute hour day-of-month month weekday.")
+    return CronSpec(" ".join(expression.split()))
+
+
+def local_minute_key(epoch):
+    local = time.localtime(epoch)
+    return "%04d-%02d-%02dT%02d:%02d" % (local.tm_year, local.tm_mon, local.tm_mday, local.tm_hour, local.tm_min)
+
+
+def cron_next_times(spec, epoch, count=5, horizon_days=800):
+    """Upcoming local fire times after `epoch`. Nonexistent local times are skipped; a repeated
+    local minute appears once."""
+    results, seen = [], set()
+    start = time.localtime(epoch)
+    day_epoch = time.mktime((start.tm_year, start.tm_mon, start.tm_mday, 12, 0, 0, 0, 0, -1))
+    for offset in range(horizon_days):
+        local_day = time.localtime(day_epoch + offset * 86400)
+        if not spec.matches_day(local_day.tm_mon, local_day.tm_mday, (local_day.tm_wday + 1) % 7):
+            continue
+        for hour in sorted(spec.hours):
+            for minute in sorted(spec.minutes):
+                candidate = time.mktime((local_day.tm_year, local_day.tm_mon, local_day.tm_mday, hour, minute, 0, 0, 0, -1))
+                actual = time.localtime(candidate)
+                if (actual.tm_mday, actual.tm_hour, actual.tm_min) != (local_day.tm_mday, hour, minute):
+                    continue
+                key = local_minute_key(candidate)
+                if candidate <= epoch or key in seen:
+                    continue
+                seen.add(key)
+                results.append(candidate)
+                if len(results) == count:
+                    return results
+    return results
+
+
+def beats_due(state, epoch):
+    """Enabled, ungated Beats whose cron matches this local minute and have not fired for it.
+    Only the current minute is considered: missed minutes are never replayed, nonexistent local
+    minutes never occur, and a repeated local minute fires once."""
+    key = local_minute_key(epoch)
+    local = time.localtime(epoch)
+    # A local minute that physically happened before (clocks moved back) was already served.
+    if any(local_minute_key(epoch - shift) == key for shift in (1800, 3600, 7200)):
+        return key, []
+    due = []
+    for beat in state["beats"]:
+        if (beat["enabled"] and not beat["recoveryGate"] and not beat["targetEnded"]
+                and beat["lastFiredMinute"] != key and parse_cron(beat["cron"]).matches(local)):
+            due.append(beat)
+    return key, due
+
+
+def beats_root():
+    override = os.environ.get("CMUX_MAESTRO_BEATS_ROOT")
+    if override:
+        if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
+            raise OrchestrationError("CMUX_MAESTRO_BEATS_ROOT is test-only.")
+        return Path(override)
+    return Path.home() / "Library/Application Support/CMUXMaestroPreview/Beats"
+
+
+def validate_beat_prompt(prompt):
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise OrchestrationError("A Beat needs a nonempty prompt.")
+    if len(prompt.encode()) > BEATS_MAX_PROMPT_BYTES or any(
+            ord(character) < 32 and character not in "\n\t" for character in prompt):
+        raise OrchestrationError("A Beat prompt must be at most 4 KiB of text without control characters.")
+    return prompt
+
+
+def validate_beats_state(state):
+    if not isinstance(state, dict) or set(state) != {"version", "beats"} or state["version"] != BEATS_VERSION \
+            or not isinstance(state["beats"], list) or len(state["beats"]) > BEATS_MAX_TOTAL:
+        raise OrchestrationError("The Beats store is invalid or from a newer version.")
+    seen = set()
+    for beat in state["beats"]:
+        if not isinstance(beat, dict) or set(beat) != BEATS_FIELDS:
+            raise OrchestrationError("The Beats store has a malformed definition.")
+        canonical_uuid(beat["id"], "Beat ID")
+        canonical_uuid(beat["sessionId"], "Beat session ID")
+        parse_cron(beat["cron"])
+        validate_beat_prompt(beat["prompt"])
+        if beat["id"] in seen or not all(type(beat[name]) is bool for name in ("enabled", "recoveryGate", "targetEnded")) \
+                or type(beat["revision"]) is not int or beat["revision"] < 1:
+            raise OrchestrationError("The Beats store has an inconsistent definition.")
+        seen.add(beat["id"])
+    return state
+
+
+def beats_store_mutate(operation, *, root=None):
+    """One authoritative store. Writers serialize on a lock file and replace atomically."""
+    root = Path(root) if root is not None else beats_root()
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise OrchestrationError("The Beats store directory is not private to this user.")
+    lock_descriptor = os.open(root / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        path = root / "beats.json"
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            state = {"version": BEATS_VERSION, "beats": []}
+        else:
+            try:
+                fileinfo = os.fstat(descriptor)
+                if not stat.S_ISREG(fileinfo.st_mode) or fileinfo.st_uid != os.getuid() \
+                        or fileinfo.st_size > BEATS_MAX_STORE_BYTES:
+                    raise OrchestrationError("The Beats store is not a private regular file within its size limit.")
+                try:
+                    state = json.loads(os.read(descriptor, BEATS_MAX_STORE_BYTES + 1))
+                except ValueError as error:
+                    raise OrchestrationError("The Beats store is not valid JSON.") from error
+            finally:
+                os.close(descriptor)
+        validate_beats_state(state)
+        result = operation(state)
+        validate_beats_state(state)
+        encoded = json.dumps(state, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        if len(encoded) > BEATS_MAX_STORE_BYTES:
+            raise OrchestrationError("The Beats store size limit was reached.")
+        write_private(path, encoded)
+        return result
+    finally:
+        os.close(lock_descriptor)
+
+
+def beats_store_read(*, root=None):
+    return beats_store_mutate(lambda state: json.loads(json.dumps(state)), root=root)
+
+
+def beat_view(beat):
+    return {name: beat[name] for name in sorted(BEATS_FIELDS)}
+
+
+def prove_own_session(session):
+    """Exact-self authority through the native identity helper (no side effects)."""
+    testing_helper = os.environ.get("CMUX_MAESTRO_IDENTITY_HELPER") if os.environ.get("CMUX_MAESTRO_TESTING") == "1" else None
+    helper = trusted_executable("CMUX_MAESTRO_IDENTITY_HELPER", testing_helper) if testing_helper \
+        else identity_helper_path("Beats")
+    try:
+        process = subprocess.run([helper, "prove", "--session-id", session], capture_output=True, text=True, timeout=5)
+        value = json.loads(process.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+        raise OrchestrationError("Own-session identity verification did not complete.") from error
+    if process.returncode != 0 or not isinstance(value, dict) or value.get("ok") is not True \
+            or str(value.get("sessionId", "")).lower() != session:
+        raise OrchestrationError("This caller could not prove ownership of that session; no Beat was changed.")
+
+
+def beats_command(args):
+    """Agent surface: every operation is bound to the caller's own proven session. Human-only
+    operations (reassignment, clearing the recovery gate) are not available here."""
+    if args.beats_action == "cron-check":
+        spec = parse_cron(args.cron)
+        times = cron_next_times(spec, time.time(), count=max(1, min(args.count, 20)))
+        return {"cron": spec.expression, "timezone": time.strftime("%Z"), "next": [
+            time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(moment)) for moment in times]}
+    if not args.own_session:
+        raise OrchestrationError("Beats are managed with --self for your own session.")
+    session = canonical_uuid(args.session_id, "current session ID")
+    prove_own_session(session)
+    action = args.beats_action
+
+    def own(state):
+        if args.beat_id is None:
+            raise OrchestrationError("Give --beat-id.")
+        beat_id = canonical_uuid(args.beat_id, "Beat ID")
+        beat = next((item for item in state["beats"] if item["id"] == beat_id), None)
+        if beat is None or beat["sessionId"] != session:
+            raise OrchestrationError("No such Beat for this session.")
+        return beat
+
+    def operate(state):
+        stamp = now()
+        if action == "list":
+            return {"beats": [beat_view(item) for item in state["beats"] if item["sessionId"] == session]}
+        if action == "create":
+            spec = parse_cron(args.cron)
+            prompt = validate_beat_prompt(args.prompt)
+            if sum(item["sessionId"] == session for item in state["beats"]) >= BEATS_MAX_PER_SESSION \
+                    or len(state["beats"]) >= BEATS_MAX_TOTAL:
+                raise OrchestrationError("The Beat limit was reached; delete one first.")
+            beat = {"id": str(uuid.uuid4()), "sessionId": session, "cron": spec.expression, "prompt": prompt,
+                    "enabled": True, "recoveryGate": False, "targetEnded": False, "lastFiredMinute": None,
+                    "createdAt": stamp, "updatedAt": stamp, "revision": 1}
+            state["beats"].append(beat)
+            return {"beat": beat_view(beat)}
+        beat = own(state)
+        if action == "delete":
+            state["beats"].remove(beat)
+            return {"deleted": beat["id"]}
+        if action == "edit":
+            if args.cron is None and args.prompt is None:
+                raise OrchestrationError("Give --cron and/or --prompt.")
+            if args.cron is not None:
+                beat["cron"] = parse_cron(args.cron).expression
+            if args.prompt is not None:
+                beat["prompt"] = validate_beat_prompt(args.prompt)
+        elif action == "pause":
+            beat["enabled"] = False
+        elif action == "resume":
+            if beat["recoveryGate"] or beat["targetEnded"]:
+                raise OrchestrationError(
+                    "This Beat is waiting for a human to repair or re-enable it; an agent cannot resume it.")
+            beat["enabled"] = True
+        else:
+            raise OrchestrationError("Unknown Beats action.")
+        beat["updatedAt"], beat["revision"] = stamp, beat["revision"] + 1
+        return {"beat": beat_view(beat)}
+
+    return beats_store_mutate(operate)
+
+
 def command_icon(args, root, cmux):
     if args.session_id is not None:
         raise OrchestrationError("Use --self for a standalone session, not managed credentials.")
@@ -4487,6 +4783,14 @@ def parser():
     pet.add_argument("--session-id")
     pet.add_argument("--pet-id")
     pet.add_argument("--add", metavar="PATH")
+    beats = commands.add_parser("beats", help="Manage recurring prompts for your own session")
+    beats.add_argument("beats_action", choices=["list", "create", "edit", "pause", "resume", "delete", "cron-check"])
+    beats.add_argument("--self", action="store_true", dest="own_session")
+    beats.add_argument("--session-id")
+    beats.add_argument("--beat-id")
+    beats.add_argument("--cron")
+    beats.add_argument("--prompt")
+    beats.add_argument("--count", type=int, default=5)
     runtime = commands.add_parser("runtime")
     runtime.add_argument("--worker-id", required=True)
     runtime.add_argument("--token")
@@ -4517,6 +4821,9 @@ def main(argv=None):
             return 0
         if args.command == "icons":
             print(json.dumps({"ok": True, **command_icons(args)}, sort_keys=True))
+            return 0
+        if args.command == "beats":
+            print(json.dumps({"ok": True, **beats_command(args)}, sort_keys=True))
             return 0
         if args.command == "pets":
             print(json.dumps({"ok": True, **command_pets(args)}, sort_keys=True))

@@ -173,6 +173,36 @@ findings. Keep independent implementation, acceptance, Roast, rubber-duck, CI,
 and non-author merge gates; messages neither satisfy these gates nor expand
 permissions. No automatic retry, acknowledgement or receipt protocol is added.
 
+## Recurring prompts (Beats)
+
+A Beat is a saved recurring prompt for **your own session**: a local-time cron
+expression plus the prompt text. Manage only your own Beats, and only when the human
+asked for a recurring prompt. Resolve your exact own session UUID as in
+`maestro-icon` (never guess, never search other sessions or private files); the
+command proves ownership through the native helper before it changes anything.
+
+```sh
+MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/cmux-maestro-orchestrator"
+"$MAESTRO" beats cron-check --cron "*/15 9-17 * * 1-5" --count 3     # preview local fire times
+"$MAESTRO" beats create --self --session-id "$SESSION" --cron "0 9 * * 1-5" --prompt "Summarize overnight changes."
+"$MAESTRO" beats list   --self --session-id "$SESSION"
+"$MAESTRO" beats edit   --self --session-id "$SESSION" --beat-id "$ID" --cron "30 9 * * 1-5"
+"$MAESTRO" beats pause|resume|delete --self --session-id "$SESSION" --beat-id "$ID"
+```
+
+- Cron is five numeric fields, `minute hour day-of-month month weekday` (weekday 0 or 7
+  = Sunday), with lists, ranges and steps; no names or macros. It runs in the Mac's
+  local time. A nonexistent local time (spring-forward) is skipped, a repeated one
+  (fall-back) fires once, and missed minutes are never replayed.
+- Prompts are plain text up to 4 KiB. At most 16 Beats per session.
+- **One handoff attempt per due occurrence**: no retries, receipts, completion tracking
+  or queue editing. Pause, edit and delete affect future occurrences only.
+- A Beat restored after a CMUX relaunch, or whose target session ended, waits for a
+  **human** to repair or re-enable it. Your `resume` is refused in that state; do not try
+  to work around it. You cannot reassign a Beat or touch another session's Beats.
+- Beats are saved definitions today. Firing requires the Beats clock, which is not part
+  of this release yet; do not tell the human a Beat will fire until it is.
+
 ## Permissions, failures and lifecycle boundaries
 
 - Normal launches add **no tool grants**. Copilot may ask the human for native

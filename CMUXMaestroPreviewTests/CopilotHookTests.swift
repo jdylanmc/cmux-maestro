@@ -51,6 +51,21 @@ struct CopilotHookTests: Sendable {
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("Orchestration").path))
     }
 
+    @Test func verifyOnlyProofNeedsExistingBindingAndWritesNothing() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).record(payload: payload, environment: environment, verifyOnly: true) == .noOwner)
+        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        let before = try binding(root)
+        #expect(recorder(root).record(payload: payload, environment: environment, verifyOnly: true) == .recorded)
+        #expect(try binding(root) == before)
+        let appearance = root.appendingPathComponent("integration/bindings/appearance-\(session.uuidString.lowercased()).json")
+        #expect(!FileManager.default.fileExists(atPath: appearance.path))
+        let different = environment.merging(["CMUX_SURFACE_ID": UUID().uuidString]) { _, value in value }
+        #expect(recorder(root).record(payload: payload, environment: different, verifyOnly: true) == .noOwner)
+    }
+
     @Test func ownSessionAppearanceRejectsDifferentSurfaceInvalidColorAndUncertainOwner() throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
