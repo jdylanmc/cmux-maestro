@@ -379,9 +379,23 @@ actor CopilotSessionReader {
         }
         // A later session's I/O can race an earlier binding, including revocation.
         // Validate the entire published set and the path to our anchored index.
+        // A missing or invalid location only hides the branch row; it never degrades the session.
+        let locations = try? CopilotFileAccess.openDirectory(
+            directories.bindings.deletingLastPathComponent().appendingPathComponent("locations", isDirectory: true),
+            owner: verifier.uid
+        )
+        defer { if let locations { close(locations) } }
         observations = try observations.map { observation in
             try Task.checkCancellation()
             var result = observation
+            if let locations,
+               let data = try? CopilotFileAccess.readStableRegular(
+                at: locations, filename: observation.sessionID.uuidString.lowercased() + ".json",
+                owner: verifier.uid, maximum: CopilotSessionLocation.maximumBytes, permissions: 0o600
+               ), let location = CopilotSessionLocation.decode(data, sessionID: observation.sessionID) {
+                result.branch = location.branch
+                result.worktree = location.worktree
+            }
             do {
                 let data = try CopilotFileAccess.readStableRegular(
                     at: bindings, filename: "appearance-\(observation.sessionID.uuidString.lowercased()).json",

@@ -411,7 +411,7 @@ struct SidebarPinnedDetailsTests {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
         let preferences = fixture.preferences()
-        preferences.selectedMode = .taskboard
+        preferences.selectedMode = subject == "child" ? .hierarchy : .taskboard
         let source = ObservedPlacementSource(
             sessionID: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA
         )
@@ -512,7 +512,7 @@ struct SidebarPinnedDetailsTests {
     }
 
     @Test(arguments: ["unchanged", "generation", "run", "session", "workspace", "surface",
-                      "focus-generation", "focus-missing", "primary-generation"], SidebarMode.allCases)
+                      "focus-generation", "focus-missing", "primary-generation"], [SidebarMode.hierarchy])
     func retainedManagedMenuValidatesCapturedSubjectBeforeInspectionAndSeen(change: String, mode: SidebarMode) async throws {
         let preferenceFixture = try SidebarPreferenceFixture()
         defer { preferenceFixture.cleanup() }
@@ -995,15 +995,9 @@ struct SidebarPinnedDetailsTests {
                     try await settle(hosting)
                     #expect(button.accessibilityValue() as? String == "Copied")
                     #expect(pasteboard.string(forType: .string) == fixtures.sessionID.uuidString)
-                    let feedback = try #require(views(hosting).compactMap { $0 as? NSTextField }
-                        .first { $0.accessibilityIdentifier() == "hover-copy-feedback" })
-                    feedback.scrollToVisible(feedback.bounds)
-                    try await settle(hosting)
-                    #expect(feedback.stringValue == "Copied" && feedback.accessibilityValue() == "Copied")
-                    let drawing = feedback.alignmentRect(forFrame: feedback.bounds)
-                    #expect(drawing.height > 0 && feedback.visibleRect.contains(drawing))
-                    let viewport = try #require(feedback.enclosingScrollView?.contentView)
-                    #expect(viewport.bounds.contains(viewport.convert(drawing, from: feedback)))
+                    #expect(!views(hosting).compactMap { $0 as? NSTextField }
+                        .contains { $0.accessibilityIdentifier() == "hover-copy-feedback" },
+                            "A successful copy shows no text")
                     let scroll = try #require(views(hosting).compactMap { $0 as? NSScrollView }.first)
                     scroll.contentView.scroll(to: .zero)
                     scroll.reflectScrolledClipView(scroll.contentView)

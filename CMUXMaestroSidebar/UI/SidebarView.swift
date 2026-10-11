@@ -348,14 +348,13 @@ private struct WorkspaceAttentionLabel: View {
 }
 
 enum SidebarHeaderAction: String, CaseIterable, Identifiable {
-    case directory, beats, taskboard, history, settings
+    case directory, beats, taskboard, settings
     var id: Self { self }
     var title: String {
         switch self {
         case .directory: "Open directory as new workspace"
         case .beats: "Beats"
         case .taskboard: "Taskboard"
-        case .history: "History"
         case .settings: "Maestro settings"
         }
     }
@@ -364,14 +363,13 @@ enum SidebarHeaderAction: String, CaseIterable, Identifiable {
         case .directory: "folder.badge.plus"
         case .beats: "music.note"
         case .taskboard: "rectangle.split.3x1"
-        case .history: "clock.arrow.circlepath"
         case .settings: "gearshape"
         }
     }
     var unavailable: String? {
         switch self {
         case .directory: "CMUX did not open the directory as a workspace. Grant Maestro the workspace-creation permission in CMUX and try again."
-        case .taskboard, .history, .settings, .beats: nil
+        case .taskboard, .settings, .beats: nil
         }
     }
 }
@@ -457,9 +455,8 @@ struct SidebarView: View {
     @Bindable private var preferences: SidebarPreferences
     // Mutation freshness is independent of the display-only presentation clock.
     private let actionNow: () -> Date
-    @State private var showingHistory = false
+    @State private var showingSettings = false
     @State private var showingBeats = false
-    @State private var settingsStartInHistory = false
     @State private var unavailableHeaderAction: SidebarHeaderAction?
     @State private var inspector: SidebarInspection?
     @State private var showingInspector = false
@@ -575,13 +572,13 @@ struct SidebarView: View {
 
     private var presentedHeaderAction: SidebarHeaderAction? {
         if showingBeats { return .beats }
-        if showingHistory { return settingsStartInHistory ? .history : .settings }
+        if showingSettings { return .settings }
         return unavailableHeaderAction
     }
 
     @ViewBuilder private var headerPopover: some View {
-        if showingHistory {
-            historySettings
+        if showingSettings {
+            settingsPanel
         } else if showingBeats {
             SidebarBeatsPanel(targets: beatTargets) { showingBeats = false }
         } else if let action = unavailableHeaderAction, let reason = action.unavailable {
@@ -602,14 +599,13 @@ struct SidebarView: View {
         case .beats: showingBeats = true
         case .taskboard:
             preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
-        case .history, .settings:
-            settingsStartInHistory = action == .history
-            showingHistory = true
+        case .settings:
+            showingSettings = true
         }
     }
 
     private func dismissHeaderPopover() {
-        showingHistory = false
+        showingSettings = false
         showingBeats = false
         unavailableHeaderAction = nil
     }
@@ -815,41 +811,10 @@ struct SidebarView: View {
             )
         case .taskboard:
             let work = visibleWork
-            let retainedIDs = SidebarPresentation.retainedSessionIDs(work.tree, managed: work.managed, now: now())
-            let managedSessionIDs = Set(SidebarPresentation.sessionPlacements(
-                work.tree.sessions, managed: work.managed, observations: work.tree, now: now()
-            ).filter { $0.contentOwnerID != nil }.map { $0.session.id })
-            if !model.orchestration.snapshot.nodes.isEmpty {
-                ManagedHierarchyContent(
-                    polling: model.orchestration, hierarchy: model.hierarchy,
-                    navigation: model.navigation, layout: preferences.layout,
-                    setExpanded: { preferences.setExpanded($1, for: $0) },
-                    selectedNode: managedSelection,
-                    dismiss: dismiss, acknowledge: acknowledge, selection: unmanagedSelection,
-                    displayNodes: work.managed, copilotTree: work.tree, rootGroup: .primary, taskboard: true
-                )
-            }
             TaskboardContent(
-                tree: work.tree, hierarchy: model.hierarchy,
-                navigation: model.navigation, dismiss: dismiss, acknowledge: acknowledge,
+                tree: work.tree, hierarchy: model.hierarchy, navigation: model.navigation,
                 selection: unmanagedSelection,
-                retainedSessionIDs: retainedIDs, managedSessionIDs: managedSessionIDs
-            )
-            if !model.orchestration.snapshot.nodes.isEmpty {
-                ManagedHierarchyContent(
-                    polling: model.orchestration, hierarchy: model.hierarchy,
-                    navigation: model.navigation, layout: preferences.layout,
-                    setExpanded: { preferences.setExpanded($1, for: $0) },
-                    selectedNode: managedSelection,
-                    dismiss: dismiss, acknowledge: acknowledge, selection: unmanagedSelection,
-                    displayNodes: work.managed, copilotTree: work.tree, rootGroup: .retained, taskboard: true
-                )
-            }
-            TaskboardContent(
-                tree: work.tree, hierarchy: model.hierarchy,
-                navigation: model.navigation, dismiss: dismiss, acknowledge: acknowledge,
-                selection: unmanagedSelection,
-                retainedSessionIDs: retainedIDs, retainedOnly: true, managedSessionIDs: managedSessionIDs
+                retainedSessionIDs: SidebarPresentation.retainedSessionIDs(work.tree, managed: work.managed, now: now())
             )
         }
     }
@@ -970,23 +935,18 @@ struct SidebarView: View {
         return true
     }
 
-    private var historySettings: some View {
+    private var settingsPanel: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Sidebar settings").font(.headline)
                 Spacer()
                 SidebarCloseButton(label: "Close sidebar settings", id: "sidebar-close-settings") {
-                    showingHistory = false
+                    showingSettings = false
                 }
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
-            ScrollViewReader { proxy in
-                ScrollView { settingsContents }
-                    .onAppear {
-                        if settingsStartInHistory { proxy.scrollTo("sidebar-settings-history", anchor: .top) }
-                    }
-            }
+            ScrollView { settingsContents }
         }
         .frame(width: 300)
         .frame(maxHeight: 600)
@@ -2618,160 +2578,170 @@ private struct DismissOutcomeButton: View {
     }
 }
 
-private struct TaskboardContent: View {
-    let tree: SidebarCopilotTree
-    let hierarchy: HierarchySnapshot
-    let navigation: SidebarNavigation
-    let dismiss: (SidebarDismissedOutcome) -> Void
-    let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
-    @Binding var selection: UnmanagedSelection?
-    var retainedSessionIDs: Set<UUID> = []
-    var retainedOnly = false
-    var managedSessionIDs: Set<UUID> = []
-    @Environment(\.sidebarDensity) private var density
-    @Environment(SidebarPreferences.self) private var preferences
+/// The Taskboard: one card per agent session, placed in the bucket for its progress.
+private enum TaskboardBucket: CaseIterable, Identifiable {
+    case waiting, working, failed, idle, finished, unknown
+    var id: Self { self }
 
-    private let groups: [(String, [AgentWorkState])] = [
-        ("Blocked", [.blocked]), ("Working", [.working]), ("Idle", [.idle]),
-        ("Done / ended", [.completed, .failed, .cancelled]), ("Unknown", [.unknown]),
-    ]
-
-    private var sessions: [SidebarCopilotSession] {
-        tree.sessions.filter { !managedSessionIDs.contains($0.id) && retainedSessionIDs.contains($0.id) == retainedOnly }
-    }
-    private var activitySessions: [SidebarCopilotSession] {
-        tree.sessions.filter { retainedSessionIDs.contains($0.id) == retainedOnly }
+    var title: String {
+        switch self {
+        case .waiting: "Waiting on you"
+        case .working: "Working"
+        case .failed: "Failed"
+        case .idle: "Idle"
+        case .finished: "Finished"
+        case .unknown: "Unknown"
+        }
     }
 
-    var body: some View {
-        if retainedOnly && !sessions.isEmpty {
-            Text("Context activity").sidebarFont(.caption, weight: .semibold)
+    var color: Color {
+        switch self {
+        case .waiting: SidebarQuestionGlow.lightBlue
+        case .working: SidebarTone.green.color
+        case .failed: SidebarTone.red.color
+        case .idle, .finished, .unknown: .secondary
         }
-        ForEach(sessions) { session in
-            let paths = hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID)
-            TaskboardSessionRow(
-                session: session, title: SidebarPresentation.surfaceTitle(for: session, in: hierarchy),
-                paths: paths, navigation: navigation, acknowledge: acknowledge, selection: $selection,
-                retained: retainedSessionIDs.contains(session.id)
-            )
-            ForEach(session.taskSections(layout: preferences.layout)) { section in
-                if section.taskDisclosure != nil {
-                    SidebarInternalTaskGroup(
-                        session: session, section: section, layout: preferences.layout,
-                        setExpanded: { preferences.setExpanded($1, for: $0) }, dismiss: dismiss, taskboard: true
-                    ) { row in
-                        CopilotWorkRow(
-                            node: row.node, session: session, navigation: navigation, dismiss: dismiss,
-                            acknowledge: acknowledge, expansion: row,
-                            setExpanded: { preferences.setExpanded($1, for: $0) },
-                            paths: paths, taskboard: true, selection: $selection,
-                            parentFocusUnavailable: retainedSessionIDs.contains(session.id)
-                                ? SidebarPresentation.retainedFocusUnavailable : nil
-                        )
-                    }
-                    .padding(.leading, 28)
-                }
-            }
-        }
-        if !retainedOnly && tree.sessions.allSatisfy({ $0.nodes.isEmpty }) {
-            SidebarNotice(
-                title: SidebarPresentation.emptyChildHistoryTitle(complete: tree.hasCompleteCounts),
-                detail: "History may hide ended work; this does not mean the session is finished. Workspace focus remains in Hierarchy."
-            )
-        } else {
-            ForEach(groups, id: \.0) { title, states in
-                let matching = activitySessions.filter { session in session.taskboardActivity.contains { states.contains($0.state) } }
-                if !matching.isEmpty {
-                    if let state = states.first {
-                        Text(title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(SidebarPresentation.state(state).tone.color)
-                    }
-                    ForEach(matching) { session in
-                        let paths = hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID)
-                        Text(retainedSessionIDs.contains(session.id)
-                             ? "Session context \(session.shortID)" : SidebarPresentation.surfaceTitle(for: session, in: hierarchy))
-                            .sidebarFont(.caption).foregroundStyle(.secondary)
-                        ForEach(session.taskboardActivity.filter { states.contains($0.state) }) { node in
-                            CopilotWorkRow(
-                                node: node, session: session, navigation: navigation, dismiss: dismiss,
-                                acknowledge: acknowledge, paths: paths, taskboard: true, selection: $selection,
-                                parentFocusUnavailable: retainedSessionIDs.contains(session.id)
-                                    ? SidebarPresentation.retainedFocusUnavailable : nil
-                            )
-                        }
-                    }
-                }
-            }
+    }
+
+    static func of(_ session: SidebarCopilotSession) -> TaskboardBucket {
+        let state = session.statusOnly ? (session.lastKnownState ?? .unknown) : session.state
+        let liveness = session.statusOnly ? session.lastKnownLiveness : session.liveness
+        let ended = liveness == .dead
+        if !ended, SidebarPresentation.needsInput(session.attention) || state == .blocked { return .waiting }
+        if state == .failed { return .failed }
+        if ended || state == .completed || state == .cancelled { return .finished }
+        switch state {
+        case .working: return .working
+        case .idle, .queued: return .idle
+        default: return .unknown
         }
     }
 }
 
-private struct TaskboardSessionRow: View {
+private struct TaskboardContent: View {
+    let tree: SidebarCopilotTree
+    let hierarchy: HierarchySnapshot
+    let navigation: SidebarNavigation
+    @Binding var selection: UnmanagedSelection?
+    var retainedSessionIDs: Set<UUID> = []
+    @Environment(\.sidebarDensity) private var density
+
+    private var sessions: [SidebarCopilotSession] {
+        tree.sessions.filter { !retainedSessionIDs.contains($0.id) }
+    }
+
+    var body: some View {
+        if sessions.isEmpty {
+            SidebarNotice(title: "No agent sessions", detail: "Agents appear here, grouped by progress, as they start.")
+        }
+        ForEach(TaskboardBucket.allCases) { bucket in
+            let items = sessions.filter { TaskboardBucket.of($0) == bucket }
+                .map { (session: $0, title: SidebarPresentation.surfaceTitle(for: $0, in: hierarchy)) }
+                .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            if !items.isEmpty {
+                HStack(spacing: 7) {
+                    Circle().fill(bucket.color).frame(width: 10, height: 10)
+                    Text(bucket.title).font(.system(.callout, weight: .bold)).foregroundStyle(bucket.color)
+                    Text("\(items.count)")
+                        .font(.system(.caption, weight: .semibold)).monospacedDigit()
+                        .padding(.horizontal, 7).padding(.vertical, 1)
+                        .background(Capsule().fill(bucket.color.opacity(0.2)))
+                        .foregroundStyle(bucket.color)
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, density.spacing(10))
+                .padding(.bottom, density.spacing(2))
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+                ForEach(items, id: \.session.id) { item in
+                    TaskboardAgentCard(
+                        session: item.session, title: item.title,
+                        workspace: workspaceTitle(item.session.workspaceID),
+                        navigation: navigation, selection: $selection
+                    )
+                }
+            }
+        }
+    }
+
+    private func workspaceTitle(_ id: UUID) -> String? {
+        guard let workspace = hierarchy.workspaces.first(where: { $0.id == id }),
+              case .available(let title) = workspace.title else { return nil }
+        return title
+    }
+}
+
+private struct TaskboardAgentCard: View {
     let session: SidebarCopilotSession
     let title: String
-    let paths: HierarchyPathContext
+    let workspace: String?
     let navigation: SidebarNavigation
-    let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
-    var retained = false
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
     @Environment(\.sidebarFocusInspection) private var focusInspection
+    @Environment(\.sidebarDensity) private var density
     @State private var showingPicker: SidebarIconTarget?
+
     private var actions: [SidebarRowActionGroup] {
         [.init(title: "Navigation", actions: [
-            retained ? .unavailable("Focus original session", SidebarPresentation.retainedFocusUnavailable)
-                : .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
-                         navigation: navigation, prepareSeen: prepareSeen,
-                         subject: .unmanaged(.session(session.id)), revalidate: focusInspection),
+            .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
+                   navigation: navigation, prepareSeen: prepareSeen,
+                   subject: .unmanaged(.session(session.id)), revalidate: focusInspection),
             .init(title: "Open details", perform: { selection = .session(session.id) })
         ]), .appearance(icon: session.statusOnly ? nil : { showingPicker = .session(session.id) }, agent: true), .placement, .lifecycle()]
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                SidebarItemIcon(
-                    kind: .agent, target: session.statusOnly ? nil : .session(session.id), title: title,
-                    agentGlyph: session.iconId, agentColor: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
-                    inspect: { selection = .session(session.id) }, picker: $showingPicker
-                )
-                FocusButton(
-                    target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
-                    navigation: navigation,
-                    label: retained ? "Inspect context session \(session.shortID)" : "Focus Copilot session \(session.shortID)",
-                    detail: retained ? SidebarPresentation.retainedFocusUnavailable : SidebarPresentation.sessionStatus(session),
-                    inspection: .unmanaged(.session(session.id)),
-                    inspectOnly: retained ? { selection = .session(session.id) } : nil,
-                    localFocusIDOverride: retained ? "session:\(session.id)" : nil
-                ) {
-                    Text(retained ? "Session context \(session.shortID)" : title)
-                        .sidebarFont(.caption, weight: .semibold).lineLimit(1)
-                }
-                .agentHoverPreview(.session(session.id))
-                Spacer(minLength: 0)
-                SidebarWorkspaceTaskEye(workspaceID: session.workspaceID)
-            }
-            .sidebarRowActions(title: title, groups: actions)
-            if retained {
-                Text("Session context").sidebarFont(.caption2).foregroundStyle(.secondary)
-            }
-            SidebarActionLayout {
-                SessionStateSummary(session: session)
-            }
-            AttentionSummary(attention: session.attention, state: session.state, degraded: session.attentionDegraded)
-            ActivityCaption(text: SidebarPresentation.activityCaption(session.activity))
-            if !session.childrenComplete || session.treeDegraded {
-                Label("Children unavailable", systemImage: "info.circle")
-                    .sidebarFont(.caption2).foregroundStyle(.secondary)
-                    .help("Child history incomplete; missing work is not assumed finished")
-            }
+    private func line(_ symbol: String, _ text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol).imageScale(.small).frame(width: 12)
+            Text(text).lineLimit(1).truncationMode(.middle)
         }
+        .sidebarFont(.caption2).foregroundStyle(.secondary)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            SidebarItemIcon(
+                kind: .agent, target: session.statusOnly ? nil : .session(session.id), title: title,
+                agentGlyph: session.iconId, agentColor: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
+                inspect: { selection = .session(session.id) }, picker: $showingPicker
+            )
+            FocusButton(
+                target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
+                navigation: navigation,
+                label: "Focus Copilot session \(session.shortID)",
+                detail: SidebarPresentation.sessionStatus(session),
+                inspection: .unmanaged(.session(session.id))
+            ) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).sidebarFont(.caption, weight: .semibold).lineLimit(1)
+                    if let activity = SidebarPresentation.activityCaption(session.activity) {
+                        Text(activity).sidebarFont(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    HStack(spacing: 6) {
+                        if let workspace { line("square.stack", workspace) }
+                        Spacer(minLength: 4)
+                        if let model = session.model {
+                            line("cpu", model).fixedSize().layoutPriority(1)
+                        }
+                    }
+                    if let branch = session.branch {
+                        line(session.worktree ? "square.on.square" : "arrow.triangle.branch",
+                             session.worktree ? "\(branch) · worktree" : branch)
+                    }
+                }
+            }
+            .agentHoverPreview(.session(session.id))
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, density.spacing(6))
+        .padding(.horizontal, density.spacing(4))
+        .sidebarRowActions(title: title, groups: actions)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("taskboard-session-attention-\(session.id)")
         .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session),
                                                 needsInput: SidebarPresentation.needsInput(session.attention)) }
-        .modifier(SidebarFocusBorder(workspaceID: session.workspaceID, surfaceID: session.surfaceID, enabled: !retained))
+        .modifier(SidebarFocusBorder(workspaceID: session.workspaceID, surfaceID: session.surfaceID, enabled: true))
     }
 }
 

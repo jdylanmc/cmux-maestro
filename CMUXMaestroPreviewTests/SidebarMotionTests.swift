@@ -113,7 +113,7 @@ struct SidebarMotionTests {
     @Test(arguments: [(false, true, false, false), (false, true, true, false),
                       (true, true, false, false), (true, false, false, false),
                       (true, true, true, false), (true, false, true, false),
-                      (false, true, false, true)], SidebarMode.allCases)
+                      (false, true, false, true)], [SidebarMode.hierarchy])
     func retainedManagedIdentityDoesNotMaskNewWorkingObservation(
         _ scenario: (showEnded: Bool, expanded: Bool, protectedObservation: Bool, delayedIdle: Bool),
         mode: SidebarMode

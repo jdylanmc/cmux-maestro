@@ -4,14 +4,33 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ## Unreleased
 
+### Changed
+
+- Rebuild the Taskboard as a state board: one card per agent session under **Waiting on
+  you**, **Working**, **Failed**, **Idle**, **Finished** and **Unknown** headings with
+  counts. Each card shows the title, activity, workspace, model and, when the agent is in a
+  git repository or linked worktree, its branch. Sub-agent, skill, shell and internal-task
+  rows are no longer listed there; Hierarchy keeps them.
+- Show a small, always-visible copy icon beside every detail label (including the model in
+  the preview). A successful copy shows no "Copied" text; the icon turns into a checkmark.
+- Add more padding between Taskboard cards.
+
 ### Removed
 
 - Drop the reusable, movable content-tab concept. Taskboard stays a sidebar-only view
   toggled from the header, and the visual proof of concept now matches (Beats is a
   popover; no utility tabs). Closes #86 and #87 as not planned.
+- Remove the header History shortcut: it opened the same popover as Maestro settings,
+  scrolled to the completed-work controls, which remain in Settings. The header now has
+  four shortcuts.
 
 ### Added
 
+- Show the git branch each agent is working in on its Taskboard card (a linked worktree
+  adds a `· worktree` suffix and icon) instead of the terminal directory; no row appears
+  outside a repository. The Copilot hook now also publishes only the branch and a worktree
+  flag per session in `Copilot/locations/`, read from the hook `cwd` and tool path by
+  reading `.git` files directly (no `git` process, no paths or repository names recorded).
 - Add Beats: recurring cron prompts for exact agent sessions. A native sidebar popover
   manages them (the header icon lights while one is enabled), `/maestro` agents manage
   their own through `beats`. The installed extension mirrors each session's enabled Beats

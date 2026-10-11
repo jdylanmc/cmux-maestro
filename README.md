@@ -500,6 +500,16 @@ For individual future CLI launches, either `CMUX_COPILOT_HOOKS_DISABLED=1` or
   Own directories are `0700`, files `0600`; dates use milliseconds since 1970.
   The last diagnostic is a bounded generic status, never a hook payload, path,
   credential, transcript, or raw CLI error.
+- After a binding is published the helper also writes `Copilot/locations/<sessionUUID>.json`
+  (`0600`, directory `0700`) holding only `schemaVersion`, `sessionID`, `branch`, a
+  `worktree` flag and `recordedAt`: never a path or repository name. It reads the hook
+  `cwd` and, for `postToolUse`, the last absolute file path or leading `cd <path>`
+  in `toolArgs`, then walks up (at most 40 levels) to a `.git` directory or linked-worktree
+  `.git` file and reads `HEAD` (4 KiB cap, no symlinks). It runs no `git` process and spawns
+  nothing. Detached HEAD, no repository or any surprise removes the record. This is
+  best effort and never changes the hook's outcome. The Taskboard agent card shows that
+  branch (a worktree adds a `· worktree` suffix and its own icon) and no row otherwise;
+  the existing read-only `Copilot/` grant already covers it.
 - Terminal control runs in the installed standard-library Python controller at
   `~/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/`.
   Private prompts, results, control tokens and process identities remain under
@@ -1167,8 +1177,8 @@ Steady connection success adds no label or row, leaving the footer lower while
 preserving the host's 50-point clearance. Waiting, disconnection and navigation
 errors or permission summaries remain visible.
 
-The same preview is available on managed agent, observed session, and non-task
-activity titles in Hierarchy and Taskboard. Internal tasks instead use passive
+The same preview is available on managed agent and observed session titles in
+Hierarchy and Taskboard, and on non-task activity titles in Hierarchy. Internal tasks instead use passive
 single-line names with complete accessibility labels and tooltips, not chat
 navigation or identity previews. Each card resolves its own exact
 subject and only current or explicitly last-known metadata. Missing/expired
@@ -1184,8 +1194,11 @@ unavailable session identity has no copy action. Open **Preview** for keyboard
 access; hovering, opening, and refreshing never write to the clipboard.
 A stale managed observation still offers its exact recorded session ID with
 the existing last-known notice; copying does not imply the session is live.
-Copying shows **Copied** only after the native pasteboard accepts the value;
-failure shows **Could not copy. Try again.** Changing the GUID clears feedback.
+Every labelled detail (session ID, model, observed time, child history, paths) has a small
+copy icon beside its label, always visible and dimmed until hovered or focused, in the pinned
+footer and the preview. A successful copy swaps the icon for a checkmark and announces
+**Copied** to VoiceOver, with no visible text; failure shows **Could not copy. Try again.**
+Changing the GUID clears feedback.
 The small `SidebarCopyableValue` control receives an injected action and knows
 nothing about session lookup, persistence, host navigation, or the pasteboard.
 
@@ -1226,14 +1239,20 @@ source diagnostics remain in details. Glyphs have 2 pt insets in their existing
 Standalone state keys retain pause/check/error symbols for blocked, finished and
 failed states. Workspace headers have a boxed disclosure;
 their trailing ellipsis menu offers Focus, Expand/Collapse and Details as separate
-actions. The five header shortcuts are directory-plus, Beats, Taskboard, History
-and Maestro settings, in that order. Directory-plus opens a folder picker and asks
-CMUX to create a workspace there (requires the workspace-creation action grants). Settings reuses the existing sidebar
-preferences; History opens the same popover at completed-work controls.
+actions. The four header shortcuts are directory-plus, Beats, Taskboard and Maestro
+settings, in that order. Directory-plus opens a folder picker and asks
+CMUX to create a workspace there (requires the workspace-creation action grants). Settings holds the sidebar
+preferences, including the completed-work history controls.
 Taskboard temporarily toggles the existing sidebar view (its underline and
 accessible state indicate selection); activate it again to return to the outline.
 Taskboard renders only in the sidebar: there are no reusable or movable content tabs, and
-the extension SDK offers no content-tab host. Beats opens a native popover to create, edit,
+the extension SDK offers no content-tab host. It is a state board: one card per agent session,
+grouped under **Waiting on you**, **Working**, **Failed**, **Idle**, **Finished** and **Unknown**
+headings with a count. A card shows the agent icon and title, its current activity, the workspace
+with the model on the right, and, only when the agent is working in a git repository or linked
+worktree, that branch (worktrees are labelled). There are no sub-agent, skill, shell or
+internal-task rows; those stay in Hierarchy. Selecting a card focuses its terminal.
+Beats opens a native popover to create, edit,
 pause and delete recurring prompts; the icon is lit while one is enabled.
 Beats run on Copilot's own scheduler: the Maestro extension loaded in each CMUX Copilot
 session mirrors that session's enabled Beats into native cron schedules, so no clock process,
@@ -1269,13 +1288,13 @@ For unmanaged terminals with exactly one observed session, its state and childre
 are presented on the named terminal row instead of adding a duplicate provider/ID
 heading. Multiple sessions remain individually inspectable; none is guessed to be
 the current owner. Passive skill/shell history moves to the selected session's
-**Other activity** disclosure and remains in Taskboard. Agents, structural
+**Other activity** disclosure; Taskboard does not list it. Agents, structural
 ancestors, active/blocked/failed work and outstanding attention stay in the outline.
 Ordinary running shell invocations are the exception: verified, unambiguous leaf
 commands fold into the quiet metadata line of their exact owning session or
 agent, such as "Running a command". Concurrent commands are counted; blocked,
 failed, attention-bearing, unresolved and structural shell rows stay visible.
-The complete shell records remain available in details and Taskboard. This is
+The complete shell records remain available in details. This is
 presentation-only: raw activity evidence, lifecycle state and counts are unchanged.
 Incomplete-history context and collapsed-branch counts stay with their owning
 row, not on standalone diagnostic rows. A chevron needs no "Branch collapsed"
@@ -1287,8 +1306,8 @@ surfaces and valid inferred Copilot sessions beneath workspace headers. Working
 directory labels are home-relative where applicable, never inferred Git
 branches. Uncertain ownership and incomplete evidence remain honest glyphs or
 summaries, and incidental diagnostics stay behind selection or settings.
-Taskboard remains available from its header button and retains each
-primary session's state even when it has no attention or child rows.
+Taskboard remains available from its header button and places every
+session in the bucket for its observed state, even with no attention or child rows.
 
 A healthy outline has no diagnostic paragraphs. **Maestro** leads the header;
 the six existing actions form a right-aligned group of 28-point buttons with
@@ -1311,8 +1330,8 @@ The current host's overlaid footer has 50 points of reserved clearance.
 
 Sidebar **settings** includes **Compact** and
 **Comfortable** (more room and larger native detail text) density. Both
-Hierarchy and Taskboard keep the same data, counts, paths and independent
-focus, dismissal and acknowledgement actions. Narrow rows stack actions;
+Hierarchy and Taskboard keep the same sessions and independent focus actions;
+dismissal and acknowledgement stay in Hierarchy. Narrow rows stack actions;
 full paths remain available to accessibility and tooltips.
 
 The outline uses 5-point side gutters (scaled for Comfortable), 8-point shallow
@@ -1328,11 +1347,8 @@ different session/provider does not inherit a collapse. Returning with the
 same full identity intentionally does. Collapsed ancestors retain visible
 running, blocked and attention summaries; incomplete counts stay labelled.
 Collapse never dismisses or acknowledges work and never changes retention.
-Taskboard still shows retained non-task activity regardless of tree collapse.
 Internal-task groups and task-child disclosure share exact provider/session/task
 identities across both views and reloads, independently of actual child-agent tabs.
-Non-task Taskboard activity remains state-grouped even when a managed owner or
-internal-task group is collapsed; coalescing a heading does not remove that activity.
 
 Density overrides, collapsed identities and workspace-local idle-task reveal
 choices are stored in a versioned
@@ -1509,8 +1525,8 @@ are read for authorization.
 ### Internal Copilot tasks
 
 Explicit provider `.subagent` observations with literal session/child parents
-are internal tasks, not interactive tabs. Both Hierarchy and Taskboard attach
-their shared compact consumer beneath the exact owning session, including
+are internal tasks, not interactive tabs. Hierarchy attaches
+its compact consumer beneath the exact owning session, including
 coalesced managed rows and retained original-session context. A task is one
 connector-linked text line without an identity icon or navigation/lifecycle
 actions. Its full observed name and state remain in accessibility and tooltips.
@@ -1549,7 +1565,7 @@ inflates agent/tab counts, changes ownership or closes a session.
 
 ### Other activity and session history
 
-The sidebar's **History** shortcut opens history controls shared by
+The completed-work history controls in sidebar **Settings** are shared by
 **Hierarchy** and **Taskboard**. The default active outline hides finished/cancelled
 non-task activity and confirmed ended process observations. Native surface rows
 remain available. Managed workers leave when a terminal outcome is known; active

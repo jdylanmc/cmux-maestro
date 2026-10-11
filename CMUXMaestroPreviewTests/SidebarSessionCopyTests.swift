@@ -161,7 +161,7 @@ struct SidebarSessionCopyTests {
         let image = folder.appendingPathComponent("copy-field-label-owner.png")
         try #require(fieldImage.representation(using: .png, properties: [:])).write(to: image)
         let lines = try SidebarRenderingEvidence.recognizedLines(in: image, dark: false, naturalLanguage: true)
-        let labelIndex = try #require(lines.firstIndex(of: "Workspace path"))
+        let labelIndex = try #require(lines.firstIndex { $0.hasPrefix("Workspace path") })
         let valueIndex = try #require(lines.firstIndex {
             $0.localizedCaseInsensitiveContains("project") && !$0.localizedCaseInsensitiveContains("Workspace")
         })
@@ -288,7 +288,7 @@ struct SidebarSessionCopyTests {
             var ancestor: NSView? = view
             while let current = ancestor {
                 if current.isHidden || current.alphaValue <= 0 ||
-                    current.layer?.isHidden == true || current.layer?.opacity == 0 {
+                    current.layer?.isHidden == true || (current.layer?.opacity ?? 1) < 0.99 {
                     return false
                 }
                 ancestor = current.superview
@@ -498,7 +498,7 @@ struct SidebarSessionCopyTests {
             try await settle(hosting)
             button = try copyButton(in: hosting)
             #expect(button.accessibilityValue() as? String == "Copied")
-            #expect(hasVisibleFeedback("Copied", in: hosting))
+            #expect(feedbackControl(in: hosting) == nil, "A successful copy shows no text; the icon and accessibility value report it")
             #expect(pasteboard.string(forType: .string) == ownID.uuidString)
         }
         #expect(copies == [ownID, ownID])
@@ -610,45 +610,45 @@ struct SidebarSessionCopyTests {
         let hosting = NSHostingView(rootView: SidebarHoverCard(
             data: .init(id: "negative-controls", category: "Agent preview", title: "Synthetic agent",
                         lines: [.sessionID(ownID)]),
-            close: {}, copyValue: { _ in true }
+            close: {}, copyValue: { _ in false }
         ).background(Color(nsColor: .windowBackgroundColor)))
         hosting.frame = NSRect(x: 0, y: 0, width: 224, height: 260)
         try await settle(hosting)
-        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        #expect(!hasVisibleFeedback("Could not copy. Try again.", in: hosting))
         #expect(try copyButton(in: hosting).accessibilityPerformPress())
         try await settle(hosting)
         let label = try #require(feedbackControl(in: hosting))
-        #expect(hasVisibleFeedback("Copied", in: hosting))
+        #expect(hasVisibleFeedback("Could not copy. Try again.", in: hosting))
         #expect(try feedbackInk(in: capture(hosting), label: label, view: hosting) > 0)
         label.stringValue = "Wrong feedback"
-        #expect(try copyButton(in: hosting).accessibilityValue() as? String == "Copied")
-        #expect(!hasVisibleFeedback("Copied", in: hosting))
-        label.stringValue = "Copied"
+        #expect(try copyButton(in: hosting).accessibilityValue() as? String == "Could not copy. Try again.")
+        #expect(!hasVisibleFeedback("Could not copy. Try again.", in: hosting))
+        label.stringValue = "Could not copy. Try again."
         label.isHidden = true
-        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        #expect(!hasVisibleFeedback("Could not copy. Try again.", in: hosting))
         label.isHidden = false
         let parent = try #require(label.superview)
         parent.isHidden = true
-        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        #expect(!hasVisibleFeedback("Could not copy. Try again.", in: hosting))
         parent.isHidden = false
         label.alphaValue = 0
-        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        #expect(!hasVisibleFeedback("Could not copy. Try again.", in: hosting))
         label.alphaValue = 1
         let frame = label.frame
         label.frame = .zero
-        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        #expect(!hasVisibleFeedback("Could not copy. Try again.", in: hosting))
         label.frame = frame.offsetBy(dx: 1_000, dy: 0)
-        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        #expect(!hasVisibleFeedback("Could not copy. Try again.", in: hosting))
         label.frame = frame
         label.textColor = .clear
         try await settle(hosting)
-        #expect(hasVisibleFeedback("Copied", in: hosting))
+        #expect(hasVisibleFeedback("Could not copy. Try again.", in: hosting))
         #expect(try feedbackInk(in: capture(hosting), label: label, view: hosting) == 0)
         label.textColor = .secondaryLabelColor
         try await settle(hosting)
         #expect(try feedbackInk(in: capture(hosting), label: label, view: hosting) > 0)
         label.removeFromSuperview()
-        #expect(!hasVisibleFeedback("Copied", in: hosting))
+        #expect(!hasVisibleFeedback("Could not copy. Try again.", in: hosting))
     }
 
     @Test func nativeFeedbackWrapsWithoutClippingOrTakingFocus() async throws {
@@ -697,8 +697,12 @@ struct SidebarSessionCopyTests {
                 try await settle(hosting)
                 #expect(try copyButton(in: hosting).accessibilityValue() as? String
                     == (success ? "Copied" : "Could not copy. Try again."))
+                if success {
+                    #expect(feedbackControl(in: hosting) == nil, "A successful copy shows no text")
+                    continue
+                }
                 let feedback = try #require(feedbackControl(in: hosting))
-                #expect(hasVisibleFeedback(success ? "Copied" : "Could not copy. Try again.", in: hosting),
+                #expect(hasVisibleFeedback("Could not copy. Try again.", in: hosting),
                         "Bounds: \(feedback.bounds); visible: \(feedback.visibleRect); content: \(feedback.alignmentRect(forFrame: feedback.bounds))")
                 #expect(!feedback.isEditable && !feedback.isSelectable && !feedback.acceptsFirstResponder)
                 #expect(feedback.font == .preferredFont(forTextStyle: .caption1))

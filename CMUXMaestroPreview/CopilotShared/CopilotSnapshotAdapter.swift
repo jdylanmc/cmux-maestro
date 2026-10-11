@@ -46,7 +46,8 @@ nonisolated enum CopilotSnapshotAdapter {
                     appearance: observation.iconId == nil && observation.iconColor == nil && observation.petId == nil ? nil
                         : .init(iconId: observation.iconId, iconColor: observation.iconColor, petId: observation.petId),
                     attention: observation.attention,
-                    childWorkObservation: .init(items: children, legacyProjectionIsLossless: legacy.count == children.count)
+                    childWorkObservation: .init(items: children, legacyProjectionIsLossless: legacy.count == children.count),
+                    location: observation.branch.map { .init(branch: $0, worktree: observation.worktree ?? false) }
                 )
             },
             issues: source.issues.map { .init(rawValue: $0.rawValue) },

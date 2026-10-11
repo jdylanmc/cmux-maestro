@@ -157,7 +157,7 @@ struct SidebarPreferencesTests {
                 hosting.layoutSubtreeIfNeeded()
                 let scroll = try #require(firstScrollView(in: hosting))
                 let document = try #require(scroll.documentView)
-                #expect(document.bounds.height > scroll.contentView.bounds.height)
+                if mode == .hierarchy { #expect(document.bounds.height > scroll.contentView.bounds.height) }
                 for y in [max(0, document.bounds.height - scroll.contentView.bounds.height), 0] {
                     scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
                     scroll.reflectScrolledClipView(scroll.contentView)

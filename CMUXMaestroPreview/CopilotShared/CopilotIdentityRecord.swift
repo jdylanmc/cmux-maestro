@@ -65,3 +65,47 @@ nonisolated enum CopilotIdentityJSON {
         return try decoder.decode(CopilotIdentityRecord.self, from: data)
     }
 }
+
+/// The only location fact the hook publishes: a branch name and whether it is a
+/// linked worktree. Never a path or repository name.
+nonisolated struct CopilotSessionLocation: Equatable, Sendable {
+    static let maximumBytes = 1024
+    static let maximumBranchBytes = 200
+    static let keys: Set<String> = ["schemaVersion", "sessionID", "branch", "worktree", "recordedAt"]
+
+    let branch: String
+    let worktree: Bool
+
+    static func validBranch(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= maximumBranchBytes && !value.hasPrefix("-")
+            && value.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F && !(0x80...0x9F).contains($0.value) }
+    }
+
+    static func encode(sessionID: UUID, location: CopilotSessionLocation, recordedAt: Date) throws -> Data {
+        let object: [String: Any] = [
+            "schemaVersion": 1, "sessionID": sessionID.uuidString.lowercased(), "branch": location.branch,
+            "worktree": location.worktree, "recordedAt": Int64((recordedAt.timeIntervalSince1970 * 1000).rounded()),
+        ]
+        return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+
+    /// Exact key set, exact types, matching session; anything else is no location.
+    static func decode(_ data: Data, sessionID: UUID) -> CopilotSessionLocation? {
+        struct Wire: Decodable {
+            let schemaVersion: Int
+            let sessionID: String
+            let branch: String
+            let worktree: Bool
+            let recordedAt: Int64
+        }
+        guard data.count <= maximumBytes,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == keys,
+              let wire = try? JSONDecoder().decode(Wire.self, from: data),
+              wire.schemaVersion == 1, wire.recordedAt > 0,
+              let id = UUID(uuidString: wire.sessionID), id == sessionID,
+              wire.sessionID == wire.sessionID.lowercased(), validBranch(wire.branch)
+        else { return nil }
+        return CopilotSessionLocation(branch: wire.branch, worktree: wire.worktree)
+    }
+}

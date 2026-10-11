@@ -6,9 +6,9 @@ import Testing
 @Suite(SidebarAppKitTestScope())
 struct SidebarHeaderTests {
     @Test func exactHeaderOrderAndUnavailableReasonsDoNotClaimCapabilities() throws {
-        #expect(SidebarHeaderAction.allCases == [.directory, .beats, .taskboard, .history, .settings])
+        #expect(SidebarHeaderAction.allCases == [.directory, .beats, .taskboard, .settings])
         #expect(SidebarHeaderAction.allCases.map(\.title) == [
-            "Open directory as new workspace", "Beats", "Taskboard", "History", "Maestro settings"
+            "Open directory as new workspace", "Beats", "Taskboard", "Maestro settings"
         ])
         for action in SidebarHeaderAction.allCases {
             #expect(NSImage(systemSymbolName: action.symbol, accessibilityDescription: nil) != nil)
@@ -39,7 +39,7 @@ struct SidebarHeaderTests {
         #expect(host.fittingSize.width <= CGFloat(width) && host.fittingSize.height <= 40)
         #expect(!window.isVisible)
         let buttons = descendants(host).compactMap { $0 as? NSButton }
-        try #require(buttons.count == 5)
+        try #require(buttons.count == 4)
         let frames = buttons.map { host.convert($0.bounds, from: $0) }
         #expect(frames.allSatisfy { $0.size == CGSize(width: 28, height: 28) && host.bounds.contains($0) })
         for index in 1..<frames.count {

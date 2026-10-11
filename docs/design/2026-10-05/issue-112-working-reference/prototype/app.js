@@ -1057,7 +1057,8 @@ document.addEventListener("drop", event => {
   draggedId = null; document.querySelectorAll(".drag-over").forEach(el => el.classList.remove("drag-over"));
 });
 document.addEventListener("dragend", () => { endSidebarDrag(); draggedId = null; document.querySelectorAll(".drag-over").forEach(el => el.classList.remove("drag-over")); });
-$("#history-button").onclick = () => {
+$("#history-open").onclick = () => {
+  $("#settings-dialog").close();
   renderHistory();
   openDialog("history-dialog");
 };
