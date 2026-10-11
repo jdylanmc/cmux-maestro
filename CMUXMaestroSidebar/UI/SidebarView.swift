@@ -388,7 +388,7 @@ struct SidebarHeader: View {
         Binding(get: { presented == action }, set: { if !$0 { dismissPopover() } })
     }
 
-    private var beats = SidebarBeatsController.shared
+    private let beats = SidebarBeatsController.shared
 
     private func lit(_ action: SidebarHeaderAction) -> Bool {
         action == .beats && beats.beats.contains { $0.enabled }
