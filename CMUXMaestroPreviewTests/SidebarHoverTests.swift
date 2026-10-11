@@ -667,8 +667,8 @@ struct SidebarHoverTests {
         let b = try #require(SidebarHoverContent.workspace(fixtures.workspaceB, hierarchy: original, connected: true))
         #expect(a.id != b.id && a.title == b.title)
         #expect(a.category == "Workspace preview")
-        #expect(a.lines.contains(.init(title: "Shared surfaces", value: "1 terminal")))
-        #expect(a.lines.contains(.init(title: "Workspace ID", value: fixtures.workspaceA.uuidString)))
+        #expect(a.lines.contains(.init(title: "Shared surfaces", value: "1 terminal", copyableValue: "1 terminal")))
+        #expect(a.lines.contains(.init(title: "Workspace ID", value: fixtures.workspaceA.uuidString, copyableValue: fixtures.workspaceA.uuidString)))
         #expect(!a.lines.contains { $0.title.contains("Agent") || $0.title.contains("Pet") })
         #expect(SidebarHoverContent.workspace(fixtures.workspaceA, hierarchy: original, connected: false) == nil)
         #expect(SidebarHoverContent.workspace(UUID(), hierarchy: original, connected: true) == nil)
@@ -683,7 +683,7 @@ struct SidebarHoverTests {
         let moved = try #require(SidebarHoverContent.workspace(
             fixtures.workspaceA, hierarchy: fixtures.hierarchy(moved: true), connected: true
         ))
-        #expect(moved.lines.contains(.init(title: "Shared surfaces", value: "None")))
+        #expect(moved.lines.contains(.init(title: "Shared surfaces", value: "None", copyableValue: "None")))
     }
 
     @Test func passiveComponentsHaveNoNavigationOrPreferenceMutationDependencies() throws {
