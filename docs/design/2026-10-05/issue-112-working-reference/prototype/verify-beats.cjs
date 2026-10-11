@@ -25,7 +25,7 @@ const assert = require("node:assert/strict");
     check("Header icon is lit (accent blue, static glow, no animation) while a Beat is enabled", lit.color === "rgb(110, 168, 255)" && lit.filter.includes("drop-shadow") && lit.animation === "none");
 
     await open();
-    check("Click opens a popover, not a content tab", await page.locator("#native-layout [data-close-tool]").count() === 0 && await page.evaluate(() => !("beats" in state.utilityTabs) && state.active === "implementer") && await button.getAttribute("aria-expanded") === "true");
+    check("Click opens a popover, not a content tab", await page.locator("#native-layout .native-tab").filter({ hasText: "Beats" }).count() === 0 && await page.evaluate(() => !("utilityTabs" in state) && state.active === "implementer") && await button.getAttribute("aria-expanded") === "true");
     const geometry = await page.evaluate(() => {
       const box = selector => document.querySelector(selector).getBoundingClientRect();
       const icon = box("#beats-button"), pop = box("#beats-popover"), arrow = box(".beats-arrow");
@@ -147,15 +147,19 @@ const assert = require("node:assert/strict");
     await page.keyboard.press("Escape");
     await page.setViewportSize({ width: 1512, height: 940 });
 
-    await page.locator("#taskboard-button").click();
-    check("Taskboard still opens as a tab", await page.evaluate(() => state.active === "tool-taskboard" && !!state.utilityTabs.taskboard) && await page.locator("#taskboard").isVisible());
-    await page.locator('#native-layout [data-tool-move="taskboard"]').click();
-    await page.locator("#tool-move-workspace").selectOption("scratch");
-    await page.locator("#tool-move-pane").selectOption("1");
-    await page.locator('#tool-move-form button[type="submit"]').click();
-    check("Taskboard still moves between workspaces and panes", await page.evaluate(() => state.utilityTabs.taskboard.workspace === "scratch" && state.utilityTabs.taskboard.pane === 1 && state.active === "tool-taskboard"));
-    await page.locator('#native-layout [data-close-tool="taskboard"]').click();
-    check("Taskboard still closes", await page.evaluate(() => !state.utilityTabs.taskboard && state.active !== "tool-taskboard") && await page.locator("#taskboard").count() === 0);
+    const tb = page.locator("#taskboard-button");
+    check("Taskboard button starts unpressed with the outline showing", await tb.getAttribute("aria-pressed") === "false" && await page.locator(".workspace-outline").isVisible() && await page.locator("#taskboard-view").isHidden());
+    await tb.click();
+    check("Taskboard renders only in the sidebar, with pressed state and no pane tab", await page.evaluate(() => state.taskboardOpen === true && state.active === "implementer") && await page.locator("#sidebar #taskboard").isVisible() && await page.locator("#native-layout #taskboard").count() === 0 && await page.locator("#native-layout .native-tab").filter({ hasText: "Taskboard" }).count() === 0 && await tb.getAttribute("aria-pressed") === "true" && await tb.getAttribute("aria-current") === "page" && await page.locator(".workspace-outline").isHidden());
+    check("Taskboard groups agents by status in the narrow sidebar", await page.locator("#taskboard [data-board-status]").evaluateAll(sections => sections.map(section => section.dataset.boardStatus).join(",")) === "input,working,idle,done,unknown" && await page.locator("#taskboard-view").evaluate(element => element.scrollWidth <= element.clientWidth + 1));
+    check("Taskboard keeps its quiet history details", await page.locator("#taskboard details.quiet-history").count() === 1);
+    await page.locator("#taskboard [data-focus='reviewer']").click();
+    check("Selecting an agent from Taskboard focuses it and stays in the Taskboard view", await page.evaluate(() => state.active === "reviewer" && state.taskboardOpen === true) && await page.locator("#taskboard-view").isVisible());
+    await page.reload();
+    check("Taskboard view persists across reload", await page.evaluate(() => state.taskboardOpen === true) && await page.locator("#taskboard").isVisible() && await tb.getAttribute("aria-pressed") === "true");
+    await tb.click();
+    check("Second click returns to the outline", await page.evaluate(() => state.taskboardOpen === false && state.active === "reviewer") && await page.locator(".workspace-outline").isVisible() && await page.locator("#taskboard").count() === 0 && await tb.getAttribute("aria-pressed") === "false" && await tb.getAttribute("aria-current") === null);
+    check("No tool surface exists anywhere", await page.evaluate(() => !surfaces.some(item => item.kind === "tool" || String(item.id).startsWith("tool-")) && !document.querySelector("[data-open-tool], [data-tool-move], [data-close-tool], #tool-move-dialog, .utility-tab")));
 
     check("No JavaScript runtime errors", errors.length === 0);
     check("No external requests", requests.every(url => url.startsWith(baseURL)));

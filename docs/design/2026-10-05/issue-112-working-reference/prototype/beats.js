@@ -78,77 +78,36 @@ const beatZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "loca
 const beatBytes = text => new TextEncoder().encode(text).length;
 const beatCronOf = value => value.trim().replace(/\s+/g, " ");
 
-function utilitySurfaces(tabs = {}) {
-  return Object.entries(tabs).map(([tool, location]) => ({
-    id: `tool-${tool}`, tool, kind: "tool", name: "Taskboard",
-    workspace: location.workspace, pane: location.pane, state: "idle", glyph: tool, color: "#afb5c0"
-  }));
-}
-
-// Older saves modelled Beats as a content tab with queue and simulator fields; drop them.
+// Older saves modelled Beats and Taskboard as content tabs; drop those tabs and Beats queue/simulator fields.
 function migrateLegacyBeatState(saved) {
-  if (saved.utilityTabs && typeof saved.utilityTabs === "object" && !Array.isArray(saved.utilityTabs)) delete saved.utilityTabs.beats;
+  delete saved.utilityTabs;
   delete saved.beatAvailability; delete saved.beatClock; delete saved.selectedBeat;
   if (Array.isArray(saved.beats)) {
     saved.beats = saved.beats.filter(beat => beat && typeof beat.id === "string" && typeof beat.agentId === "string" && typeof beat.cron === "string" && typeof beat.prompt === "string" && typeof beat.enabled === "boolean")
       .map(({ id, agentId, cron, prompt, enabled }) => ({ id, agentId, cron, prompt, enabled }));
   }
-  const legacy = "tool-beats";
-  if (saved.active === legacy) saved.active = "implementer";
-  for (const map of [saved.panes, saved.paneSelected]) if (map && typeof map === "object") for (const key of Object.keys(map)) if (key === legacy || map[key] === legacy) delete map[key];
-  if (saved.tabOrder && typeof saved.tabOrder === "object") for (const key of Object.keys(saved.tabOrder)) if (Array.isArray(saved.tabOrder[key])) saved.tabOrder[key] = saved.tabOrder[key].filter(id => id !== legacy);
+  const legacy = id => typeof id === "string" && id.startsWith("tool-");
+  if (legacy(saved.active)) saved.active = "implementer";
+  for (const map of [saved.panes, saved.paneSelected]) if (map && typeof map === "object") for (const key of Object.keys(map)) if (legacy(key) || legacy(map[key])) delete map[key];
+  if (saved.tabOrder && typeof saved.tabOrder === "object") for (const key of Object.keys(saved.tabOrder)) if (Array.isArray(saved.tabOrder[key])) saved.tabOrder[key] = saved.tabOrder[key].filter(id => !legacy(id));
+  if (saved.dismissed && typeof saved.dismissed === "object") for (const key of Object.keys(saved.dismissed)) if (legacy(key)) delete saved.dismissed[key];
 }
 
 function validUtilityState(saved) {
-  const tabs = saved.utilityTabs ?? {};
-  if (!tabs || typeof tabs !== "object" || Array.isArray(tabs)) return false;
-  const workspaceIDs = [...workspaces.map(workspace => workspace.id), ...(saved.createdDirectories || []).map(record => record.id)];
-  if (!Object.entries(tabs).every(([tool, location]) => tool === "taskboard" && location && workspaceIDs.includes(location.workspace) && [1, 2].includes(location.pane))) return false;
+  if (saved.taskboardOpen !== undefined && typeof saved.taskboardOpen !== "boolean") return false;
   if (saved.sidebarOrders !== undefined && (!saved.sidebarOrders || typeof saved.sidebarOrders !== "object" || Array.isArray(saved.sidebarOrders) || !Object.values(saved.sidebarOrders).every(order => Array.isArray(order) && order.every(id => typeof id === "string") && new Set(order).size === order.length))) return false;
   return saved.beats === undefined || (Array.isArray(saved.beats) && saved.beats.every(beat => beat && typeof beat.id === "string" && typeof beat.agentId === "string" && typeof beat.cron === "string" && typeof beat.prompt === "string" && typeof beat.enabled === "boolean"));
 }
 
-let movingTool = null;
 const beatsUI = { open: false, mode: "list", confirmDelete: null, draft: null };
 
-function openUtility(tool) {
-  if (tool !== "taskboard") return;
-  if (!state.utilityTabs[tool]) state.utilityTabs[tool] = { workspace: activeWorkspace(), pane: 2 };
-  focusItem(`tool-${tool}`);
-}
-
-function moveUtility(tool, workspace, pane) {
-  const item = byId(`tool-${tool}`);
-  if (!item || !workspaces.some(candidate => candidate.id === workspace) || ![1, 2].includes(pane)) { notify("Cannot move this prototype tab: destination unavailable."); return; }
-  const source = `${item.workspace}:${paneFor(item)}`;
-  state.tabOrder[source] = orderedPaneItems(item.workspace, paneFor(item)).filter(candidate => candidate.id !== item.id).map(candidate => candidate.id);
-  if (state.paneSelected[source] === item.id) delete state.paneSelected[source];
-  state.utilityTabs[tool] = { workspace, pane };
-  delete state.panes[item.id];
-  const destination = `${workspace}:${pane}`;
-  state.tabOrder[destination] = [...orderedPaneItems(workspace, pane).filter(candidate => candidate.id !== item.id).map(candidate => candidate.id), item.id];
-  state.paneSelected[destination] = item.id;
-  state.workspaceCollapsed[workspace] = false;
+function toggleTaskboard() {
+  state.taskboardOpen = !state.taskboardOpen;
   commit();
-  notify(`${item.name} moved to ${workspaces.find(candidate => candidate.id === workspace).name}, Pane ${pane}. Agent sessions unchanged.`);
-}
-
-function closeUtility(tool) {
-  const id = `tool-${tool}`, item = byId(id);
-  if (!item) return;
-  const fallback = orderedPaneItems(item.workspace, paneFor(item)).find(candidate => candidate.id !== id) || surfaces.find(candidate => candidate.workspace === item.workspace && !state.dismissed[candidate.id]) || surfaces.find(candidate => !state.dismissed[candidate.id]);
-  if (!fallback) { notify("No remaining prototype surface is available."); return; }
-  delete state.utilityTabs[tool];
-  delete state.panes[id];
-  for (const key of Object.keys(state.paneSelected)) if (state.paneSelected[key] === id) delete state.paneSelected[key];
-  for (const key of Object.keys(state.tabOrder)) state.tabOrder[key] = state.tabOrder[key].filter(candidate => candidate !== id);
-  if (state.active === id) state.active = fallback.id;
-  commit();
-  notify(`${item.name} view closed. Agent sessions are unchanged.`);
 }
 
 function renderTaskboard() {
-  return `<section id="taskboard" class="tool-panel" aria-label="Taskboard"><header class="tool-panel-header"><div><h2>Taskboard</h2><p>All workspaces · synthetic agent activity</p></div></header><p class="experiment-note">Exploratory content tab. Switching tabs changes the view, not the agents.</p><div class="board-columns">${["input", "working", "idle", "done", "unknown"].map(status => `<section data-board-status="${status}"><h3>${({ working: "Working", input: "Needs you", idle: "Idle", done: "Done", unknown: "Unknown" })[status]}</h3>${surfaces.filter(item => item.kind === "agent" && item.state === status && !state.dismissed[item.id]).map(item => `<button data-focus="${item.id}">${iconFor(item)}<b>${escapeHTML(item.name)}</b><span>${escapeHTML(item.task)}</span>${tagMarkup(item, true)}<small>${escapeHTML(workspaces.find(workspace => workspace.id === item.workspace).name)}</small></button>`).join("")}</section>`).join("")}</div><details class="quiet-history"><summary>Quiet skill & shell history · synthetic</summary><p>Skill: design review · completed<br>Shell: local build check · completed</p><p>Activity records only; no separate session controls inferred.</p></details></section>`;
+  return `<section id="taskboard" class="tool-panel" aria-label="Taskboard"><header class="tool-panel-header"><div><h2>Taskboard</h2><p>All workspaces · synthetic agent activity</p></div></header><p class="experiment-note">Sidebar view. Select the Taskboard icon again to return to the outline.</p><div class="board-columns">${["input", "working", "idle", "done", "unknown"].map(status => `<section data-board-status="${status}"><h3>${({ working: "Working", input: "Needs you", idle: "Idle", done: "Done", unknown: "Unknown" })[status]}</h3>${surfaces.filter(item => item.kind === "agent" && item.state === status && !state.dismissed[item.id]).map(item => `<button data-focus="${item.id}">${iconFor(item)}<b>${escapeHTML(item.name)}</b><span>${escapeHTML(item.task)}</span>${tagMarkup(item, true)}<small>${escapeHTML(workspaces.find(workspace => workspace.id === item.workspace).name)}</small></button>`).join("")}</section>`).join("")}</div><details class="quiet-history"><summary>Quiet skill & shell history · synthetic</summary><p>Skill: design review · completed<br>Shell: local build check · completed</p><p>Activity records only; no separate session controls inferred.</p></details></section>`;
 }
 
 const openBeatSessions = () => surfaces.filter(item => item.kind === "agent" && !state.dismissed[item.id]);
@@ -299,19 +258,9 @@ document.addEventListener("click", event => {
     state.beats = state.beats.filter(beat => beat.id !== d.beatDeleteConfirm);
     beatsUI.confirmDelete = null; commit(); notify("Beat deleted. Its session is unchanged."); return;
   }
-  if (d.openTool) { openUtility(d.openTool); return; }
-  if (d.closeTool) { closeUtility(d.closeTool); return; }
+  if (button.id === "taskboard-button") { toggleTaskboard(); return; }
   if ("openSettings" in d) { renderInstallStatus(); openDialog("settings-dialog"); return; }
   if ("fermata" in d) { state.fermata = !state.fermata; commit(); notify(`Fermata ${state.fermata ? "on" : "off"} · simulated. Mac sleep settings are unchanged.`); return; }
-  if (d.toolMove) {
-    movingTool = d.toolMove;
-    const item = byId(`tool-${movingTool}`);
-    $("#tool-move-title").textContent = `Move ${item.name}`;
-    $("#tool-move-workspace").innerHTML = workspaces.map(workspace => `<option value="${workspace.id}">${escapeHTML(workspace.name)}</option>`).join("");
-    $("#tool-move-workspace").value = item.workspace;
-    $("#tool-move-pane").value = String(paneFor(item));
-    openDialog("tool-move-dialog"); return;
-  }
 });
 
 document.addEventListener("input", event => {
@@ -331,14 +280,5 @@ document.addEventListener("keydown", event => {
 window.addEventListener("resize", () => { if (beatsUI.open) positionBeatsPopover(); });
 
 document.addEventListener("submit", event => {
-  if (event.target.id === "tool-move-form") {
-    event.preventDefault(); $("#tool-move-dialog").close();
-    moveUtility(movingTool, $("#tool-move-workspace").value, Number($("#tool-move-pane").value)); return;
-  }
   if (event.target.id === "beat-form") { event.preventDefault(); saveBeatForm(); }
-});
-
-document.addEventListener("dragover", event => {
-  const workspace = event.target.closest("[data-workspace]");
-  if (workspace && byId(draggedId)?.kind === "tool") { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }
 });

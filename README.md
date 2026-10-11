@@ -1232,7 +1232,8 @@ CMUX to create a workspace there (requires the workspace-creation action grants)
 preferences; History opens the same popover at completed-work controls.
 Taskboard temporarily toggles the existing sidebar view (its underline and
 accessible state indicate selection); activate it again to return to the outline.
-Reusable utility hosting is not implemented. Beats opens a native popover to create, edit,
+Taskboard renders only in the sidebar: there are no reusable or movable content tabs, and
+the extension SDK offers no content-tab host. Beats opens a native popover to create, edit,
 pause and delete recurring prompts; the icon is lit while one is enabled.
 Beats run on Copilot's own scheduler: the Maestro extension loaded in each CMUX Copilot
 session mirrors that session's enabled Beats into native cron schedules, so no clock process,
@@ -1299,7 +1300,7 @@ Rows retain the chosen identity glyph in a consistent 24-point column; directory
 context uses the observed basename, never a guessed workspace name or Git branch.
 Complete home-relative paths remain in hover, accessibility and Details rather than repeating unavailable
 workspace/project/path lines on every row.
-New grouping selectors, pane headings, tags and utility rows from the design
+New grouping selectors, pane headings and tags from the design
 prototype are deliberately separate scope; no decorative substitutes are shown.
 The header gear remains the entry for density and stored preferences. Saved
 expansion, retention, acknowledgement, navigation and source records are preserved;

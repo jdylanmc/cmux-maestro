@@ -47,8 +47,9 @@ const path = require("node:path");
       state.createdDirectories.push(record);
       state.workspaceOrder.push(record.id);
       state.workspaceCollapsed[record.id] = true;
-      state.utilityTabs.taskboard = { workspace: record.id, pane: 2 };
-      state.utilityTabs.beats = { workspace: record.id, pane: 1 };
+      state.utilityTabs = { taskboard: { workspace: record.id, pane: 2 }, beats: { workspace: record.id, pane: 1 } };
+      state.panes["tool-taskboard"] = 2; state.paneSelected[`${record.id}:2`] = "tool-taskboard";
+      state.tabOrder[`${record.id}:2`] = ["tool-taskboard", "tool-beats"]; state.taskboardOpen = true;
       state.beats = [{ id: "legacy-beat", agentId: "reviewer", cron: "*/10 * * * *", prompt: "Legacy prompt", enabled: true, pending: true, pendingSince: 1, lastAttempt: 2, lastDelivered: 3, deliveries: 4, skipped: 5, error: "", events: [{ at: 1, message: "old" }] }];
       state.beatClock = 1; state.beatAvailability = { reviewer: "busy" }; state.selectedBeat = "legacy-beat";
       save();
@@ -58,10 +59,14 @@ const path = require("node:path");
       state.workspaceOrder.join(",") === "scratch,design,directory-00000000-0000-4000-8000-000000000001,stress" &&
       state.workspaceCollapsed.stress && state.icons.implementer.glyph === "leaf" &&
       state.tags.implementer[0] === "preserve-this" && Object.keys(state.taskDismissals).length === 1 &&
-      state.utilityTabs.taskboard.workspace === state.createdDirectories[0].id
+      state.taskboardOpen === true
     ));
-    check("Legacy Beats tab entry and queue/simulator fields are dropped, not rejected", await page.evaluate(() =>
-      !("beats" in state.utilityTabs) && !("beatClock" in state) && !("beatAvailability" in state) && !("selectedBeat" in state) &&
+    check("Legacy utilityTabs and tool-* ids are silently dropped, not rejected", await page.evaluate(() =>
+      !("utilityTabs" in state) && !JSON.stringify([state.panes, state.paneSelected, state.tabOrder]).includes("tool-") && !state.active.startsWith("tool-") &&
+      !document.querySelector("#native-layout .utility-tab, #native-layout [data-close-tool], #native-layout [data-tool-move]") && !/tool|tab|utility/i.test(startupNotice)
+    ));
+    check("Legacy Beats queue/simulator fields are dropped, not rejected", await page.evaluate(() =>
+      !("utilityTabs" in state) && !("beatClock" in state) && !("beatAvailability" in state) && !("selectedBeat" in state) &&
       state.beats.length === 1 && state.beats[0].id === "legacy-beat" && state.beats[0].prompt === "Legacy prompt" &&
       !["pending", "events", "deliveries", "skipped", "error", "lastAttempt"].some(key => key in state.beats[0])
     ));
@@ -198,12 +203,13 @@ const path = require("node:path");
     check("Long browser and terminal rows remain actual selectable surfaces", await page.locator("#pinned-details").getAttribute("data-active") === "stress-terminal-3");
     await page.locator("#taskboard-button").click();
     await page.reload();
-    check("Utility view placement in Stress testing survives reload", await page.evaluate(() => state.utilityTabs.taskboard.workspace === "stress" && state.active === "tool-taskboard"));
+    check("Taskboard sidebar view in Stress testing survives reload", await page.evaluate(() => state.taskboardOpen === true && state.active === "stress-terminal-3") && await page.locator("#taskboard-view").isVisible() && await page.locator(".workspace-outline").isHidden() && await page.locator("#native-layout .native-tab").count() > 0 && await page.locator("#native-layout #taskboard").count() === 0);
     await page.locator("#beats-button").click();
-    check("Beats opens as an anchored popover over the stress layout, never as a tab", await page.locator("#beats-popover").isVisible() && await page.evaluate(() => !("beats" in state.utilityTabs) && state.active === "tool-taskboard"));
+    check("Beats opens as an anchored popover over the stress layout, never as a tab", await page.locator("#beats-popover").isVisible() && await page.evaluate(() => !("utilityTabs" in state) && state.active === "stress-terminal-3") && await page.locator("#native-layout [data-close-tool], #native-layout .utility-tab").count() === 0);
     await page.keyboard.press("Escape");
     check("Escape closes the Beats popover", !await page.locator("#beats-popover").isVisible());
-    await page.locator('#native-layout [data-close-tool="taskboard"]').click();
+    await page.locator("#taskboard-button").click();
+    check("Taskboard icon returns the stress sidebar to the outline", await page.evaluate(() => state.taskboardOpen === false) && await page.locator(".workspace-outline").isVisible() && await page.locator("#taskboard-view").isHidden());
     await page.locator("#reset-demo").click();
     check("Reset preserves the complete stress fixture and returns to the readable demo", await page.evaluate(() => surfaces.filter(item => item.workspace === "stress").length === 65 && state.workspaceCollapsed.stress && !state.stressLongName && state.active === "implementer"));
     check("No runtime errors under the stress fixture", errors.length === 0);
