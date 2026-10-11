@@ -1293,7 +1293,10 @@ ancestors, active/blocked/failed work and outstanding attention stay in the outl
 Ordinary running shell invocations are the exception: verified, unambiguous leaf
 commands fold into the quiet metadata line of their exact owning session or
 agent, such as "Running a command". Concurrent commands are counted; blocked,
-failed, attention-bearing, unresolved and structural shell rows stay visible.
+attention-bearing, unresolved and structural shell rows stay visible. A nested shell
+command that merely exited with an error is not an outline row: it moves to the
+session's **Other activity** disclosure, so a stray `bash invocation` failure no longer
+draws a red row under an agent.
 The complete shell records remain available in details. This is
 presentation-only: raw activity evidence, lifecycle state and counts are unchanged.
 Incomplete-history context and collapsed-branch counts stay with their owning

@@ -24,6 +24,12 @@ Notable changes are recorded using Keep a Changelog categories.
   scrolled to the completed-work controls, which remain in Settings. The header now has
   four shortcuts.
 
+### Changed
+
+- Stop showing failed nested shell commands ("bash invocation · Shell · error") as red
+  outline rows. They move to the session's Other activity disclosure; blocked or
+  attention-bearing shell rows and failed agents/tasks still stay visible.
+
 ### Added
 
 - Show the git branch each agent is working in on its Taskboard card (a linked worktree

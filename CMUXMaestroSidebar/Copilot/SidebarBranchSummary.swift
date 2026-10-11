@@ -179,8 +179,9 @@ extension SidebarCopilotSession {
         let byID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
         let folded = foldedShellIDs
         var retained = Set(nodes.filter {
+            // A failed nested shell command is passive history (Other activity), not an outline row.
             !folded.contains($0.id) && (($0.kind != .skill && $0.kind != .shell)
-                || $0.state == .working || $0.state == .blocked || $0.state == .failed
+                || $0.state == .working || $0.state == .blocked || ($0.state == .failed && $0.kind != .shell)
                 || !$0.attention.isEmpty || $0.attentionDegraded || $0.ancestryUnresolved)
         }.map(\.id))
         for node in nodes where retained.contains(node.id) {
