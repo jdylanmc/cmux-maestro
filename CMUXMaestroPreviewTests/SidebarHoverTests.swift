@@ -156,7 +156,7 @@ struct SidebarHoverTests {
             let controls = descendants(try #require(panel.contentView)).compactMap { $0 as? NSButton }
                 .filter { ["hover-close", "hover-copy-value"].contains($0.accessibilityIdentifier()) && $0.canBecomeKeyView }
             let copyControls = controls.filter { $0.accessibilityIdentifier() == "hover-copy-value" }
-            try #require(controls.count == 6 && copyControls.count == 5 && copyControls.first === copy)
+            try #require(controls.count == 7 && copyControls.count == 6 && copyControls.first === copy)
             let path = try automaticPath(from: origin, to: following)
             if exit == "tab" {
                 for _ in 1..<copyControls.count {
