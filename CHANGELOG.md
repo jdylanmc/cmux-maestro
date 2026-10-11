@@ -4,6 +4,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ## Unreleased
 
+### Removed
+
+- Drop the reusable, movable content-tab concept. Taskboard stays a sidebar-only view
+  toggled from the header, and the visual proof of concept now matches (Beats is a
+  popover; no utility tabs). Closes #86 and #87 as not planned.
+
 ### Added
 
 - Add Beats: recurring cron prompts for exact agent sessions. A native sidebar popover

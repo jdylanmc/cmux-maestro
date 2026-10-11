@@ -141,14 +141,14 @@ function seedStressWorkspace() {
   }
 }
 seedStressWorkspace();
-const allSurfaces = () => [...surfaces, ...utilitySurfaces(state.utilityTabs)];
+const allSurfaces = () => surfaces;
 const byId = id => allSurfaces().find(s => s.id === id);
 const STORAGE = "maestro-cosmetic-lab-v2";
 const initialState = () => ({
   version: 2, active: "implementer", grouping: "worktrees",
   collapsed: { "design:main": true }, workspaceCollapsed: { scratch: true, stress: true }, ancestryCollapsed: {}, paneCollapsed: {}, tabOrder: {},
   icons: {}, pets: {}, tags: {}, panes: {}, paneSelected: {}, agentChoices: {}, dismissed: {}, showEnded: false, petHidden: {}, workspaceOrder: ["design", "scratch", "stress"], stressLongName: false,
-  utilityTabs: {}, beats: initialBeats(), workspaceFinished: {}, sidebarOrders: {}, createdDirectories: [], tagColors: {}, taskDismissals: {}, taskGroupsCollapsed: {}
+  taskboardOpen: false, beats: initialBeats(), workspaceFinished: {}, sidebarOrders: {}, createdDirectories: [], tagColors: {}, taskDismissals: {}, taskGroupsCollapsed: {}
 });
 let state = initialState();
 let startupNotice = "";
@@ -176,7 +176,7 @@ try {
     const maps = ["collapsed", "workspaceCollapsed", "ancestryCollapsed", "icons", "pets", "tags", "panes", "petHidden", "paneSelected", "agentChoices"];
     const taskDismissalsValid = saved.taskDismissals === undefined || (saved.taskDismissals !== null && typeof saved.taskDismissals === "object" && !Array.isArray(saved.taskDismissals) && Object.values(saved.taskDismissals).every(value => value === true));
     const taskGroupsValid = saved.taskGroupsCollapsed === undefined || (saved.taskGroupsCollapsed !== null && typeof saved.taskGroupsCollapsed === "object" && !Array.isArray(saved.taskGroupsCollapsed) && Object.values(saved.taskGroupsCollapsed).every(value => typeof value === "boolean"));
-    if (saved.version !== 2 || (saved.stressLongName !== undefined && typeof saved.stressLongName !== "boolean") || !directoryStateValid || !taskDismissalsValid || !taskGroupsValid || !validTagColors(saved.tagColors) || !validUtilityState(saved) || ![...savedSurfaces, ...utilitySurfaces(saved.utilityTabs)].some(item => item.id === saved.active) || !maps.every(key => saved[key] && typeof saved[key] === "object" && !Array.isArray(saved[key])) ||
+    if (saved.version !== 2 || (saved.stressLongName !== undefined && typeof saved.stressLongName !== "boolean") || !directoryStateValid || !taskDismissalsValid || !taskGroupsValid || !validTagColors(saved.tagColors) || !validUtilityState(saved) || !savedSurfaces.some(item => item.id === saved.active) || !maps.every(key => saved[key] && typeof saved[key] === "object" && !Array.isArray(saved[key])) ||
         !Array.isArray(saved.workspaceOrder) || saved.workspaceOrder.length !== savedWorkspaces.length || new Set(saved.workspaceOrder).size !== savedWorkspaces.length || !saved.workspaceOrder.every(id => savedWorkspaces.some(w => w.id === id))) {
       startupNotice = "Saved demo preferences are incompatible. Showing defaults; use Reset demo to clear them.";
     } else {
@@ -271,7 +271,6 @@ function restoreFocus(focus) {
 }
 function commit() { const focus = captureFocusOrigin(document.activeElement); save(); render(); restoreFocus(focus); }
 function resolvedIcon(surface) {
-  if (surface.kind === "tool") return { glyph: surface.tool, color: "#afb5c0" };
   const override = state.icons[surface.id];
   if (override?.mode === "custom" && iconPaths[override.glyph] && colors.some(([, color]) => color === override.color)) return override;
   if (override?.mode === "favicon" && surface.kind === "browser") return { mode: "favicon" };
@@ -374,7 +373,6 @@ function orderedPaneItems(workspace, pane) {
   return [...order.map(id => members.find(item => item.id === id)).filter(Boolean), ...members.filter(item => !order.includes(item.id))];
 }
 function identityContext(item) {
-  if (item.kind === "tool") return `${item.name} · all workspaces · movable view`;
   if (item.worktree) return `${worktrees[item.worktree].branch} · ${worktrees[item.worktree].path} · verified ${worktrees[item.worktree].exactID}`;
   if (item.evidence === "stale") return `Stale evidence · previously ${worktrees[item.lastWorktree].exactID}; current membership unverified`;
   if (item.kind === "agent") return item.worktree === null ? `${item.directory} · confirmed non-repository (synthetic evidence)` : "Membership unknown · unavailable probe is not proof of non-repository";
@@ -396,10 +394,9 @@ function visibleAgents(workspace, mode) {
   }
   return agents.filter(a => visible.has(a.id));
 }
-const panelType = item => item.kind === "tool" ? item.name : item.kind === "browser" ? "Browser" : "Terminal";
+const panelType = item => item.kind === "browser" ? "Browser" : "Terminal";
 function renderRow(item, ordinal = null, container = null, kind = "row", includeTasks = true) {
   const sortable = container ? sortAttributes(kind, item.id, container) : "";
-  if (item.kind === "tool") return `<div class="surface-row ${state.active === item.id ? "selected" : ""}" data-row="${item.id}" ${sortable} ${ordinal === null ? "" : `data-native-surface="${item.id}"`}><button class="identity-icon" data-focus="${item.id}" aria-label="Open ${item.name}">${iconFor(item)}</button><button class="row-main" data-focus="${item.id}"><span class="row-name">${item.name}</span><span class="row-meta">All workspaces · view only</span></button><button class="row-accessory" data-tool-move="${item.tool}" aria-label="Move ${item.name} tab">⇄</button></div>`;
   return `<div class="${item.kind === "agent" ? "agent-row" : "surface-row"} ${item.state === "input" ? "needs-input" : ""} ${state.active === item.id ? "selected" : ""}" data-row="${item.id}" data-hover="${item.id}" ${sortable} ${ordinal === null ? "" : `data-native-surface="${item.id}"`}>
     <button class="identity-icon" data-icon="${item.id}" aria-label="Choose icon for ${escapeHTML(item.name)}" title="Right-click to choose icon">${iconFor(item)}</button>
     <button class="row-main" data-focus="${item.id}" ${state.active === item.id ? 'aria-current="true"' : ""} ${ordinal === null ? "" : `aria-label="${escapeHTML(item.name)}, tab ${ordinal}, ${panelType(item)} panel"`}><span class="row-title"><span class="row-name">${escapeHTML(item.name)}</span>${tagMarkup(item, true)}</span><span class="row-meta">${dot(item)}<span>${ordinal !== null ? `${panelType(item)} panel` : item.kind === "agent" ? escapeHTML(item.task) : item.kind === "browser" ? item.url : `Pane ${paneFor(item)}`}</span></span></button>
@@ -619,10 +616,6 @@ function openTagColor(slug) {
 function renderPinned() {
   const item = byId(state.active);
   $("#pinned-details").dataset.active = item.id;
-  if (item.kind === "tool") {
-    $("#pinned-details").innerHTML = `<div class="pinned-heading"><span>Active tab</span><span>Prototype</span></div><div class="tool-pinned">${iconFor(item)}<div><b>${item.name}</b><p>${escapeHTML(workspaces.find(workspace => workspace.id === item.workspace).name)} · Pane ${paneFor(item)}</p></div></div><p class="session-note">A movable view. Closing this tab does not change agents.</p>`;
-    return;
-  }
   $("#pinned-details").innerHTML = `<div class="pinned-heading"><span class="eyebrow">Active window · pinned</span><span>Demo metadata</span></div>
     <div class="detail-identity">${item.kind === "agent" ? `<button class="pet-button" data-pet="${item.id}" aria-label="Choose pet for ${escapeHTML(item.name)}" title="Choose pet · original placeholder">${state.petHidden[item.id] ? icon("spark", "#9ba6b6") : pet(resolvedPet(item))}</button>` : `<button class="identity-icon" data-icon="${item.id}" aria-label="Choose icon">${iconFor(item)}</button>`}<div class="detail-info"><div class="detail-name">${escapeHTML(item.name)}</div><div class="muted">${dot(item)} ${stateLabel(item)} · Pane ${paneFor(item)}</div><div class="muted">${item.model || (item.kind === "browser" ? "Browser window" : "Terminal window")}</div></div></div>
     ${metrics(item)}<div class="detail-path" title="${escapeHTML(identityContext(item))}">${escapeHTML(identityContext(item))}</div>${item.kind === "agent" ? previewFields(item) : ""}${tagMarkup(item)}${item.kind === "agent" ? `<div class="session-note">Synthetic session metadata · original placeholder pet</div><button class="dismiss-inline" data-dismiss="${item.id}">Exit session & close tab · simulated</button>` : ""}`;
@@ -632,11 +625,11 @@ function renderStage() {
   $("#stage-title").textContent = workspace.name;
   const active = byId(state.active);
   const panes = orderedPanes(workspace.id);
-  $("#native-layout").className = `native-layout${active.kind === "tool" ? ` utility-pane-${panes.indexOf(paneFor(active)) + 1}` : ""}`;
+  $("#native-layout").className = "native-layout";
   $("#native-layout").innerHTML = panes.map(pane => {
     const items = orderedPaneItems(workspace.id, pane);
     const selected = items.find(s => s.id === state.active) || items.find(s => s.id === state.paneSelected[`${workspace.id}:${pane}`]) || items[0];
-    return `<section class="pane" data-pane="${pane}"><header class="pane-header"><b>Pane ${pane}</b><span>· ${selected?.id === state.active ? "Focused" : "Visible, not focused"}</span></header><div class="tab-list" role="group" aria-label="Surface tabs in pane ${pane}">${items.map(item => `<div class="native-tab ${item.id === state.active ? "focused" : ""} ${item.kind === "tool" ? "utility-tab" : ""}" draggable="true" data-drag="${item.id}"><button data-focus="${item.id}" ${selected?.id === item.id ? 'aria-current="page"' : ""}>${item.kind === "tool" ? iconFor(item) : ""}${escapeHTML(item.name)}</button>${item.kind === "tool" ? `<button class="move-tab" data-tool-move="${item.tool}" aria-label="Move ${item.name} tab">⇄</button><button class="move-tab" data-close-tool="${item.tool}" aria-label="Close ${item.name} tab">×</button>` : `<button class="move-tab" data-move="${item.id}" aria-label="Move ${escapeHTML(item.name)} to pane ${pane === 1 ? 2 : 1}">⇄</button>`}</div>`).join("") || '<span class="empty">Drop a tab here</span>'}</div>${selected?.kind === "tool" ? `<div class="utility-content">${selected.tool === "beats" ? renderBeats() : renderTaskboard()}</div>` : `<div class="terminal-preview" role="region" aria-label="${selected ? `${panelType(selected)} panel for ${escapeHTML(selected.name)}` : "Empty pane"}">${selected ? `<div class="panel-content-label">${panelType(selected)} panel · selected tab content</div><div class="prompt">${selected.kind === "agent" ? "❯" : "›"} ${escapeHTML(selected.name)}</div><strong>${escapeHTML(selected.task || selected.url || "npm run build")}</strong><br><br>${selected.kind === "agent" ? "Interactive agent surface<br>Input remains untouched." : selected.kind === "browser" ? "Browser surface · synthetic page<br>No website or favicon requests." : "Terminal surface · synthetic output"}<br><span class="cursor"></span>` : "No selected surface."}</div>`}</section>`;
+    return `<section class="pane" data-pane="${pane}"><header class="pane-header"><b>Pane ${pane}</b><span>· ${selected?.id === state.active ? "Focused" : "Visible, not focused"}</span></header><div class="tab-list" role="group" aria-label="Surface tabs in pane ${pane}">${items.map(item => `<div class="native-tab ${item.id === state.active ? "focused" : ""}" draggable="true" data-drag="${item.id}"><button data-focus="${item.id}" ${selected?.id === item.id ? 'aria-current="page"' : ""}>${escapeHTML(item.name)}</button><button class="move-tab" data-move="${item.id}" aria-label="Move ${escapeHTML(item.name)} to pane ${pane === 1 ? 2 : 1}">⇄</button></div>`).join("") || '<span class="empty">Drop a tab here</span>'}</div><div class="terminal-preview" role="region" aria-label="${selected ? `${panelType(selected)} panel for ${escapeHTML(selected.name)}` : "Empty pane"}">${selected ? `<div class="panel-content-label">${panelType(selected)} panel · selected tab content</div><div class="prompt">${selected.kind === "agent" ? "❯" : "›"} ${escapeHTML(selected.name)}</div><strong>${escapeHTML(selected.task || selected.url || "npm run build")}</strong><br><br>${selected.kind === "agent" ? "Interactive agent surface<br>Input remains untouched." : selected.kind === "browser" ? "Browser surface · synthetic page<br>No website or favicon requests." : "Terminal surface · synthetic output"}<br><span class="cursor"></span>` : "No selected surface."}</div></section>`;
   }).join("");
 }
 function render() {
@@ -649,10 +642,14 @@ function render() {
   document.querySelectorAll(".strip-scroll").forEach(element => { element.scrollLeft = stripOffsets.get(element.dataset.stripKey) ?? 0; });
   $("#window-context").hidden = state.grouping !== "workspace";
   document.querySelectorAll("[data-grouping]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.grouping === state.grouping)));
-  document.querySelectorAll("[data-open-tool]").forEach(button => {
-    if (state.active === `tool-${button.dataset.openTool}`) button.setAttribute("aria-current", "page");
-    else button.removeAttribute("aria-current");
-  });
+  const outline = !state.taskboardOpen;
+  $("#global-grouping").hidden = !outline;
+  document.querySelector(".workspace-outline").hidden = !outline;
+  $("#taskboard-view").hidden = outline;
+  $("#taskboard-view").innerHTML = outline ? "" : renderTaskboard();
+  const taskboardButton = $("#taskboard-button");
+  taskboardButton.setAttribute("aria-pressed", String(!outline));
+  if (!outline) taskboardButton.setAttribute("aria-current", "page"); else taskboardButton.removeAttribute("aria-current");
   renderPinned(); renderStage(); renderBeatsPopover();
 }
 function focusItem(id) {
@@ -745,7 +742,6 @@ function editTags(id) {
 }
 function moveTab(id, pane) {
   const item = byId(id);
-  if (item.kind === "tool") { moveUtility(item.tool, item.workspace, pane); return; }
   const source = `${item.workspace}:${paneFor(item)}`, target = `${item.workspace}:${pane}`;
   if (source === target) { notify("Tab already belongs to that pane; native tab order unchanged."); return; }
   const sourceOrder = orderedPaneItems(item.workspace, paneFor(item)).filter(member => member.id !== id).map(member => member.id);
@@ -1057,8 +1053,7 @@ document.addEventListener("drop", event => {
   const pane = event.target.closest("[data-pane]");
   const workspace = event.target.closest("[data-workspace]");
   const item = byId(draggedId);
-  if (item?.kind === "tool" && workspace) { event.preventDefault(); moveUtility(item.tool, workspace.dataset.workspace, 1); }
-  else if (pane && draggedId && item?.workspace === activeWorkspace()) { event.preventDefault(); moveTab(draggedId, Number(pane.dataset.pane)); }
+  if (pane && draggedId && item?.workspace === activeWorkspace()) { event.preventDefault(); moveTab(draggedId, Number(pane.dataset.pane)); }
   draggedId = null; document.querySelectorAll(".drag-over").forEach(el => el.classList.remove("drag-over"));
 });
 document.addEventListener("dragend", () => { endSidebarDrag(); draggedId = null; document.querySelectorAll(".drag-over").forEach(el => el.classList.remove("drag-over")); });
