@@ -12,7 +12,7 @@ struct SidebarHeaderTests {
         ])
         for action in SidebarHeaderAction.allCases {
             #expect(NSImage(systemSymbolName: action.symbol, accessibilityDescription: nil) != nil)
-            #expect((action.unavailable != nil) == [.directory, .beats].contains(action))
+            #expect((action.unavailable != nil) == [.directory].contains(action))
         }
         var actions: [SidebarHeaderAction] = []
         let header = SidebarHeader(taskboardActive: false, activate: { actions.append($0) })

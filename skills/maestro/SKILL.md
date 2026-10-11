@@ -173,6 +173,41 @@ findings. Keep independent implementation, acceptance, Roast, rubber-duck, CI,
 and non-author merge gates; messages neither satisfy these gates nor expand
 permissions. No automatic retry, acknowledgement or receipt protocol is added.
 
+## Recurring prompts (Beats)
+
+A Beat is a saved recurring prompt for **your own session**: a local-time cron
+expression plus the prompt text. Manage only your own Beats, and only when the human
+asked for a recurring prompt. Resolve your exact own session UUID as in
+`maestro-icon` (never guess, never search other sessions or private files); the
+command proves ownership through the native helper before it changes anything.
+
+```sh
+MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/cmux-maestro-orchestrator"
+"$MAESTRO" beats cron-check --cron "*/15 9-17 * * 1-5" --count 3     # preview local fire times
+"$MAESTRO" beats create --self --session-id "$SESSION" --cron "0 9 * * 1-5" --prompt "Summarize overnight changes."
+"$MAESTRO" beats list   --self --session-id "$SESSION"
+"$MAESTRO" beats edit   --self --session-id "$SESSION" --beat-id "$ID" --cron "30 9 * * 1-5"
+"$MAESTRO" beats pause|resume|delete --self --session-id "$SESSION" --beat-id "$ID"
+```
+
+- Cron is five numeric fields, `minute hour day-of-month month weekday` (weekday 0 or 7
+  = Sunday), with lists, ranges and steps; no names or macros. It runs in the Mac's
+  local time. A nonexistent local time (spring-forward) is skipped, a repeated one
+  (fall-back) fires once, and missed minutes are never replayed.
+- Prompts are plain text up to 4 KiB. At most 16 Beats per session.
+- **One handoff attempt per due occurrence** is Copilot's own: no retries, receipts,
+  completion tracking or queue editing. Pause, edit and delete affect future
+  occurrences only.
+- A Beat is simply on or off. You cannot reassign a Beat or touch another session's Beats.
+- Beats run on **Copilot's own scheduler**. The Maestro extension in each CMUX session
+  mirrors that session's enabled Beats into Copilot schedules (labelled `Beat [id]`),
+  within about 15 seconds of a change and again whenever the session starts; Copilot owns
+  timing, time zone and queueing. There is no separate clock and no managed launch is
+  needed. A Beat fires only while its session is running.
+- Do not edit or stop `Beat [...]` schedules with `/every` or `/after`; manage Beats with
+  the commands above. If Copilot scheduling is unavailable the extension logs one
+  diagnostic and Beats stay saved but inert, so do not promise a firing you have not seen.
+
 ## Permissions, failures and lifecycle boundaries
 
 - Normal launches add **no tool grants**. Copilot may ask the human for native

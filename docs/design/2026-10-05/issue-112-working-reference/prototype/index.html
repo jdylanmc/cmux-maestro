@@ -23,7 +23,7 @@
         <h1>Maestro</h1>
         <div class="sidebar-heading-actions">
           <button id="open-directory-button" data-open-directory title="Open directory as new workspace" aria-label="Open directory as new workspace" aria-haspopup="dialog" aria-controls="directory-dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M8 13h8m-4-4v8"/></svg></button>
-          <button id="beats-button" data-open-tool="beats" title="Beats" aria-label="Beats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15 3v13"/><ellipse cx="11" cy="17" rx="4" ry="3" transform="rotate(-20 11 17)" fill="currentColor" stroke="none"/></svg></button>
+          <button id="beats-button" title="Beats" aria-label="Beats" aria-haspopup="dialog" aria-controls="beats-popover" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15 3v13"/><ellipse cx="11" cy="17" rx="4" ry="3" transform="rotate(-20 11 17)" fill="currentColor" stroke="none"/></svg></button>
           <button id="taskboard-button" data-open-tool="taskboard" title="Taskboard" aria-label="Taskboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg></button>
           <button id="history-button" title="History" aria-label="History" aria-haspopup="dialog" aria-controls="history-dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/></svg></button>
           <button id="maestro-settings-button" data-open-settings title="Maestro settings" aria-label="Maestro settings" aria-haspopup="dialog" aria-controls="settings-dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m10 3 4 0 .6 2.4 2 .9 2.2-.7 2 3.4-1.7 1.7v2.6l1.7 1.7-2 3.4-2.2-.7-2 .9L14 21h-4l-.6-2.4-2-.9-2.2.7-2-3.4 1.7-1.7v-2.6L3.2 9l2-3.4 2.2.7 2-.9z"/><circle cx="12" cy="12" r="3"/></svg></button>
@@ -46,10 +46,10 @@
         <div><span class="ledger-dot"></span><p><b>Tabs are destinations. Tasks are activity.</b> Identity icons belong to interactive tabs. Internal Copilot tasks stay connected beneath their parent as single lines: a green spinner while working, a quiet check when finished, a red cross on failure. Status words live in tooltips and accessible labels. Idle tasks hide; finished outcomes stay until dismissed. The eye reveals idle tasks, not cancelled, unknown or dismissed outcomes.</p></div>
         <div><span class="ledger-dot"></span><p><b>Worktree ≠ ancestry ≠ pane.</b> Reviewer shares the implementer's worktree, but has its own child. The coordinator's children span worktrees.</p></div>
         <div><span class="ledger-dot"></span><p><b>Placement is not ownership.</b> Drag tabs between the two panes, or use their Move button. This never changes worktree groups or spawn relationships.</p></div>
-        <div><span class="ledger-dot"></span><p><b>Views, not modes.</b> Beats and Taskboard open reusable content tabs. Move them between panes or workspaces; close and reopen them without changing agents or Beat definitions.</p></div>
-        <div><span class="ledger-dot"></span><p><b>A Beat is a cron prompt.</b> One exact agent, one cron expression, one prompt. Each Beat can wait once; another occurrence does not add another queued prompt. The wand builds an expression, not a second schedule.</p></div>
+        <div><span class="ledger-dot"></span><p><b>Views, not modes.</b> Taskboard opens a reusable content tab. Move it between panes or workspaces; close and reopen it without changing agents.</p></div>
+        <div><span class="ledger-dot"></span><p><b>Beats is a popover, not a tab.</b> The header music-note icon opens it directly beneath that icon, and it lights up while at least one Beat is on. A Beat is a recurring prompt for one exact open session: a session, a cron expression, a prompt, and an on/off switch. Each session schedules its own Beats through Copilot, so the session must be running. Times are your local time zone. There is no queue, no run-now and no delivery state.</p></div>
         <div><span class="ledger-dot"></span><p><b>Finished is not exited.</b> Open a finished chat to continue. Proposed “Exit session & close tab” is simulated here; active sessions require confirmation. No production graceful-exit capability is implied.</p></div>
-        <div><span class="ledger-dot"></span><p><b>Nothing here controls CMUX.</b> Diagnostics, Beats, tabs, and pets are synthetic. Beats adds a visual exploration of #42, not live scheduling or an expansion of the native delivery backlog. No prompts or commands are sent.</p></div>
+        <div><span class="ledger-dot"></span><p><b>Nothing here controls CMUX.</b> Diagnostics, Beats, tabs, and pets are synthetic. Beats reproduces the shipped popover for review only; this page runs no scheduler and sends no prompts or commands.</p></div>
         <footer><a href="https://github.com/jdylanmc/cmux-maestro/issues/131" target="_blank" rel="noreferrer">Internal tasks #131</a><a href="https://github.com/jdylanmc/cmux-maestro/issues/57" target="_blank" rel="noreferrer">Design parent #57 ↗</a><button id="capability-button">Research & capability notes</button></footer>
       </section>
     </section>
@@ -93,21 +93,8 @@
     <form id="tool-move-form">
       <label>Workspace<select id="tool-move-workspace"><option value="design">Maestro design</option><option value="scratch">Scratch space</option></select></label>
       <label>Pane<select id="tool-move-pane"><option value="1">Pane 1 · left</option><option value="2">Pane 2 · right</option></select></label>
-      <p class="muted">Move the view only. Agent targets and saved Beats stay unchanged.</p>
+      <p class="muted">Move the view only. Agent sessions stay unchanged.</p>
       <div class="button-row"><button type="button" data-close="tool-move-dialog">Cancel</button><button type="submit" class="primary">Move tab</button></div>
-    </form>
-  </dialog>
-  <dialog id="cron-dialog" class="settings-dialog compact-dialog" aria-labelledby="cron-title">
-    <header><div><h2 id="cron-title">Build a cron expression</h2><p class="muted">Friendly controls. One expression.</p></div><button data-close="cron-dialog" aria-label="Close cron builder">×</button></header>
-    <form id="cron-form">
-      <label>Repeat<select id="cron-frequency"><option value="minutes">Every few minutes</option><option value="hourly">Every hour</option><option value="daily">Every day</option><option value="weekdays">Weekdays</option><option value="weekly">Every week</option></select></label>
-      <label id="cron-interval-label">Minute step within each hour<input id="cron-interval" type="number" min="1" max="59" value="15" required></label>
-      <label id="cron-minute-label" hidden>Minute of the hour<input id="cron-minute" type="number" min="0" max="59" value="0"></label>
-      <label id="cron-time-label" hidden>Time · UTC<input id="cron-time" type="time" value="09:00"></label>
-      <label id="cron-weekday-label" hidden>Day<select id="cron-weekday"><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="0">Sunday</option></select></label>
-      <output id="cron-preview" class="cron-preview" aria-live="polite"></output>
-      <p class="muted">UTC is a prototype convention, not a settled timezone policy. Applying this only fills the editor; save the Beat to keep it.</p>
-      <div class="button-row"><button type="button" data-close="cron-dialog">Cancel</button><button type="submit" class="primary">Use expression</button></div>
     </form>
   </dialog>
   <dialog id="tag-color-dialog" class="settings-dialog compact-dialog" aria-labelledby="tag-color-title">
@@ -153,8 +140,8 @@
       <li>Codex documents pets and a custom sprite contract. Built-in artwork redistribution permission is unverified. The default Maestro robot-head pet is an original bundled asset; the other three pets are original geometric placeholders. Catalog artwork rights stay unverified, and agent-made pets are session-scoped until saved.</li>
       <li>Proposed Dismiss exits a session and closes its tab. Current production archive refuses live/uncertain interactive sessions and retains tabs after exit; current history Dismiss only hides records. Adapter close() is not agent exit. Reopening a chat after actual exit is not implemented.</li>
       <li>Observed provider children have no individual surface/worktree identity; parent-chat fallback is not an independent child chat, pet, or exit capability.</li>
-      <li>Beats is a synthetic extension to this prototype only. There is no live scheduler, provider connection, prompt delivery, or shell-command support. The demo uses numeric five-field cron in UTC; production timezone, persistence, offline catch-up, permissions, and delivery integration remain open.</li>
-      <li>Beats and Taskboard use simulated reusable tabs. Closing or moving a view preserves Beat definitions and exact agent targets. Pause stops future simulated occurrences; a queued occurrence remains visible until delivered or explicitly cancelled. These interactions are candidates for human review, not shipped behavior.</li>
+      <li>Beats here mirrors the shipped native popover with synthetic data only. There is no scheduler, provider connection, prompt delivery, or shell-command support in this page; in the real app Copilot's own scheduler runs each Beat inside its session. Cron is numeric five-field (minute, hour, day-of-month, month, weekday; 7 is Sunday; lists, ranges and steps; no names or macros), evaluated in your local time zone. Limits: 4096 prompt bytes, 16 Beats per session, 256 in total.</li>
+      <li>Beats is a popover anchored to its header icon (close with × or by clicking away); it has no tab to move or close. A Beat is simply on or off: Pause and Resume only flip that switch, and there is no queue, run-now, simulator, or delivery-availability state. Taskboard remains an exploratory reusable tab; closing or moving it never changes agents.</li>
       <li>Sidebar units reorder among siblings only: workspaces, worktree groups, agent trees, panes, and individual rows. Groups carry their children. Drop lines show before/after placement; cross-container drops are rejected. Option+Up/Down offers the same reorder from a focused row or heading. Identity, ancestry, focus, and preferences stay unchanged.</li>
       <li>Tag colors are deterministic from normalized slugs and shared across the prototype. Human swatch overrides apply everywhere; agents only assign tags. Black or white chip text is selected for at least 4.5:1 contrast. Shared storage and agent-facing enforcement in the real app remain implementation work.</li>
     </ul>
@@ -162,6 +149,13 @@
     <p><a href="https://github.com/manaflow-ai/cmux/blob/f11bd6142d476ae9dfe00b094198664cb924b38b/docs/custom-sidebars.md" target="_blank" rel="noreferrer">CMUX native sidebar research ↗</a></p>
     <p><a href="https://learn.chatgpt.com/docs/pets?surface=app" target="_blank" rel="noreferrer">Official pet documentation ↗</a></p>
   </dialog>
+  <div id="beats-popover" class="beats-popover" role="dialog" aria-labelledby="beats-title" hidden>
+    <span class="beats-arrow" aria-hidden="true"></span>
+    <header><h2 id="beats-title">Beats</h2><button data-beats-close aria-label="Close Beats">×</button></header>
+    <p id="beats-caption" class="beats-caption">Recurring prompts for exact agent sessions. Each session schedules its own through Copilot, so the session must be running.</p>
+    <div id="beats-body"></div>
+    <footer class="beats-footer">Synthetic prototype · nothing is scheduled and no real prompts are sent.</footer>
+  </div>
   <div id="notice" role="status" aria-live="polite"></div>
   <script src="beats.js"></script>
   <script src="app.js"></script>

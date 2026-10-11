@@ -106,7 +106,8 @@ nonisolated struct CopilotHookRecorder {
     }
 
     func record(
-        payload: Data, environment: [String: String], appearance: CopilotSessionAppearance? = nil
+        payload: Data, environment: [String: String], appearance: CopilotSessionAppearance? = nil,
+        verifyOnly: Bool = false
     ) -> HookOutcome {
         guard !Self.isDisabled(environment) else { return .disabled }
         guard payload.count <= 65_536,
@@ -169,7 +170,7 @@ nonisolated struct CopilotHookRecorder {
                 guard let (existing, _) = try? CopilotFileAccess.readIdentity(
                     at: bindings, filename: name, owner: own.uid
                 ) else { return diagnose(.superseded) }
-                if appearance != nil {
+                if appearance != nil || verifyOnly {
                     guard existing.sessionID == session, existing.surfaceID == surface,
                           existing.launchWorkspaceID == workspace, owner.owns(existing) else {
                         return diagnose(.noOwner)
@@ -186,7 +187,7 @@ nonisolated struct CopilotHookRecorder {
                 case .dead: break
                 }
             } else {
-                if appearance != nil { return diagnose(.noOwner) }
+                if appearance != nil || verifyOnly { return diagnose(.noOwner) }
                 if errno != ENOENT { return diagnose(.unavailable) }
             }
 
@@ -203,6 +204,8 @@ nonisolated struct CopilotHookRecorder {
                   try verifier.verifyStable(proof, record: record, sessionDirectory: currentSource).status == .alive,
                   ancestors.allSatisfy({ process($0.pid) == .found($0) }) else { return diagnose(.noOwner) }
 
+            // Ownership proof for callers that change something else (for example Beats): no write.
+            if verifyOnly { return .recorded }
             if let appearance {
                 let appearanceName = "appearance-\(session.uuidString.lowercased()).json"
                 var selected = appearance

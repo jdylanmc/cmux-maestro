@@ -371,8 +371,7 @@ enum SidebarHeaderAction: String, CaseIterable, Identifiable {
     var unavailable: String? {
         switch self {
         case .directory: "CMUX did not open the directory as a workspace. Grant Maestro the workspace-creation permission in CMUX and try again."
-        case .beats: "Beats scheduling is not available. No schedule has been created."
-        case .taskboard, .history, .settings: nil
+        case .taskboard, .history, .settings, .beats: nil
         }
     }
 }
@@ -380,7 +379,20 @@ enum SidebarHeaderAction: String, CaseIterable, Identifiable {
 struct SidebarHeader: View {
     let taskboardActive: Bool
     var availability: SidebarOrchestrationAvailability = .ready
+    var presented: SidebarHeaderAction? = nil
+    var dismissPopover: () -> Void = {}
+    var popoverContent: () -> AnyView = { AnyView(EmptyView()) }
     let activate: (SidebarHeaderAction) -> Void
+
+    private func isPresented(_ action: SidebarHeaderAction) -> Binding<Bool> {
+        Binding(get: { presented == action }, set: { if !$0 { dismissPopover() } })
+    }
+
+    private let beats = SidebarBeatsController.shared
+
+    private func lit(_ action: SidebarHeaderAction) -> Bool {
+        action == .beats && beats.beats.contains { $0.enabled }
+    }
 
     var body: some View {
         HStack(spacing: 2) {
@@ -411,6 +423,8 @@ struct SidebarHeader: View {
                         Button { activate(action) } label: {
                             VStack(spacing: 2) {
                                 Image(systemName: action.symbol).font(.system(size: 14))
+                                    .foregroundStyle(lit(action) ? Color.accentColor : Color.primary)
+                                    .shadow(color: lit(action) ? Color.accentColor.opacity(0.55) : .clear, radius: 4)
                                     .frame(height: 18)
                                 Capsule().fill(Color.clear).frame(width: 12, height: 2)
                             }
@@ -421,10 +435,17 @@ struct SidebarHeader: View {
                         .help(action.unavailable.map { "\(action.title). \($0)" } ?? action.title)
                         .accessibilityLabel(action.title)
                         .accessibilityIdentifier("sidebar-header-\(action.rawValue)")
+                        .popover(isPresented: isPresented(action)) { popoverContent() }
                     }
                 }
             }
             .fixedSize()
+        }
+        .task {
+            while !Task.isCancelled {
+                beats.refresh()
+                try? await Task.sleep(for: .seconds(3))
+            }
         }
     }
 }
@@ -437,6 +458,7 @@ struct SidebarView: View {
     // Mutation freshness is independent of the display-only presentation clock.
     private let actionNow: () -> Date
     @State private var showingHistory = false
+    @State private var showingBeats = false
     @State private var settingsStartInHistory = false
     @State private var unavailableHeaderAction: SidebarHeaderAction?
     @State private var inspector: SidebarInspection?
@@ -521,6 +543,19 @@ struct SidebarView: View {
         }, set: { if let selection = $0 { inspect(selection) } })
     }
 
+    /// Live agent sessions the human may target, titled by their terminal tab.
+    private var beatTargets: [SidebarBeatTarget] {
+        var titles: [UUID: String] = [:]
+        for workspace in model.hierarchy.workspaces {
+            if case .available(let surfaces) = workspace.surfaces {
+                for surface in surfaces { titles[surface.id] = surface.title }
+            }
+        }
+        return model.copilot.tree.sessions
+            .filter { $0.liveness == .alive }
+            .map { SidebarBeatTarget(id: $0.id, title: titles[$0.surfaceID] ?? "Copilot \($0.shortID)", live: true) }
+    }
+
     private func openDirectoryAsWorkspace() {
         guard let open = model.openWorkspaceAtPath else {
             unavailableHeaderAction = .directory
@@ -538,39 +573,63 @@ struct SidebarView: View {
         }
     }
 
+    private var presentedHeaderAction: SidebarHeaderAction? {
+        if showingBeats { return .beats }
+        if showingHistory { return settingsStartInHistory ? .history : .settings }
+        return unavailableHeaderAction
+    }
+
+    @ViewBuilder private var headerPopover: some View {
+        if showingHistory {
+            historySettings
+        } else if showingBeats {
+            SidebarBeatsPanel(targets: beatTargets) { showingBeats = false }
+        } else if let action = unavailableHeaderAction, let reason = action.unavailable {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(action.title).font(.headline)
+                Text(reason).font(.callout).fixedSize(horizontal: false, vertical: true)
+                Button("Close") { unavailableHeaderAction = nil }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(14)
+            .frame(width: 260)
+        }
+    }
+
+    private func activateHeader(_ action: SidebarHeaderAction) {
+        switch action {
+        case .directory: openDirectoryAsWorkspace()
+        case .beats: showingBeats = true
+        case .taskboard:
+            preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
+        case .history, .settings:
+            settingsStartInHistory = action == .history
+            showingHistory = true
+        }
+    }
+
+    private func dismissHeaderPopover() {
+        showingHistory = false
+        showingBeats = false
+        unavailableHeaderAction = nil
+    }
+
+    private var headerBar: some View {
+        SidebarHeader(
+            taskboardActive: preferences.selectedMode == .taskboard,
+            availability: model.orchestration.availability,
+            presented: presentedHeaderAction,
+            dismissPopover: dismissHeaderPopover,
+            popoverContent: { AnyView(headerPopover) },
+            activate: activateHeader
+        )
+        .padding(.top, 6)
+        .padding(.bottom, 8)
+    }
+
     private func content(pinnedHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: preferences.layout.density.spacing(6)) {
-            SidebarHeader(taskboardActive: preferences.selectedMode == .taskboard,
-                          availability: model.orchestration.availability) { action in
-                switch action {
-                case .directory: openDirectoryAsWorkspace()
-                case .beats: unavailableHeaderAction = action
-                case .taskboard:
-                    preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
-                case .history, .settings:
-                    settingsStartInHistory = action == .history
-                    showingHistory = true
-                }
-            }
-            .padding(.top, 6)
-            .padding(.bottom, 8)
-            .popover(isPresented: Binding(
-                get: { showingHistory || unavailableHeaderAction != nil },
-                set: { if !$0 { showingHistory = false; unavailableHeaderAction = nil } }
-            )) {
-                if showingHistory {
-                    historySettings
-                } else if let action = unavailableHeaderAction, let reason = action.unavailable {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(action.title).font(.headline)
-                        Text(reason).font(.callout).fixedSize(horizontal: false, vertical: true)
-                        Button("Close") { unavailableHeaderAction = nil }
-                            .keyboardShortcut(.cancelAction)
-                    }
-                    .padding(14)
-                    .frame(width: 260)
-                }
-            }
+            headerBar
             if model.orchestration.availability == .unavailable {
                 Label("Managed orchestration evidence is unavailable.", systemImage: "exclamationmark.circle")
                     .font(.caption2).foregroundStyle(.secondary)
@@ -704,21 +763,7 @@ struct SidebarView: View {
             preferences.refreshLayout()
             if let owner = dismissedTaskOwner {
                 dismissedTaskOwner = nil
-                DispatchQueue.main.async {
-                    let work = visibleWork
-                    let native = preferences.selectedMode == .hierarchy
-                    let ownerVisible = native
-                        ? SidebarTopology(model.hierarchy).workspaceBySurface[owner.surface] == owner.workspace
-                        : work.tree.sessions.contains { $0.surfaceID == owner.surface && $0.workspaceID == owner.workspace }
-                            || work.managed.contains { $0.surfaceId == owner.surface && $0.workspaceId == owner.workspace }
-                    let workspaceVisible = native || work.managed.contains { $0.workspaceId == owner.workspace }
-                    taskFocusNotice = localFocus.restore(
-                        surfaceID: owner.surface, workspaceID: owner.workspace,
-                        ownerVisible: ownerVisible, workspaceVisible: workspaceVisible,
-                        sessionID: work.tree.sessions.contains { $0.id == owner.session } ? owner.session : nil
-                    )
-                        ? nil : "The outcome was hidden, but local keyboard focus could not be restored. Tab to the sidebar controls."
-                }
+                DispatchQueue.main.async { restoreFocus(afterDismissing: owner) }
             }
         }
         .onChange(of: inspectorDetails == nil) { _, unavailable in
@@ -734,6 +779,27 @@ struct SidebarView: View {
             }
         }
         .onDisappear { model.setVisible(false) }
+    }
+
+    private func restoreFocus(afterDismissing owner: (session: UUID, surface: UUID, workspace: UUID)) {
+        let work = visibleWork
+        let native = preferences.selectedMode == .hierarchy
+        let ownerVisible: Bool
+        if native {
+            ownerVisible = SidebarTopology(model.hierarchy).workspaceBySurface[owner.surface] == owner.workspace
+        } else {
+            let inTree = work.tree.sessions.contains { $0.surfaceID == owner.surface && $0.workspaceID == owner.workspace }
+            let inManaged = work.managed.contains { $0.surfaceId == owner.surface && $0.workspaceId == owner.workspace }
+            ownerVisible = inTree || inManaged
+        }
+        let workspaceVisible = native || work.managed.contains { $0.workspaceId == owner.workspace }
+        let session: UUID? = work.tree.sessions.contains { $0.id == owner.session } ? owner.session : nil
+        let restored = localFocus.restore(
+            surfaceID: owner.surface, workspaceID: owner.workspace,
+            ownerVisible: ownerVisible, workspaceVisible: workspaceVisible, sessionID: session
+        )
+        taskFocusNotice = restored
+            ? nil : "The outcome was hidden, but local keyboard focus could not be restored. Tab to the sidebar controls."
     }
 
     @ViewBuilder private var outlineContent: some View {
@@ -2741,7 +2807,7 @@ private struct ActivityCaption: View {
     }
 }
 
-private struct SidebarCloseButton: View {
+struct SidebarCloseButton: View {
     let label: String
     let id: String
     let action: () -> Void

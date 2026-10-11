@@ -51,6 +51,21 @@ struct CopilotHookTests: Sendable {
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("Orchestration").path))
     }
 
+    @Test func verifyOnlyProofNeedsExistingBindingAndWritesNothing() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).record(payload: payload, environment: environment, verifyOnly: true) == .noOwner)
+        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        let before = try binding(root)
+        #expect(recorder(root).record(payload: payload, environment: environment, verifyOnly: true) == .recorded)
+        #expect(try binding(root) == before)
+        let appearance = root.appendingPathComponent("integration/bindings/appearance-\(session.uuidString.lowercased()).json")
+        #expect(!FileManager.default.fileExists(atPath: appearance.path))
+        let different = environment.merging(["CMUX_SURFACE_ID": UUID().uuidString]) { _, value in value }
+        #expect(recorder(root).record(payload: payload, environment: different, verifyOnly: true) == .noOwner)
+    }
+
     @Test func ownSessionAppearanceRejectsDifferentSurfaceInvalidColorAndUncertainOwner() throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -347,6 +362,8 @@ struct CopilotHookTests: Sendable {
         #expect(grants.allSatisfy { $0.hasPrefix("/") && $0.hasSuffix("/") })
         #expect(plist["com.apple.security.app-sandbox"] as? Bool == true)
         #expect(plist["com.apple.security.files.user-selected.read-only"] as? Bool == true)
-        #expect(plist.count == 3)
+        let writes = try #require(plist["com.apple.security.temporary-exception.files.home-relative-path.read-write"] as? [String])
+        #expect(writes == ["/Library/Application Support/CMUXMaestroPreview/Beats/"])
+        #expect(plist.count == 4)
     }
 }
