@@ -1072,7 +1072,7 @@ with installer.locked():
         (app / "signatures.json").write_text(json.dumps({
             "app": signature("", {}),
             "extension": signature(".Extension", profile if profile is not None else {
-                metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS,
+                metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS, metadata.WRITE_KEY: metadata.WRITE_PATHS,
             }),
             "helper": signature(".CopilotHook", {
                 "com.apple.application-identifier": metadata.BASE_ID + ".CopilotHook",

@@ -84,6 +84,8 @@
 		D12700000000000000000001 /* SidebarPreferenceStore.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = D12700000000000000000002; };
 		C0A200000000000000000001 /* SidebarPetStore.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0A200000000000000000002; };
 		C0A200000000000000000003 /* SidebarPetViews.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0A200000000000000000004; };
+		C0A300000000000000000001 /* SidebarBeatsModel.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0A300000000000000000002; };
+		C0A300000000000000000003 /* SidebarBeatsViews.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0A300000000000000000004; };
 		D11400000000000000000001 /* SidebarPresentation.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = D11400000000000000000002; };
 		D10400000000000000000002 /* SidebarConnectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10400000000000000000004 /* SidebarConnectionState.swift */; };
 /* End PBXBuildFile section */
@@ -201,6 +203,8 @@
 		D12700000000000000000002 /* SidebarPreferenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarPreferenceStore.swift; sourceTree = SOURCE_ROOT; };
 		C0A200000000000000000002 /* SidebarPetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarPetStore.swift; sourceTree = SOURCE_ROOT; };
 		C0A200000000000000000004 /* SidebarPetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarPetViews.swift; sourceTree = SOURCE_ROOT; };
+		C0A300000000000000000002 /* SidebarBeatsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarBeatsModel.swift; sourceTree = SOURCE_ROOT; };
+		C0A300000000000000000004 /* SidebarBeatsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarBeatsViews.swift; sourceTree = SOURCE_ROOT; };
 		D11400000000000000000002 /* SidebarPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarPresentation.swift; sourceTree = SOURCE_ROOT; };
 		D10400000000000000000004 /* SidebarConnectionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Connection/SidebarConnectionState.swift; sourceTree = SOURCE_ROOT; };
 		D10500000000000000000004 /* HierarchySnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Hierarchy/HierarchySnapshot.swift; sourceTree = SOURCE_ROOT; };
@@ -370,6 +374,8 @@
 				D12700000000000000000002 /* SidebarPreferenceStore.swift */,
 				C0A200000000000000000002 /* SidebarPetStore.swift */,
 				C0A200000000000000000004 /* SidebarPetViews.swift */,
+				C0A300000000000000000002 /* SidebarBeatsModel.swift */,
+				C0A300000000000000000004 /* SidebarBeatsViews.swift */,
 				D11400000000000000000002 /* SidebarPresentation.swift */,
 				D10400000000000000000004 /* SidebarConnectionState.swift */,
 				D10500000000000000000004 /* HierarchySnapshot.swift */,
@@ -657,6 +663,8 @@
 				D12700000000000000000001 /* SidebarPreferenceStore.swift in Test Sources */,
 				C0A200000000000000000001 /* SidebarPetStore.swift in Test Sources */,
 				C0A200000000000000000003 /* SidebarPetViews.swift in Test Sources */,
+				C0A300000000000000000001 /* SidebarBeatsModel.swift in Test Sources */,
+				C0A300000000000000000003 /* SidebarBeatsViews.swift in Test Sources */,
 				D11400000000000000000001 /* SidebarPresentation.swift in Test Sources */,
 				D10400000000000000000002 /* SidebarConnectionState.swift in Sources */,
 				D10500000000000000000001 /* HierarchySnapshot.swift in Sources */,

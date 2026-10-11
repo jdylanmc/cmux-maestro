@@ -85,6 +85,27 @@ class CronTests(LocalTimeCase):
                          ["2026-10-12 09:30", "2026-10-13 09:30", "2026-10-14 09:30"])
 
 
+FIXTURES = REPO / "scripts" / "test-fixtures"
+
+
+class SharedFixtureTests(unittest.TestCase):
+    """The same fixtures are decoded by the Swift sidebar tests (SidebarBeatsTests)."""
+
+    def test_cron_cases(self):
+        cases = json.loads((FIXTURES / "beats-cron-cases.json").read_text())
+        for expression, normalized in cases["valid"]:
+            self.assertEqual(parse_cron(expression).expression, normalized, repr(expression))
+        for expression in cases["invalid"]:
+            with self.assertRaises(OrchestrationError, msg=repr(expression)):
+                parse_cron(expression)
+
+    def test_store_sample_is_valid_and_round_trips(self):
+        raw = (FIXTURES / "beats-store-sample.json").read_text()
+        state = json.loads(raw)
+        API["validate_beats_state"](state)
+        self.assertEqual(json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n", raw)
+
+
 class DaylightSavingTests(LocalTimeCase):
     def simulate(self, cron, start, end):
         state = {"version": 1, "beats": [beat(cron)]}

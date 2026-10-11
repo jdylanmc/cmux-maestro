@@ -25,8 +25,10 @@ READ_PATHS = [
     ORCHESTRATION_READ_PATH,
     "/.copilot/session-state/",
 ]
+WRITE_PATHS = ["/Library/Application Support/CMUXMaestroPreview/Beats/"]
 SANDBOX_KEY = "com.apple.security.app-sandbox"
 READ_KEY = "com.apple.security.temporary-exception.files.home-relative-path.read-only"
+WRITE_KEY = "com.apple.security.temporary-exception.files.home-relative-path.read-write"
 USER_SELECTED_KEY = "com.apple.security.files.user-selected.read-only"
 GUIDE_HOST = "CMUXMaestroGuideUIHost"
 GUIDE_TESTS = "CMUXMaestroGuideUITests"
@@ -65,7 +67,8 @@ def plist(path):
 def verify_profile(profile):
     require(profile.get(SANDBOX_KEY) is True, "Sidebar must have effective App Sandbox.")
     require(profile.get(READ_KEY) == READ_PATHS, "Sidebar read-only grants differ from the approved prefixes.")
-    require(set(profile) <= {SANDBOX_KEY, READ_KEY, USER_SELECTED_KEY, "com.apple.security.get-task-allow"},
+    require(profile.get(WRITE_KEY) == WRITE_PATHS, "Sidebar read-write grant differs from the approved Beats store.")
+    require(set(profile) <= {SANDBOX_KEY, READ_KEY, WRITE_KEY, USER_SELECTED_KEY, "com.apple.security.get-task-allow"},
             "Unexpected sidebar entitlement.")
     require(profile.get(USER_SELECTED_KEY, True) is True, "User-selected access must be read-only.")
 
@@ -349,7 +352,8 @@ def verify_local_preview(app, *, current=True, runner=subprocess.run):
                         and set(paths) <= set(READ_PATHS), "Rollback expands approved read-only access.")
                 if ORCHESTRATION_READ_PATH in paths:
                     verify_orchestration_resources(app)
-                require(set(profile) <= {SANDBOX_KEY, READ_KEY, USER_SELECTED_KEY, "com.apple.security.get-task-allow"},
+                require(profile.get(WRITE_KEY, WRITE_PATHS) == WRITE_PATHS, "Rollback expands approved read-write access.")
+                require(set(profile) <= {SANDBOX_KEY, READ_KEY, WRITE_KEY, USER_SELECTED_KEY, "com.apple.security.get-task-allow"},
                         "Unknown rollback sidebar entitlement.")
         else:
             allowed = {"com.apple.security.get-task-allow"}

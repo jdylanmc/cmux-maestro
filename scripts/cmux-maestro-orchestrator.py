@@ -4094,7 +4094,7 @@ BEATS_FIELDS = frozenset((
     "lastFiredMinute", "createdAt", "updatedAt", "revision",
 ))
 CRON_FIELD_RANGES = (("minute", 0, 59), ("hour", 0, 23), ("day", 1, 31), ("month", 1, 12), ("weekday", 0, 7))
-CRON_ITEM = re.compile(r"^(\*|\d{1,2}(?:-\d{1,2})?)(?:/(\d{1,2}))?$")
+CRON_ITEM = re.compile(r"^(\*|[0-9]{1,2}(?:-[0-9]{1,2})?)(?:/([0-9]{1,2}))?$")
 DAYS_IN_MONTH = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 
 
@@ -4103,7 +4103,7 @@ class CronSpec:
 
     def __init__(self, expression):
         self.expression = expression
-        fields = expression.split()
+        fields = re.split(r"[ \t]+", expression.strip(" \t"))
         sets, stars = [], []
         for text, (name, low, high) in zip(fields, CRON_FIELD_RANGES):
             values = set()
@@ -4160,9 +4160,9 @@ def parse_cron(expression):
     if not isinstance(expression, str) or not expression.strip() or len(expression) > 100 \
             or any(ord(character) < 32 and character not in "\t" for character in expression):
         raise OrchestrationError("Cron must be five space-separated numeric fields: minute hour day month weekday.")
-    if len(expression.split()) != 5:
+    if len(re.split(r"[ \t]+", expression.strip(" \t"))) != 5:
         raise OrchestrationError("Cron must have exactly five fields: minute hour day-of-month month weekday.")
-    return CronSpec(" ".join(expression.split()))
+    return CronSpec(" ".join(re.split(r"[ \t]+", expression.strip(" \t"))))
 
 
 def local_minute_key(epoch):

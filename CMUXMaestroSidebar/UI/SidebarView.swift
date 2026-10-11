@@ -371,8 +371,7 @@ enum SidebarHeaderAction: String, CaseIterable, Identifiable {
     var unavailable: String? {
         switch self {
         case .directory: "CMUX did not open the directory as a workspace. Grant Maestro the workspace-creation permission in CMUX and try again."
-        case .beats: "Beats scheduling is not available. No schedule has been created."
-        case .taskboard, .history, .settings: nil
+        case .taskboard, .history, .settings, .beats: nil
         }
     }
 }
@@ -437,6 +436,7 @@ struct SidebarView: View {
     // Mutation freshness is independent of the display-only presentation clock.
     private let actionNow: () -> Date
     @State private var showingHistory = false
+    @State private var showingBeats = false
     @State private var settingsStartInHistory = false
     @State private var unavailableHeaderAction: SidebarHeaderAction?
     @State private var inspector: SidebarInspection?
@@ -521,6 +521,19 @@ struct SidebarView: View {
         }, set: { if let selection = $0 { inspect(selection) } })
     }
 
+    /// Live agent sessions the human may target, titled by their terminal tab.
+    private var beatTargets: [SidebarBeatTarget] {
+        var titles: [UUID: String] = [:]
+        for workspace in model.hierarchy.workspaces {
+            if case .available(let surfaces) = workspace.surfaces {
+                for surface in surfaces { titles[surface.id] = surface.title }
+            }
+        }
+        return model.copilot.tree.sessions
+            .filter { $0.liveness == .alive }
+            .map { SidebarBeatTarget(id: $0.id, title: titles[$0.surfaceID] ?? "Copilot \($0.shortID)", live: true) }
+    }
+
     private func openDirectoryAsWorkspace() {
         guard let open = model.openWorkspaceAtPath else {
             unavailableHeaderAction = .directory
@@ -544,7 +557,7 @@ struct SidebarView: View {
                           availability: model.orchestration.availability) { action in
                 switch action {
                 case .directory: openDirectoryAsWorkspace()
-                case .beats: unavailableHeaderAction = action
+                case .beats: showingBeats = true
                 case .taskboard:
                     preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
                 case .history, .settings:
@@ -555,11 +568,13 @@ struct SidebarView: View {
             .padding(.top, 6)
             .padding(.bottom, 8)
             .popover(isPresented: Binding(
-                get: { showingHistory || unavailableHeaderAction != nil },
-                set: { if !$0 { showingHistory = false; unavailableHeaderAction = nil } }
+                get: { showingHistory || showingBeats || unavailableHeaderAction != nil },
+                set: { if !$0 { showingHistory = false; showingBeats = false; unavailableHeaderAction = nil } }
             )) {
                 if showingHistory {
                     historySettings
+                } else if showingBeats {
+                    SidebarBeatsPanel(targets: beatTargets) { showingBeats = false }
                 } else if let action = unavailableHeaderAction, let reason = action.unavailable {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(action.title).font(.headline)
@@ -2741,7 +2756,7 @@ private struct ActivityCaption: View {
     }
 }
 
-private struct SidebarCloseButton: View {
+struct SidebarCloseButton: View {
     let label: String
     let id: String
     let action: () -> Void

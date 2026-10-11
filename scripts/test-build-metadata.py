@@ -868,7 +868,7 @@ class BuildMetadataTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(destination.exists())
 
-    def test_ci_preserves_all_fourteen_validation_commands_without_new_conditions(self):
+    def test_ci_preserves_all_fifteen_validation_commands_without_new_conditions(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
         self.assertEqual(re.findall(r"^        run: (.+)$", workflow, re.MULTILINE), [
@@ -876,6 +876,7 @@ class BuildMetadataTests(unittest.TestCase):
             "node scripts/check-skill-overrides.mjs",
             "python3 scripts/test-joe-role-appearance.py",
             "python3 scripts/test-cmux-maestro-orchestrator.py",
+            "python3 scripts/test-beats.py",
             "python3 scripts/test-delivery-proof.py",
             "node --test scripts/test-delivery-proof.mjs",
             "python3 scripts/test-build-metadata.py",
@@ -889,7 +890,7 @@ class BuildMetadataTests(unittest.TestCase):
         ])
         steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
         run_steps = [step for step in steps if "\n        run:" in step]
-        self.assertEqual(len(run_steps), 14)
+        self.assertEqual(len(run_steps), 15)
         for step in run_steps:
             self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
         self.assertNotIn("continue-on-error", workflow)
@@ -1061,10 +1062,12 @@ class BuildMetadataTests(unittest.TestCase):
                     metadata.verify_metadata(self.app, "tests")
 
     def test_effective_sandbox_and_prefixes_are_required(self):
-        good = {metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS}
+        good = {metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS, metadata.WRITE_KEY: metadata.WRITE_PATHS}
         metadata.verify_profile(good)
         for invalid in (
             {metadata.READ_KEY: metadata.READ_PATHS},
+            {metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS},
+            {**good, metadata.WRITE_KEY: ["/Library/Application Support/CMUXMaestroPreview/"]},
             {**good, metadata.SANDBOX_KEY: False},
             {**good, metadata.READ_KEY: [path.lstrip("/") for path in metadata.READ_PATHS]},
             {**good, "com.apple.security.network.client": True},
@@ -1086,7 +1089,7 @@ class BuildMetadataTests(unittest.TestCase):
         helper.parent.mkdir()
         helper.write_bytes(b"synthetic")
         helper.chmod(0o700)
-        good = {metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS}
+        good = {metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS, metadata.WRITE_KEY: metadata.WRITE_PATHS}
 
         def signed(command, **_):
             if "--verbose=4" in command:
