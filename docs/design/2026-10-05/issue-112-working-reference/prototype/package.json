@@ -2,8 +2,9 @@
   "name": "maestro-cosmetic-prototype",
   "private": true,
   "scripts": {
-    "test": "node verify-copy.cjs && node verify-issue-112.cjs && node verify-stress.cjs",
+    "test": "node verify-copy.cjs && node verify-issue-112.cjs && node verify-beats.cjs && node verify-stress.cjs",
     "test:copy": "node verify-copy.cjs",
+    "test:beats": "node verify-beats.cjs",
     "test:stress": "node verify-stress.cjs",
     "test:issue-112": "node verify-issue-112.cjs"
   },

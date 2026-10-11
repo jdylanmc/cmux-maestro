@@ -110,6 +110,31 @@ private func setOwnAppearance() -> Int32 {
     return outcome == .recorded ? 0 : 2
 }
 
+private func proveOwnSession() -> Int32 {
+    let arguments = Array(CommandLine.arguments.dropFirst(2))
+    guard arguments.count == 2, arguments[0] == "--session-id",
+          let session = CopilotHookRecorder.canonicalUUID(arguments[1]),
+          let root = try? CopilotPaths.integrationRoot(), let sessions = try? CopilotPaths.sessionStateRoot()
+    else { return 2 }
+    let recorder = CopilotHookRecorder(
+        integrationRoot: root, sessionStateRoot: sessions, processID: getpid(),
+        process: { @Sendable pid in CopilotProcessProbe.read(pid) }
+    )
+    guard let payload = try? JSONSerialization.data(withJSONObject: ["sessionId": session.uuidString]) else { return 2 }
+    let outcome = recorder.record(payload: payload, environment: ProcessInfo.processInfo.environment, verifyOnly: true)
+    let result: [String: Any] = ["ok": outcome == .recorded, "status": outcome.rawValue, "sessionId": session.uuidString]
+    guard let encoded = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) else { return 2 }
+    FileHandle.standardOutput.write(encoded + Data([10]))
+    return outcome == .recorded ? 0 : 2
+}
+
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "prove" {
+    #if CMUX_VALIDATION || MAESTRO_HOOK_TESTING
+    exit(2)
+    #else
+    exit(proveOwnSession())
+    #endif
+}
 if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "icon" {
     #if CMUX_VALIDATION || MAESTRO_HOOK_TESTING
     exit(2)

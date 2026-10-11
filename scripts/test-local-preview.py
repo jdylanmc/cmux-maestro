@@ -1072,7 +1072,7 @@ with installer.locked():
         (app / "signatures.json").write_text(json.dumps({
             "app": signature("", {}),
             "extension": signature(".Extension", profile if profile is not None else {
-                metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS,
+                metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS, metadata.WRITE_KEY: metadata.WRITE_PATHS,
             }),
             "helper": signature(".CopilotHook", {
                 "com.apple.application-identifier": metadata.BASE_ID + ".CopilotHook",
@@ -1889,7 +1889,8 @@ with installer.locked():
     def test_rollback_validates_older_own_version_and_lower_privilege_profile(self):
         older = self.fixture("v1", "1", {metadata.SANDBOX_KEY: True})
         # Simulate an installation made by the previous version of this tool.
-        with patch.object(metadata, "APP_BUILD_VERSION", "1"), patch.object(metadata, "READ_PATHS", []):
+        with patch.object(metadata, "APP_BUILD_VERSION", "1"), patch.object(metadata, "READ_PATHS", []), \
+                patch.object(metadata, "WRITE_PATHS", None):
             signatures = json.loads((older / "signatures.json").read_text())
             signatures["extension"]["entitlements"][metadata.READ_KEY] = []
             (older / "signatures.json").write_text(json.dumps(signatures))
@@ -1918,9 +1919,8 @@ with installer.locked():
             kwargs["require_orchestration"] = False
             return verify_metadata(app, mode, **kwargs)
 
-        with patch.object(metadata, "READ_PATHS", previous_paths), patch.object(
-            metadata, "verify_metadata", side_effect=previous_metadata
-        ):
+        with patch.object(metadata, "READ_PATHS", previous_paths), patch.object(metadata, "WRITE_PATHS", None), \
+                patch.object(metadata, "verify_metadata", side_effect=previous_metadata):
             self.operation("install", legacy)
 
         self.assertIn("Verified installed preview", self.operation("status"))

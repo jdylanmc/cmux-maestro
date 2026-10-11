@@ -1,13 +1,17 @@
 "use strict";
 
 // Synthetic interaction model only: no scheduler, network, or provider connection.
+// Shipped model: Beats is a header popover; a Beat is simply on or off and Copilot runs it.
+const BEAT_LIMITS = { perSession: 16, total: 256, promptBytes: 4096 };
+const BEAT_PRESETS = [
+  ["*/5 * * * *", "Every 5 minutes"], ["*/15 * * * *", "Every 15 minutes"],
+  ["0 * * * *", "Hourly"], ["0 9 * * 1-5", "Weekdays at 9:00"]
+];
+
 function initialBeats() {
-  const seed = (id, agentId, prompt, cron, enabled = true) => ({
-    id, agentId, prompt, cron, enabled, pending: false, pendingSince: null,
-    lastAttempt: null, lastDelivered: null, deliveries: 0, skipped: 0, error: "", events: []
-  });
+  const seed = (id, agentId, prompt, cron, enabled = true) => ({ id, agentId, prompt, cron, enabled });
   return [
-    { ...seed("beat-review", "reviewer", "Review open pull requests. Summarize blockers and any changes that need my attention.", "*/10 * * * *"), pending: true, pendingSince: Date.UTC(2026, 8, 25, 19, 58) },
+    seed("beat-review", "reviewer", "Review open pull requests. Summarize blockers and any changes that need my attention.", "*/10 * * * *"),
     seed("beat-progress", "implementer", "Check progress against the current issue. Continue the next unblocked step.", "*/15 * * * *"),
     seed("beat-checks", "reviewer", "Check the latest CI results. Report new failures without retrying or merging anything.", "0 * * * *"),
     seed("beat-notes", "notes", "Review my project notes and suggest the next useful action.", "0 9 * * 1-5", false)
@@ -16,14 +20,14 @@ function initialBeats() {
 
 function parseCron(expression) {
   const parts = expression.trim().split(/\s+/);
-  if (parts.length !== 5) throw new Error("Use five fields: minute, hour, day, month, weekday.");
+  if (parts.length !== 5) throw new Error("Use five fields: minute, hour, day-of-month, month, weekday.");
   const bounds = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
   const fields = parts.map((field, index) => {
     if (field.length > 80) throw new Error("That cron field is too long for this prototype.");
     const [min, max] = bounds[index], values = new Set();
     for (const term of field.split(",")) {
       const match = /^(\*|\d+(?:-\d+)?)(?:\/([1-9]\d*))?$/.exec(term);
-      if (!match) throw new Error("Use numeric fields, *, ranges, lists, or / steps. Names and seconds are not supported in this demo.");
+      if (!match) throw new Error("Use numeric fields, *, ranges, lists, or / steps. Names and macros are not supported.");
       const step = match[2] ? Number(match[2]) : 1;
       let start = min, end = max;
       if (match[1] !== "*") {
@@ -39,83 +43,76 @@ function parseCron(expression) {
   return { fields, dayWildcard: parts[2].startsWith("*"), weekdayWildcard: parts[4].startsWith("*") };
 }
 
+// Evaluated in the viewer's local time zone, like Copilot's own scheduler.
 function nextCron(expression, after) {
   const { fields: [minutes, hours, days, months, weekdays], dayWildcard, weekdayWildcard } = parseCron(expression);
   const date = new Date(Math.floor(after / 60000) * 60000 + 60000);
   const limit = date.getTime() + 366 * 86400000;
   while (date.getTime() < limit) {
-    const day = days.has(date.getUTCDate()), weekday = weekdays.has(date.getUTCDay());
+    const day = days.has(date.getDate()), weekday = weekdays.has(date.getDay());
     const matchesDay = dayWildcard ? weekday : weekdayWildcard ? day : day || weekday;
-    if (months.has(date.getUTCMonth() + 1) && matchesDay && hours.has(date.getUTCHours()) && minutes.has(date.getUTCMinutes())) return date.getTime();
-    date.setUTCMinutes(date.getUTCMinutes() + 1);
+    if (months.has(date.getMonth() + 1) && matchesDay && hours.has(date.getHours()) && minutes.has(date.getMinutes())) return date.getTime();
+    date.setMinutes(date.getMinutes() + 1);
   }
   return null;
 }
 
-function cronDescription(expression) {
-  const parts = expression.trim().split(/\s+/);
-  if (parts.slice(1).every(part => part === "*") && /^\*\/\d+$/.test(parts[0])) {
-    const step = Number(parts[0].slice(2));
-    return 60 % step === 0 ? `Every ${step} minute${step === 1 ? "" : "s"}` : `Every ${step}th minute within each hour; resets hourly`;
+function nextCronTimes(expression, after, count) {
+  const times = [];
+  for (let from = after; times.length < count;) {
+    const next = nextCron(expression, from);
+    if (next === null) break;
+    times.push(next); from = next;
   }
-  if (expression.trim() === "* * * * *") return "Every minute";
-  if (/^\d+$/.test(parts[0]) && parts.slice(1).every(part => part === "*")) return `Hourly at minute ${parts[0]}`;
-  if (/^\d+$/.test(parts[0]) && /^\d+$/.test(parts[1]) && parts[2] === "*" && parts[3] === "*") {
-    const time = `${parts[1].padStart(2, "0")}:${parts[0].padStart(2, "0")}`;
-    if (parts[4] === "*") return `Daily at ${time} UTC`;
-    if (parts[4] === "1-5") return `Weekdays at ${time} UTC`;
-  }
-  return "Custom cron schedule · UTC";
+  return times;
 }
 
-function triggerBeat(beat, availability, now, source) {
-  if (source === "schedule" && !beat.enabled) return { beat, message: "Paused: this occurrence was not queued." };
-  const next = { ...beat, lastAttempt: now, error: "" };
-  let message;
-  if (beat.pending) {
-    next.skipped += 1;
-    message = "Already queued. No second prompt added.";
-  } else if (availability === "unavailable") {
-    next.error = "Target agent unavailable. No prompt delivered or redirected.";
-    message = next.error;
-  } else if (availability === "busy" || availability === "input") {
-    next.pending = true;
-    next.pendingSince = now;
-    message = availability === "input" ? "Queued once. Awaiting human input; no approval answered." : "Queued once. Waiting for the agent to become available.";
-  } else {
-    next.pending = false;
-    next.pendingSince = null;
-    next.lastDelivered = now;
-    next.deliveries += 1;
-    message = "Prompt delivered · simulated. Agent completion is not implied.";
-  }
-  next.events = [{ at: now, message }, ...beat.events].slice(0, 5);
-  return { beat: next, message };
+function beatTime(timestamp) {
+  const date = new Date(timestamp);
+  const day = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric" }).format(date);
+  const time = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(date);
+  return `${day} at ${time}`;
 }
+
+const beatZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "local time";
+const beatBytes = text => new TextEncoder().encode(text).length;
+const beatCronOf = value => value.trim().replace(/\s+/g, " ");
 
 function utilitySurfaces(tabs = {}) {
   return Object.entries(tabs).map(([tool, location]) => ({
-    id: `tool-${tool}`, tool, kind: "tool", name: tool === "beats" ? "Beats" : "Taskboard",
+    id: `tool-${tool}`, tool, kind: "tool", name: "Taskboard",
     workspace: location.workspace, pane: location.pane, state: "idle", glyph: tool, color: "#afb5c0"
   }));
+}
+
+// Older saves modelled Beats as a content tab with queue and simulator fields; drop them.
+function migrateLegacyBeatState(saved) {
+  if (saved.utilityTabs && typeof saved.utilityTabs === "object" && !Array.isArray(saved.utilityTabs)) delete saved.utilityTabs.beats;
+  delete saved.beatAvailability; delete saved.beatClock; delete saved.selectedBeat;
+  if (Array.isArray(saved.beats)) {
+    saved.beats = saved.beats.filter(beat => beat && typeof beat.id === "string" && typeof beat.agentId === "string" && typeof beat.cron === "string" && typeof beat.prompt === "string" && typeof beat.enabled === "boolean")
+      .map(({ id, agentId, cron, prompt, enabled }) => ({ id, agentId, cron, prompt, enabled }));
+  }
+  const legacy = "tool-beats";
+  if (saved.active === legacy) saved.active = "implementer";
+  for (const map of [saved.panes, saved.paneSelected]) if (map && typeof map === "object") for (const key of Object.keys(map)) if (key === legacy || map[key] === legacy) delete map[key];
+  if (saved.tabOrder && typeof saved.tabOrder === "object") for (const key of Object.keys(saved.tabOrder)) if (Array.isArray(saved.tabOrder[key])) saved.tabOrder[key] = saved.tabOrder[key].filter(id => id !== legacy);
 }
 
 function validUtilityState(saved) {
   const tabs = saved.utilityTabs ?? {};
   if (!tabs || typeof tabs !== "object" || Array.isArray(tabs)) return false;
   const workspaceIDs = [...workspaces.map(workspace => workspace.id), ...(saved.createdDirectories || []).map(record => record.id)];
-  if (!Object.entries(tabs).every(([tool, location]) => ["beats", "taskboard"].includes(tool) && location && workspaceIDs.includes(location.workspace) && [1, 2].includes(location.pane))) return false;
+  if (!Object.entries(tabs).every(([tool, location]) => tool === "taskboard" && location && workspaceIDs.includes(location.workspace) && [1, 2].includes(location.pane))) return false;
   if (saved.sidebarOrders !== undefined && (!saved.sidebarOrders || typeof saved.sidebarOrders !== "object" || Array.isArray(saved.sidebarOrders) || !Object.values(saved.sidebarOrders).every(order => Array.isArray(order) && order.every(id => typeof id === "string") && new Set(order).size === order.length))) return false;
-  if (saved.beats !== undefined && (!Array.isArray(saved.beats) || !saved.beats.every(beat => beat && typeof beat.id === "string" && typeof beat.agentId === "string" && typeof beat.cron === "string" && typeof beat.prompt === "string" && typeof beat.enabled === "boolean" && typeof beat.pending === "boolean" && Array.isArray(beat.events)))) return false;
-  if (saved.beatAvailability !== undefined && (!saved.beatAvailability || typeof saved.beatAvailability !== "object" || Array.isArray(saved.beatAvailability))) return false;
-  return saved.beatClock === undefined || Number.isFinite(saved.beatClock);
+  return saved.beats === undefined || (Array.isArray(saved.beats) && saved.beats.every(beat => beat && typeof beat.id === "string" && typeof beat.agentId === "string" && typeof beat.cron === "string" && typeof beat.prompt === "string" && typeof beat.enabled === "boolean"));
 }
 
-let movingTool = null, removingBeat = null, simulatorOpen = false, eventsOpen = false;
-const beatDrafts = new Map();
+let movingTool = null;
+const beatsUI = { open: false, mode: "list", confirmDelete: null, draft: null };
 
 function openUtility(tool) {
-  if (!["beats", "taskboard"].includes(tool)) return;
+  if (tool !== "taskboard") return;
   if (!state.utilityTabs[tool]) state.utilityTabs[tool] = { workspace: activeWorkspace(), pane: 2 };
   focusItem(`tool-${tool}`);
 }
@@ -133,7 +130,7 @@ function moveUtility(tool, workspace, pane) {
   state.paneSelected[destination] = item.id;
   state.workspaceCollapsed[workspace] = false;
   commit();
-  notify(`${item.name} moved to ${workspaces.find(candidate => candidate.id === workspace).name}, Pane ${pane}. Agent targets and Beats unchanged.`);
+  notify(`${item.name} moved to ${workspaces.find(candidate => candidate.id === workspace).name}, Pane ${pane}. Agent sessions unchanged.`);
 }
 
 function closeUtility(tool) {
@@ -147,140 +144,161 @@ function closeUtility(tool) {
   for (const key of Object.keys(state.tabOrder)) state.tabOrder[key] = state.tabOrder[key].filter(candidate => candidate !== id);
   if (state.active === id) state.active = fallback.id;
   commit();
-  notify(`${item.name} view closed. Saved Beats and agent sessions are unchanged.`);
+  notify(`${item.name} view closed. Agent sessions are unchanged.`);
 }
 
 function renderTaskboard() {
   return `<section id="taskboard" class="tool-panel" aria-label="Taskboard"><header class="tool-panel-header"><div><h2>Taskboard</h2><p>All workspaces · synthetic agent activity</p></div></header><p class="experiment-note">Exploratory content tab. Switching tabs changes the view, not the agents.</p><div class="board-columns">${["input", "working", "idle", "done", "unknown"].map(status => `<section data-board-status="${status}"><h3>${({ working: "Working", input: "Needs you", idle: "Idle", done: "Done", unknown: "Unknown" })[status]}</h3>${surfaces.filter(item => item.kind === "agent" && item.state === status && !state.dismissed[item.id]).map(item => `<button data-focus="${item.id}">${iconFor(item)}<b>${escapeHTML(item.name)}</b><span>${escapeHTML(item.task)}</span>${tagMarkup(item, true)}<small>${escapeHTML(workspaces.find(workspace => workspace.id === item.workspace).name)}</small></button>`).join("")}</section>`).join("")}</div><details class="quiet-history"><summary>Quiet skill & shell history · synthetic</summary><p>Skill: design review · completed<br>Shell: local build check · completed</p><p>Activity records only; no separate session controls inferred.</p></details></section>`;
 }
 
-function availabilityFor(agentId) {
-  const agent = byId(agentId);
-  if (!agent || agent.kind !== "agent" || state.dismissed[agentId]) return "unavailable";
-  return state.beatAvailability[agentId] || ({ working: "busy", input: "input", unknown: "unavailable" }[agent.state] || "available");
-}
+const openBeatSessions = () => surfaces.filter(item => item.kind === "agent" && !state.dismissed[item.id]);
+const beatSessionTitle = agentId => {
+  const agent = surfaces.find(item => item.id === agentId && item.kind === "agent" && !state.dismissed[item.id]);
+  return agent ? agent.name : `Session ${agentId.slice(0, 8)} (not open)`;
+};
 
-function beatTime(timestamp) {
-  return timestamp === null || timestamp === undefined ? "Not yet" : new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", weekday: "short", hour: "2-digit", minute: "2-digit" }).format(timestamp);
-}
-
-function beatStatus(beat) {
-  if (beat.error) return "Delivery failed";
-  if (availabilityFor(beat.agentId) === "unavailable") return "Agent unavailable";
-  if (beat.pending) return beat.enabled ? "1 queued" : "Paused · 1 queued";
-  return beat.enabled ? "Active" : "Paused";
-}
-
-function draftFor(beat) {
-  if (!beatDrafts.has(beat.id)) beatDrafts.set(beat.id, { agentId: beat.agentId, cron: beat.cron, prompt: beat.prompt });
-  return beatDrafts.get(beat.id);
-}
-
-function selectedBeat() {
-  if (state.selectedBeat === "new") return { id: "new", agentId: surfaces.find(item => item.kind === "agent" && !state.dismissed[item.id])?.id || "", cron: "*/15 * * * *", prompt: "", enabled: true, pending: false, events: [] };
-  return state.beats.find(beat => beat.id === state.selectedBeat) || state.beats[0];
-}
-
-function beatIsDirty(beat, draft) {
-  return beat.id === "new" || ["agentId", "cron", "prompt"].some(key => beat[key] !== draft[key]);
-}
-
-function nextBeatText(beat) {
-  if (!beat.enabled) return "Paused";
-  try { const next = nextCron(beat.cron, state.beatClock); return next === null ? "No match in next 366 days" : `${beatTime(next)} UTC`; }
-  catch (error) { return `Invalid schedule: ${error.message}`; }
-}
-
-function renderBeats() {
-  const beat = selectedBeat();
-  return `<section id="beats-panel" class="tool-panel" aria-label="Beats"><header class="tool-panel-header"><div><h2>Beats</h2><p>A cron expression. A prompt. An agent.</p></div><button class="primary" data-beat-add>+ Add beat</button></header><div class="beat-scope"><span>All workspaces</span><span>Synthetic · no prompts sent</span></div><div class="beats-layout"><nav class="beat-list" aria-label="Saved Beats">${state.beats.map(item => {
-    const agent = byId(item.agentId), selected = beat?.id === item.id;
-    return `<button class="beat-list-item" data-beat-select="${item.id}" ${selected ? 'aria-current="true"' : ""}><span class="beat-agent">${agent ? iconFor(agent) : icon("robot")} ${escapeHTML(agent?.name || "Agent unavailable")}</span>${agent ? tagMarkup(agent, true) : ""}<b>${escapeHTML(item.prompt.split("\n")[0])}</b><code>${escapeHTML(item.cron)}</code><span class="beat-list-status ${item.error ? "failed" : item.pending ? "queued" : item.enabled ? "enabled" : ""}"><span class="beat-status-dot"></span>${beatStatus(item)}</span></button>`;
-  }).join("") || '<p class="empty">No Beats yet. Add a cron prompt for an agent.</p>'}<p class="beat-list-count">${state.beats.length} Beats · ${state.beats.filter(item => item.enabled).length} enabled</p></nav><div class="beat-detail">${beat ? renderBeatEditor(beat) : '<div class="beat-empty"><h3>Keep a useful prompt on repeat.</h3><p>Choose an agent, write a prompt, and give it a cron expression.</p><button data-beat-add class="primary">Add your first beat</button></div>'}</div></div></section>`;
-}
-
-function renderBeatEditor(beat) {
-  const draft = draftFor(beat), dirty = beatIsDirty(beat, draft), isNew = beat.id === "new";
-  const agents = surfaces.filter(item => item.kind === "agent");
-  return `<div class="beat-editor-heading"><h3>${isNew ? "New beat" : "Cron prompt"}</h3><span id="beat-draft-status">${dirty ? "Unsaved changes" : "Saved locally"}</span></div>
-    <form id="beat-editor-form" data-beat-id="${beat.id}">
-      <label>Agent<select id="beat-agent">${!agents.some(agent => agent.id === draft.agentId) ? `<option value="${escapeHTML(draft.agentId)}" selected disabled>${draft.agentId ? "Saved agent unavailable" : "Choose an available agent"}</option>` : ""}${agents.map(agent => `<option value="${agent.id}" ${draft.agentId === agent.id ? "selected" : ""} ${state.dismissed[agent.id] ? "disabled" : ""}>${escapeHTML(agent.name)} · ${workspaces.find(workspace => workspace.id === agent.workspace).name}${state.dismissed[agent.id] ? " · closed" : ""}</option>`).join("")}</select></label>
-      <div class="beat-field-label"><label for="beat-cron">Cron expression</label><span>UTC · demo</span></div>
-      <div class="cron-input-row"><input id="beat-cron" value="${escapeHTML(draft.cron)}" maxlength="100" spellcheck="false" aria-describedby="beat-cron-description" required><button type="button" data-cron-builder title="Build cron expression" aria-label="Build cron expression" aria-haspopup="dialog">${icon("wand")}</button></div>
-      <p id="beat-cron-description" class="field-hint">${escapeHTML(cronDescription(draft.cron))}</p>
-      <label>Prompt<textarea id="beat-prompt" rows="5" maxlength="2000" placeholder="What should this agent do on each beat?" required>${escapeHTML(draft.prompt)}</textarea></label>
-      <p id="beat-form-error" class="beat-error" role="alert"></p>
-      <div class="beat-save-row"><button type="submit" class="primary">Save beat</button><button type="button" data-beat-discard="${beat.id}">Discard edits</button>${!isNew ? `<button type="button" data-beat-remove="${beat.id}" class="beat-remove">Remove</button>` : ""}</div>
-    </form>
-    ${removingBeat === beat.id ? `<div class="beat-remove-confirm" role="alert"><p>Remove this Beat and its queued occurrence? The agent stays open.</p><button data-beat-remove-confirm="${beat.id}">Remove beat</button><button data-beat-remove-cancel>Keep beat</button></div>` : ""}
-    ${isNew ? '<p class="field-hint">No schedule runs in this prototype. Save to explore delivery and queue states.</p>' : `<div class="beat-run-actions"><button data-beat-run="${beat.id}" ${dirty ? "disabled" : ""}>Run now</button><button data-beat-pause="${beat.id}">${beat.enabled ? "Pause future runs" : "Resume schedule"}</button>${beat.pending ? `<button data-beat-cancel="${beat.id}">Cancel queued</button>` : ""}</div>
-      <p class="field-hint">Run now uses the saved prompt, even while paused. Delivery is not task completion.</p>
-      <div class="beat-diagnostic-status ${beat.error ? "failed" : ""}"><span>${beatStatus(beat)}</span>${beat.pending ? "<small>One pending prompt for this Beat. Further occurrences add nothing.</small>" : ""}${beat.error ? `<small>${escapeHTML(beat.error)}</small>` : ""}</div>
-      <dl class="beat-diagnostics"><div><dt>Next occurrence</dt><dd>${nextBeatText(beat)}</dd></div><div><dt>Last delivery</dt><dd>${beatTime(beat.lastDelivered)}</dd></div><div><dt>Last trigger</dt><dd>${beatTime(beat.lastAttempt)}</dd></div><div><dt>Extra occurrences skipped</dt><dd>${beat.skipped}</dd></div></dl>
-      <div class="beat-binding"><span>Target: <code>demo:${escapeHTML(beat.agentId)}</code></span><button data-beat-reveal="${beat.agentId}">Reveal agent ↗</button></div>
-      <details class="beat-simulator" ${simulatorOpen ? "open" : ""}><summary>Explore scheduling behavior</summary><p>Demo clock: ${beatTime(state.beatClock)} UTC. Nothing runs automatically.</p><label>Simulated target state<select id="beat-availability" data-agent-id="${beat.agentId}">${[["available", "Available"], ["busy", "Busy"], ["input", "Awaiting human input"], ["unavailable", "Unavailable"]].map(([value, label]) => `<option value="${value}" ${availabilityFor(beat.agentId) === value ? "selected" : ""}>${label}</option>`).join("")}</select></label><button data-beat-tick="${beat.id}">Simulate scheduled occurrence</button><p>Try twice while busy: only one prompt queues. Set Available to deliver it. Pause stops future ticks; use Cancel queued to remove an existing pending prompt.</p></details>
-      ${beat.events.length ? `<details class="beat-log" ${eventsOpen ? "open" : ""}><summary>Recent simulated events</summary><ol>${beat.events.map(event => `<li><time>${beatTime(event.at)}</time><span>${escapeHTML(event.message)}</span></li>`).join("")}</ol></details>` : ""}`}`;
-}
-
-function updateBeatDraft() {
-  const form = document.querySelector("#beat-editor-form");
-  if (!form) return;
-  const draft = { agentId: $("#beat-agent").value, cron: $("#beat-cron").value, prompt: $("#beat-prompt").value };
-  beatDrafts.set(form.dataset.beatId, draft);
-  const dirty = beatIsDirty(selectedBeat(), draft);
-  $("#beat-draft-status").textContent = dirty ? "Unsaved changes" : "Saved locally";
-  const run = document.querySelector("[data-beat-run]");
-  if (run) run.disabled = dirty;
+function beatNextText(beat) {
   try {
-    parseCron(draft.cron);
-    $("#beat-cron-description").textContent = cronDescription(draft.cron);
-    $("#beat-cron").removeAttribute("aria-invalid");
-  } catch (error) {
-    $("#beat-cron-description").textContent = error.message;
-    $("#beat-cron").setAttribute("aria-invalid", "true");
-  }
+    const next = nextCron(beat.cron, Date.now());
+    return next === null ? "Next: no match in the next 366 days" : `Next: ${beatTime(next)}`;
+  } catch (error) { return ""; }
 }
 
-function simulateBeat(id, source) {
-  const index = state.beats.findIndex(beat => beat.id === id);
-  if (index < 0) return;
-  state.beatClock += 60000;
-  const result = triggerBeat(state.beats[index], availabilityFor(state.beats[index].agentId), state.beatClock, source);
-  state.beats[index] = result.beat;
-  commit();
-  notify(result.message);
+function renderBeatRow(beat) {
+  const confirming = beatsUI.confirmDelete === beat.id, next = beat.enabled ? beatNextText(beat) : "";
+  return `<article class="beat-row ${beat.enabled ? "active" : "paused"}" data-beat-row="${beat.id}"><div class="beat-row-head"><span class="beat-dot" aria-hidden="true"></span><b class="beat-session">${escapeHTML(beatSessionTitle(beat.agentId))}</b><span class="beat-status">${beat.enabled ? "Active" : "Paused"}</span></div><code class="beat-cron-text">${escapeHTML(beat.cron)}</code>${next ? `<p class="beat-next">${next}</p>` : ""}<p class="beat-prompt-text">${escapeHTML(beat.prompt)}</p><div class="beat-actions"><button data-beat-toggle="${beat.id}">${beat.enabled ? "Pause" : "Resume"}</button><button data-beat-edit="${beat.id}">Edit</button>${confirming ? `<span class="beat-delete-group"><button class="beat-delete" data-beat-delete-confirm="${beat.id}">Delete?</button><button data-beat-keep>Keep</button></span>` : `<button class="beat-delete" data-beat-delete="${beat.id}">Delete</button>`}</div></article>`;
 }
 
-function cronBuilderValue() {
-  const frequency = $("#cron-frequency").value;
-  const interval = Number($("#cron-interval").value), minute = Number($("#cron-minute").value);
-  const [hour, timeMinute] = $("#cron-time").value.split(":").map(Number);
-  if (frequency === "minutes") {
-    if (!Number.isInteger(interval) || interval < 1 || interval > 59) throw new Error("Choose a minute step from 1 to 59.");
-    return `*/${interval} * * * *`;
-  }
-  if (frequency === "hourly") {
-    if (!Number.isInteger(minute) || minute < 0 || minute > 59) throw new Error("Choose a minute from 0 to 59.");
-    return `${minute} * * * *`;
-  }
-  if (!Number.isInteger(hour) || !Number.isInteger(timeMinute)) throw new Error("Choose a valid time.");
-  return `${timeMinute} ${hour} * * ${frequency === "weekdays" ? "1-5" : frequency === "weekly" ? $("#cron-weekday").value : "*"}`;
+function renderBeatForm() {
+  const draft = beatsUI.draft, sessions = openBeatSessions();
+  const preset = BEAT_PRESETS.some(([cron]) => cron === beatCronOf(draft.cron)) ? beatCronOf(draft.cron) : "";
+  return `<form id="beat-form" novalidate><label>Session<select id="beat-session">${!sessions.some(item => item.id === draft.agentId) ? `<option value="${escapeHTML(draft.agentId)}" selected disabled>${draft.agentId ? escapeHTML(beatSessionTitle(draft.agentId)) : "Choose an open session"}</option>` : ""}${sessions.map(item => `<option value="${item.id}" ${draft.agentId === item.id ? "selected" : ""}>${escapeHTML(item.name)}</option>`).join("")}</select></label>
+    <label>Schedule preset<select id="beat-preset"><option value="" ${preset ? "" : "selected"}>Custom</option>${BEAT_PRESETS.map(([cron, label]) => `<option value="${cron}" ${preset === cron ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+    <label>Cron expression<input id="beat-cron" value="${escapeHTML(draft.cron)}" maxlength="100" spellcheck="false" autocomplete="off" aria-describedby="beat-cron-error beat-preview"></label>
+    <p id="beat-cron-error" class="beat-error" role="alert"></p>
+    <div class="beat-preview-block"><span class="beat-preview-title">Next 3 fire times · ${escapeHTML(beatZone())}</span><ol id="beat-preview"></ol></div>
+    <label>Prompt<textarea id="beat-prompt" rows="4" placeholder="What should this session do on each beat?" aria-describedby="beat-prompt-error beat-bytes">${escapeHTML(draft.prompt)}</textarea></label>
+    <div class="beat-byte-row"><p id="beat-prompt-error" class="beat-error" role="alert"></p><span id="beat-bytes"></span></div>
+    <div class="beat-form-actions"><button type="submit" class="primary">Save</button><button type="button" data-beat-cancel>Cancel</button></div></form>`;
 }
 
-function renderCronBuilder() {
-  const frequency = $("#cron-frequency").value;
-  for (const [field, visible] of [["interval", frequency === "minutes"], ["minute", frequency === "hourly"], ["time", ["daily", "weekdays", "weekly"].includes(frequency)], ["weekday", frequency === "weekly"]]) {
-    $(`#cron-${field}-label`).hidden = !visible;
-    $(`#cron-${field}`).disabled = !visible;
-  }
-  try { const expression = cronBuilderValue(); $("#cron-preview").textContent = `${expression}\n${cronDescription(expression)}`; $("#cron-form [type=submit]").disabled = false; }
-  catch (error) { $("#cron-preview").textContent = error.message; $("#cron-form [type=submit]").disabled = true; }
+function renderBeatsPopover() {
+  const popover = $("#beats-popover"), button = $("#beats-button");
+  button.classList.toggle("lit", state.beats.some(beat => beat.enabled));
+  button.setAttribute("aria-expanded", String(beatsUI.open));
+  popover.hidden = !beatsUI.open;
+  if (!beatsUI.open) return;
+  positionBeatsPopover();
+  if (beatsUI.mode === "form" && popover.querySelector("#beat-form")) return;
+  const focused = popover.contains(document.activeElement) ? Object.entries(document.activeElement.dataset)[0] : null;
+  const listScroll = popover.querySelector(".beats-list")?.scrollTop ?? 0;
+  const editing = beatsUI.mode === "form";
+  $("#beats-title").textContent = editing ? (beatsUI.draft.id ? "Edit Beat" : "New Beat") : "Beats";
+  $("#beats-caption").hidden = editing;
+  $("#beats-body").innerHTML = editing ? renderBeatForm() : `<div class="beats-list">${state.beats.map(renderBeatRow).join("") || '<p class="beats-empty">No Beats yet.</p>'}</div><button class="beat-new" data-beat-new><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg>New Beat</button>`;
+  if (editing) updateBeatFormFeedback(); else popover.querySelector(".beats-list").scrollTop = listScroll;
+  if (focused) popover.querySelector(`[data-${focused[0].replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}="${focused[1]}"]`)?.focus();
+}
+
+function positionBeatsPopover() {
+  const popover = $("#beats-popover"), anchor = $("#beats-button").getBoundingClientRect();
+  const width = popover.offsetWidth, center = anchor.left + anchor.width / 2;
+  const left = Math.max(8, Math.min(center - width / 2, window.innerWidth - width - 8));
+  popover.style.left = `${left}px`;
+  popover.style.top = `${anchor.bottom + 10}px`;
+  popover.style.maxHeight = `${Math.max(240, window.innerHeight - anchor.bottom - 22)}px`;
+  popover.style.setProperty("--arrow-left", `${center - left}px`);
+}
+
+function openBeatsPopover() {
+  Object.assign(beatsUI, { open: true, mode: "list", confirmDelete: null, draft: null });
+  $("#beats-popover").hidden = false;
+  renderBeatsPopover();
+  $("#beats-popover [data-beats-close]").focus();
+}
+
+function closeBeatsPopover(restoreFocus = true) {
+  if (!beatsUI.open) return;
+  Object.assign(beatsUI, { open: false, mode: "list", confirmDelete: null, draft: null });
+  renderBeatsPopover();
+  if (restoreFocus) $("#beats-button").focus();
+}
+
+function startBeatForm(beat) {
+  const sessions = openBeatSessions();
+  beatsUI.mode = "form"; beatsUI.confirmDelete = null;
+  beatsUI.draft = beat
+    ? { id: beat.id, agentId: beat.agentId, cron: beat.cron, prompt: beat.prompt }
+    : { id: "", agentId: (sessions.find(item => item.id === state.active) || sessions[0])?.id || "", cron: "*/15 * * * *", prompt: "" };
+  renderBeatsPopover();
+  $("#beat-prompt").focus();
+}
+
+function beatCronError(cron) {
+  try { parseCron(cron); return ""; } catch (error) { return error.message; }
+}
+
+function beatPromptError(prompt) {
+  if (!prompt.trim()) return "Write the prompt this Beat should send.";
+  if (beatBytes(prompt) > BEAT_LIMITS.promptBytes) return `Prompt is over the ${BEAT_LIMITS.promptBytes}-byte limit.`;
+  return "";
+}
+
+function setBeatInvalid(field, message) {
+  if (message) field.setAttribute("aria-invalid", "true"); else field.removeAttribute("aria-invalid");
+}
+
+function updateBeatFormFeedback(showEmptyPrompt = false) {
+  const draft = beatsUI.draft, cronError = beatCronError(draft.cron);
+  $("#beat-cron-error").textContent = cronError;
+  setBeatInvalid($("#beat-cron"), cronError);
+  $("#beat-preview").innerHTML = cronError ? "<li>Fix the cron expression to preview fire times.</li>"
+    : nextCronTimes(draft.cron, Date.now(), 3).map(time => `<li>${beatTime(time)}</li>`).join("") || "<li>No match in the next 366 days.</li>";
+  const bytes = beatBytes(draft.prompt), promptError = bytes > BEAT_LIMITS.promptBytes || showEmptyPrompt ? beatPromptError(draft.prompt) : "";
+  $("#beat-prompt-error").textContent = promptError;
+  setBeatInvalid($("#beat-prompt"), promptError);
+  $("#beat-bytes").textContent = `${bytes} / ${BEAT_LIMITS.promptBytes} bytes`;
+  $("#beat-bytes").classList.toggle("over", bytes > BEAT_LIMITS.promptBytes);
+}
+
+function saveBeatForm() {
+  const draft = beatsUI.draft, session = surfaces.find(item => item.id === draft.agentId && item.kind === "agent" && !state.dismissed[item.id]);
+  updateBeatFormFeedback(true);
+  if (beatCronError(draft.cron) || beatPromptError(draft.prompt)) return;
+  const others = state.beats.filter(beat => beat.id !== draft.id);
+  let error = "";
+  if (!session) error = "Choose an open session.";
+  else if (others.filter(beat => beat.agentId === session.id).length >= BEAT_LIMITS.perSession) error = `This session already has ${BEAT_LIMITS.perSession} Beats.`;
+  else if (others.length >= BEAT_LIMITS.total) error = `The limit is ${BEAT_LIMITS.total} Beats in total.`;
+  if (error) { $("#beat-prompt-error").textContent = error; return; }
+  const value = { agentId: session.id, cron: beatCronOf(draft.cron), prompt: draft.prompt.trim() };
+  const current = state.beats.find(beat => beat.id === draft.id);
+  if (current) Object.assign(current, value);
+  else state.beats.push({ id: `beat-${crypto.randomUUID()}`, enabled: true, ...value });
+  beatsUI.mode = "list"; beatsUI.draft = null;
+  commit(); notify("Beat saved · synthetic. No prompt will be sent.");
 }
 
 document.addEventListener("click", event => {
+  if (beatsUI.open && !event.composedPath().some(node => node.id === "beats-popover" || node.id === "beats-button")) closeBeatsPopover(false);
   const button = event.target.closest("button");
   if (!button) return;
   const d = button.dataset;
+  if (button.id === "beats-button") { beatsUI.open ? closeBeatsPopover() : openBeatsPopover(); return; }
+  if ("beatsClose" in d) { closeBeatsPopover(); return; }
+  if ("beatNew" in d) { startBeatForm(null); return; }
+  if (d.beatEdit) { startBeatForm(state.beats.find(beat => beat.id === d.beatEdit)); return; }
+  if ("beatCancel" in d) { beatsUI.mode = "list"; beatsUI.draft = null; renderBeatsPopover(); return; }
+  if (d.beatToggle) {
+    const beat = state.beats.find(item => item.id === d.beatToggle);
+    beat.enabled = !beat.enabled; commit(); notify(beat.enabled ? "Beat resumed · synthetic." : "Beat paused · synthetic."); return;
+  }
+  if (d.beatDelete) { beatsUI.confirmDelete = d.beatDelete; renderBeatsPopover(); return; }
+  if ("beatKeep" in d) { beatsUI.confirmDelete = null; renderBeatsPopover(); return; }
+  if (d.beatDeleteConfirm) {
+    state.beats = state.beats.filter(beat => beat.id !== d.beatDeleteConfirm);
+    beatsUI.confirmDelete = null; commit(); notify("Beat deleted. Its session is unchanged."); return;
+  }
   if (d.openTool) { openUtility(d.openTool); return; }
   if (d.closeTool) { closeUtility(d.closeTool); return; }
   if ("openSettings" in d) { renderInstallStatus(); openDialog("settings-dialog"); return; }
@@ -294,94 +312,30 @@ document.addEventListener("click", event => {
     $("#tool-move-pane").value = String(paneFor(item));
     openDialog("tool-move-dialog"); return;
   }
-  if ("beatAdd" in d) { state.selectedBeat = "new"; removingBeat = null; commit(); $("#beat-prompt").focus(); return; }
-  if (d.beatSelect) { state.selectedBeat = d.beatSelect; removingBeat = null; commit(); return; }
-  if (d.beatDiscard) { beatDrafts.delete(d.beatDiscard); if (d.beatDiscard === "new") state.selectedBeat = state.beats[0]?.id || ""; commit(); return; }
-  if (d.beatRun) { simulateBeat(d.beatRun, "manual"); return; }
-  if (d.beatTick) { simulateBeat(d.beatTick, "schedule"); return; }
-  if (d.beatPause || d.beatCancel) {
-    const beat = state.beats.find(item => item.id === (d.beatPause || d.beatCancel));
-    if (d.beatPause) beat.enabled = !beat.enabled;
-    else { beat.pending = false; beat.pendingSince = null; }
-    commit(); notify(d.beatCancel ? "Queued occurrence cancelled." : beat.enabled ? "Schedule enabled · simulation only." : `Future runs paused.${beat.pending ? " The queued occurrence remains; cancel it separately." : ""}`); return;
-  }
-  if (d.beatRemove) { removingBeat = d.beatRemove; commit(); return; }
-  if ("beatRemoveCancel" in d) { removingBeat = null; commit(); return; }
-  if (d.beatRemoveConfirm) {
-    state.beats = state.beats.filter(beat => beat.id !== d.beatRemoveConfirm);
-    beatDrafts.delete(d.beatRemoveConfirm); state.selectedBeat = state.beats[0]?.id || ""; removingBeat = null; commit(); notify("Beat removed. Its agent is unchanged."); return;
-  }
-  if (d.beatReveal) {
-    const agent = byId(d.beatReveal);
-    if (!agent || state.dismissed[agent.id]) { notify("The exact target agent is unavailable. No replacement was selected."); return; }
-    if (agent.worktree) state.collapsed[`${agent.workspace}:${agent.worktree}`] = false;
-    focusItem(agent.id); return;
-  }
-  if ("cronBuilder" in d) {
-    updateBeatDraft();
-    const cron = $("#beat-cron").value.trim(), parts = cron.split(/\s+/);
-    $("#cron-frequency").value = "minutes"; $("#cron-interval").value = "15";
-    if (/^\*\/\d+ \* \* \* \*$/.test(cron)) $("#cron-interval").value = parts[0].slice(2);
-    else if (/^\d+ \* \* \* \*$/.test(cron)) { $("#cron-frequency").value = "hourly"; $("#cron-minute").value = parts[0]; }
-    else if (/^\d+ \d+ \* \* (\*|1-5|[0-6])$/.test(cron)) {
-      $("#cron-frequency").value = parts[4] === "*" ? "daily" : parts[4] === "1-5" ? "weekdays" : "weekly";
-      $("#cron-time").value = `${parts[1].padStart(2, "0")}:${parts[0].padStart(2, "0")}`;
-      if (/^[0-6]$/.test(parts[4])) $("#cron-weekday").value = parts[4];
-    }
-    renderCronBuilder(); openDialog("cron-dialog"); return;
-  }
-  if (button.id === "reset-demo") { beatDrafts.clear(); removingBeat = null; simulatorOpen = false; eventsOpen = false; }
 });
-
-document.addEventListener("toggle", event => {
-  if (event.target.matches(".beat-simulator")) simulatorOpen = event.target.open;
-  if (event.target.matches(".beat-log")) eventsOpen = event.target.open;
-}, true);
 
 document.addEventListener("input", event => {
-  if (["beat-agent", "beat-cron", "beat-prompt"].includes(event.target.id)) updateBeatDraft();
-  if (event.target.closest("#cron-form")) renderCronBuilder();
+  const draft = beatsUI.draft;
+  if (!draft || !event.target.closest("#beat-form")) return;
+  if (event.target.id === "beat-preset" && event.target.value) { draft.cron = event.target.value; $("#beat-cron").value = draft.cron; }
+  else if (event.target.id === "beat-cron") { draft.cron = event.target.value; $("#beat-preset").value = BEAT_PRESETS.some(([cron]) => cron === beatCronOf(draft.cron)) ? beatCronOf(draft.cron) : ""; }
+  else if (event.target.id === "beat-prompt") draft.prompt = event.target.value;
+  else if (event.target.id === "beat-session") draft.agentId = event.target.value;
+  updateBeatFormFeedback();
 });
 
-document.addEventListener("change", event => {
-  if (event.target.id === "beat-agent") updateBeatDraft();
-  if (event.target.id !== "beat-availability") return;
-  const agentId = event.target.dataset.agentId;
-  state.beatAvailability[agentId] = event.target.value;
-  if (availabilityFor(agentId) === "available") {
-    state.beats = state.beats.map(beat => beat.agentId === agentId && beat.pending ? triggerBeat({ ...beat, pending: false }, "available", state.beatClock, "delivery").beat : beat);
-  }
-  commit(); notify("Synthetic target state changed. No live agent was contacted.");
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && beatsUI.open && !document.querySelector("dialog[open]")) { event.preventDefault(); closeBeatsPopover(); }
 });
+
+window.addEventListener("resize", () => { if (beatsUI.open) positionBeatsPopover(); });
 
 document.addEventListener("submit", event => {
   if (event.target.id === "tool-move-form") {
     event.preventDefault(); $("#tool-move-dialog").close();
     moveUtility(movingTool, $("#tool-move-workspace").value, Number($("#tool-move-pane").value)); return;
   }
-  if (event.target.id === "cron-form") {
-    event.preventDefault();
-    try { $("#beat-cron").value = cronBuilderValue(); updateBeatDraft(); $("#cron-dialog").close(); $("#beat-cron").focus(); }
-    catch (error) { $("#cron-preview").textContent = error.message; }
-    return;
-  }
-  if (event.target.id !== "beat-editor-form") return;
-  event.preventDefault(); updateBeatDraft();
-  const id = event.target.dataset.beatId, draft = beatDrafts.get(id), agent = byId(draft.agentId);
-  try {
-    parseCron(draft.cron);
-    if (!draft.prompt.trim()) throw new Error("Write the prompt this Beat should send.");
-    if (!agent || agent.kind !== "agent" || state.dismissed[agent.id]) throw new Error("Select an existing agent. The saved target will not be replaced automatically.");
-    const current = state.beats.find(beat => beat.id === id);
-    if (current?.pending && ["agentId", "cron", "prompt"].some(key => current[key] !== draft[key])) throw new Error("Cancel the queued occurrence before changing this Beat. Its pending prompt and target must stay unambiguous.");
-    const value = { ...draft, cron: draft.cron.trim().replace(/\s+/g, " "), prompt: draft.prompt.trim() };
-    if (current) Object.assign(current, value);
-    else {
-      const newBeat = { ...initialBeats()[1], ...value, id: `beat-${crypto.randomUUID()}`, events: [] };
-      state.beats.push(newBeat); state.selectedBeat = newBeat.id;
-    }
-    beatDrafts.delete(id); commit(); notify("Beat saved locally. No real schedule was created.");
-  } catch (error) { $("#beat-form-error").textContent = error.message; }
+  if (event.target.id === "beat-form") { event.preventDefault(); saveBeatForm(); }
 });
 
 document.addEventListener("dragover", event => {

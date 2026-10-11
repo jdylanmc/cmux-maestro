@@ -6,6 +6,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Add Beats: recurring cron prompts for exact agent sessions. A native sidebar popover
+  manages them (the header icon lights while one is enabled), `/maestro` agents manage
+  their own through `beats`. The installed extension mirrors each session's enabled Beats
+  into Copilot's native cron scheduler (any CMUX Copilot session; no clock or managed
+  launch) behind an isolated `createScheduleGateway`; a Beat is simply on or off and its
+  session re-registers it on start. Add the `Beats/` read-write sandbox grant.
 - Show an animated Codex-format pet (1536×1872, 8×9 cells) in pinned details,
   with a bundled original Maestro robot-head default, a per-agent picker,
   **Upload pet…**, gallery links, **Save to my pets** and **Reset to agent's
