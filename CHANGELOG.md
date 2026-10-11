@@ -10,6 +10,12 @@ Notable changes are recorded using Keep a Changelog categories.
   toggled from the header, and the visual proof of concept now matches (Beats is a
   popover; no utility tabs). Closes #86 and #87 as not planned.
 
+### Changed
+
+- Stop showing failed nested shell commands ("bash invocation · Shell · error") as red
+  outline rows. They move to the session's Other activity disclosure; blocked or
+  attention-bearing shell rows and failed agents/tasks still stay visible.
+
 ### Added
 
 - Add Beats: recurring cron prompts for exact agent sessions. A native sidebar popover

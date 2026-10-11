@@ -1035,9 +1035,9 @@ struct SidebarClarityTests {
         #expect(session.foldedShellCount(parentID: "owner") == 1)
         #expect(session.foldedShellCount(parentID: "different-owner") == 0)
         #expect(session.outlineNodes.map(\.id) == [
-            "owner", "blocked", "failed", "attention", "unresolved", "ancestor", "descendant"
-        ])
-        #expect(session.secondaryActivity.map(\.id) == ["first", "second", "child"])
+            "owner", "blocked", "attention", "unresolved", "ancestor", "descendant"
+        ], "A failed nested shell command is passive history, not an outline row")
+        #expect(session.secondaryActivity.map(\.id) == ["first", "second", "child", "failed"])
         #expect(session.nodes == nodes)
     }
 
