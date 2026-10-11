@@ -26,6 +26,10 @@ const iconPaths = {
   beats: '<path d="M15 3v13"/><ellipse cx="11" cy="17" rx="4" ry="3" transform="rotate(-20 11 17)" fill="currentColor" stroke="none"/>',
   taskboard: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/>',
   wand: '<path d="m4 20 12-12 4 4L8 24M14 10l4 4" transform="translate(0 -3)"/><path d="M5 3v4M3 5h4M19 2v4M17 4h4M20 17v4M18 19h4"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7"/>',
+  cpu: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4"/>',
+  workspace: '<rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8m-4-3v3"/>',
+  worktree: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="12" r="2"/><path d="M6 7v10M8 5h4q6 0 6 5"/><path d="M15 19h6"/>',
   copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3"/>'
 };
 function icon(name, color = "currentColor") {
@@ -47,8 +51,8 @@ function pet(name) {
   return `<svg class="pet" viewBox="0 0 58 64" aria-hidden="true">${shapes[name] || shapes.Sprout}<circle cx="22" cy="33" r="2" fill="#263341"/><circle cx="34" cy="33" r="2" fill="#263341"/><path d="M24 41q4 3 8 0" stroke="#263341" fill="none" stroke-width="1.5"/></svg>`;
 }
 const worktrees = {
-  main: { name: "cmux-maestro", branch: "main", path: "/demo/cmux-maestro", exactID: "tree-001" },
-  sidebar: { name: "cmux-maestro", branch: "Detached HEAD · a4c71e2", path: "/demo/worktrees/sidebar-design/cmux-maestro", exactID: "tree-002" }
+  main: { name: "cmux-maestro", branch: "main", boardBranch: "main", linked: false, path: "/demo/cmux-maestro", exactID: "tree-001" },
+  sidebar: { name: "cmux-maestro", branch: "Detached HEAD · a4c71e2", boardBranch: "feat/sidebar-design", linked: true, path: "/demo/worktrees/sidebar-design/cmux-maestro", exactID: "tree-002" }
 };
 const workspaces = [
   { id: "design", name: "Maestro design", subtitle: "Sidebar & personalization", backlog: "#57 Cosmetic overhaul", directory: "/demo/cmux-maestro" },
@@ -68,6 +72,10 @@ const surfaces = [
   { id: "notes", workspace: "scratch", name: "Notes assistant", task: "Outline a personal project", kind: "agent", state: "idle", worktree: null, parent: null, pane: 1, glyph: "leaf", color: "#79d7cc", pet: "Pebble", model: "Copilot · demo model", elapsed: "6m", context: "12%", files: null, agentTags: [], directory: "/demo/scratch" },
   { id: "notes-child", workspace: "scratch", name: "Notes outline review", task: "Review the personal outline", kind: "agent", state: "idle", worktree: null, parent: "notes", pane: 2, glyph: "book", color: "#79d7cc", pet: "Sprout", model: "Copilot · demo model", elapsed: "2m", context: "8%", files: null, agentTags: [], directory: "/demo/scratch" }
 ];
+const demoModels = { coordinator: "demo-model-pro", implementer: "demo-model-fast", researcher: "demo-model-pro", writer: "demo-model-mini", reviewer: "demo-model-pro", accessibility: "demo-model-fast", "scratch-agent": "demo-model-mini", notes: "demo-model-fast", "notes-child": "demo-model-mini" };
+for (const item of surfaces) if (demoModels[item.id]) item.model = demoModels[item.id];
+const demoActivity = { coordinator: "Running a command", implementer: "Editing files", writer: "Reading files", accessibility: "Running a command" };
+for (const item of surfaces) if (demoActivity[item.id]) item.activity = demoActivity[item.id];
 const demoSessionMetadata = new Map(surfaces.filter(item => item.kind === "agent").map((item, index) => [item.id, {
   sessionId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
   observedAt: "2026-09-25T20:00:00.000Z",
@@ -90,8 +98,8 @@ const stressHistory = [
 const stressWorkspaceName = `Stress testing: ${stressParagraph} ${stressToken}`;
 function seedStressWorkspace() {
   workspaces.push({ id: "stress", name: "Stress testing", subtitle: stressParagraph, backlog: null, directory: `/demo/stress/${stressToken}/workspace` });
-  worktrees["stress-wide"] = { name: `Wide families: ${stressParagraph}`, branch: `feature/${stressToken}`, path: `/demo/stress/${stressToken}/wide`, exactID: "tree-stress-wide" };
-  worktrees["stress-deep"] = { name: `Deep ancestry: ${stressParagraph}`, branch: `review/${stressToken}`, path: `/demo/stress/${stressToken}/deep`, exactID: "tree-stress-deep" };
+  worktrees["stress-wide"] = { name: `Wide families: ${stressParagraph}`, branch: `feature/${stressToken}`, boardBranch: `feature/${stressToken}`, linked: false, path: `/demo/stress/${stressToken}/wide`, exactID: "tree-stress-wide" };
+  worktrees["stress-deep"] = { name: `Deep ancestry: ${stressParagraph}`, branch: `review/${stressToken}`, boardBranch: `review/${stressToken}`, linked: true, path: `/demo/stress/${stressToken}/deep`, exactID: "tree-stress-deep" };
   const addAgent = (id, name, parent, index, worktree) => {
     surfaces.push({
       id, workspace: "stress", name, task: stressHistory, kind: "agent",
@@ -539,9 +547,10 @@ function previewFields(item) {
     { key: "child-history", label: "Child history", value: metadata?.childHistory, display: metadata?.childHistory === "incomplete" ? "Incomplete: missing work is not assumed finished" : metadata?.childHistory },
     { key: "workspace-path", label: "Workspace path", value: workspacePath, display: displayPath(workspacePath) },
     { key: "project-path", label: "Project path", value: projectPath, display: displayPath(projectPath) ?? (item.worktree === null ? "Not a repository" : "Unavailable") },
-    { key: "working-directory", label: "Working directory", value: projectPath ?? item.directory, display: displayPath(projectPath ?? item.directory) }
+    { key: "working-directory", label: "Working directory", value: projectPath ?? item.directory, display: displayPath(projectPath ?? item.directory) },
+    { key: "model", label: "Model", value: item.model ?? null, display: item.model ?? "Unavailable" }
   ];
-  return `<dl class="detail-fields">${fields.map(field => `<div class="detail-field" data-field="${field.key}"><dt><span class="detail-field-label"><span>${field.label}</span>${field.value == null ? "" : `<button type="button" class="field-copy" data-copy-value="${escapeHTML(field.value)}" data-copy-label="${field.label}" aria-label="Copy ${field.label.toLowerCase()}" title="Copy ${field.label.toLowerCase()}">${icon("copy")}</button>`}</span></dt><dd>${escapeHTML(field.display ?? field.value ?? "Unavailable")}</dd></div>`).join("")}</dl>`;
+  return `<dl class="detail-fields">${fields.map(field => `<div class="detail-field" data-field="${field.key}"><dt><span class="detail-field-label"><span>${field.label}</span>${field.value == null ? "" : `<button type="button" class="field-copy" data-copy-value="${escapeHTML(field.value)}" data-copy-label="${field.label}" aria-label="Copy ${field.label.toLowerCase()}" title="Copy ${field.label.toLowerCase()}" data-idle-label="Copy ${field.label.toLowerCase()}">${icon("copy")}</button>`}</span></dt><dd>${escapeHTML(field.display ?? field.value ?? "Unavailable")}</dd></div>`).join("")}</dl>`;
 }
 const tagSwatches = [
   ["Rose", "#efb8c8"], ["Peach", "#efc2a1"], ["Gold", "#e8d28d"], ["Lime", "#c8dda0"],
@@ -809,8 +818,21 @@ document.addEventListener("click", async event => {
   if (!button) return;
   const d = button.dataset;
   if ("copyValue" in d) {
-    try { await navigator.clipboard.writeText(d.copyValue); notify(`${d.copyLabel} copied.`); }
-    catch (error) { notify(`Copy failed (${error.name}). Allow clipboard access and try again.`); }
+    try {
+      await navigator.clipboard.writeText(d.copyValue);
+      const idleLabel = button.dataset.idleLabel;
+      button.innerHTML = icon("check");
+      button.dataset.copied = "true";
+      button.setAttribute("aria-label", `${d.copyLabel} copied`);
+      $("#copy-live").textContent = `${d.copyLabel} copied`;
+      setTimeout(() => {
+        if (!button.isConnected) return;
+        button.innerHTML = icon("copy");
+        delete button.dataset.copied;
+        button.setAttribute("aria-label", idleLabel);
+        $("#copy-live").textContent = "";
+      }, 1800);
+    } catch (error) { notify("Could not copy. Try again."); }
     return;
   }
   if (d.dismissTask) {

@@ -204,6 +204,7 @@ const path = require("node:path");
     await page.locator("#taskboard-button").click();
     await page.reload();
     check("Taskboard sidebar view in Stress testing survives reload", await page.evaluate(() => state.taskboardOpen === true && state.active === "stress-terminal-3") && await page.locator("#taskboard-view").isVisible() && await page.locator(".workspace-outline").isHidden() && await page.locator("#native-layout .native-tab").count() > 0 && await page.locator("#native-layout #taskboard").count() === 0);
+    check("Stress Taskboard keeps one single-line card per agent with long labels contained", await page.evaluate(() => { const view = document.querySelector("#taskboard-view"); const cards = [...view.querySelectorAll(".board-card")]; return cards.length === surfaces.filter(item => item.kind === "agent" && !state.dismissed[item.id]).length && view.scrollWidth <= view.clientWidth + 1 && cards.every(card => card.scrollWidth <= card.clientWidth + 1) && [...view.querySelectorAll(".board-title")].every(title => title.getBoundingClientRect().height < 20) && !view.querySelector(".quiet-history, .internal-tasks"); }));
     await page.locator("#beats-button").click();
     check("Beats opens as an anchored popover over the stress layout, never as a tab", await page.locator("#beats-popover").isVisible() && await page.evaluate(() => !("utilityTabs" in state) && state.active === "stress-terminal-3") && await page.locator("#native-layout [data-close-tool], #native-layout .utility-tab").count() === 0);
     await page.keyboard.press("Escape");

@@ -106,8 +106,27 @@ function toggleTaskboard() {
   commit();
 }
 
+const taskboardBuckets = [
+  { key: "waiting", label: "Waiting on you", states: ["input", "blocked"], tone: "blue" },
+  { key: "working", label: "Working", states: ["working"], tone: "green" },
+  { key: "failed", label: "Failed", states: ["failed"], tone: "red" },
+  { key: "idle", label: "Idle", states: ["idle"], tone: "grey" },
+  { key: "finished", label: "Finished", states: ["done"], tone: "grey" },
+  { key: "unknown", label: "Unknown", states: ["unknown"], tone: "grey" }
+];
+
+function taskboardCard(item, tone) {
+  const workspace = workspaces.find(candidate => candidate.id === item.workspace);
+  const tree = item.worktree ? worktrees[item.worktree] : null;
+  const branch = tree?.boardBranch ? `<div class="board-line board-branch" data-board-branch>${icon(tree.linked ? "worktree" : "branch")}<span>${escapeHTML(tree.boardBranch)}${tree.linked ? " · worktree" : ""}</span></div>` : "";
+  const activity = item.activity ? `<div class="board-activity">${escapeHTML(item.activity)}</div>` : "";
+  return `<button type="button" class="board-card ${tone}" data-focus="${item.id}" data-board-card="${item.id}">${iconFor(item)}<div class="board-card-body"><div class="board-title" title="${escapeHTML(item.name)}">${escapeHTML(item.name)}</div>${activity}<div class="board-line board-workspace-line"><span class="board-workspace" data-board-workspace>${icon("workspace")}<span>${escapeHTML(workspace.name)}</span></span>${item.model ? `<span class="board-model" data-board-model>${icon("cpu")}<span>${escapeHTML(item.model)}</span></span>` : ""}</div>${branch}</div></button>`;
+}
+
 function renderTaskboard() {
-  return `<section id="taskboard" class="tool-panel" aria-label="Taskboard"><header class="tool-panel-header"><div><h2>Taskboard</h2><p>All workspaces · synthetic agent activity</p></div></header><p class="experiment-note">Sidebar view. Select the Taskboard icon again to return to the outline.</p><div class="board-columns">${["input", "working", "idle", "done", "unknown"].map(status => `<section data-board-status="${status}"><h3>${({ working: "Working", input: "Needs you", idle: "Idle", done: "Done", unknown: "Unknown" })[status]}</h3>${surfaces.filter(item => item.kind === "agent" && item.state === status && !state.dismissed[item.id]).map(item => `<button data-focus="${item.id}">${iconFor(item)}<b>${escapeHTML(item.name)}</b><span>${escapeHTML(item.task)}</span>${tagMarkup(item, true)}<small>${escapeHTML(workspaces.find(workspace => workspace.id === item.workspace).name)}</small></button>`).join("")}</section>`).join("")}</div><details class="quiet-history"><summary>Quiet skill & shell history · synthetic</summary><p>Skill: design review · completed<br>Shell: local build check · completed</p><p>Activity records only; no separate session controls inferred.</p></details></section>`;
+  const agents = surfaces.filter(item => item.kind === "agent" && !state.dismissed[item.id]);
+  const groups = taskboardBuckets.map(bucket => ({ bucket, items: agents.filter(item => bucket.states.includes(item.state)) })).filter(group => group.items.length);
+  return `<section id="taskboard" class="tool-panel" aria-label="Taskboard">${groups.length ? groups.map(({ bucket, items }) => `<section class="board-group" data-board-group="${bucket.key}"><h3 class="board-heading ${bucket.tone}"><span>${bucket.label}</span><span class="board-count">${items.length}</span></h3>${items.map(item => taskboardCard(item, bucket.tone)).join("")}</section>`).join("") : '<p class="board-empty">No agent sessions.</p>'}</section>`;
 }
 
 const openBeatSessions = () => surfaces.filter(item => item.kind === "agent" && !state.dismissed[item.id]);
