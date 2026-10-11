@@ -748,21 +748,7 @@ struct SidebarView: View {
             preferences.refreshLayout()
             if let owner = dismissedTaskOwner {
                 dismissedTaskOwner = nil
-                DispatchQueue.main.async {
-                    let work = visibleWork
-                    let native = preferences.selectedMode == .hierarchy
-                    let ownerVisible = native
-                        ? SidebarTopology(model.hierarchy).workspaceBySurface[owner.surface] == owner.workspace
-                        : work.tree.sessions.contains { $0.surfaceID == owner.surface && $0.workspaceID == owner.workspace }
-                            || work.managed.contains { $0.surfaceId == owner.surface && $0.workspaceId == owner.workspace }
-                    let workspaceVisible = native || work.managed.contains { $0.workspaceId == owner.workspace }
-                    taskFocusNotice = localFocus.restore(
-                        surfaceID: owner.surface, workspaceID: owner.workspace,
-                        ownerVisible: ownerVisible, workspaceVisible: workspaceVisible,
-                        sessionID: work.tree.sessions.contains { $0.id == owner.session } ? owner.session : nil
-                    )
-                        ? nil : "The outcome was hidden, but local keyboard focus could not be restored. Tab to the sidebar controls."
-                }
+                DispatchQueue.main.async { restoreFocus(afterDismissing: owner) }
             }
         }
         .onChange(of: inspectorDetails == nil) { _, unavailable in
@@ -778,6 +764,27 @@ struct SidebarView: View {
             }
         }
         .onDisappear { model.setVisible(false) }
+    }
+
+    private func restoreFocus(afterDismissing owner: (session: UUID, surface: UUID, workspace: UUID)) {
+        let work = visibleWork
+        let native = preferences.selectedMode == .hierarchy
+        let ownerVisible: Bool
+        if native {
+            ownerVisible = SidebarTopology(model.hierarchy).workspaceBySurface[owner.surface] == owner.workspace
+        } else {
+            let inTree = work.tree.sessions.contains { $0.surfaceID == owner.surface && $0.workspaceID == owner.workspace }
+            let inManaged = work.managed.contains { $0.surfaceId == owner.surface && $0.workspaceId == owner.workspace }
+            ownerVisible = inTree || inManaged
+        }
+        let workspaceVisible = native || work.managed.contains { $0.workspaceId == owner.workspace }
+        let session: UUID? = work.tree.sessions.contains { $0.id == owner.session } ? owner.session : nil
+        let restored = localFocus.restore(
+            surfaceID: owner.surface, workspaceID: owner.workspace,
+            ownerVisible: ownerVisible, workspaceVisible: workspaceVisible, sessionID: session
+        )
+        taskFocusNotice = restored
+            ? nil : "The outcome was hidden, but local keyboard focus could not be restored. Tab to the sidebar controls."
     }
 
     @ViewBuilder private var outlineContent: some View {
