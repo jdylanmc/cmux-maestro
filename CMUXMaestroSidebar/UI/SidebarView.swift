@@ -596,25 +596,40 @@ struct SidebarView: View {
         }
     }
 
+    private func activateHeader(_ action: SidebarHeaderAction) {
+        switch action {
+        case .directory: openDirectoryAsWorkspace()
+        case .beats: showingBeats = true
+        case .taskboard:
+            preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
+        case .history, .settings:
+            settingsStartInHistory = action == .history
+            showingHistory = true
+        }
+    }
+
+    private func dismissHeaderPopover() {
+        showingHistory = false
+        showingBeats = false
+        unavailableHeaderAction = nil
+    }
+
+    private var headerBar: some View {
+        SidebarHeader(
+            taskboardActive: preferences.selectedMode == .taskboard,
+            availability: model.orchestration.availability,
+            presented: presentedHeaderAction,
+            dismissPopover: dismissHeaderPopover,
+            popoverContent: { AnyView(headerPopover) },
+            activate: activateHeader
+        )
+        .padding(.top, 6)
+        .padding(.bottom, 8)
+    }
+
     private func content(pinnedHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: preferences.layout.density.spacing(6)) {
-            SidebarHeader(taskboardActive: preferences.selectedMode == .taskboard,
-                          availability: model.orchestration.availability,
-                          presented: presentedHeaderAction,
-                          dismissPopover: { showingHistory = false; showingBeats = false; unavailableHeaderAction = nil },
-                          popoverContent: { AnyView(headerPopover) }) { action in
-                switch action {
-                case .directory: openDirectoryAsWorkspace()
-                case .beats: showingBeats = true
-                case .taskboard:
-                    preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
-                case .history, .settings:
-                    settingsStartInHistory = action == .history
-                    showingHistory = true
-                }
-            }
-            .padding(.top, 6)
-            .padding(.bottom, 8)
+            headerBar
             if model.orchestration.availability == .unavailable {
                 Label("Managed orchestration evidence is unavailable.", systemImage: "exclamationmark.circle")
                     .font(.caption2).foregroundStyle(.secondary)
