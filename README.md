@@ -1245,6 +1245,11 @@ CMUX to create a workspace there (requires the workspace-creation action grants)
 preferences, including the completed-work history controls.
 Taskboard temporarily toggles the existing sidebar view (its underline and
 accessible state indicate selection); activate it again to return to the outline.
+A workspace's menu has **Rename… (⇧⌘R)** and its preview ends with "⇧⌘R to rename": the
+CMUX extension SDK has no rename action, so Maestro selects the workspace and reminds you of
+CMUX's own shortcut instead of renaming it. The **Active window** footer has a drag handle on
+its top divider (shrink to the pet row, grow to half the sidebar; double-click resets, and
+the size is remembered).
 Taskboard renders only in the sidebar: there are no reusable or movable content tabs, and
 the extension SDK offers no content-tab host. It is a state board: one card per agent session,
 grouped under **Waiting on you**, **Working**, **Failed**, **Idle**, **Finished** and **Unknown**

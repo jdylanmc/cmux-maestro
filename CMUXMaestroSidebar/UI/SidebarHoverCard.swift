@@ -58,6 +58,11 @@ struct SidebarHoverCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .id(data.id)
+            if data.category == "Workspace preview" {
+                Label("⇧⌘R to rename", systemImage: "keyboard")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("hover-rename-hint")
+            }
             Text("Preview only").font(.caption2).foregroundStyle(.secondary)
         }
         .padding(14)

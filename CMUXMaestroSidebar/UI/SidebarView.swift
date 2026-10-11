@@ -478,7 +478,8 @@ struct SidebarView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            content(pinnedHeight: min(220, max(80, geometry.size.height * 0.36)))
+            content(pinnedHeight: min(220, max(80, geometry.size.height * 0.36)),
+                    pinnedDragLimit: max(80, geometry.size.height * 0.5))
                 .environment(\.sidebarContentWidth, max(0, geometry.size.width - preferences.layout.density.spacing(10)))
         }
     }
@@ -623,7 +624,7 @@ struct SidebarView: View {
         .padding(.bottom, 8)
     }
 
-    private func content(pinnedHeight: CGFloat) -> some View {
+    private func content(pinnedHeight: CGFloat, pinnedDragLimit: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: preferences.layout.density.spacing(6)) {
             headerBar
             if model.orchestration.availability == .unavailable {
@@ -673,7 +674,8 @@ struct SidebarView: View {
             .accessibilityIdentifier("sidebar-mode-content")
 
             let pinned = pinnedDetails
-            SidebarPinnedFooter(content: pinned, maximumHeight: pinnedHeight, inspect: {
+            SidebarPinnedFooter(content: pinned, maximumHeight: pinnedHeight, dragLimit: pinnedDragLimit,
+                                userHeight: $preferences.pinnedFooterHeight, inspect: {
                 guard let target = pinned.inspection?.target else { return }
                 switch target {
                 case .managed(let node): inspectManaged(node)
@@ -1635,6 +1637,7 @@ private struct WorkspaceRow: View {
     @Environment(\.sidebarHoverConnected) private var connected
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
     @Environment(\.sidebarPresentationNow) private var now
+    @State private var renameHintShown = false
     private var expanded: Bool { layout.isExpanded(.workspace(workspace.id)) }
     private var managedNodes: [SidebarOrchestrationNode] {
         displayManaged.filter { $0.workspaceId == workspace.id }
@@ -1671,6 +1674,11 @@ private struct WorkspaceRow: View {
                 .init(title: expanded ? "Collapse workspace" : "Expand workspace",
                       perform: { setExpanded(.workspace(workspace.id), !expanded) }),
                 .init(title: "Workspace details", perform: { selection = .workspace(workspace.id) }),
+                // CMUX offers no rename action to extensions: select the workspace, then point at its own shortcut.
+                .init(title: "Rename… (⇧⌘R)", unavailable: navigation.disabledReason(for: .workspace(workspace.id))) {
+                    navigation.select(.workspace(workspace.id))
+                    renameHintShown = true
+                },
                 .unavailable("Open backlog…", "Workspace backlog is not available.")
             ]),
             .placement, .lifecycle()
@@ -1723,6 +1731,13 @@ private struct WorkspaceRow: View {
             .padding(.vertical, 5)
             .overlay(alignment: .bottom) { Divider() }
             .padding(.bottom, 5)
+            if renameHintShown {
+                Label("Press ⇧⌘R to rename this workspace", systemImage: "keyboard")
+                    .sidebarFont(.caption2).foregroundStyle(.secondary)
+                    .padding(.bottom, 5)
+                    .accessibilityIdentifier("workspace-rename-hint")
+                    .task { try? await Task.sleep(for: .seconds(8)); renameHintShown = false }
+            }
             if expanded {
                 managedContent(.primary)
                 switch workspace.surfaces {
@@ -1756,6 +1771,7 @@ private struct WorkspaceRow: View {
             }
         }
         .padding(.bottom, density.spacing(8))
+        .onChange(of: title) { renameHintShown = false }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("workspace-\(workspace.id.uuidString)")
     }
@@ -2853,16 +2869,83 @@ private struct SidebarSessionDetail: View {
     }
 }
 
+/// A one-point divider with a larger invisible grab area; dragging up grows the footer above it.
+private struct SidebarResizeHandle: View {
+    let bodyHeight: CGFloat
+    let begin: () -> CGFloat
+    let set: (CGFloat, CGFloat) -> Void
+    let end: () -> Void
+    let reset: () -> Void
+    let adjust: (CGFloat) -> Void
+
+    var body: some View {
+        Divider()
+            .overlay {
+                Capsule().fill(.tertiary).frame(width: 28, height: 3)
+                Color.clear
+                    .frame(height: 12)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                            .onChanged { set(begin(), $0.translation.height) }
+                            .onEnded { _ in end() }
+                    )
+                    .onTapGesture(count: 2, perform: reset)
+                    .onHover { inside in
+                        if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+                    }
+            }
+            .help("Drag to resize the Active window. Double-click to reset.")
+            .accessibilityElement()
+            .accessibilityLabel("Resize Active window")
+            .accessibilityValue("\(Int(bodyHeight)) points")
+            .accessibilityAdjustableAction { adjust($0 == .increment ? 24 : -24) }
+            .accessibilityIdentifier("sidebar-pinned-resize")
+    }
+}
+
 struct SidebarPinnedFooter: View {
     let content: SidebarDetailContent
     var maximumHeight: CGFloat = 220
+    var dragLimit: CGFloat = 220
+    var userHeight: Binding<Double?> = .constant(nil)
     let inspect: () -> Void
     var copyValue: (String) -> Bool = { SidebarSessionCopy.copy($0) }
     @State private var contentHeight: CGFloat = 80
+    @State private var petRowHeight: CGFloat = 48
+    @State private var dragStart: CGFloat?
+
+    private let headerHeight: CGFloat = 33
+    private var minimumBodyHeight: CGFloat { petRowHeight }
+    private var maximumBodyHeight: CGFloat { max(minimumBodyHeight, dragLimit - headerHeight) }
+    private var bodyHeight: CGFloat {
+        if let stored = userHeight.wrappedValue {
+            return min(max(CGFloat(stored), minimumBodyHeight), maximumBodyHeight)
+        }
+        return min(contentHeight, max(0, maximumHeight - headerHeight))
+    }
+
+    private func setBodyHeight(_ value: CGFloat) {
+        userHeight.wrappedValue = Double(min(max(value, minimumBodyHeight), maximumBodyHeight))
+    }
+
+    private var resizeHandle: some View {
+        SidebarResizeHandle(
+            bodyHeight: bodyHeight,
+            begin: { dragStart ?? bodyHeight },
+            set: { start, translation in
+                dragStart = start
+                setBodyHeight(start - translation)
+            },
+            end: { dragStart = nil },
+            reset: { userHeight.wrappedValue = nil },
+            adjust: { setBodyHeight(bodyHeight + $0) }
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Divider()
+            resizeHandle
             HStack {
                 Text("Active window").sidebarFont(.caption2, weight: .semibold).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
@@ -2881,7 +2964,7 @@ struct SidebarPinnedFooter: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
-            .frame(height: min(contentHeight, max(0, maximumHeight - 33)))
+            .frame(height: bodyHeight)
         }
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .contain)
@@ -2906,6 +2989,7 @@ struct SidebarPinnedFooter: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { petRowHeight = $0 }
             ForEach(content.lines.filter { $0.copyableValue != nil }) { line in
                 SidebarSessionDetail(line: line, copyValue: copyValue)
             }

@@ -14,6 +14,12 @@ Notable changes are recorded using Keep a Changelog categories.
 - Show a small, always-visible copy icon beside every detail label (including the model in
   the preview). A successful copy shows no "Copied" text; the icon turns into a checkmark.
 - Add more padding between Taskboard cards.
+- Let the **Active window** footer be resized: drag the divider above it. It can shrink to
+  just the pet row and grow to half the sidebar height; the size is remembered, and
+  double-clicking the divider restores the automatic size.
+- Add **Rename… (⇧⌘R)** to the workspace menu and a "⇧⌘R to rename" note to the workspace
+  preview. CMUX exposes no rename action to extensions, so the menu item selects the
+  workspace and shows a short reminder of CMUX's own shortcut.
 
 ### Removed
 

@@ -37,6 +37,7 @@ final class SidebarPreferences {
     private static let historyKey = "sidebar.completedHistory.v1"
     private static let attentionKey = "sidebar.attention.v1"
     private static let showEndedKey = "sidebar.showEnded"
+    private static let pinnedFooterHeightKey = "sidebar.pinnedFooterHeight"
     private static let agentIconStyleKey = "sidebar.agentIconStyle"
     private static let terminalIconStyleKey = "sidebar.terminalIconStyle"
     private let defaults: UserDefaults
@@ -54,6 +55,16 @@ final class SidebarPreferences {
     var attentionNotice: String? { attentionStore.value.notice }
     var showEnded: Bool {
         didSet { defaults.set(showEnded, forKey: Self.showEndedKey) }
+    }
+    /// Height the human dragged the Active window footer to; nil keeps the automatic size.
+    var pinnedFooterHeight: Double? {
+        didSet {
+            if let pinnedFooterHeight, pinnedFooterHeight.isFinite, pinnedFooterHeight > 0 {
+                defaults.set(pinnedFooterHeight, forKey: Self.pinnedFooterHeightKey)
+            } else {
+                defaults.removeObject(forKey: Self.pinnedFooterHeightKey)
+            }
+        }
     }
     var agentIconStyle: SidebarAgentIconStyle {
         didSet { defaults.set(agentIconStyle.rawValue, forKey: Self.agentIconStyleKey) }
@@ -90,6 +101,8 @@ final class SidebarPreferences {
             initializeMissingFile: false, preserveSettingsOnSaveFailure: true
         )
         showEnded = defaults.bool(forKey: Self.showEndedKey)
+        let storedFooter = defaults.double(forKey: Self.pinnedFooterHeightKey)
+        pinnedFooterHeight = storedFooter.isFinite && storedFooter > 0 ? storedFooter : nil
         agentIconStyle = defaults.string(forKey: Self.agentIconStyleKey)
             .flatMap(SidebarAgentIconStyle.init(rawValue:)) ?? .maestro
         terminalIconStyle = defaults.string(forKey: Self.terminalIconStyleKey)
