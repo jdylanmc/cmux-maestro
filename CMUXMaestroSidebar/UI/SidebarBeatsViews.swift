@@ -71,7 +71,7 @@ struct SidebarBeatsPanel: View {
                 Spacer()
                 SidebarCloseButton(label: "Close Beats", id: "sidebar-close-beats", action: close)
             }
-            Text("Recurring prompts for exact agent sessions. Beats are saved here but nothing fires yet.")
+            Text("Recurring prompts for exact agent sessions. They fire only while the Beats clock runs, and only into Maestro-managed sessions.")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let notice = controller.notice ?? actionError {
                 Text(notice).font(.caption).foregroundStyle(SidebarTone.attention.color)

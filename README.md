@@ -1232,8 +1232,11 @@ CMUX to create a workspace there (requires the workspace-creation action grants)
 preferences; History opens the same popover at completed-work controls.
 Taskboard temporarily toggles the existing sidebar view (its underline and
 accessible state indicate selection); activate it again to return to the outline.
-Reusable utility hosting is not implemented. Beats explains its unavailability
-without creating a schedule. Keep-awake is not exposed by CMUX, so there is no Fermata control.
+Reusable utility hosting is not implemented. Beats opens a native popover to create, edit,
+pause and delete recurring prompts; the icon is lit while one is enabled.
+`cmux-maestro-orchestrator beats run` is the clock: run it in a CMUX terminal, one per user.
+Each start pauses saved Beats for human re-enable, and each due occurrence gets one queued
+handoff attempt (no retries or catch-up) into a Maestro-managed session only. Keep-awake is not exposed by CMUX, so there is no Fermata control.
 Settings and the separate Details inspector popover have explicit Close controls.
 The keyboard-accessible inspector scrolls independently, preserves full metadata
 and Other activity, and revalidates window, placement, session, run and generation

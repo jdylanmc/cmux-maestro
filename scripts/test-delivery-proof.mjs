@@ -777,6 +777,35 @@ test("installed mode discovers arbitrary same-workspace participants and peer re
     ["maestro_peers", "maestro_send", "maestro_identity", "maestro_close", "maestro_spawn"]);
 });
 
+test("a Beat frame proves the destination's own capability and queues instead of steering", async (t) => {
+  const f = await managedFixture(t);
+  await f.launch(1);
+  const target = f.bindings[1];
+  const beat = (overrides = {}) => ({
+    destination: managedAddress(target), kind: "beat", body: "Run the checks.",
+    capability: target.capability, ...overrides,
+  });
+  const incoming = event(f.events, "send");
+  await rawSend(f.root, target.peer, beat());
+  await incoming;
+  assert.equal(f.sends.length, 1);
+  assert.equal(f.sends[0].mode, "enqueue");
+  assert.match(f.sends[0].prompt, /^Maestro Beat: a scheduled recurring prompt/);
+  assert.ok(f.sends[0].prompt.endsWith("\nRun the checks."));
+  const rejected = [
+    beat({ capability: f.bindings[0].capability }),
+    beat({ destination: managedAddress(f.bindings[0]) }),
+    beat({ extra: true }),
+    beat({ body: "bad\u0000body" }),
+  ];
+  for (const wire of rejected) {
+    const dropped = event(f.events, "drop");
+    await rawSend(f.root, target.peer, wire);
+    await dropped;
+  }
+  assert.equal(f.sends.length, 1);
+});
+
 test("managed steering does not wait for native admission or serialize behind an earlier send", async (t) => {
   let release;
   const admission = new Promise((resolve) => { release = resolve; });

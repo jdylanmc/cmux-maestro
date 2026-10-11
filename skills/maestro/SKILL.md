@@ -200,8 +200,12 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
 - A Beat restored after a CMUX relaunch, or whose target session ended, waits for a
   **human** to repair or re-enable it. Your `resume` is refused in that state; do not try
   to work around it. You cannot reassign a Beat or touch another session's Beats.
-- Beats are saved definitions today. Firing requires the Beats clock, which is not part
-  of this release yet; do not tell the human a Beat will fire until it is.
+- Beats fire only while the human runs the clock, `"$MAESTRO" beats run`, in a CMUX
+  terminal tab (one per user; it stops with that terminal), and only into
+  Maestro-managed sessions. Delivery is queued behind current work as one
+  `Maestro Beat:` prompt. Each clock start pauses saved Beats behind the recovery gate;
+  the human re-enables them in the panel. Do not tell the human a Beat will fire unless
+  the clock is running and your session is managed.
 
 ## Permissions, failures and lifecycle boundaries
 

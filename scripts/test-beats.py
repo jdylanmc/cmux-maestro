@@ -22,6 +22,7 @@ beats_due = API["beats_due"]
 cron_next_times = API["cron_next_times"]
 local_minute_key = API["local_minute_key"]
 store_mutate = API["beats_store_mutate"]
+store_read = API["beats_store_read"]
 
 SESSION_A = str(uuid.uuid4())
 SESSION_B = str(uuid.uuid4())
@@ -317,6 +318,98 @@ class AgentSurfaceTests(unittest.TestCase):
         code, value = self.run_beats("cron-check", "--cron", "0 9 * * *", "--count", "2", own=False)
         self.assertEqual(code, 0)
         self.assertEqual(len(value["next"]), 2)
+
+
+class DeliveryTests(LocalTimeCase):
+    def setUp(self):
+        super().setUp()
+        self.base = Path(tempfile.mkdtemp(prefix="bt-", dir="/tmp")).resolve()
+        self.store = self.base / "store"
+        self.store.mkdir(mode=0o700)
+        self.routes = self.base / "routes"
+        self.routes.mkdir(mode=0o700)
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.base, ignore_errors=True))
+        self.sent = []
+        self.workspace = str(uuid.uuid4())
+
+    def bind(self, session, peer="0123456789abcdef", generation=1, socket_file=True):
+        binding = {"peer": peer, "nodeId": str(uuid.uuid4()), "name": "worker", "workspaceId": self.workspace,
+                   "sessionId": session, "generation": generation, "capability": "a" * 64}
+        path = self.routes / f"{peer}.json"
+        path.write_text(json.dumps(binding))
+        path.chmod(0o600)
+        if socket_file:
+            import socket as socket_module
+            listener = socket_module.socket(socket_module.AF_UNIX)
+            listener.bind(str(self.routes / f"{peer}.sock"))
+            (self.routes / f"{peer}.sock").chmod(0o600)
+            self.addCleanup(listener.close)
+            return binding, listener
+        return binding, None
+
+    def seed(self, *beats):
+        store_mutate(lambda state: state["beats"].extend(beats), root=self.store)
+
+    def tick(self, epoch, send=None):
+        return API["beats_tick"](epoch, routes=self.routes, store_root=self.store,
+                                 send=send or (lambda routes, binding, prompt: self.sent.append((binding, prompt))))
+
+    def test_fires_once_for_its_minute_and_never_retries_or_catches_up(self):
+        self.bind(SESSION_A)
+        record = beat("*/5 * * * *")
+        self.seed(record)
+        moment = local_epoch(2026, 1, 15, 10, 5, 0)
+        self.assertEqual([item["outcome"] for item in self.tick(moment)], ["sent"])
+        self.assertEqual(self.tick(moment + 20), [])
+        self.assertEqual(self.tick(moment + 60), [])
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.sent[0][1], "go")
+
+    def test_failed_attempt_is_recorded_and_not_retried(self):
+        self.bind(SESSION_A)
+        self.seed(beat("* * * * *"))
+        moment = local_epoch(2026, 1, 15, 10, 5, 0)
+
+        def refuse(routes, binding, prompt):
+            raise OrchestrationError("no")
+        self.assertEqual(self.tick(moment, refuse)[0]["outcome"], "failed")
+        self.assertEqual(self.tick(moment + 10), [])
+
+    def test_unmanaged_or_unbound_session_reports_without_delivery(self):
+        self.seed(beat("* * * * *"))
+        self.assertEqual(self.tick(local_epoch(2026, 1, 15, 10, 5, 0))[0]["outcome"], "no-managed-session")
+        self.assertEqual(self.sent, [])
+
+    def test_gated_paused_and_ended_beats_do_not_fire(self):
+        self.bind(SESSION_A)
+        self.seed(beat("* * * * *", recoveryGate=True), beat("* * * * *", enabled=False),
+                  beat("* * * * *", targetEnded=True))
+        self.assertEqual(self.tick(local_epoch(2026, 1, 15, 10, 5, 0)), [])
+
+    def test_binding_choice_is_exact_session_newest_generation_with_live_socket(self):
+        self.bind(SESSION_B, peer="1111111111111111")
+        self.bind(SESSION_A, peer="2222222222222222", generation=1)
+        newer, _ = self.bind(SESSION_A, peer="3333333333333333", generation=2)
+        self.bind(SESSION_A, peer="4444444444444444", generation=3, socket_file=False)
+        found = API["beat_binding"](self.routes, SESSION_A)
+        self.assertEqual(found["peer"], newer["peer"])
+        self.assertIsNone(API["beat_binding"](self.routes, str(uuid.uuid4())))
+
+    def test_real_socket_receives_a_beat_frame_with_target_capability(self):
+        binding, listener = self.bind(SESSION_A)
+        listener.listen(1)
+        API["send_beat"](self.routes, binding, "héllo\nworld")
+        connection, _ = listener.accept()
+        wire = json.loads(connection.makefile("rb").read())
+        self.assertEqual(wire, {"destination": {"workspaceId": self.workspace, "sessionId": SESSION_A, "generation": 1},
+                                "kind": "beat", "body": "héllo\nworld", "capability": "a" * 64})
+
+    def test_start_gates_saved_recurrence_for_human_recovery(self):
+        self.seed(beat("* * * * *"), beat("* * * * *", enabled=False))
+        self.assertEqual(API["beats_gate_on_start"](self.store), 1)
+        states = store_read(root=self.store)["beats"]
+        self.assertEqual([(item["enabled"], item["recoveryGate"]) for item in states],
+                         [(False, True), (False, False)])
 
 
 if __name__ == "__main__":

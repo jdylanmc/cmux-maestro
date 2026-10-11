@@ -379,7 +379,20 @@ enum SidebarHeaderAction: String, CaseIterable, Identifiable {
 struct SidebarHeader: View {
     let taskboardActive: Bool
     var availability: SidebarOrchestrationAvailability = .ready
+    var presented: SidebarHeaderAction? = nil
+    var dismissPopover: () -> Void = {}
+    var popoverContent: () -> AnyView = { AnyView(EmptyView()) }
     let activate: (SidebarHeaderAction) -> Void
+
+    private func isPresented(_ action: SidebarHeaderAction) -> Binding<Bool> {
+        Binding(get: { presented == action }, set: { if !$0 { dismissPopover() } })
+    }
+
+    private var beats = SidebarBeatsController.shared
+
+    private func lit(_ action: SidebarHeaderAction) -> Bool {
+        action == .beats && beats.beats.contains { $0.enabled }
+    }
 
     var body: some View {
         HStack(spacing: 2) {
@@ -410,6 +423,8 @@ struct SidebarHeader: View {
                         Button { activate(action) } label: {
                             VStack(spacing: 2) {
                                 Image(systemName: action.symbol).font(.system(size: 14))
+                                    .foregroundStyle(lit(action) ? Color.accentColor : Color.primary)
+                                    .shadow(color: lit(action) ? Color.accentColor.opacity(0.55) : .clear, radius: 4)
                                     .frame(height: 18)
                                 Capsule().fill(Color.clear).frame(width: 12, height: 2)
                             }
@@ -420,10 +435,17 @@ struct SidebarHeader: View {
                         .help(action.unavailable.map { "\(action.title). \($0)" } ?? action.title)
                         .accessibilityLabel(action.title)
                         .accessibilityIdentifier("sidebar-header-\(action.rawValue)")
+                        .popover(isPresented: isPresented(action)) { popoverContent() }
                     }
                 }
             }
             .fixedSize()
+        }
+        .task {
+            while !Task.isCancelled {
+                beats.refresh()
+                try? await Task.sleep(for: .seconds(3))
+            }
         }
     }
 }
@@ -551,10 +573,36 @@ struct SidebarView: View {
         }
     }
 
+    private var presentedHeaderAction: SidebarHeaderAction? {
+        if showingBeats { return .beats }
+        if showingHistory { return settingsStartInHistory ? .history : .settings }
+        return unavailableHeaderAction
+    }
+
+    @ViewBuilder private var headerPopover: some View {
+                if showingHistory {
+                historySettings
+            } else if showingBeats {
+                SidebarBeatsPanel(targets: beatTargets) { showingBeats = false }
+            } else if let action = unavailableHeaderAction, let reason = action.unavailable {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(action.title).font(.headline)
+                    Text(reason).font(.callout).fixedSize(horizontal: false, vertical: true)
+                    Button("Close") { unavailableHeaderAction = nil }
+                        .keyboardShortcut(.cancelAction)
+                }
+                .padding(14)
+                .frame(width: 260)
+            }
+    }
+
     private func content(pinnedHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: preferences.layout.density.spacing(6)) {
             SidebarHeader(taskboardActive: preferences.selectedMode == .taskboard,
-                          availability: model.orchestration.availability) { action in
+                          availability: model.orchestration.availability,
+                          presented: presentedHeaderAction,
+                          dismissPopover: { showingHistory = false; showingBeats = false; unavailableHeaderAction = nil },
+                          popoverContent: { AnyView(headerPopover) }) { action in
                 switch action {
                 case .directory: openDirectoryAsWorkspace()
                 case .beats: showingBeats = true
@@ -567,25 +615,6 @@ struct SidebarView: View {
             }
             .padding(.top, 6)
             .padding(.bottom, 8)
-            .popover(isPresented: Binding(
-                get: { showingHistory || showingBeats || unavailableHeaderAction != nil },
-                set: { if !$0 { showingHistory = false; showingBeats = false; unavailableHeaderAction = nil } }
-            )) {
-                if showingHistory {
-                    historySettings
-                } else if showingBeats {
-                    SidebarBeatsPanel(targets: beatTargets) { showingBeats = false }
-                } else if let action = unavailableHeaderAction, let reason = action.unavailable {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(action.title).font(.headline)
-                        Text(reason).font(.callout).fixedSize(horizontal: false, vertical: true)
-                        Button("Close") { unavailableHeaderAction = nil }
-                            .keyboardShortcut(.cancelAction)
-                    }
-                    .padding(14)
-                    .frame(width: 260)
-                }
-            }
             if model.orchestration.availability == .unavailable {
                 Label("Managed orchestration evidence is unavailable.", systemImage: "exclamationmark.circle")
                     .font(.caption2).foregroundStyle(.secondary)

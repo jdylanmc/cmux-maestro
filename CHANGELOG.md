@@ -6,6 +6,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Add Beats: recurring cron prompts for exact agent sessions. A native sidebar popover
+  manages them (the header icon lights while one is enabled), `/maestro` agents manage
+  their own through `beats`, and `beats run` is the local-time clock that queues one
+  `Maestro Beat:` prompt per due occurrence into Maestro-managed sessions through the
+  installed adapter. No retries or catch-up; each clock start pauses saved Beats for
+  human re-enable. Add the `Beats/` read-write sandbox grant.
 - Show an animated Codex-format pet (1536×1872, 8×9 cells) in pinned details,
   with a bundled original Maestro robot-head default, a per-agent picker,
   **Upload pet…**, gallery links, **Save to my pets** and **Reset to agent's

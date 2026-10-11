@@ -18,6 +18,7 @@ import shutil
 import selectors
 import signal
 import shlex
+import socket
 import stat
 import subprocess
 import sys
@@ -4312,6 +4313,126 @@ def prove_own_session(session):
         raise OrchestrationError("This caller could not prove ownership of that session; no Beat was changed.")
 
 
+def beat_binding(routes, session):
+    """The live managed route for exactly this Copilot session, or None. Newest generation wins."""
+    best, entries = None, 0
+    for entry in os.scandir(routes):
+        if not re.fullmatch(r"[0-9a-f]{16}\.json", entry.name):
+            continue
+        entries += 1
+        if entries > 1024:
+            raise OrchestrationError("Messaging has too many routes to scan.")
+        try:
+            binding = message_json(routes / entry.name)
+        except (OSError, ValueError, OrchestrationError):
+            continue
+        if (not isinstance(binding, dict) or binding.get("sessionId") != session
+                or type(binding.get("generation")) is not int or binding.get("peer") != entry.name[:-5]
+                or not isinstance(binding.get("capability"), str)
+                or not isinstance(binding.get("workspaceId"), str)):
+            continue
+        try:
+            info = (routes / f"{binding['peer']}.sock").lstat()
+        except OSError:
+            continue
+        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            continue
+        if best is None or binding["generation"] > best["generation"]:
+            best = binding
+    return best
+
+
+def send_beat(routes, binding, prompt):
+    """One local write to the target's adapter. No acknowledgement exists, so no retry."""
+    frame = json.dumps({
+        "destination": {"workspaceId": binding["workspaceId"], "sessionId": binding["sessionId"],
+                        "generation": binding["generation"]},
+        "kind": "beat", "body": prompt, "capability": binding["capability"],
+    }, ensure_ascii=False, separators=(",", ":")).encode()
+    if len(frame) > 8192:
+        raise OrchestrationError("This Beat's prompt is too large to deliver.")
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(1.5)
+        sock.connect(str(routes / f"{binding['peer']}.sock"))
+        sock.sendall(frame)
+        sock.shutdown(socket.SHUT_WR)
+    finally:
+        sock.close()
+
+
+def beats_tick(epoch, *, routes, store_root=None, send=send_beat):
+    """Fire what is due this local minute. Each occurrence gets exactly one attempt: it is recorded
+    before delivery, so a failed or interrupted attempt is never retried or caught up."""
+    claimed = []
+
+    def claim(state):
+        key, due = beats_due(state, epoch)
+        for beat in due:
+            beat["lastFiredMinute"] = key
+            claimed.append(dict(beat))
+
+    beats_store_mutate(claim, root=store_root)
+    outcomes = []
+    for beat in claimed:
+        try:
+            binding = beat_binding(routes, beat["sessionId"])
+            if binding is None:
+                outcomes.append({"beat": beat["id"], "outcome": "no-managed-session"})
+                continue
+            send(routes, binding, beat["prompt"])
+            outcomes.append({"beat": beat["id"], "outcome": "sent"})
+        except (OSError, OrchestrationError):
+            outcomes.append({"beat": beat["id"], "outcome": "failed"})
+    return outcomes
+
+
+def beats_gate_on_start(store_root=None):
+    """A new clock run is a relaunch: saved recurrence stays paused until a human re-enables it."""
+    def gate(state):
+        count = 0
+        for beat in state["beats"]:
+            if beat["enabled"] and not beat["recoveryGate"]:
+                beat["enabled"], beat["recoveryGate"] = False, True
+                count += 1
+        return count
+    return beats_store_mutate(gate, root=store_root)
+
+
+def beats_run(root):
+    """The clock. One per user, for the life of the terminal it runs in."""
+    config = messaging_configuration(root)
+    if config is None:
+        raise OrchestrationError("Messaging is not installed; enable Maestro integration.")
+    routes = Path(config["routes"])
+    store = beats_root()
+    store.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock = os.open(store / ".clock.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        os.close(lock)
+        raise OrchestrationError("A Beats clock is already running.") from error
+    stop = []
+    for number in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(number, lambda *_: stop.append(True))
+    gated = beats_gate_on_start()
+    print(json.dumps({"beatsClock": "started", "gatedForRecovery": gated}), flush=True)
+    while not stop:
+        now = time.time()
+        time.sleep(max(0.2, 60 - now % 60 + 0.5))
+        if stop:
+            break
+        try:
+            private_message_directory(routes)
+            outcomes = beats_tick(time.time(), routes=routes)
+        except (OSError, OrchestrationError) as error:
+            outcomes = [{"outcome": "tick-failed", "reason": str(error)[:200]}]
+        for outcome in outcomes:
+            print(json.dumps({"minute": local_minute_key(time.time()), **outcome}), flush=True)
+    return 0
+
+
 def beats_command(args):
     """Agent surface: every operation is bound to the caller's own proven session. Human-only
     operations (reassignment, clearing the recovery gate) are not available here."""
@@ -4784,7 +4905,7 @@ def parser():
     pet.add_argument("--pet-id")
     pet.add_argument("--add", metavar="PATH")
     beats = commands.add_parser("beats", help="Manage recurring prompts for your own session")
-    beats.add_argument("beats_action", choices=["list", "create", "edit", "pause", "resume", "delete", "cron-check"])
+    beats.add_argument("beats_action", choices=["list", "create", "edit", "pause", "resume", "delete", "cron-check", "run"])
     beats.add_argument("--self", action="store_true", dest="own_session")
     beats.add_argument("--session-id")
     beats.add_argument("--beat-id")
@@ -4822,6 +4943,8 @@ def main(argv=None):
         if args.command == "icons":
             print(json.dumps({"ok": True, **command_icons(args)}, sort_keys=True))
             return 0
+        if args.command == "beats" and args.beats_action == "run":
+            return beats_run(default_root())
         if args.command == "beats":
             print(json.dumps({"ok": True, **beats_command(args)}, sort_keys=True))
             return 0
