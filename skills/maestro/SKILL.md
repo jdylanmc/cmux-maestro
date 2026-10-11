@@ -195,17 +195,18 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
   local time. A nonexistent local time (spring-forward) is skipped, a repeated one
   (fall-back) fires once, and missed minutes are never replayed.
 - Prompts are plain text up to 4 KiB. At most 16 Beats per session.
-- **One handoff attempt per due occurrence**: no retries, receipts, completion tracking
-  or queue editing. Pause, edit and delete affect future occurrences only.
-- A Beat restored after a CMUX relaunch, or whose target session ended, waits for a
-  **human** to repair or re-enable it. Your `resume` is refused in that state; do not try
-  to work around it. You cannot reassign a Beat or touch another session's Beats.
-- Beats fire only while the human runs the clock, `"$MAESTRO" beats run`, in a CMUX
-  terminal tab (one per user; it stops with that terminal), and only into
-  Maestro-managed sessions. Delivery is queued behind current work as one
-  `Maestro Beat:` prompt. Each clock start pauses saved Beats behind the recovery gate;
-  the human re-enables them in the panel. Do not tell the human a Beat will fire unless
-  the clock is running and your session is managed.
+- **One handoff attempt per due occurrence** is Copilot's own: no retries, receipts,
+  completion tracking or queue editing. Pause, edit and delete affect future
+  occurrences only.
+- A Beat is simply on or off. You cannot reassign a Beat or touch another session's Beats.
+- Beats run on **Copilot's own scheduler**. The Maestro extension in each CMUX session
+  mirrors that session's enabled Beats into Copilot schedules (labelled `Beat [id]`),
+  within about 15 seconds of a change and again whenever the session starts; Copilot owns
+  timing, time zone and queueing. There is no separate clock and no managed launch is
+  needed. A Beat fires only while its session is running.
+- Do not edit or stop `Beat [...]` schedules with `/every` or `/after`; manage Beats with
+  the commands above. If Copilot scheduling is unavailable the extension logs one
+  diagnostic and Beats stay saved but inert, so do not promise a firing you have not seen.
 
 ## Permissions, failures and lifecycle boundaries
 

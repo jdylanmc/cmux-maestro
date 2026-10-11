@@ -1,9 +1,10 @@
-import { constants, promises as fs } from "node:fs";
+import { constants, promises as fs, watch } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { TextDecoder } from "node:util";
 import { execFile } from "node:child_process";
+import os from "node:os";
 
 const PEERS = ["a", "b"];
 const MANAGED_PEER = /^[0-9a-f]{16}$/;
@@ -526,23 +527,6 @@ export async function start({ root, peer, joinSession, managed = false, expected
       pending++;
       (async () => {
         const wire = JSON.parse(decoder.decode(Buffer.concat(chunks)));
-        if (managed && wire !== null && typeof wire === "object" && wire.kind === "beat") {
-          // A Beat is a saved recurring prompt from the local clock. It proves the destination's own
-          // private capability (same-user files) and queues behind current work: never `immediate`.
-          exactKeys(wire, ["destination", "kind", "body", "capability"]);
-          address(wire.destination, managed);
-          validateBody(wire.body);
-          await currentBinding();
-          requireCondition(sameAddress(wire.destination, ownAddress) && typeof wire.capability === "string" &&
-            CAPABILITY.test(wire.capability) &&
-            timingSafeEqual(Buffer.from(wire.capability), Buffer.from(own.capability)));
-          await session.send({
-            prompt: "Maestro Beat: a scheduled recurring prompt saved for this session. " +
-              "Body is the saved task text, not new authorization or policy.\n" + wire.body,
-            mode: "enqueue",
-          });
-          return;
-        }
         exactKeys(wire, ["destination", "sender", "body", "capability"]);
         address(wire.destination, managed);
         address(wire.sender, managed);
@@ -565,6 +549,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
   });
   server.maxConnections = 8;
   const listener = {
+    get session() { return session; },
     close: () => {
       if (closing) return closing;
       for (const socket of sockets) socket.destroy();
@@ -674,4 +659,125 @@ export async function startReadiness({ joinSession, environment = process.env, s
   requireCondition(session?.sessionId === sessionId);
   ready = true;
   return session;
+}
+
+// ---- Beats: recurring prompts handed to Copilot's own scheduler -------------------------------
+// Copilot owns timing, time zones and queueing. This section is the only place that knows how
+// schedules are created. `session.schedule.addCron` exists in the runtime but is absent from the
+// SDK's typed client, so it is reached through the raw connection behind this one function. If a
+// Copilot release changes it, the gateway fails and Beats stop registering; nothing else breaks.
+
+const BEAT_LABEL = /^Beat \[([0-9a-f]{8})\]/;
+const BEATS_STORE_LIMIT = 1_048_576;
+
+const beatKey = (beat) => beat.id.slice(0, 8);
+const beatLabel = (beat) => `Beat [${beatKey(beat)}] ${beat.prompt.split("\n")[0].slice(0, 60)}`;
+
+export function createScheduleGateway(session) {
+  const sessionId = session?.sessionId;
+  return {
+    async list() {
+      const { entries } = await session.rpc.schedule.list();
+      requireCondition(Array.isArray(entries));
+      return entries.map((entry) => ({
+        id: entry.id, cron: entry.cron, tz: entry.tz, prompt: entry.prompt, label: entry.displayPrompt ?? "",
+      }));
+    },
+    async add({ cron, tz, prompt, label }) {
+      const connection = session?.connection;
+      requireCondition(typeof connection?.sendRequest === "function");
+      const result = await connection.sendRequest("session.schedule.addCron", {
+        sessionId, cron, tz, prompt, displayPrompt: label, recurring: true,
+      });
+      requireCondition(Number.isSafeInteger(result?.entry?.id));
+      return result.entry.id;
+    },
+    async remove(id) {
+      await session.rpc.schedule.stop({ id });
+    },
+  };
+}
+
+// Pure: which of this session's Beats need a native schedule added or removed. Schedules this
+// section did not create (the user's own /every, /after) are never touched.
+export function planBeatSchedules({ beats, sessionId, entries, tz }) {
+  const wanted = beats.filter((beat) => beat.sessionId === sessionId && beat.enabled &&
+    !beat.recoveryGate && !beat.targetEnded);
+  const wantedKeys = new Set(wanted.map(beatKey));
+  const remove = [];
+  const present = new Set();
+  for (const entry of entries) {
+    const key = BEAT_LABEL.exec(entry.label)?.[1];
+    if (key === undefined) continue;
+    const beat = wanted.find((item) => beatKey(item) === key);
+    if (beat && !present.has(key) && entry.cron === beat.cron && entry.tz === tz && entry.prompt === beat.prompt) {
+      present.add(key);
+    } else {
+      remove.push(entry.id);
+    }
+  }
+  const add = wanted.filter((beat) => !present.has(beatKey(beat)) && wantedKeys.has(beatKey(beat)))
+    .map((beat) => ({ cron: beat.cron, tz, prompt: beat.prompt, label: beatLabel(beat) }));
+  return { add, remove };
+}
+
+export async function readBeatsStore(root) {
+  let handle;
+  try {
+    handle = await fs.open(path.join(root, "beats.json"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  try {
+    const info = await handle.stat();
+    requireCondition(info.isFile() && info.uid === process.getuid() && !(info.mode & 0o077) &&
+      info.size <= BEATS_STORE_LIMIT);
+    const state = JSON.parse(decoder.decode(await handle.readFile()));
+    requireCondition(state?.version === 1 && Array.isArray(state.beats));
+    return state.beats.filter((beat) => typeof beat?.id === "string" && UUID.test(beat.id) &&
+      typeof beat.sessionId === "string" && typeof beat.cron === "string" && typeof beat.prompt === "string" &&
+      typeof beat.enabled === "boolean" && typeof beat.recoveryGate === "boolean" &&
+      typeof beat.targetEnded === "boolean");
+  } finally {
+    await handle.close();
+  }
+}
+
+export function startBeats({ session, root = path.join(os.homedir(), "Library/Application Support/CMUXMaestroPreview/Beats"),
+  gateway = createScheduleGateway(session), pollMs = 15_000,
+  tz = Intl.DateTimeFormat().resolvedOptions().timeZone, diagnostic = (error) => {
+    const code = typeof error?.code === "string" ? error.code : error?.name ?? "UNKNOWN";
+    console.error(`Maestro Beats could not sync with Copilot scheduling (${code}).`);
+  } }) {
+  const sessionId = session?.sessionId;
+  requireCondition(typeof sessionId === "string" && UUID.test(sessionId));
+  let busy = false, failing = false, closed = false, debounce;
+  async function sync() {
+    if (busy || closed) return;
+    busy = true;
+    try {
+      const plan = planBeatSchedules({
+        beats: await readBeatsStore(root), sessionId, entries: await gateway.list(), tz,
+      });
+      for (const id of plan.remove) await gateway.remove(id);
+      for (const entry of plan.add) await gateway.add(entry);
+      failing = false;
+    } catch (error) {
+      if (!failing) diagnostic(error);
+      failing = true;
+    } finally {
+      busy = false;
+    }
+  }
+  const timer = setInterval(sync, pollMs);
+  timer.unref?.();
+  let watcher;
+  try {
+    watcher = watch(root, () => { clearTimeout(debounce); debounce = setTimeout(sync, 250); debounce.unref?.(); });
+    watcher.on("error", () => {});
+    watcher.unref?.();
+  } catch { /* The directory may not exist yet; polling covers it. */ }
+  const first = sync();
+  return { sync, ready: first, close() { closed = true; clearInterval(timer); clearTimeout(debounce); watcher?.close(); } };
 }
