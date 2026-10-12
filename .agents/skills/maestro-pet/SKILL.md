@@ -45,9 +45,11 @@ The response lists the default (`maestro`) and any pets this session already add
 ## Make a new pet (wraps hatch-pet)
 
 A valid Codex pet is a folder with `pet.json` and a transparent PNG or WebP
-spritesheet of exactly **1536x1872** pixels: 8 columns x 9 rows of 192x208 cells. Rows
+spritesheet of **1536x1872** pixels: 8 columns x 9 rows of 192x208 cells. Rows
 in order: idle, running-right, running-left, waving, jumping, failed, waiting, running,
-review. Maestro shows `idle`, `running` (working), `waiting` (needs input), `waving`
+review. A **v2** pet (`spriteVersionNumber` 2, **1536x2288**, 11 rows) adds
+look-direction rows below those; Maestro accepts it and plays only the first nine rows.
+Maestro shows `idle`, `running` (working), `waiting` (needs input), `waving`
 (turn finished) and `failed` (blocked or failed).
 
 1. If the human already has a pet folder, use it; skip to "Add and choose".

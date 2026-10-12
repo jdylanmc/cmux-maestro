@@ -11,6 +11,12 @@ enum SidebarPetSheet {
     static let cellHeight = 208
     static let width = columns * cellWidth
     static let height = rows * cellHeight
+    /// Codex pet v2 sheets append look-direction rows below the nine standard rows; Maestro plays only the first nine.
+    static let v2Height = 11 * cellHeight
+
+    static func accepts(width: Int, height: Int) -> Bool {
+        width == Self.width && (height == Self.height || height == v2Height)
+    }
     static let maximumBytes = 10 * 1024 * 1024
     /// Populated frames per row: idle, run right, run left, wave, jump, failure, waiting, working, review.
     static let frameCounts = [6, 8, 8, 4, 5, 8, 6, 6, 6]
@@ -295,7 +301,7 @@ final class SidebarPetStore {
     nonisolated private static func image(_ url: URL) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
-              image.width == SidebarPetSheet.width, image.height == SidebarPetSheet.height else { return nil }
+              SidebarPetSheet.accepts(width: image.width, height: image.height) else { return nil }
         return image
     }
 
@@ -331,7 +337,7 @@ final class SidebarPetStore {
             throw PetError(message: "The spritesheet must be smaller than 10 MB.")
         }
         guard image(sheetURL) != nil, let data = try? Data(contentsOf: sheetURL) else {
-            throw PetError(message: "The spritesheet must be \(SidebarPetSheet.width)×\(SidebarPetSheet.height) pixels (8×9 cells of 192×208).")
+            throw PetError(message: "The spritesheet must be \(SidebarPetSheet.width)×\(SidebarPetSheet.height) pixels (8×9 cells of 192×208), or \(SidebarPetSheet.width)×\(SidebarPetSheet.v2Height) for a v2 pet.")
         }
         if id.isEmpty { id = "pet" }
         if id == defaultID { id = "maestro-custom" }

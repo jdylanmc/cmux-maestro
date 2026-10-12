@@ -10,6 +10,12 @@ Notable changes are recorded using Keep a Changelog categories.
   toggled from the header, and the visual proof of concept now matches (Beats is a
   popover; no utility tabs). Closes #86 and #87 as not planned.
 
+### Fixed
+
+- Accept Codex **v2** pets (1536×2288, 11 rows with look-direction animations) when adding or
+  uploading a pet, in both `maestro pet --add` and the picker. Maestro plays only the first
+  nine rows, which share the v1 layout. Previously such pets were rejected as "must be 1536×1872".
+
 ### Added
 
 - Add Beats: recurring cron prompts for exact agent sessions. A native sidebar popover

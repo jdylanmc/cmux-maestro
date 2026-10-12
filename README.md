@@ -1434,7 +1434,7 @@ golden-image comparison. No transcripts, real workspace paths or desktop images 
 ## Pets: `/cmux-maestro-native:maestro-pet`
 
 The active agent's pinned details show an animated Codex-format pet (1536×1872 PNG/WebP,
-8×9 cells of 192×208). Every agent starts with the bundled, original **Maestro** robot-head
+8×9 cells of 192×208; a v2 pet at 1536×2288 is accepted and only its first nine rows are played). Every agent starts with the bundled, original **Maestro** robot-head
 pet, animated by state: idle, working, needs input, turn finished and blocked/failed.
 Click the pet to open a picker of the bundled pet, pets you saved or uploaded, and the pet
 this agent made for itself. **Upload pet…** accepts a Codex pet folder (`pet.json` plus

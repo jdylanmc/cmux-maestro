@@ -3919,6 +3919,9 @@ def command_self_icon(args):
 
 
 PET_SIZE = (1536, 1872)
+# Codex pet v2 adds look-direction rows below the nine standard rows; Maestro only plays the first nine.
+PET_V2_SIZE = (1536, 2288)
+PET_SIZES = (PET_SIZE, PET_V2_SIZE)
 PET_MAX_BYTES = 10 * 1024 * 1024
 PET_MAX_PER_SESSION = 8
 PET_DEFAULT_ID = "maestro"
@@ -3987,9 +3990,10 @@ def read_pet_source(source, requested_id):
         data = sheet.read_bytes()
     except OSError as error:
         raise OrchestrationError("The spritesheet could not be read.") from error
-    if image_size(data) != PET_SIZE:
+    if image_size(data) not in PET_SIZES:
         raise OrchestrationError(
-            f"The spritesheet must be exactly {PET_SIZE[0]}x{PET_SIZE[1]} pixels (8 columns x 9 rows of 192x208 cells).")
+            f"The spritesheet must be {PET_SIZE[0]}x{PET_SIZE[1]} pixels (8 columns x 9 rows of 192x208 cells), "
+            f"or {PET_V2_SIZE[0]}x{PET_V2_SIZE[1]} for a v2 pet with extra look-direction rows.")
     if not identifier or not PET_ID_PATTERN.fullmatch(identifier) or identifier == PET_DEFAULT_ID:
         identifier = pet_slug(f"{identifier or 'pet'}-custom")
     return identifier, display, description, data, sheet.suffix.lower()
@@ -4029,7 +4033,8 @@ def list_session_pets(session):
 
 def command_pets(args):
     session = canonical_uuid(args.session_id, "current session ID") if args.session_id else None
-    return {"default": PET_DEFAULT_ID, "contract": f"{PET_SIZE[0]}x{PET_SIZE[1]} PNG/WebP, 8x9 cells of 192x208",
+    return {"default": PET_DEFAULT_ID, "contract": f"{PET_SIZE[0]}x{PET_SIZE[1]} PNG/WebP, 8x9 cells of 192x208 "
+                f"(or {PET_V2_SIZE[0]}x{PET_V2_SIZE[1]} v2; only the first nine rows are used)",
             "sessionPets": list_session_pets(session) if session else []}
 
 

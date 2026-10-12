@@ -4113,5 +4113,38 @@ class DirectLaunchTests(unittest.TestCase):
                 caller.communicate(timeout=5)
 
 
+class PetSheetSizeTests(unittest.TestCase):
+    """Codex pet v1 (1536x1872) and v2 (1536x2288, extra look-direction rows) sheets are accepted."""
+
+    @staticmethod
+    def png(width, height):
+        import struct
+        return (b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR"
+                + struct.pack(">II", width, height) + b"\x08\x06\x00\x00\x00" + b"\x00" * 4)
+
+    def pet_folder(self, width, height, name="duck"):
+        folder = Path(tempfile.mkdtemp(prefix="pet-", dir="/tmp")) / name
+        folder.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, folder.parent, True)
+        (folder / "pet.json").write_text(json.dumps({
+            "id": name, "displayName": "Duck", "spritesheetPath": "sheet.png",
+            "spriteVersionNumber": 2 if height > 1872 else 1}))
+        (folder / "sheet.png").write_bytes(self.png(width, height))
+        return folder
+
+    def test_v1_and_v2_sheets_are_accepted(self):
+        read = CONTROLLER_API["read_pet_source"]
+        for height in (1872, 2288):
+            identifier, display, description, data, extension = read(str(self.pet_folder(1536, height)), None)
+            self.assertEqual((identifier, extension), ("duck", ".png"))
+            self.assertEqual(CONTROLLER_API["image_size"](data), (1536, height))
+
+    def test_other_sizes_are_rejected_with_both_contracts_named(self):
+        read = CONTROLLER_API["read_pet_source"]
+        for width, height in ((1536, 2000), (1920, 1872), (1536, 2080), (768, 936)):
+            with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], r"1536x1872.*1536x2288"):
+                read(str(self.pet_folder(width, height)), None)
+
+
 if __name__ == "__main__":
     unittest.main()
