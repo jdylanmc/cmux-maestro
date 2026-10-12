@@ -59,7 +59,6 @@ struct SidebarPetButton: View {
         .accessibilityLabel("Pet \(name), \(state.title)")
         .accessibilityHint("Opens the pet picker")
         .accessibilityIdentifier("sidebar-pet-button")
-        .onHover { hovering = $0 }
         .overlay(alignment: .center) {
             if (capturable && hovering) || captured, let session = content.petSessionID {
                 Button {
@@ -74,11 +73,14 @@ struct SidebarPetButton: View {
                         .background(Circle().fill(Color.black.opacity(0.35)).padding(1))
                 }
                 .buttonStyle(.plain)
-                                .help("Save \(name) to my pets so every agent can use it.")
+                .help("Save \(name) to my pets so every agent can use it.")
                 .accessibilityLabel("Save \(name) to my pets")
                 .accessibilityIdentifier("sidebar-pet-capture")
             }
         }
+        // Hover is tracked on the whole pet including the badge, or the badge would steal it and flicker.
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
         .popover(isPresented: $showingPicker, arrowEdge: .trailing) {
             SidebarPetPicker(sessionID: content.petSessionID, agentChoice: content.petChoice, state: state) {
                 showingPicker = false
