@@ -21,6 +21,11 @@ Notable changes are recorded using Keep a Changelog categories.
   `maestro pet --add` and the picker. Maestro plays only the first nine rows and ignores the
   rest. Previously such pets were rejected as "must be exactly 1536×1872".
 
+### Fixed
+
+- Stop the Active window footer jumping up about 40 px and straight back when you click a row:
+  a changed footer height now applies only if it holds for 300 ms.
+
 ### Added
 
 - Collect pets like a Pokédex. Hover the footer pet while an agent uses an agent-made pet to get a
