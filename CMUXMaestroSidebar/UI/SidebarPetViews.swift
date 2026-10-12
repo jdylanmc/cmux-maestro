@@ -100,7 +100,7 @@ struct SidebarPetPicker: View {
             }
             HStack {
                 Button("Upload pet…") { upload(store) }
-                    .help("Choose a Codex pet folder (pet.json + spritesheet) or a 1536×1872 PNG/WebP spritesheet.")
+                    .help("Choose a Codex pet folder (pet.json + spritesheet) or a PNG/WebP spritesheet (8 columns × 9+ rows of 192:208 cells; standard 1536×1872).")
                     .accessibilityIdentifier("sidebar-pet-upload")
                 if let sessionID, let pet = store.descriptor(current, session: sessionID), pet.source == .session {
                     Button("Save to my pets") { store.saveToRepository(pet.id, session: sessionID); refreshToken += 1 }
@@ -148,7 +148,7 @@ struct SidebarPetPicker: View {
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.folder, .png, .webP]
         panel.prompt = "Upload"
-        panel.message = "Choose a Codex pet folder or a 1536×1872 PNG/WebP spritesheet"
+        panel.message = "Choose a Codex pet folder or a PNG/WebP spritesheet (8 columns × 9+ rows; standard 1536×1872)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         if let id = store.upload(from: url), let sessionID { store.choose(id, session: sessionID) }
         refreshToken += 1

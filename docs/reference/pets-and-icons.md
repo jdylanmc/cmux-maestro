@@ -5,7 +5,7 @@ Codex pets, session icon CLI, appearance security. Short version: [README](../..
 ## Pets: `/cmux-maestro-native:maestro-pet`
 
 Active agent's pinned details show animated Codex-format pet (1536×1872 PNG/WebP,
-8×9 cells of 192×208). Every agent starts with bundled, original **Maestro** robot-head
+8×9 cells of 192×208). Sheets are accepted flexibly: 8 columns, at least nine rows, 192:208 cells at any whole-pixel scale (width a multiple of 8, 512 to 4096). A v2 pet (1536×2288) works. Extra rows are ignored. Every agent starts with bundled, original **Maestro** robot-head
 pet. Animation follows state: idle, working, needs input, turn finished, blocked/failed.
 Click pet to open picker: bundled pet, pets you saved or uploaded, pet
 this agent made for itself. **Upload pet…** accepts Codex pet folder (`pet.json` plus

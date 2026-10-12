@@ -10,6 +10,11 @@ Notable changes are recorded using Keep a Changelog categories.
   evidence incomplete") while an agent runs sub-agents; momentarily incomplete evidence no
   longer revives finished activity or marks task rows.
 
+- Accept any Codex pet sheet with 8 columns and at least nine rows of 192:208 cells at any
+  whole-pixel scale, including **v2** pets (1536×2288, with look-direction rows), in both
+  `maestro pet --add` and the picker. Maestro plays only the first nine rows and ignores the
+  rest. Previously such pets were rejected as "must be exactly 1536×1872".
+
 ### Changed
 
 - Rewrite the README as a short overview with screenshots and an install path. Move the full
