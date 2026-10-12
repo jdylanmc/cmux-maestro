@@ -2159,7 +2159,8 @@ struct SidebarInternalTaskGroup<Activity: View>: View {
     @Environment(\.sidebarContentWidth) private var width
 
     var body: some View {
-        if let disclosure = section.taskDisclosure {
+        let shownTasks = section.rows.filter { showsRow($0) && $0.node.isInternalTask }.count
+        if let disclosure = section.taskDisclosure, shownTasks > 0 {
             let expanded = layout.isExpanded(disclosure)
             let summary = session.taskSummary(for: section)
             VStack(alignment: .leading, spacing: 0) {
@@ -2172,7 +2173,7 @@ struct SidebarInternalTaskGroup<Activity: View>: View {
                     HStack(spacing: 4) {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 8, weight: .semibold)).frame(width: 12)
-                        Text("\(summary.taskCount) internal \(summary.taskCount == 1 ? "task" : "tasks")")
+                        Text("\(shownTasks) internal \(shownTasks == 1 ? "task" : "tasks")")
                             .lineLimit(1)
                         if !expanded {
                             if summary.running > 0 {
@@ -2272,6 +2273,7 @@ struct SidebarInternalTaskRow: View {
             }
             .frame(width: 24 + indentation)
             SidebarStateBadge(visual: SidebarPresentation.internalTaskState(node), detail: taskDetail)
+                .frame(width: 14, height: 24)
             SidebarInternalTaskName(name: node.name, detail: taskDetail, fontSize: density.rowTitleSize,
                                     identity: "\(sessionID):\(node.id)")
                 .frame(maxWidth: .infinity, alignment: .leading)
