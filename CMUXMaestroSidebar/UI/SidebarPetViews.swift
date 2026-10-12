@@ -40,12 +40,17 @@ struct SidebarPetView: View {
 struct SidebarPetButton: View {
     let content: SidebarDetailContent
     @State private var showingPicker = false
+    @State private var hovering = false
+    @State private var captured = false
 
     var body: some View {
         let store = SidebarPetStore.shared
         let petID = store.resolvedID(session: content.petSessionID, agentChoice: content.petChoice)
         let state = SidebarPetState.resolve(visual: content.visual, needsInput: content.needsInput)
-        let name = store.descriptor(petID, session: content.petSessionID)?.displayName ?? "Maestro"
+        let descriptor = store.descriptor(petID, session: content.petSessionID)
+        let name = descriptor?.displayName ?? "Maestro"
+        // An agent-made pet in use can be captured into the shared collection.
+        let capturable = descriptor?.source == .session && content.petSessionID != nil
         Button { showingPicker = true } label: {
             SidebarPetView(petID: petID, session: content.petSessionID, state: state, width: 38)
         }
@@ -54,6 +59,26 @@ struct SidebarPetButton: View {
         .accessibilityLabel("Pet \(name), \(state.title)")
         .accessibilityHint("Opens the pet picker")
         .accessibilityIdentifier("sidebar-pet-button")
+        .onHover { hovering = $0 }
+        .overlay(alignment: .topTrailing) {
+            if (capturable && hovering) || captured, let session = content.petSessionID {
+                Button {
+                    if store.saveToRepository(petID, session: session) != nil {
+                        captured = true
+                        Task { try? await Task.sleep(nanoseconds: 1_500_000_000); captured = false }
+                    }
+                } label: {
+                    Image(systemName: captured ? "checkmark.circle.fill" : "plus.circle.fill")
+                        .font(.system(size: 15)).symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, captured ? SidebarTone.green.color : SidebarQuestionGlow.lightBlue)
+                }
+                .buttonStyle(.plain)
+                .offset(x: 6, y: -6)
+                .help("Save \(name) to my pets so every agent can use it.")
+                .accessibilityLabel("Save \(name) to my pets")
+                .accessibilityIdentifier("sidebar-pet-capture")
+            }
+        }
         .popover(isPresented: $showingPicker, arrowEdge: .trailing) {
             SidebarPetPicker(sessionID: content.petSessionID, agentChoice: content.petChoice, state: state) {
                 showingPicker = false
@@ -68,27 +93,32 @@ struct SidebarPetPicker: View {
     let state: SidebarPetState
     let close: () -> Void
     @State private var refreshToken = 0
+    @State private var pendingRemoval: SidebarPetDescriptor?
 
     var body: some View {
         let store = SidebarPetStore.shared
         let current = store.resolvedID(session: sessionID, agentChoice: agentChoice)
+        let collected = store.installed.filter { $0.source == .uploaded }.count
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Choose a pet").font(.headline)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Choose a pet").font(.headline)
+                    Text(collected == 1 ? "1 pet collected" : "\(collected) pets collected")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 Spacer(minLength: 0)
                 Button("Close", action: close).keyboardShortcut(.cancelAction)
             }
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: 8)], spacing: 8) {
                     ForEach(store.available(for: sessionID)) { pet in
-                        Button {
-                            if let sessionID { store.choose(pet.id, session: sessionID) }
-                        } label: {
-                            SidebarPetCell(pet: pet, session: sessionID, selected: current == pet.id, state: state)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(sessionID == nil)
-                        .accessibilityLabel("\(pet.displayName)\(current == pet.id ? ", selected" : "")")
+                        SidebarPetCell(
+                            pet: pet, session: sessionID, selected: current == pet.id, state: state,
+                            choose: { if let sessionID { store.choose(pet.id, session: sessionID) } },
+                            save: pet.source == .session && sessionID != nil
+                                ? { if let sessionID { store.saveToRepository(pet.id, session: sessionID); refreshToken += 1 } } : nil,
+                            remove: pet.source == .uploaded ? { pendingRemoval = pet } : nil
+                        )
                         .contextMenu { cellMenu(pet, store) }
                     }
                 }
@@ -130,6 +160,19 @@ struct SidebarPetPicker: View {
         .frame(width: 320)
         .id(refreshToken)
         .onAppear { store.refresh() }
+        .confirmationDialog(
+            pendingRemoval.map { "Remove \($0.displayName) from my pets?" } ?? "",
+            isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) {
+                if let pet = pendingRemoval { store.removeUpload(pet.id); refreshToken += 1 }
+                pendingRemoval = nil
+            }
+            Button("Keep", role: .cancel) { pendingRemoval = nil }
+        } message: {
+            Text("Agents using it fall back to their own pet or Maestro. You can upload it again later.")
+        }
     }
 
     @ViewBuilder private func cellMenu(_ pet: SidebarPetDescriptor, _ store: SidebarPetStore) -> some View {
@@ -137,7 +180,7 @@ struct SidebarPetPicker: View {
             Button("Save to my pets") { store.saveToRepository(pet.id, session: sessionID); refreshToken += 1 }
         }
         if pet.source == .uploaded {
-            Button("Remove saved pet", role: .destructive) { store.removeUpload(pet.id); refreshToken += 1 }
+            Button("Remove from my pets…", role: .destructive) { pendingRemoval = pet }
         }
     }
 
@@ -160,13 +203,45 @@ private struct SidebarPetCell: View {
     let session: UUID?
     let selected: Bool
     let state: SidebarPetState
+    let choose: () -> Void
+    var save: (() -> Void)? = nil
+    var remove: (() -> Void)? = nil
+    @State private var hovering = false
 
     var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Button(action: choose) { content }
+                .buttonStyle(.plain)
+                .disabled(session == nil)
+                .accessibilityLabel("\(pet.displayName)\(selected ? ", selected" : "")")
+            if hovering {
+                if let save {
+                    cornerButton("plus.circle.fill", SidebarQuestionGlow.lightBlue, "Save \(pet.displayName) to my pets", save)
+                } else if let remove {
+                    cornerButton("xmark.circle.fill", SidebarTone.red.color, "Remove \(pet.displayName) from my pets", remove)
+                }
+            }
+        }
+        .onHover { hovering = $0 }
+    }
+
+    private func cornerButton(_ symbol: String, _ tint: Color, _ label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 15)).symbolRenderingMode(.palette)
+                .foregroundStyle(.white, tint)
+        }
+        .buttonStyle(.plain)
+        .padding(2)
+        .help(label)
+        .accessibilityLabel(label)
+    }
+
+    private var content: some View {
         VStack(spacing: 2) {
             SidebarPetView(petID: pet.id, session: session, state: selected ? state : .idle, width: 56)
             Text(pet.displayName).font(.caption2).lineLimit(1).truncationMode(.tail)
             if pet.source != .bundled {
-                Text(pet.source == .session ? "agent-made · this session" : "saved")
+                Text(pet.source == .session ? "agent-made · not saved" : "collected")
                     .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
             }
         }
