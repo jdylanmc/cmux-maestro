@@ -1129,7 +1129,7 @@ struct SidebarPinnedDetailsTests {
                 SidebarPinnedFooter(content: content, maximumHeight: 144,
                                     inspect: { Issue.record("Rendering must not inspect") },
                                     copyValue: { _ in Issue.record("Rendering must not copy"); return false })
-                    .frame(height: control == "clipped" ? 60 : nil, alignment: .top)
+                    .frame(height: control == "clipped" ? 30 : nil, alignment: .top)
                     .clipped()
                     .opacity(control == "hidden" ? 0 : 1)
                 Spacer(minLength: 50)
@@ -1334,7 +1334,7 @@ struct SidebarPinnedDetailsTests {
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         var modelRegion = CGRect.null
-        // Independent literal header geometry: outer inset, divider, gaps, 24-point heading and 38-point pet.
+        // Independent literal header geometry: outer inset, divider, gap and 38-point pet (no heading row).
         let reference = NSHostingView(rootView: VStack(alignment: .leading, spacing: 2) {
             Text("Verified agent").font(.system(.caption).weight(.semibold)).lineLimit(2)
             Label("Working", systemImage: "circle.fill")
@@ -1347,7 +1347,7 @@ struct SidebarPinnedDetailsTests {
                 } action: { modelRegion = $0 }
         }
         .frame(width: size.width - 20 - 38 - 8, alignment: .leading)
-        .padding(.leading, 10 + 38 + 8).padding(.top, 10 + 0.5 + 4 + 24 + 4)
+        .padding(.leading, 10 + 38 + 8).padding(.top, 10 + 0.5 + 4)
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .coordinateSpace(name: "footer-model-reference")
         .environment(\.colorScheme, dark ? .dark : .light)

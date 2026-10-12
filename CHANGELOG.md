@@ -14,8 +14,11 @@ Notable changes are recorded using Keep a Changelog categories.
 - Show a small, always-visible copy icon beside every detail label (including the model in
   the preview). A successful copy shows no "Copied" text; the icon turns into a checkmark.
 - Add more padding between Taskboard cards.
+- Remove the "Active window" heading and the "Details" button from the footer: clicking the
+  agent's title now opens the details popover. Preview cards size themselves to their content
+  (scrolling only when taller than the screen), with the rename note at the bottom right.
 - Give the workspace preview the same copy icons (surfaces, paths, workspace ID) and drop its "Preview only" footer.
-- Let the **Active window** footer be resized: drag the divider above it. It can shrink to
+- Let the active-window footer be resized: drag the divider above it. It can shrink to
   just the pet row and grow to half the sidebar height; the size is remembered, and
   double-clicking the divider restores the automatic size.
 - Add **Rename… (⇧⌘R)** to the workspace menu and a "⇧⌘R to rename" note to the workspace

@@ -2915,7 +2915,7 @@ struct SidebarPinnedFooter: View {
     @State private var petRowHeight: CGFloat = 48
     @State private var dragStart: CGFloat?
 
-    private let headerHeight: CGFloat = 33
+    private let headerHeight: CGFloat = 5
     private var minimumBodyHeight: CGFloat { petRowHeight }
     private var maximumBodyHeight: CGFloat { max(minimumBodyHeight, dragLimit - headerHeight) }
     private var bodyHeight: CGFloat {
@@ -2946,19 +2946,6 @@ struct SidebarPinnedFooter: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             resizeHandle
-            HStack {
-                Text("Active window").sidebarFont(.caption2, weight: .semibold).foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                if content.inspection != nil {
-                    Button("Details", action: inspect)
-                        .buttonStyle(.borderless)
-                        .sidebarFont(.caption)
-                        .frame(minHeight: SidebarPresentation.minimumControlSize)
-                        .accessibilityLabel("Details for active window")
-                        .accessibilityIdentifier("sidebar-pinned-inspect")
-                }
-            }
-            .frame(minHeight: 24)
             ScrollView {
                 footerContents
                     .fixedSize(horizontal: false, vertical: true)
@@ -2971,12 +2958,28 @@ struct SidebarPinnedFooter: View {
         .accessibilityIdentifier("sidebar-pinned-details")
     }
 
+    /// The title opens the details popover when the active window has inspectable details.
+    @ViewBuilder private var titleView: some View {
+        let title = Text(content.title).sidebarFont(.caption, weight: .semibold).lineLimit(2)
+        if content.inspection != nil {
+            Button(action: inspect) {
+                title.multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+            }
+                .buttonStyle(.plain)
+                .help("Show details")
+                .accessibilityLabel("Details for \(content.title)")
+                .accessibilityIdentifier("sidebar-pinned-inspect")
+        } else {
+            title
+        }
+    }
+
     private var footerContents: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .top, spacing: 8) {
                 if content.isAgent { SidebarPetButton(content: content) }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(content.title).sidebarFont(.caption, weight: .semibold).lineLimit(2)
+                    titleView
                     if let visual = content.visual {
                         Label(visual.title, systemImage: visual.symbol)
                             .sidebarFont(.caption2).foregroundStyle(visual.tone.color)
