@@ -256,7 +256,9 @@ struct SidebarVisibleWork {
             let byID = Dictionary(uniqueKeysWithValues: session.nodes.map { ($0.id, $0) })
             var retained = Set(session.nodes.filter { node in
                 if node.isInternalTask { return !node.historyAncestor }
-                if node.attentionDegraded || node.attention.contains(where: { $0.kind.isBlocking || $0.kind == .error }) { return true }
+                // Finished activity is not revived by momentarily incomplete evidence; that read flickers.
+                if (node.attentionDegraded && !node.state.isTerminal)
+                    || node.attention.contains(where: { $0.kind.isBlocking || $0.kind == .error }) { return true }
                 if [.completed, .cancelled].contains(node.state) { return false }
                 return true
             }.map(\.id))

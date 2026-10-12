@@ -4,6 +4,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ## Unreleased
 
+### Fixed
+
+- Stop the sidebar flashing a list of finished shell and skill rows (each marked "Attention
+  evidence incomplete") while an agent runs sub-agents; momentarily incomplete evidence no
+  longer revives finished activity or marks task rows.
+
 ### Changed
 
 - Internal-task rows put their state spinner on the left and hide the counts on the

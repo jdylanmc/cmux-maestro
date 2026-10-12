@@ -2293,8 +2293,8 @@ struct SidebarInternalTaskRow: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.red)
                 .frame(width: 10, height: 14)
-                .opacity(node.attention.isEmpty && !node.attentionDegraded ? 0 : 1)
-                .accessibilityHidden(node.attention.isEmpty && !node.attentionDegraded)
+                .opacity(node.attention.isEmpty ? 0 : 1)
+                .accessibilityHidden(node.attention.isEmpty)
                 .accessibilityLabel(SidebarPresentation.needsInput(node.attention) ? "Needs input" : "Attention")
                 .help(taskDetail)
             Group {
