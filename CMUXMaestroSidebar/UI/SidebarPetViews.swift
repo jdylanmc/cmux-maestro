@@ -128,34 +128,34 @@ struct SidebarPetPicker: View {
             }
             .frame(height: 210)
             if sessionID == nil {
-                Text("This item has no agent session to choose a pet for.").font(.caption2).foregroundStyle(.secondary)
+                Text("No agent session selected.").font(.caption2).foregroundStyle(.secondary)
             }
             HStack {
                 Button("Upload pet…") { upload(store) }
-                    .help("Choose a Codex pet folder (pet.json + spritesheet) or a PNG/WebP spritesheet (8 columns × 9+ rows of 192:208 cells; standard 1536×1872).")
+                    .help("Choose a Codex pet folder or spritesheet.")
                     .accessibilityIdentifier("sidebar-pet-upload")
                 if let sessionID, let pet = store.descriptor(current, session: sessionID), pet.source == .session {
                     Button("Save to my pets") { store.saveToRepository(pet.id, session: sessionID); refreshToken += 1 }
-                        .help("Keep this agent-made pet so any agent can use it. Otherwise it only works for this session.")
+                        .help("Save this pet for all agents.")
                         .accessibilityIdentifier("sidebar-pet-save")
                 }
                 Button("Reset to agent's pet") { if let sessionID { store.clearChoice(session: sessionID) } }
                     .disabled(sessionID.map { !store.hasOverride(session: $0) } ?? true)
-                    .help("Remove your choice: show the pet this agent chose for itself, or Maestro if it chose none.")
+                    .help("Reset to the agent’s pet.")
             }
             if let notice = store.notice {
                 Text(notice).font(.caption).foregroundStyle(SidebarTone.attention.color)
                     .fixedSize(horizontal: false, vertical: true)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text("Find more Codex pets, unzip, then Upload pet…").font(.caption2).foregroundStyle(.secondary)
+                Text("Download and unzip a pet, then upload it.").font(.caption2).foregroundStyle(.secondary)
                 HStack(spacing: 10) {
                     Link("Codex Pets gallery", destination: SidebarPetStore.galleryURL)
                     Link("Create a pet", destination: SidebarPetStore.generatorURL)
                 }
                 .font(.caption2)
             }
-            Text("Agents can make and pick their own with the maestro-pet skill; an agent-made pet is only for its session until you save it.")
+            Text("Agent-made pets are session-only until saved.")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)

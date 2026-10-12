@@ -688,7 +688,6 @@ extension EnvironmentValues {
     }
 }
 
-/// The title is one native keyboard target; entering its preview never presses it.
 final class SidebarTitleNativeButton: NSButton {
     let hosting = NSHostingView(rootView: AnyView(EmptyView()))
     var labelContent = AnyView(EmptyView())

@@ -163,7 +163,7 @@ struct SidebarGlyphIcon: View {
                 Image(systemName: "questionmark.square")
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Icon unavailable: \(name)")
-                    .help("Glyph \(name) is unavailable in the bundled Nerd Font.")
+                    .help("Glyph unavailable: \(name).")
             }
         }
         .frame(width: 20, height: 20)
