@@ -1229,7 +1229,7 @@ struct ManagedHierarchyContent: View {
                                 ManagedNodeRow(
                                     node: row.node, depth: row.depth,
                                     hasChildren: row.hasChildren || retained.contains {
-                                        !$0.outlineNodes.isEmpty || $0.internalTaskCountsIncomplete
+                                        $0.hasShownOutline(layout) || $0.internalTaskCountsIncomplete
                                     },
                                     activeDescendants: row.activeDescendants,
                                     expanded: expanded,
@@ -1244,7 +1244,7 @@ struct ManagedHierarchyContent: View {
                                     },
                                     select: { selectedNode = row.node }
                                 )
-                                if !expanded && retained.contains(where: { !$0.outlineNodes.isEmpty || $0.internalTaskCountsIncomplete }) {
+                                if !expanded && retained.contains(where: { $0.hasShownOutline(layout) || $0.internalTaskCountsIncomplete }) {
                                     CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: retained))
                                         .padding(.leading, 22 + density.indentation(
                                             depth: row.depth, unresolved: false, width: contentWidth
@@ -1799,7 +1799,7 @@ private struct SurfaceRow: View {
             && (singleSession.map { layout.isExpanded(.session($0.id)) } ?? true)
     }
     private var hasChildren: Bool {
-        singleSession.map { !$0.outlineNodes.isEmpty } ?? !sessions.isEmpty
+        singleSession.map { $0.hasShownOutline(layout) } ?? !sessions.isEmpty
     }
 
     private var title: String { surface.title.isEmpty ? "Untitled surface" : surface.title }
@@ -1982,7 +1982,7 @@ private struct CopilotSessionRow: View {
                          navigation: navigation, prepareSeen: prepareSeen),
             .init(title: "Open details", perform: { selection = .session(session.id) })
         ]
-        if !session.outlineNodes.isEmpty {
+        if session.hasShownOutline(layout) {
             items.append(.init(title: expanded ? "Collapse branch" : "Expand branch",
                                perform: { setExpanded(.session(session.id), !expanded) }))
         }
@@ -1993,7 +1993,7 @@ private struct CopilotSessionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 4) {
-                if !session.outlineNodes.isEmpty {
+                if session.hasShownOutline(layout) {
                     ExpandButton(expanded: expanded, label: "Agent children") {
                         setExpanded(.session(session.id), !expanded)
                     }
@@ -2029,7 +2029,7 @@ private struct CopilotSessionRow: View {
                 }
                 .accessibilityValue(SidebarPresentation.sessionStatus(session))
                 .agentHoverPreview(.session(session.id))
-                if !expanded && !session.outlineNodes.isEmpty {
+                if !expanded && session.hasShownOutline(layout) {
                     CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: [session]))
                 }
             }

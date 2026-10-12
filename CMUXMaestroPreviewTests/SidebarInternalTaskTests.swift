@@ -82,6 +82,16 @@ struct SidebarInternalTaskTests {
         #expect(historyVisible.tree.sessions[0].nodes[0].historyAncestor, "Only ancestry remains, not the dismissed outcome")
     }
 
+    @Test func finishedTasksDoNotMakeARowExpandableUntilTheEyeIsOn() throws {
+        let session = try #require(project([task("done", state: .completed)], revealing: [fixtures.workspaceA]).sessions.first)
+        var layout = SidebarLayoutSettings()
+        #expect(!session.hasShownOutline(layout))
+        try layout.setIdleTasksVisible(true, in: session.workspaceID)
+        #expect(session.hasShownOutline(layout))
+        let failed = try #require(project([task("bad", state: .failed)]).sessions.first)
+        #expect(failed.hasShownOutline(SidebarLayoutSettings()))
+    }
+
     @Test(arguments: [CopilotWorkState.working, .blocked, .unknown, .failed])
     func review002ProtectedOrUncertainDescendantsStillRejectDismissal(_ state: CopilotWorkState) {
         let children = [task("result", state: .completed), task("child", parent: "result", state: state)]

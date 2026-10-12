@@ -12,6 +12,7 @@ Notable changes are recorded using Keep a Changelog categories.
 - Show the chosen pet in the Active window footer. The footer never passed its agent's
   session to the pet picker, so every agent showed the default pet and the picker said
   "This item has no agent session".
+- Hide the expand arrow on an agent row when its only sub-tasks are finished and hidden.
 - Stop the sidebar flashing a list of finished shell and skill rows (each marked "Attention
   evidence incomplete") while an agent runs sub-agents; momentarily incomplete evidence no
   longer revives finished activity or marks task rows.
