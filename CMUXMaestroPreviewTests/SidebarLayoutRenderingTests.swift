@@ -820,8 +820,9 @@ struct SidebarLayoutRenderingTests {
                         let footer = try #require(scrollViews(in: view).last)
                         let bottom = view.convert(footer.bounds, from: footer).maxY
                         let clearance = CGFloat(height) - bottom
-                        #expect(abs(clearance - (50 + density.spacing(10))) <= 0.5,
-                                "Connected footer must end at host clearance plus existing padding, not an empty status row")
+                        let copilotIconRow: CGFloat = 14
+                        #expect(abs(clearance - (50 + density.spacing(10) + copilotIconRow)) <= 0.5,
+                                "Connected footer must end at host clearance plus padding and the Copilot icon row, not an empty status row")
                         print("P46 connected geometry \(destination.lastPathComponent): footerBottom=\(bottom), clearance=\(clearance)")
                     }
                     #expect(metrics.viewportHeight >= 80)

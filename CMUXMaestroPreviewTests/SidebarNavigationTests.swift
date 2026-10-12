@@ -65,14 +65,17 @@ struct SidebarNavigationTests {
         #expect(model.hierarchy.windowID == fixtures.windowID)
         model.navigation.select(.surface(workspaceID: fixtures.workspaceB, surfaceID: fixtures.surfaceA))
         await sidebarEventually { recorder.actions.count == 1 }
-        #expect(recorder.actions[0] == .selectSurface(workspaceID: fixtures.workspaceB, surfaceID: fixtures.surfaceA))
+        #expect(recorder.actions[0] == .selectWorkspace(fixtures.workspaceB))
         recorder.reply(0, .accepted)
+        await sidebarEventually { recorder.actions.count == 2 }
+        #expect(recorder.actions[1] == .selectSurface(workspaceID: fixtures.workspaceB, surfaceID: fixtures.surfaceA))
+        recorder.reply(1, .accepted)
         await sidebarEventually { model.navigation.status == .selected }
 
         model.navigation.select(.workspace(fixtures.workspaceA))
-        await sidebarEventually { recorder.actions.count == 2 }
-        #expect(recorder.actions[1] == .selectWorkspace(fixtures.workspaceA))
-        recorder.reply(1, .accepted)
+        await sidebarEventually { recorder.actions.count == 3 }
+        #expect(recorder.actions[2] == .selectWorkspace(fixtures.workspaceA))
+        recorder.reply(2, .accepted)
         await sidebarEventually { model.navigation.status == .selected }
     }
 
@@ -125,11 +128,14 @@ struct SidebarNavigationTests {
         model.navigation.select(.surface(workspaceID: fixtures.workspaceB, surfaceID: fixtures.surfaceB))
         await sidebarEventually { recorder.actions.count == 2 }
         recorder.reply(1, .accepted)
+        await sidebarEventually { recorder.actions.count == 3 }
+        recorder.reply(2, .accepted)
         await sidebarEventually { model.navigation.status == .selected }
         recorder.reply(0, .rejected("private host detail"))
         await Task.yield()
         #expect(model.navigation.status == .selected)
-        #expect(recorder.actions[1] == .selectSurface(workspaceID: fixtures.workspaceB, surfaceID: fixtures.surfaceB))
+        #expect(recorder.actions[1] == .selectWorkspace(fixtures.workspaceB))
+        #expect(recorder.actions[2] == .selectSurface(workspaceID: fixtures.workspaceB, surfaceID: fixtures.surfaceB))
     }
 
     @Test
