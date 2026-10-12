@@ -2909,7 +2909,6 @@ private struct SidebarSessionDetail: View {
     }
 }
 
-/// A one-point divider with a larger invisible grab area; dragging up grows the footer above it.
 private struct SidebarResizeHandle: View {
     let bodyHeight: CGFloat
     let begin: () -> CGFloat
