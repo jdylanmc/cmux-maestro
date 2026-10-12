@@ -2272,6 +2272,9 @@ struct SidebarInternalTaskRow: View {
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var width
 
+    // Shared by chevron and leaf rows so sibling icons, titles and connectors align.
+    static let gutterWidth: Double = 24
+
     static func indentation(depth: Int, width: Double) -> Double {
         min(Double(max(0, depth)) * (width < 350 ? 2 : 5), width < 350 ? 16 : 36)
     }
@@ -2284,8 +2287,8 @@ struct SidebarInternalTaskRow: View {
             ZStack(alignment: .trailing) {
                 SidebarTaskConnector(continues: followingDepth.map { $0 >= node.depth } ?? false, tick: running ? 6 : 12)
                     .stroke(Color.secondary.opacity(0.5), lineWidth: 1)
-                    .frame(width: 12)
-                    .padding(.trailing, node.hasChildren ? 12 : 2)
+                    .frame(width: Self.gutterWidth - 2)
+                    .padding(.trailing, 2)
                 if node.hasChildren {
                     SidebarTitleButton(
                         label: "Task children for \(node.name)",
@@ -2305,7 +2308,7 @@ struct SidebarInternalTaskRow: View {
                     .help(row.collapsedSummary?.lines.joined(separator: ". ") ?? "Collapse task children")
                 }
             }
-            .frame(width: (node.hasChildren ? 24 : 14) + indentation)
+            .frame(width: Self.gutterWidth + indentation)
             SidebarStateBadge(visual: SidebarPresentation.internalTaskState(node), detail: taskDetail)
                 .frame(width: 12, height: 24, alignment: .leading)
                 .offset(x: running ? -3 : 0)

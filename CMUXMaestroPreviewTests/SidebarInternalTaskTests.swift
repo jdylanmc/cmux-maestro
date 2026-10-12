@@ -463,6 +463,11 @@ struct SidebarInternalTaskTests {
         }
     }
 
+    @Test func siblingTaskRowsShareOneGutterRegardlessOfChevron() {
+        #expect(SidebarInternalTaskRow.gutterWidth == 24)
+        #expect(SidebarInternalTaskRow.indentation(depth: 1, width: 280) == 2)
+    }
+
     @Test func stateShapesAreDistinctAndOnlyWorkingAnimatesIncludingReducedMotion() {
         let states: [AgentWorkState] = [.unknown, .queued, .working, .idle, .blocked, .completed, .failed, .cancelled]
         let visuals = states.map { state in
