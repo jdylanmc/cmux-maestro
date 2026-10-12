@@ -2274,11 +2274,12 @@ struct SidebarInternalTaskRow: View {
             .frame(width: (node.hasChildren ? 24 : 14) + indentation)
             SidebarStateBadge(visual: SidebarPresentation.internalTaskState(node), detail: taskDetail)
                 .frame(width: 12, height: 24, alignment: .leading)
-                .offset(y: -4.5)
             SidebarInternalTaskName(name: node.name, detail: taskDetail, fontSize: density.rowTitleSize,
                                     identity: "\(sessionID):\(node.id)")
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: 24)
+                // The label field draws about 4pt above the row center, which is where the tick and badge sit.
+                .offset(y: 4)
             if let summary = row.collapsedSummary {
                 if summary.running > 0 { Text("\(summary.running)").font(.system(size: 9)).help(summary.lines.joined(separator: ". ")) }
                 if summary.attention > 0 || summary.blocked > 0 || summary.incomplete {
