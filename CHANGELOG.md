@@ -9,7 +9,6 @@ Notable changes are recorded using Keep a Changelog categories.
 - Stop the sidebar flashing a list of finished shell and skill rows (each marked "Attention
   evidence incomplete") while an agent runs sub-agents; momentarily incomplete evidence no
   longer revives finished activity or marks task rows.
-
 - Accept any Codex pet sheet with 8 columns and at least nine rows of 192:208 cells at any
   whole-pixel scale, including **v2** pets (1536×2288, with look-direction rows), in both
   `maestro pet --add` and the picker. Maestro plays only the first nine rows and ignores the
