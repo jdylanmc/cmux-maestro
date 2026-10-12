@@ -313,7 +313,7 @@ private struct CollapsedBranchSummary: View {
         let lines = SidebarPresentation.collapsed(summary)
         if !lines.isEmpty {
             HStack(spacing: 4) {
-                if summary.running > 0 { Label("\(summary.running)", systemImage: SidebarPresentation.state(.working).symbol) }
+                if summary.running > 0 { Image(systemName: SidebarPresentation.state(.working).symbol) }
                 if summary.blocked > 0 { Label("\(summary.blocked)", systemImage: SidebarPresentation.state(.blocked).symbol) }
                 if summary.attention > 0 { Label("\(summary.attention)", systemImage: "exclamationmark.circle") }
                 if summary.omittedActive > 0 { Label("+\(summary.omittedActive)", systemImage: "exclamationmark.triangle") }
@@ -1246,7 +1246,7 @@ struct ManagedHierarchyContent: View {
                                 )
                                 if !expanded && retained.contains(where: { !$0.outlineNodes.isEmpty || $0.internalTaskCountsIncomplete }) {
                                     CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: retained))
-                                        .padding(.leading, 28 + density.indentation(
+                                        .padding(.leading, 22 + density.indentation(
                                             depth: row.depth, unresolved: false, width: contentWidth
                                         ))
                                 }
@@ -1350,7 +1350,7 @@ private struct ManagedNodeRow: View {
             if hasChildren {
                 ExpandButton(expanded: expanded, label: node.label, toggle: toggleExpanded)
             } else {
-                Color.clear.frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
+                Color.clear.frame(width: 18, height: SidebarPresentation.minimumControlSize)
             }
             SidebarItemIcon(
                 kind: .agent, target: SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate),
@@ -1853,7 +1853,7 @@ private struct SurfaceRow: View {
                 if hasChildren {
                     ExpandButton(expanded: expanded, label: title, toggle: toggleExpanded)
                 } else {
-                    Color.clear.frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
+                    Color.clear.frame(width: 18, height: SidebarPresentation.minimumControlSize)
                 }
                 if let singleSession {
                     SidebarItemIcon(
@@ -1998,7 +1998,7 @@ private struct CopilotSessionRow: View {
                         setExpanded(.session(session.id), !expanded)
                     }
                 } else {
-                    Color.clear.frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
+                    Color.clear.frame(width: 18, height: SidebarPresentation.minimumControlSize)
                 }
                 SidebarItemIcon(
                     kind: .agent, target: session.statusOnly ? nil : .session(session.id), title: "Copilot \(session.shortID)",
@@ -2138,7 +2138,7 @@ struct SidebarWorkspaceTaskEye: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .help("Show idle internal tasks in this workspace only. Unknown, cancelled and dismissed outcomes stay hidden; real tabs are unchanged.")
+        .help("Show idle and finished internal tasks in this workspace only. Unknown, cancelled and dismissed outcomes stay hidden; real tabs are unchanged.")
         .accessibilityLabel("Show idle internal tasks")
         .accessibilityValue(visible ? "On" : "Off")
         .accessibilityIdentifier("idle-tasks-\(workspaceID)")
@@ -2174,21 +2174,14 @@ struct SidebarInternalTaskGroup<Activity: View>: View {
                             .font(.system(size: 8, weight: .semibold)).frame(width: 12)
                         Text("\(summary.taskCount) internal \(summary.taskCount == 1 ? "task" : "tasks")")
                             .lineLimit(1)
-                        Spacer(minLength: 0)
                         if !expanded {
                             if summary.running > 0 {
                                 SidebarStateBadge(visual: SidebarPresentation.state(.working))
-                                Text("\(summary.running)")
                             }
-                            if summary.blocked > 0 {
-                                Image(systemName: "pause")
-                                Text("\(summary.blocked)")
-                            }
-                            if summary.attention > 0 {
-                                Image(systemName: "exclamationmark")
-                                Text("\(summary.attention)")
-                            }
+                            if summary.blocked > 0 { Image(systemName: "pause") }
+                            if summary.attention > 0 { Image(systemName: "exclamationmark") }
                         }
+                        Spacer(minLength: 0)
                     }
                     .font(.system(size: density.rowMetadataSize))
                     .foregroundStyle(.secondary)
@@ -2202,7 +2195,7 @@ struct SidebarInternalTaskGroup<Activity: View>: View {
                 .help("Related branch activity: \(summary.lines.joined(separator: ". "))")
                 .padding(.leading, SidebarInternalTaskRow.indentation(depth: ownerDepth, width: width))
                 if expanded {
-                    ForEach(section.rows) { row in
+                    ForEach(section.rows.filter(showsRow)) { row in
                         if row.node.isInternalTask {
                             SidebarInternalTaskRow(
                                 row: row, sessionID: session.id,
@@ -2222,9 +2215,16 @@ struct SidebarInternalTaskGroup<Activity: View>: View {
         }
     }
 
+    // Finished tasks stay out of the way until the workspace eye is on.
+    private func showsRow(_ row: SidebarChildRow) -> Bool {
+        !(row.node.isInternalTask && row.node.state == .completed)
+            || layout.revealingIdleTasksIn.contains(session.workspaceID)
+    }
+
     private func followingDepth(_ row: SidebarChildRow) -> Int? {
-        guard let index = section.rows.firstIndex(where: { $0.id == row.id }), index + 1 < section.rows.count else { return nil }
-        return section.rows[index + 1].node.depth
+        let rows = section.rows.filter(showsRow)
+        guard let index = rows.firstIndex(where: { $0.id == row.id }), index + 1 < rows.count else { return nil }
+        return rows[index + 1].node.depth
     }
 }
 
@@ -2271,9 +2271,10 @@ struct SidebarInternalTaskRow: View {
                 }
             }
             .frame(width: 24 + indentation)
+            SidebarStateBadge(visual: SidebarPresentation.internalTaskState(node), detail: taskDetail)
             SidebarInternalTaskName(name: node.name, detail: taskDetail, fontSize: density.rowTitleSize,
                                     identity: "\(sessionID):\(node.id)")
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .frame(height: 24)
             if let summary = row.collapsedSummary {
                 if summary.running > 0 { Text("\(summary.running)").font(.system(size: 9)).help(summary.lines.joined(separator: ". ")) }
@@ -2290,7 +2291,6 @@ struct SidebarInternalTaskRow: View {
                 .accessibilityHidden(node.attention.isEmpty && !node.attentionDegraded)
                 .accessibilityLabel(SidebarPresentation.needsInput(node.attention) ? "Needs input" : "Attention")
                 .help(taskDetail)
-            SidebarStateBadge(visual: SidebarPresentation.internalTaskState(node), detail: taskDetail)
             Group {
                 if let outcome = node.dismissibleOutcome(sessionID: sessionID) {
                     SidebarTitleButton(
@@ -2445,7 +2445,7 @@ private struct CopilotWorkRow: View {
                         setExpanded(expansion.expansionID, !expansion.expanded)
                     }
                 } else {
-                    Color.clear.frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
+                    Color.clear.frame(width: 18, height: SidebarPresentation.minimumControlSize)
                 }
                 Button {
                     selection = .child(sessionID: session.id, childID: node.id)
@@ -3115,7 +3115,7 @@ private struct ExpandButton: View {
                 .overlay {
                     if workspace { RoundedRectangle(cornerRadius: 3).stroke(.tertiary, lineWidth: 0.5) }
                 }
-                .frame(width: max(SidebarPresentation.minimumControlSize, density.controlSize),
+                .frame(width: workspace ? max(SidebarPresentation.minimumControlSize, density.controlSize) : 18,
                        height: max(SidebarPresentation.minimumControlSize, density.controlSize))
                 .contentShape(Rectangle())
         }

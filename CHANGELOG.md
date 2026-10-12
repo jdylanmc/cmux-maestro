@@ -6,6 +6,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Internal-task rows put their state spinner on the left and hide the counts on the
+  collapsed row; finished tasks stay hidden until the workspace eye is on. The expand
+  chevron is narrower, and "Error reported" no longer shows on an agent that is still
+  working.
 - Rebuild the Taskboard as a state board: one card per agent session under **Waiting on
   you**, **Working**, **Failed**, **Idle**, **Finished** and **Unknown** headings with
   counts. Each card shows the title, activity, workspace, model and, when the agent is in a

@@ -276,6 +276,7 @@ struct SidebarInternalTaskRenderingTests {
         try #require(SidebarPresentation.displacedManagedNodeIDs(
             [owner], observations: observations, now: observedAt
         ) == [owner.id])
+        for workspace in model.hierarchy.workspaces { preferences.setIdleTasksVisible(true, in: workspace.id) }
         let frame = NSRect(x: 0, y: 0, width: 280, height: 900)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -576,6 +577,8 @@ struct SidebarInternalTaskRenderingTests {
         _ model: SidebarConnectionModel, _ preferences: SidebarPreferences, width: Int, reduceMotion: Bool = false,
         now: Date? = nil, actionNow: (() -> Date)? = nil
     ) -> (window: NSWindow, host: NSView) {
+        // Finished tasks are hidden until the workspace eye is on; these scenarios inspect them.
+        for workspace in model.hierarchy.workspaces { preferences.setIdleTasksVisible(true, in: workspace.id) }
         let frame = NSRect(x: 0, y: 0, width: width, height: 900)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

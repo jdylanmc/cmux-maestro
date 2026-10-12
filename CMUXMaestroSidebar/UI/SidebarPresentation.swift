@@ -829,6 +829,8 @@ enum SidebarPresentation {
     static func attention(_ signals: [AgentAttention], state: AgentWorkState, degraded: Bool) -> [String] {
         var result = AgentAttentionKind.allCases.compactMap { kind -> String? in
             guard kind != .turnFinished, kind != .answer else { return nil }
+            // A recovered error on an agent that is still working is noise; the state already says so.
+            if kind == .error && state == .working { return nil }
             let count = signals.filter { $0.kind == kind }.count
             guard count > 0 else { return nil }
             return kind.title + (count > 1 ? " (\(count))" : "")
