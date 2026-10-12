@@ -23,7 +23,7 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
-- Collect pets like a Pokédex. While an agent uses an agent-made pet, its footer pet shows a
+- Collect pets like a Pokédex. Hover the footer pet while an agent uses an agent-made pet to get a
   **+** badge that saves it to your shared pets; the picker also shows a **+** on agent-made pets and
   an **×** on collected ones (with a confirmation) and counts how many you have collected. Every
   agent's picker shows the whole collection.

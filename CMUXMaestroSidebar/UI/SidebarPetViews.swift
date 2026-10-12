@@ -60,8 +60,8 @@ struct SidebarPetButton: View {
         .accessibilityHint("Opens the pet picker")
         .accessibilityIdentifier("sidebar-pet-button")
         .onHover { hovering = $0 }
-        .overlay(alignment: .bottom) {
-            if capturable || captured, let session = content.petSessionID {
+        .overlay(alignment: .center) {
+            if (capturable && hovering) || captured, let session = content.petSessionID {
                 Button {
                     if store.saveToRepository(petID, session: session) != nil {
                         captured = true
@@ -74,8 +74,7 @@ struct SidebarPetButton: View {
                         .background(Circle().fill(Color.black.opacity(0.35)).padding(1))
                 }
                 .buttonStyle(.plain)
-                .offset(y: 9)
-                .help("Save \(name) to my pets so every agent can use it.")
+                                .help("Save \(name) to my pets so every agent can use it.")
                 .accessibilityLabel("Save \(name) to my pets")
                 .accessibilityIdentifier("sidebar-pet-capture")
             }
