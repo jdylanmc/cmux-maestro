@@ -2246,9 +2246,10 @@ struct SidebarInternalTaskRow: View {
     var body: some View {
         let node = row.node
         let indentation = Self.indentation(depth: node.depth - baseDepth, width: width)
+        let running = SidebarPresentation.internalTaskState(node).tone == .green
         HStack(spacing: 2) {
             ZStack(alignment: .trailing) {
-                SidebarTaskConnector(continues: followingDepth.map { $0 >= node.depth } ?? false)
+                SidebarTaskConnector(continues: followingDepth.map { $0 >= node.depth } ?? false, tick: running ? 6 : 12)
                     .stroke(Color.secondary.opacity(0.5), lineWidth: 1)
                     .frame(width: 12)
                     .padding(.trailing, node.hasChildren ? 12 : 2)
@@ -2274,6 +2275,7 @@ struct SidebarInternalTaskRow: View {
             .frame(width: (node.hasChildren ? 24 : 14) + indentation)
             SidebarStateBadge(visual: SidebarPresentation.internalTaskState(node), detail: taskDetail)
                 .frame(width: 12, height: 24, alignment: .leading)
+                .offset(x: running ? -3 : 0)
             SidebarInternalTaskName(name: node.name, detail: taskDetail, fontSize: density.rowTitleSize,
                                     identity: "\(sessionID):\(node.id)")
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2335,12 +2337,13 @@ struct SidebarInternalTaskRow: View {
 
 private struct SidebarTaskConnector: Shape {
     let continues: Bool
+    var tick: CGFloat = 12
     func path(in rect: CGRect) -> Path {
         Path { path in
             path.move(to: CGPoint(x: 0, y: 0))
             path.addLine(to: CGPoint(x: 0, y: continues ? rect.maxY : rect.midY))
             path.move(to: CGPoint(x: 0, y: rect.midY))
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+            path.addLine(to: CGPoint(x: min(rect.maxX, tick), y: rect.midY))
         }
     }
 }
