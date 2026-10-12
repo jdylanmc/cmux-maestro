@@ -215,20 +215,16 @@ struct SidebarHistoryTests {
         #expect(view.contains("dismiss: dismiss, acknowledge: acknowledge"))
         let normalized = view.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         #expect(normalized.contains("case .taskboard: let work = visibleWork"))
-        let taskboard = "TaskboardContent( tree: work.tree, hierarchy: model.hierarchy, "
-            + "navigation: model.navigation, dismiss: dismiss, acknowledge: acknowledge, "
-            + "selection: unmanagedSelection, retainedSessionIDs: retainedIDs"
-        #expect(normalized.components(separatedBy: taskboard).count == 3,
-                "Both Taskboard sections must consume the same captured history projection")
-        #expect(normalized.contains(taskboard + ", managedSessionIDs: managedSessionIDs )"))
-        #expect(normalized.contains(taskboard + ", retainedOnly: true, managedSessionIDs: managedSessionIDs )"))
+        let taskboard = "TaskboardContent( tree: work.tree, hierarchy: model.hierarchy, navigation: model.navigation, "
+            + "selection: unmanagedSelection, retainedSessionIDs: SidebarPresentation.retainedSessionIDs("
+        #expect(normalized.components(separatedBy: taskboard).count == 2,
+                "Taskboard must consume the same captured history projection")
         #expect(view.contains("visibleWork: visibleWork,"))
         #expect(view.components(separatedBy: "DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)").count == 2)
         #expect(view.contains("SidebarInternalTaskGroup("))
         #expect(view.contains(".popover(isPresented: isPresented(action)) { popoverContent() }"))
-        #expect(view.contains("if showingHistory { return settingsStartInHistory ? .history : .settings }"))
-        #expect(view.contains("if showingHistory {\n            historySettings"))
-        #expect(view.contains("settingsStartInHistory = action == .history"))
+        #expect(view.contains("if showingSettings { return .settings }"))
+        #expect(view.contains("if showingSettings {\n            settingsPanel"))
         #expect(view.contains(".popover(isPresented: $showingInspector)"))
         #expect(view.contains("SidebarInspector(content: inspectorDetails)"))
         #expect(view.contains("SidebarCloseButton(label: \"Close sidebar settings\", id: \"sidebar-close-settings\")"))

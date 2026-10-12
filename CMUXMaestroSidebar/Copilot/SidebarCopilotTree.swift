@@ -77,6 +77,8 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     var iconId: String? = nil
     var iconColor: String? = nil
     var petId: String? = nil
+    var branch: String? = nil
+    var worktree = false
     let id: UUID
     let workspaceID: UUID
     let surfaceID: UUID
@@ -376,6 +378,7 @@ struct SidebarCopilotTree: Equatable {
             sessions.append(SidebarCopilotSession(
                 iconId: observation.appearance?.iconId, iconColor: observation.appearance?.iconColor,
                 petId: observation.appearance?.petId,
+                branch: observation.location?.branch, worktree: observation.location?.worktree ?? false,
                 id: sessionID,
                 workspaceID: workspaceID,
                 surfaceID: surfaceID,

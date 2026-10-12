@@ -11,6 +11,16 @@ enum SidebarPetSheet {
     static let cellHeight = 208
     static let width = columns * cellWidth
     static let height = rows * cellHeight
+    /// Eight columns of 192:208 cells at any whole-pixel scale with at least nine rows. Extra rows
+    /// (Codex v2 adds look-direction rows, 1536x2288) are ignored: Maestro plays only rows 0-8.
+    static func accepts(width: Int, height: Int) -> Bool {
+        guard width % columns == 0, (512...4096).contains(width) else { return false }
+        let minimum = (rows * cellHeight * width + Self.width - 1) / Self.width
+        return height >= minimum && height <= 2 * width
+    }
+
+    /// Pixel scale of a sheet relative to the 1536-wide standard.
+    static func scale(width: Int) -> CGFloat { CGFloat(width) / CGFloat(Self.width) }
     static let maximumBytes = 10 * 1024 * 1024
     /// Populated frames per row: idle, run right, run left, wave, jump, failure, waiting, working, review.
     static let frameCounts = [6, 8, 8, 4, 5, 8, 6, 6, 6]
@@ -269,9 +279,11 @@ final class SidebarPetStore {
         guard let sheet = sheet(for: petID, session: session) ?? sheet(for: Self.defaultID, session: nil),
               state.frameCount > 0 else { return nil }
         let column = ((index % state.frameCount) + state.frameCount) % state.frameCount
+        let scale = SidebarPetSheet.scale(width: sheet.width)
+        let cellWidth = CGFloat(SidebarPetSheet.cellWidth) * scale, cellHeight = CGFloat(SidebarPetSheet.cellHeight) * scale
         return sheet.cropping(to: CGRect(
-            x: column * SidebarPetSheet.cellWidth, y: state.row * SidebarPetSheet.cellHeight,
-            width: SidebarPetSheet.cellWidth, height: SidebarPetSheet.cellHeight))
+            x: (CGFloat(column) * cellWidth).rounded(), y: (CGFloat(state.row) * cellHeight).rounded(),
+            width: cellWidth.rounded(), height: cellHeight.rounded()))
     }
 
     nonisolated private static func sheet(in folder: URL, manifest: SidebarPetManifest) -> CGImage? {
@@ -295,7 +307,7 @@ final class SidebarPetStore {
     nonisolated private static func image(_ url: URL) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
-              image.width == SidebarPetSheet.width, image.height == SidebarPetSheet.height else { return nil }
+              SidebarPetSheet.accepts(width: image.width, height: image.height) else { return nil }
         return image
     }
 
@@ -331,7 +343,7 @@ final class SidebarPetStore {
             throw PetError(message: "The spritesheet must be smaller than 10 MB.")
         }
         guard image(sheetURL) != nil, let data = try? Data(contentsOf: sheetURL) else {
-            throw PetError(message: "The spritesheet must be \(SidebarPetSheet.width)×\(SidebarPetSheet.height) pixels (8×9 cells of 192×208).")
+            throw PetError(message: "The spritesheet must be \(SidebarPetSheet.width)×\(SidebarPetSheet.height) pixels or larger: 8 columns and at least 9 rows of 192:208 cells at any scale (extra rows are ignored).")
         }
         if id.isEmpty { id = "pet" }
         if id == defaultID { id = "maestro-custom" }

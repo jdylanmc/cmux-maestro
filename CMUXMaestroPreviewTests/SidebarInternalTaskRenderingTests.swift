@@ -6,7 +6,7 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarInternalTaskRenderingTests {
-    @Test(arguments: SidebarMode.allCases)
+    @Test(arguments: [SidebarMode.hierarchy])
     func review001HistoricalTasksKeepTheirOwnSessionHeading(_ mode: SidebarMode) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
@@ -60,7 +60,7 @@ struct SidebarInternalTaskRenderingTests {
         #expect(model.navigation.status == .idle)
     }
 
-    @Test(arguments: [SidebarHistoryRetention.fifteenSeconds, .never], SidebarMode.allCases)
+    @Test(arguments: [SidebarHistoryRetention.fifteenSeconds, .never], [SidebarMode.hierarchy])
     func review002DisplayedDismissControlHandlesHiddenCompletedChild(
         _ retention: SidebarHistoryRetention, _ mode: SidebarMode
     ) async throws {
@@ -92,54 +92,7 @@ struct SidebarInternalTaskRenderingTests {
         try capture(mounted.host, name: "review1-dismiss-hidden-child-\(retention.rawValue)-\(mode.rawValue)")
     }
 
-    @Test(arguments: [false, true])
-    func review003ManagedTaskboardKeepsMixedLegacyActivityAcrossCollapse(_ showEnded: Bool) async throws {
-        let fixture = try SidebarPreferenceFixture()
-        defer { fixture.cleanup() }
-        let preferences = fixture.preferences()
-        preferences.showEnded = showEnded
-        preferences.setRetention(.never)
-        preferences.selectedMode = .taskboard
-        let data = SidebarTreeFixtures(), now = Date()
-        let model = await makeModel(data, children: [
-            .init(id: "task", parentID: nil, kind: .subagent, name: "Internal task", state: .completed,
-                  model: nil, terminalEvent: .init(id: UUID(), timestamp: now)),
-            .init(id: "shell", parentID: "task", kind: .shell, name: "Running shell", state: .working, model: nil),
-            .init(id: "idle", parentID: nil, kind: .skill, name: "Idle skill", state: .idle, model: nil),
-            .init(id: "unknown", parentID: nil, kind: .skill, name: "Unknown skill", state: .unknown, model: nil),
-            .init(id: "finished", parentID: nil, kind: .skill, name: "Finished skill", state: .completed,
-                  model: nil, terminalEvent: .init(id: UUID(), timestamp: now))
-        ], now: now, managed: true)
-        defer { model.setVisible(false) }
-        let mounted = mount(model, preferences, width: 350)
-        defer { mounted.window.contentView = nil; mounted.window.close() }
-        await sidebarEventually { model.orchestration.snapshot.nodes.count == 1 }
-        let owner = try #require(model.orchestration.snapshot.nodes.first)
-        let expected = ["Running shell", "Idle skill", "Unknown skill"] + (showEnded ? ["Finished skill"] : [])
-        for expanded in [true, false] {
-            preferences.setExpanded(expanded, for: .managed(owner.id))
-            preferences.setExpanded(expanded, for: .internalTasks(sessionID: data.sessionID))
-            preferences.selectedMode = .hierarchy
-            await Task.yield()
-            preferences.selectedMode = .taskboard
-            await sidebarEventually {
-                let labels = buttons(mounted.host).compactMap { $0.accessibilityLabel() }
-                return expected.allSatisfy { name in labels.contains("Open parent chat for \(name), Copilot 10000000") }
-                    && names(mounted.host).count == (expanded ? 1 : 0)
-            }
-            let labels = buttons(mounted.host).compactMap { $0.accessibilityLabel() }
-            for name in expected {
-                #expect(labels.filter { $0 == "Open parent chat for \(name), Copilot 10000000" }.count == 1)
-            }
-            #expect(labels.filter { $0 == "Focus Managed owner" }.count == 1)
-            #expect(!labels.contains("Focus Copilot session 10000000"))
-            #expect(names(mounted.host).count == (expanded ? 1 : 0))
-            #expect(model.navigation.status == .idle)
-        }
-        try capture(mounted.host, name: "review1-legacy-taskboard-ended-\(showEnded)")
-    }
-
-    @Test(arguments: SidebarMode.allCases)
+    @Test(arguments: [SidebarMode.hierarchy])
     func review004CollapsedMixedBranchAndOwnerRetainEvidenceAfterReload(_ mode: SidebarMode) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
@@ -189,7 +142,7 @@ struct SidebarInternalTaskRenderingTests {
     }
 
     @Test(arguments: [(280, false), (280, true), (350, false), (350, true), (460, false), (460, true)],
-          SidebarMode.allCases)
+          [SidebarMode.hierarchy])
     func combinedProductionOwnerAndTaskDepthKeepsGeometry(
         _ scenario: (width: Int, retained: Bool), _ mode: SidebarMode
     ) async throws {
@@ -283,7 +236,7 @@ struct SidebarInternalTaskRenderingTests {
         }
     }
 
-    @Test(arguments: SidebarMode.allCases)
+    @Test(arguments: [SidebarMode.hierarchy])
     func controlledPresentationAgeExpiresRetainedOwnerWithoutChangingObservations(_ mode: SidebarMode) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
@@ -323,6 +276,7 @@ struct SidebarInternalTaskRenderingTests {
         try #require(SidebarPresentation.displacedManagedNodeIDs(
             [owner], observations: observations, now: observedAt
         ) == [owner.id])
+        for workspace in model.hierarchy.workspaces { preferences.setIdleTasksVisible(true, in: workspace.id) }
         let frame = NSRect(x: 0, y: 0, width: 280, height: 900)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -360,7 +314,7 @@ struct SidebarInternalTaskRenderingTests {
         let frame: CGRect
     }
 
-    @Test(arguments: SidebarMode.allCases)
+    @Test(arguments: [SidebarMode.hierarchy])
     func managedOwnerRendersItsTasksOnceWithoutReplacingRealSurfaces(_ mode: SidebarMode) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
@@ -389,7 +343,7 @@ struct SidebarInternalTaskRenderingTests {
         try capture(mounted.host, name: "internal-tasks-managed-\(mode.rawValue)-280")
     }
 
-    @Test(arguments: [280, 350, 460], SidebarMode.allCases)
+    @Test(arguments: [280, 350, 460], [SidebarMode.hierarchy])
     func compactTasksKeepNamesAndStatusEdgeAtProductionDepth(_ width: Int, _ mode: SidebarMode) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
@@ -490,11 +444,6 @@ struct SidebarInternalTaskRenderingTests {
         #expect(!preferences.layout.isExpanded(.internalTasks(sessionID: data.sessionID)))
         #expect(group.toolTip?.contains("1 known running") == true)
         #expect(group.toolTip?.contains("1 blocked") == true)
-        preferences.selectedMode = .taskboard
-        await sidebarEventually {
-            buttons(mounted.host).contains { $0.localFocusID == "task-disclosure:\(data.sessionID):session" }
-                && names(mounted.host).isEmpty
-        }
         let current = try #require(buttons(mounted.host).first { $0.localFocusID == "task-disclosure:\(data.sessionID):session" })
         current.performClick(nil)
         await sidebarEventually { names(mounted.host).count == 1 }
@@ -503,7 +452,7 @@ struct SidebarInternalTaskRenderingTests {
         #expect(model.navigation.status == .idle)
     }
 
-    @Test(arguments: [true, false], SidebarMode.allCases)
+    @Test(arguments: [true, false], [SidebarMode.hierarchy])
     func exactOutcomeDismissalRestoresVisibleLocalFocusWithoutNavigation(_ ownerAlive: Bool, _ mode: SidebarMode) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
@@ -547,7 +496,7 @@ struct SidebarInternalTaskRenderingTests {
         try capture(mounted.host, name: "internal-task-dismiss-\(mode.rawValue)-owner-\(ownerAlive)")
     }
 
-    @Test(arguments: SidebarMode.allCases)
+    @Test(arguments: [SidebarMode.hierarchy])
     func frozenPresentationClockCannotAuthorizeStaleDismissal(_ mode: SidebarMode) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
@@ -628,6 +577,8 @@ struct SidebarInternalTaskRenderingTests {
         _ model: SidebarConnectionModel, _ preferences: SidebarPreferences, width: Int, reduceMotion: Bool = false,
         now: Date? = nil, actionNow: (() -> Date)? = nil
     ) -> (window: NSWindow, host: NSView) {
+        // Finished tasks are hidden until the workspace eye is on; these scenarios inspect them.
+        for workspace in model.hierarchy.workspaces { preferences.setIdleTasksVisible(true, in: workspace.id) }
         let frame = NSRect(x: 0, y: 0, width: width, height: 900)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

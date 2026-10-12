@@ -24,7 +24,8 @@ enum SidebarHoverContent {
                     guard let count = groups[kind]?.count else { return nil }
                     return "\(count) \(kind.title.lowercased())"
                 }
-                lines.append(.init(title: "Shared surfaces", value: summary.isEmpty ? "None" : summary.joined(separator: ", ")))
+                let counts = summary.isEmpty ? "None" : summary.joined(separator: ", ")
+                lines.append(.init(title: "Shared surfaces", value: counts, copyableValue: counts))
             } else {
                 lines.append(.init(title: "Shared surfaces", value: "Count unavailable; placement is ambiguous"))
             }
@@ -32,9 +33,11 @@ enum SidebarHoverContent {
             lines.append(.init(title: "Shared surfaces", value: "Metadata unavailable"))
         }
         lines += [
-            .init(title: "Workspace path", value: workspace.rootPath.pathDisplayText),
-            .init(title: "Project path", value: workspace.projectRootPath.pathDisplayText),
-            .init(title: "Workspace ID", value: id.uuidString)
+            .init(title: "Workspace path", value: workspace.rootPath.pathDisplayText,
+                  copyableValue: workspace.rootPath.copyablePathValue),
+            .init(title: "Project path", value: workspace.projectRootPath.pathDisplayText,
+                  copyableValue: workspace.projectRootPath.copyablePathValue),
+            .init(title: "Workspace ID", value: id.uuidString, copyableValue: id.uuidString)
         ]
         return .init(id: "workspace-\(id)", category: "Workspace preview", title: title, subtitle: detail, lines: lines)
     }

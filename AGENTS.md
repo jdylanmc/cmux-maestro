@@ -93,6 +93,33 @@ do not copy its source or history, modify it, or make this project depend on it.
 - Preserve exact workspace/surface/session/generation ownership and the
   controller's depth, node, size and concurrent-operation bounds.
 
+## Domain and decisions
+
+- Read [`CONTEXT.md`](CONTEXT.md) for terms. Use them. Do not invent synonyms.
+- Read [`docs/adr/`](docs/adr/) before changing a decision. Say so if you conflict with one.
+- Contract detail lives in [`docs/reference/`](docs/reference/). The README stays short.
+
+## Evidence and safety rules
+
+Moved here from the README. Reasons are in the ADRs.
+
+- Never infer ownership from titles, paths, focus, chronology, or terminal text. Unknown stays unknown. ([ADR 0002](docs/adr/0002-exact-identity-evidence-never-heuristics.md))
+- Never infer success, progress, hang, or completion from process presence, idle time, file timestamps, terminal output, launch acceptance, or expired history. ([ADR 0003](docs/adr/0003-liveness-work-attention-completion-stay-separate.md))
+- Never read, store, or display raw transcripts, prompts, tool arguments or results, credentials, tokens, or unsanitized errors.
+- Never use terminal keystrokes as a messaging or control fallback. Never restart, adopt, or signal existing sessions. ([ADR 0004](docs/adr/0004-interactive-workers-only.md), [0005](docs/adr/0005-native-peer-messaging-is-fire-and-forget.md))
+- Never treat recorded launch policy as live permissions. Deny wins. Explicit worker YOLO refuses. ([ADR 0006](docs/adr/0006-recorded-launch-policy-deny-wins.md))
+- Never key dismissal by label, path, or timestamp. Keep history presentation limits apart from ingestion limits. ([ADR 0009](docs/adr/0009-dismissal-by-event-identity.md))
+- History fails open. Replay and capacity fail closed. Never evict exact evidence to admit more. ([ADR 0010](docs/adr/0010-history-fails-open-replay-fails-closed.md))
+- Never delete or truncate the install lock. Never force-kill. Never remove source files or deregister foreign registrations. Treat `build-register.sh` and `install` as publication, not validation. ([ADR 0011](docs/adr/0011-coordinated-install-no-force-kill.md))
+- Never run two `build-register.sh` or install commands at once. A second build can rewrite the app mid-install and strand the transaction.
+- Never use a validation build's installer UI. Only the production identity may run setup. ([ADR 0015](docs/adr/0015-isolated-validation-identities.md))
+- Never widen sandbox entitlements or add ancestor traversal for convenience. ([ADR 0001](docs/adr/0001-sandboxed-sidebar-reads-sanitized-evidence.md))
+- Keep layout changes presentation-only. Do not alter evidence, lifecycle state, counts, retention, acknowledgement, or focus. Keep layout, history, and acknowledgement storage separate.
+- Previews stay passive. ([ADR 0017](docs/adr/0017-previews-are-passive-and-rename-is-a-reminder.md))
+- Never claim a compile, parser check, screenshot, synthetic fixture, sandbox probe, registry check, or `build-register.sh` success proves hosted UI, live install, loaded hooks, or ExtensionKit runtime behavior.
+- Render and pixel checks use synthetic local offscreen data. Critical text uses exact pixel oracles. Never upload transcripts, real paths, or desktop captures. ([ADR 0019](docs/adr/0019-exact-pixel-oracles-for-critical-text.md))
+- Only synthetic or generic content in docs and screenshots. Never real workspace names, paths, or work content.
+
 ## Validation
 
 Use the checked-in scripts, which select full Xcode explicitly:

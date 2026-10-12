@@ -267,6 +267,12 @@ nonisolated struct AgentSessionAppearance: Codable, Equatable, Sendable {
     var petId: String? = nil
 }
 
+/// Branch the agent is working in, published by the hook; never a path.
+nonisolated struct AgentSessionLocation: Codable, Equatable, Sendable {
+    let branch: String
+    let worktree: Bool
+}
+
 // Additional evidence, never a reinterpretation of v1's nested childWork.
 // Items are ordered literal edges; missing parents and cycles are permissible.
 nonisolated struct AgentChildWorkObservation: Codable, Equatable, Sendable {
@@ -577,6 +583,7 @@ nonisolated struct AgentSessionSnapshotItem: Codable, Equatable, Sendable {
     let appearance: AgentSessionAppearance?
     let attention: [AgentAttention]?
     let childWorkObservation: AgentChildWorkObservation?
+    var location: AgentSessionLocation? = nil
 
     var workState: AgentWorkState { .resolve(state, detail: stateDetail) }
 
@@ -596,7 +603,8 @@ nonisolated struct AgentSessionSnapshotItem: Codable, Equatable, Sendable {
         launchBinding: AgentSessionBinding? = nil,
         appearance: AgentSessionAppearance? = nil,
         attention: [AgentAttention]? = nil,
-        childWorkObservation: AgentChildWorkObservation? = nil
+        childWorkObservation: AgentChildWorkObservation? = nil,
+        location: AgentSessionLocation? = nil
     ) {
         self.identity = identity
         self.binding = binding
@@ -614,6 +622,7 @@ nonisolated struct AgentSessionSnapshotItem: Codable, Equatable, Sendable {
         self.appearance = appearance
         self.attention = attention
         self.childWorkObservation = childWorkObservation
+        self.location = location
     }
 }
 

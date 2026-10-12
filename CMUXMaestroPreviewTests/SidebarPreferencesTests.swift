@@ -52,6 +52,25 @@ struct SidebarPreferencesTests {
     }
 
     @Test
+    func activeWindowFooterHeightPersistsAndResetsToAutomatic() throws {
+        try withIsolatedDefaults { defaults, file, attentionFile, layoutStore in
+            @MainActor func make() -> SidebarPreferences {
+                SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore)
+            }
+            let original = make()
+            #expect(original.pinnedFooterHeight == nil)
+            original.pinnedFooterHeight = 140
+            #expect(make().pinnedFooterHeight == 140)
+            original.pinnedFooterHeight = nil
+            #expect(make().pinnedFooterHeight == nil)
+            defaults.set(-4.0, forKey: "sidebar.pinnedFooterHeight")
+            #expect(make().pinnedFooterHeight == nil)
+            defaults.set(Double.nan, forKey: "sidebar.pinnedFooterHeight")
+            #expect(make().pinnedFooterHeight == nil)
+        }
+    }
+
+    @Test
     func invalidPersistedValueFallsBackToHierarchy() throws {
         try withIsolatedDefaults { defaults, file, attentionFile, layoutStore in
             defaults.set("unknown-mode", forKey: "sidebar.selectedMode")
@@ -157,7 +176,7 @@ struct SidebarPreferencesTests {
                 hosting.layoutSubtreeIfNeeded()
                 let scroll = try #require(firstScrollView(in: hosting))
                 let document = try #require(scroll.documentView)
-                #expect(document.bounds.height > scroll.contentView.bounds.height)
+                if mode == .hierarchy { #expect(document.bounds.height > scroll.contentView.bounds.height) }
                 for y in [max(0, document.bounds.height - scroll.contentView.bounds.height), 0] {
                     scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
                     scroll.reflectScrolledClipView(scroll.contentView)

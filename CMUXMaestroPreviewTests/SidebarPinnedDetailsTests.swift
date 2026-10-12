@@ -411,7 +411,7 @@ struct SidebarPinnedDetailsTests {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
         let preferences = fixture.preferences()
-        preferences.selectedMode = .taskboard
+        preferences.selectedMode = subject == "child" ? .hierarchy : .taskboard
         let source = ObservedPlacementSource(
             sessionID: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA
         )
@@ -512,7 +512,7 @@ struct SidebarPinnedDetailsTests {
     }
 
     @Test(arguments: ["unchanged", "generation", "run", "session", "workspace", "surface",
-                      "focus-generation", "focus-missing", "primary-generation"], SidebarMode.allCases)
+                      "focus-generation", "focus-missing", "primary-generation"], [SidebarMode.hierarchy])
     func retainedManagedMenuValidatesCapturedSubjectBeforeInspectionAndSeen(change: String, mode: SidebarMode) async throws {
         let preferenceFixture = try SidebarPreferenceFixture()
         defer { preferenceFixture.cleanup() }
@@ -995,15 +995,9 @@ struct SidebarPinnedDetailsTests {
                     try await settle(hosting)
                     #expect(button.accessibilityValue() as? String == "Copied")
                     #expect(pasteboard.string(forType: .string) == fixtures.sessionID.uuidString)
-                    let feedback = try #require(views(hosting).compactMap { $0 as? NSTextField }
-                        .first { $0.accessibilityIdentifier() == "hover-copy-feedback" })
-                    feedback.scrollToVisible(feedback.bounds)
-                    try await settle(hosting)
-                    #expect(feedback.stringValue == "Copied" && feedback.accessibilityValue() == "Copied")
-                    let drawing = feedback.alignmentRect(forFrame: feedback.bounds)
-                    #expect(drawing.height > 0 && feedback.visibleRect.contains(drawing))
-                    let viewport = try #require(feedback.enclosingScrollView?.contentView)
-                    #expect(viewport.bounds.contains(viewport.convert(drawing, from: feedback)))
+                    #expect(!views(hosting).compactMap { $0 as? NSTextField }
+                        .contains { $0.accessibilityIdentifier() == "hover-copy-feedback" },
+                            "A successful copy shows no text")
                     let scroll = try #require(views(hosting).compactMap { $0 as? NSScrollView }.first)
                     scroll.contentView.scroll(to: .zero)
                     scroll.reflectScrolledClipView(scroll.contentView)
@@ -1135,7 +1129,7 @@ struct SidebarPinnedDetailsTests {
                 SidebarPinnedFooter(content: content, maximumHeight: 144,
                                     inspect: { Issue.record("Rendering must not inspect") },
                                     copyValue: { _ in Issue.record("Rendering must not copy"); return false })
-                    .frame(height: control == "clipped" ? 60 : nil, alignment: .top)
+                    .frame(height: control == "clipped" ? 30 : nil, alignment: .top)
                     .clipped()
                     .opacity(control == "hidden" ? 0 : 1)
                 Spacer(minLength: 50)
@@ -1340,7 +1334,7 @@ struct SidebarPinnedDetailsTests {
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         var modelRegion = CGRect.null
-        // Independent literal header geometry: outer inset, divider, gaps, 24-point heading and 38-point pet.
+        // Independent literal header geometry: outer inset, divider, gap and 38-point pet (no heading row).
         let reference = NSHostingView(rootView: VStack(alignment: .leading, spacing: 2) {
             Text("Verified agent").font(.system(.caption).weight(.semibold)).lineLimit(2)
             Label("Working", systemImage: "circle.fill")
@@ -1353,7 +1347,7 @@ struct SidebarPinnedDetailsTests {
                 } action: { modelRegion = $0 }
         }
         .frame(width: size.width - 20 - 38 - 8, alignment: .leading)
-        .padding(.leading, 10 + 38 + 8).padding(.top, 10 + 0.5 + 4 + 24 + 4)
+        .padding(.leading, 10 + 38 + 8).padding(.top, 10 + 0.5 + 4)
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .coordinateSpace(name: "footer-model-reference")
         .environment(\.colorScheme, dark ? .dark : .light)

@@ -14,6 +14,41 @@ struct SidebarHoverCard: View {
     let close: () -> Void
     let copyValue: (String) -> Bool
     var copyActionFocusChanged: (Bool) -> Void = { _ in }
+    /// Lay out at natural height without scrolling, so the panel can size itself to its content.
+    var intrinsic = false
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let subtitle = data.subtitle {
+                Text(subtitle).font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(data.lines) { line in
+                if let changes = line.gitChanges {
+                    GitChangeBadge(changes: changes)
+                } else if let clipboardValue = line.copyableValue {
+                    SidebarCopyableValue(
+                        value: line.value, label: line.title, clipboardValue: clipboardValue,
+                        copy: copyValue, focusChanged: copyActionFocusChanged
+                    )
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(line.title).foregroundStyle(.secondary)
+                        Text(line.value).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.caption)
+                    .accessibilityElement(children: .combine)
+                    .help(line.help ?? "")
+                    .accessibilityHint(line.help ?? "")
+                }
+            }
+            if let notice = data.notice {
+                Text(notice).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -25,43 +60,27 @@ struct SidebarHoverCard: View {
                 Spacer(minLength: 0)
                 SidebarPreviewCloseButton(close: close).frame(width: 24, height: 24)
             }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    if let subtitle = data.subtitle {
-                        Text(subtitle).font(.callout).fixedSize(horizontal: false, vertical: true)
-                    }
-                    ForEach(data.lines) { line in
-                        if let changes = line.gitChanges {
-                            GitChangeBadge(changes: changes)
-                        } else if let clipboardValue = line.copyableValue {
-                            SidebarCopyableValue(
-                                value: line.value, label: line.title, clipboardValue: clipboardValue,
-                                copy: copyValue, focusChanged: copyActionFocusChanged
-                            )
-                        } else {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(line.title).foregroundStyle(.secondary)
-                                Text(line.value).textSelection(.enabled)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .font(.caption)
-                            .accessibilityElement(children: .combine)
-                            .help(line.help ?? "")
-                            .accessibilityHint(line.help ?? "")
-                        }
-                    }
-                    if let notice = data.notice {
-                        Text(notice).font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+            if intrinsic {
+                details
+            } else {
+                // Content that fits shows as-is; only a card taller than its panel scrolls.
+                ViewThatFits(in: .vertical) {
+                    details
+                    ScrollView { details }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .id(data.id)
             }
-            .id(data.id)
-            Text("Preview only").font(.caption2).foregroundStyle(.secondary)
+            if data.category == "Workspace preview" {
+                HStack {
+                    Spacer(minLength: 0)
+                    Label("⇧⌘R to rename", systemImage: "keyboard")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("hover-rename-hint")
+                }
+            }
         }
         .padding(14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: intrinsic ? nil : .infinity, alignment: .topLeading)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("hover-card-\(data.id)")
     }
@@ -429,8 +448,16 @@ final class SidebarHoverPresenter {
         panel?.appearance = anchor.effectiveAppearance
         panel?.setFrame(SidebarHoverPlacement.frame(
             anchor: rectangle, visible: screen.visibleFrame,
-            preferred: CGSize(width: 300, height: (data?.lines.count ?? 0) > 3 ? 360 : 260)
+            preferred: preferredCardSize()
         ), display: true)
+    }
+
+    private func preferredCardSize() -> CGSize {
+        guard let data else { return CGSize(width: 300, height: 260) }
+        let measuring = NSHostingView(rootView: SidebarHoverCard(
+            data: data, close: {}, copyValue: copyValue, intrinsic: true
+        ).frame(width: 300))
+        return CGSize(width: 300, height: max(80, ceil(measuring.fittingSize.height)))
     }
 
     private func installObservers(window: NSWindow) {

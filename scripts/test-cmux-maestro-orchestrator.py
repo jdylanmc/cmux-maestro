@@ -4113,5 +4113,37 @@ class DirectLaunchTests(unittest.TestCase):
                 caller.communicate(timeout=5)
 
 
+class PetSheetSizeTests(unittest.TestCase):
+    """Pet sheets are flexible: 8 columns of 192:208 cells, any scale, nine or more rows."""
+
+    @staticmethod
+    def png(width, height):
+        import struct
+        return (b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR"
+                + struct.pack(">II", width, height) + b"\x08\x06\x00\x00\x00" + b"\x00" * 4)
+
+    def pet_folder(self, width, height, name="duck"):
+        folder = Path(tempfile.mkdtemp(prefix="pet-", dir="/tmp")) / name
+        folder.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, folder.parent, True)
+        (folder / "pet.json").write_text(json.dumps({
+            "id": name, "displayName": "Duck", "spritesheetPath": "sheet.png"}))
+        (folder / "sheet.png").write_bytes(self.png(width, height))
+        return folder
+
+    def test_standard_v2_and_scaled_sheets_are_accepted(self):
+        read = CONTROLLER_API["read_pet_source"]
+        for width, height in ((1536, 1872), (1536, 2288), (3072, 3744), (768, 936), (1536, 2000)):
+            identifier, display, description, data, extension = read(str(self.pet_folder(width, height)), None)
+            self.assertEqual((identifier, extension), ("duck", ".png"))
+            self.assertEqual(CONTROLLER_API["image_size"](data), (width, height))
+
+    def test_sheets_without_the_grid_are_rejected(self):
+        read = CONTROLLER_API["read_pet_source"]
+        for width, height in ((1536, 1800), (1537, 1872), (400, 468), (5000, 6000), (1536, 4000), (1536, 800)):
+            with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], r"8 columns"):
+                read(str(self.pet_folder(width, height)), None)
+
+
 if __name__ == "__main__":
     unittest.main()

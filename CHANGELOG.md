@@ -4,14 +4,66 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ## Unreleased
 
+### Fixed
+
+- Stop the sidebar flashing a list of finished shell and skill rows (each marked "Attention
+  evidence incomplete") while an agent runs sub-agents; momentarily incomplete evidence no
+  longer revives finished activity or marks task rows.
+- Accept any Codex pet sheet with 8 columns and at least nine rows of 192:208 cells at any
+  whole-pixel scale, including **v2** pets (1536×2288, with look-direction rows), in both
+  `maestro pet --add` and the picker. Maestro plays only the first nine rows and ignores the
+  rest. Previously such pets were rejected as "must be exactly 1536×1872".
+
+### Changed
+
+- Rewrite the README as a short overview with screenshots and an install path. Move the full
+  contracts, unchanged in substance, to `docs/reference/`. Add `CONTEXT.md` (domain terms),
+  `docs/adr/` (19 decision records), and an evidence and safety rules section in `AGENTS.md`.
+- Internal-task rows put their state spinner on the left and hide the counts on the
+  collapsed row; finished tasks stay hidden until the workspace eye is on. The expand
+  chevron is narrower, and "Error reported" no longer shows on an agent that is still
+  working.
+- Rebuild the Taskboard as a state board: one card per agent session under **Waiting on
+  you**, **Working**, **Failed**, **Idle**, **Finished** and **Unknown** headings with
+  counts. Each card shows the title, activity, workspace, model and, when the agent is in a
+  git repository or linked worktree, its branch. Sub-agent, skill, shell and internal-task
+  rows are no longer listed there; Hierarchy keeps them.
+- Show a small, always-visible copy icon beside every detail label (including the model in
+  the preview). A successful copy shows no "Copied" text; the icon turns into a checkmark.
+- Add more padding between Taskboard cards.
+- Remove the "Active window" heading and the "Details" button from the footer: clicking the
+  agent's title now opens the details popover. Preview cards size themselves to their content
+  (scrolling only when taller than the screen), with the rename note at the bottom right.
+- Give the workspace preview the same copy icons (surfaces, paths, workspace ID) and drop its "Preview only" footer.
+- Let the active-window footer be resized: drag the divider above it. It can shrink to
+  just the pet row and grow to half the sidebar height; the size is remembered, and
+  double-clicking the divider restores the automatic size.
+- Add **Rename… (⇧⌘R)** to the workspace menu and a "⇧⌘R to rename" note to the workspace
+  preview. CMUX exposes no rename action to extensions, so the menu item selects the
+  workspace and shows a short reminder of CMUX's own shortcut.
+
 ### Removed
 
 - Drop the reusable, movable content-tab concept. Taskboard stays a sidebar-only view
   toggled from the header, and the visual proof of concept now matches (Beats is a
   popover; no utility tabs). Closes #86 and #87 as not planned.
+- Remove the header History shortcut: it opened the same popover as Maestro settings,
+  scrolled to the completed-work controls, which remain in Settings. The header now has
+  four shortcuts.
+
+### Changed
+
+- Stop showing failed nested shell commands ("bash invocation · Shell · error") as red
+  outline rows. They move to the session's Other activity disclosure; blocked or
+  attention-bearing shell rows and failed agents/tasks still stay visible.
 
 ### Added
 
+- Show the git branch each agent is working in on its Taskboard card (a linked worktree
+  adds a `· worktree` suffix and icon) instead of the terminal directory; no row appears
+  outside a repository. The Copilot hook now also publishes only the branch and a worktree
+  flag per session in `Copilot/locations/`, read from the hook `cwd` and tool path by
+  reading `.git` files directly (no `git` process, no paths or repository names recorded).
 - Add Beats: recurring cron prompts for exact agent sessions. A native sidebar popover
   manages them (the header icon lights while one is enabled), `/maestro` agents manage
   their own through `beats`. The installed extension mirrors each session's enabled Beats

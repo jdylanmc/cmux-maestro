@@ -165,8 +165,9 @@ struct SidebarGitPresentationTests {
             hosting.frame = frame
             hosting.layoutSubtreeIfNeeded()
             let metrics = SidebarRenderingEvidence.metrics(for: hosting)
-            #expect(metrics.viewportWidth > 0 && metrics.documentWidth <= metrics.viewportWidth + 1,
-                    "No horizontal scroll or overflow in \(name)")
+            // Content that fits has no scroll view, so there is nothing to scroll sideways.
+            let contained = metrics.viewportWidth == 0 || metrics.documentWidth <= metrics.viewportWidth + 1
+            #expect(contained, "No horizontal scroll or overflow in \(name)")
             let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
             hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
             var background: NSColor?

@@ -7,6 +7,17 @@ enum SidebarAgentHoverTarget {
 }
 
 enum SidebarAgentHoverContent {
+    /// The reported model is the one labelled value that had no copy action.
+    static func copyable(_ lines: [SidebarDetailLine]) -> [SidebarDetailLine] {
+        lines.map { line in
+            guard line.copyableValue == nil, ["Model", "Last reported model"].contains(line.title),
+                  !line.value.isEmpty else { return line }
+            var result = line
+            result.copyableValue = line.value
+            return result
+        }
+    }
+
     static func card(
         for target: SidebarAgentHoverTarget, hierarchy: HierarchySnapshot, connected: Bool,
         tree: SidebarCopilotTree, managed: SidebarOrchestrationSnapshot,
@@ -27,6 +38,7 @@ enum SidebarAgentHoverContent {
             ])
             var lines = SidebarPresentation.managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { allowed.contains($0.title) }
+            lines = Self.copyable(lines)
             let current = availability == .ready || availability == .partial
             if !current && availability != .stale {
                 lines = lines.map { line in
@@ -102,6 +114,7 @@ enum SidebarAgentHoverContent {
         if !retained { lines += SidebarPresentation.paths(hierarchy.pathContext(
             workspaceID: session.workspaceID, surfaceID: session.surfaceID
         ), copyable: true) }
+        lines = Self.copyable(lines)
         return .init(
             id: "session-\(session.id)", category: retained ? "Session context" : "Agent preview", title: title,
             subtitle: SidebarPresentation.sessionState(session).title,

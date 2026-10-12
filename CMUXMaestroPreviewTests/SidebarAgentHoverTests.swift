@@ -358,7 +358,7 @@ struct SidebarAgentHoverTests {
         let a = session()
         let b = session(id: fixtures.otherSessionID, name: "different-model")
         let result = try #require(card(.session(a.id), sessions: [a, b]))
-        #expect(result.lines.contains(.init(title: "Model", value: "model")))
+        #expect(result.lines.contains(.init(title: "Model", value: "model", copyableValue: "model")))
         #expect(!result.lines.contains { $0.value == "different-model" })
         #expect(result.id == "session-\(a.id)")
         #expect(result.lines.filter { $0.copyableSessionID != nil } == [.sessionID(a.id)])
@@ -380,6 +380,7 @@ struct SidebarAgentHoverTests {
         timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         #expect(copied == [
             "Session ID": observed.id.uuidString,
+            "Model": "model",
             "Observed": timestamp.string(from: observed.observedAt),
             "Child history": "incomplete",
             "Workspace path": "/synthetic/workspace",
@@ -388,7 +389,7 @@ struct SidebarAgentHoverTests {
         ])
         #expect(result.lines.first { $0.title == "Observed" }?.value != copied["Observed"])
         #expect(result.lines.allSatisfy {
-            !["Model", "State", "Process", "Known working children", "Child ID"].contains($0.title)
+            !["State", "Process", "Known working children", "Child ID"].contains($0.title)
                 || $0.copyableValue == nil
         })
 
@@ -569,7 +570,7 @@ struct SidebarAgentHoverTests {
         )
         let result = try #require(card(.managed(node.id, generation: 2), sessions: [session()], nodes: [node]))
         #expect(result.title == node.label)
-        #expect(result.lines.contains(.init(title: "Model", value: "model")))
+        #expect(result.lines.contains(.init(title: "Model", value: "model", copyableValue: "model")))
         #expect(!result.lines.contains { $0.value == "old-branch" || $0.value == "not-current" })
         #expect(result.lines.contains(.init(title: "Last verified location",
                                            value: "Assigned directory: Not current Git state: old-branch · not-current",

@@ -156,7 +156,7 @@ struct SidebarHoverTests {
             let controls = descendants(try #require(panel.contentView)).compactMap { $0 as? NSButton }
                 .filter { ["hover-close", "hover-copy-value"].contains($0.accessibilityIdentifier()) && $0.canBecomeKeyView }
             let copyControls = controls.filter { $0.accessibilityIdentifier() == "hover-copy-value" }
-            try #require(controls.count == 6 && copyControls.count == 5 && copyControls.first === copy)
+            try #require(controls.count == 7 && copyControls.count == 6 && copyControls.first === copy)
             let path = try automaticPath(from: origin, to: following)
             if exit == "tab" {
                 for _ in 1..<copyControls.count {
@@ -667,8 +667,8 @@ struct SidebarHoverTests {
         let b = try #require(SidebarHoverContent.workspace(fixtures.workspaceB, hierarchy: original, connected: true))
         #expect(a.id != b.id && a.title == b.title)
         #expect(a.category == "Workspace preview")
-        #expect(a.lines.contains(.init(title: "Shared surfaces", value: "1 terminal")))
-        #expect(a.lines.contains(.init(title: "Workspace ID", value: fixtures.workspaceA.uuidString)))
+        #expect(a.lines.contains(.init(title: "Shared surfaces", value: "1 terminal", copyableValue: "1 terminal")))
+        #expect(a.lines.contains(.init(title: "Workspace ID", value: fixtures.workspaceA.uuidString, copyableValue: fixtures.workspaceA.uuidString)))
         #expect(!a.lines.contains { $0.title.contains("Agent") || $0.title.contains("Pet") })
         #expect(SidebarHoverContent.workspace(fixtures.workspaceA, hierarchy: original, connected: false) == nil)
         #expect(SidebarHoverContent.workspace(UUID(), hierarchy: original, connected: true) == nil)
@@ -683,7 +683,7 @@ struct SidebarHoverTests {
         let moved = try #require(SidebarHoverContent.workspace(
             fixtures.workspaceA, hierarchy: fixtures.hierarchy(moved: true), connected: true
         ))
-        #expect(moved.lines.contains(.init(title: "Shared surfaces", value: "None")))
+        #expect(moved.lines.contains(.init(title: "Shared surfaces", value: "None", copyableValue: "None")))
     }
 
     @Test func passiveComponentsHaveNoNavigationOrPreferenceMutationDependencies() throws {
@@ -740,7 +740,7 @@ struct SidebarHoverTests {
             try #require(bitmap.representation(using: .png, properties: [:])).write(to: image)
             let text = try SidebarRenderingEvidence.recognizedLines(in: image, dark: dark, naturalLanguage: true).joined(separator: " ")
             #expect(text.contains("Maestro design"))
-            #expect(text.contains("Preview only"))
+            #expect(text.contains("rename"))
         }
         #expect(preferences.history == before.0 && preferences.attention == before.1)
         #expect(preferences.layout == before.2 && preferences.icons == before.3)

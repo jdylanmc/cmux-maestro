@@ -256,7 +256,9 @@ struct SidebarVisibleWork {
             let byID = Dictionary(uniqueKeysWithValues: session.nodes.map { ($0.id, $0) })
             var retained = Set(session.nodes.filter { node in
                 if node.isInternalTask { return !node.historyAncestor }
-                if node.attentionDegraded || node.attention.contains(where: { $0.kind.isBlocking || $0.kind == .error }) { return true }
+                // Finished activity is not revived by momentarily incomplete evidence; that read flickers.
+                if (node.attentionDegraded && !node.state.isTerminal)
+                    || node.attention.contains(where: { $0.kind.isBlocking || $0.kind == .error }) { return true }
                 if [.completed, .cancelled].contains(node.state) { return false }
                 return true
             }.map(\.id))
@@ -829,6 +831,8 @@ enum SidebarPresentation {
     static func attention(_ signals: [AgentAttention], state: AgentWorkState, degraded: Bool) -> [String] {
         var result = AgentAttentionKind.allCases.compactMap { kind -> String? in
             guard kind != .turnFinished, kind != .answer else { return nil }
+            // A recovered error on an agent that is still working is noise; the state already says so.
+            if kind == .error && state == .working { return nil }
             let count = signals.filter { $0.kind == kind }.count
             guard count > 0 else { return nil }
             return kind.title + (count > 1 ? " (\(count))" : "")

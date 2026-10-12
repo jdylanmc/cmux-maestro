@@ -27,6 +27,8 @@ const path = require("node:path");
   });
   const check = (label, result) => { assert.ok(result, label); checks.push(label); };
   const revealed = button => button.evaluate(element => getComputedStyle(element).opacity === "1");
+  const dimmed = button => button.evaluate(element => getComputedStyle(element).opacity === "0.55");
+  const showsCheck = button => button.evaluate(element => element.dataset.copied === "true" && element.querySelector("svg path")?.getAttribute("d") === "m5 12.5 4.5 4.5L19 7");
   const active = () => page.locator("#pinned-details").getAttribute("data-active");
   const lastCopy = () => page.evaluate(() => window.copyRequests.at(-1));
   const hoverAgent = async id => {
@@ -45,35 +47,43 @@ const path = require("node:path");
     ["child-history", "incomplete"],
     ["workspace-path", "/demo/cmux-maestro"],
     ["project-path", "/demo/worktrees/sidebar-design/cmux-maestro"],
-    ["working-directory", "/demo/worktrees/sidebar-design/cmux-maestro"]
+    ["working-directory", "/demo/worktrees/sidebar-design/cmux-maestro"],
+    ["model", "demo-model-fast"]
   ];
   try {
     await page.goto(baseURL);
     await page.locator("#reset-demo").click();
     await page.mouse.move(1100, 80);
-    check("Copy buttons are hidden initially", await page.locator("#pinned-details .field-copy").evaluateAll(elements => elements.length === 6 && elements.every(element => getComputedStyle(element).opacity === "0" && getComputedStyle(element).pointerEvents === "none")));
+    check("Copy buttons are always visible, dimmed to 55%, with a 24px hit area and ~9pt glyph", await page.locator("#pinned-details .field-copy").evaluateAll(elements => elements.length === 7 && elements.every(element => {
+      const box = element.getBoundingClientRect();
+      const glyph = element.querySelector("svg").getBoundingClientRect();
+      return getComputedStyle(element).opacity === "0.55" && getComputedStyle(element).pointerEvents !== "none" && Math.round(box.width) === 24 && Math.round(box.height) === 24 && glyph.width >= 11 && glyph.width <= 13;
+    })));
     const prefsBefore = await page.evaluate(() => JSON.stringify(state));
     for (const surface of ["#pinned-details", "#hover-card"]) {
       if (surface === "#hover-card") await hoverAgent("reviewer");
       const fields = page.locator(`${surface} .detail-fields`);
-      check(`${surface}: buttons belong to labels, never values`, await fields.locator("dt .field-copy").count() === 6 && await fields.locator("dd button").count() === 0);
+      check(`${surface}: buttons belong to labels, never values`, await fields.locator("dt .field-copy").count() === 7 && await fields.locator("dd button").count() === 0);
       for (const [key, expected] of values) {
         const field = fields.locator(`[data-field="${key}"]`);
         const button = field.locator(".field-copy");
         await field.locator("dd").hover();
-        check(`${surface} ${key}: value hover does not reveal copy`, !await revealed(button));
+        check(`${surface} ${key}: value hover leaves copy dimmed but visible`, await dimmed(button));
         const before = await field.locator("dd").boundingBox();
         await field.locator(".detail-field-label > span").hover();
-        check(`${surface} ${key}: label hover reveals only its own copy button`, await revealed(button) && await fields.locator(".field-copy").evaluateAll(elements => elements.filter(element => getComputedStyle(element).opacity === "1").length) === 1);
+        await button.hover();
+        check(`${surface} ${key}: hovering the button reaches full opacity, others stay dimmed`, await revealed(button) && await fields.locator(".field-copy").evaluateAll(elements => elements.filter(element => getComputedStyle(element).opacity === "1").length) === 1);
         const after = await field.locator("dd").boundingBox();
-        check(`${surface} ${key}: reveal does not shift layout`, JSON.stringify(before) === JSON.stringify(after));
+        check(`${surface} ${key}: hover does not shift layout`, JSON.stringify(before) === JSON.stringify(after));
         await button.hover();
         check(`${surface} ${key}: button remains reachable from label`, await revealed(button));
         await button.locator("svg").click();
-        const raw = surface === "#hover-card" && key === "session-id" ? "00000000-0000-4000-8000-000000000005" : expected;
+        const raw = surface === "#hover-card" && key === "session-id" ? "00000000-0000-4000-8000-000000000005" : surface === "#hover-card" && key === "model" ? "demo-model-pro" : expected;
         check(`${surface} ${key}: copies the raw value`, await lastCopy() === raw);
+        check(`${surface} ${key}: success swaps to a checkmark with no Copied text`, await showsCheck(button) && !/copied/i.test(await page.locator("#notice").textContent()) && !/copied/i.test(await field.textContent()) && /copied/i.test(await button.getAttribute("aria-label")) && /copied/i.test(await page.locator("#copy-live").textContent()));
         await field.locator("dd").hover();
-        check(`${surface} ${key}: pointer click does not leave the button visible`, !await revealed(button));
+        await page.waitForFunction(element => !element.dataset.copied && element.getAttribute("aria-label").startsWith("Copy "), await button.elementHandle());
+        check(`${surface} ${key}: checkmark reverts to the dimmed copy icon`, await dimmed(button) && await button.locator("svg path").first().getAttribute("d") !== "m5 12.5 4.5 4.5L19 7");
       }
     }
     check("Copying hovered fields preserves active agent and all preferences", await active() === "implementer" && await page.evaluate(() => JSON.stringify(state)) === prefsBefore);
@@ -82,28 +92,29 @@ const path = require("node:path");
 
     const sessionField = page.locator('#hover-card [data-field="session-id"]');
     await sessionField.locator("dt").hover({ position: { x: 200, y: 10 } });
-    check("Blank label-row space does not reveal a copy button", !await revealed(sessionField.locator(".field-copy")));
+    check("Blank label-row space leaves the copy button dimmed", await dimmed(sessionField.locator(".field-copy")));
     await sessionField.locator(".detail-field-label > span").hover();
     await page.screenshot({ path: path.join(artifacts, "review-copy-hover.png") });
     await page.evaluate(() => { window.copyDenied = true; });
     const copyCount = await page.evaluate(() => window.copyRequests.length);
     await sessionField.locator(".field-copy").click();
-    check("Clipboard rejection surfaces an error rather than success", (await page.locator("#notice").textContent()).includes("Copy failed (NotAllowedError)") && await page.evaluate(() => window.copyRequests.length) === copyCount);
+    check("Clipboard rejection surfaces an error rather than success", (await page.locator("#notice").textContent()) === "Could not copy. Try again." && !await showsCheck(sessionField.locator(".field-copy")) && await page.evaluate(() => window.copyRequests.length) === copyCount);
     await page.evaluate(() => { window.copyDenied = false; });
     await sessionField.locator(".field-copy").click();
-    check("Copy works after permission failure", await page.locator("#notice").textContent() === "Session ID copied.");
+    check("Copy works after permission failure", await lastCopy() === "00000000-0000-4000-8000-000000000005" && await showsCheck(sessionField.locator(".field-copy")) && !/copied/i.test(await sessionField.textContent()));
 
     await page.keyboard.press("Escape");
     await page.mouse.move(1100, 80);
     await page.locator('#pinned-details [data-pet="implementer"]').focus();
     await page.keyboard.press("Tab");
     const pinnedCopy = page.locator('#pinned-details [data-field="session-id"] .field-copy');
-    check("Tab reveals a pinned copy button without pointer hover", await pinnedCopy.evaluate(element => element === document.activeElement) && await revealed(pinnedCopy));
+    check("Tab focuses a pinned copy button and brings it to full opacity", await pinnedCopy.evaluate(element => element === document.activeElement) && await revealed(pinnedCopy));
     await page.keyboard.press("Space");
     check("Space copies the pinned raw session ID", await lastCopy() === values[0][1]);
     await page.keyboard.press("Tab");
     const observedCopy = page.locator('#pinned-details [data-field="observed"] .field-copy');
-    check("Keyboard focus reveals only the new field", !await revealed(pinnedCopy) && await revealed(observedCopy));
+    await page.waitForFunction(() => !document.querySelector('#pinned-details [data-field="session-id"] .field-copy').dataset.copied);
+    check("Keyboard focus brings only the new field to full opacity", await dimmed(pinnedCopy) && await revealed(observedCopy));
     await page.keyboard.press("Enter");
     check("Enter copies the raw timestamp", await lastCopy() === values[1][1]);
 

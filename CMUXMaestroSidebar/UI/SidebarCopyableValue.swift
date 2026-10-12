@@ -38,7 +38,7 @@ struct SidebarCopyableValue: View {
                     }
                 )
                 .frame(width: SidebarCopyableValueLayout.actionSize, height: SidebarCopyableValueLayout.actionSize)
-                .opacity(labelHovered || actionFocused ? 1 : 0)
+                .opacity(labelHovered || actionFocused ? 1 : 0.55)
             }
             .fixedSize(horizontal: true, vertical: false)
             .background(SidebarCopyHoverAnchor(
@@ -46,7 +46,7 @@ struct SidebarCopyableValue: View {
             ))
             Text(value).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
-            if copied != nil {
+            if copied == false {
                 SidebarCopyFeedback(text: feedback)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -154,6 +154,7 @@ private struct SidebarCopyButton: NSViewRepresentable {
         button.activate = action
         button.focusChanged = focusChanged
         button.image = NSImage(systemSymbolName: copied ? "checkmark" : "doc.on.doc", accessibilityDescription: nil)
+        button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .regular)
         button.toolTip = label
         button.setAccessibilityLabel(label)
         button.setAccessibilityValue(feedback)

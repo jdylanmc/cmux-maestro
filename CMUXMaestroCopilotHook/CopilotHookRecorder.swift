@@ -236,11 +236,34 @@ nonisolated struct CopilotHookRecorder {
                 )
             } else {
                 try HookFiles.atomicWrite(CopilotIdentityJSON.encode(record), name: name, directory: bindings)
+                // Best effort: a location failure never changes the recording outcome.
+                recordLocation(object: object, session: session)
             }
             return .recorded
         } catch {
             return diagnose(.unavailable)
         }
+    }
+
+    func recordLocation(object: [String: Any], session: UUID) {
+        let home = (try? CopilotPaths.realUserHome().path) ?? "/"
+        let location = CopilotLocationResolver.resolve(payload: object, home: home)
+        guard let directory = try? HookFiles.privateDirectory(
+            integrationRoot.appendingPathComponent("locations", isDirectory: true)
+        ) else { return }
+        defer { close(directory) }
+        let name = session.uuidString.lowercased() + ".json"
+        guard let location else {
+            unlinkat(directory, name, 0)
+            return
+        }
+        let existing = try? CopilotFileAccess.readStableRegular(
+            at: directory, filename: name, owner: getuid(), maximum: CopilotSessionLocation.maximumBytes, permissions: 0o600
+        )
+        if let existing, CopilotSessionLocation.decode(existing, sessionID: session) == location { return }
+        guard let data = try? CopilotSessionLocation.encode(sessionID: session, location: location, recordedAt: Date())
+        else { return }
+        try? HookFiles.atomicWrite(data, name: name, directory: directory)
     }
 
     @discardableResult
@@ -252,5 +275,161 @@ nonisolated struct CopilotHookRecorder {
                                        name: "hook-status.json", directory: directory)
         }
         return outcome
+    }
+}
+
+/// Finds the branch an agent is working in by reading plain files only: no
+/// `git` process, no network, bounded depth and size. Any surprise is "no location".
+nonisolated enum CopilotLocationResolver {
+    static let maximumDepth = 40
+    static let maximumReadBytes = 4096
+    private static let shellTools: Set<String> = ["bash", "powershell", "shell", "sh", "zsh"]
+    private static let pathKeys = ["path", "file_path", "filePath"]
+
+    static func resolve(payload: [String: Any], home: String) -> CopilotSessionLocation? {
+        candidates(payload: payload, home: home).first.flatMap(location(at:))
+    }
+
+    /// Most specific tool path first; payload cwd is the fallback when none is usable.
+    static func candidates(payload: [String: Any], home: String) -> [String] {
+        var result: [String] = []
+        if let tool = payload["toolName"] as? String ?? payload["tool_name"] as? String,
+           let arguments = toolArguments(payload) {
+            if shellTools.contains(tool.lowercased()) {
+                if let command = arguments["command"] as? String,
+                   let path = lastLeadingChange(command, home: home) { result.append(path) }
+            } else if let path = pathKeys.lazy.compactMap({ arguments[$0] as? String })
+                .compactMap({ absolute($0, home: home) }).first {
+                result.append(path)
+            }
+        }
+        if let cwd = payload["cwd"] as? String, let path = absolute(cwd, home: home) { result.append(path) }
+        return result
+    }
+
+    static func toolArguments(_ payload: [String: Any]) -> [String: Any]? {
+        let raw = payload["toolArgs"] ?? payload["tool_args"] ?? payload["toolInput"] ?? payload["tool_input"]
+        if let object = raw as? [String: Any] { return object }
+        guard let text = raw as? String, text.utf8.count <= 65_536,
+              let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
+        else { return nil }
+        return object
+    }
+
+    static func absolute(_ value: String, home: String) -> String? {
+        guard !value.isEmpty, value.utf8.count <= 4096, !value.utf8.contains(0) else { return nil }
+        var path = value
+        if path == "~" { path = home } else if path.hasPrefix("~/") { path = home + path.dropFirst() }
+        guard path.hasPrefix("/") else { return nil }
+        var parts: [Substring] = []
+        for part in path.split(separator: "/", omittingEmptySubsequences: true) {
+            if part == "." { continue }
+            if part == ".." { _ = parts.popLast() } else { parts.append(part) }
+        }
+        return "/" + parts.joined(separator: "/")
+    }
+
+    /// Target of the last `cd` in the leading `cd … && cd … && command` chain.
+    static func lastLeadingChange(_ command: String, home: String) -> String? {
+        guard command.utf8.count <= 16_384 else { return nil }
+        var found: String?
+        var rest = Substring(command)
+        while true {
+            rest = rest.drop { $0 == " " || $0 == "\t" || $0 == "\n" }
+            guard rest.hasPrefix("cd"), rest.dropFirst(2).first.map({ $0 == " " || $0 == "\t" }) == true else { break }
+            rest = rest.dropFirst(2).drop { $0 == " " || $0 == "\t" }
+            while rest.hasPrefix("-") && !rest.hasPrefix("--") {
+                let flag = rest.prefix { $0 != " " && $0 != "\t" }
+                guard ["-P", "-L", "-e", "-@"].contains(String(flag)) else { return found }
+                rest = rest.dropFirst(flag.count).drop { $0 == " " || $0 == "\t" }
+            }
+            var target = ""
+            if let quote = rest.first, quote == "\"" || quote == "'" {
+                let body = rest.dropFirst()
+                guard let end = body.firstIndex(of: quote) else { return found }
+                target = String(body[..<end])
+                rest = body[body.index(after: end)...]
+            } else {
+                let token = rest.prefix { !" \t\n;&|<>()".contains($0) }
+                target = String(token)
+                rest = rest.dropFirst(token.count)
+            }
+            guard !target.isEmpty, !target.contains(where: { "$`*?[\\".contains($0) }),
+                  let path = absolute(target, home: home) else { return found }
+            found = path
+            rest = rest.drop { $0 == " " || $0 == "\t" }
+            if rest.hasPrefix("&&") { rest = rest.dropFirst(2) }
+            else if rest.hasPrefix(";") || rest.hasPrefix("\n") { rest = rest.dropFirst() }
+            else { break }
+        }
+        return found
+    }
+
+    static func location(at path: String) -> CopilotSessionLocation? {
+        guard var directory = existingDirectory(path) else { return nil }
+        for _ in 0..<maximumDepth {
+            var entry = stat()
+            if lstat(directory + "/.git", &entry) == 0 {
+                switch entry.st_mode & S_IFMT {
+                case S_IFDIR:
+                    return branch(head: directory + "/.git/HEAD").map { .init(branch: $0, worktree: false) }
+                case S_IFREG:
+                    return linkedWorktree(file: directory + "/.git", base: directory)
+                default:
+                    return nil
+                }
+            }
+            guard errno == ENOENT || errno == ENOTDIR, directory != "/" else { return nil }
+            directory = (directory as NSString).deletingLastPathComponent
+            if directory.isEmpty { return nil }
+        }
+        return nil
+    }
+
+    private static func existingDirectory(_ path: String) -> String? {
+        var current = path
+        for _ in 0..<64 {
+            var entry = stat()
+            if stat(current, &entry) == 0, entry.st_mode & S_IFMT == S_IFDIR { return current }
+            guard current != "/" else { return nil }
+            current = (current as NSString).deletingLastPathComponent
+            if current.isEmpty { return nil }
+        }
+        return nil
+    }
+
+    private static func linkedWorktree(file: String, base: String) -> CopilotSessionLocation? {
+        guard let text = readSmallFile(file), text.hasPrefix("gitdir:") else { return nil }
+        let line = text.dropFirst(7).split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !trimmed.utf8.contains(0) else { return nil }
+        let gitDirectory = trimmed.hasPrefix("/") ? trimmed : base + "/" + trimmed
+        var entry = stat()
+        guard let normalized = absolute(gitDirectory, home: "/"),
+              (normalized as NSString).deletingLastPathComponent.split(separator: "/").last == "worktrees",
+              lstat(normalized, &entry) == 0, entry.st_mode & S_IFMT == S_IFDIR
+        else { return nil }
+        return branch(head: normalized + "/HEAD").map { .init(branch: $0, worktree: true) }
+    }
+
+    private static func branch(head path: String) -> String? {
+        guard let text = readSmallFile(path), text.hasPrefix("ref: refs/heads/") else { return nil }
+        let name = String(text.dropFirst(16).split(whereSeparator: \.isNewline).first ?? "")
+            .trimmingCharacters(in: .whitespaces)
+        return CopilotSessionLocation.validBranch(name) ? name : nil
+    }
+
+    /// Regular file only (never a symlink), at most 4 KiB, valid UTF-8.
+    private static func readSmallFile(_ path: String) -> String? {
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var entry = stat()
+        guard fstat(fd, &entry) == 0, entry.st_mode & S_IFMT == S_IFREG,
+              entry.st_size > 0, entry.st_size <= maximumReadBytes else { return nil }
+        var buffer = [UInt8](repeating: 0, count: maximumReadBytes + 1)
+        let count = read(fd, &buffer, buffer.count)
+        guard count > 0, count <= maximumReadBytes, !buffer.prefix(count).contains(0) else { return nil }
+        return String(bytes: buffer.prefix(count), encoding: .utf8)
     }
 }
