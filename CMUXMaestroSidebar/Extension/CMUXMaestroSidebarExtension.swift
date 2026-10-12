@@ -5,7 +5,7 @@ import SwiftUI
 final class CMUXMaestroSidebarExtension: @MainActor CmuxSidebarExtension {
     static let manifest = CmuxExtensionManifest(
         id: "com.jdylanmc.CMUXMaestroPreview.Extension",
-        displayName: "CMUX Maestro Preview",
+        displayName: "Maestro Sidebar",
         readScopes: [
             .workspaceMetadata,
             .surfaceMetadata,

@@ -23,7 +23,7 @@ hosted UI loaded.
 
 Already-selected preview historically kept a lost connection after replacement.
 Observed workaround: right-click CMUX's sidebar toggle, select default
-sidebar, then reselect **CMUX Maestro Preview**. In observed case, this recreated host view
+sidebar, then reselect **Maestro Sidebar**. In observed case, this recreated host view
 and loaded replacement extension without restarting CMUX or Copilot
 sessions. It is not a universal fix or proof of an OS cause.
 Coordinated installer claims it neither as prerequisite nor as fallback.

@@ -27,7 +27,7 @@ struct ContentView: View {
 
     private var setupContents: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("CMUX Maestro Preview", systemImage: "sidebar.left")
+            Label("Maestro Sidebar", systemImage: "sidebar.left")
                 .font(.title2.weight(.semibold))
 
             Text("Copilot integration maintenance")
