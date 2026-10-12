@@ -163,6 +163,8 @@ struct SidebarPinnedDetailsTests {
         let a = pinned(sessions: sessions)
         let b = pinned(hierarchy(active: fixtures.workspaceB), sessions: sessions)
         #expect(a.isAgent && b.isAgent)
+        // The footer pet follows the focused agent's own session, so its choice shows.
+        #expect(a.petSessionID == sessions[0].id && b.petSessionID == sessions[1].id)
         #expect(a.inspection?.surfaceID == fixtures.surfaceA && b.inspection?.surfaceID == fixtures.surfaceB)
         #expect(a.lines.contains(.init(title: "Model", value: "verified-model")))
         #expect(b.lines.contains(.init(title: "Model", value: "other-model")))
