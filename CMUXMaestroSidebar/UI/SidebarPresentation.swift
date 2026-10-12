@@ -526,6 +526,8 @@ enum SidebarPresentation {
             return result
         }
         result.isAgent = true
+        result.petSessionID = session.id
+        result.petChoice = session.petId
         result.visual = sessionState(session)
         result.lines = sessionDetails(session).filter {
             ["Model", "Session ID", "Observed", "Child history"].contains($0.title)

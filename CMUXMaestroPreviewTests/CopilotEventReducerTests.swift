@@ -619,6 +619,18 @@ nonisolated struct CopilotEventReducerTests {
         #expect(reducer.value() == uncertain)
     }
 
+    @Test func subagentModelChangeDoesNotOverwriteTheSessionModel() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "session.model_change", ["newModel": "root-model"])
+        try feed(&reducer, "subagent.started", agent: "worker", [
+            "toolCallId": "spawn-a", "agentDisplayName": "A", "model": "child-model"
+        ])
+        try feed(&reducer, "session.model_change", agent: "worker", ["newModel": "child-model-2"])
+        let value = reducer.value()
+        #expect(value.model == "root-model")
+        #expect(value.children.first?.model == "child-model-2")
+    }
+
     @Test func unsaturatedColdStartsCannotChangeLiveInvocationOrItsPendingRequest() throws {
         var reducer = CopilotEventReducer(
             sessionID: UUID(), maximumRelationships: 2, maximumReplayFilterWords: 1

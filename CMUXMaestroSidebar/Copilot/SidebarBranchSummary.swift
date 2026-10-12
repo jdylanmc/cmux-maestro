@@ -197,6 +197,13 @@ extension SidebarCopilotSession {
         }
     }
 
+    /// Finished internal tasks stay hidden until the workspace eye is on, so they must not
+    /// make a row look expandable.
+    func hasShownOutline(_ layout: SidebarLayoutSettings) -> Bool {
+        let reveal = layout.revealingIdleTasksIn.contains(workspaceID)
+        return outlineNodes.contains { reveal || !($0.isInternalTask && $0.state == .completed) }
+    }
+
     var secondaryActivity: [SidebarCopilotNode] {
         let primary = Set(outlineNodes.map(\.id))
         return nodes.filter { !primary.contains($0.id) }
