@@ -2274,6 +2274,7 @@ struct SidebarInternalTaskRow: View {
             .frame(width: (node.hasChildren ? 24 : 14) + indentation)
             SidebarStateBadge(visual: SidebarPresentation.internalTaskState(node), detail: taskDetail)
                 .frame(width: 12, height: 24, alignment: .leading)
+                .offset(y: -2)
             SidebarInternalTaskName(name: node.name, detail: taskDetail, fontSize: density.rowTitleSize,
                                     identity: "\(sessionID):\(node.id)")
                 .frame(maxWidth: .infinity, alignment: .leading)
