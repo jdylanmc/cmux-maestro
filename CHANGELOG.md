@@ -12,6 +12,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Rewrite the README as a short overview with screenshots and an install path. Move the full
+  contracts, unchanged in substance, to `docs/reference/`. Add `CONTEXT.md` (domain terms),
+  `docs/adr/` (19 decision records), and an evidence and safety rules section in `AGENTS.md`.
 - Internal-task rows put their state spinner on the left and hide the counts on the
   collapsed row; finished tasks stay hidden until the workspace eye is on. The expand
   chevron is narrower, and "Error reported" no longer shows on an agent that is still

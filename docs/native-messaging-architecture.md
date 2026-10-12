@@ -353,7 +353,7 @@ by successful Copilot global discovery. Global `npx skills` is now the sole guid
 distribution: `/maestro` or `{"skill":"maestro"}`. This is observed discovery,
 not a guarantee across CLI versions or proof of every live messaging condition.
 The GitHub-source command in Settings requires the skill to merge to `main`;
-[local-source acceptance instructions](../README.md#cli-integration-install-the-global-guide)
+[local-source acceptance instructions](reference/cli-guide-and-uninstall.md#cli-integration-install-the-global-guide)
 cover development without movable refs or automatic installation.
 
 Setup writes only `{version, routes, extension}` for messaging; the old
