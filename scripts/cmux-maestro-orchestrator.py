@@ -3919,9 +3919,15 @@ def command_self_icon(args):
 
 
 PET_SIZE = (1536, 1872)
-# Codex pet v2 adds look-direction rows below the nine standard rows; Maestro only plays the first nine.
-PET_V2_SIZE = (1536, 2288)
-PET_SIZES = (PET_SIZE, PET_V2_SIZE)
+
+
+def pet_sheet_ok(width, height):
+    """Eight columns of 192:208 cells at any whole-pixel scale, with at least nine rows.
+    Extra rows (Codex v2 adds look-direction rows, 1536x2288) are ignored; only rows 0-8 play."""
+    if width % 8 or not 512 <= width <= 4096:
+        return False
+    minimum = -(-9 * 208 * width // 1536)
+    return minimum <= height <= 2 * width
 PET_MAX_BYTES = 10 * 1024 * 1024
 PET_MAX_PER_SESSION = 8
 PET_DEFAULT_ID = "maestro"
@@ -3990,10 +3996,11 @@ def read_pet_source(source, requested_id):
         data = sheet.read_bytes()
     except OSError as error:
         raise OrchestrationError("The spritesheet could not be read.") from error
-    if image_size(data) not in PET_SIZES:
+    if not pet_sheet_ok(*image_size(data)):
         raise OrchestrationError(
-            f"The spritesheet must be {PET_SIZE[0]}x{PET_SIZE[1]} pixels (8 columns x 9 rows of 192x208 cells), "
-            f"or {PET_V2_SIZE[0]}x{PET_V2_SIZE[1]} for a v2 pet with extra look-direction rows.")
+            "The spritesheet needs 8 columns of 192:208 cells and at least 9 rows "
+            f"(standard {PET_SIZE[0]}x{PET_SIZE[1]}; larger scales and extra rows such as Codex v2's "
+            "1536x2288 are fine). Width must be a multiple of 8 between 512 and 4096.")
     if not identifier or not PET_ID_PATTERN.fullmatch(identifier) or identifier == PET_DEFAULT_ID:
         identifier = pet_slug(f"{identifier or 'pet'}-custom")
     return identifier, display, description, data, sheet.suffix.lower()
@@ -4034,7 +4041,7 @@ def list_session_pets(session):
 def command_pets(args):
     session = canonical_uuid(args.session_id, "current session ID") if args.session_id else None
     return {"default": PET_DEFAULT_ID, "contract": f"{PET_SIZE[0]}x{PET_SIZE[1]} PNG/WebP, 8x9 cells of 192x208 "
-                f"(or {PET_V2_SIZE[0]}x{PET_V2_SIZE[1]} v2; only the first nine rows are used)",
+                "(any scale; extra rows such as v2 look-direction rows are ignored)",
             "sessionPets": list_session_pets(session) if session else []}
 
 

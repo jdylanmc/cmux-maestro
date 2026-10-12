@@ -47,8 +47,10 @@ The response lists the default (`maestro`) and any pets this session already add
 A valid Codex pet is a folder with `pet.json` and a transparent PNG or WebP
 spritesheet of **1536x1872** pixels: 8 columns x 9 rows of 192x208 cells. Rows
 in order: idle, running-right, running-left, waving, jumping, failed, waiting, running,
-review. A **v2** pet (`spriteVersionNumber` 2, **1536x2288**, 11 rows) adds
-look-direction rows below those; Maestro accepts it and plays only the first nine rows.
+review. Maestro is flexible: any sheet with 8 columns and at least nine rows of 192:208
+cells at any whole-pixel scale works (width a multiple of 8, 512-4096). A **v2** pet
+(`spriteVersionNumber` 2, 1536x2288, 11 rows) adds look-direction rows below those; the
+extra rows are ignored and only the first nine play.
 Maestro shows `idle`, `running` (working), `waiting` (needs input), `waving`
 (turn finished) and `failed` (blocked or failed).
 

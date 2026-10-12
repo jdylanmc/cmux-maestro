@@ -12,9 +12,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
-- Accept Codex **v2** pets (1536×2288, 11 rows with look-direction animations) when adding or
-  uploading a pet, in both `maestro pet --add` and the picker. Maestro plays only the first
-  nine rows, which share the v1 layout. Previously such pets were rejected as "must be 1536×1872".
+- Accept any Codex pet sheet with 8 columns and at least nine rows of 192:208 cells at any
+  whole-pixel scale, including **v2** pets (1536×2288, with look-direction rows), in both
+  `maestro pet --add` and the picker. Maestro plays only the first nine rows and ignores the
+  rest. Previously such pets were rejected as "must be exactly 1536×1872".
 
 ### Added
 

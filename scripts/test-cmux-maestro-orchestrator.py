@@ -4114,7 +4114,7 @@ class DirectLaunchTests(unittest.TestCase):
 
 
 class PetSheetSizeTests(unittest.TestCase):
-    """Codex pet v1 (1536x1872) and v2 (1536x2288, extra look-direction rows) sheets are accepted."""
+    """Pet sheets are flexible: 8 columns of 192:208 cells, any scale, nine or more rows."""
 
     @staticmethod
     def png(width, height):
@@ -4127,22 +4127,21 @@ class PetSheetSizeTests(unittest.TestCase):
         folder.mkdir(parents=True)
         self.addCleanup(shutil.rmtree, folder.parent, True)
         (folder / "pet.json").write_text(json.dumps({
-            "id": name, "displayName": "Duck", "spritesheetPath": "sheet.png",
-            "spriteVersionNumber": 2 if height > 1872 else 1}))
+            "id": name, "displayName": "Duck", "spritesheetPath": "sheet.png"}))
         (folder / "sheet.png").write_bytes(self.png(width, height))
         return folder
 
-    def test_v1_and_v2_sheets_are_accepted(self):
+    def test_standard_v2_and_scaled_sheets_are_accepted(self):
         read = CONTROLLER_API["read_pet_source"]
-        for height in (1872, 2288):
-            identifier, display, description, data, extension = read(str(self.pet_folder(1536, height)), None)
+        for width, height in ((1536, 1872), (1536, 2288), (3072, 3744), (768, 936), (1536, 2000)):
+            identifier, display, description, data, extension = read(str(self.pet_folder(width, height)), None)
             self.assertEqual((identifier, extension), ("duck", ".png"))
-            self.assertEqual(CONTROLLER_API["image_size"](data), (1536, height))
+            self.assertEqual(CONTROLLER_API["image_size"](data), (width, height))
 
-    def test_other_sizes_are_rejected_with_both_contracts_named(self):
+    def test_sheets_without_the_grid_are_rejected(self):
         read = CONTROLLER_API["read_pet_source"]
-        for width, height in ((1536, 2000), (1920, 1872), (1536, 2080), (768, 936)):
-            with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], r"1536x1872.*1536x2288"):
+        for width, height in ((1536, 1800), (1537, 1872), (400, 468), (5000, 6000), (1536, 4000), (1536, 800)):
+            with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], r"8 columns"):
                 read(str(self.pet_folder(width, height)), None)
 
 
