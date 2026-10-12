@@ -21,6 +21,19 @@ Notable changes are recorded using Keep a Changelog categories.
   `maestro pet --add` and the picker. Maestro plays only the first nine rows and ignores the
   rest. Previously such pets were rejected as "must be exactly 1536×1872".
 
+### Fixed
+
+- Stop the Active window footer jumping up and straight back when you click a row. The
+  navigation status line ("Selecting…") sat below the footer and pushed it up until the
+  selection finished; it now floats above the footer instead.
+
+### Added
+
+- Collect pets like a Pokédex. Hover the footer pet while an agent uses an agent-made pet to get a
+  **+** badge that saves it to your shared pets; the picker also shows a **+** on agent-made pets and
+  an **×** on collected ones (with a confirmation) and counts how many you have collected. Every
+  agent's picker shows the whole collection.
+
 ### Changed
 
 - Rewrite the README as a short overview with screenshots and an install path. Move the full

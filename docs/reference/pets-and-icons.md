@@ -7,7 +7,10 @@ Codex pets, session icon CLI, appearance security. Short version: [README](../..
 Active agent's pinned details show animated Codex-format pet (1536×1872 PNG/WebP,
 8×9 cells of 192×208). Sheets are accepted flexibly: 8 columns, at least nine rows, 192:208 cells at any whole-pixel scale (width a multiple of 8, 512 to 4096). A v2 pet (1536×2288) works. Extra rows are ignored. Every agent starts with bundled, original **Maestro** robot-head
 pet. Animation follows state: idle, working, needs input, turn finished, blocked/failed.
-Click pet to open picker: bundled pet, pets you saved or uploaded, pet
+Collect pets: while an agent uses an agent-made pet, hover its footer pet and click the centered **+** to
+save it to your shared pets (the picker has the same **+** on agent-made cells and a confirmed **×**
+on collected ones). Every agent's picker lists the whole collection. Removing a collected pet makes
+agents using it fall back to their own pet or Maestro. Click pet to open picker: bundled pet, pets you saved or uploaded, pet
 this agent made for itself. **Upload pet…** accepts Codex pet folder (`pet.json` plus
 spritesheet) or bare sheet. Picker also links to online Codex pet galleries.
 

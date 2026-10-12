@@ -683,6 +683,22 @@ struct SidebarView: View {
                 }
             })
             .padding(.horizontal, preferences.layout.density.spacing(5))
+            // The status line floats above the footer. In the layout it pushed the footer up
+            // for a moment after every row click, then dropped it back.
+            .overlay(alignment: .top) {
+                if let message = model.navigation.status.message, model.navigation.status != .selected {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
+                        .padding(.horizontal, preferences.layout.density.spacing(5))
+                        .offset(y: -22)
+                        .allowsHitTesting(false)
+                        .accessibilityIdentifier("sidebar-navigation-status")
+                }
+            }
             .popover(isPresented: $showingInspector) {
                 SidebarInspector(content: inspectorDetails) {
                     showingInspector = false
@@ -690,13 +706,6 @@ struct SidebarView: View {
                 }
             }
 
-            if let message = model.navigation.status.message, model.navigation.status != .selected {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, preferences.layout.density.spacing(5))
-                    .accessibilityIdentifier("sidebar-navigation-status")
-            }
             if let explanation = model.navigation.permissionSummary {
                 Label(explanation, systemImage: "lock")
                     .font(.caption2)
