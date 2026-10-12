@@ -1550,9 +1550,11 @@ counts. This counting rule does not attach their task contents to a managed
 chat. Existing retained managed records keep the explicit entries/context legend.
 
 Idle, unknown and cancelled tasks hide by state. A workspace's eye reveals
-**idle tasks only**, independently of other workspaces and **Show ended agents**.
-Finished and failed task outcomes have **no retention clock**: they remain until
-their exact session/task/terminal-event outcome is dismissed. Outstanding
+**idle and finished tasks**, independently of other workspaces and **Show ended
+agents**; failed tasks always show. Finished and failed task outcomes have **no
+retention clock**: they remain until their exact session/task/terminal-event outcome is
+dismissed. An "N internal tasks" row counts only the tasks currently shown and disappears
+when none are. Outstanding
 attention, degraded evidence and necessary ancestry stay protected.
 New work, a new result or new attention can return. Dismissal revalidates current,
 fresh evidence and cannot hide a replacement outcome or bypass active, failed,
