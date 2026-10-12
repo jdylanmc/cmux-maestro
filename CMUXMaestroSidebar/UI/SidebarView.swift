@@ -683,6 +683,22 @@ struct SidebarView: View {
                 }
             })
             .padding(.horizontal, preferences.layout.density.spacing(5))
+            // The status line floats above the footer. In the layout it pushed the footer up
+            // for a moment after every row click, then dropped it back.
+            .overlay(alignment: .top) {
+                if let message = model.navigation.status.message, model.navigation.status != .selected {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5))
+                        .padding(.horizontal, preferences.layout.density.spacing(5))
+                        .offset(y: -22)
+                        .allowsHitTesting(false)
+                        .accessibilityIdentifier("sidebar-navigation-status")
+                }
+            }
             .popover(isPresented: $showingInspector) {
                 SidebarInspector(content: inspectorDetails) {
                     showingInspector = false
@@ -690,13 +706,6 @@ struct SidebarView: View {
                 }
             }
 
-            if let message = model.navigation.status.message, model.navigation.status != .selected {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, preferences.layout.density.spacing(5))
-                    .accessibilityIdentifier("sidebar-navigation-status")
-            }
             if let explanation = model.navigation.permissionSummary {
                 Label(explanation, systemImage: "lock")
                     .font(.caption2)
@@ -2919,8 +2928,6 @@ struct SidebarPinnedFooter: View {
     let inspect: () -> Void
     var copyValue: (String) -> Bool = { SidebarSessionCopy.copy($0) }
     @State private var contentHeight: CGFloat = 80
-    @State private var measured = false
-    @State private var pendingHeight: Task<Void, Never>?
     @State private var petRowHeight: CGFloat = 48
     @State private var dragStart: CGFloat?
 
@@ -2932,19 +2939,6 @@ struct SidebarPinnedFooter: View {
             return min(max(CGFloat(stored), minimumBodyHeight), maximumBodyHeight)
         }
         return min(contentHeight, max(0, maximumHeight - headerHeight))
-    }
-
-    /// Clicking a row briefly swaps the footer through a transitional state (extra notice lines)
-    /// before the new focus resolves. Apply a changed height only if it holds, so the panel does
-    /// not jump up and straight back. The first measurement applies at once.
-    private func settleHeight(_ new: CGFloat) {
-        pendingHeight?.cancel()
-        guard measured else { contentHeight = new; measured = true; return }
-        guard abs(new - contentHeight) >= 0.5 else { return }
-        pendingHeight = Task {
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            if !Task.isCancelled { contentHeight = new }
-        }
     }
 
     private func setBodyHeight(_ value: CGFloat) {
@@ -2971,7 +2965,7 @@ struct SidebarPinnedFooter: View {
             ScrollView {
                 footerContents
                     .fixedSize(horizontal: false, vertical: true)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { settleHeight($0) }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
             .frame(height: bodyHeight)
         }

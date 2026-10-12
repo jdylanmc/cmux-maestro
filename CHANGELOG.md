@@ -23,8 +23,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
-- Stop the Active window footer jumping up about 40 px and straight back when you click a row:
-  a changed footer height now applies only if it holds for 300 ms.
+- Stop the Active window footer jumping up and straight back when you click a row. The
+  navigation status line ("Selecting…") sat below the footer and pushed it up until the
+  selection finished; it now floats above the footer instead.
 
 ### Added
 
