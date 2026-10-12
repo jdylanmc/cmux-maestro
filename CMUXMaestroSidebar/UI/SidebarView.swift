@@ -2251,7 +2251,7 @@ struct SidebarInternalTaskRow: View {
                 SidebarTaskConnector(continues: followingDepth.map { $0 >= node.depth } ?? false)
                     .stroke(Color.secondary.opacity(0.5), lineWidth: 1)
                     .frame(width: 12)
-                    .padding(.trailing, 12)
+                    .padding(.trailing, node.hasChildren ? 12 : 2)
                 if node.hasChildren {
                     SidebarTitleButton(
                         label: "Task children for \(node.name)",
@@ -2271,9 +2271,9 @@ struct SidebarInternalTaskRow: View {
                     .help(row.collapsedSummary?.lines.joined(separator: ". ") ?? "Collapse task children")
                 }
             }
-            .frame(width: 24 + indentation)
+            .frame(width: (node.hasChildren ? 24 : 14) + indentation)
             SidebarStateBadge(visual: SidebarPresentation.internalTaskState(node), detail: taskDetail)
-                .frame(width: 14, height: 24)
+                .frame(width: 12, height: 24, alignment: .leading)
             SidebarInternalTaskName(name: node.name, detail: taskDetail, fontSize: density.rowTitleSize,
                                     identity: "\(sessionID):\(node.id)")
                 .frame(maxWidth: .infinity, alignment: .leading)
