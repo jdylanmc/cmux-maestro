@@ -541,7 +541,8 @@ nonisolated struct CopilotEventReducer: Sendable {
             retireRequests()
             demoteNonterminalChildren()
         case "session.model_change":
-            rootModel = event.model
+            // A sub-agent's model change belongs to that sub-agent, not the session.
+            if let id = event.agentID { setModel(event.model, agent: id) } else { rootModel = event.model }
         case "session.idle":
             if !ended && rootState != .failed && rootState != .cancelled { rootState = .idle }
         case "session.shutdown":

@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Stop a sub-agent's model change from replacing the session's model in the footer and
+  previews (a Copilot `session.model_change` event carrying a sub-agent ID now updates only
+  that sub-agent).
 - Stop the sidebar flashing a list of finished shell and skill rows (each marked "Attention
   evidence incomplete") while an agent runs sub-agents; momentarily incomplete evidence no
   longer revives finished activity or marks task rows.
