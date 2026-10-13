@@ -9,6 +9,10 @@ Notable changes are recorded using Keep a Changelog categories.
 - Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
   dependency-free `pet_kit.py` drawing kit instead of requiring `hatch-pet`, whose
   Codex-only image generation was unavailable to Copilot.
+- Remove the orchestrator's testing mode. `CMUX_MAESTRO_TESTING` and the test-only root,
+  executable, timeout, identity-helper and attach-fault variables are ignored; worker
+  admission never skips its parent-evidence check; workers inherit none of the caller's
+  `CMUX_MAESTRO_` variables.
 - Stop a sub-agent's model change from replacing the session's model in the footer and
   previews (a Copilot `session.model_change` event carrying a sub-agent ID now updates only
   that sub-agent).

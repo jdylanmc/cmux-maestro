@@ -263,3 +263,26 @@ covering this project's macOS 14 deployment target.
 
 These tests do **not** prove actual plugin installation, cached-hook loading,
 live owner ancestry, or ExtensionKit-hosted runtime behavior.
+
+## Orchestrator fixture edges
+
+The shipped orchestrator reads no test variables and has no testing mode.
+Worker admission's parent-evidence check and identity-helper proof always run.
+Fixture launches use `native-spawn` from a coordinator holding managed-session
+evidence: a live synthetic provider, a recorded launch policy and its adapter's
+private route. Tests about runs from before that admission seed a registered
+root explicitly. The Python suites fake only the outside world:
+
+- `HOME` selects the synthetic Orchestration and Beats stores.
+- `PATH` supplies synthetic `cmux`, `copilot` and `gh` executables.
+- An installed-style `identity-helper.json` beside a copied controller selects
+  a synthetic identity helper.
+- The synthetic host (`FAKE_ATTACH_BARRIER`, `FAKE_ATTACH_FAILURE`) holds or
+  fails the creator's first `identify` of a new surface.
+- `controller-fixture.py`, written by `scripts/test-cmux-maestro-orchestrator.py`,
+  is the only reader of `FAKE_STARTUP_SECONDS`, `FAKE_HEARTBEAT_SECONDS`,
+  `FAKE_ARCHIVE_SECONDS` and `FAKE_GIT`. It also becomes the re-entry point for
+  runtimes and terminals.
+
+Workers inherit no `CMUX_MAESTRO_` variable from their caller; the controller
+sets that namespace explicitly.
