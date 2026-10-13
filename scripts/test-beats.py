@@ -4,6 +4,7 @@ definition store, and the exact-self agent surface. No real clock, session or ne
 import json
 import os
 import runpy
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -218,20 +219,29 @@ print(json.dumps({"ok": True, "sessionId": sys.argv[sys.argv.index("--session-id
 class AgentSurfaceTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
-        self.root = Path(self.directory.name) / "beats"
-        self.helper = Path(self.directory.name) / "helper"
+        base = Path(self.directory.name).resolve()
+        self.home = base / "home"
+        self.root = self.home / "Library/Application Support/CMUXMaestroPreview/Beats"
+        self.helper = base / "helper"
         self.helper.write_text(FAKE_HELPER)
         self.helper.chmod(0o700)
+        # An installed controller finds its identity helper through private adjacent configuration.
+        package = base / "package"
+        package.mkdir()
+        self.controller = package / CONTROLLER.name
+        shutil.copyfile(CONTROLLER, self.controller)
+        config = package / "identity-helper.json"
+        config.write_text(json.dumps({"helper": str(self.helper)}))
+        config.chmod(0o600)
 
     def tearDown(self):
         self.directory.cleanup()
 
-    def run_beats(self, *arguments, session=SESSION_A, deny=False, own=True):
-        environment = dict(os.environ, CMUX_MAESTRO_TESTING="1", CMUX_MAESTRO_BEATS_ROOT=str(self.root),
-                           CMUX_MAESTRO_IDENTITY_HELPER=str(self.helper))
+    def run_beats(self, *arguments, session=SESSION_A, deny=False, own=True, controller=None, environment=None):
+        environment = dict(os.environ, HOME=str(self.home), **(environment or {}))
         if deny:
             environment["FAKE_PROOF"] = "deny"
-        command = [sys.executable, str(CONTROLLER), "beats", *arguments]
+        command = [sys.executable, str(controller or self.controller), "beats", *arguments]
         if own:
             command += ["--self", "--session-id", session]
         process = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=30)
@@ -270,6 +280,15 @@ class AgentSurfaceTests(unittest.TestCase):
             self.assertIn("No such Beat", value["error"])
         self.assertEqual(self.run_beats("list", session=SESSION_B)[1]["beats"], [])
         self.assertEqual(len(self.run_beats("list", session=SESSION_A)[1]["beats"]), 1)
+
+    def test_retired_testing_variables_cannot_substitute_the_identity_helper(self):
+        code, value = self.run_beats(
+            "create", "--cron", "0 9 * * *", "--prompt", "x", controller=CONTROLLER,
+            environment={"CMUX_MAESTRO_TESTING": "1", "CMUX_MAESTRO_IDENTITY_HELPER": str(self.helper),
+                         "CMUX_MAESTRO_BEATS_ROOT": str(self.root)})
+        self.assertNotEqual(code, 0)
+        self.assertIn("Refresh Maestro integration", value["error"])
+        self.assertFalse(self.root.exists())
 
     def test_failed_ownership_proof_changes_nothing(self):
         code, value = self.run_beats("create", "--cron", "0 9 * * *", "--prompt", "x", deny=True)

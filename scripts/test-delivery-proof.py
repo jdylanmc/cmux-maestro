@@ -713,7 +713,7 @@ class ProofTests(unittest.TestCase):
             with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "maestro_spawn"):
                 spawn(args, self.root, mock.Mock())
 
-    def test_registered_caller_cannot_launch_using_only_saved_account_in_production(self):
+    def test_registered_caller_cannot_launch_using_only_saved_account_even_with_retired_testing_flag(self):
         state, actor = self.lifecycle_state()
         spawn = CONTROLLER["command_spawn"]
         args = CONTROLLER["parser"]().parse_args([
@@ -721,7 +721,7 @@ class ProofTests(unittest.TestCase):
             "--name", "Child", "--task", "No fallback", "--cwd", self.paths["a"],
         ])
         forbidden = mock.Mock(side_effect=AssertionError("must refuse before launch effects"))
-        with mock.patch.dict(os.environ, {"CMUX_MAESTRO_TESTING": ""}), \
+        with mock.patch.dict(os.environ, {"CMUX_MAESTRO_TESTING": "1"}), \
                 mock.patch.dict(spawn.__globals__, {
                     "read_state": lambda _: state,
                     "authorize": lambda *a: actor,
@@ -1228,8 +1228,15 @@ class ProofTests(unittest.TestCase):
                 mock.patch.dict(os.environ, {
                     "CMUX_MAESTRO_MESSAGE_ROOT": "stale-parent", "CMUX_MAESTRO_MESSAGE_PEER": "stale-peer",
                     "CMUX_WORKSPACE_ID": str(uuid.uuid4()),
+                    "CMUX_MAESTRO_TESTING": "1", "CMUX_MAESTRO_TEST_ATTACH_FAILURE": "1",
+                    "CMUX_MAESTRO_ROOT": "/synthetic/root", "CMUX_MAESTRO_IDENTITY_HELPER": "/synthetic/helper",
                 }):
             result = environment(self.node["id"], "synthetic", self.node)
+            self.assertEqual({key for key in result if key.startswith("CMUX_MAESTRO_")}, {
+                "CMUX_MAESTRO_WORKER_ID", "CMUX_MAESTRO_CONTROL_TOKEN", "CMUX_MAESTRO_RUN_ID",
+                "CMUX_MAESTRO_GENERATION", "CMUX_MAESTRO_SESSION_ID", "CMUX_MAESTRO_ORCHESTRATOR",
+                "CMUX_MAESTRO_EXECUTION_MODE", "CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER",
+            })
             self.assertEqual(result["CMUX_MAESTRO_MESSAGE_ROOT"], str(routes))
             self.assertEqual(result["CMUX_MAESTRO_MESSAGE_PEER"], CONTROLLER["message_peer"](self.node))
             self.assertEqual(result["CMUX_WORKSPACE_ID"], self.node["workspaceId"])
@@ -2787,6 +2794,21 @@ class LifecycleFailureTests(unittest.TestCase):
         self.mutations = 0
         self.before_mutate = lambda _: None
 
+    def native_parent(self):
+        """Give the coordinator the private route evidence its native adapter would hold."""
+        routes = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, routes)
+        self.actor.update(copilotSessionId=str(uuid.uuid4()),
+                          messaging={"version": 1, "routes": str(routes), "extension": "/synthetic/extension"})
+        identity = {key: self.actor[field] for key, field in (
+            ("nodeId", "id"), ("workspaceId", "workspaceId"), ("sessionId", "copilotSessionId"),
+            ("generation", "generation"),
+        )} | {"capability": "c" * 64}
+        binding = routes / f"{CONTROLLER['message_peer'](self.actor)}.json"
+        binding.write_text(json.dumps(identity))
+        binding.chmod(0o600)
+        return identity | {"login": "parent-account", "host": "github.com"}
+
     def mutate(self, _root, callback, **_kwargs):
         self.mutations += 1
         self.before_mutate(self.mutations)
@@ -3263,6 +3285,7 @@ class LifecycleFailureTests(unittest.TestCase):
             "spawn", "--actor-id", self.actor["id"], "--token", self.token,
             "--name", "Capacity changed", "--task", "Synthetic", "--cwd", str(REPO),
         ])
+        identity = self.native_parent()
         with mock.patch.dict(spawn.__globals__, {
             "read_state": lambda *a, **k: copy.deepcopy(self.state),
             "mutate": self.mutate,
@@ -3273,9 +3296,9 @@ class LifecycleFailureTests(unittest.TestCase):
             "resource_observations": lambda *_: ({}, set()),
             "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
             "launch_reserved_session": launcher,
-        }), mock.patch.dict(os.environ, {"CMUX_MAESTRO_TESTING": "1"}):
+        }):
             with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "resource limit"):
-                spawn(args, self.root, self.cmux)
+                spawn(args, self.root, self.cmux, native_identity=identity)
         launcher.assert_not_called()
         self.assertEqual(self.state["launches"], {})
         self.assertEqual(len(self.state["nodes"]), 2)

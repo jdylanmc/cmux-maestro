@@ -51,6 +51,9 @@ STALE_SECONDS = 600
 HEARTBEAT_SECONDS = 15
 STARTUP_SECONDS = 8
 ARCHIVE_SECONDS = 5
+GIT_EXECUTABLE = "/usr/bin/git"
+# How workers and terminals re-enter this controller.
+CONTROLLER_ENTRYPOINT = Path(__file__).resolve()
 REPORT_PHASES = {
     "blocked": "reported-blocked",
     "completed": "reported-completed",
@@ -482,9 +485,9 @@ def github_cli():
     for candidate in ("gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"):
         if candidate != "gh" and not Path(candidate).is_file():
             continue
-        if candidate == "gh" and not shutil_which(candidate) and not os.environ.get("CMUX_MAESTRO_GH"):
+        if candidate == "gh" and not shutil_which(candidate):
             continue
-        return trusted_executable("CMUX_MAESTRO_GH", candidate)
+        return trusted_executable(candidate)
     raise OrchestrationError("GitHub CLI is unavailable; install it to choose a pinned Copilot subscription.")
 
 
@@ -607,7 +610,7 @@ def git_display_metadata(cwd):
         "gitChangesStatus": "unavailable", "gitChanges": None, "gitChangesAt": captured_at,
     }
     try:
-        git = trusted_executable("CMUX_MAESTRO_GIT", "/usr/bin/git")
+        git = trusted_executable(GIT_EXECUTABLE)
     except OrchestrationError:
         return unavailable
 
@@ -871,39 +874,7 @@ def recorded_native_permissions(actor):
 
 
 def default_root():
-    override = os.environ.get("CMUX_MAESTRO_ROOT")
-    if override:
-        if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-            raise OrchestrationError("CMUX_MAESTRO_ROOT is test-only.")
-        return Path(override)
     return Path.home() / "Library/Application Support/CMUXMaestroPreview/Orchestration"
-
-
-def timeout(name, production):
-    value = os.environ.get(name)
-    if value is not None:
-        if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-            raise OrchestrationError(f"{name} is test-only.")
-        try:
-            return float(value)
-        except ValueError:
-            raise OrchestrationError(f"{name} is invalid.")
-    return production
-
-
-def test_barrier(name):
-    path = os.environ.get(name)
-    if path is None:
-        return
-    if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-        raise OrchestrationError(f"{name} is test-only.")
-    marker = Path(path)
-    marker.with_suffix(".ready").write_text("ready")
-    deadline = time.monotonic() + 10
-    while not marker.with_suffix(".release").exists():
-        if time.monotonic() >= deadline:
-            raise OrchestrationError(f"{name} timed out.")
-        time.sleep(0.01)
 
 
 def shutil_which(name):
@@ -914,15 +885,12 @@ def shutil_which(name):
     return None
 
 
-def trusted_executable(variable, fallback):
-    value = os.environ.get(variable)
-    if value and os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-        raise OrchestrationError(f"{variable} is test-only.")
-    candidate = Path(value or fallback)
+def trusted_executable(name):
+    candidate = Path(name)
     if not candidate.is_absolute():
         resolved = shutil_which(str(candidate))
         if resolved is None:
-            raise OrchestrationError(f"Required executable is unavailable: {fallback}")
+            raise OrchestrationError(f"Required executable is unavailable: {name}")
         candidate = Path(resolved)
     try:
         resolved = candidate.resolve(strict=True)
@@ -938,9 +906,7 @@ def trusted_executable(variable, fallback):
 
 def provider_launch_context(actor=None):
     actor = actor or {}
-    executable = trusted_executable(
-        "CMUX_MAESTRO_COPILOT", actor.get("copilotExecutable") or "copilot"
-    )
+    executable = trusted_executable(actor.get("copilotExecutable") or "copilot")
     launch_path = actor.get("launchPath") or os.environ.get("PATH", "/usr/bin:/bin")
     bounded_text(launch_path, "provider launch PATH", MAX_LAUNCH_PATH)
     return executable, launch_path
@@ -1722,7 +1688,7 @@ def remove_launch_credential(root, worker_id):
 
 class Cmux:
     def __init__(self):
-        self.executable = trusted_executable("CMUX_MAESTRO_CMUX", "cmux")
+        self.executable = trusted_executable("cmux")
 
     def run(self, command, *arguments):
         invocation = [self.executable, "--json", "--id-format", "uuids", command, *arguments]
@@ -2784,7 +2750,7 @@ def command_spawn(args, root, cmux, *, native_identity=None):
         )
     if actor.get("messaging") and native_identity is None:
         raise OrchestrationError("Managed sessions must use maestro_spawn to verify their current Copilot account.")
-    if native_identity is None and proof is None and os.environ.get("CMUX_MAESTRO_TESTING") != "1":
+    if native_identity is None and proof is None:
         raise OrchestrationError("New managed workers require maestro_spawn from a managed coordinator; registration and saved accounts are not parent-account evidence.")
     messaging = None if proof is not None else messaging_configuration(root)
     launch_settings = worker_launch_settings(root)
@@ -2963,7 +2929,7 @@ def maestro_task(task, coordinator=None):
 
 def interactive_arguments(node, prompt):
     arguments = [
-        trusted_executable("CMUX_MAESTRO_COPILOT", node.get("copilotExecutable") or "copilot"),
+        trusted_executable(node.get("copilotExecutable") or "copilot"),
         "--no-auto-update", "--interactive", prompt,
         "--session-id", node["copilotSessionId"], "--name", node["label"],
         "-C", node["workingDirectory"],
@@ -3023,7 +2989,7 @@ def prepare_direct_launch(root, node, token):
     script += "unset CMUX_MAESTRO_INITIAL_TASK\n"
     script += f"CMUX_MAESTRO_INITIAL_TASK={shlex.quote(arguments[3])}\n"
     if (node.get("launchSettings") or {}).get("copilotAccount"):
-        credential = shlex.join([sys.executable, str(Path(__file__).resolve()), "launch-credential"])
+        credential = shlex.join([sys.executable, str(CONTROLLER_ENTRYPOINT), "launch-credential"])
         script += (
             f'COPILOT_GITHUB_TOKEN="$({credential})" || return 1\n'
             "export COPILOT_GITHUB_TOKEN\n"
@@ -3074,12 +3040,7 @@ def launch_direct_session(root, cmux, node, token, pane):
                 raise OrchestrationError("Direct launch returned a conflicting surface.")
             lease.update(surfaceId=surface, state="attaching", updatedAt=now())
         mutate(root, created)
-        test_barrier("CMUX_MAESTRO_TEST_ATTACH_BARRIER")
         confirmed_pane = cmux.validate_surface(workspace, surface)
-        if os.environ.get("CMUX_MAESTRO_TEST_ATTACH_FAILURE") == "1":
-            if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-                raise OrchestrationError("CMUX_MAESTRO_TEST_ATTACH_FAILURE is test-only.")
-            raise OrchestrationError("Injected attachment commit failure.")
         cmux.rename(workspace, surface, node["label"])
 
         def attach(state):
@@ -3150,7 +3111,7 @@ def launch_legacy_session(root, cmux, identifier, session_id, worker_token, work
             return descriptor
         attachment = with_store(root, credential)
         bootstrap = shlex.join([
-            sys.executable, str(Path(__file__).resolve()), "runtime", "--worker-id", identifier
+            sys.executable, str(CONTROLLER_ENTRYPOINT), "runtime", "--worker-id", identifier
         ])
         def creating(state):
             node = authorize(state, identifier, worker_token)
@@ -3173,12 +3134,7 @@ def launch_legacy_session(root, cmux, identifier, session_id, worker_token, work
                 surface, "attaching", now()
             )
         mutate(root, created, wait=1)
-        test_barrier("CMUX_MAESTRO_TEST_ATTACH_BARRIER")
         confirmed_pane = cmux.validate_surface(workspace, surface)
-        if os.environ.get("CMUX_MAESTRO_TEST_ATTACH_FAILURE") == "1":
-            if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-                raise OrchestrationError("CMUX_MAESTRO_TEST_ATTACH_FAILURE is test-only.")
-            raise OrchestrationError("Injected attachment commit failure.")
 
         def attach(state):
             node = state["nodes"].get(identifier)
@@ -3225,7 +3181,7 @@ def launch_legacy_session(root, cmux, identifier, session_id, worker_token, work
             raise OrchestrationError("Worker launch lease is no longer active.")
         return node
 
-    deadline = time.monotonic() + timeout("CMUX_MAESTRO_STARTUP_SECONDS", STARTUP_SECONDS)
+    deadline = time.monotonic() + STARTUP_SECONDS
     while True:
         state = read_state(root, wait=1)
         node = owned_node(state)
@@ -3394,19 +3350,17 @@ def terminal_bookkeeping(event):
 
 
 def worker_environment(worker_id, token, node, *, credentials=True):
-    environment = os.environ.copy()
+    # The controller owns this namespace; a worker inherits none of the caller's keys.
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("CMUX_MAESTRO_")}
     if "launchPath" in node:
         environment["PATH"] = node["launchPath"]
-    for key in ("CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER",
-                "CMUX_MAESTRO_DIRECT_LAUNCH", "CMUX_MAESTRO_LAUNCH_PID"):
-        environment.pop(key, None)
     environment.update({
         "CMUX_MAESTRO_WORKER_ID": worker_id,
         "CMUX_MAESTRO_CONTROL_TOKEN": token,
         "CMUX_MAESTRO_RUN_ID": node["runId"],
         "CMUX_MAESTRO_GENERATION": str(node["generation"]),
         "CMUX_MAESTRO_SESSION_ID": node["copilotSessionId"],
-        "CMUX_MAESTRO_ORCHESTRATOR": str(Path(__file__).resolve()),
+        "CMUX_MAESTRO_ORCHESTRATOR": str(CONTROLLER_ENTRYPOINT),
         "CMUX_MAESTRO_EXECUTION_MODE": node.get("executionMode", "bounded"),
     })
     if node.get("messaging"):
@@ -3473,7 +3427,7 @@ def run_interactive_session(root, worker_id, token, node):
                 raise OrchestrationError("Interactive session ownership changed during launch.")
             current["providerProcess"] = anchor
         mutate(root, attach, wait=2)
-        interval = timeout("CMUX_MAESTRO_HEARTBEAT_SECONDS", HEARTBEAT_SECONDS)
+        interval = HEARTBEAT_SECONDS
         if interval <= 0:
             raise OrchestrationError("Interactive heartbeat interval is invalid.")
         next_heartbeat = time.monotonic() + interval
@@ -3508,9 +3462,7 @@ def run_interactive_session(root, worker_id, token, node):
 
 
 def run_copilot_turn(root, worker_id, token, node):
-    copilot = trusted_executable(
-        "CMUX_MAESTRO_COPILOT", node.get("copilotExecutable") or "copilot"
-    )
+    copilot = trusted_executable(node.get("copilotExecutable") or "copilot")
     prompt = node["task"] + report_instruction(node)
     arguments = [copilot, "--no-auto-update", "-p", prompt, "--output-format", "json"]
     if node["generation"] > 1:
@@ -3533,7 +3485,7 @@ def run_copilot_turn(root, worker_id, token, node):
         arguments.extend(["--deny-tool", rule])
     arguments.extend(["-C", node["workingDirectory"]])
     environment = worker_environment(worker_id, token, node)
-    heartbeat_interval = timeout("CMUX_MAESTRO_HEARTBEAT_SECONDS", HEARTBEAT_SECONDS)
+    heartbeat_interval = HEARTBEAT_SECONDS
     if heartbeat_interval <= 0:
         return (
             "protocol-failed",
@@ -3989,7 +3941,7 @@ def identity_helper_path(feature):
             raise ValueError()
     except (OSError, ValueError, TypeError) as error:
         raise OrchestrationError(f"Refresh Maestro integration to enable {feature}.") from error
-    return trusted_executable("CMUX_MAESTRO_IDENTITY_HELPER", config["helper"])
+    return trusted_executable(config["helper"])
 
 
 def command_self_icon(args):
@@ -4428,11 +4380,6 @@ def beats_due(state, epoch):
 
 
 def beats_root():
-    override = os.environ.get("CMUX_MAESTRO_BEATS_ROOT")
-    if override:
-        if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-            raise OrchestrationError("CMUX_MAESTRO_BEATS_ROOT is test-only.")
-        return Path(override)
     return Path.home() / "Library/Application Support/CMUXMaestroPreview/Beats"
 
 
@@ -4513,295 +4460,7 @@ def beat_view(beat):
 
 def prove_own_session(session):
     """Exact-self authority through the native identity helper (no side effects)."""
-    testing_helper = os.environ.get("CMUX_MAESTRO_IDENTITY_HELPER") if os.environ.get("CMUX_MAESTRO_TESTING") == "1" else None
-    helper = trusted_executable("CMUX_MAESTRO_IDENTITY_HELPER", testing_helper) if testing_helper \
-        else identity_helper_path("Beats")
-    try:
-        process = subprocess.run([helper, "prove", "--session-id", session], capture_output=True, text=True, timeout=5)
-        value = json.loads(process.stdout)
-    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
-        raise OrchestrationError("Own-session identity verification did not complete.") from error
-    if process.returncode != 0 or not isinstance(value, dict) or value.get("ok") is not True \
-            or str(value.get("sessionId", "")).lower() != session:
-        raise OrchestrationError("This caller could not prove ownership of that session; no Beat was changed.")
-
-
-def beats_command(args):
-    """Agent surface: every operation is bound to the caller's own proven session. Human-only
-    operations (reassignment, clearing the recovery gate) are not available here."""
-    if args.beats_action == "cron-check":
-        spec = parse_cron(args.cron)
-        times = cron_next_times(spec, time.time(), count=max(1, min(args.count, 20)))
-        return {"cron": spec.expression, "timezone": time.strftime("%Z"), "next": [
-            time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(moment)) for moment in times]}
-    if not args.own_session:
-        raise OrchestrationError("Pets are chosen with --self for your own session.")
-    session = canonical_uuid(args.session_id, "current session ID")
-    if args.add is None and args.pet_id is None:
-        raise OrchestrationError("Give --pet-id to select a pet, or --add PATH to add and select one.")
-    installed = None
-    created = False
-    if args.add is not None:
-        identifier, display, description, data, extension = read_pet_source(args.add, args.pet_id)
-        existing = {pet["petId"] for pet in list_session_pets(session)}
-        if identifier not in existing and len(existing) >= PET_MAX_PER_SESSION:
-            raise OrchestrationError("This session already has the maximum number of its own pets.")
-        folder = pet_session_root(session) / identifier
-        created = not folder.exists()
-        private_directory(folder)
-        write_private(folder / f"spritesheet{extension}", data)
-        write_private(folder / "pet.json", json.dumps({
-            "id": identifier, "displayName": display, "description": description,
-            "spritesheetPath": f"spritesheet{extension}"}, sort_keys=True).encode())
-        installed = identifier
-    chosen = installed or args.pet_id
-    if chosen != PET_DEFAULT_ID and (not PET_ID_PATTERN.fullmatch(chosen or "")
-                                     or chosen not in {pet["petId"] for pet in list_session_pets(session)}):
-        raise OrchestrationError("That pet is not available to this session. Use --add PATH first.")
-    helper = identity_helper_path("session pets")
-
-    def discard():
-        if installed is not None and created:
-            shutil.rmtree(pet_session_root(session) / installed, ignore_errors=True)
-
-    try:
-        process = subprocess.run([helper, "icon", "--session-id", session, "--pet", chosen],
-                                 capture_output=True, text=True, timeout=5)
-        value = json.loads(process.stdout)
-    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
-        discard()
-        raise OrchestrationError("Own-session identity verification did not complete.") from error
-    if process.returncode != 0 or not isinstance(value, dict) or value.get("ok") is not True:
-        discard()
-        raise OrchestrationError("This caller could not prove ownership of that session; no pet was selected.")
-    if str(value.get("sessionId", "")).lower() != session or value.get("petId") != chosen:
-        raise OrchestrationError("The identity helper returned a mismatched selection.")
-    return {"sessionId": session, "petId": chosen, "added": installed is not None,
-            "scope": "this session only until saved from the Maestro pet picker"}
-
-
-# --- Beats: recurring prompts for exact agent sessions -------------------------
-# Policy lives in issue #42. Definitions persist in one local store; this module
-# owns cron evaluation and exact-self management. The CMUX-lifetime clock and the
-# human UI use the same store and rules.
-BEATS_VERSION = 1
-BEATS_MAX_TOTAL = 256
-BEATS_MAX_PER_SESSION = 16
-BEATS_MAX_PROMPT_BYTES = 4096
-BEATS_MAX_STORE_BYTES = 1024 * 1024
-BEATS_FIELDS = frozenset((
-    "id", "sessionId", "cron", "prompt", "enabled", "recoveryGate", "targetEnded",
-    "lastFiredMinute", "createdAt", "updatedAt", "revision",
-))
-CRON_FIELD_RANGES = (("minute", 0, 59), ("hour", 0, 23), ("day", 1, 31), ("month", 1, 12), ("weekday", 0, 7))
-CRON_ITEM = re.compile(r"^(\*|[0-9]{1,2}(?:-[0-9]{1,2})?)(?:/([0-9]{1,2}))?$")
-DAYS_IN_MONTH = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
-
-
-class CronSpec:
-    """Five numeric fields: minute hour day-of-month month weekday, evaluated in local time."""
-
-    def __init__(self, expression):
-        self.expression = expression
-        fields = re.split(r"[ \t]+", expression.strip(" \t"))
-        sets, stars = [], []
-        for text, (name, low, high) in zip(fields, CRON_FIELD_RANGES):
-            values = set()
-            for item in text.split(","):
-                match = CRON_ITEM.fullmatch(item)
-                if not match:
-                    raise OrchestrationError(
-                        f"Cron {name} field is invalid. Use numbers, ranges, lists and steps only (for example */15 or 1-5).")
-                base, step = match.group(1), match.group(2)
-                if base == "*":
-                    first, last = low, high
-                elif "-" in base:
-                    first, last = (int(part) for part in base.split("-"))
-                else:
-                    if step is not None:
-                        raise OrchestrationError(f"Cron {name} step needs * or a range.")
-                    first = last = int(base)
-                if not (low <= first <= last <= high):
-                    raise OrchestrationError(f"Cron {name} values must be {low}-{high}.")
-                increment = int(step) if step is not None else 1
-                if increment < 1:
-                    raise OrchestrationError(f"Cron {name} step must be at least 1.")
-                values.update(range(first, last + 1, increment))
-            if name == "weekday":
-                values = {value % 7 for value in values}
-            sets.append(frozenset(values))
-            stars.append(text.startswith("*"))
-        self.minutes, self.hours, self.days, self.months, self.weekdays = sets
-        self.day_star, self.weekday_star = stars[2], stars[4]
-        if not self.day_star and self.weekday_star:
-            if not any(day <= DAYS_IN_MONTH[month - 1] for month in self.months for day in self.days):
-                raise OrchestrationError("That cron expression can never match a real date.")
-
-    def matches_day(self, month, day, weekday):
-        """weekday: cron numbering, 0 = Sunday."""
-        if month not in self.months:
-            return False
-        day_ok, weekday_ok = day in self.days, weekday in self.weekdays
-        if self.day_star and self.weekday_star:
-            return True
-        if self.day_star:
-            return weekday_ok
-        if self.weekday_star:
-            return day_ok
-        return day_ok or weekday_ok
-
-    def matches(self, local):
-        """local: a time.struct_time in the Mac's current local time zone."""
-        return (local.tm_min in self.minutes and local.tm_hour in self.hours
-                and self.matches_day(local.tm_mon, local.tm_mday, (local.tm_wday + 1) % 7))
-
-
-def parse_cron(expression):
-    if not isinstance(expression, str) or not expression.strip() or len(expression) > 100 \
-            or any(ord(character) < 32 and character not in "\t" for character in expression):
-        raise OrchestrationError("Cron must be five space-separated numeric fields: minute hour day month weekday.")
-    if len(re.split(r"[ \t]+", expression.strip(" \t"))) != 5:
-        raise OrchestrationError("Cron must have exactly five fields: minute hour day-of-month month weekday.")
-    return CronSpec(" ".join(re.split(r"[ \t]+", expression.strip(" \t"))))
-
-
-def local_minute_key(epoch):
-    local = time.localtime(epoch)
-    return "%04d-%02d-%02dT%02d:%02d" % (local.tm_year, local.tm_mon, local.tm_mday, local.tm_hour, local.tm_min)
-
-
-def cron_next_times(spec, epoch, count=5, horizon_days=800):
-    """Upcoming local fire times after `epoch`. Nonexistent local times are skipped; a repeated
-    local minute appears once."""
-    results, seen = [], set()
-    start = time.localtime(epoch)
-    day_epoch = time.mktime((start.tm_year, start.tm_mon, start.tm_mday, 12, 0, 0, 0, 0, -1))
-    for offset in range(horizon_days):
-        local_day = time.localtime(day_epoch + offset * 86400)
-        if not spec.matches_day(local_day.tm_mon, local_day.tm_mday, (local_day.tm_wday + 1) % 7):
-            continue
-        for hour in sorted(spec.hours):
-            for minute in sorted(spec.minutes):
-                candidate = time.mktime((local_day.tm_year, local_day.tm_mon, local_day.tm_mday, hour, minute, 0, 0, 0, -1))
-                actual = time.localtime(candidate)
-                if (actual.tm_mday, actual.tm_hour, actual.tm_min) != (local_day.tm_mday, hour, minute):
-                    continue
-                key = local_minute_key(candidate)
-                if candidate <= epoch or key in seen:
-                    continue
-                seen.add(key)
-                results.append(candidate)
-                if len(results) == count:
-                    return results
-    return results
-
-
-def beats_due(state, epoch):
-    """Enabled, ungated Beats whose cron matches this local minute and have not fired for it.
-    Only the current minute is considered: missed minutes are never replayed, nonexistent local
-    minutes never occur, and a repeated local minute fires once."""
-    key = local_minute_key(epoch)
-    local = time.localtime(epoch)
-    # A local minute that physically happened before (clocks moved back) was already served.
-    if any(local_minute_key(epoch - shift) == key for shift in (1800, 3600, 7200)):
-        return key, []
-    due = []
-    for beat in state["beats"]:
-        if (beat["enabled"] and not beat["recoveryGate"] and not beat["targetEnded"]
-                and beat["lastFiredMinute"] != key and parse_cron(beat["cron"]).matches(local)):
-            due.append(beat)
-    return key, due
-
-
-def beats_root():
-    override = os.environ.get("CMUX_MAESTRO_BEATS_ROOT")
-    if override:
-        if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-            raise OrchestrationError("CMUX_MAESTRO_BEATS_ROOT is test-only.")
-        return Path(override)
-    return Path.home() / "Library/Application Support/CMUXMaestroPreview/Beats"
-
-
-def validate_beat_prompt(prompt):
-    if not isinstance(prompt, str) or not prompt.strip():
-        raise OrchestrationError("A Beat needs a nonempty prompt.")
-    if len(prompt.encode()) > BEATS_MAX_PROMPT_BYTES or any(
-            ord(character) < 32 and character not in "\n\t" for character in prompt):
-        raise OrchestrationError("A Beat prompt must be at most 4 KiB of text without control characters.")
-    return prompt
-
-
-def validate_beats_state(state):
-    if not isinstance(state, dict) or set(state) != {"version", "beats"} or state["version"] != BEATS_VERSION \
-            or not isinstance(state["beats"], list) or len(state["beats"]) > BEATS_MAX_TOTAL:
-        raise OrchestrationError("The Beats store is invalid or from a newer version.")
-    seen = set()
-    for beat in state["beats"]:
-        if not isinstance(beat, dict) or set(beat) != BEATS_FIELDS:
-            raise OrchestrationError("The Beats store has a malformed definition.")
-        canonical_uuid(beat["id"], "Beat ID")
-        canonical_uuid(beat["sessionId"], "Beat session ID")
-        parse_cron(beat["cron"])
-        validate_beat_prompt(beat["prompt"])
-        if beat["id"] in seen or not all(type(beat[name]) is bool for name in ("enabled", "recoveryGate", "targetEnded")) \
-                or type(beat["revision"]) is not int or beat["revision"] < 1:
-            raise OrchestrationError("The Beats store has an inconsistent definition.")
-        seen.add(beat["id"])
-    return state
-
-
-def beats_store_mutate(operation, *, root=None):
-    """One authoritative store. Writers serialize on a lock file and replace atomically."""
-    root = Path(root) if root is not None else beats_root()
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = root.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-        raise OrchestrationError("The Beats store directory is not private to this user.")
-    lock_descriptor = os.open(root / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    try:
-        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
-        path = root / "beats.json"
-        try:
-            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-        except FileNotFoundError:
-            state = {"version": BEATS_VERSION, "beats": []}
-        else:
-            try:
-                fileinfo = os.fstat(descriptor)
-                if not stat.S_ISREG(fileinfo.st_mode) or fileinfo.st_uid != os.getuid() \
-                        or fileinfo.st_size > BEATS_MAX_STORE_BYTES:
-                    raise OrchestrationError("The Beats store is not a private regular file within its size limit.")
-                try:
-                    state = json.loads(os.read(descriptor, BEATS_MAX_STORE_BYTES + 1))
-                except ValueError as error:
-                    raise OrchestrationError("The Beats store is not valid JSON.") from error
-            finally:
-                os.close(descriptor)
-        validate_beats_state(state)
-        result = operation(state)
-        validate_beats_state(state)
-        encoded = json.dumps(state, sort_keys=True, separators=(",", ":")).encode() + b"\n"
-        if len(encoded) > BEATS_MAX_STORE_BYTES:
-            raise OrchestrationError("The Beats store size limit was reached.")
-        write_private(path, encoded)
-        return result
-    finally:
-        os.close(lock_descriptor)
-
-
-def beats_store_read(*, root=None):
-    return beats_store_mutate(lambda state: json.loads(json.dumps(state)), root=root)
-
-
-def beat_view(beat):
-    return {name: beat[name] for name in sorted(BEATS_FIELDS)}
-
-
-def prove_own_session(session):
-    """Exact-self authority through the native identity helper (no side effects)."""
-    testing_helper = os.environ.get("CMUX_MAESTRO_IDENTITY_HELPER") if os.environ.get("CMUX_MAESTRO_TESTING") == "1" else None
-    helper = trusted_executable("CMUX_MAESTRO_IDENTITY_HELPER", testing_helper) if testing_helper \
-        else identity_helper_path("Beats")
+    helper = identity_helper_path("Beats")
     try:
         process = subprocess.run([helper, "prove", "--session-id", session], capture_output=True, text=True, timeout=5)
         value = json.loads(process.stdout)
@@ -5090,7 +4749,7 @@ def command_archive(args, root, cmux):
                 node["archiving"] = True
                 node["updatedAt"] = now()
     mutate(root, begin)
-    deadline = time.monotonic() + timeout("CMUX_MAESTRO_ARCHIVE_SECONDS", ARCHIVE_SECONDS)
+    deadline = time.monotonic() + ARCHIVE_SECONDS
     while time.monotonic() < deadline:
         state = read_state(root, wait=1)
         workers = [
