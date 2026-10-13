@@ -49,7 +49,29 @@ class IntegratedTestScopeTests(unittest.TestCase):
         ]}]}
         return summary, tests
 
-    def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0, benchmark_flag=None, guide_exit=0):
+    @staticmethod
+    def reported_names(*reports):
+        names = scopes.Counter()
+
+        def visit(node):
+            if node.get("nodeType") == "Test Case" and isinstance(node.get("nodeIdentifier"), str):
+                name = scopes.test_name(node["nodeIdentifier"])
+                if name != scopes.test_name(scopes.TEST):
+                    names[name] += 1
+            for child in node.get("children", []) if isinstance(node.get("children"), list) else []:
+                if isinstance(child, dict):
+                    visit(child)
+        for _, tests in reports:
+            for node in tests.get("testNodes", []) if isinstance(tests, dict) else []:
+                if isinstance(node, dict):
+                    visit(node)
+        names[scopes.test_name(scopes.TEST)] += 1
+        return names
+
+    def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0, benchmark_flag=None, guide_exit=0,
+                expected=None):
+        # Default source inventory mirrors the fixture; coverage tests pass an explicit one.
+        expected = self.reported_names(isolated, remaining) if expected is None else expected
         def runner(command, **kwargs):
             self.commands.append(command)
             if command[0] == "xcodebuild":
@@ -65,7 +87,8 @@ class IntegratedTestScopeTests(unittest.TestCase):
                 patch.object(scopes, "produce_guide_acceptance", return_value={"exitCode": guide_exit, "environment": {}}), \
                 patch.object(scopes, "revalidate_guide_acceptance",
                              side_effect=ValueError("Synthetic native producer failed") if guide_exit else None), \
-                patch.object(scopes, "validate_original_guide_cases"):
+                patch.object(scopes, "validate_original_guide_cases"), \
+                patch.object(scopes, "expected_test_names", return_value=expected):
             if benchmark_flag is None:
                 os.environ.pop(BENCHMARK_FLAG, None)
             else:
@@ -173,6 +196,34 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertIn("-only-testing:" + scopes.SELECTOR, commands[1])
         self.assertIn("-skip-testing:" + scopes.SELECTOR, commands[2])
         self.assertFalse(any("-parallel-testing-enabled" in command for command in commands))
+
+    def test_missing_or_unexpected_source_tests_fail_an_otherwise_green_gate(self):
+        isolated = self.report([(scopes.TEST, "Passed")])
+        remaining = self.report([("OtherSuite/first()", "Passed")])
+        base = scopes.Counter({scopes.test_name(scopes.TEST): 1, "first": 1})
+        for name, expected in (("missing suite", base + scopes.Counter({"readerRegression": 1})),
+                               ("missing isolated", scopes.Counter({"first": 1})),
+                               ("unexpected", scopes.Counter({scopes.test_name(scopes.TEST): 1}))):
+            with self.subTest(name), patch.object(scopes, "capture_failure_diagnostics", return_value={}):
+                if (self.directory / "results").exists():
+                    shutil.rmtree(self.directory / "results")
+                result, evidence = self.execute(isolated, remaining, expected=expected)
+                self.assertEqual(result, 1)
+                self.assertIn("sourceCoverageError", evidence)
+                self.assertFalse(evidence["passed"])
+        shutil.rmtree(self.directory / "results")
+        result, evidence = self.execute(isolated, remaining, expected=base)
+        self.assertEqual(result, 0)
+        self.assertEqual(evidence["sourceCoverage"], {"expectedTests": 2, "reportedTests": 2})
+
+    def test_source_inventory_includes_every_declared_hosted_test(self):
+        names = scopes.expected_test_names()
+        self.assertEqual(names[scopes.test_name(scopes.TEST)], 1)
+        self.assertEqual(names[scopes.test_name(BENCHMARK_TEST)], 1)
+        declared = sum(len(scopes.TEST_ATTRIBUTE.findall(path.read_text()))
+                       for path in scopes.TEST_SOURCES.rglob("*.swift"))
+        self.assertEqual(sum(names.values()), declared)
+        self.assertGreater(declared, 100)
 
     def test_failed_isolated_regression_still_runs_complement_and_remains_red(self):
         result, evidence = self.execute(self.report([(scopes.TEST, "Failed")]),
