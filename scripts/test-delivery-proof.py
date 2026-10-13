@@ -812,7 +812,7 @@ class ProofTests(unittest.TestCase):
             "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
             "worker_launch_settings": lambda _: {"version": 1, "copilotAccount": "saved-other", "model": "pinned-model"},
             "resolve_copilot_token": mock.Mock(return_value=None),
-            "mutate": lambda _root, operation: operation(state),
+            "mutate": lambda _root, operation, **_kw: operation(state),
             "launch_reserved_session": launcher,
         }):
             result = command(args, self.root, cmux)
@@ -846,7 +846,7 @@ class ProofTests(unittest.TestCase):
             "read_state": lambda _: state,
             "worker_launch_settings": lambda _: {"version": 1, "model": "pinned-model"},
             "resolve_copilot_token": mock.Mock(return_value=None),
-            "mutate": lambda _root, operation: operation(state),
+            "mutate": lambda _root, operation, **_kw: operation(state),
             "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
             "launch_reserved_session": mock.Mock(side_effect=CONTROLLER["OrchestrationError"]("Synthetic startup failure")),
         }):
@@ -923,7 +923,7 @@ class ProofTests(unittest.TestCase):
         with mock.patch.dict(status.__globals__, {
             "read_state": lambda _: snapshot,
             "authorize": lambda state, *a: state["nodes"][actor["id"]],
-            "mutate": lambda root, callback: callback(state),
+            "mutate": lambda root, callback, **_kw: callback(state),
             "collect_git_evidence": lambda *a: {},
             "apply_git_evidence": lambda *a: None,
             "process_start": process_start,
@@ -1059,7 +1059,7 @@ class ProofTests(unittest.TestCase):
         with mock.patch.dict(recover.__globals__, {
             "read_state": lambda _: snapshot,
             "require_current_surface": lambda *a: None,
-            "mutate": lambda root, callback: callback(state),
+            "mutate": lambda root, callback, **_kw: callback(state),
             "new_root": lambda *a: (replacement, "synthetic"),
             "process_start": process_start,
         }), mock.patch("os.kill", side_effect=kill_error):
@@ -1146,12 +1146,14 @@ class ProofTests(unittest.TestCase):
         binding = PROOF["read_private"](route)
         binding["nodeId"] = str(uuid.uuid4())
         route.write_text(json.dumps(binding))
-        before = copy.deepcopy(state)
-        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "identity changed"):
-            self.recover_interleaving(
-                state, actor, copy.deepcopy(state), process_start=lambda _: None,
-            )
-        self.assertEqual(state, before)
+        # Routes retire only after the state commit; an unprovable binding is never
+        # deleted and is reported rather than aborting committed recovery.
+        result = self.recover_interleaving(
+            state, actor, copy.deepcopy(state), process_start=lambda _: None,
+        )
+        self.assertEqual(result["recoveredRunId"], actor["runId"])
+        self.assertNotIn(self.node["id"], state["nodes"])
+        self.assertEqual(result["routesNotRetired"], 1)
         self.assertEqual(PROOF["read_private"](route), binding)
 
     def test_installed_spawn_automatically_participates_and_requires_pins(self):

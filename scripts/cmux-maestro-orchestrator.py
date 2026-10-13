@@ -2139,6 +2139,7 @@ def command_launch_coordinator(args, root, cmux):
                     root, node["id"], token, node["copilotSessionId"], node["generation"]
                 )
             except (OrchestrationError, OSError) as recovery_error:
+                reservation_state = getattr(recovery_error, "state", reservation_state)
                 message += f" Failure recording also failed: {launch_failure_message(recovery_error)}"
         if reservation_state == "uncommitted":
             raise OrchestrationError(message) from error
@@ -2148,6 +2149,12 @@ def command_launch_coordinator(args, root, cmux):
             message, {**receipt, "reservationState": reservation_state},
         ) from error
     return {**result, **receipt}
+
+
+class ReservationCleanupError(OrchestrationError):
+    """The reservation is known committed, but recording its cancellation failed."""
+
+    state = "committed"
 
 
 def cancel_unlaunched_reservation(root, identifier, token, session_id, generation):
@@ -2173,6 +2180,8 @@ def cancel_unlaunched_reservation(root, identifier, token, session_id, generatio
             store.write(state)
         except CommittedProjectionError:
             pass
+        except (OrchestrationError, OSError) as error:
+            raise ReservationCleanupError(launch_failure_message(error)) from error
     with_store(root, cancel)
     return outcome
 
