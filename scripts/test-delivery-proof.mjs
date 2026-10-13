@@ -10,7 +10,8 @@ import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import {
-  createScheduleGateway, planBeatSchedules, start, startBeats, startManaged, startReadiness, validateSend,
+  createScheduleGateway, planBeatSchedules, readBeatsStore, start, startBeats, startManaged, startReadiness,
+  validateSend,
 } from "./delivery-proof/adapter.mjs";
 
 const base = await fs.realpath("/tmp");
@@ -871,6 +872,46 @@ test("Beat sync mirrors the store into this session's schedules and follows edit
   await f.write([{ ...later, cron: "0 9 * * 1-5" }]);
   await f.running.sync();
   assert.deepEqual(f.entries.map((entry) => entry.cron), ["0 9 * * 1-5"]);
+});
+
+test("the Beats reader refuses symlinked or shared stores and drops malformed beats", async (t) => {
+  const root = await fs.mkdtemp(path.join(base, "bt-"));
+  t.after(() => fs.rm(root, { recursive: true }));
+  await fs.chmod(root, 0o700);
+  const store = path.join(root, "beats.json");
+  const live = makeBeat();
+  const write = (beats, mode = 0o600) => fs.writeFile(store, JSON.stringify({ version: 1, beats }), { mode });
+  assert.deepEqual(await readBeatsStore(root), []);
+  await write([live]);
+  assert.deepEqual(await readBeatsStore(root), [live]);
+
+  await fs.rename(store, path.join(root, "real.json"));
+  await fs.symlink(path.join(root, "real.json"), store);
+  await assert.rejects(readBeatsStore(root), { code: "ELOOP" });
+  await fs.rm(store);
+
+  await write([live], 0o640);
+  await fs.chmod(store, 0o640);
+  await assert.rejects(readBeatsStore(root), /Invalid or unavailable/);
+  await fs.chmod(store, 0o600);
+  assert.deepEqual(await readBeatsStore(root), [live]);
+
+  const malformed = [
+    { ...makeBeat(), id: "not-a-uuid" }, { ...makeBeat(), enabled: "yes" }, { ...makeBeat(), cron: 5 },
+    { ...makeBeat(), sessionId: null }, { ...makeBeat(), recoveryGate: undefined }, null, "beat",
+  ];
+  await write([...malformed, live]);
+  assert.deepEqual(await readBeatsStore(root), [live]);
+});
+
+test("a refused Beats store reports a diagnostic and leaves schedules alone", async (t) => {
+  const live = makeBeat();
+  const f = await beatsFixture(t, [live]);
+  assert.equal(f.entries.length, 1);
+  await fs.chmod(path.join(f.root, "beats.json"), 0o644);
+  await f.running.sync();
+  assert.deepEqual(f.events, ["diagnostic"]);
+  assert.deepEqual(f.entries.map((entry) => entry.label), [beatLabelOf(live)]);
 });
 
 test("Beat sync reports one diagnostic per outage and recovers without retry storms", async (t) => {
