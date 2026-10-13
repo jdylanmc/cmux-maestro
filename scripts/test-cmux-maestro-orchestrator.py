@@ -4197,6 +4197,52 @@ class ReservationAndLeaseTests(unittest.TestCase):
         archived = self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token)
         self.assertTrue(archived["archived"])
 
+    def test_prelaunch_preparation_failure_releases_lease_and_retires_its_route(self):
+        routes = self.h.path / "pr"
+        routes.mkdir(mode=0o700)
+        published = []
+        prepare = CONTROLLER_API["launch_direct_session"].__globals__["prepare_direct_launch"]
+
+        def bind_then_fail(root, node, token):
+            node["messaging"] = {"version": 1, "routes": str(routes), "extension": "/synthetic/extension"}
+            self.h.change_state(lambda state: state["nodes"][node["id"]].update(messaging=node["messaging"]))
+            CONTROLLER_API["bind_messaging"](node)
+            published.extend(routes.iterdir())
+            raise CONTROLLER_API["OrchestrationError"]("Delivery proof binding failed; use fresh fixtures.")
+        args = CONTROLLER_API["parser"]().parse_args([
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Prep fails", "--cwd", str(self.h.path), "--task", "Never launched",
+        ])
+        with patch.dict(os.environ, self.h.env), patch.dict(
+            CONTROLLER_API["launch_direct_session"].__globals__, {"prepare_direct_launch": bind_then_fail},
+        ):
+            with self.assertRaises(CONTROLLER_API["SessionLaunchError"]):
+                CONTROLLER_API["command_spawn"](args, self.h.root, CONTROLLER_API["Cmux"]())
+        self.assertEqual(len(published), 1)
+        self.assertEqual(list(routes.iterdir()), [])
+        self.assertEqual(self.h.state()["launches"], {})
+        self.assertFalse([call for call in self.h.cmux_data()["calls"] if "surface.create" in call])
+
+    def test_failed_attach_keeps_its_route_while_execution_is_uncertain(self):
+        routes = self.h.path / "ur"
+        routes.mkdir(mode=0o700)
+
+        def bind_then_continue_to_failure(root, node, token):
+            node["messaging"] = {"version": 1, "routes": str(routes), "extension": "/synthetic/extension"}
+            self.h.change_state(lambda state: state["nodes"][node["id"]].update(messaging=node["messaging"]))
+            CONTROLLER_API["bind_messaging"](node)
+            return "/usr/bin/true"
+        args = CONTROLLER_API["parser"]().parse_args([
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Uncertain", "--cwd", str(self.h.path), "--task", "May already run",
+        ])
+        with patch.dict(os.environ, {**self.h.env, "CMUX_MAESTRO_TEST_ATTACH_FAILURE": "1"}), patch.dict(
+            CONTROLLER_API["launch_direct_session"].__globals__, {"prepare_direct_launch": bind_then_continue_to_failure},
+        ):
+            with self.assertRaises(CONTROLLER_API["SessionLaunchError"]):
+                CONTROLLER_API["command_spawn"](args, self.h.root, CONTROLLER_API["Cmux"]())
+        self.assertEqual(len(list(routes.iterdir())), 1)
+
     def test_failed_attach_lease_is_kept_without_a_provider_exit_anchor(self):
         node = self.failed_attach()
         self.h.remove_surface(node["surfaceId"])
@@ -4259,6 +4305,25 @@ class RoutePublicationTests(unittest.TestCase):
                 self.retire(commit)
         self.assertEqual(self.h.state()["archives"][-1]["runId"], marker)
         self.assertFalse(self.route.exists())
+
+    def test_committed_projection_failure_reports_routes_left_in_place(self):
+        self.route.write_text(json.dumps({"peer": "someone-else"}))
+        self.route.chmod(0o600)
+        store, original = CONTROLLER_API["Store"], CONTROLLER_API["Store"]._atomic
+
+        def flaky(directory, name, data):
+            if name == "current.json":
+                raise OSError(28, "No space left on device")
+            return original(directory, name, data)
+
+        def commit(state, retiring):
+            retiring.append(self.node)
+        with patch.object(store, "_atomic", staticmethod(flaky)):
+            with self.assertRaisesRegex(CONTROLLER_API["CommittedProjectionError"],
+                                        "was committed.*1 message route") as raised:
+                self.retire(commit)
+        self.assertEqual(raised.exception.routesNotRetired, 1)
+        self.assertTrue(self.route.exists())
 
     def test_unprovable_route_is_left_in_place_and_reported(self):
         self.route.write_text(json.dumps({"peer": "someone-else"}))
@@ -4326,7 +4391,7 @@ class OwnPetPublicationTests(unittest.TestCase):
         return CONTROLLER_API["command_self_pet"](args)
 
     def library_names(self):
-        return sorted(item.name for item in self.library.iterdir())
+        return sorted(item.name for item in self.library.iterdir() if not item.name.endswith(".lock"))
 
     def test_refused_ownership_restores_the_existing_pet(self):
         with self.select(False), self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "prove ownership"):
@@ -4355,6 +4420,37 @@ class OwnPetPublicationTests(unittest.TestCase):
             self.add()
         self.assertEqual((self.library / "duck/spritesheet.png").read_bytes(), b"original-sheet")
         self.assertEqual(self.library_names(), ["duck"])
+
+    def staged(self, label):
+        return CONTROLLER_API["PetPublication"](self.SESSION, "duck", (
+            ("pet.json", json.dumps({"displayName": label}).encode()),
+        ))
+
+    def test_restore_never_deletes_a_pet_another_invocation_published(self):
+        publication = self.staged("Mine")
+        publication.publish()
+        shutil.rmtree(self.library / "duck")
+        (self.library / "duck").mkdir(mode=0o700)
+        (self.library / "duck/pet.json").write_text('{"displayName": "Theirs"}')
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "retained"):
+            publication.restore()
+        self.assertEqual((self.library / "duck/pet.json").read_text(), '{"displayName": "Theirs"}')
+        self.assertTrue(any(item.name.startswith(".duck.previous-") for item in self.library.iterdir()))
+
+    def test_concurrent_adds_of_one_pet_are_serialized(self):
+        first = self.staged("First")
+        first.publish()
+        second = []
+        worker = threading.Thread(target=lambda: second.append(self.staged("Second")))
+        worker.start()
+        worker.join(0.3)
+        self.assertTrue(worker.is_alive())
+        first.commit()
+        worker.join(5)
+        self.assertFalse(worker.is_alive())
+        second[0].publish()
+        second[0].restore()
+        self.assertEqual(json.loads((self.library / "duck/pet.json").read_text())["displayName"], "First")
 
     def test_non_image_sheet_is_refused_without_a_traceback(self):
         (self.source / "sheet.png").write_bytes(b"not an image")
