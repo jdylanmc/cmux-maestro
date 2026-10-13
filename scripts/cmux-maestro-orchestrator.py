@@ -2982,7 +2982,12 @@ def prepare_direct_launch(root, node, token):
         "CMUX_MAESTRO_GENERATION", "CMUX_MAESTRO_ORCHESTRATOR", "CMUX_MAESTRO_EXECUTION_MODE",
         "CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER", "CMUX_MAESTRO_SESSION_ID",
     }
-    script = "unset CMUX_MAESTRO_MESSAGE_ROOT CMUX_MAESTRO_MESSAGE_PEER\n"
+    # The host shell may carry any caller's CMUX_MAESTRO_ names; the provider gets only these.
+    script = (
+        "for maestro_name in $(/usr/bin/env | /usr/bin/sed -n "
+        "'s/^\\(CMUX_MAESTRO_[A-Za-z0-9_]*\\)=.*/\\1/p'); do unset \"$maestro_name\"; done\n"
+        "unset maestro_name\n"
+    )
     script += "".join(f"export {key}={shlex.quote(environment[key])}\n"
                       for key in sorted(keys) if key in environment)
     script += 'export CMUX_MAESTRO_LAUNCH_PID=$$\nexport CMUX_MAESTRO_DIRECT_LAUNCH=1\n'

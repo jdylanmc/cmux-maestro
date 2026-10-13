@@ -8,8 +8,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 - Remove the orchestrator's testing mode. `CMUX_MAESTRO_TESTING` and the test-only root,
   executable, timeout, identity-helper and attach-fault variables are ignored; worker
-  admission never skips its parent-evidence check; workers inherit none of the caller's
-  `CMUX_MAESTRO_` variables.
+  admission never skips its parent-evidence check. Worker Copilot processes receive only the
+  controller's own `CMUX_MAESTRO_` variables: the bounded environment drops every inherited
+  one, and the direct launch unsets every `CMUX_MAESTRO_` name in the host shell first.
 - Stop a sub-agent's model change from replacing the session's model in the footer and
   previews (a Copilot `session.model_change` event carrying a sub-agent ID now updates only
   that sub-agent).

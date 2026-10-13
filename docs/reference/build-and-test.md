@@ -284,5 +284,9 @@ root explicitly. The Python suites fake only the outside world:
   `FAKE_ARCHIVE_SECONDS` and `FAKE_GIT`. It also becomes the re-entry point for
   runtimes and terminals.
 
-Workers inherit no `CMUX_MAESTRO_` variable from their caller; the controller
-sets that namespace explicitly.
+Worker Copilot processes receive only the controller's `CMUX_MAESTRO_`
+allowlist. Bounded runtimes build the provider environment without any inherited
+`CMUX_MAESTRO_` key. A direct launch's sourced script unsets every
+`CMUX_MAESTRO_` name present in the host shell, then exports the allowlist and
+`exec`s the provider with the recorded launch `PATH`; other variables such as
+`HOME` pass through.
