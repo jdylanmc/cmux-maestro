@@ -50,29 +50,37 @@ class IntegratedTestScopeTests(unittest.TestCase):
         return summary, tests
 
     @staticmethod
-    def reported_names(*reports):
-        names = scopes.Counter()
-
-        def visit(node):
-            if node.get("nodeType") == "Test Case" and isinstance(node.get("nodeIdentifier"), str):
-                name = scopes.test_name(node["nodeIdentifier"])
-                if name != scopes.test_name(scopes.TEST):
-                    names[name] += 1
-            for child in node.get("children", []) if isinstance(node.get("children"), list) else []:
-                if isinstance(child, dict):
-                    visit(child)
+    def reported_identities(*reports):
+        identities = {scopes.SELECTOR}
         for _, tests in reports:
-            for node in tests.get("testNodes", []) if isinstance(tests, dict) else []:
-                if isinstance(node, dict):
-                    visit(node)
-        names[scopes.test_name(scopes.TEST)] += 1
-        return names
+            try:
+                identities.update(case.identity for case in scopes.cases(tests))
+            except (ValueError, KeyError, TypeError, AttributeError):
+                pass
+        return identities
+
+    @staticmethod
+    def enumeration(enabled, disabled=()):
+        return {"errors": [], "values": [{
+            "testPlan": "CMUXMaestroPreview",
+            "enabledTests": [{"identifier": identity} for identity in sorted(enabled)],
+            "disabledTests": [{"identifier": identity} for identity in sorted(disabled)],
+        }]}
 
     def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0, benchmark_flag=None, guide_exit=0,
-                expected=None):
-        # Default source inventory mirrors the fixture; coverage tests pass an explicit one.
-        expected = self.reported_names(isolated, remaining) if expected is None else expected
+                inventory=None, enumeration_exit=0):
+        # The default built inventory mirrors the fixture; inventory tests pass an explicit enumeration.
+        inventory = (self.enumeration(self.reported_identities(isolated, remaining))
+                     if inventory is None else inventory)
+        self.enumerations = []
+
         def runner(command, **kwargs):
+            if "-enumerate-tests" in command:
+                self.enumerations.append((command, kwargs.get("env")))
+                path = Path(command[command.index("-test-enumeration-output-path") + 1])
+                if not enumeration_exit:
+                    path.write_text(json.dumps(inventory))
+                return subprocess.CompletedProcess(command, enumeration_exit)
             self.commands.append(command)
             if command[0] == "xcodebuild":
                 self.build_environments.append(kwargs.get("env"))
@@ -87,8 +95,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
                 patch.object(scopes, "produce_guide_acceptance", return_value={"exitCode": guide_exit, "environment": {}}), \
                 patch.object(scopes, "revalidate_guide_acceptance",
                              side_effect=ValueError("Synthetic native producer failed") if guide_exit else None), \
-                patch.object(scopes, "validate_original_guide_cases"), \
-                patch.object(scopes, "expected_test_names", return_value=expected):
+                patch.object(scopes, "validate_original_guide_cases"):
             if benchmark_flag is None:
                 os.environ.pop(BENCHMARK_FLAG, None)
             else:
@@ -197,33 +204,62 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertIn("-skip-testing:" + scopes.SELECTOR, commands[2])
         self.assertFalse(any("-parallel-testing-enabled" in command for command in commands))
 
-    def test_missing_or_unexpected_source_tests_fail_an_otherwise_green_gate(self):
+    def test_reported_tests_must_equal_the_built_inventory(self):
         isolated = self.report([(scopes.TEST, "Passed")])
         remaining = self.report([("OtherSuite/first()", "Passed")])
-        base = scopes.Counter({scopes.test_name(scopes.TEST): 1, "first": 1})
-        for name, expected in (("missing suite", base + scopes.Counter({"readerRegression": 1})),
-                               ("missing isolated", scopes.Counter({"first": 1})),
-                               ("unexpected", scopes.Counter({scopes.test_name(scopes.TEST): 1}))):
+        first = scopes.TARGET + "/OtherSuite/first()"
+        for name, inventory, code in (
+            ("missing suite", self.enumeration({scopes.SELECTOR, first, scopes.TARGET + "/ReaderSuite/regression()"}), 0),
+            ("same name in another suite", self.enumeration({scopes.SELECTOR, scopes.TARGET + "/Other/first()"}), 0),
+            ("missing isolated", self.enumeration({first}), 0),
+            ("unexpected", self.enumeration({scopes.SELECTOR}), 0),
+            ("unexplained disabled", self.enumeration({scopes.SELECTOR, first}, {scopes.TARGET + "/Off/test()"}), 0),
+            ("enumeration errors", {"errors": ["synthetic"], "values": []}, 0),
+            ("enumeration failed", None, 65),
+        ):
             with self.subTest(name), patch.object(scopes, "capture_failure_diagnostics", return_value={}):
                 if (self.directory / "results").exists():
                     shutil.rmtree(self.directory / "results")
-                result, evidence = self.execute(isolated, remaining, expected=expected)
+                result, evidence = self.execute(isolated, remaining, inventory=inventory or {},
+                                                enumeration_exit=code)
                 self.assertEqual(result, 1)
-                self.assertIn("sourceCoverageError", evidence)
+                self.assertIn("inventoryError", evidence)
                 self.assertFalse(evidence["passed"])
         shutil.rmtree(self.directory / "results")
-        result, evidence = self.execute(isolated, remaining, expected=base)
+        result, evidence = self.execute(isolated, remaining, inventory=self.enumeration({scopes.SELECTOR, first}))
         self.assertEqual(result, 0)
-        self.assertEqual(evidence["sourceCoverage"], {"expectedTests": 2, "reportedTests": 2})
+        self.assertEqual(evidence["inventoryCoverage"], {"expectedTests": 2, "reportedTests": 2})
 
-    def test_source_inventory_includes_every_declared_hosted_test(self):
-        names = scopes.expected_test_names()
-        self.assertEqual(names[scopes.test_name(scopes.TEST)], 1)
-        self.assertEqual(names[scopes.test_name(BENCHMARK_TEST)], 1)
-        declared = sum(len(scopes.TEST_ATTRIBUTE.findall(path.read_text()))
-                       for path in scopes.TEST_SOURCES.rglob("*.swift"))
-        self.assertEqual(sum(names.values()), declared)
-        self.assertGreater(declared, 100)
+    def test_conditionally_compiled_out_tests_are_absent_from_inventory_and_pass(self):
+        # A test excluded by #if never reaches the built product, so enumeration omits it.
+        result, evidence = self.execute(
+            self.report([(scopes.TEST, "Passed")]), self.report([("OtherSuite/first()", "Passed")]),
+            inventory=self.enumeration({scopes.SELECTOR, scopes.TARGET + "/OtherSuite/first()"}))
+        self.assertEqual(result, 0)
+        self.assertEqual(evidence["enumeratedTests"], 2)
+
+    def test_inventory_comes_from_the_built_product_under_the_same_settings(self):
+        result, _ = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                 self.report([("OtherSuite/first()", "Passed")]))
+        self.assertEqual(result, 0)
+        [(command, environment)] = self.enumerations
+        self.assertEqual(command[:3], ["xcodebuild", "-scheme", "CMUXMaestroPreview"])
+        self.assertEqual(command[3:7], ["test-without-building", "-enumerate-tests",
+                                        "-test-enumeration-format", "json"])
+        self.assertIsNotNone(environment)
+
+    def test_allowlisted_disabled_tests_and_skips_have_reasons(self):
+        self.assertEqual(set(scopes.INTENTIONAL_SKIPS), {scopes.SELECTOR, scopes.TARGET + "/" + BENCHMARK_TEST})
+        self.assertTrue(all(reason.strip() for reason in scopes.INTENTIONAL_SKIPS.values()))
+        first = scopes.TARGET + "/OtherSuite/first()"
+        benchmark = scopes.TARGET + "/" + BENCHMARK_TEST
+        result, evidence = self.execute(
+            self.report([(scopes.TEST, "Passed")]),
+            self.report([("OtherSuite/first()", "Passed"), (BENCHMARK_TEST, "Skipped")]),
+            inventory=self.enumeration({scopes.SELECTOR, first}, {benchmark}))
+        self.assertEqual(result, 0)
+        [skip] = evidence["remainingCounts"]["skippedTestsByIdentity"]
+        self.assertEqual(skip["allowlistReason"], scopes.INTENTIONAL_SKIPS[benchmark])
 
     def test_failed_isolated_regression_still_runs_complement_and_remains_red(self):
         result, evidence = self.execute(self.report([(scopes.TEST, "Failed")]),
@@ -360,7 +396,8 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(evidence["combinedExecutedTestCount"], 3)
         self.assertEqual(evidence["remainingCounts"]["skippedTestsByIdentity"], [{
-            "identity": scopes.SELECTOR, "policyReason": "verified-isolated-selector-exclusion", "reportedDetails": None}])
+            "identity": scopes.SELECTOR, "policyReason": "verified-isolated-selector-exclusion",
+            "allowlistReason": scopes.INTENTIONAL_SKIPS[scopes.SELECTOR], "reportedDetails": None}])
 
     def test_enabled_benchmark_cannot_be_absent_from_otherwise_passing_results(self):
         fixture = json.loads((ROOT / "scripts/test-fixtures/xcresult-isolated-hosted.json").read_text())
