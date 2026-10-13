@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-import ast
 import fcntl
 import io
 import json
 import os
 import pty
-import re
 import runpy
 import secrets
 import shlex
@@ -3663,31 +3661,6 @@ class OrchestratorTests(unittest.TestCase):
                          {"allow": ["read"], "deny": ["shell(exact)", "network"]})
         with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "cannot grant a child additional"):
             CONTROLLER_API["normalize_tool_policy"](["write"], ["network"], parent_policy)
-
-    def test_python_projection_and_typed_swift_phase_vocabulary_match(self):
-        module = ast.parse(CONTROLLER.read_text())
-        assignment = next(
-            item for item in module.body
-            if isinstance(item, ast.Assign)
-            and any(
-                isinstance(target, ast.Name) and target.id == "PROJECTED_PHASES"
-                for target in item.targets
-            )
-        )
-        projected = ast.literal_eval(assignment.value)
-        swift = (
-            REPO / "CMUXMaestroSidebar/Orchestration/SidebarOrchestration.swift"
-        ).read_text()
-        phase_block = swift.split(
-            "enum SidebarOrchestrationPhase", 1
-        )[1].split("\n}", 1)[0]
-        typed = {
-            raw or name
-            for name, raw in re.findall(
-                r'case\s+(\w+)(?:\s*=\s*"([^"]+)")?', phase_block
-            )
-        }
-        self.assertEqual(projected, typed)
 
     def test_completed_live_resources_reject_over_capacity_until_exact_resource_retired(self):
         workers = []

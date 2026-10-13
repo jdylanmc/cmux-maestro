@@ -883,15 +883,24 @@ struct SidebarPinnedDetailsTests {
         }
         let source = try String(contentsOf: root.appendingPathComponent(
             "CMUXMaestroSidebar/UI/SidebarView.swift"), encoding: .utf8)
-        #expect(source.contains(".popover(isPresented: $showingInspector)"))
         #expect(source.contains("SidebarPresentation.focusInteraction(from: old, to: new)"))
         #expect(!source.contains("selectionDetails"))
         let footer = try #require(source.components(separatedBy: "struct SidebarPinnedFooter: View").last?
             .components(separatedBy: "private struct PathDetail").first)
         #expect(footer.contains("SidebarPetButton(store: pets, content: content, width: petWidth"))
-        for forbidden in ["SidebarCloseButton", "prepareSeen(", "FocusButton", ".onHover", "RoundedRectangle"] {
+        for forbidden in ["SidebarCloseButton", "prepareSeen(", ".onHover", "RoundedRectangle"] {
             #expect(!footer.contains(forbidden))
         }
+        let stores = SidebarStoreFixture()
+        defer { stores.cleanup() }
+        let rendered = NSHostingView(rootView: SidebarPinnedFooter(
+            content: before, pets: stores.pets, inspect: { Issue.record("Rendering must not inspect") },
+            copyValue: { _ in Issue.record("Rendering must not copy"); return false }
+        ))
+        rendered.frame = NSRect(x: 0, y: 0, width: 300, height: 400)
+        rendered.layoutSubtreeIfNeeded()
+        try #require(views(rendered).contains { $0.accessibilityIdentifier() == "hover-copy-value" })
+        #expect(!views(rendered).contains { $0 is SidebarTitleNativeButton }, "The passive footer has no focus control")
     }
 
     @Test(arguments: [false, true])

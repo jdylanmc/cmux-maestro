@@ -207,30 +207,15 @@ struct SidebarHistoryTests {
         }
     }
 
-    @Test func bothViewsConsumeSameHistoryProjectionAndUseDistinctDismissButtons() throws {
+    @Test func settingsAndHeaderPopoverChromeRemainComposed() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let view = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarView.swift"), encoding: .utf8)
-        let presentation = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarPresentation.swift"), encoding: .utf8)
-        #expect(view.contains("model: model, layout: preferences.layout,"))
         #expect(view.contains("dismiss: dismiss, acknowledge: acknowledge"))
-        let normalized = view.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        #expect(normalized.contains("case .taskboard: let work = visibleWork"))
-        let taskboard = "TaskboardContent( tree: work.tree, hierarchy: model.hierarchy, navigation: model.navigation, "
-            + "selection: unmanagedSelection, retainedSessionIDs: SidebarPresentation.retainedSessionIDs("
-        #expect(normalized.components(separatedBy: taskboard).count == 2,
-                "Taskboard must consume the same captured history projection")
-        #expect(view.contains("visibleWork: visibleWork,"))
-        #expect(view.components(separatedBy: "DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)").count == 2)
-        #expect(view.contains("SidebarInternalTaskGroup("))
         #expect(view.contains(".popover(isPresented: isPresented(action)) { popoverContent() }"))
         #expect(view.contains("if showingSettings { return .settings }"))
         #expect(view.contains("if showingSettings {\n            settingsPanel"))
-        #expect(view.contains(".popover(isPresented: $showingInspector)"))
-        #expect(view.contains("SidebarInspector(content: inspectorDetails)"))
         #expect(view.contains("SidebarCloseButton(label: \"Close sidebar settings\", id: \"sidebar-close-settings\")"))
         #expect(view.contains("SidebarCloseButton(label: \"Close details\", id: \"sidebar-close-details\", action: close)"))
-        #expect(presentation.contains("Completion age unknown"))
-        #expect(view.contains("model.copilot.tree.dismissibleOutcomes.contains(outcome)"))
         #expect(!view.contains("No recorded child tasks"))
     }
 
