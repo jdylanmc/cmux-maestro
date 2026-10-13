@@ -106,6 +106,19 @@ class SharedFixtureTests(unittest.TestCase):
         API["validate_beats_state"](state)
         self.assertEqual(json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n", raw)
 
+    def test_store_contract_cases(self):
+        cases = json.loads((FIXTURES / "beats-store-cases.json").read_text())
+        for case in cases["valid"]:
+            API["beats_decode"](case["raw"].encode())
+        for case in cases["invalid"]:
+            with self.assertRaises(OrchestrationError, msg=case["name"]):
+                API["beats_decode"](case["raw"].encode())
+
+    def test_duplicate_keys_are_refused(self):
+        # Swift's JSONSerialization keeps the first duplicate and Python the last; refuse instead.
+        with self.assertRaises(OrchestrationError):
+            API["beats_decode"](b'{"version":1,"version":1,"beats":[]}')
+
 
 class DaylightSavingTests(LocalTimeCase):
     def simulate(self, cron, start, end):
@@ -184,6 +197,7 @@ class StoreTests(unittest.TestCase):
         for content in ('{"version": 2, "beats": []}', '{"version": 1}', "not json",
                         json.dumps({"version": 1, "beats": [{"id": "x"}]})):
             path.write_text(content)
+            path.chmod(0o600)
             with self.assertRaises(OrchestrationError):
                 store_mutate(lambda state: None, root=self.root)
             self.assertEqual(path.read_text(), content)
@@ -195,6 +209,31 @@ class StoreTests(unittest.TestCase):
         (self.root / "beats.json").symlink_to(target)
         with self.assertRaises((OrchestrationError, OSError)):
             store_mutate(lambda state: None, root=self.root)
+
+    def test_shared_store_or_directory_is_refused(self):
+        self.root.mkdir(mode=0o700)
+        path = self.root / "beats.json"
+        path.write_text('{"version":1,"beats":[]}')
+        path.chmod(0o640)
+        for read in (lambda: store_mutate(lambda state: None, root=self.root),
+                     lambda: API["beats_store_snapshot"](root=self.root)):
+            with self.assertRaises(OrchestrationError):
+                read()
+        path.chmod(0o600)
+        self.root.chmod(0o750)
+        with self.assertRaises(OrchestrationError):
+            API["beats_store_snapshot"](root=self.root)
+        self.root.chmod(0o700)
+        self.assertEqual(API["beats_store_snapshot"](root=self.root)["beats"], [])
+
+    def test_snapshot_is_read_only(self):
+        self.assertEqual(API["beats_store_snapshot"](root=self.root)["beats"], [])
+        self.assertFalse(self.root.exists())
+        store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
+        before = os.stat(self.root / "beats.json")
+        self.assertEqual(len(API["beats_store_snapshot"](root=self.root)["beats"]), 1)
+        after = os.stat(self.root / "beats.json")
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
 
     def test_invalid_mutation_is_not_persisted(self):
         store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
@@ -336,6 +375,39 @@ class AgentSurfaceTests(unittest.TestCase):
         code, value = self.run_beats("cron-check", "--cron", "0 9 * * *", "--count", "2", own=False)
         self.assertEqual(code, 0)
         self.assertEqual(len(value["next"]), 2)
+
+    def snapshot(self, body):
+        environment = dict(os.environ, HOME=str(self.home))
+        process = subprocess.run([sys.executable, str(self.controller), "beats-snapshot"], input=body,
+                                 capture_output=True, text=True, env=environment, timeout=30)
+        return process.returncode, json.loads(process.stdout or process.stderr)
+
+    def test_snapshot_returns_only_this_sessions_runnable_beats(self):
+        self.assertEqual(self.snapshot(json.dumps({"sessionId": SESSION_A})), (0, {"ok": True, "beats": []}))
+        self.assertFalse(self.root.exists())
+        live = self.create(prompt="live")
+        paused = self.create(prompt="paused")
+        self.run_beats("pause", "--beat-id", paused["id"])
+        gated = self.create(prompt="gated")
+        store_mutate(lambda state: next(item for item in state["beats"] if item["id"] == gated["id"])
+                     .update(recoveryGate=True), root=self.root)
+        self.create(prompt="other", session=SESSION_B)
+        code, value = self.snapshot(json.dumps({"sessionId": SESSION_A}))
+        self.assertEqual(code, 0, value)
+        self.assertEqual(value["beats"], [{"id": live["id"], "cron": live["cron"], "prompt": "live"}])
+
+    def test_snapshot_refuses_bad_requests_and_invalid_stores(self):
+        for body in ("", "nope", json.dumps({"sessionId": "x"}), json.dumps({"sessionId": SESSION_A, "x": 1}),
+                     json.dumps({"sessionId": SESSION_A.upper()}), "x" * 2000):
+            code, value = self.snapshot(body)
+            self.assertNotEqual(code, 0, body[:40])
+            self.assertFalse(value["ok"])
+        self.create()
+        path = self.root / "beats.json"
+        path.write_text(path.read_text().replace('"revision":1', '"revision":0'))
+        code, value = self.snapshot(json.dumps({"sessionId": SESSION_A}))
+        self.assertNotEqual(code, 0)
+        self.assertFalse(value["ok"])
 
 
 if __name__ == "__main__":

@@ -200,13 +200,15 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
   occurrences only.
 - A Beat is simply on or off. You cannot reassign a Beat or touch another session's Beats.
 - Beats run on **Copilot's own scheduler**. The Maestro extension in each CMUX session
-  mirrors that session's enabled Beats into Copilot schedules (labelled `Beat [id]`),
+  asks the Maestro controller for that session's enabled Beats and mirrors them into
+  Copilot schedules (labelled `Beat [id]`),
   within about 15 seconds of a change and again whenever the session starts; Copilot owns
   timing, time zone and queueing. There is no separate clock and no managed launch is
   needed. A Beat fires only while its session is running.
 - Do not edit or stop `Beat [...]` schedules with `/every` or `/after`; manage Beats with
-  the commands above. If Copilot scheduling is unavailable the extension logs one
-  diagnostic and Beats stay saved but inert, so do not promise a firing you have not seen.
+  the commands above. If Copilot scheduling is unavailable, or the Beats store is invalid,
+  the extension logs one diagnostic and changes no schedule, so do not promise a firing you
+  have not seen.
 
 ## Permissions, failures and lifecycle boundaries
 

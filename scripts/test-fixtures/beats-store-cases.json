@@ -1,0 +1,191 @@
+{
+ "_comment": "Store contract shared by the Swift sidebar (SidebarBeatsTests) and the orchestrator (test-beats.py). Each case is raw beats.json text.",
+ "valid": [
+  {
+   "name": "empty",
+   "raw": "{\"version\": 1, \"beats\": []}"
+  },
+  {
+   "name": "one beat",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "unicode prompt and fired minute",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}, {\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": false, \"id\": \"33333333-3333-4333-8333-333333333333\", \"lastFiredMinute\": \"2026-10-05T09:00\", \"prompt\": \"Weekly planning — é ☃\", \"recoveryGate\": true, \"revision\": 4, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "pretty printed",
+   "raw": "{\n  \"version\": 1,\n  \"beats\": [\n    {\n      \"createdAt\": \"2026-10-11T00:25:14.063050Z\",\n      \"cron\": \"*/15 9-17 * * 1-5\",\n      \"enabled\": true,\n      \"id\": \"11111111-1111-4111-8111-111111111111\",\n      \"lastFiredMinute\": null,\n      \"prompt\": \"Check the board.\",\n      \"recoveryGate\": false,\n      \"revision\": 1,\n      \"sessionId\": \"22222222-2222-4222-8222-222222222222\",\n      \"targetEnded\": false,\n      \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"\n    }\n  ]\n}"
+  },
+  {
+   "name": "escaped ascii text",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"caf\\u00e9\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "prompt with newline and tab",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Line one\\n\\tLine two\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "max revision",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 9223372036854775807, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  }
+ ],
+ "invalid": [
+  {
+   "name": "not json",
+   "raw": "nope"
+  },
+  {
+   "name": "empty file",
+   "raw": ""
+  },
+  {
+   "name": "array root",
+   "raw": "[]"
+  },
+  {
+   "name": "missing beats",
+   "raw": "{\"version\":1}"
+  },
+  {
+   "name": "extra top key",
+   "raw": "{\"version\": 1, \"beats\": [], \"extra\": true}"
+  },
+  {
+   "name": "version 2",
+   "raw": "{\"version\":2,\"beats\":[]}"
+  },
+  {
+   "name": "version true",
+   "raw": "{\"version\":true,\"beats\":[]}"
+  },
+  {
+   "name": "version 1.0",
+   "raw": "{\"version\":1.0,\"beats\":[]}"
+  },
+  {
+   "name": "version string",
+   "raw": "{\"version\":\"1\",\"beats\":[]}"
+  },
+  {
+   "name": "beats not array",
+   "raw": "{\"version\":1,\"beats\":{}}"
+  },
+  {
+   "name": "beat not object",
+   "raw": "{\"version\":1,\"beats\":[\"beat\"]}"
+  },
+  {
+   "name": "beat null",
+   "raw": "{\"version\":1,\"beats\":[null]}"
+  },
+  {
+   "name": "missing cron",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "extra beat field",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\", \"surprise\": 1}]}"
+  },
+  {
+   "name": "id not uuid",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"not-a-uuid\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "id uppercase",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "id braces",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"{11111111-1111-4111-8111-111111111111}\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "session uppercase",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"ABCDEF00-0000-4000-8000-000000000000\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "duplicate id",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}, {\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "cron invalid",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"bogus\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "cron number",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": 5, \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "prompt empty",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "prompt whitespace",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \" \\n\\t 　\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "prompt control char",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"bell\\u0007\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "prompt over 4 KiB",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "prompt lone surrogate",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"x\\ud800y\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "prompt number",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": 1, \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "createdAt number",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": 0, \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "updatedAt null",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": null}]}"
+  },
+  {
+   "name": "lastFiredMinute number",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": 5, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "enabled string",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": \"true\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "recoveryGate number",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": 1, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "targetEnded null",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": null, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "revision zero",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 0, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "revision 1.0",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1.0, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "revision 1e0",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1e0, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "revision true",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": true, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "revision over Int64",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 9223372036854775808, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "NaN value",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": NaN, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  }
+ ]
+}

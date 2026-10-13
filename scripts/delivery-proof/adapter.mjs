@@ -668,7 +668,6 @@ export async function startReadiness({ joinSession, environment = process.env, s
 // Copilot release changes it, the gateway fails and Beats stop registering; nothing else breaks.
 
 const BEAT_LABEL = /^Beat \[([0-9a-f]{8})\]/;
-const BEATS_STORE_LIMIT = 1_048_576;
 
 const beatKey = (beat) => beat.id.slice(0, 8);
 const beatLabel = (beat) => `Beat [${beatKey(beat)}] ${beat.prompt.split("\n")[0].slice(0, 60)}`;
@@ -698,11 +697,10 @@ export function createScheduleGateway(session) {
   };
 }
 
-// Pure: which of this session's Beats need a native schedule added or removed. Schedules this
-// section did not create (the user's own /every, /after) are never touched.
-export function planBeatSchedules({ beats, sessionId, entries, tz }) {
-  const wanted = beats.filter((beat) => beat.sessionId === sessionId && beat.enabled &&
-    !beat.recoveryGate && !beat.targetEnded);
+// Pure: which native schedules to add or remove so this session runs exactly `wanted` (its runnable
+// Beats, as returned by the controller). Schedules this section did not create (the user's own
+// /every, /after) are never touched.
+export function planBeatSchedules({ wanted, entries, tz }) {
   const wantedKeys = new Set(wanted.map(beatKey));
   const remove = [];
   const present = new Set();
@@ -721,31 +719,22 @@ export function planBeatSchedules({ beats, sessionId, entries, tz }) {
   return { add, remove };
 }
 
-export async function readBeatsStore(root) {
-  let handle;
-  try {
-    handle = await fs.open(path.join(root, "beats.json"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  } catch (error) {
-    if (error.code === "ENOENT") return [];
-    throw error;
-  }
-  try {
-    const info = await handle.stat();
-    requireCondition(info.isFile() && info.uid === process.getuid() && !(info.mode & 0o077) &&
-      info.size <= BEATS_STORE_LIMIT);
-    const state = JSON.parse(decoder.decode(await handle.readFile()));
-    requireCondition(state?.version === 1 && Array.isArray(state.beats));
-    return state.beats.filter((beat) => typeof beat?.id === "string" && UUID.test(beat.id) &&
-      typeof beat.sessionId === "string" && typeof beat.cron === "string" && typeof beat.prompt === "string" &&
-      typeof beat.enabled === "boolean" && typeof beat.recoveryGate === "boolean" &&
-      typeof beat.targetEnded === "boolean");
-  } finally {
-    await handle.close();
-  }
+// Maestro's controller owns the store contract; the adapter never parses beats.json itself. Any
+// refusal (invalid store, missing controller) throws, so the caller changes no schedule.
+export async function readBeats(sessionId, controller) {
+  const result = await invokeController("beats-snapshot", { sessionId }, controller);
+  requireCondition(Array.isArray(result.beats) && result.beats.every((beat) =>
+    typeof beat?.id === "string" && UUID.test(beat.id) && typeof beat.cron === "string" &&
+    typeof beat.prompt === "string"));
+  return result.beats;
 }
 
-export function startBeats({ session, root = path.join(os.homedir(), "Library/Application Support/CMUXMaestroPreview/Beats"),
-  gateway = createScheduleGateway(session), pollMs = 15_000,
+const maestroSupport = path.join(os.homedir(), "Library/Application Support/CMUXMaestroPreview");
+
+export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
+  controller = process.env.CMUX_MAESTRO_ORCHESTRATOR ||
+    path.join(maestroSupport, "Orchestration/bin/cmux-maestro-orchestrator"),
+  read = (sessionId) => readBeats(sessionId, controller), gateway = createScheduleGateway(session), pollMs = 15_000,
   tz = Intl.DateTimeFormat().resolvedOptions().timeZone, diagnostic = (error) => {
     const code = typeof error?.code === "string" ? error.code : error?.name ?? "UNKNOWN";
     console.error(`Maestro Beats could not sync with Copilot scheduling (${code}).`);
@@ -757,9 +746,7 @@ export function startBeats({ session, root = path.join(os.homedir(), "Library/Ap
     if (busy || closed) return;
     busy = true;
     try {
-      const plan = planBeatSchedules({
-        beats: await readBeatsStore(root), sessionId, entries: await gateway.list(), tz,
-      });
+      const plan = planBeatSchedules({ wanted: await read(sessionId), entries: await gateway.list(), tz });
       for (const id of plan.remove) await gateway.remove(id);
       for (const entry of plan.add) await gateway.add(entry);
       failing = false;

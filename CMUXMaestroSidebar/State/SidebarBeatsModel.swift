@@ -2,7 +2,7 @@ import Foundation
 
 /// Beats: saved recurring prompts for exact agent sessions. This mirrors the Python
 /// orchestrator's `beats` store and cron rules (scripts/cmux-maestro-orchestrator.py); the two
-/// share `scripts/test-fixtures/beats-cron-cases.json`. Policy lives in issue #42.
+/// share `scripts/test-fixtures/beats-cron-cases.json` and `beats-store-cases.json`. Policy lives in issue #42.
 nonisolated enum BeatsLimits {
     static let maximumTotal = 256
     static let maximumPerSession = 16
@@ -201,12 +201,15 @@ nonisolated struct SidebarBeatsState: Equatable {
         return value
     }
 
+    /// The store contract. The orchestrator applies the same rules (`validate_beats_state`); both run
+    /// `scripts/test-fixtures/beats-store-cases.json`. Types are checked on the raw JSON because
+    /// `JSONDecoder` would accept `true` or `1.0` where the contract requires an integer.
     static func decode(_ data: Data) throws -> SidebarBeatsState {
         guard data.count <= BeatsLimits.maximumStoreBytes,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(object.keys) == ["version", "beats"], object["version"] as? Int == 1,
+              Set(object.keys) == ["version", "beats"], strictInteger(object["version"]) == 1,
               let raw = object["beats"] as? [[String: Any]], raw.count <= BeatsLimits.maximumTotal,
-              raw.allSatisfy({ Set($0.keys) == SidebarBeat.fieldNames }),
+              raw.allSatisfy(hasContractTypes),
               let beats = try? JSONDecoder().decode([SidebarBeat].self, from: JSONSerialization.data(withJSONObject: raw))
         else { throw BeatsError("The Beats store is invalid or from a newer version.") }
         var seen = Set<String>()
@@ -219,6 +222,27 @@ nonisolated struct SidebarBeatsState: Equatable {
             }
         }
         return SidebarBeatsState(beats: beats)
+    }
+
+    private static func hasContractTypes(_ beat: [String: Any]) -> Bool {
+        guard Set(beat.keys) == SidebarBeat.fieldNames else { return false }
+        let texts = ["id", "sessionId", "cron", "prompt", "createdAt", "updatedAt"]
+        let flags = ["enabled", "recoveryGate", "targetEnded"]
+        return texts.allSatisfy { beat[$0] is String } && flags.allSatisfy { strictBool(beat[$0]) }
+            && (beat["lastFiredMinute"] is NSNull || beat["lastFiredMinute"] is String)
+            && strictInteger(beat["revision"]) != nil
+    }
+
+    private static func strictBool(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) == CFBooleanGetTypeID()
+    }
+
+    /// An integral JSON number (not a boolean or a decimal/exponent form) that fits in `Int`.
+    private static func strictInteger(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              !CFNumberIsFloatType(number as CFNumber) else { return nil }
+        return number as? Int
     }
 
     func encoded() throws -> Data {
@@ -348,6 +372,11 @@ nonisolated struct SidebarBeatsFile {
     }
 
     private func readLocked() throws -> SidebarBeatsState {
+        var directory = stat()
+        guard lstat(root.path, &directory) == 0, directory.st_mode & S_IFMT == S_IFDIR,
+              directory.st_uid == getuid(), directory.st_mode & 0o077 == 0 else {
+            throw BeatsError("The Beats store directory is not private to this user.")
+        }
         let path = root.appendingPathComponent("beats.json").path
         let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         if descriptor < 0 {
@@ -357,7 +386,7 @@ nonisolated struct SidebarBeatsFile {
         defer { close(descriptor) }
         var info = stat()
         guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid(),
-              info.st_size <= BeatsLimits.maximumStoreBytes else {
+              info.st_mode & 0o077 == 0, info.st_size <= BeatsLimits.maximumStoreBytes else {
             throw BeatsError("The Beats store is not a private regular file within its size limit.")
         }
         let data = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false).readData(ofLength: BeatsLimits.maximumStoreBytes + 1)

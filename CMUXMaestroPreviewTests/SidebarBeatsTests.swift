@@ -77,6 +77,32 @@ struct SidebarBeatsTests {
         #expect(String(decoding: try state.encoded(), as: UTF8.self).contains("\"lastFiredMinute\":null"))
     }
 
+    @Test func storeContractMatchesTheOrchestrator() throws {
+        let data = try Data(contentsOf: Self.fixtures.appendingPathComponent("beats-store-cases.json"))
+        let cases = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        for item in try #require(cases["valid"] as? [[String: String]]) {
+            #expect(throws: Never.self, "\(item["name"] ?? "")") { _ = try SidebarBeatsState.decode(Data(item["raw"]!.utf8)) }
+        }
+        for item in try #require(cases["invalid"] as? [[String: String]]) {
+            #expect(throws: BeatsError.self, "\(item["name"] ?? "")") { _ = try SidebarBeatsState.decode(Data(item["raw"]!.utf8)) }
+        }
+    }
+
+    @Test func sharedStoreOrDirectoryIsRefused() throws {
+        let root = try temporaryRoot().appendingPathComponent("Beats")
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        let file = SidebarBeatsFile(root: root)
+        _ = try file.mutate { _ = try $0.create(session: UUID(), cron: "0 9 * * *", prompt: "x") }
+        let store = root.appendingPathComponent("beats.json").path
+        try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: store)
+        #expect(throws: BeatsError.self) { _ = try file.read() }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: store)
+        try FileManager.default.setAttributes([.posixPermissions: 0o750], ofItemAtPath: root.path)
+        #expect(throws: BeatsError.self) { _ = try file.read() }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        #expect(try file.read().beats.count == 1)
+    }
+
     @Test func malformedStoresAreRefused() throws {
         let sample = try Data(contentsOf: Self.fixtures.appendingPathComponent("beats-store-sample.json"))
         var object = try #require(JSONSerialization.jsonObject(with: sample) as? [String: Any])
@@ -178,7 +204,8 @@ struct SidebarBeatsTests {
     @Test func symlinkedStoreIsRefused() throws {
         let root = try temporaryRoot().appendingPathComponent("Beats")
         defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
         let elsewhere = root.deletingLastPathComponent().appendingPathComponent("elsewhere.json")
         try Data("{\"beats\":[],\"version\":1}\n".utf8).write(to: elsewhere)
         try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("beats.json"), withDestinationURL: elsewhere)

@@ -10,7 +10,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import {
-  createScheduleGateway, planBeatSchedules, readBeatsStore, start, startBeats, startManaged, startReadiness,
+  createScheduleGateway, planBeatSchedules, readBeats, start, startBeats, startManaged, startReadiness,
   validateSend,
 } from "./delivery-proof/adapter.mjs";
 
@@ -782,33 +782,27 @@ test("installed mode discovers arbitrary same-workspace participants and peer re
 
 const beatSession = randomUUID();
 const makeBeat = (overrides = {}) => ({
-  id: randomUUID(), sessionId: beatSession, cron: "*/5 * * * *", prompt: "Run the checks.\nThen report.",
-  enabled: true, recoveryGate: false, targetEnded: false, ...overrides,
+  id: randomUUID(), cron: "*/5 * * * *", prompt: "Run the checks.\nThen report.", ...overrides,
 });
 const TZ = "America/New_York";
 const beatLabelOf = (beat) => `Beat [${beat.id.slice(0, 8)}] Run the checks.`;
 
-test("Beat planning adds, replaces and removes only its own schedules for this session", () => {
-  const live = makeBeat(), gated = makeBeat({ recoveryGate: true }), ended = makeBeat({ targetEnded: true });
-  const paused = makeBeat({ enabled: false }), foreign = makeBeat({ sessionId: randomUUID() });
-  const beats = [live, gated, ended, paused, foreign];
+test("Beat planning adds, replaces and removes only its own schedules", () => {
+  const live = makeBeat();
   const users = { id: 1, cron: "0 9 * * *", tz: TZ, prompt: "mine", label: "" };
-  assert.deepEqual(planBeatSchedules({ beats, sessionId: beatSession, entries: [users], tz: TZ }), {
+  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [users], tz: TZ }), {
     add: [{ cron: live.cron, tz: TZ, prompt: live.prompt, label: beatLabelOf(live) }], remove: [],
   });
   const current = { id: 7, cron: live.cron, tz: TZ, prompt: live.prompt, label: beatLabelOf(live) };
-  assert.deepEqual(planBeatSchedules({ beats, sessionId: beatSession, entries: [users, current], tz: TZ }),
-    { add: [], remove: [] });
+  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [users, current], tz: TZ }), { add: [], remove: [] });
   const edited = { ...current, cron: "0 * * * *" };
-  assert.deepEqual(planBeatSchedules({ beats, sessionId: beatSession, entries: [edited], tz: TZ }), {
+  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [edited], tz: TZ }), {
     add: [{ cron: live.cron, tz: TZ, prompt: live.prompt, label: beatLabelOf(live) }], remove: [7],
   });
   const orphan = { id: 9, cron: "* * * * *", tz: TZ, prompt: "x", label: "Beat [deadbeef] gone" };
-  assert.deepEqual(planBeatSchedules({ beats: [], sessionId: beatSession, entries: [orphan, users], tz: TZ }),
-    { add: [], remove: [9] });
+  assert.deepEqual(planBeatSchedules({ wanted: [], entries: [orphan, users], tz: TZ }), { add: [], remove: [9] });
   const duplicate = { ...current, id: 8 };
-  assert.deepEqual(planBeatSchedules({ beats, sessionId: beatSession, entries: [current, duplicate], tz: TZ }),
-    { add: [], remove: [8] });
+  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [current, duplicate], tz: TZ }), { add: [], remove: [8] });
 });
 
 test("the schedule gateway hides Copilot's raw add behind a narrow interface", async () => {
@@ -835,12 +829,8 @@ test("the schedule gateway hides Copilot's raw add behind a narrow interface", a
     .add({ cron: "* * * * *", tz: TZ, prompt: "p", label: "l" }));
 });
 
-async function beatsFixture(t, beats) {
-  const root = await fs.mkdtemp(path.join(base, "bt-"));
-  await fs.chmod(root, 0o700);
-  const write = (value) => fs.writeFile(path.join(root, "beats.json"),
-    JSON.stringify({ version: 1, beats: value }), { mode: 0o600 });
-  await write(beats);
+function beatsFixture(t, initial) {
+  let wanted = initial, refuse = false;
   const entries = [], events = [];
   let nextId = 1, failAdd = false;
   const gateway = {
@@ -848,95 +838,98 @@ async function beatsFixture(t, beats) {
     add: async (entry) => { if (failAdd) throw new Error("synthetic"); entries.push({ id: nextId, ...entry }); return nextId++; },
     remove: async (id) => { entries.splice(entries.findIndex((entry) => entry.id === id), 1); },
   };
-  const session = { sessionId: beatSession };
   const running = startBeats({
-    session, root, gateway, tz: TZ, pollMs: 60_000,
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), gateway, tz: TZ, pollMs: 60_000,
+    read: async (sessionId) => {
+      assert.equal(sessionId, beatSession);
+      if (refuse) throw new Error("Native launch failed or timed out; reconcile owned resources before retrying.");
+      return wanted;
+    },
     diagnostic: () => events.push("diagnostic"),
   });
-  t.after(async () => { running.close(); await fs.rm(root, { recursive: true }); });
-  await running.ready;
-  return { root, write, entries, events, running, setFailing: (value) => { failAdd = value; } };
+  t.after(() => running.close());
+  return {
+    entries, events, running, set: (value) => { wanted = value; },
+    setRefusing: (value) => { refuse = value; }, setFailing: (value) => { failAdd = value; },
+  };
 }
 
-test("Beat sync mirrors the store into this session's schedules and follows edits", async (t) => {
+test("Beat sync mirrors the controller's Beats into this session's schedules and follows edits", async (t) => {
   const live = makeBeat();
-  const f = await beatsFixture(t, [live]);
+  const f = beatsFixture(t, [live]);
+  await f.running.ready;
   assert.deepEqual(f.entries.map((entry) => entry.label), [beatLabelOf(live)]);
-  await f.write([{ ...live, enabled: false }]);
+  f.set([]);
   await f.running.sync();
   assert.deepEqual(f.entries, []);
   const later = makeBeat({ prompt: "Later" });
-  await f.write([later]);
+  f.set([later]);
   await f.running.sync();
   assert.equal(f.entries.length, 1);
-  await f.write([{ ...later, cron: "0 9 * * 1-5" }]);
+  f.set([{ ...later, cron: "0 9 * * 1-5" }]);
   await f.running.sync();
   assert.deepEqual(f.entries.map((entry) => entry.cron), ["0 9 * * 1-5"]);
 });
 
-test("the Beats reader refuses symlinked or shared stores and drops malformed beats", async (t) => {
-  const root = await fs.mkdtemp(path.join(base, "bt-"));
-  t.after(() => fs.rm(root, { recursive: true }));
-  await fs.chmod(root, 0o700);
-  const store = path.join(root, "beats.json");
+test("a refused Beats snapshot reports a diagnostic and leaves schedules alone", async (t) => {
   const live = makeBeat();
-  const write = (beats, mode = 0o600) => fs.writeFile(store, JSON.stringify({ version: 1, beats }), { mode });
-  assert.deepEqual(await readBeatsStore(root), []);
-  await write([live]);
-  assert.deepEqual(await readBeatsStore(root), [live]);
-
-  await fs.rename(store, path.join(root, "real.json"));
-  await fs.symlink(path.join(root, "real.json"), store);
-  await assert.rejects(readBeatsStore(root), { code: "ELOOP" });
-  await fs.rm(store);
-
-  await write([live], 0o640);
-  await fs.chmod(store, 0o640);
-  await assert.rejects(readBeatsStore(root), /Invalid or unavailable/);
-  await fs.chmod(store, 0o600);
-  assert.deepEqual(await readBeatsStore(root), [live]);
-
-  const malformed = [
-    { ...makeBeat(), id: "not-a-uuid" }, { ...makeBeat(), enabled: "yes" }, { ...makeBeat(), cron: 5 },
-    { ...makeBeat(), sessionId: null }, { ...makeBeat(), recoveryGate: undefined }, null, "beat",
-  ];
-  await write([...malformed, live]);
-  assert.deepEqual(await readBeatsStore(root), [live]);
-});
-
-test("a refused Beats store reports a diagnostic and leaves schedules alone", async (t) => {
-  const live = makeBeat();
-  const f = await beatsFixture(t, [live]);
+  const f = beatsFixture(t, [live]);
+  await f.running.ready;
   assert.equal(f.entries.length, 1);
-  await fs.chmod(path.join(f.root, "beats.json"), 0o644);
+  f.setRefusing(true);
+  await f.running.sync();
   await f.running.sync();
   assert.deepEqual(f.events, ["diagnostic"]);
   assert.deepEqual(f.entries.map((entry) => entry.label), [beatLabelOf(live)]);
 });
 
 test("Beat sync reports one diagnostic per outage and recovers without retry storms", async (t) => {
-  const root = await fs.mkdtemp(path.join(base, "bt-"));
-  t.after(() => fs.rm(root, { recursive: true }));
-  await fs.chmod(root, 0o700);
-  await fs.writeFile(path.join(root, "beats.json"), JSON.stringify({ version: 1, beats: [makeBeat()] }), { mode: 0o600 });
-  const entries = [], events = [];
-  let failing = true;
-  const running = startBeats({
-    session: { sessionId: beatSession }, root, tz: TZ, pollMs: 60_000,
-    gateway: {
-      list: async () => entries,
-      add: async (entry) => { if (failing) throw new Error("synthetic"); entries.push(entry); return 1; },
-      remove: async () => {},
-    },
-    diagnostic: () => events.push("diagnostic"),
+  const f = beatsFixture(t, [makeBeat()]);
+  f.setFailing(true);
+  await f.running.ready;
+  await f.running.sync();
+  assert.deepEqual(f.events, ["diagnostic"]);
+  f.setFailing(false);
+  await f.running.sync();
+  assert.equal(f.entries.length, 1);
+});
+
+async function beatsController(t, home) {
+  const directory = await fs.mkdtemp(path.join(base, "bc-"));
+  t.after(() => fs.rm(directory, { recursive: true }));
+  const controller = path.join(directory, "cmux-maestro-orchestrator");
+  await fs.copyFile(fileURLToPath(new URL("./cmux-maestro-orchestrator.py", import.meta.url)), controller);
+  await fs.chmod(controller, 0o700);
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  t.after(() => { process.env.HOME = saved; });
+  return controller;
+}
+
+test("readBeats takes this session's runnable Beats from the real controller and refuses invalid stores", async (t) => {
+  const home = await fs.mkdtemp(path.join(base, "bh-"));
+  t.after(() => fs.rm(home, { recursive: true }));
+  const controller = await beatsController(t, home);
+  assert.deepEqual(await readBeats(beatSession, controller), []);
+  const root = path.join(home, "Library/Application Support/CMUXMaestroPreview/Beats");
+  await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  const stamp = "2026-01-01T00:00:00Z";
+  const stored = (overrides) => ({
+    id: randomUUID(), sessionId: beatSession, cron: "*/5 * * * *", prompt: "Run the checks.", enabled: true,
+    recoveryGate: false, targetEnded: false, lastFiredMinute: null, createdAt: stamp, updatedAt: stamp, revision: 1,
+    ...overrides,
   });
-  t.after(() => running.close());
-  await running.ready;
-  await running.sync();
-  assert.deepEqual(events, ["diagnostic"]);
-  failing = false;
-  await running.sync();
-  assert.equal(entries.length, 1);
+  const live = stored({});
+  const beats = [live, stored({ enabled: false }), stored({ recoveryGate: true }), stored({ sessionId: randomUUID() })];
+  const store = path.join(root, "beats.json");
+  await fs.writeFile(store, JSON.stringify({ version: 1, beats }), { mode: 0o600 });
+  assert.deepEqual(await readBeats(beatSession, controller), [{ id: live.id, cron: live.cron, prompt: live.prompt }]);
+  // One invalid definition refuses the whole store; nothing is dropped silently.
+  await fs.writeFile(store, JSON.stringify({ version: 1, beats: [...beats, stored({ revision: 1.5 })] }), { mode: 0o600 });
+  await assert.rejects(readBeats(beatSession, controller));
+  await fs.writeFile(store, JSON.stringify({ version: 1, beats }), { mode: 0o600 });
+  await fs.chmod(store, 0o644);
+  await assert.rejects(readBeats(beatSession, controller));
 });
 
 test("managed steering does not wait for native admission or serialize behind an earlier send", async (t) => {

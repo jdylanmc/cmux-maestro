@@ -6,6 +6,14 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Make every Beats reader apply one store contract. The Swift sidebar and the orchestrator
+  now refuse the same stores (shared `scripts/test-fixtures/beats-store-cases.json`):
+  `true`, `1.0` or out-of-range integers, uppercase UUIDs, non-text timestamps, lone
+  surrogates, `NaN`, duplicate keys, and a store file or folder readable by others. The
+  installed extension no longer parses `beats.json`; it asks the controller
+  (`beats-snapshot`, read-only under the shared lock) for its session's runnable Beats, and
+  an invalid store now leaves Copilot schedules untouched instead of silently dropping a
+  Beat and stopping its schedule.
 - Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
   dependency-free `pet_kit.py` drawing kit instead of requiring `hatch-pet`, whose
   Codex-only image generation was unavailable to Copilot.
