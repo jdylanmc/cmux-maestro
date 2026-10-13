@@ -591,11 +591,22 @@ class ProofTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CMUX_MAESTRO_PLUGIN_DIR": "/foreign/plugin"}):
             self.assertNotIn("--plugin-dir", self.run_mocked_launcher())
 
+    # Literal digests (sha256("<session>:<generation>")[:16]) computed outside the controller.
+    FIXED_SESSION = "11111111-2222-4333-8444-555555555555"
+    FIXED_PEERS = {1: "9534c811ed72e030", 2: "40c1a7d6f3e3a9b4"}
+
+    def test_message_peer_is_a_stable_literal_digest(self):
+        for generation, peer in self.FIXED_PEERS.items():
+            node = {"copilotSessionId": self.FIXED_SESSION, "generation": generation}
+            self.assertEqual(CONTROLLER["message_peer"](node), peer)
+
     def test_installed_binding_generation_exclusivity_cleanup_and_readiness(self):
         routes, config = self.install_synthetic_messaging()
         self.assertEqual(CONTROLLER["messaging_configuration"](self.root), config)
+        self.node["copilotSessionId"] = self.FIXED_SESSION
         CONTROLLER["bind_messaging"](self.node)
-        peer = CONTROLLER["message_peer"](self.node)
+        peer = self.FIXED_PEERS[1]
+        self.assertEqual([path.name for path in routes.iterdir()], [f"{peer}.json"])
         binding = PROOF["read_private"](routes / f"{peer}.json")
         self.assertEqual(binding["nodeId"], self.node["id"])
         self.assertEqual(binding["generation"], 1)
@@ -1223,6 +1234,7 @@ class ProofTests(unittest.TestCase):
 
     def test_managed_environment_is_exact_and_legacy_does_not_inherit_route(self):
         routes, _ = self.install_synthetic_messaging()
+        self.node["copilotSessionId"] = self.FIXED_SESSION
         environment = CONTROLLER["worker_environment"]
         with mock.patch.dict(environment.__globals__, {"resolve_copilot_token": lambda _: None}), \
                 mock.patch.dict(os.environ, {
@@ -1238,7 +1250,7 @@ class ProofTests(unittest.TestCase):
                 "CMUX_MAESTRO_EXECUTION_MODE", "CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER",
             })
             self.assertEqual(result["CMUX_MAESTRO_MESSAGE_ROOT"], str(routes))
-            self.assertEqual(result["CMUX_MAESTRO_MESSAGE_PEER"], CONTROLLER["message_peer"](self.node))
+            self.assertEqual(result["CMUX_MAESTRO_MESSAGE_PEER"], self.FIXED_PEERS[1])
             self.assertEqual(result["CMUX_WORKSPACE_ID"], self.node["workspaceId"])
             legacy = dict(self.node)
             legacy.pop("messaging")
