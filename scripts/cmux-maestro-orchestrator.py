@@ -23,6 +23,7 @@ import subprocess
 import sys
 import time
 import uuid
+import zlib
 
 VERSION = 1
 MAX_BYTES = 1_048_576
@@ -4019,6 +4020,80 @@ def image_size(data):
     return None
 
 
+PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+ADAM7 = ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
+
+
+def png_complete(data):
+    """Whether a PNG's chunks, CRCs and image data are intact, so a decoder can read it.
+    A valid header alone is not enough: the sidebar drops sheets it cannot decode."""
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return False
+    position, header, compressed = 8, None, []
+    while position + 12 <= len(data):
+        length = int.from_bytes(data[position:position + 4], "big")
+        kind, body = data[position + 4:position + 8], data[position + 8:position + 8 + length]
+        end = position + 12 + length
+        if end > len(data) or zlib.crc32(kind + body) != int.from_bytes(data[end - 4:end], "big"):
+            return False
+        if (position == 8) != (kind == b"IHDR"):
+            return False
+        position = end
+        if kind == b"IHDR":
+            if length != 13:
+                return False
+            header = body
+        elif kind == b"IDAT":
+            compressed.append(body)
+        elif kind == b"IEND":
+            return position == len(data) and bool(compressed) and png_pixels_complete(header, compressed)
+    return False
+
+
+def png_pixels_complete(header, compressed):
+    width, height = int.from_bytes(header[:4], "big"), int.from_bytes(header[4:8], "big")
+    depth, color, interlace = header[8], header[9], header[12]
+    if color not in PNG_CHANNELS or depth not in (1, 2, 4, 8, 16) or interlace not in (0, 1):
+        return False
+    bits = depth * PNG_CHANNELS[color]
+    passes = ADAM7 if interlace else ((0, 0, 1, 1),)
+    expected = 0
+    for x, y, dx, dy in passes:
+        columns, rows = -(-(width - x) // dx), -(-(height - y) // dy)
+        if columns > 0 and rows > 0:
+            expected += rows * (1 + -(-columns * bits // 8))
+    inflater, produced = zlib.decompressobj(), 0
+    try:
+        for chunk in compressed:
+            pending = chunk
+            while pending:
+                produced += len(inflater.decompress(pending, 1 << 20))
+                pending = inflater.unconsumed_tail
+                if produced > expected:
+                    return False
+        while not inflater.eof:
+            more = inflater.decompress(b"", 1 << 20)
+            if not more:
+                break
+            produced += len(more)
+            if produced > expected:
+                return False
+    except zlib.error:
+        return False
+    return inflater.eof and not inflater.unused_data and produced == expected
+
+
+def webp_complete(data):
+    """RIFF framing must account for every byte; pixel decoding is left to the reader."""
+    if len(data) < 20 or int.from_bytes(data[4:8], "little") + 8 != len(data):
+        return False
+    position = 12
+    while position + 8 <= len(data):
+        length = int.from_bytes(data[position + 4:position + 8], "little")
+        position += 8 + length + (length & 1)
+    return position == len(data)
+
+
 def pet_slug(value):
     slug = "-".join(part for part in re.sub(r"[^a-z0-9]+", "-", str(value).lower()).split("-") if part)
     return slug[:48].strip("-")
@@ -4067,6 +4142,8 @@ def read_pet_source(source, requested_id):
             "The spritesheet needs 8 columns of 192:208 cells and at least 9 rows "
             f"(standard {PET_SIZE[0]}x{PET_SIZE[1]}; larger scales and extra rows such as Codex v2's "
             "1536x2288 are fine). Width must be a multiple of 8 between 512 and 4096.")
+    if not (png_complete(data) if data[:4] == b"\x89PNG" else webp_complete(data)):
+        raise OrchestrationError("The spritesheet is corrupt or truncated.")
     if not identifier or not PET_ID_PATTERN.fullmatch(identifier) or identifier == PET_DEFAULT_ID:
         identifier = pet_slug(f"{identifier or 'pet'}-custom")
     return identifier, display, description, data, sheet.suffix.lower()

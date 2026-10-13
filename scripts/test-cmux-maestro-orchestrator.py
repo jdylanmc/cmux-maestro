@@ -4516,10 +4516,46 @@ class PetSheetSizeTests(unittest.TestCase):
     """Pet sheets are flexible: 8 columns of 192:208 cells, any scale, nine or more rows."""
 
     @staticmethod
-    def png(width, height):
+    def png(width, height, rows=None):
+        """A complete, decodable 8-bit RGBA PNG; `rows` encodes fewer pixel rows than declared."""
         import struct
-        return (b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR"
-                + struct.pack(">II", width, height) + b"\x08\x06\x00\x00\x00" + b"\x00" * 4)
+        import zlib
+
+        def chunk(kind, body):
+            return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+        compressor = zlib.compressobj(9)
+        row = b"\x00" * (1 + width * 4)
+        pixels = b"".join(compressor.compress(row) for _ in range(height if rows is None else rows))
+        pixels += compressor.flush()
+        return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+                + chunk(b"IDAT", pixels) + chunk(b"IEND", b""))
+
+    def test_fixture_decodes_with_an_independent_reader(self):
+        sips = shutil.which("sips")
+        if sips is None:
+            self.skipTest("ImageIO's sips is macOS-only")
+        folder = self.pet_folder(1536, 1872)
+        output = subprocess.run([sips, "-g", "pixelWidth", "-g", "pixelHeight", str(folder / "sheet.png")],
+                                capture_output=True, text=True, check=True).stdout
+        self.assertIn("pixelWidth: 1536", output)
+        self.assertIn("pixelHeight: 1872", output)
+
+    def test_corrupt_or_truncated_sheets_with_valid_headers_are_rejected(self):
+        read = CONTROLLER_API["read_pet_source"]
+        sheet = self.png(1536, 1872)
+        idat = sheet.index(b"IDAT")
+        flipped = bytearray(sheet)
+        flipped[idat + 8] ^= 0xFF
+        header_only = sheet[:33]
+        for name, data in (("header only", header_only), ("truncated", sheet[:-20]),
+                           ("bad crc", bytes(flipped)), ("trailing bytes", sheet + b"junk"),
+                           ("missing rows", self.png(1536, 1872, rows=1871))):
+            with self.subTest(name):
+                folder = self.pet_folder(1536, 1872)
+                (folder / "sheet.png").write_bytes(data)
+                self.assertEqual(CONTROLLER_API["image_size"](data), (1536, 1872))
+                with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "corrupt or truncated"):
+                    read(str(folder), None)
 
     def pet_folder(self, width, height, name="duck"):
         folder = Path(tempfile.mkdtemp(prefix="pet-", dir="/tmp")) / name
