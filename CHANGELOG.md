@@ -10,8 +10,7 @@ Notable changes are recorded using Keep a Changelog categories.
   now refuse the same stores (shared `scripts/test-fixtures/beats-store-cases.json`):
   `true`, `1.0` or out-of-range integers, uppercase UUIDs, non-text timestamps, lone
   surrogates, `NaN`, U+FEFF anywhere, whitespace-only prompts (U+200B counts as whitespace),
-  and a store file or folder readable by others. The orchestrator also refuses duplicate
-  keys; the sidebar cannot detect them and keeps the first value. The
+  and a store file or folder readable by others. The
   installed extension no longer parses `beats.json`; it asks the controller
   (`beats-snapshot`, read-only under the shared lock) for its session's runnable Beats, and
   an invalid store now leaves Copilot schedules untouched instead of silently dropping a
@@ -20,12 +19,15 @@ Notable changes are recorded using Keep a Changelog categories.
   (`\u00e9`, up to 6 bytes a character), so a store the sidebar saved under 1 MiB could
   exceed the limit when re-encoded and block even `beats list`. Both writers now produce
   byte-identical files.
-- Make a Beat simply on or off, as ADR 0007 decided. The Beats store is now version 2:
+- **Breaking:** make a Beat simply on or off, as ADR 0007 decided. The Beats store is now version 2:
   `recoveryGate`, `targetEnded` and `lastFiredMinute` are gone, with the unused Maestro
   clock (`beats_due`), the unreachable `beats gate-session` command, and the sidebar's
   "Needs recovery", "Target ended" and **Re-enable** states. Moving a Beat to another
   session keeps it on or off, and an agent's `beats resume` always resumes. A version 1
   store reads as empty and is replaced on the next write; its Beats are not migrated.
+  Every store must also be plain JSON for both readers: unique keys, Int64 integers only,
+  Unicode text and at most 8 nested levels, so a duplicate `version` can no longer make
+  the sidebar and the orchestrator read different versions.
 - Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
   dependency-free `pet_kit.py` drawing kit instead of requiring `hatch-pet`, whose
   Codex-only image generation was unavailable to Copilot.

@@ -12,6 +12,8 @@ nonisolated enum BeatsLimits {
     static let version = 2
     /// Version 1 carried the rejected recovery gate and Maestro clock; it reads as empty.
     static let legacyVersion = 1
+    /// A valid store nests three containers; the orchestrator's `BEATS_MAX_DEPTH`.
+    static let maximumDepth = 8
 }
 
 nonisolated struct BeatsError: Error, Equatable {
@@ -176,7 +178,8 @@ nonisolated struct SidebarBeatsState: Equatable {
     /// `JSONDecoder` would accept `true` or `1.0` where the contract requires an integer.
     static func decode(_ data: Data) throws -> SidebarBeatsState {
         guard data.count <= BeatsLimits.maximumStoreBytes, !containsByteOrderMark(data),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              isPlainJSON(data) else {
             throw BeatsError("The Beats store is invalid or from a newer version.")
         }
         if strictInteger(object["version"]) == BeatsLimits.legacyVersion { return SidebarBeatsState() }
@@ -212,6 +215,48 @@ nonisolated struct SidebarBeatsState: Equatable {
             backslashes = byte == UInt8(ascii: "\\") ? backslashes + 1 : 0
         }
         return false
+    }
+
+    /// Unique keys, Int64 integers only and bounded nesting, as the orchestrator's `beats_decode`
+    /// requires. `JSONSerialization` keeps the first of duplicate keys, so a store with a duplicate
+    /// `version` could otherwise read as a different version here than in the orchestrator.
+    /// Call only on bytes `JSONSerialization` already parsed.
+    static func isPlainJSON(_ data: Data) -> Bool {
+        let bytes = [UInt8](data)
+        // Keys compare by scalar values; Swift `String` equality would merge canonically equivalent keys.
+        var containers: [(isObject: Bool, keys: Set<[UInt32]>, expectsKey: Bool)] = []
+        var index = 0
+        while index < bytes.count {
+            switch bytes[index] {
+            case UInt8(ascii: "{"), UInt8(ascii: "["):
+                let isObject = bytes[index] == UInt8(ascii: "{")
+                containers.append((isObject, [], isObject))
+                if containers.count > BeatsLimits.maximumDepth { return false }
+            case UInt8(ascii: "}"), UInt8(ascii: "]"):
+                containers.removeLast()
+            case UInt8(ascii: ","):
+                if containers.last?.isObject == true { containers[containers.count - 1].expectsKey = true }
+            case UInt8(ascii: "\""):
+                var end = index + 1
+                while bytes[end] != UInt8(ascii: "\"") { end += bytes[end] == UInt8(ascii: "\\") ? 2 : 1 }
+                if let last = containers.last, last.isObject, last.expectsKey {
+                    guard let key = try? JSONSerialization.jsonObject(with: Data(bytes[index...end]),
+                                                                      options: .fragmentsAllowed) as? String,
+                          containers[containers.count - 1].keys.insert(key.unicodeScalars.map(\.value)).inserted else { return false }
+                    containers[containers.count - 1].expectsKey = false
+                }
+                index = end
+            case UInt8(ascii: "-"), UInt8(ascii: "0")...UInt8(ascii: "9"):
+                var end = index
+                while end < bytes.count, "+-0123456789.eE".utf8.contains(bytes[end]) { end += 1 }
+                guard let token = String(bytes: bytes[index..<end], encoding: .ascii), Int64(token) != nil else { return false }
+                index = end - 1
+            default:
+                break
+            }
+            index += 1
+        }
+        return true
     }
 
     private static func hasContractTypes(_ beat: [String: Any]) -> Bool {

@@ -4448,6 +4448,9 @@ BEATS_MAX_PER_SESSION = 16
 BEATS_MAX_PROMPT_BYTES = 4096
 BEATS_MAX_STORE_BYTES = 1024 * 1024
 BEATS_MAX_REVISION = (1 << 63) - 1
+# Any store, of any version, is plain JSON: unique keys, Int64 integers only, Unicode text, and
+# at most this many nested containers (a valid store uses three). Swift applies the same rule.
+BEATS_MAX_DEPTH = 8
 # U+FEFF in any form, raw UTF-8 or an unescaped \u escape. Swift's JSONSerialization drops it from
 # the start of a string, so the readers could otherwise see different text.
 BEATS_BYTE_ORDER_MARK = re.compile(rb"\xef\xbb\xbf|(?<!\\)(?:\\\\)*\\u[fF][eE][fF][fF]")
@@ -4606,9 +4609,27 @@ def validate_beats_state(state):
     return state
 
 
+def beats_plain_json(value):
+    pending = [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        if isinstance(item, (dict, list)):
+            if depth > BEATS_MAX_DEPTH:
+                raise ValueError("too deep")
+            if isinstance(item, dict):
+                if not all(beats_text(key) for key in item):
+                    raise ValueError("key is not text")
+                pending.extend((child, depth + 1) for child in item.values())
+            else:
+                pending.extend((child, depth + 1) for child in item)
+        elif isinstance(item, str) and not beats_text(item):
+            raise ValueError("string is not text")
+
+
 def beats_decode(raw):
-    """Parse and validate stored bytes. Duplicate keys and non-finite numbers are refused so every
-    reader sees the same values."""
+    """Parse and validate stored bytes. Every reader must see the same values, so anything a JSON
+    parser may resolve differently (duplicate keys, decimals, huge numbers, lone surrogates, deep
+    nesting) is refused before the version is read."""
     if len(raw) > BEATS_MAX_STORE_BYTES:
         raise OrchestrationError("The Beats store is not a private regular file within its size limit.")
     if BEATS_BYTE_ORDER_MARK.search(raw):
@@ -4620,10 +4641,18 @@ def beats_decode(raw):
             raise ValueError("duplicate key")
         return value
 
-    def finite(_):
-        raise ValueError("non-finite number")
+    def refuse(_):
+        raise ValueError("not an Int64 integer")
+
+    def integer(text):
+        value = int(text)
+        if not -(1 << 63) <= value < (1 << 63):
+            raise ValueError("not an Int64 integer")
+        return value
     try:
-        state = json.loads(raw, object_pairs_hook=unique, parse_constant=finite)
+        state = json.loads(raw, object_pairs_hook=unique, parse_constant=refuse, parse_float=refuse,
+                           parse_int=integer)
+        beats_plain_json(state)
     except (UnicodeError, ValueError, RecursionError) as error:
         raise OrchestrationError("The Beats store is not valid JSON.") from error
     if isinstance(state, dict) and type(state.get("version")) is int and state["version"] == BEATS_LEGACY_VERSION:
