@@ -52,6 +52,7 @@ nonisolated struct CopilotSessionObservation: Codable, Equatable, Sendable {
     var petId: String? = nil
     var branch: String? = nil
     var worktree: Bool? = nil
+    var sessionIssues: [CopilotIssue]? = nil
     let sessionID: UUID
     let surfaceID: UUID
     let launchWorkspaceID: UUID
@@ -87,6 +88,12 @@ nonisolated enum CopilotIssue: String, Codable, Equatable, Sendable {
     case permissionDenied, malformedData, unsupportedFormat, loadingHistory
     case identityChanged, ambiguousIdentity, ambiguousTurn, readLimitReached
     case appearanceUnavailable
+
+    // Cosmetic issues describe optional sidecars; they never affect trust or completeness.
+    var isCosmetic: Bool { self == .appearanceUnavailable }
+
+    // Identity doubt about one bound session; it must not invalidate other sessions.
+    var isSessionScoped: Bool { self == .ambiguousIdentity || self == .identityChanged }
 }
 
 nonisolated struct CopilotSnapshot: Codable, Equatable, Sendable {

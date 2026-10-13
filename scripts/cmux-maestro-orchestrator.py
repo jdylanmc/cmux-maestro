@@ -1457,11 +1457,14 @@ class Store:
         icon_data = json.dumps(
             {"version": 1, "icons": icons}, sort_keys=True, separators=(",", ":")
         ).encode() + b"\n"
-        if len(icon_data) > MAX_BYTES:
-            raise OrchestrationError("Host icon-projection byte safety limit reached.")
         self._atomic(self.control_fd, "state.json", encoded)
         self._atomic(self.observer_fd, "current.json", projection)
-        self._atomic(self.observer_fd, "icons.json", icon_data)
+        # Icons are cosmetic: an oversized or unwritable overlay never fails the mutation.
+        if len(icon_data) <= MAX_BYTES:
+            try:
+                self._atomic(self.observer_fd, "icons.json", icon_data)
+            except (OSError, OrchestrationError):
+                pass
 
     def _projection(self, state):
         nodes = sorted(

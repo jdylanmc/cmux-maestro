@@ -2011,6 +2011,17 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(glyph_only["iconId"], "fa-edge")
         self.assertEqual(glyph_only["iconColor"], "blue")
 
+    def test_unwritable_icon_projection_does_not_fail_state_mutation(self):
+        icons_path = self.h.root / "observer" / "icons.json"
+        icons_path.unlink()
+        icons_path.mkdir()
+        result = self.h.run("icon", "--actor-id", self.h.node, "--token", self.h.token,
+                            "--icon", "nf-md-duck", "--color", "teal")
+        self.assertEqual(result["iconId"], "md-duck")
+        self.assertEqual(self.h.state()["nodes"][self.h.node]["iconId"], "md-duck")
+        current = json.loads((self.h.root / "observer" / "current.json").read_text())
+        self.assertTrue(any(node["id"] == self.h.node for node in current["nodes"]))
+
     def test_icon_rejects_other_callers_invalid_tokens_targets_and_unknown_glyphs(self):
         before = self.h.state()
         bad_env = self.h.env.copy()

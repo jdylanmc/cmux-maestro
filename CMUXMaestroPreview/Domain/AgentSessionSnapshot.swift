@@ -300,6 +300,8 @@ nonisolated struct AgentSnapshotIssue: RawRepresentable, Codable, Equatable, Sen
     static let ambiguousTurn = Self(rawValue: "ambiguousTurn")
     static let readLimitReached = Self(rawValue: "readLimitReached")
     static let appearanceUnavailable = Self(rawValue: "appearanceUnavailable")
+
+    var isCosmetic: Bool { self == .appearanceUnavailable }
 }
 
 nonisolated struct AgentModel: Codable, Equatable, Sendable {
@@ -584,6 +586,7 @@ nonisolated struct AgentSessionSnapshotItem: Codable, Equatable, Sendable {
     let attention: [AgentAttention]?
     let childWorkObservation: AgentChildWorkObservation?
     var location: AgentSessionLocation? = nil
+    var sessionIssues: [AgentSnapshotIssue]? = nil
 
     var workState: AgentWorkState { .resolve(state, detail: stateDetail) }
 
@@ -635,6 +638,14 @@ nonisolated struct AgentSessionSnapshot: Codable, Equatable, Sendable {
     let completeness: SnapshotValue<Bool>?
 
     var isComplete: Bool { completeness?.knownValue == true }
+
+    // Incomplete only because individual sessions carry their own identity
+    // doubt: the snapshot-wide evidence is still trustworthy for other sessions.
+    var isCompleteApartFromSessionIssues: Bool {
+        isComplete || (completeness?.knownValue == false
+            && (issues ?? []).allSatisfy(\.isCosmetic)
+            && sessions.contains { !($0.sessionIssues ?? []).isEmpty })
+    }
 
     init(
         schemaVersion: SnapshotSchemaVersion = .current,

@@ -69,6 +69,40 @@ struct SidebarCopilotTreeTests {
     }
 
     @Test
+    func cosmeticAppearanceWarningNeverDegradesCompleteSessions() {
+        let now = Date()
+        let tree = SidebarCopilotTree.project(
+            fixtures.snapshot(
+                sessions: [fixtures.session(now: now), fixtures.session(id: fixtures.otherSessionID, surface: fixtures.surfaceB, now: now)],
+                issues: [.appearanceUnavailable], complete: true, now: now
+            ),
+            onto: fixtures.topology(), now: now
+        )
+        #expect(tree.availability == .ready)
+        #expect(tree.sessions.count == 2)
+        #expect(tree.sessions.allSatisfy { $0.childrenComplete })
+        #expect(tree.issues.contains(.appearanceUnavailable))
+    }
+
+    @Test
+    func oneAmbiguousSessionLeavesOtherSessionsPublishedAndComplete() {
+        let now = Date()
+        var ambiguous = fixtures.session(
+            id: fixtures.otherSessionID, surface: fixtures.surfaceB, liveness: .ambiguous, now: now
+        )
+        ambiguous.sessionIssues = [.ambiguousIdentity]
+        let tree = SidebarCopilotTree.project(
+            fixtures.snapshot(sessions: [fixtures.session(now: now), ambiguous], complete: false, now: now),
+            onto: fixtures.topology(), now: now
+        )
+        #expect(tree.sessions.map(\.id) == [fixtures.sessionID, fixtures.otherSessionID])
+        #expect(tree.sessions.first { $0.id == fixtures.sessionID }?.childrenComplete == true)
+        #expect(tree.sessions.first { $0.id == fixtures.otherSessionID }?.childrenComplete == false)
+        #expect(tree.availability == .partial)
+        #expect(tree.issues.contains(.ambiguousIdentity))
+    }
+
+    @Test
     func topologyRequiresCurrentWindowAndGrantedSurfaceMetadata() {
         var hierarchy = fixtures.hierarchy()
         hierarchy.windowID = nil

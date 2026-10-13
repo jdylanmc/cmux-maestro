@@ -35,7 +35,7 @@ nonisolated enum CopilotSnapshotAdapter {
                 }
                 let children = observation.children.map { child($0, session: identity) }
                 let legacy = legacyHierarchy(children, session: identity)
-                return AgentSessionSnapshotItem(
+                var item = AgentSessionSnapshotItem(
                     identity: identity, binding: binding, title: .unknown(),
                     state: state(observation.state),
                     activity: observation.activity.map { .known($0) } ?? .unknown(),
@@ -49,6 +49,8 @@ nonisolated enum CopilotSnapshotAdapter {
                     childWorkObservation: .init(items: children, legacyProjectionIsLossless: legacy.count == children.count),
                     location: observation.branch.map { .init(branch: $0, worktree: observation.worktree ?? false) }
                 )
+                item.sessionIssues = observation.sessionIssues?.map { .init(rawValue: $0.rawValue) }
+                return item
             },
             issues: source.issues.map { .init(rawValue: $0.rawValue) },
             completeness: .known(source.isComplete)

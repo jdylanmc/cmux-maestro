@@ -258,7 +258,14 @@ struct SidebarCopilotTree: Equatable {
                 availability: .unavailable, sessions: [], issues: [], generatedAt: nil
             )
         }
-        let issues = snapshot.issues ?? []
+        // Cosmetic warnings are shown but never decide trust; session-scoped
+        // doubt is attributed to its own session below.
+        let trustIssues = (snapshot.issues ?? []).filter { !$0.isCosmetic }
+        var issues = snapshot.issues ?? []
+        for scoped in snapshot.sessions.flatMap({ $0.sessionIssues ?? [] }) where !issues.contains(scoped) {
+            issues.append(scoped)
+        }
+        let globallyComplete = snapshot.isCompleteApartFromSessionIssues
         let groups = Dictionary(grouping: snapshot.sessions.filter {
             $0.identity.providerID == CopilotSnapshotAdapter.providerID
         }, by: { UUID(uuidString: $0.identity.sessionID) })
@@ -347,7 +354,7 @@ struct SidebarCopilotTree: Equatable {
             )
             // Capture outcome eligibility before either display projection removes
             // harmless legacy history or recomputes disclosure-only hasChildren.
-            let uncertainDescendants = !snapshot.isComplete || assessment.hasUncountedChildren
+            let uncertainDescendants = !globallyComplete || !(observation.sessionIssues ?? []).isEmpty || assessment.hasUncountedChildren
                 || tree.omitted > 0 || assessment.omittedChildren > 0
             var protectedAncestors: Set<String> = []
             for child in validated {
@@ -372,8 +379,8 @@ struct SidebarCopilotTree: Equatable {
             let degraded = tree.degraded || validated.count != children.count
                 || sessionAttention.degraded || sessionActivity.degraded
                 || observation.state.isDegraded || observation.activity.isDegraded || observation.model.isDegraded
-                || !assessment.isValid
-            let complete = snapshot.isComplete && issues.isEmpty
+                || !assessment.isValid || !(observation.sessionIssues ?? []).isEmpty
+            let complete = globallyComplete && trustIssues.isEmpty
                 && liveness == .alive && !degraded
             sessions.append(SidebarCopilotSession(
                 iconId: observation.appearance?.iconId, iconColor: observation.appearance?.iconColor,
@@ -401,7 +408,7 @@ struct SidebarCopilotTree: Equatable {
             ))
         }
         return SidebarCopilotTree(
-            availability: snapshot.isComplete && issues.isEmpty && !rejected
+            availability: globallyComplete && trustIssues.isEmpty && !rejected
                 && !sessions.contains(where: \.treeDegraded) ? .ready : .partial,
             sessions: sessions,
             issues: issues,

@@ -405,6 +405,20 @@ struct SidebarOrchestrationTests {
         }
     }
 
+    @Test func corruptIconOverlayLeavesManagedHierarchyIntact() {
+        let current = node(run: UUID(), role: "coordinator", parent: nil, workspace: UUID())
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [current]
+        )
+        #expect(SidebarIconOverrides.overlaid(Data("not json".utf8), onto: snapshot) == snapshot)
+        let invalid = SidebarIconOverrides.Entry(
+            nodeId: current.id, runId: current.runId, workspaceId: current.workspaceId,
+            surfaceId: current.surfaceId, iconId: "../image.png", iconColor: nil
+        )
+        let data = try? JSONEncoder().encode(SidebarIconOverrides(version: 1, icons: [invalid]))
+        #expect(SidebarIconOverrides.overlaid(data ?? Data(), onto: snapshot) == snapshot)
+    }
+
     @Test func gitChangeCountsRequireValidFreshEvidenceAndRemainBackwardCompatible() throws {
         let captured = Date()
         let changes = SidebarGitChanges(files: 3, insertions: 42, deletions: 7, untrackedFiles: 1, binaryFiles: 1)

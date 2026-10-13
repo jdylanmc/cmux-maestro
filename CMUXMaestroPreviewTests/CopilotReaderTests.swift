@@ -698,6 +698,8 @@ nonisolated struct CopilotReaderTests {
         try Data("malformed".utf8).write(to: file)
         let invalid = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(invalid.issues.contains(.appearanceUnavailable))
+        #expect(invalid.issues.allSatisfy { $0.isCosmetic })
+        #expect(invalid.isComplete)
         #expect(invalid.sessions.first?.state == .working)
         #expect(invalid.sessions.first?.iconId == nil)
     }
@@ -769,7 +771,26 @@ nonisolated struct CopilotReaderTests {
         try FileManager.default.removeItem(at: fixture.session)
         try FileManager.default.createSymbolicLink(at: fixture.session, withDestinationURL: fixture.root)
         let directory = try await fixture.reader().read(surfaceIDs: [fixture.surface])
-        #expect(directory.issues.contains(.ambiguousIdentity))
+        #expect(directory.sessions.first?.sessionIssues?.contains(.ambiguousIdentity) == true)
+        #expect(!directory.isComplete)
+    }
+
+    @Test func oneAmbiguousSessionDoesNotBlankOrPoisonHealthySessions() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("assistant.turn_start", data: ["turnId": "current"])])
+        let badSurface = UUID()
+        let bad = try fixture.addSession(surface: badSurface)
+        try FileManager.default.removeItem(at: bad)
+        try FileManager.default.createSymbolicLink(at: bad, withDestinationURL: fixture.root)
+        let snapshot = try await fixture.reader().read(surfaceIDs: [fixture.surface, badSurface])
+        let healthy = snapshot.sessions.first { $0.sessionID == fixture.sessionID }
+        #expect(healthy?.state == .working)
+        #expect(healthy?.sessionIssues == nil)
+        let broken = snapshot.sessions.first { $0.surfaceID == badSurface }
+        #expect(broken?.sessionIssues == [.ambiguousIdentity])
+        #expect(!snapshot.issues.contains(.ambiguousIdentity))
+        #expect(!snapshot.isComplete)
     }
 
     @Test func integrationMissingAndEmptySelectionAreTyped() async throws {
@@ -970,9 +991,10 @@ nonisolated struct CopilotReaderTests {
         let reader = fixture.reader(lookup: { probe.read($0) })
         let snapshot = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(probe.refreshedSuccessfully)
-        #expect(snapshot.issues.contains(.identityChanged))
+        #expect(!snapshot.issues.contains(.identityChanged))
         #expect(!snapshot.isComplete)
         let ambiguous = try #require(snapshot.sessions.first)
+        #expect(ambiguous.sessionIssues == [.identityChanged])
         #expect(ambiguous.sessionID == fixture.sessionID)
         #expect(ambiguous.surfaceID == fixture.surface)
         #expect(ambiguous.liveness == .ambiguous)

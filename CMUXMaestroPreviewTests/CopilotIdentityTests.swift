@@ -76,7 +76,7 @@ nonisolated struct CopilotIdentityTests {
             pid: fixture.process.pid, parentPID: 1, uid: getuid(), startSeconds: 2, startMicroseconds: 0
         )
         let changed = try await fixture.reader(lookup: { _ in .found(reused) }).read(surfaceIDs: [fixture.surface])
-        #expect(changed.issues.contains(.identityChanged))
+        #expect(changed.sessions[0].sessionIssues?.contains(.identityChanged) == true)
         #expect(changed.sessions[0].liveness == .ambiguous)
         #expect(changed.sessions[0].state == .unknown)
     }
@@ -91,16 +91,16 @@ nonisolated struct CopilotIdentityTests {
         let live = try await fixture.reader(lookup: { pid in
             .found(pid == owner.pid ? owner : other)
         }).read(surfaceIDs: [fixture.surface])
-        #expect(live.issues.contains(.ambiguousIdentity))
+        #expect(live.sessions[0].sessionIssues?.contains(.ambiguousIdentity) == true)
         #expect(live.sessions[0].state == .unknown)
         let unknown = try await fixture.reader(lookup: { pid in
             pid == owner.pid ? .found(owner) : .unavailable
         }).read(surfaceIDs: [fixture.surface])
-        #expect(unknown.issues.contains(.ambiguousIdentity))
+        #expect(unknown.sessions[0].sessionIssues?.contains(.ambiguousIdentity) == true)
         let stale = try await fixture.reader(lookup: { pid in
             pid == owner.pid ? .dead : .found(other)
         }).read(surfaceIDs: [fixture.surface])
-        #expect(stale.issues.contains(.ambiguousIdentity))
+        #expect(stale.sessions[0].sessionIssues?.contains(.ambiguousIdentity) == true)
         #expect(stale.sessions[0].liveness == .ambiguous)
     }
 
@@ -110,7 +110,7 @@ nonisolated struct CopilotIdentityTests {
         try fixture.writeEvents([copilotTestEvent("session.idle")])
         let probe = CopilotChangingProbe(owner: fixture.process)
         let snapshot = try await fixture.reader(lookup: { probe.read($0) }).read(surfaceIDs: [fixture.surface])
-        #expect(snapshot.issues.contains(.identityChanged))
+        #expect(snapshot.sessions[0].sessionIssues?.contains(.identityChanged) == true)
         #expect(snapshot.sessions[0].state == .unknown)
     }
 
@@ -162,7 +162,7 @@ nonisolated struct CopilotIdentityTests {
         #expect(missing.sessions[0].state == .unknown)
         try FileManager.default.createSymbolicLink(at: marker, withDestinationURL: fixture.events)
         let link = try await fixture.reader().read(surfaceIDs: [fixture.surface])
-        #expect(link.issues.contains(.ambiguousIdentity))
+        #expect(link.sessions[0].sessionIssues?.contains(.ambiguousIdentity) == true)
         #expect(link.sessions[0].state == .unknown)
     }
 
