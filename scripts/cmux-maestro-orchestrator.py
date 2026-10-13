@@ -77,6 +77,8 @@ class OrchestrationError(Exception):
 class CommittedProjectionError(OrchestrationError):
     """Control state committed; only the derived observer projection failed to publish."""
 
+    routesNotRetired = 0
+
 
 class CloseBudgetExhausted(OrchestrationError):
     pass
@@ -1602,8 +1604,12 @@ def mutate_retiring_routes(root, operation, *, wait=1):
     retiring = []
     try:
         result = mutate(root, lambda state: operation(state, retiring), wait=wait)
-    except CommittedProjectionError:
-        retire_committed_routes(retiring)
+    except CommittedProjectionError as error:
+        left = retire_committed_routes(retiring)
+        if left:
+            reported = CommittedProjectionError(f"{error} {left} message route(s) were not retired.")
+            reported.routesNotRetired = left
+            raise reported from error
         raise
     left = retire_committed_routes(retiring)
     if left and isinstance(result, dict):
@@ -3087,12 +3093,17 @@ def launch_direct_session(root, cmux, node, token, pane):
             }
         return mutate(root, attach)
     except (OrchestrationError, OSError) as error:
-        def failed(state):
+        def failed(state, retiring):
             current = state["nodes"].get(identifier)
             if current is not None and all(current.get(key) == node.get(key) for key in (
                 "runId", "workspaceId", "copilotSessionId", "generation", "tokenHash", "launchMethod",
             )):
                 record_launch_failure(state, identifier, surface)
+                # The route was published before any terminal existed; retire it only
+                # when no surface was created or left uncertain.
+                if (current.get("runtimeNotStarted") and surface is None
+                        and not current.get("surfaceUnknown")):
+                    retiring.append(current)
             elif surface is not None and not any(item.get("surfaceId") == surface
                                                  for item in state["nodes"].values()) and not any(
                 item["surfaceId"] == surface for item in state["retainedResources"]
@@ -3104,7 +3115,7 @@ def launch_direct_session(root, cmux, node, token, pane):
                     "surfaceId": surface, "archivedAt": now(),
                 })
         try:
-            mutate(root, failed)
+            mutate_retiring_routes(root, failed)
         except (OrchestrationError, OSError) as recovery_error:
             raise SessionLaunchError(
                 f"{launch_failure_message(error)} Failure recording also failed: "
@@ -4110,7 +4121,12 @@ def write_private(path, data):
 
 
 class PetPublication:
-    """Stage a pet beside its folder, swap it in, and restore the previous pet on refusal."""
+    """Stage a pet beside its folder, swap it in, and restore the previous pet on refusal.
+
+    An exclusive per-(session, pet) lock is held from construction until commit or
+    restore, so concurrent adds of one pet are serialized. Restore also verifies the
+    published directory is still the staged one before deleting anything.
+    """
 
     def __init__(self, session, identifier, files):
         self.sessions = pet_session_root(session)
@@ -4119,16 +4135,31 @@ class PetPublication:
         self.stage = self.sessions / f".{identifier}.stage-{secrets.token_hex(4)}"
         self.replaced = False
         self.created = False
+        self.identity = None
         private_directory(self.sessions)
-        if self.folder.is_symlink() or (self.folder.exists() and not self.folder.is_dir()):
-            raise OrchestrationError("The Maestro pet library is not a private directory.")
-        private_directory(self.stage)
+        self.lock = os.open(self.sessions / f".{identifier}.lock",
+                            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
-            for name, data in files:
-                write_private(self.stage / name, data)
+            fcntl.flock(self.lock, fcntl.LOCK_EX)
+            if self.folder.is_symlink() or (self.folder.exists() and not self.folder.is_dir()):
+                raise OrchestrationError("The Maestro pet library is not a private directory.")
+            private_directory(self.stage)
+            try:
+                for name, data in files:
+                    write_private(self.stage / name, data)
+            except BaseException:
+                shutil.rmtree(self.stage, ignore_errors=True)
+                raise
+            info = self.stage.lstat()
+            self.identity = (info.st_dev, info.st_ino)
         except BaseException:
-            shutil.rmtree(self.stage, ignore_errors=True)
+            self._unlock()
             raise
+
+    def _unlock(self):
+        if self.lock is not None:
+            os.close(self.lock)
+            self.lock = None
 
     def publish(self):
         self.created = not self.folder.exists()
@@ -4143,15 +4174,30 @@ class PetPublication:
 
     def commit(self):
         shutil.rmtree(self.previous, ignore_errors=True)
+        self._unlock()
+
+    def _published_is_ours(self):
+        try:
+            info = self.folder.lstat()
+        except FileNotFoundError:
+            return True
+        return (info.st_dev, info.st_ino) == self.identity
 
     def restore(self):
-        shutil.rmtree(self.stage, ignore_errors=True)
-        if self.replaced:
+        try:
+            shutil.rmtree(self.stage, ignore_errors=True)
+            if not (self.replaced or self.created):
+                return
+            if not self._published_is_ours():
+                raise OrchestrationError(
+                    "The pet folder changed during the add; it and any previous pet were retained."
+                )
             shutil.rmtree(self.folder, ignore_errors=True)
-            os.rename(self.previous, self.folder)
-            self.replaced = False
-        elif self.created:
-            shutil.rmtree(self.folder, ignore_errors=True)
+            if self.replaced:
+                os.rename(self.previous, self.folder)
+                self.replaced = False
+        finally:
+            self._unlock()
 
 
 def list_session_pets(session):
