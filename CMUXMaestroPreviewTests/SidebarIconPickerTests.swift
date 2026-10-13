@@ -143,9 +143,9 @@ struct SidebarIconPickerTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let image = root.appendingPathComponent("icon-picker-\(dark ? "dark" : "light").png")
         try png.write(to: image)
-        let text = try SidebarRenderingEvidence.recognizedLines(in: image, dark: dark, naturalLanguage: true).joined(separator: " ")
+        let text = try SidebarRenderingEvidence.recognizedLines(in: image, dark: dark, naturalLanguage: true)
         for label in ["Choose icon", "Your choice", "Reset to default", "Reset to agent selection"] {
-            #expect(text.localizedCaseInsensitiveContains(label), "Missing visible picker control: \(label); OCR: \(text)")
+            #expect(text.contains(label), "Missing visible picker control: \(label); OCR: \(text)")
         }
     }
 

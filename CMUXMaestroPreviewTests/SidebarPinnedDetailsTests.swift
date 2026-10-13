@@ -1157,7 +1157,8 @@ struct SidebarPinnedDetailsTests {
             let destination = folder.appendingPathComponent("directory77-\(name)-\(dark ? "dark" : "light").png")
             try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
             let text = try SidebarRenderingEvidence.recognizedLines(in: destination, dark: dark, naturalLanguage: true)
-            #expect(text.contains { $0.contains(label) }, "\(name): directory label must survive all production filters: \(text)")
+            // OCR may read an adjacent copy icon or colon as trailing glyphs; the label must lead its line.
+            #expect(text.contains { $0.hasPrefix(label) }, "\(name): directory label must survive all production filters: \(text)")
             #expect(text.contains("reports") || text.contains("Surface directory: reports"),
                     "\(name): exact surface value must render: \(text)")
             #expect(!text.contains { $0.contains("Working directory") || $0.contains("Parent working directory") })

@@ -827,7 +827,7 @@ struct SidebarLayoutRenderingTests {
                     }
                     #expect(metrics.viewportHeight >= 80)
                     let text = try SidebarRenderingEvidence.recognizedLines(in: destination, dark: appearance == .dark)
-                    #expect(text.contains { $0.contains("coordinator-model") },
+                    #expect(text.contains("coordinator-model"),
                             "Expected exact coordinator-model text in the rendered footer; OCR: \(text)")
                     #expect(!text.contains { $0.contains("CMUX connected") })
                     let image = try #require(NSBitmapImageRep(data: Data(contentsOf: destination)))
