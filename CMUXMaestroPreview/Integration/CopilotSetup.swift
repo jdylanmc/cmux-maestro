@@ -1209,7 +1209,6 @@ nonisolated enum CopilotProcessResult: Equatable, Sendable {
 }
 
 nonisolated protocol CopilotSetupProcessRunner: Sendable {
-    func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult
     func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult
     func plugin(executable: URL, operation: CopilotPluginOperation, path: String, providerHome: URL?) async -> CopilotPluginOperationResult
     func sourceIdentity(executable: URL, source: URL, path: String) async -> CopilotSourceIdentityResult

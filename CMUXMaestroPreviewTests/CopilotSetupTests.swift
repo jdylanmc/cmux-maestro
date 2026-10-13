@@ -3,18 +3,22 @@ import Foundation
 import Testing
 @testable import CMUXMaestroPreview
 
+/// Records every provider request; setup policy makes no other kind.
 private actor SetupRunnerSpy: CopilotSetupProcessRunner {
-    var calls: [[String]] = []
-    let result: CopilotProcessResult
-    init(result: CopilotProcessResult = .exited(0)) { self.result = result }
-    func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
-        calls.append([executable.path] + arguments)
-        return result
+    var calls: [String] = []
+    func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult {
+        calls.append("metadata")
+        return .failed(.unavailable)
     }
-    func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult { .failed(.unavailable) }
     func plugin(executable: URL, operation: CopilotPluginOperation, path: String,
-                providerHome: URL?) async -> CopilotPluginOperationResult { .failed(.unavailable) }
-    func sourceIdentity(executable: URL, source: URL, path: String) async -> CopilotSourceIdentityResult { .failed(.unavailable) }
+                providerHome: URL?) async -> CopilotPluginOperationResult {
+        calls.append("plugin")
+        return .failed(.unavailable)
+    }
+    func sourceIdentity(executable: URL, source: URL, path: String) async -> CopilotSourceIdentityResult {
+        calls.append("sourceIdentity")
+        return .failed(.unavailable)
+    }
 }
 
 private struct SetupFileStub: CopilotSetupFileSystem {
@@ -464,7 +468,7 @@ struct CopilotSetupTests {
         #expect(process.terminationStatus == 0, Comment(rawValue: detail))
     }
 
-    @Test func constructionDoesNotInstallAndConsentUsesExactOwnPluginArguments() async throws {
+    @Test func constructionDoesNotInstallAndConsentUsesExactOwnPluginOperations() async throws {
         let fixture = try ObserverFixture()
         defer { try? fixture.clean() }
         let runner = ObserverSetupRunner(fixture)
@@ -477,10 +481,7 @@ struct CopilotSetupTests {
                                     controller: controller, skill: skill) == .installed)
         #expect(await setup.perform(.uninstall, selected: nil, path: "", root: fixture.root, helper: fixture.helper,
                                     controller: controller, skill: skill) == .uninstalled)
-        #expect(await runner.calls == [
-            [fixture.helper.path, "--no-auto-update", "plugin", "install", fixture.source.path],
-            [fixture.helper.path, "--no-auto-update", "plugin", "uninstall", "cmux-maestro-native"],
-        ])
+        #expect(await runner.calls == ["install:\(fixture.source.path)", "uninstall:opaque-provider-source"])
     }
 
     @Test func reportsRealFailureAndNeverRunsWhenFilesystemFails() async throws {
