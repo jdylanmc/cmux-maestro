@@ -87,18 +87,36 @@ extension EnvironmentValues {
 private struct SidebarTypography: ViewModifier {
     let style: Font.TextStyle
     let weight: Font.Weight
+    var sizeOffset: CGFloat = 0
     @Environment(\.sidebarDensity) private var density
 
     func body(content: Content) -> some View {
         let resolved: Font.TextStyle = density == .compact ? style
             : style == .caption2 ? .caption : style == .caption ? .subheadline : .body
-        content.font(.system(resolved).weight(weight))
+        if sizeOffset == 0 {
+            content.font(.system(resolved).weight(weight))
+        } else {
+            content.font(.system(size: Self.pointSize(resolved) + sizeOffset, weight: weight))
+        }
+    }
+
+    static func pointSize(_ style: Font.TextStyle) -> CGFloat {
+        let native: NSFont.TextStyle = switch style {
+        case .caption2: .caption2
+        case .caption: .caption1
+        case .footnote: .footnote
+        case .subheadline: .subheadline
+        case .callout: .callout
+        case .headline: .headline
+        default: .body
+        }
+        return NSFont.preferredFont(forTextStyle: native).pointSize
     }
 }
 
 private extension View {
-    func sidebarFont(_ style: Font.TextStyle, weight: Font.Weight = .regular) -> some View {
-        modifier(SidebarTypography(style: style, weight: weight))
+    func sidebarFont(_ style: Font.TextStyle, weight: Font.Weight = .regular, sizeOffset: CGFloat = 0) -> some View {
+        modifier(SidebarTypography(style: style, weight: weight, sizeOffset: sizeOffset))
     }
 }
 
@@ -2944,6 +2962,8 @@ private struct SidebarResizeHandle: View {
     }
 }
 
+enum SidebarFooterPart { case pet, text }
+
 struct SidebarPinnedFooter: View {
     let content: SidebarDetailContent
     var maximumHeight: CGFloat = 220
@@ -2951,20 +2971,31 @@ struct SidebarPinnedFooter: View {
     var userHeight: Binding<Double?> = .constant(nil)
     let inspect: () -> Void
     var copyValue: (String) -> Bool = { SidebarSessionCopy.copy($0) }
+    /// Presentation-only seam: pet and text-column frames in the visible body's coordinate space.
+    var geometryChanged: ((SidebarFooterPart, CGRect) -> Void)? = nil
     @State private var contentHeight: CGFloat = 80
-    /// Pet row height measured only at baseline pet width, so a growing pet cannot ratchet the minimum.
-    @State private var restingRowHeight: CGFloat = 48
+    @State private var rowHeight: CGFloat = 48
+    /// Text column height as laid out beside a baseline pet, measured independently of the displayed pet.
+    @State private var baselineTextHeight: CGFloat = 0
     @State private var footerWidth: CGFloat = 0
     @State private var dragStart: CGFloat?
 
     private let headerHeight: CGFloat = 5
+    private let rowSpacing: CGFloat = 8
+    private static let bodySpace = "sidebar-pinned-body"
     private var iconRowHeight: CGFloat { content.isAgent ? 14 : 0 }
     private var minimumBodyHeight: CGFloat {
-        max(SidebarFooterPetSize.height(forWidth: SidebarFooterPetSize.baselineWidth), restingRowHeight)
+        guard content.isAgent else { return rowHeight }
+        return max(SidebarFooterPetSize.height(forWidth: SidebarFooterPetSize.baselineWidth), baselineTextHeight)
     }
     private var petWidth: CGFloat {
         SidebarFooterPetSize.width(bodyHeight: bodyHeight, footerWidth: footerWidth,
                                    userSized: userHeight.wrappedValue != nil)
+    }
+    /// The agent header text beside the pet reads 2pt larger than its text style.
+    private var textSizeOffset: CGFloat { content.isAgent ? 2 : 0 }
+    private var baselineTextWidth: CGFloat {
+        max(0, footerWidth - SidebarFooterPetSize.baselineWidth - rowSpacing)
     }
     private var maximumBodyHeight: CGFloat { max(minimumBodyHeight, dragLimit - headerHeight - iconRowHeight) }
     private var bodyHeight: CGFloat {
@@ -3000,6 +3031,7 @@ struct SidebarPinnedFooter: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
+            .coordinateSpace(name: Self.bodySpace)
             .frame(height: bodyHeight)
             if content.isAgent {
                 SidebarGlyphIcon(name: "oct-copilot", tint: .secondary)
@@ -3025,7 +3057,7 @@ struct SidebarPinnedFooter: View {
 
     /// The title opens the details popover when the active window has inspectable details.
     @ViewBuilder private var titleView: some View {
-        let title = Text(displayTitle).sidebarFont(.caption, weight: .semibold).lineLimit(2)
+        let title = Text(displayTitle).sidebarFont(.caption, weight: .semibold, sizeOffset: textSizeOffset).lineLimit(2)
         if content.inspection != nil {
             Button(action: inspect) {
                 title.multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
@@ -3039,27 +3071,47 @@ struct SidebarPinnedFooter: View {
         }
     }
 
+    private var textColumn: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            titleView
+            if let visual = content.visual {
+                Label(visual.title, systemImage: visual.symbol)
+                    .sidebarFont(.caption2, sizeOffset: textSizeOffset).foregroundStyle(visual.tone.color)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let model = content.lines.first(where: { $0.title == "Model" }) {
+                Text(model.value).sidebarFont(.caption2, sizeOffset: textSizeOffset).foregroundStyle(.secondary)
+                    .lineLimit(1).help(model.value)
+            }
+        }
+    }
+
     private var footerContents: some View {
         VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .top, spacing: 8) {
-                if content.isAgent { SidebarPetButton(content: content, width: petWidth) }
-                VStack(alignment: .leading, spacing: 2) {
-                    titleView
-                    if let visual = content.visual {
-                        Label(visual.title, systemImage: visual.symbol)
-                            .sidebarFont(.caption2).foregroundStyle(visual.tone.color)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if let model = content.lines.first(where: { $0.title == "Model" }) {
-                        Text(model.value).sidebarFont(.caption2).foregroundStyle(.secondary)
-                            .lineLimit(1).help(model.value)
-                    }
+            HStack(alignment: .center, spacing: rowSpacing) {
+                if content.isAgent {
+                    SidebarPetButton(content: content, width: petWidth)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.bodySpace)) } action: {
+                            geometryChanged?(.pet, $0)
+                        }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                textColumn
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.bodySpace)) } action: {
+                        geometryChanged?(.text, $0)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                if petWidth <= SidebarFooterPetSize.baselineWidth { restingRowHeight = height }
+            .background(alignment: .topLeading) {
+                if content.isAgent {
+                    textColumn
+                        .frame(width: baselineTextWidth, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { baselineTextHeight = $0 }
+                        .hidden()
+                        .accessibilityHidden(true)
+                }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeight = $0 }
             ForEach(content.lines.filter { $0.copyableValue != nil }) { line in
                 SidebarSessionDetail(line: line, copyValue: copyValue)
             }

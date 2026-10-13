@@ -9,6 +9,8 @@ struct SidebarPetView: View {
     let state: SidebarPetState
     var width: CGFloat = 46
     var animated = true
+    /// Fraction of the cell's transparent top margin excluded from layout; the sprite may draw into it.
+    var topTrim: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var height: CGFloat { width * CGFloat(SidebarPetSheet.cellHeight) / CGFloat(SidebarPetSheet.cellWidth) }
@@ -25,6 +27,7 @@ struct SidebarPetView: View {
             }
         }
         .frame(width: width, height: height)
+        .frame(width: width, height: height * (1 - topTrim), alignment: .bottom)
     }
 
     @ViewBuilder private func cell(_ frame: CGImage?) -> some View {
@@ -36,19 +39,27 @@ struct SidebarPetView: View {
     }
 }
 
-/// Footer pet sizing: grows with a user-sized footer, keeping the cell aspect ratio within
-/// half the footer width and the visible body height, never below the baseline.
+/// Footer pet sizing: grows with a user-sized footer, keeping the cell aspect ratio within the visible
+/// body height and a 64pt box. Half the footer width is a hard cap that wins over the baseline floor.
 enum SidebarFooterPetSize {
     static let baselineWidth: CGFloat = 38
     static let maximumWidthFraction: CGFloat = 0.5
+    /// The full sprite cell fits this square, so width <= 64 * 192 / 208.
+    static let maximumBox: CGFloat = 64
+    /// Transparent band above every footer-played row (idle, wave, failure, waiting, working) of the
+    /// bundled sheet: its tallest played row (working) starts 19 of 208 cell pixels down.
+    static let topTrimFraction: CGFloat = 19 / 208
     static var aspect: CGFloat { CGFloat(SidebarPetSheet.cellHeight) / CGFloat(SidebarPetSheet.cellWidth) }
 
     static func width(bodyHeight: CGFloat, footerWidth: CGFloat, userSized: Bool) -> CGFloat {
-        guard userSized, footerWidth > 0, bodyHeight.isFinite, footerWidth.isFinite else { return baselineWidth }
-        return max(baselineWidth, min(bodyHeight / aspect, footerWidth * maximumWidthFraction).rounded(.down))
+        guard footerWidth > 0, footerWidth.isFinite else { return baselineWidth }
+        let grown = userSized && bodyHeight.isFinite ? bodyHeight / (aspect * (1 - topTrimFraction)) : baselineWidth
+        let boxed = min(grown, maximumBox, maximumBox / aspect)
+        return min(max(baselineWidth, boxed), footerWidth * maximumWidthFraction).rounded(.down)
     }
 
-    static func height(forWidth width: CGFloat) -> CGFloat { width * aspect }
+    /// Laid-out footer pet height: the full cell height less the trimmed top band.
+    static func height(forWidth width: CGFloat) -> CGFloat { width * aspect * (1 - topTrimFraction) }
 }
 
 /// The active/hovered agent's pet. Click to choose a different pet for this agent session.
@@ -68,7 +79,8 @@ struct SidebarPetButton: View {
         // An agent-made pet in use can be captured into the shared collection.
         let capturable = descriptor?.source == .session && content.petSessionID != nil
         Button { showingPicker = true } label: {
-            SidebarPetView(petID: petID, session: content.petSessionID, state: state, width: width)
+            SidebarPetView(petID: petID, session: content.petSessionID, state: state, width: width,
+                           topTrim: SidebarFooterPetSize.topTrimFraction)
         }
         .buttonStyle(.plain)
         .help("\(name) · \(state.title). Click to choose a pet.")
