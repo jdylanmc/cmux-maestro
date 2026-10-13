@@ -80,6 +80,22 @@ struct SidebarNavigationTests {
     }
 
     @Test
+    func rejectedWorkspaceSwitchSkipsSurfaceActionAndNeverReportsSuccess() async {
+        let recorder = SidebarHostRecorder()
+        let model = responseOrderingModel()
+        model.update(context: context(recorder: recorder, moved: true))
+        var seen = 0
+        model.navigation.select(.surface(workspaceID: fixtures.workspaceB, surfaceID: fixtures.surfaceA)) { seen += 1 }
+        await sidebarEventually { recorder.actions.count == 1 }
+        #expect(recorder.actions[0] == .selectWorkspace(fixtures.workspaceB))
+        recorder.reply(0, .rejected("workspace switch refused"))
+        await sidebarEventually { model.navigation.status == .rejected }
+        await Task.yield()
+        #expect(recorder.actions.count == 1)
+        #expect(seen == 0)
+    }
+
+    @Test
     func deniedActionAndOffWindowTargetsNeverReachHost() async {
         let recorder = SidebarHostRecorder()
         let model = SidebarConnectionModel()

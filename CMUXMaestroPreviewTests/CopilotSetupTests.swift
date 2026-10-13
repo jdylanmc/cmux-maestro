@@ -1155,3 +1155,23 @@ struct CopilotSetupTests {
         #expect(FileManager.default.fileExists(atPath: retained.path))
     }
 }
+
+struct CopilotProcessQuiescenceTests {
+    @Test func unkillableGroupStopsWaitingAtItsDeadline() {
+        var polls = 0
+        let stopped = LocalCopilotSetupRunner.waitForQuiescence(
+            until: .now.advanced(by: .milliseconds(50)), pollInterval: 0.001
+        ) { polls += 1; return false }
+        #expect(!stopped)
+        #expect(polls > 1)
+    }
+
+    @Test func quiescenceObservedBeforeTheDeadlineSucceeds() {
+        var polls = 0
+        let stopped = LocalCopilotSetupRunner.waitForQuiescence(
+            until: .now.advanced(by: .seconds(5)), pollInterval: 0.001
+        ) { polls += 1; return polls == 3 }
+        #expect(stopped)
+        #expect(polls == 3)
+    }
+}

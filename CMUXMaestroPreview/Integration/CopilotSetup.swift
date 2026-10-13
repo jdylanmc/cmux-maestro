@@ -1707,10 +1707,28 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         let killError = killResult < 0 ? errno : 0
         observation?.note(.killSignal, .init(result: killResult, error: killError, pid: pid, status: SIGKILL))
         observation?.end(.killSignal)
-        while !groupIsQuiescent(pid, observation: observation) {
-            Thread.sleep(forTimeInterval: 0.01)
-        }
+        // SIGKILL cannot be ignored, but an uninterruptible member or failing enumeration
+        // must not hold the dispatch worker forever. Leave the leader unreaped so its
+        // process-group anchor stays valid, and report the group as not stopped.
+        let stopped = waitForQuiescence(
+            until: .now.advanced(by: .seconds(max(grace, postKillQuiescenceGrace)))
+        ) { groupIsQuiescent(pid, observation: observation) }
+        guard stopped else { return false }
         reap(pid, observation: observation)
+        return true
+    }
+
+    static let postKillQuiescenceGrace: TimeInterval = 5
+
+    static func waitForQuiescence(
+        until deadline: ContinuousClock.Instant,
+        pollInterval: TimeInterval = 0.01,
+        isQuiescent: () -> Bool
+    ) -> Bool {
+        while !isQuiescent() {
+            guard ContinuousClock.now < deadline else { return false }
+            Thread.sleep(forTimeInterval: pollInterval)
+        }
         return true
     }
 
