@@ -4437,6 +4437,25 @@ class OwnPetPublicationTests(unittest.TestCase):
         self.assertEqual((self.library / "duck/pet.json").read_text(), '{"displayName": "Theirs"}')
         self.assertTrue(any(item.name.startswith(".duck.previous-") for item in self.library.iterdir()))
 
+    def test_folder_replaced_after_the_identity_check_is_never_deleted(self):
+        publication = self.staged("Mine")
+        publication.publish()
+        real_rename = os.rename
+        folder = self.library / "duck"
+
+        def rename_then_race(source, destination, *args, **kwargs):
+            real_rename(source, destination, *args, **kwargs)
+            if Path(source) == folder:  # the instant after the folder was taken out of the namespace
+                folder.mkdir(mode=0o700)
+                (folder / "pet.json").write_text('{"displayName": "Raced"}')
+        with patch.dict(CONTROLLER_API["PetPublication"].restore.__globals__,
+                        {"os": unittest.mock.Mock(wraps=os, rename=rename_then_race)}):
+            with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "retained"):
+                publication.restore()
+        self.assertEqual((folder / "pet.json").read_text(), '{"displayName": "Raced"}')
+        self.assertTrue(any(item.name.startswith(".duck.previous-") for item in self.library.iterdir()))
+        self.assertFalse(any(item.name.startswith(".duck.quarantine-") for item in self.library.iterdir()))
+
     def test_concurrent_adds_of_one_pet_are_serialized(self):
         first = self.staged("First")
         first.publish()

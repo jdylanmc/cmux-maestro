@@ -4176,24 +4176,33 @@ class PetPublication:
         shutil.rmtree(self.previous, ignore_errors=True)
         self._unlock()
 
-    def _published_is_ours(self):
-        try:
-            info = self.folder.lstat()
-        except FileNotFoundError:
-            return True
-        return (info.st_dev, info.st_ino) == self.identity
-
     def restore(self):
         try:
             shutil.rmtree(self.stage, ignore_errors=True)
             if not (self.replaced or self.created):
                 return
-            if not self._published_is_ours():
-                raise OrchestrationError(
-                    "The pet folder changed during the add; it and any previous pet were retained."
-                )
-            shutil.rmtree(self.folder, ignore_errors=True)
+            # Never delete a pathname after a separate check: take the visible folder
+            # out of the namespace first, then judge and delete only what we hold.
+            quarantine = self.sessions / f".{self.folder.name}.quarantine-{secrets.token_hex(4)}"
+            try:
+                os.rename(self.folder, quarantine)
+            except FileNotFoundError:
+                quarantine = None
+            if quarantine is not None:
+                info = quarantine.lstat()
+                if (info.st_dev, info.st_ino) != self.identity:
+                    if not os.path.lexists(self.folder):
+                        os.rename(quarantine, self.folder)
+                        kept = "it and any previous pet were retained"
+                    else:
+                        kept = "it was quarantined beside the library and any previous pet was retained"
+                    raise OrchestrationError(f"The pet folder changed during the add; {kept}.")
+                shutil.rmtree(quarantine, ignore_errors=True)
             if self.replaced:
+                if os.path.lexists(self.folder):
+                    raise OrchestrationError(
+                        "A pet appeared during the add; the previous pet was retained beside the library."
+                    )
                 os.rename(self.previous, self.folder)
                 self.replaced = False
         finally:
