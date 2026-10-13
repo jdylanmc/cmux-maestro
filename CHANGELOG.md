@@ -36,6 +36,11 @@ Notable changes are recorded using Keep a Changelog categories.
   extension stopped the sync there, so every later Beat in that session never registered,
   and it logged a single generic diagnostic. Each schedule change is now attempted on its
   own, and a failure is logged once per Beat (with its ID) until it succeeds.
+- Apply a pause or edit noticed during a sync from the newest store. The change-triggered
+  sync was dropped while one ran, so a sync that had already read the store could register
+  a just-paused Beat and leave it until the next poll. A sync requested mid-run now stops
+  the running pass from starting further changes and reruns it, and no schedule change
+  starts after the session's Beats are closed.
 - Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
   dependency-free `pet_kit.py` drawing kit instead of requiring `hatch-pet`, whose
   Codex-only image generation was unavailable to Copilot.

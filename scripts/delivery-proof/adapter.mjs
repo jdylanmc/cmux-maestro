@@ -752,19 +752,39 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
   } }) {
   const sessionId = session?.sessionId;
   requireCondition(typeof sessionId === "string" && UUID.test(sessionId));
-  let busy = false, failing = false, closed = false, debounce;
+  let running = null, again = false, failing = false, closed = false, debounce;
   // One diagnostic per failing schedule change until it succeeds; one schedule's failure never
-  // blocks the others. Each sync attempts every change once; nothing retries in between.
+  // blocks the others. Each pass attempts every change at most once; nothing retries within it.
   let failed = new Set();
-  async function sync() {
-    if (busy || closed) return;
-    busy = true;
+  // A sync requested during a pass stops that pass from starting further changes and reruns it from
+  // the newest store, so a stale snapshot never adds a just-paused Beat. Callers share the running
+  // promise, so awaiting sync() means the latest store was applied. No change starts after close.
+  function sync() {
+    if (closed) return Promise.resolve();
+    if (running) {
+      again = true;
+      return running;
+    }
+    running = (async () => {
+      try {
+        do {
+          again = false;
+          await reconcile();
+        } while (again && !closed);
+      } finally {
+        running = null;
+      }
+    })();
+    return running;
+  }
+  async function reconcile() {
     try {
       const wanted = await read(sessionId), entries = await gateway.list();
       const plan = planBeatSchedules({ wanted, entries, tz });
       failing = false;
       const failingNow = new Set();
       const attempt = async (key, beatId, change) => {
+        if (closed || again) return null;
         try {
           await change();
           return true;
@@ -780,19 +800,18 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
       for (const id of plan.remove) {
         const label = entries.find((entry) => entry.id === id)?.label ?? "";
         const owner = (BEAT_LABEL.exec(label) ?? RETIRED_BEAT_LABEL.exec(label))?.[1];
-        if (!await attempt(`remove ${id}`, owner, () => gateway.remove(id)) && owner) stuck.push(owner);
+        if (await attempt(`remove ${id}`, owner, () => gateway.remove(id)) === false && owner) stuck.push(owner);
       }
       for (const entry of plan.add) {
         const beatId = BEAT_LABEL.exec(entry.label)[1];
         if (stuck.some((owner) => beatId.startsWith(owner))) continue;
         await attempt(`add ${beatId}`, beatId, () => gateway.add(entry));
       }
-      failed = failingNow;
+      // An interrupted pass keeps earlier failures so the rerun does not report them twice.
+      failed = closed || again ? new Set([...failed, ...failingNow]) : failingNow;
     } catch (error) {
       if (!failing) diagnostic(error);
       failing = true;
-    } finally {
-      busy = false;
     }
   }
   const timer = setInterval(sync, pollMs);

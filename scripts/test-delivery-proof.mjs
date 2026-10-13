@@ -979,6 +979,57 @@ test("a schedule that cannot be stopped blocks its Beat's replacement and names 
   assert.deepEqual(entries.map((entry) => entry.prompt), ["New words."]);
 });
 
+function gatedBeats(t, initial) {
+  let wanted = initial, gate = null;
+  const entries = [], calls = [];
+  let nextId = 1;
+  const running = startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    read: async () => wanted,
+    gateway: {
+      list: async () => { await gate?.promise; return entries.map((entry) => ({ ...entry })); },
+      add: async (entry) => { calls.push("add"); entries.push({ id: nextId, ...entry }); return nextId++; },
+      remove: async (id) => { calls.push("remove"); entries.splice(entries.findIndex((entry) => entry.id === id), 1); },
+    },
+    diagnostic: (error) => assert.fail(error),
+  });
+  t.after(() => running.close());
+  const hold = () => {
+    let release;
+    gate = { promise: new Promise((resolve) => { release = resolve; }) };
+    return () => { gate = null; release(); };
+  };
+  return { running, entries, calls, set: (value) => { wanted = value; }, hold };
+}
+
+test("a pause noticed during a sync stops its stale changes and reruns from the newest store", async (t) => {
+  const beat = makeBeat();
+  const f = gatedBeats(t, []);
+  await f.running.ready;
+  f.set([beat]);                                 // resumed
+  const release = f.hold();
+  const inFlight = f.running.sync();             // reads [beat], then waits in list()
+  f.set([]);                                     // paused while that sync is in flight
+  const rerun = f.running.sync();                // the change-triggered sync arrives while busy
+  release();
+  await rerun;                                   // awaiting a coalesced sync means it was applied
+  await inFlight;
+  assert.deepEqual(f.entries, []);
+  assert.deepEqual(f.calls, [], "the stale snapshot never registered the paused Beat");
+});
+
+test("closing Beats during a sync starts no schedule change", async (t) => {
+  const f = gatedBeats(t, []);
+  await f.running.ready;
+  f.set([makeBeat()]);
+  const release = f.hold();
+  const inFlight = f.running.sync();
+  f.running.close();
+  release();
+  await inFlight;
+  assert.deepEqual(f.entries, []);
+});
+
 async function beatsController(t, home) {
   const directory = await fs.mkdtemp(path.join(base, "bc-"));
   t.after(() => fs.rm(directory, { recursive: true }));
