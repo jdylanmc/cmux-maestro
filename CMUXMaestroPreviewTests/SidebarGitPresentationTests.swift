@@ -144,7 +144,7 @@ struct SidebarGitPresentationTests {
             copyValue: { _ in Issue.record("Rendering must not copy"); return false }
         )
         let pinned = SidebarPinnedFooter(
-            content: .init(title: "Synthetic Git", lines: lines), maximumHeight: 600,
+            content: .init(title: "Synthetic Git", lines: lines), pets: SidebarStoreFixture().pets, maximumHeight: 600,
             inspect: { Issue.record("Rendering must not inspect or acknowledge") }
         )
         for (name, content) in [("hover", AnyView(hover)), ("pinned", AnyView(pinned))] {

@@ -12,8 +12,6 @@ struct SidebarBeatTarget: Identifiable, Equatable {
 @Observable
 @MainActor
 final class SidebarBeatsController {
-    static let shared = SidebarBeatsController()
-
     private(set) var beats: [SidebarBeat] = []
     private(set) var notice: String?
     private let file: SidebarBeatsFile?
@@ -57,6 +55,7 @@ private enum BeatsMode: Equatable {
 }
 
 struct SidebarBeatsPanel: View {
+    let controller: SidebarBeatsController
     let targets: [SidebarBeatTarget]
     let close: () -> Void
     @State private var mode = BeatsMode.list
@@ -64,7 +63,6 @@ struct SidebarBeatsPanel: View {
     @State private var actionError: String?
 
     var body: some View {
-        let controller = SidebarBeatsController.shared
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Beats").font(.headline)
@@ -117,7 +115,7 @@ private struct BeatsList: View {
                     Text("No beats.").font(.caption).foregroundStyle(.secondary).padding(.vertical, 12)
                 }
                 ForEach(controller.beats) { beat in
-                    BeatRow(beat: beat, target: targets.first { $0.id.uuidString.lowercased() == beat.sessionId },
+                    BeatRow(controller: controller, beat: beat, target: targets.first { $0.id.uuidString.lowercased() == beat.sessionId },
                             pendingDelete: $pendingDelete, actionError: $actionError, edit: edit)
                 }
             }
@@ -127,6 +125,7 @@ private struct BeatsList: View {
 }
 
 private struct BeatRow: View {
+    let controller: SidebarBeatsController
     let beat: SidebarBeat
     let target: SidebarBeatTarget?
     @Binding var pendingDelete: String?
@@ -148,7 +147,6 @@ private struct BeatRow: View {
     }
 
     var body: some View {
-        let controller = SidebarBeatsController.shared
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Circle().fill(tone).frame(width: 7, height: 7)
@@ -161,7 +159,7 @@ private struct BeatRow: View {
             if let nextFire { Text("Next: \(nextFire)").font(.caption2).foregroundStyle(.secondary) }
             Text(beat.prompt).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
             HStack(spacing: 8) {
-                primaryAction(controller)
+                primaryAction
                 Button("Edit") { edit(beat) }.buttonStyle(.borderless)
                 Spacer(minLength: 0)
                 if pendingDelete == beat.id {
@@ -182,7 +180,7 @@ private struct BeatRow: View {
         .accessibilityElement(children: .contain)
     }
 
-    @ViewBuilder private func primaryAction(_ controller: SidebarBeatsController) -> some View {
+    @ViewBuilder private var primaryAction: some View {
         switch beat.status {
         case .active:
             Button("Pause") { actionError = controller.perform { try $0.pause(id: beat.id) } }.buttonStyle(.borderless)

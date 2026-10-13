@@ -113,7 +113,6 @@ private struct SidebarPetManifest: Codable {
 @Observable
 @MainActor
 final class SidebarPetStore {
-    static let shared = SidebarPetStore()
     static let defaultID = "maestro"
     private static let overridesKey = "sidebar.pet.overrides.v1"
     private static let maximumOverrides = 512

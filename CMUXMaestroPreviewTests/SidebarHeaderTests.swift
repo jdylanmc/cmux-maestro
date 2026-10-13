@@ -15,7 +15,7 @@ struct SidebarHeaderTests {
             #expect((action.unavailable != nil) == [.directory].contains(action))
         }
         var actions: [SidebarHeaderAction] = []
-        let header = SidebarHeader(taskboardActive: false, activate: { actions.append($0) })
+        let header = SidebarHeader(beats: SidebarStoreFixture().beats, taskboardActive: false, activate: { actions.append($0) })
         #expect(actions.isEmpty)
         for action in SidebarHeaderAction.allCases { header.activate(action) }
         #expect(actions == SidebarHeaderAction.allCases)
@@ -27,7 +27,7 @@ struct SidebarHeaderTests {
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        let host = NSHostingView(rootView: SidebarHeader(taskboardActive: true, availability: .stale, activate: { _ in
+        let host = NSHostingView(rootView: SidebarHeader(beats: SidebarStoreFixture().beats, taskboardActive: true, availability: .stale, activate: { _ in
             Issue.record("Rendering a shortcut cannot activate it")
         }).padding(.horizontal, 5).environment(\.colorScheme, dark ? .dark : .light)
             .background(Color(nsColor: .windowBackgroundColor))
