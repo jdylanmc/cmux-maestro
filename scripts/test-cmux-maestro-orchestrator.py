@@ -4413,10 +4413,15 @@ class OwnPetPublicationTests(unittest.TestCase):
     def select(self, ok):
         completed = unittest.mock.Mock(returncode=0 if ok else 1, stdout=json.dumps(
             {"ok": ok, "sessionId": self.SESSION, "petId": "duck"}))
+        # Only the identity helper is synthetic; the sheet still decodes through the real decoder.
+        def run(command, *args, **kwargs):
+            if command[0] == CONTROLLER_API["PET_DECODER"]:
+                return subprocess.run(command, *args, **kwargs)
+            return completed
         return patch.dict(CONTROLLER_API["select_own_pet"].__globals__, {
             "identity_helper_path": lambda feature: "/synthetic/helper",
-            "subprocess": unittest.mock.Mock(run=unittest.mock.Mock(return_value=completed),
-                                             TimeoutExpired=subprocess.TimeoutExpired),
+            "subprocess": unittest.mock.Mock(run=unittest.mock.Mock(side_effect=run),
+                                             TimeoutExpired=subprocess.TimeoutExpired, DEVNULL=subprocess.DEVNULL),
         })
 
     def add(self):
@@ -4516,19 +4521,81 @@ class PetSheetSizeTests(unittest.TestCase):
     """Pet sheets are flexible: 8 columns of 192:208 cells, any scale, nine or more rows."""
 
     @staticmethod
-    def png(width, height, rows=None):
-        """A complete, decodable 8-bit RGBA PNG; `rows` encodes fewer pixel rows than declared."""
+    def png(width, height, rows=None, *, color=6, depth=8, method=0, row_filter=0, palette=None):
+        """A complete 8-bit RGBA PNG by default; options build specific defects.
+        `rows` encodes fewer rows than declared; `palette` is the PLTE entry count."""
         import struct
         import zlib
 
         def chunk(kind, body):
             return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+        channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color]
         compressor = zlib.compressobj(9)
-        row = b"\x00" * (1 + width * 4)
+        row = bytes([row_filter]) + b"\x00" * -(-width * channels * depth // 8)
         pixels = b"".join(compressor.compress(row) for _ in range(height if rows is None else rows))
         pixels += compressor.flush()
-        return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
-                + chunk(b"IDAT", pixels) + chunk(b"IEND", b""))
+        header = chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, depth, color, method, 0, 0))
+        plte = chunk(b"PLTE", b"\x00\x00\x00" * palette) if palette else b""
+        return b"\x89PNG\r\n\x1a\n" + header + plte + chunk(b"IDAT", pixels) + chunk(b"IEND", b"")
+
+    # 512x624 lossless WebP made with `cwebp -lossless`; decodes with ImageIO.
+    WEBP = bytes.fromhex("524946462c000000574542505650384c200000002fffc19b10071011110050a4ffff29a2ffa9"
+                         "fffdef7ffffbdffffef7bfff0f00")
+
+    @staticmethod
+    def fake_vp8(width, height):
+        """RIFF-framed lossy WebP whose VP8 payload is not decodable."""
+        import struct
+        frame = b"\x00\x00\x00\x9d\x01\x2a" + struct.pack("<HH", width, height) + b"\x00" * 22
+        body = b"WEBP" + b"VP8 " + struct.pack("<I", len(frame)) + frame
+        return b"RIFF" + struct.pack("<I", len(body)) + body
+
+    def sheet_folder(self, data, extension):
+        folder = Path(tempfile.mkdtemp(prefix="pet-", dir="/tmp")) / "duck"
+        folder.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, folder.parent, True)
+        (folder / "pet.json").write_text(json.dumps({
+            "id": "duck", "displayName": "Duck", "spritesheetPath": "sheet" + extension}))
+        (folder / ("sheet" + extension)).write_bytes(data)
+        return folder
+
+    def test_decodable_png_indexed_png_and_webp_are_accepted(self):
+        read = CONTROLLER_API["read_pet_source"]
+        for name, data, extension in (("rgba png", self.png(512, 624), ".png"),
+                                      ("indexed png", self.png(512, 624, color=3, palette=1), ".png"),
+                                      ("lossless webp", self.WEBP, ".webp")):
+            with self.subTest(name):
+                *_, sheet, actual = read(str(self.sheet_folder(data, extension)), None)
+                self.assertEqual((sheet, actual), (data, extension))
+                self.assertEqual(CONTROLLER_API["decoded_size"](data, extension), (512, 624))
+
+    def test_undecodable_sheets_with_plausible_framing_are_refused(self):
+        read = CONTROLLER_API["read_pet_source"]
+        for name, data, extension in (
+            ("invalid filter byte", self.png(512, 624, row_filter=5), ".png"),
+            ("indexed without palette", self.png(512, 624, color=3), ".png"),
+            ("palette larger than depth", self.png(512, 624, color=3, depth=1, palette=3), ".png"),
+            ("illegal depth for color", self.png(512, 624, depth=4), ".png"),
+            ("nonzero compression method", self.png(512, 624, method=1), ".png"),
+            ("framed but invalid vp8", self.fake_vp8(512, 624), ".webp"),
+        ):
+            with self.subTest(name):
+                self.assertEqual(CONTROLLER_API["image_size"](data), (512, 624))
+                with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "corrupt or truncated"):
+                    read(str(self.sheet_folder(data, extension)), None)
+        # The framed VP8 passes preflight, so only the ImageIO decode refuses it.
+        self.assertTrue(CONTROLLER_API["webp_complete"](self.fake_vp8(512, 624)))
+        self.assertIsNone(CONTROLLER_API["decoded_size"](self.fake_vp8(512, 624), ".webp"))
+
+    def test_decoder_disagreement_or_absence_refuses(self):
+        read = CONTROLLER_API["read_pet_source"]
+        folder = self.sheet_folder(self.png(512, 624), ".png")
+        with patch.dict(read.__globals__, {"decoded_size": lambda data, extension: (512, 625)}), \
+                self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "corrupt or truncated"):
+            read(str(folder), None)
+        with patch.dict(read.__globals__, {"PET_DECODER": "/nonexistent/sips"}), \
+                self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "cannot be verified"):
+            read(str(folder), None)
 
     def test_fixture_decodes_with_an_independent_reader(self):
         sips = shutil.which("sips")
