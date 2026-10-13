@@ -61,7 +61,7 @@ private func run() {
         recorder.diagnose(.invalidInput)
         return
     }
-    _ = recorder.record(payload: input, environment: environment)
+    _ = recorder.bind(payload: input, environment: environment)
 }
 
 private func setOwnAppearance() -> Int32 {
@@ -100,7 +100,7 @@ private func setOwnAppearance() -> Int32 {
         process: { @Sendable pid in CopilotProcessProbe.read(pid) }
     )
     guard let payload = try? JSONSerialization.data(withJSONObject: ["sessionId": session.uuidString]) else { return 2 }
-    let outcome = recorder.record(payload: payload, environment: environment, appearance: appearance)
+    let outcome = recorder.setAppearance(appearance, payload: payload, environment: environment)
     var result: [String: Any] = ["ok": outcome == .recorded, "status": outcome.rawValue, "sessionId": session.uuidString]
     if let icon = appearance.iconId { result["iconId"] = icon }
     if let color = appearance.iconColor { result["iconColor"] = color }
@@ -121,7 +121,7 @@ private func proveOwnSession() -> Int32 {
         process: { @Sendable pid in CopilotProcessProbe.read(pid) }
     )
     guard let payload = try? JSONSerialization.data(withJSONObject: ["sessionId": session.uuidString]) else { return 2 }
-    let outcome = recorder.record(payload: payload, environment: ProcessInfo.processInfo.environment, verifyOnly: true)
+    let outcome = recorder.prove(payload: payload, environment: ProcessInfo.processInfo.environment)
     let result: [String: Any] = ["ok": outcome == .recorded, "status": outcome.rawValue, "sessionId": session.uuidString]
     guard let encoded = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) else { return 2 }
     FileHandle.standardOutput.write(encoded + Data([10]))

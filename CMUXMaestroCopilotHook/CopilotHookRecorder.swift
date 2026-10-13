@@ -105,144 +105,275 @@ nonisolated struct CopilotHookRecorder {
         }
     }
 
+    /// What a proven owner may do. Every intent shares one ownership proof.
+    enum Intent: Sendable {
+        /// Record (or refresh) this session's binding. The only intent that may create one.
+        case bind
+        /// Merge an explicit own-session appearance choice. Needs an existing binding.
+        case setAppearance(CopilotSessionAppearance)
+        /// Prove ownership for a caller that changes something else (for example Beats). No write.
+        case prove
+
+        fileprivate var requiresExistingBinding: Bool {
+            if case .bind = self { return false }
+            return true
+        }
+    }
+
+    func bind(payload: Data, environment: [String: String]) -> HookOutcome {
+        record(payload: payload, environment: environment, intent: .bind)
+    }
+
+    func setAppearance(
+        _ appearance: CopilotSessionAppearance, payload: Data, environment: [String: String]
+    ) -> HookOutcome {
+        record(payload: payload, environment: environment, intent: .setAppearance(appearance))
+    }
+
+    func prove(payload: Data, environment: [String: String]) -> HookOutcome {
+        record(payload: payload, environment: environment, intent: .prove)
+    }
+
+    // Compatibility entry point. An appearance is validated even when proof
+    // alone is requested; proof then wins and nothing is written.
     func record(
         payload: Data, environment: [String: String], appearance: CopilotSessionAppearance? = nil,
         verifyOnly: Bool = false
     ) -> HookOutcome {
+        let intent: Intent = verifyOnly ? .prove : appearance.map { .setAppearance($0) } ?? .bind
+        return record(payload: payload, environment: environment, intent: intent, validating: appearance)
+    }
+
+    func record(payload: Data, environment: [String: String], intent: Intent) -> HookOutcome {
+        var appearance: CopilotSessionAppearance?
+        if case .setAppearance(let choice) = intent { appearance = choice }
+        return record(payload: payload, environment: environment, intent: intent, validating: appearance)
+    }
+
+    private func record(
+        payload: Data, environment: [String: String], intent: Intent, validating appearance: CopilotSessionAppearance?
+    ) -> HookOutcome {
         guard !Self.isDisabled(environment) else { return .disabled }
-        guard payload.count <= 65_536,
-              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
-              let session = Self.canonicalUUID((object["sessionId"] ?? object["session_id"]) as? String),
-              object["sessionId"] == nil || object["session_id"] == nil
-                || Self.canonicalUUID(object["sessionId"] as? String) == Self.canonicalUUID(object["session_id"] as? String),
-              let workspace = Self.canonicalUUID(environment["CMUX_WORKSPACE_ID"]),
-              let surface = Self.canonicalUUID(environment["CMUX_SURFACE_ID"])
-        else { return diagnose(.invalidInput) }
-        if let appearance, (!appearance.isValid || appearance.sessionID != session) {
+        guard let request = HookRequest(payload: payload, environment: environment) else {
             return diagnose(.invalidInput)
         }
-
+        if let appearance, (!appearance.isValid || appearance.sessionID != request.session) {
+            return diagnose(.invalidInput)
+        }
         do {
-            guard case .found(let own) = process(processID), own.uid == getuid() else { return diagnose(.noOwner) }
-            let sourceURL = sessionStateRoot.appendingPathComponent(session.uuidString.lowercased())
-            let source = try CopilotFileAccess.openDirectory(sourceURL, owner: own.uid)
-            defer { close(source) }
-            let sourceMetadata = try CopilotFileAccess.statFile(source)
-            var ancestors: [HookProcess] = [own]
-            var next = own.parentPID
-            var owner: HookProcess?
-            for _ in 0..<32 {
-                guard next > 1, !ancestors.contains(where: { $0.pid == next }),
-                      case .found(let candidate) = process(next), candidate.uid == own.uid else { break }
-                ancestors.append(candidate)
-                let name = "inuse.\(candidate.pid).lock"
-                if (try? CopilotFileAccess.statEntry(at: source, name: name)) != nil {
-                    owner = candidate
-                    break
+            return try withProvenOwnership(request, intent: intent) { ownership in
+                switch intent {
+                case .prove:
+                    return .recorded
+                case .setAppearance(let appearance):
+                    return try commitAppearance(appearance, ownership: ownership)
+                case .bind:
+                    return try commitBinding(ownership)
                 }
-                next = candidate.parentPID
             }
-            guard let owner else { return diagnose(.noOwner) }
-            let record = CopilotIdentityRecord(sessionID: session, surfaceID: surface,
-                launchWorkspaceID: workspace, ownerPID: owner.pid,
-                ownerStartSeconds: owner.startSeconds, ownerStartMicroseconds: owner.startMicroseconds,
-                recordedAt: own.startDate)
-            let verifier = CopilotIdentityVerifier(uid: own.uid, lookup: process)
-            let proof = try verifier.inspect(record: record, sessionDirectory: source)
-            guard proof.status == .alive else { return diagnose(.noOwner) }
-            let root = try HookFiles.privateDirectory(integrationRoot)
-            defer { close(root) }
-            let bindingURL = integrationRoot.appendingPathComponent("bindings")
-            let bindings = try HookFiles.privateDirectory(bindingURL)
-            defer { close(bindings) }
-            let lockName = ".\(session.uuidString.lowercased()).lock"
-            let lock = openat(bindings, lockName, O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
-            guard lock >= 0 else { return diagnose(.unavailable) }
-            defer { close(lock) }
-            _ = try HookFiles.metadata(lock)
-            guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { return diagnose(.unavailable) }
-            defer { flock(lock, LOCK_UN) }
-
-            let name = session.uuidString.lowercased() + ".json"
-            let existingFD = openat(bindings, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-            if existingFD >= 0 {
-                close(existingFD)
-                guard let (existing, _) = try? CopilotFileAccess.readIdentity(
-                    at: bindings, filename: name, owner: own.uid
-                ) else { return diagnose(.superseded) }
-                if appearance != nil || verifyOnly {
-                    guard existing.sessionID == session, existing.surfaceID == surface,
-                          existing.launchWorkspaceID == workspace, owner.owns(existing) else {
-                        return diagnose(.noOwner)
-                    }
-                }
-                switch process(existing.ownerPID) {
-                case .found(let live):
-                    if live.uid != own.uid || (live.owns(existing)
-                        && (!owner.owns(existing) || existing.recordedAt > own.startDate)) {
-                        return diagnose(.superseded)
-                    }
-                case .unavailable:
-                    return diagnose(.superseded)
-                case .dead: break
-                }
-            } else {
-                if appearance != nil || verifyOnly { return diagnose(.noOwner) }
-                if errno != ENOENT { return diagnose(.unavailable) }
-            }
-
-            // Reopen the named source and marker immediately before committing:
-            // a renamed directory, replaced lock, dead owner or reused PID fails closed.
-            let currentSource = try CopilotFileAccess.openDirectory(sourceURL, owner: own.uid)
-            defer { close(currentSource) }
-            let currentBindings = try CopilotFileAccess.openDirectory(bindingURL, owner: own.uid)
-            defer { close(currentBindings) }
-            let bindingsMetadata = CopilotFileStamp(try HookFiles.metadata(bindings, directory: true))
-            let currentBindingsMetadata = CopilotFileStamp(try HookFiles.metadata(currentBindings, directory: true))
-            guard sourceMetadata.sameFile(as: try CopilotFileAccess.statFile(currentSource)),
-                  bindingsMetadata.sameFile(as: currentBindingsMetadata),
-                  try verifier.verifyStable(proof, record: record, sessionDirectory: currentSource).status == .alive,
-                  ancestors.allSatisfy({ process($0.pid) == .found($0) }) else { return diagnose(.noOwner) }
-
-            // Ownership proof for callers that change something else (for example Beats): no write.
-            if verifyOnly { return .recorded }
-            if let appearance {
-                let appearanceName = "appearance-\(session.uuidString.lowercased()).json"
-                var selected = appearance
-                do {
-                    let data = try CopilotFileAccess.readStableRegular(
-                        at: bindings, filename: appearanceName, owner: own.uid, maximum: 4096, permissions: 0o600
-                    )
-                    let previous = try JSONDecoder().decode(CopilotSessionAppearance.self, from: data)
-                    guard previous.sessionID == session, previous.isValid else { return diagnose(.unavailable) }
-                    selected.iconId = appearance.iconId ?? previous.iconId
-                    selected.iconColor = appearance.iconColor ?? previous.iconColor
-                    selected.petId = appearance.petId ?? previous.petId
-                } catch CopilotFileError.missing {
-                    // The first own-session choice has no previous appearance.
-                }
-                let finalBindings = try CopilotFileAccess.openDirectory(bindingURL, owner: own.uid)
-                defer { close(finalBindings) }
-                let finalSource = try CopilotFileAccess.openDirectory(sourceURL, owner: own.uid)
-                defer { close(finalSource) }
-                guard bindingsMetadata.sameFile(as: try CopilotFileAccess.statFile(finalBindings)),
-                      sourceMetadata.sameFile(as: try CopilotFileAccess.statFile(finalSource)) else {
-                    return diagnose(.noOwner)
-                }
-                guard try verifier.verifyStable(proof, record: record, sessionDirectory: currentSource).status == .alive,
-                      ancestors.allSatisfy({ process($0.pid) == .found($0) }) else { return diagnose(.noOwner) }
-                try HookFiles.atomicWrite(
-                    JSONEncoder().encode(selected), name: appearanceName, directory: bindings
-                )
-            } else {
-                try HookFiles.atomicWrite(CopilotIdentityJSON.encode(record), name: name, directory: bindings)
-                // Best effort: a location failure never changes the recording outcome.
-                recordLocation(object: object, session: session)
-            }
-            return .recorded
         } catch {
             return diagnose(.unavailable)
         }
+    }
+
+    // MARK: Ownership proof
+
+    private struct HookRequest {
+        let object: [String: Any]
+        let session: UUID
+        let workspace: UUID
+        let surface: UUID
+
+        init?(payload: Data, environment: [String: String]) {
+            guard payload.count <= 65_536,
+                  let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+                  let session = CopilotHookRecorder.canonicalUUID((object["sessionId"] ?? object["session_id"]) as? String),
+                  object["sessionId"] == nil || object["session_id"] == nil
+                    || CopilotHookRecorder.canonicalUUID(object["sessionId"] as? String)
+                        == CopilotHookRecorder.canonicalUUID(object["session_id"] as? String),
+                  let workspace = CopilotHookRecorder.canonicalUUID(environment["CMUX_WORKSPACE_ID"]),
+                  let surface = CopilotHookRecorder.canonicalUUID(environment["CMUX_SURFACE_ID"])
+            else { return nil }
+            self.object = object
+            self.session = session
+            self.workspace = workspace
+            self.surface = surface
+        }
+
+        var bindingName: String { session.uuidString.lowercased() + ".json" }
+    }
+
+    /// Evidence held open (and locked) for the duration of a commit.
+    private struct Ownership {
+        let request: HookRequest
+        let own: HookProcess
+        let ancestors: [HookProcess]
+        let record: CopilotIdentityRecord
+        let verifier: CopilotIdentityVerifier
+        let proof: CopilotIdentityEvidence
+        let sourceURL: URL
+        let sourceMetadata: CopilotFileStamp
+        let bindingURL: URL
+        let bindings: Int32
+        let bindingsMetadata: CopilotFileStamp
+        let currentSource: Int32
+    }
+
+    private struct ProcessAncestry {
+        let ancestors: [HookProcess]
+        let owner: HookProcess?
+    }
+
+    private func withProvenOwnership(
+        _ request: HookRequest, intent: Intent, _ commit: (Ownership) throws -> HookOutcome
+    ) throws -> HookOutcome {
+        guard case .found(let own) = process(processID), own.uid == getuid() else { return diagnose(.noOwner) }
+        let sourceURL = sessionStateRoot.appendingPathComponent(request.session.uuidString.lowercased())
+        let source = try CopilotFileAccess.openDirectory(sourceURL, owner: own.uid)
+        defer { close(source) }
+        let sourceMetadata = try CopilotFileAccess.statFile(source)
+        let ancestry = findOwner(from: own, source: source)
+        guard let owner = ancestry.owner else { return diagnose(.noOwner) }
+        let record = CopilotIdentityRecord(sessionID: request.session, surfaceID: request.surface,
+            launchWorkspaceID: request.workspace, ownerPID: owner.pid,
+            ownerStartSeconds: owner.startSeconds, ownerStartMicroseconds: owner.startMicroseconds,
+            recordedAt: own.startDate)
+        let verifier = CopilotIdentityVerifier(uid: own.uid, lookup: process)
+        let proof = try verifier.inspect(record: record, sessionDirectory: source)
+        guard proof.status == .alive else { return diagnose(.noOwner) }
+        let root = try HookFiles.privateDirectory(integrationRoot)
+        defer { close(root) }
+        let bindingURL = integrationRoot.appendingPathComponent("bindings")
+        let bindings = try HookFiles.privateDirectory(bindingURL)
+        defer { close(bindings) }
+        let lockName = ".\(request.session.uuidString.lowercased()).lock"
+        let lock = openat(bindings, lockName, O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
+        guard lock >= 0 else { return diagnose(.unavailable) }
+        defer { close(lock) }
+        _ = try HookFiles.metadata(lock)
+        guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { return diagnose(.unavailable) }
+        defer { flock(lock, LOCK_UN) }
+
+        if let refusal = existingBindingRefusal(
+            request, intent: intent, own: own, owner: owner, bindings: bindings
+        ) { return diagnose(refusal) }
+
+        // Reopen the named source and marker immediately before committing:
+        // a renamed directory, replaced lock, dead owner or reused PID fails closed.
+        let currentSource = try CopilotFileAccess.openDirectory(sourceURL, owner: own.uid)
+        defer { close(currentSource) }
+        let currentBindings = try CopilotFileAccess.openDirectory(bindingURL, owner: own.uid)
+        defer { close(currentBindings) }
+        let bindingsMetadata = CopilotFileStamp(try HookFiles.metadata(bindings, directory: true))
+        let currentBindingsMetadata = CopilotFileStamp(try HookFiles.metadata(currentBindings, directory: true))
+        guard sourceMetadata.sameFile(as: try CopilotFileAccess.statFile(currentSource)),
+              bindingsMetadata.sameFile(as: currentBindingsMetadata),
+              try verifier.verifyStable(proof, record: record, sessionDirectory: currentSource).status == .alive,
+              ancestry.ancestors.allSatisfy({ process($0.pid) == .found($0) }) else { return diagnose(.noOwner) }
+
+        return try commit(Ownership(
+            request: request, own: own, ancestors: ancestry.ancestors, record: record, verifier: verifier,
+            proof: proof, sourceURL: sourceURL, sourceMetadata: sourceMetadata, bindingURL: bindingURL,
+            bindings: bindings, bindingsMetadata: bindingsMetadata, currentSource: currentSource
+        ))
+    }
+
+    // The owner is the nearest same-user ancestor holding the session's in-use marker.
+    private func findOwner(from own: HookProcess, source: Int32) -> ProcessAncestry {
+        var ancestors: [HookProcess] = [own]
+        var next = own.parentPID
+        for _ in 0..<32 {
+            guard next > 1, !ancestors.contains(where: { $0.pid == next }),
+                  case .found(let candidate) = process(next), candidate.uid == own.uid else { break }
+            ancestors.append(candidate)
+            let name = "inuse.\(candidate.pid).lock"
+            if (try? CopilotFileAccess.statEntry(at: source, name: name)) != nil {
+                return ProcessAncestry(ancestors: ancestors, owner: candidate)
+            }
+            next = candidate.parentPID
+        }
+        return ProcessAncestry(ancestors: ancestors, owner: nil)
+    }
+
+    // A live, newer or foreign binding supersedes this one. Only `bind` may
+    // proceed without a binding, and others must match it exactly.
+    private func existingBindingRefusal(
+        _ request: HookRequest, intent: Intent, own: HookProcess, owner: HookProcess, bindings: Int32
+    ) -> HookOutcome? {
+        let name = request.bindingName
+        let existingFD = openat(bindings, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard existingFD >= 0 else {
+            if intent.requiresExistingBinding { return .noOwner }
+            return errno != ENOENT ? .unavailable : nil
+        }
+        close(existingFD)
+        guard let (existing, _) = try? CopilotFileAccess.readIdentity(
+            at: bindings, filename: name, owner: own.uid
+        ) else { return .superseded }
+        if intent.requiresExistingBinding {
+            guard existing.sessionID == request.session, existing.surfaceID == request.surface,
+                  existing.launchWorkspaceID == request.workspace, owner.owns(existing) else {
+                return .noOwner
+            }
+        }
+        switch process(existing.ownerPID) {
+        case .found(let live):
+            if live.uid != own.uid || (live.owns(existing)
+                && (!owner.owns(existing) || existing.recordedAt > own.startDate)) {
+                return .superseded
+            }
+        case .unavailable:
+            return .superseded
+        case .dead: break
+        }
+        return nil
+    }
+
+    // MARK: Commits
+
+    private func commitBinding(_ ownership: Ownership) throws -> HookOutcome {
+        try HookFiles.atomicWrite(
+            CopilotIdentityJSON.encode(ownership.record), name: ownership.request.bindingName,
+            directory: ownership.bindings
+        )
+        // Best effort: a location failure never changes the recording outcome.
+        recordLocation(object: ownership.request.object, session: ownership.request.session)
+        return .recorded
+    }
+
+    private func commitAppearance(_ appearance: CopilotSessionAppearance, ownership: Ownership) throws -> HookOutcome {
+        let session = ownership.request.session
+        let appearanceName = "appearance-\(session.uuidString.lowercased()).json"
+        var selected = appearance
+        do {
+            let data = try CopilotFileAccess.readStableRegular(
+                at: ownership.bindings, filename: appearanceName, owner: ownership.own.uid,
+                maximum: 4096, permissions: 0o600
+            )
+            let previous = try JSONDecoder().decode(CopilotSessionAppearance.self, from: data)
+            guard previous.sessionID == session, previous.isValid else { return diagnose(.unavailable) }
+            selected.iconId = appearance.iconId ?? previous.iconId
+            selected.iconColor = appearance.iconColor ?? previous.iconColor
+            selected.petId = appearance.petId ?? previous.petId
+        } catch CopilotFileError.missing {
+            // The first own-session choice has no previous appearance.
+        }
+        let finalBindings = try CopilotFileAccess.openDirectory(ownership.bindingURL, owner: ownership.own.uid)
+        defer { close(finalBindings) }
+        let finalSource = try CopilotFileAccess.openDirectory(ownership.sourceURL, owner: ownership.own.uid)
+        defer { close(finalSource) }
+        guard ownership.bindingsMetadata.sameFile(as: try CopilotFileAccess.statFile(finalBindings)),
+              ownership.sourceMetadata.sameFile(as: try CopilotFileAccess.statFile(finalSource)) else {
+            return diagnose(.noOwner)
+        }
+        guard try ownership.verifier.verifyStable(
+            ownership.proof, record: ownership.record, sessionDirectory: ownership.currentSource
+        ).status == .alive,
+              ownership.ancestors.allSatisfy({ process($0.pid) == .found($0) }) else { return diagnose(.noOwner) }
+        try HookFiles.atomicWrite(
+            JSONEncoder().encode(selected), name: appearanceName, directory: ownership.bindings
+        )
+        return .recorded
     }
 
     func recordLocation(object: [String: Any], session: UUID) {
