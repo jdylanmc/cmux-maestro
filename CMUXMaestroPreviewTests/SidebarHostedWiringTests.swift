@@ -7,22 +7,36 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarHostedWiringTests {
-    @Test func hierarchyDismissPersistsExactOutcomeAndReprojectsHistory() async throws {
-        let hosted = try await SidebarHostedSidebar(mode: .hierarchy)
+    /// Hierarchy owns outcome dismissal; Taskboard cards expose no dismissal control at all.
+    @Test(arguments: [SidebarMode.hierarchy, .taskboard])
+    func dismissalPersistsExactOutcomeOnlyFromItsProductionControl(mode: SidebarMode) async throws {
+        let hosted = try await SidebarHostedSidebar(mode: mode)
         defer { hosted.close() }
-        let dismiss = try #require(hosted.button("Dismiss Finished child, completed outcome"))
-        #expect(hosted.preferences.history.dismissed.isEmpty)
-        dismiss.activate()
+        let label = "Dismiss Finished child, completed outcome"
         let key = SidebarDismissedOutcome(sessionID: hosted.fixtures.sessionID, childID: "finished",
                                           eventID: hosted.childEventID)
-        #expect(hosted.preferences.history.dismissed == [key])
-        await sidebarEventually {
-            hosted.model.copilot.tree.sessions.first?.nodes.contains { $0.id == "finished" } == false
-                && hosted.button("Dismiss Finished child, completed outcome") == nil
+        try #require(hosted.model.copilot.tree.dismissibleOutcomes.contains(key))
+        let menuDismissals = hosted.descendants().compactMap { ($0 as? SidebarRowMenuAnchorView)?.presenter }
+            .flatMap(\.groups).flatMap(\.actions).filter { $0.title.hasPrefix("Dismiss") }
+        #expect(hosted.preferences.history.dismissed.isEmpty)
+        switch mode {
+        case .hierarchy:
+            let dismiss = try #require(hosted.button(label))
+            dismiss.activate()
+            #expect(hosted.preferences.history.dismissed == [key])
+            await sidebarEventually {
+                hosted.model.copilot.tree.sessions.first?.nodes.contains { $0.id == "finished" } == false
+                    && hosted.button(label) == nil
+            }
+            #expect(hosted.model.copilot.tree.sessions.first?.nodes.contains { $0.id == "finished" } == false,
+                    "The model must reproject the persisted history")
+            #expect(hosted.button(label) == nil, "The dismissed outcome's control disappears")
+        case .taskboard:
+            #expect(hosted.button(label) == nil && menuDismissals.isEmpty,
+                    "Taskboard cards offer focus and details only; dismissal lives in the hierarchy")
+            #expect(hosted.button("Focus Copilot session 10000000") != nil, "Fixture renders the owning card")
+            #expect(hosted.preferences.history.dismissed.isEmpty)
         }
-        #expect(hosted.model.copilot.tree.sessions.first?.nodes.contains { $0.id == "finished" } == false,
-                "The model must reproject the persisted history")
-        #expect(hosted.button("Dismiss Finished child, completed outcome") == nil)
         #expect(hosted.navigations.isEmpty && hosted.preferences.attention.acknowledged.isEmpty,
                 "Dismissal neither navigates nor acknowledges")
     }
