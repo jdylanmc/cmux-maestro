@@ -23,9 +23,39 @@ enum SidebarPetSheet {
     static func scale(width: Int) -> CGFloat { CGFloat(width) / CGFloat(Self.width) }
     static let maximumBytes = 10 * 1024 * 1024
     static let frameCounts = [6, 8, 8, 4, 5, 8, 6, 6, 6]
+    /// Largest transparent top band trimmed from layout, as a fraction of cell height: the bundled
+    /// sheet's tallest played row (working) starts 19 of 208 cell pixels down.
+    static let maximumTopInset: CGFloat = 19 / 208
+    /// Rows the sidebar actually plays.
+    static let playedRows = Set(SidebarPetState.allCases.map(\.row)).sorted()
+
+    /// Fully transparent top rows shared by every played cell, as a fraction of cell height, capped at
+    /// `maximumTopInset`. `pixels` is a top-down premultiplied RGBA bitmap of the whole sheet.
+    static func topInset(pixels: UnsafePointer<UInt8>, width: Int, height: Int, bytesPerRow: Int) -> CGFloat {
+        let scale = Self.scale(width: width)
+        let cellWidth = Int((CGFloat(Self.cellWidth) * scale).rounded())
+        let cellHeight = (CGFloat(Self.cellHeight) * scale).rounded()
+        let limit = Int((cellHeight * maximumTopInset).rounded(.down))
+        var inset = limit
+        for row in playedRows {
+            let top = Int((CGFloat(row) * cellHeight).rounded())
+            for column in 0..<frameCounts[row] {
+                let left = column * cellWidth
+                var clear = 0
+                scan: while clear < inset, top + clear < height {
+                    let line = pixels + (top + clear) * bytesPerRow
+                    for x in left..<min(left + cellWidth, width) where line[x * 4 + 3] != 0 { break scan }
+                    clear += 1
+                }
+                inset = min(inset, clear)
+                if inset == 0 { return 0 }
+            }
+        }
+        return CGFloat(inset) / cellHeight
+    }
 }
 
-enum SidebarPetState: Equatable {
+enum SidebarPetState: Equatable, CaseIterable {
     case idle, working, needsInput, finished, failed
 
     var row: Int {
@@ -95,6 +125,7 @@ final class SidebarPetStore {
     private(set) var overrides: [String: String] = [:]
     private(set) var notice: String?
     private var sheets: [String: CGImage] = [:]
+    private var topInsets: [String: CGFloat] = [:]
     private var frames: [String: CGImage] = [:]
     private var sessionCache: [UUID: (date: Date, pets: [SidebarPetDescriptor])] = [:]
     private let defaults: UserDefaults
@@ -194,6 +225,7 @@ final class SidebarPetStore {
         guard installed.first(where: { $0.id == id })?.source == .uploaded else { return }
         try? FileManager.default.removeItem(at: uploadDirectory.appendingPathComponent(id, isDirectory: true))
         sheets[id] = nil
+        topInsets[id] = nil
         frames.removeAll()
         refresh()
     }
@@ -244,6 +276,7 @@ final class SidebarPetStore {
             try JSONEncoder().encode(manifest).write(to: target.appendingPathComponent("pet.json"), options: .atomic)
             notice = nil
             sheets[id] = nil
+            topInsets[id] = nil
             frames.removeAll()
             refresh()
             if let session, id != package.id { choose(id, session: session) }
@@ -257,10 +290,19 @@ final class SidebarPetStore {
     // MARK: Frames
 
     func sheet(for id: String, session: UUID?) -> CGImage? {
+        decodedSheet(for: id, session: session)?.image
+    }
+
+    /// Transparent top band of the pet's played cells (fraction of cell height), measured once per decode.
+    func topInset(petID: String, session: UUID?) -> CGFloat {
+        (decodedSheet(for: petID, session: session) ?? decodedSheet(for: Self.defaultID, session: nil))?.topInset ?? 0
+    }
+
+    private func decodedSheet(for id: String, session: UUID?) -> DecodedSheet? {
         guard let pet = descriptor(id, session: session) else { return nil }
         let key = pet.source == .session ? "\(session?.uuidString.lowercased() ?? "")/\(id)" : id
-        if let cached = sheets[key] { return cached }
-        let image: CGImage?
+        if let cached = sheets[key], let inset = topInsets[key] { return .init(image: cached, topInset: inset) }
+        let image: DecodedSheet?
         switch pet.source {
         case .bundled:
             image = Bundle.main.url(forResource: "maestro-pet", withExtension: "webp").flatMap(Self.image)
@@ -273,7 +315,10 @@ final class SidebarPetStore {
             }?.appendingPathComponent(id, isDirectory: true)
             image = folder.flatMap { folder in Self.manifest(in: folder).flatMap { Self.sheet(in: folder, manifest: $0) } }
         }
-        if let image { sheets[key] = image }
+        if let image {
+            sheets[key] = image.image
+            topInsets[key] = image.topInset
+        }
         return image
     }
 
@@ -292,7 +337,7 @@ final class SidebarPetStore {
         return cell
     }
 
-    nonisolated private static func sheet(in folder: URL, manifest: SidebarPetManifest) -> CGImage? {
+    nonisolated private static func sheet(in folder: URL, manifest: SidebarPetManifest) -> DecodedSheet? {
         manifest.spritesheetPath.flatMap(plainFilename).flatMap { image(folder.appendingPathComponent($0)) }
     }
 
@@ -310,7 +355,9 @@ final class SidebarPetStore {
         return try? JSONDecoder().decode(SidebarPetManifest.self, from: data)
     }
 
-    nonisolated private static func image(_ url: URL) -> CGImage? {
+    struct DecodedSheet { let image: CGImage; let topInset: CGFloat }
+
+    nonisolated private static func image(_ url: URL) -> DecodedSheet? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
               SidebarPetSheet.accepts(width: image.width, height: image.height) else { return nil }
@@ -318,13 +365,18 @@ final class SidebarPetStore {
     }
 
     /// Lazy WebP/PNG images re-decode the whole sheet on every render; draw once into a bitmap.
-    nonisolated private static func decoded(_ image: CGImage) -> CGImage? {
+    /// The same pass measures the played cells' transparent top band.
+    nonisolated static func decoded(_ image: CGImage) -> DecodedSheet? {
         guard let context = CGContext(
             data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        return context.makeImage()
+        guard let decoded = context.makeImage(), let data = context.data else { return nil }
+        let inset = SidebarPetSheet.topInset(
+            pixels: data.assumingMemoryBound(to: UInt8.self), width: context.width, height: context.height,
+            bytesPerRow: context.bytesPerRow)
+        return DecodedSheet(image: decoded, topInset: inset)
     }
 
     nonisolated private static func slug(_ value: String) -> String {
