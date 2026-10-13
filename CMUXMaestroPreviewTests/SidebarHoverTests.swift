@@ -760,9 +760,10 @@ struct SidebarHoverTests {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let image = root.appendingPathComponent("hover-workspace-\(Int(size.width))-\(dark ? "dark" : "light").png")
             try #require(bitmap.representation(using: .png, properties: [:])).write(to: image)
-            let text = try SidebarRenderingEvidence.recognizedLines(in: image, dark: dark, naturalLanguage: true).joined(separator: " ")
-            #expect(text.contains("Maestro design"))
-            #expect(text.contains("rename"))
+            let text = try SidebarRenderingEvidence.recognizedLines(in: image, dark: dark, naturalLanguage: true)
+            #expect(text.contains("Maestro design"), "OCR: \(text)")
+            // The leading shortcut glyph OCRs inconsistently; the reminder wording must end its line.
+            #expect(text.contains { $0.hasSuffix(" to rename") }, "OCR: \(text)")
         }
         #expect(preferences.history == before.0 && preferences.attention == before.1)
         #expect(preferences.layout == before.2 && preferences.icons == before.3)
