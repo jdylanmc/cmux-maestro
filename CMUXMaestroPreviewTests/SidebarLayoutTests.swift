@@ -576,8 +576,11 @@ struct SidebarLayoutTests {
         #expect(view.components(separatedBy: workingRingSchedule).count == 2)
         // The question-mark badge and its row tint are the only other sanctioned motion.
         #expect(view.components(separatedBy: askingSchedule).count == 3)
+        // The focus-bar glide is the third sanctioned motion; it honors Reduce Motion.
+        let focusBarGlide = ".animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: focusedSurface)"
         #expect(!view.replacingOccurrences(of: workingRingSchedule, with: "")
-            .replacingOccurrences(of: askingSchedule, with: "").contains(".animation("))
+            .replacingOccurrences(of: askingSchedule, with: "")
+            .replacingOccurrences(of: focusBarGlide, with: "").contains(".animation("))
         #expect(!view.contains(".phaseAnimator"))
         #expect(view.contains("@Environment(\\.accessibilityReduceMotion)"))
         #expect(SidebarBranchSummary(sessions: [], complete: false).incomplete)

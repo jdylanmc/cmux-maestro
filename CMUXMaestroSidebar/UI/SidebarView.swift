@@ -36,6 +36,10 @@ private struct SidebarFocusedSurfaceKey: EnvironmentKey {
     static let defaultValue: SidebarSeenTarget? = nil
 }
 
+private struct SidebarFocusBarNamespaceKey: EnvironmentKey {
+    static let defaultValue: Namespace.ID? = nil
+}
+
 extension EnvironmentValues {
     var sidebarPresentationNow: () -> Date {
         get { self[SidebarPresentationNowKey.self] }
@@ -49,6 +53,10 @@ extension EnvironmentValues {
     var sidebarFocusedSurface: SidebarSeenTarget? {
         get { self[SidebarFocusedSurfaceKey.self] }
         set { self[SidebarFocusedSurfaceKey.self] = newValue }
+    }
+    var sidebarFocusBarNamespace: Namespace.ID? {
+        get { self[SidebarFocusBarNamespaceKey.self] }
+        set { self[SidebarFocusBarNamespaceKey.self] = newValue }
     }
     var sidebarDismissManaged: ((SidebarDismissedManagedOutcome) -> Void)? {
         get { self[SidebarDismissManagedKey.self] }
@@ -194,22 +202,33 @@ private struct SidebarFocusBorder: ViewModifier {
     let surfaceID: UUID
     var enabled = true
     @Environment(\.sidebarFocusedSurface) private var target
+    @Environment(\.sidebarFocusBarNamespace) private var barNamespace
     private var focused: Bool { enabled && target == .surface(workspaceID: workspaceID, surfaceID: surfaceID) }
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .leading) {
                 if focused {
-                    Capsule()
-                        .fill(Color.accentColor)
-                        .frame(width: 2)
-                        .shadow(color: .accentColor.opacity(0.65), radius: 3)
-                        .padding(.vertical, 2)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
+                    bar
                 }
             }
             .accessibilityAddTraits(focused ? .isSelected : [])
+    }
+
+    // One shared identity lets the bar glide to the newly focused row.
+    @ViewBuilder private var bar: some View {
+        let capsule = Capsule()
+            .fill(Color.accentColor)
+            .frame(width: 2)
+            .shadow(color: .accentColor.opacity(0.65), radius: 3)
+            .padding(.vertical, 2)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        if let barNamespace {
+            capsule.matchedGeometryEffect(id: "sidebar-focus-bar", in: barNamespace)
+        } else {
+            capsule
+        }
     }
 }
 
@@ -464,6 +483,8 @@ struct SidebarView: View {
     @State private var localFocus = SidebarLocalFocus()
     @State private var dismissedTaskOwner: (session: UUID, surface: UUID, workspace: UUID)?
     @State private var taskFocusNotice: String?
+    @Namespace private var focusBarNamespace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.sidebarPresentationNow) private var now
 
@@ -686,7 +707,8 @@ struct SidebarView: View {
             // The status line floats above the footer. In the layout it pushed the footer up
             // for a moment after every row click, then dropped it back.
             .overlay(alignment: .top) {
-                if let message = model.navigation.status.message, model.navigation.status != .selected {
+                if let message = model.navigation.status.message, model.navigation.status != .selected,
+                   model.navigation.status != .selecting {
                     Text(message)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -738,6 +760,8 @@ struct SidebarView: View {
         .environment(\.sidebarAgentIconStyle, preferences.agentIconStyle)
         .environment(\.sidebarTerminalIconStyle, preferences.terminalIconStyle)
         .environment(\.sidebarFocusedSurface, focusedSurface)
+        .environment(\.sidebarFocusBarNamespace, focusBarNamespace)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: focusedSurface)
         .environment(\.sidebarPrepareSeen, prepareSeen)
         .environment(\.sidebarFocusInspection, focusInspection)
         .environment(\.sidebarDismissManaged, dismissManaged)
@@ -2932,13 +2956,14 @@ struct SidebarPinnedFooter: View {
     @State private var dragStart: CGFloat?
 
     private let headerHeight: CGFloat = 5
+    private var iconRowHeight: CGFloat { content.isAgent ? 14 : 0 }
     private var minimumBodyHeight: CGFloat { petRowHeight }
-    private var maximumBodyHeight: CGFloat { max(minimumBodyHeight, dragLimit - headerHeight) }
+    private var maximumBodyHeight: CGFloat { max(minimumBodyHeight, dragLimit - headerHeight - iconRowHeight) }
     private var bodyHeight: CGFloat {
         if let stored = userHeight.wrappedValue {
             return min(max(CGFloat(stored), minimumBodyHeight), maximumBodyHeight)
         }
-        return min(contentHeight, max(0, maximumHeight - headerHeight))
+        return min(contentHeight, max(0, maximumHeight - headerHeight - iconRowHeight))
     }
 
     private func setBodyHeight(_ value: CGFloat) {
@@ -2968,15 +2993,30 @@ struct SidebarPinnedFooter: View {
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
             .frame(height: bodyHeight)
+            if content.isAgent {
+                SidebarGlyphIcon(name: "oct-copilot", tint: .secondary)
+                    .frame(width: 10, height: 10)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, 4)
+                    .help("GitHub Copilot")
+                    .accessibilityLabel("GitHub Copilot")
+            }
         }
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("sidebar-pinned-details")
     }
 
+    /// The Copilot suffix is shown as a corner icon instead of title text.
+    private var displayTitle: String {
+        let suffix = " - GitHub Copilot"
+        guard content.isAgent, content.title.hasSuffix(suffix), content.title.count > suffix.count else { return content.title }
+        return String(content.title.dropLast(suffix.count))
+    }
+
     /// The title opens the details popover when the active window has inspectable details.
     @ViewBuilder private var titleView: some View {
-        let title = Text(content.title).sidebarFont(.caption, weight: .semibold).lineLimit(2)
+        let title = Text(displayTitle).sidebarFont(.caption, weight: .semibold).lineLimit(2)
         if content.inspection != nil {
             Button(action: inspect) {
                 title.multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
@@ -3020,6 +3060,7 @@ struct SidebarPinnedFooter: View {
             ForEach(content.lines.filter {
                 ["Branch", "Worktree", "Git evidence", "Git changes", SidebarSurfaceDirectory.title].contains($0.title)
                     && ($0.title != "Git changes" || content.gitChanges == nil)
+                    && ($0.title != SidebarSurfaceDirectory.title || $0.copyableValue == nil)
             }) { line in
                 Text("\(line.title): \(line.value)")
                     .sidebarFont(.caption2).foregroundStyle(.secondary)

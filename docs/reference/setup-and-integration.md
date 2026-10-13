@@ -61,7 +61,7 @@ runtime-directory collection.
    Normal app startup still performs no installation.
    Production preview builds disable coverage instrumentation. Setup leaves no
    `default.profraw` in caller's worktree. Test coverage stays enabled.
-3. If not already enabled, select **CMUX Maestro Preview** in CMUX's **Sidebar
+3. If not already enabled, select **Maestro Sidebar** in CMUX's **Sidebar
    Extensions** browser. Installation does not change host grants or selection.
 4. Leave existing Copilot chats running. New sessions load installed
    configuration. Already-running sessions may retain cached hooks. Installation

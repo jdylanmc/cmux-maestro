@@ -44,7 +44,7 @@ Needs macOS 14+, Xcode 26.6 (to build), CMUX with sidebar extensions, and Copilo
 ./scripts/build-register.sh   # build, sign locally, install, set up Copilot
 ```
 
-That installs `~/Applications/CMUX Maestro Preview.app` and the Copilot integration in one transaction. Then select **CMUX Maestro Preview** as the sidebar in CMUX.
+That installs `~/Applications/CMUX Maestro Preview.app` and the Copilot integration in one transaction. Then select **Maestro Sidebar** as the sidebar in CMUX.
 
 - Running Copilot sessions are **not** restarted. Start new ones to load the hooks.
 - Run **one** install at a time. Two at once strand the transaction.

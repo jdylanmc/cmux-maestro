@@ -154,6 +154,7 @@ struct SidebarRowActions<Content: View>: View {
     @State private var presenter = SidebarRowMenuPresenter()
     @State private var hovered = false
     @State private var focused = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 2) {
@@ -174,6 +175,13 @@ struct SidebarRowActions<Content: View>: View {
         }
         .environment(\.sidebarRowMenu, configuredPresenter)
         .background(SidebarRowMenuAnchor(presenter: presenter))
+        .background {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.primary.opacity(hovered ? 0.06 : 0))
+                .shadow(color: .black.opacity(hovered ? 0.28 : 0), radius: hovered ? 5 : 0, y: hovered ? 2 : 0)
+                .offset(y: hovered ? -1 : 0)
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovered)
         .onHover { hovered = $0 }
     }
 
