@@ -86,6 +86,8 @@ struct SidebarBeatsTests {
         for item in try #require(cases["invalid"] as? [[String: String]]) {
             #expect(throws: BeatsError.self, "\(item["name"] ?? "")") { _ = try SidebarBeatsState.decode(Data(item["raw"]!.utf8)) }
         }
+        let valid = try #require((cases["valid"] as? [[String: String]])?.first?["raw"])
+        #expect(throws: BeatsError.self) { _ = try SidebarBeatsState.decode(Data([0xEF, 0xBB, 0xBF]) + Data(valid.utf8)) }
     }
 
     @Test func writersRefusePromptsReadersRefuse() throws {

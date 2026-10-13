@@ -113,6 +113,8 @@ class SharedFixtureTests(unittest.TestCase):
         for case in cases["invalid"]:
             with self.assertRaises(OrchestrationError, msg=case["name"]):
                 API["beats_decode"](case["raw"].encode())
+        with self.assertRaises(OrchestrationError):
+            API["beats_decode"](b"\xef\xbb\xbf" + cases["valid"][0]["raw"].encode())
 
     def test_duplicate_keys_are_refused(self):
         # Swift's JSONSerialization keeps the first duplicate and Python the last; refuse instead.
