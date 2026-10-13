@@ -14,7 +14,12 @@ agents using it fall back to their own pet or Maestro. Click pet to open picker:
 this agent made for itself. **Upload pet…** accepts Codex pet folder (`pet.json` plus
 spritesheet) or bare sheet. Picker also links to online Codex pet galleries.
 
-Bundled `maestro-pet` skill wraps `hatch-pet` for creation. Agent adds pet with
+Bundled `maestro-pet` skill ships `pet_kit.py`: a Python standard-library drawing kit
+(shapes, alpha, PNG writer). Any Copilot session in CMUX with Maestro's integration
+draws its own original pet with no image provider, API key, network or package
+install. Kit requires every frame of the five rows Maestro plays, fills unused Codex
+rows from idle, and writes `pet.json`, `spritesheet.png` and `preview.png` to a new
+folder. It never selects a pet. Agent adds pet with
 `cmux-maestro-orchestrator pet --self --session-id … --add <folder>`. Command validates
 format. It selects pet only after native identity helper proves session ownership.
 Agent-made pet is **scoped to that session**. Use **Save to my pets** in picker to

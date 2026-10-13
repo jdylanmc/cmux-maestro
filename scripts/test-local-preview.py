@@ -484,6 +484,7 @@ else:
             (resources / "maestro-icon/SKILL.md").write_text("---\nname: maestro-icon\n---\n")
             (resources / "maestro-pet").mkdir()
             (resources / "maestro-pet/SKILL.md").write_text("---\nname: maestro-pet\n---\n")
+            (resources / "maestro-pet/pet_kit.py").write_text("# Pet kit fixture\n")
             (resources / "cmux-maestro-orchestrator.py").write_text("#!/usr/bin/env python3\n# " + app.stem + "\n")
 
     def integration_snapshot(self):

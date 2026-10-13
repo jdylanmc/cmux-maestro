@@ -17,6 +17,8 @@ jobs:
         run: python3 scripts/test-joe-role-appearance.py
       - name: Verify terminal orchestration contracts
         run: python3 scripts/test-cmux-maestro-orchestrator.py
+      - name: Verify dependency-free pet drawing kit
+        run: python3 scripts/test-pet-kit.py
       - name: Verify Beats cron, local-time rules, store and agent surface
         run: python3 scripts/test-beats.py
       - name: Verify managed messaging and legacy proof launcher contracts

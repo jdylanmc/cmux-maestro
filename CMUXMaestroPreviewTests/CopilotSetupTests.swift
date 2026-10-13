@@ -1054,6 +1054,11 @@ struct CopilotSetupTests {
         try FileManager.default.createDirectory(at: petSkillDirectory, withIntermediateDirectories: true)
         let petSkill = petSkillDirectory.appendingPathComponent("SKILL.md")
         try Data("---\nname: maestro-pet\n---\n".utf8).write(to: petSkill)
+        let petKit = petSkillDirectory.appendingPathComponent("pet_kit.py")
+        try FileManager.default.copyItem(
+            at: repository.appendingPathComponent(".agents/skills/maestro-pet/pet_kit.py"),
+            to: petKit
+        )
         for name in ["adapter.mjs", "extension.mjs"] {
             try FileManager.default.copyItem(
                 at: repository.appendingPathComponent("scripts/delivery-proof/\(name)"),
@@ -1085,6 +1090,9 @@ struct CopilotSetupTests {
             == Data(contentsOf: iconSkill))
         #expect(try Data(contentsOf: plugin.appendingPathComponent("skills/maestro-pet/SKILL.md"))
             == Data(contentsOf: petSkill))
+        let installedKit = plugin.appendingPathComponent("skills/maestro-pet/pet_kit.py")
+        #expect(try Data(contentsOf: installedKit) == Data(contentsOf: petKit))
+        #expect((try FileManager.default.attributesOfItem(atPath: installedKit.path)[.posixPermissions] as? Int) == 0o600)
         #expect(!FileManager.default.fileExists(atPath: plugin.appendingPathComponent("skills/maestro").path))
         let native = local.nativeExtensions.appendingPathComponent("maestro")
         #expect(try Data(contentsOf: native.appendingPathComponent("extension.mjs"))
@@ -1110,6 +1118,13 @@ struct CopilotSetupTests {
         #expect(try Data(contentsOf: installed.deletingLastPathComponent().appendingPathComponent("NerdFonts/glyphnames.json"))
             == Data(contentsOf: repository.appendingPathComponent("Resources/NerdFonts/glyphnames.json")))
         #expect(try String(contentsOf: configuration, encoding: .utf8) == "preserved")
+        let kitData = try Data(contentsOf: petKit)
+        try FileManager.default.removeItem(at: petKit)
+        #expect(throws: (any Error).self) {
+            try local.resources(root: integration, helper: executable, controller: controller, skill: skill)
+        }
+        #expect(try Data(contentsOf: installedKit) == kitData)
+        try kitData.write(to: petKit)
         #expect(try local.executable(selected: executable, path: "") == executable)
         #expect(throws: (any Error).self) { try local.executable(selected: nil, path: ".:relative") }
         // Simulate only the obsolete installer-owned copy, not a global installation.
