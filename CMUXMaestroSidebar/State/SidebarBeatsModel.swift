@@ -54,7 +54,8 @@ nonisolated struct BeatsCron: Equatable {
             }
             if range.name == "weekday" { values = Set(values.map { $0 % 7 }) }
             sets.append(values)
-            stars.append(text.hasPrefix("*"))
+            // Only a bare `*` leaves a day field unrestricted; `*/2` restricts it (Copilot's scheduler).
+            stars.append(text == "*")
         }
         expression = fields.joined(separator: " ")
         minutes = sets[0]; hours = sets[1]; days = sets[2]; months = sets[3]; weekdays = sets[4]

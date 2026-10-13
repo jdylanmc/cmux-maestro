@@ -97,6 +97,24 @@ class SharedFixtureTests(unittest.TestCase):
             with self.assertRaises(OrchestrationError, msg=repr(expression)):
                 parse_cron(expression)
 
+    def test_previews_match_copilots_recorded_next_runs(self):
+        oracle = json.loads((FIXTURES / "beats-cron-cases.json").read_text())["copilotNextRuns"]
+        saved = os.environ.get("TZ")
+        os.environ["TZ"] = oracle["timeZone"]
+        time.tzset()
+        try:
+            start = time.mktime(time.strptime(oracle["from"], "%Y-%m-%d %H:%M"))
+            for case in oracle["cases"]:
+                times = cron_next_times(parse_cron(case["cron"]), start, count=len(case["next"]))
+                self.assertEqual([time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) for t in times], case["next"],
+                                 case["cron"])
+        finally:
+            if saved is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = saved
+            time.tzset()
+
     def test_store_sample_is_valid_and_canonical(self):
         # The Swift sidebar encodes the same sample to the same bytes (SidebarBeatsTests).
         raw = (FIXTURES / "beats-store-sample.json").read_bytes()

@@ -46,6 +46,11 @@ Notable changes are recorded using Keep a Changelog categories.
   zone. Each sync now uses an IANA zone name in `TZ` when set, else reads the
   current zone from `/etc/localtime` (falling back to the runtime's zone), and re-registers
   Beats when it changes.
+- Preview stepped day fields the way Copilot fires them. A day-of-month or weekday field
+  such as `*/2` was treated as "any day", so `0 0 */2 * *` previewed every day and
+  `0 0 */2 * 1` previewed Mondays only, while Copilot runs odd days, and odd days or
+  Mondays. Only a bare `*` is unrestricted now; previews in the sidebar and `cron-check`
+  match next runs recorded from Copilot's scheduler (outside daylight-saving changes).
 - Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
   dependency-free `pet_kit.py` drawing kit instead of requiring `hatch-pet`, whose
   Codex-only image generation was unavailable to Copilot.

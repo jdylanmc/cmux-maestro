@@ -4492,7 +4492,8 @@ class CronSpec:
             if name == "weekday":
                 values = {value % 7 for value in values}
             sets.append(frozenset(values))
-            stars.append(text.startswith("*"))
+            # Only a bare `*` leaves a day field unrestricted; `*/2` restricts it (Copilot's scheduler).
+            stars.append(text == "*")
         self.minutes, self.hours, self.days, self.months, self.weekdays = sets
         self.day_star, self.weekday_star = stars[2], stars[4]
         if not self.day_star and self.weekday_star:
