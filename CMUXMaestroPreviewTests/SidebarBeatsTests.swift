@@ -38,13 +38,17 @@ struct SidebarBeatsTests {
         let data = try Data(contentsOf: Self.fixtures.appendingPathComponent("beats-cron-cases.json"))
         let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let oracle = try #require(root["copilotNextRuns"] as? [String: Any])
-        let calendar = newYork(try #require(oracle["timeZone"] as? String))
+        let zone = try #require(oracle["timeZone"] as? String)
+        let from = try #require(oracle["from"] as? String)
+        let calendar = newYork(zone)
         let parse = DateFormatter()
         parse.calendar = calendar; parse.timeZone = calendar.timeZone
         parse.locale = Locale(identifier: "en_US_POSIX"); parse.dateFormat = "yyyy-MM-dd HH:mm"
-        let start = try #require(parse.date(from: try #require(oracle["from"] as? String)))
-        for item in try #require(oracle["cases"] as? [[String: Any]]) {
-            let cron = try #require(item["cron"] as? String), expected = try #require(item["next"] as? [String])
+        let start = try #require(parse.date(from: from))
+        let cases = try #require(oracle["cases"] as? [[String: Any]])
+        for item in cases {
+            let cron = try #require(item["cron"] as? String)
+            let expected = try #require(item["next"] as? [String])
             let times = try BeatsCron(cron).nextTimes(after: start, count: expected.count, calendar: calendar)
             #expect(times.map { parse.string(from: $0) } == expected, "\(cron)")
         }
