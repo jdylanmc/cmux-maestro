@@ -4651,8 +4651,11 @@ def beats_decode(raw):
 
 def beats_encode(state):
     """Canonical store bytes: sorted, compact UTF-8. Byte-identical to the Swift sidebar's
-    SidebarBeatsState.encoded(), so both writers measure the same size limit."""
-    return json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+    SidebarBeatsState.encoded(), which also refuses a store over the size limit."""
+    encoded = json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+    if len(encoded) > BEATS_MAX_STORE_BYTES:
+        raise OrchestrationError("The Beats store size limit was reached.")
+    return encoded
 
 
 def beats_open_store(path):
@@ -4689,10 +4692,7 @@ def beats_store_mutate(operation, *, root=None):
         state = beats_open_store(path) or {"version": BEATS_VERSION, "beats": []}
         result = operation(state)
         validate_beats_state(state)
-        encoded = beats_encode(state)
-        if len(encoded) > BEATS_MAX_STORE_BYTES:
-            raise OrchestrationError("The Beats store size limit was reached.")
-        write_private(path, encoded)
+        write_private(path, beats_encode(state))
         return result
     finally:
         os.close(lock_descriptor)

@@ -265,7 +265,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual((self.root / "beats.json").read_bytes(), before)
 
     def test_size_limit_counts_utf8_bytes(self):
-        # Escaped as \\u00e9 this store would be about 1.7 MiB; as UTF-8 it is about 0.6 MiB.
+        # Escaped as \u00e9 this store would be about 1.6 MiB; as UTF-8 it is about 0.6 MiB.
         prompt = "é" * 1360
 
         def fill(state):
@@ -274,6 +274,8 @@ class StoreTests(unittest.TestCase):
         self.assertLess((self.root / "beats.json").stat().st_size, 1024 * 1024)
         self.assertEqual(len(API["beats_store_snapshot"](root=self.root)["beats"]), 200)
         self.assertEqual(len(store_mutate(lambda state: state["beats"], root=self.root)), 200)
+        with self.assertRaises(OrchestrationError):
+            API["beats_encode"]({"version": 1, "beats": [{"prompt": "x" * BYTES} for BYTES in (1024 * 1024,)]})
 
 
 FAKE_HELPER = """#!/usr/bin/env python3
