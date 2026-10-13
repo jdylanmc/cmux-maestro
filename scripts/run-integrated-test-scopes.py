@@ -303,6 +303,40 @@ def validate_remaining(summary, tests, *, benchmark_enabled, isolated_excluded=T
     return {**measured, "skippedTestsByIdentity": attributed}
 
 
+TEST_SOURCES = Path(__file__).resolve().parents[1] / TARGET
+TEST_ATTRIBUTE = re.compile(r"(?m)^[ \t]*@Test\b")
+TEST_FUNCTION = re.compile(r"\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def expected_test_names(root=TEST_SOURCES):
+    """Every `@Test` function the target compiles; absence from results is a regression."""
+    names = Counter()
+    for path in sorted(root.rglob("*.swift")):
+        text = path.read_text()
+        for attribute in TEST_ATTRIBUTE.finditer(text):
+            function = TEST_FUNCTION.search(text, attribute.end())
+            require(function is not None, f"Unresolved @Test declaration in {path.name}.")
+            names[function.group(1)] += 1
+    require(names, "No @Test declarations found in the test target sources.")
+    return names
+
+
+def test_name(identity):
+    return identity.rsplit("/", 1)[-1].split("(", 1)[0]
+
+
+def validate_source_coverage(expected, isolated, remaining, *, isolated_excluded):
+    observed = Counter(test_name(case.identity) for case in isolated)
+    observed.update(test_name(case.identity) for case in remaining
+                    if not (isolated_excluded and case.identity == SELECTOR))
+    missing = sorted((expected - observed).elements())
+    unexpected = sorted((observed - expected).elements())
+    require(not missing and not unexpected,
+            f"Reported tests disagree with source @Test declarations; missing={missing[:20]} "
+            f"({len(missing)}), unexpected={unexpected[:20]} ({len(unexpected)}).")
+    return {"expectedTests": sum(expected.values()), "reportedTests": sum(observed.values())}
+
+
 def validate_arguments(command):
     require(command and Path(command[0]).name == "xcodebuild", "Expected the existing xcodebuild command.")
     restricted = ("-only-testing", "-skip-testing", "-only-test-configuration", "-skip-test-configuration",
@@ -615,8 +649,10 @@ def run(command, directory, runner=subprocess.run):
                        "-resultBundlePath", str(isolated_bundle)], check=False, env=test_environment)
     evidence["isolatedExitCode"] = isolated.returncode
     isolated_summary = None
+    isolated_cases = []
     try:
         isolated_summary, tests = read_result(isolated_bundle, directory, "isolated", runner)
+        isolated_cases = cases(tests)
         print("Isolated hosted summary: " + json.dumps(isolated_summary), flush=True)
         print("Isolated hosted test tree: " + json.dumps(tests)[:16384], flush=True)
         evidence["isolatedCounts"] = validate_isolated(isolated_summary, tests)
@@ -642,6 +678,13 @@ def run(command, directory, runner=subprocess.run):
         validate_original_guide_cases(tests)
     except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         evidence["remainingValidationError"] = str(error)
+    else:
+        try:
+            evidence["sourceCoverage"] = validate_source_coverage(
+                expected_test_names(), isolated_cases if selection else [], cases(tests),
+                isolated_excluded=bool(selection))
+        except (ValueError, OSError) as error:
+            evidence["sourceCoverageError"] = str(error)
     try:
         revalidate_guide_acceptance(guide, runner)
     except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as error:
@@ -649,6 +692,7 @@ def run(command, directory, runner=subprocess.run):
     success = ("guideAcceptanceError" not in evidence and guide["exitCode"] == 0
                and evidence["selectorVerifiedByHostedResult"] and not isolated.returncode and not remaining.returncode
                and "remainingValidationError" not in evidence
+               and "sourceCoverage" in evidence and "sourceCoverageError" not in evidence
                and isolated_summary is not None and isolated_summary.get("result") == "Passed"
                and remaining_summary is not None and remaining_summary.get("result") == "Passed"
                and remaining_summary.get("failedTests") == 0)
@@ -677,7 +721,8 @@ def run(command, directory, runner=subprocess.run):
     save()
     print("Integrated scope counts: " + json.dumps({
         key: evidence[key] for key in ("selectorVerifiedByHostedResult", "isolatedCounts", "remainingCounts",
-                                       "combinedExecutedTestCount", "passed") if key in evidence
+                                       "combinedExecutedTestCount", "sourceCoverage", "sourceCoverageError",
+                                       "passed") if key in evidence
     }), flush=True)
     print(f"Integrated test coverage: {evidence_path}", flush=True)
     if not success:
