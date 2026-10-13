@@ -481,7 +481,7 @@ struct SidebarHoverTests {
         window.contentView = root
         defer { window.contentView = nil; window.close() }
         let clock = SidebarManualHoverClock()
-        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in }, pause: clock.pause)
+        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in }, schedule: clock.schedule)
         anchor.presenter = presenter
         anchor.tracksName = true
         presenter.update(anchor: anchor, data: .init(id: "name", category: "Workspace", title: "Long workspace name"),
@@ -494,14 +494,13 @@ struct SidebarHoverTests {
             anchor.mouseEntered(with: event)
             anchor.mouseExited(with: event)
         }
-        #expect(await clock.elapse(SidebarHoverPresenter.openDelay) == 0, "Leaving the name must cancel every pending open")
+        #expect(clock.elapse(SidebarHoverPresenter.openDelay) == 0, "Leaving the name must cancel every pending open")
         #expect(clock.pending.isEmpty)
         #expect(presenter.state.mode == .hidden && presenter.panel == nil)
         anchor.mouseEntered(with: event)
-        await sidebarEventually { clock.pending == [SidebarHoverPresenter.openDelay] }
+        #expect(clock.pending == [SidebarHoverPresenter.openDelay])
         #expect(presenter.state.mode == .hidden, "Hover must wait for the open delay")
-        #expect(await clock.elapse(SidebarHoverPresenter.openDelay) == 1)
-        await sidebarEventually { presenter.state.mode == .hover }
+        #expect(clock.elapse(SidebarHoverPresenter.openDelay) == 1)
         #expect(presenter.state.mode == .hover)
         anchor.mouseExited(with: event)
         #expect(presenter.state.mode == .hidden)
@@ -566,7 +565,7 @@ struct SidebarHoverTests {
         window.contentView = anchor
         defer { window.contentView = nil; window.close() }
         let clock = SidebarManualHoverClock()
-        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in }, pause: clock.pause)
+        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in }, schedule: clock.schedule)
         defer { presenter.detach() }
         presenter.update(anchor: anchor, data: .init(
             id: "focus-retained", category: "Agent preview", title: "Synthetic agent",
@@ -576,15 +575,14 @@ struct SidebarHoverTests {
         presenter.open(explicit: false)
         presenter.hoverAnchor(false)
         presenter.copyActionFocus(true)
-        await sidebarEventually { clock.pending == [SidebarHoverPresenter.closeDelay] }
-        #expect(await clock.elapse(SidebarHoverPresenter.closeDelay) == 1, "The delayed close must run its recheck")
+        #expect(clock.pending == [SidebarHoverPresenter.closeDelay])
+        #expect(clock.elapse(SidebarHoverPresenter.closeDelay) == 1, "The delayed close must run its recheck")
         #expect(presenter.state.mode == .hover)
         #expect(presenter.panel != nil)
         presenter.copyActionFocus(false)
-        await sidebarEventually { clock.pending == [SidebarHoverPresenter.closeDelay] }
+        #expect(clock.pending == [SidebarHoverPresenter.closeDelay])
         #expect(presenter.state.mode == .hover, "Dismissal must wait for the close delay")
-        #expect(await clock.elapse(SidebarHoverPresenter.closeDelay) == 1)
-        await sidebarEventually { presenter.state.mode == .hidden }
+        #expect(clock.elapse(SidebarHoverPresenter.closeDelay) == 1)
         #expect(presenter.state.mode == .hidden)
         #expect(presenter.panel?.contentView == nil)
         #expect(!presenter.isMonitoring)
@@ -592,18 +590,18 @@ struct SidebarHoverTests {
 
     @Test func leavingOrDetachingCancelsPendingHover() async throws {
         let clock = SidebarManualHoverClock()
-        let presenter = SidebarHoverPresenter(pause: clock.pause)
+        let presenter = SidebarHoverPresenter(schedule: clock.schedule)
         presenter.hoverAnchor(true)
-        await sidebarEventually { clock.pending == [SidebarHoverPresenter.openDelay] }
+        #expect(clock.pending == [SidebarHoverPresenter.openDelay])
         presenter.hoverAnchor(false)
-        await sidebarEventually { clock.pending.isEmpty }
-        #expect(await clock.elapse(SidebarHoverPresenter.openDelay) == 0, "Leaving cancels the pending open")
+        #expect(clock.pending.isEmpty)
+        #expect(clock.elapse(SidebarHoverPresenter.openDelay) == 0, "Leaving cancels the pending open")
         #expect(presenter.panel == nil && presenter.state.mode == .hidden)
         presenter.hoverAnchor(true)
-        await sidebarEventually { clock.pending == [SidebarHoverPresenter.openDelay] }
+        #expect(clock.pending == [SidebarHoverPresenter.openDelay])
         presenter.detach()
-        await sidebarEventually { clock.pending.isEmpty }
-        #expect(await clock.elapse(SidebarHoverPresenter.openDelay) == 0, "Detaching cancels the pending open")
+        #expect(clock.pending.isEmpty)
+        #expect(clock.elapse(SidebarHoverPresenter.openDelay) == 0, "Detaching cancels the pending open")
         #expect(presenter.panel == nil && presenter.state.mode == .hidden)
     }
 
@@ -778,47 +776,38 @@ struct SidebarHoverTests {
     }
 }
 
-/// Hover open/close delays advance only when a test elapses them; cancellation still throws.
+/// Hover open/close delays advance only when a test elapses them. Elapsing runs each due, uncancelled
+/// action synchronously, so a returned count means every recheck has completed; nothing depends on
+/// executor scheduling order.
 @MainActor
 final class SidebarManualHoverClock {
-    private struct Waiter {
-        let id: Int
+    private struct Entry {
         let duration: Duration
-        let continuation: CheckedContinuation<Void, Error>
+        let task: Task<Void, Never>
+        let action: @MainActor () -> Void
     }
-    private var waiters: [Waiter] = []
-    private var nextID = 0
-    var pending: [Duration] { waiters.map(\.duration) }
+    private var entries: [Entry] = []
+    var pending: [Duration] { entries.filter { !$0.task.isCancelled }.map(\.duration) }
 
-    func pause(_ duration: Duration) async throws {
-        let id = nextID
-        nextID += 1
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                if Task.isCancelled {
-                    continuation.resume(throwing: CancellationError())
-                } else {
-                    waiters.append(Waiter(id: id, duration: duration, continuation: continuation))
-                }
-            }
-        } onCancel: { [weak self] in
-            Task { @MainActor in self?.cancel(id) }
-        }
+    func schedule(_ delay: Duration, _ action: @escaping @MainActor () -> Void) -> Task<Void, Never> {
+        // The handle only carries the presenter's cancellation; it suspends until cancelled.
+        let task = Task<Void, Never> { _ = try? await sidebarFrozenExpiry(0) }
+        entries.append(Entry(duration: delay, task: task, action: action))
+        return task
     }
 
-    /// Resumes due waiters, then returns only after their main-actor continuations have run:
-    /// the hop below is enqueued on the serial main executor behind every resumed job.
     @discardableResult
-    func elapse(_ duration: Duration) async -> Int {
-        let due = waiters.filter { $0.duration <= duration }
-        waiters.removeAll { $0.duration <= duration }
-        for waiter in due { waiter.continuation.resume() }
-        await Task { @MainActor in }.value
-        return due.count
-    }
-
-    private func cancel(_ id: Int) {
-        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
-        waiters.remove(at: index).continuation.resume(throwing: CancellationError())
+    func elapse(_ duration: Duration) -> Int {
+        let due = entries.filter { $0.duration <= duration }
+        entries.removeAll { $0.duration <= duration }
+        var ran = 0
+        for entry in due {
+            if !entry.task.isCancelled {
+                entry.action()
+                ran += 1
+            }
+            entry.task.cancel()
+        }
+        return ran
     }
 }
