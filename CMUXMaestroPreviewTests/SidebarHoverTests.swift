@@ -480,7 +480,8 @@ struct SidebarHoverTests {
         root.addSubview(anchor)
         window.contentView = root
         defer { window.contentView = nil; window.close() }
-        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in })
+        let clock = SidebarManualHoverClock()
+        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in }, pause: clock.pause)
         anchor.presenter = presenter
         anchor.tracksName = true
         presenter.update(anchor: anchor, data: .init(id: "name", category: "Workspace", title: "Long workspace name"),
@@ -493,10 +494,16 @@ struct SidebarHoverTests {
             anchor.mouseEntered(with: event)
             anchor.mouseExited(with: event)
         }
-        try await Task.sleep(for: .milliseconds(400))
+        await presenter.settleScheduledTransitions()
+        clock.elapse(SidebarHoverPresenter.openDelay)
+        await presenter.settleScheduledTransitions()
+        #expect(clock.pending.isEmpty, "Leaving the name must cancel every pending open")
         #expect(presenter.state.mode == .hidden && presenter.panel == nil)
         anchor.mouseEntered(with: event)
-        await sidebarEventually { presenter.state.mode == .hover }
+        await sidebarEventually { clock.pending == [SidebarHoverPresenter.openDelay] }
+        #expect(presenter.state.mode == .hidden, "Hover must wait for the open delay")
+        clock.elapse(SidebarHoverPresenter.openDelay)
+        await presenter.settleScheduledTransitions()
         #expect(presenter.state.mode == .hover)
         anchor.mouseExited(with: event)
         #expect(presenter.state.mode == .hidden)
@@ -560,7 +567,8 @@ struct SidebarHoverTests {
         let anchor = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 30))
         window.contentView = anchor
         defer { window.contentView = nil; window.close() }
-        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in })
+        let clock = SidebarManualHoverClock()
+        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in }, pause: clock.pause)
         defer { presenter.detach() }
         presenter.update(anchor: anchor, data: .init(
             id: "focus-retained", category: "Agent preview", title: "Synthetic agent",
@@ -570,25 +578,39 @@ struct SidebarHoverTests {
         presenter.open(explicit: false)
         presenter.hoverAnchor(false)
         presenter.copyActionFocus(true)
-        try await Task.sleep(for: .milliseconds(260))
+        await sidebarEventually { clock.pending == [SidebarHoverPresenter.closeDelay] }
+        clock.elapse(SidebarHoverPresenter.closeDelay)
+        await presenter.settleScheduledTransitions()
         #expect(presenter.state.mode == .hover)
         #expect(presenter.panel != nil)
         presenter.copyActionFocus(false)
-        try await Task.sleep(for: .milliseconds(260))
+        await sidebarEventually { clock.pending == [SidebarHoverPresenter.closeDelay] }
+        #expect(presenter.state.mode == .hover, "Dismissal must wait for the close delay")
+        clock.elapse(SidebarHoverPresenter.closeDelay)
+        await presenter.settleScheduledTransitions()
         #expect(presenter.state.mode == .hidden)
         #expect(presenter.panel?.contentView == nil)
         #expect(!presenter.isMonitoring)
     }
 
     @Test func leavingOrDetachingCancelsPendingHover() async throws {
-        let presenter = SidebarHoverPresenter()
+        let clock = SidebarManualHoverClock()
+        let presenter = SidebarHoverPresenter(pause: clock.pause)
         presenter.hoverAnchor(true)
+        await sidebarEventually { clock.pending == [SidebarHoverPresenter.openDelay] }
         presenter.hoverAnchor(false)
-        try await Task.sleep(for: .milliseconds(400))
+        await presenter.settleScheduledTransitions()
+        #expect(clock.pending.isEmpty)
+        clock.elapse(SidebarHoverPresenter.openDelay)
+        await presenter.settleScheduledTransitions()
         #expect(presenter.panel == nil && presenter.state.mode == .hidden)
         presenter.hoverAnchor(true)
+        await sidebarEventually { clock.pending == [SidebarHoverPresenter.openDelay] }
         presenter.detach()
-        try await Task.sleep(for: .milliseconds(400))
+        await presenter.settleScheduledTransitions()
+        #expect(clock.pending.isEmpty)
+        clock.elapse(SidebarHoverPresenter.openDelay)
+        await presenter.settleScheduledTransitions()
         #expect(presenter.panel == nil && presenter.state.mode == .hidden)
     }
 
@@ -744,5 +766,45 @@ struct SidebarHoverTests {
         }
         #expect(preferences.history == before.0 && preferences.attention == before.1)
         #expect(preferences.layout == before.2 && preferences.icons == before.3)
+    }
+}
+
+/// Hover open/close delays advance only when a test elapses them; cancellation still throws.
+@MainActor
+final class SidebarManualHoverClock {
+    private struct Waiter {
+        let id: Int
+        let duration: Duration
+        let continuation: CheckedContinuation<Void, Error>
+    }
+    private var waiters: [Waiter] = []
+    private var nextID = 0
+    var pending: [Duration] { waiters.map(\.duration) }
+
+    func pause(_ duration: Duration) async throws {
+        let id = nextID
+        nextID += 1
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    waiters.append(Waiter(id: id, duration: duration, continuation: continuation))
+                }
+            }
+        } onCancel: { [weak self] in
+            Task { @MainActor in self?.cancel(id) }
+        }
+    }
+
+    func elapse(_ duration: Duration) {
+        let due = waiters.filter { $0.duration <= duration }
+        waiters.removeAll { $0.duration <= duration }
+        for waiter in due { waiter.continuation.resume() }
+    }
+
+    private func cancel(_ id: Int) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        waiters.remove(at: index).continuation.resume(throwing: CancellationError())
     }
 }
