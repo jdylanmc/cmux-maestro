@@ -2986,11 +2986,18 @@ struct SidebarPinnedFooter: View {
     private var iconRowHeight: CGFloat { content.isAgent ? 14 : 0 }
     private var minimumBodyHeight: CGFloat {
         guard content.isAgent else { return rowHeight }
-        return max(SidebarFooterPetSize.height(forWidth: SidebarFooterPetSize.baselineWidth), baselineTextHeight)
+        return max(SidebarFooterPetSize.height(forWidth: SidebarFooterPetSize.baselineWidth, topInset: petInset),
+                   baselineTextHeight)
     }
     private var petWidth: CGFloat {
         SidebarFooterPetSize.width(bodyHeight: bodyHeight, footerWidth: footerWidth,
-                                   userSized: userHeight.wrappedValue != nil)
+                                   userSized: userHeight.wrappedValue != nil, topInset: petInset)
+    }
+    private var petInset: CGFloat {
+        guard content.isAgent else { return 0 }
+        let store = SidebarPetStore.shared
+        let id = store.resolvedID(session: content.petSessionID, agentChoice: content.petChoice)
+        return store.topInset(petID: id, session: content.petSessionID)
     }
     /// The agent header text beside the pet reads 2pt larger than its text style.
     private var textSizeOffset: CGFloat { content.isAgent ? 2 : 0 }
@@ -3090,7 +3097,7 @@ struct SidebarPinnedFooter: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .center, spacing: rowSpacing) {
                 if content.isAgent {
-                    SidebarPetButton(content: content, width: petWidth)
+                    SidebarPetButton(content: content, width: petWidth, topInset: petInset)
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.bodySpace)) } action: {
                             geometryChanged?(.pet, $0)
                         }

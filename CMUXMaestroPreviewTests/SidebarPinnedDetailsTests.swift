@@ -809,7 +809,10 @@ struct SidebarPinnedDetailsTests {
     }
 
     @Test func liveFooterPetTracksWidthTextAndUserHeightWithCenteredText() async throws {
-        let model = PetFooterHarness(content: pinned(nodes: [managed()]))
+        // Copy rows set a ~125pt footer minimum width; drop them so half-width containment is observable.
+        var content = pinned(nodes: [managed()])
+        content.lines = content.lines.filter { $0.copyableValue == nil }
+        let model = PetFooterHarness(content: content)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 480),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -817,12 +820,16 @@ struct SidebarPinnedDetailsTests {
         window.contentView = hosting
         defer { window.contentView = nil; window.close() }
 
+        let store = SidebarPetStore.shared
+        let inset = store.topInset(
+            petID: store.resolvedID(session: model.content.petSessionID, agentChoice: model.content.petChoice),
+            session: model.content.petSessionID)
         func check(_ label: String, petWidth: CGFloat? = nil, snug: Bool = false) async throws -> PetFooterHarness.Snapshot {
             let state = try await model.stable(in: hosting)
             #expect(state.body > 0, "\(label): \(state)")
             if let petWidth { #expect(abs(state.pet.width - petWidth) < 0.5, "\(label): \(state)") }
             #expect(state.pet.width <= model.width / 2 + 0.5, "\(label): \(state)")
-            #expect(abs(state.pet.height - SidebarFooterPetSize.height(forWidth: state.pet.width)) < 1, "\(label): \(state)")
+            #expect(abs(state.pet.height - SidebarFooterPetSize.height(forWidth: state.pet.width, topInset: inset)) < 1, "\(label): \(state)")
             #expect(abs(state.text.midY - state.pet.midY) <= 1, "\(label): text centered on pet \(state)")
             #expect(state.pet.minY >= -0.5 && state.pet.maxY <= state.body + 0.5, "\(label): \(state)")
             #expect(abs(state.pet.minX) < 0.5, "\(label): pet on the footer content's leading edge \(state)")
@@ -835,11 +842,10 @@ struct SidebarPinnedDetailsTests {
 
         model.stored = 300
         _ = try await check("tall", petWidth: 59, snug: true)
-        // Narrow widths stay above the footer's own minimum width (copy rows) so half-width is observable.
-        model.width = 116
-        _ = try await check("narrow", petWidth: 58)
-        model.width = 112
-        _ = try await check("narrower", petWidth: 56)
+        model.width = 100
+        _ = try await check("narrow", petWidth: 50)
+        model.width = 96
+        _ = try await check("narrower", petWidth: 48)
         model.width = 340
         let wide = try await check("wide", petWidth: 59, snug: true)
         #expect(abs(wide.body - 300) < 0.5)
@@ -882,7 +888,7 @@ struct SidebarPinnedDetailsTests {
         #expect(!source.contains("selectionDetails"))
         let footer = try #require(source.components(separatedBy: "struct SidebarPinnedFooter: View").last?
             .components(separatedBy: "private struct PathDetail").first)
-        #expect(footer.contains("SidebarPetButton(content: content, width: petWidth)"))
+        #expect(footer.contains("SidebarPetButton(content: content, width: petWidth"))
         for forbidden in ["SidebarCloseButton", "prepareSeen(", "FocusButton", ".onHover", "RoundedRectangle"] {
             #expect(!footer.contains(forbidden))
         }
