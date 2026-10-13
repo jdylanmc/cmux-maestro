@@ -283,6 +283,7 @@ actor CopilotSessionReader {
         var byteBudget = limits.bytesPerRead
         var madeProgress = false
         var unreadHistory = false
+        var scopedIssues: [UUID: [CopilotIssue]] = [:]
         for entry in records {
             try Task.checkCancellation()
             let record = entry.record
@@ -304,7 +305,8 @@ actor CopilotSessionReader {
                 guard before.status == .alive else {
                     tails.removeValue(forKey: record.sessionID)
                     publishedCohort.insert(record.sessionID)
-                    issues += Self.issues(before.status)
+                    scopedIssues[record.sessionID, default: []] += Self.issues(before.status).filter(\.isSessionScoped)
+                    issues += Self.issues(before.status).filter { !$0.isSessionScoped }
                     observations.append(observation(record, liveness: Self.liveness(before.status), now: now))
                     continue
                 }
@@ -357,7 +359,9 @@ actor CopilotSessionReader {
                     // evidence is uncertain, so a content-free row is safe.
                     tails.removeValue(forKey: record.sessionID)
                     publishedCohort.insert(record.sessionID)
-                    issues += after.status == .alive ? [.identityChanged] : Self.issues(after.status)
+                    let uncertain: [CopilotIssue] = after.status == .alive ? [.identityChanged] : Self.issues(after.status)
+                    scopedIssues[record.sessionID, default: []] += uncertain.filter(\.isSessionScoped)
+                    issues += uncertain.filter { !$0.isSessionScoped }
                     observations.append(observation(record, liveness: .ambiguous, now: now))
                     continue
                 }
@@ -373,7 +377,12 @@ actor CopilotSessionReader {
             } catch {
                 try Self.rethrowCancellation(error)
                 publishedCohort.insert(record.sessionID)
-                issues.append(Self.issue(error))
+                let failure = Self.issue(error)
+                if failure.isSessionScoped {
+                    scopedIssues[record.sessionID, default: []].append(failure)
+                } else {
+                    issues.append(failure)
+                }
                 observations.append(observation(record, liveness: .unknown, now: now))
             }
         }
@@ -388,6 +397,7 @@ actor CopilotSessionReader {
         observations = try observations.map { observation in
             try Task.checkCancellation()
             var result = observation
+            result.sessionIssues = scopedIssues[observation.sessionID].flatMap { $0.isEmpty ? nil : $0 }
             if let locations,
                let data = try? CopilotFileAccess.readStableRegular(
                 at: locations, filename: observation.sessionID.uuidString.lowercased() + ".json",
@@ -680,10 +690,11 @@ actor CopilotSessionReader {
         now: Date, observations: [CopilotSessionObservation], issues: [CopilotIssue]
     ) -> CopilotSnapshot {
         let unique = Array(Set(issues.map(\.rawValue))).sorted().compactMap(CopilotIssue.init(rawValue:))
+        let sessionsAreClean = observations.allSatisfy { ($0.sessionIssues ?? []).isEmpty }
         return .init(
             generatedAt: now,
             sessions: observations.sorted { $0.sessionID.uuidString < $1.sessionID.uuidString },
-            issues: unique, isComplete: unique.isEmpty
+            issues: unique, isComplete: unique.allSatisfy(\.isCosmetic) && sessionsAreClean
         )
     }
 

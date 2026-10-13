@@ -201,7 +201,7 @@ final class SidebarCopilotPolling {
         ]
         // Aggregate format warnings can describe only one child's unknown lifecycle.
         // The envelope schema and explicit identity failures remain global barriers.
-        if snapshot.issues?.contains(where: { unsafeIssues.contains($0) }) == true
+        if snapshot.globalIssues.contains(where: { unsafeIssues.contains($0) })
             || !SnapshotSchemaVersion.supported.contains(snapshot.schemaVersion) {
             lastStatuses.removeAll()
             invalidatedAt = now()

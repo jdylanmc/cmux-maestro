@@ -300,6 +300,9 @@ nonisolated struct AgentSnapshotIssue: RawRepresentable, Codable, Equatable, Sen
     static let ambiguousTurn = Self(rawValue: "ambiguousTurn")
     static let readLimitReached = Self(rawValue: "readLimitReached")
     static let appearanceUnavailable = Self(rawValue: "appearanceUnavailable")
+
+    var isCosmetic: Bool { self == .appearanceUnavailable }
+    var isSessionScoped: Bool { self == .ambiguousIdentity || self == .identityChanged }
 }
 
 nonisolated struct AgentModel: Codable, Equatable, Sendable {
@@ -584,6 +587,7 @@ nonisolated struct AgentSessionSnapshotItem: Codable, Equatable, Sendable {
     let attention: [AgentAttention]?
     let childWorkObservation: AgentChildWorkObservation?
     var location: AgentSessionLocation? = nil
+    var sessionIssues: [AgentSnapshotIssue]? = nil
 
     var workState: AgentWorkState { .resolve(state, detail: stateDetail) }
 
@@ -635,6 +639,24 @@ nonisolated struct AgentSessionSnapshot: Codable, Equatable, Sendable {
     let completeness: SnapshotValue<Bool>?
 
     var isComplete: Bool { completeness?.knownValue == true }
+
+    // Session-scoped payloads may carry only identity doubt; any other kind is
+    // promoted to snapshot-wide so it can never be trusted as a per-session fault.
+    var globalIssues: [AgentSnapshotIssue] {
+        var result = issues ?? []
+        for issue in sessions.flatMap({ $0.sessionIssues ?? [] }) where !issue.isSessionScoped && !result.contains(issue) {
+            result.append(issue)
+        }
+        return result
+    }
+
+    // Incomplete only because individual sessions carry their own identity
+    // doubt: the snapshot-wide evidence is still trustworthy for other sessions.
+    var isCompleteApartFromSessionIssues: Bool {
+        isComplete || (completeness?.knownValue == false
+            && globalIssues.allSatisfy(\.isCosmetic)
+            && sessions.contains { !($0.sessionIssues ?? []).isEmpty })
+    }
 
     init(
         schemaVersion: SnapshotSchemaVersion = .current,

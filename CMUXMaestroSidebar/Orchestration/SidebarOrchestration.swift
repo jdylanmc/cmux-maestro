@@ -18,6 +18,11 @@ nonisolated struct SidebarIconOverrides: Codable, Equatable, Sendable {
     let version: Int
     let icons: [Entry]
 
+    // Icons are cosmetic: a bad overlay must not discard the verified hierarchy.
+    static func overlaid(_ data: Data, onto snapshot: SidebarOrchestrationSnapshot) -> SidebarOrchestrationSnapshot {
+        (try? JSONDecoder().decode(Self.self, from: data).applying(to: snapshot)) ?? snapshot
+    }
+
     func applying(to snapshot: SidebarOrchestrationSnapshot) throws -> SidebarOrchestrationSnapshot {
         guard version == 1, icons.count <= SidebarOrchestrationReader.maximumNodes,
               Dictionary(grouping: icons, by: \.workspaceId).values.allSatisfy({
@@ -250,10 +255,10 @@ nonisolated enum SidebarOrchestrationReader {
                 at: observer, filename: "icons.json", owner: owner,
                 maximum: maximumBytes, permissions: 0o600
             )
-        } catch CopilotFileError.missing {
+        } catch {
             return snapshot
         }
-        return try JSONDecoder().decode(SidebarIconOverrides.self, from: iconData).applying(to: snapshot)
+        return SidebarIconOverrides.overlaid(iconData, onto: snapshot)
     }
 
     static func validate(_ snapshot: SidebarOrchestrationSnapshot, now: Date = Date()) throws {

@@ -256,6 +256,25 @@ struct SidebarHistoryPollingTests {
         await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
     }
 
+    @Test func sessionScopedAmbiguityDoesNotInvalidateHealthySessions() async {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        var ambiguous = fixtures.session(
+            id: fixtures.otherSessionID, surface: fixtures.surfaceB, liveness: .ambiguous, now: clock.read()
+        )
+        ambiguous.sessionIssues = [.ambiguousIdentity]
+        await harness.succeed(fixtures.snapshot(
+            sessions: [fixtures.session(now: clock.read()), ambiguous], complete: false, now: clock.read()
+        ))
+        await sidebarEventually { await harness.isPaused && poller.tree.sessions.count == 2 }
+        #expect(poller.tree.sessions.first { $0.id == fixtures.sessionID }?.childrenComplete == true)
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
     @Test(arguments: [CopilotLiveness.alive, .dead], [false, true])
     func partialSemanticUnknownRemainsCurrentBesideHealthyObservation(
         _ liveness: CopilotLiveness, sameSurface: Bool
