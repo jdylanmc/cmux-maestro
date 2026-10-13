@@ -733,6 +733,15 @@ struct SidebarSessionCopyTests {
             try await settle(hosting)
             #expect(copies == 0)
             #expect(feedbackControl(in: hosting) == nil)
+            let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent(".build/layout-validation/offscreen")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let pixels = try await SidebarCopyFieldPixels.compare(
+                in: hosting, label: "Parent session ID", value: parentID.uuidString, dark: dark,
+                destination: folder.appendingPathComponent("hover-session-copy-\(width)-\(dark ? "dark" : "light").png")
+            )
+            #expect(pixels.referenceInk > 400, "Blank or incomplete literal reference: \(pixels)")
+            #expect(pixels.differing == 0, "Parent session ID copy field differs from its literal reference: \(pixels)")
             for success in [true, false] {
                 succeeds = success
                 let button = try copyButton(in: hosting)
@@ -773,9 +782,6 @@ struct SidebarSessionCopyTests {
                     "hover-session-copy-\(width)-\(dark ? "dark" : "light")-\(success ? "success" : "failure").png"
                 )
                 try #require(bitmap.representation(using: .png, properties: [:])).write(to: image)
-                let text = try SidebarRenderingEvidence.recognizedLines(in: image, dark: dark, naturalLanguage: true)
-                // OCR reads the trailing copy icon as glyphs; the label must still lead its line, case-exact.
-                #expect(text.contains { $0.hasPrefix("Parent session ID") }, "OCR: \(text)")
             }
             #expect(copies == 2)
         }

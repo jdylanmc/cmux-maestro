@@ -1108,10 +1108,19 @@ struct SidebarPinnedDetailsTests {
             let destination = folder.appendingPathComponent("directory77-\(name)-\(dark ? "dark" : "light").png")
             try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
             let text = try SidebarRenderingEvidence.recognizedLines(in: destination, dark: dark, naturalLanguage: true)
-            // OCR may read an adjacent copy icon or colon as trailing glyphs; the label must lead its line.
-            #expect(text.contains { $0.hasPrefix(label) }, "\(name): directory label must survive all production filters: \(text)")
-            #expect(text.contains("reports") || text.contains("Surface directory: reports"),
-                    "\(name): exact surface value must render: \(text)")
+            let copyLabel = "Copy \(label.prefix(1).lowercased())\(label.dropFirst())"
+            if views(hosting).contains(where: { ($0 as? NSButton)?.accessibilityLabel() == copyLabel }) {
+                // Copy-control text: exact native pixels (ADR 0019), not OCR.
+                let pixels = try await SidebarCopyFieldPixels.compare(
+                    in: hosting, label: label, value: "reports", dark: dark, destination: destination
+                )
+                #expect(pixels.referenceInk > 200, "\(name): blank or incomplete literal reference: \(pixels)")
+                #expect(pixels.differing == 0, "\(name): directory copy field differs from its literal reference: \(pixels)")
+            } else {
+                let split = zip(text, text.dropFirst()).contains { $0 == label && $1 == "reports" }
+                #expect(text.contains("\(label): reports") || split,
+                        "\(name): plain directory line must render exactly: \(text)")
+            }
             #expect(!text.contains { $0.contains("Working directory") || $0.contains("Parent working directory") })
             let metrics = SidebarRenderingEvidence.metrics(for: hosting)
             #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
