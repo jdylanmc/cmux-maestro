@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 import Testing
 @_spi(CmuxHostTransport) import CmuxExtensionKit
@@ -807,6 +808,63 @@ struct SidebarPinnedDetailsTests {
         }
     }
 
+    @Test func liveFooterPetTracksWidthTextAndUserHeightWithCenteredText() async throws {
+        // Copy rows set a ~125pt footer minimum width; drop them so half-width containment is observable.
+        var content = pinned(nodes: [managed()])
+        content.lines = content.lines.filter { $0.copyableValue == nil }
+        let model = PetFooterHarness(content: content)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 480),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = NSHostingView(rootView: PetFooterHarnessView(model: model))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+
+        let store = SidebarPetStore.shared
+        let inset = store.topInset(
+            petID: store.resolvedID(session: model.content.petSessionID, agentChoice: model.content.petChoice),
+            session: model.content.petSessionID)
+        func check(_ label: String, petWidth: CGFloat? = nil, snug: Bool = false) async throws -> PetFooterHarness.Snapshot {
+            let state = try await model.stable(in: hosting)
+            #expect(state.body > 0, "\(label): \(state)")
+            if let petWidth { #expect(abs(state.pet.width - petWidth) < 0.5, "\(label): \(state)") }
+            #expect(state.pet.width <= model.width / 2 + 0.5, "\(label): \(state)")
+            #expect(abs(state.pet.height - SidebarFooterPetSize.height(forWidth: state.pet.width, topInset: inset)) < 1, "\(label): \(state)")
+            #expect(abs(state.text.midY - state.pet.midY) <= 1, "\(label): text centered on pet \(state)")
+            #expect(state.pet.minY >= -0.5 && state.pet.maxY <= state.body + 0.5, "\(label): \(state)")
+            #expect(abs(state.pet.minX) < 0.5, "\(label): pet on the footer content's leading edge \(state)")
+            #expect(state.pet.width <= 64 && state.pet.width * SidebarFooterPetSize.aspect <= 64, "\(label): \(state)")
+            // The taller of pet and text sits flush with the body top (0.5pt layout rounding).
+            #expect(min(state.pet.minY, state.text.minY) <= 0.5, "\(label): \(state)")
+            if snug { #expect(state.pet.height >= state.text.height && state.pet.minY <= 0.5, "\(label): \(state)") }
+            return state
+        }
+
+        model.stored = 300
+        _ = try await check("tall", petWidth: 59, snug: true)
+        model.width = 100
+        _ = try await check("narrow", petWidth: 50)
+        model.width = 96
+        _ = try await check("narrower", petWidth: 48)
+        model.width = 340
+        let wide = try await check("wide", petWidth: 59, snug: true)
+        #expect(abs(wide.body - 300) < 0.5)
+
+        model.width = 240
+        model.stored = 1
+        model.content.title = "A long synthetic agent title that wraps onto a second line in the footer"
+        let long = try await check("long minimum")
+        model.content.title = "Short"
+        let short = try await check("short minimum")
+        #expect(short.body < long.body - 5, "minimum follows text: long \(long) short \(short)")
+        model.content.title = "A long synthetic agent title that wraps onto a second line in the footer"
+        let longAgain = try await check("long minimum again")
+        #expect(abs(longAgain.body - long.body) < 0.5, "no ratchet: \(long) then \(longAgain)")
+
+        model.stored = nil
+        _ = try await check("auto height", petWidth: SidebarFooterPetSize.baselineWidth)
+    }
+
     @Test func passiveProjectionAndHoverHaveNoInteractionOrUnsupportedMetrics() throws {
         let before = pinned(nodes: [managed()])
         _ = SidebarAgentHoverContent.card(
@@ -830,7 +888,7 @@ struct SidebarPinnedDetailsTests {
         #expect(!source.contains("selectionDetails"))
         let footer = try #require(source.components(separatedBy: "struct SidebarPinnedFooter: View").last?
             .components(separatedBy: "private struct PathDetail").first)
-        #expect(footer.contains("if content.isAgent { SidebarPetButton(content: content) }"))
+        #expect(footer.contains("SidebarPetButton(content: content, width: petWidth"))
         for forbidden in ["SidebarCloseButton", "prepareSeen(", "FocusButton", ".onHover", "RoundedRectangle"] {
             #expect(!footer.contains(forbidden))
         }
@@ -1336,13 +1394,16 @@ struct SidebarPinnedDetailsTests {
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         var modelRegion = CGRect.null
+        let caption = NSFont.preferredFont(forTextStyle: .caption1).pointSize
+        let caption2 = NSFont.preferredFont(forTextStyle: .caption2).pointSize
         // Independent literal header geometry: outer inset, divider, gap and 38-point pet (no heading row).
         let reference = NSHostingView(rootView: VStack(alignment: .leading, spacing: 2) {
-            Text("Verified agent").font(.system(.caption).weight(.semibold)).lineLimit(2)
+            // Agent header text is 2pt above its compact text style.
+            Text("Verified agent").font(.system(size: caption + 2, weight: .semibold)).lineLimit(2)
             Label("Working", systemImage: "circle.fill")
-                .font(.system(.caption2).weight(.regular))
+                .font(.system(size: caption2 + 2, weight: .regular))
                 .fixedSize(horizontal: false, vertical: true)
-            Text("verified-model").font(.system(.caption2).weight(.regular))
+            Text("verified-model").font(.system(size: caption2 + 2, weight: .regular))
                 .foregroundStyle(.secondary).lineLimit(1)
                 .onGeometryChange(for: CGRect.self) {
                     $0.frame(in: .named("footer-model-reference"))
@@ -1500,5 +1561,61 @@ struct SidebarPinnedDetailsTests {
         view.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(30))
         view.layoutSubtreeIfNeeded()
+    }
+}
+
+@MainActor @Observable
+private final class PetFooterHarness {
+    struct Snapshot: Equatable { var pet: CGRect; var text: CGRect; var body: CGFloat }
+
+    var width: CGFloat = 240
+    var stored: Double?
+    var content: SidebarDetailContent
+    @ObservationIgnored var pet = CGRect.zero
+    @ObservationIgnored var text = CGRect.zero
+
+    init(content: SidebarDetailContent) { self.content = content }
+
+    /// Pumps layout until the reported geometry is unchanged for consecutive passes; the oracle is the
+    /// settled geometry, not elapsed time.
+    func stable(in hosting: NSView) async throws -> Snapshot {
+        var previous: Snapshot?
+        var repeats = 0
+        for _ in 0..<60 {
+            hosting.layoutSubtreeIfNeeded()
+            await Task.yield()
+            try await Task.sleep(for: .milliseconds(5))
+            hosting.layoutSubtreeIfNeeded()
+            let scroll = Self.views(hosting).compactMap { $0 as? NSScrollView }.first
+            let current = Snapshot(pet: pet, text: text, body: scroll?.frame.height ?? 0)
+            repeats = current == previous ? repeats + 1 : 0
+            previous = current
+            if repeats >= 3 { return current }
+        }
+        Issue.record("Footer geometry did not settle: \(String(describing: previous))")
+        return try #require(previous)
+    }
+
+    private static func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { views($0) } }
+}
+
+private struct PetFooterHarnessView: View {
+    let model: PetFooterHarness
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            SidebarPinnedFooter(
+                content: model.content, maximumHeight: 420, dragLimit: 420,
+                userHeight: Binding(get: { model.stored }, set: { model.stored = $0 }), inspect: {},
+                geometryChanged: { part, frame in
+                    switch part {
+                    case .pet: model.pet = frame
+                    case .text: model.text = frame
+                    }
+                }
+            )
+        }
+        .frame(width: model.width, height: 480)
     }
 }
