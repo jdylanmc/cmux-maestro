@@ -742,11 +742,26 @@ export async function readBeats(sessionId, controller) {
 
 const maestroSupport = path.join(os.homedir(), "Library/Application Support/CMUXMaestroPreview");
 
+// The zone Copilot's own scheduler would use: TZ when set, else the Mac's current zone. Node caches
+// its zone at startup (only assigning process.env.TZ resets it), so a system change made while a
+// session runs is read from the /etc/localtime link.
+export async function currentTimeZone(link = "/etc/localtime", environment = process.env) {
+  const canonical = (zone) => new Intl.DateTimeFormat("en-US", { timeZone: zone }).resolvedOptions().timeZone;
+  try {
+    if (environment.TZ) return canonical(environment.TZ.replace(/^:/, ""));
+  } catch { /* not a zone this runtime knows: use the system zone */ }
+  try {
+    const zone = /(?:^|\/)zoneinfo\/(?:posix\/|right\/)?(.+)$/.exec(await fs.readlink(link))?.[1];
+    if (zone) return canonical(zone);
+  } catch { /* not a link, or not a zone this runtime knows: fall back below */ }
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
 export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
   controller = process.env.CMUX_MAESTRO_ORCHESTRATOR ||
     path.join(maestroSupport, "Orchestration/bin/cmux-maestro-orchestrator"),
   read = (sessionId) => readBeats(sessionId, controller), gateway = createScheduleGateway(session), pollMs = 15_000,
-  tz = Intl.DateTimeFormat().resolvedOptions().timeZone, diagnostic = (error, beatId) => {
+  tz = currentTimeZone, diagnostic = (error, beatId) => {
     const code = typeof error?.code === "string" ? error.code : error?.name ?? "UNKNOWN";
     console.error(`Maestro Beats could not sync with Copilot scheduling${beatId ? ` for Beat ${beatId}` : ""} (${code}).`);
   } }) {
@@ -780,8 +795,10 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
   }
   async function reconcile() {
     try {
+      // Resolved every sync: a time zone change re-registers each Beat in the new zone.
+      const zone = typeof tz === "function" ? await tz() : tz;
       const wanted = await read(sessionId), entries = await gateway.list();
-      const plan = planBeatSchedules({ wanted, entries, tz });
+      const plan = planBeatSchedules({ wanted, entries, tz: zone });
       failing = false;
       const failingNow = new Set(), succeeded = new Set();
       const attempt = async (key, beatId, change) => {

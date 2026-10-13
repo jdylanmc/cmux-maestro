@@ -10,7 +10,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import {
-  createScheduleGateway, planBeatSchedules, readBeats, start, startBeats, startManaged, startReadiness,
+  createScheduleGateway, currentTimeZone, planBeatSchedules, readBeats, start, startBeats, startManaged, startReadiness,
   validateSend,
 } from "./delivery-proof/adapter.mjs";
 
@@ -1072,6 +1072,54 @@ test("closing Beats during a sync starts no schedule change", async (t) => {
   release();
   await inFlight;
   assert.deepEqual(f.entries, []);
+});
+
+test("currentTimeZone prefers TZ, then follows the /etc/localtime link, then falls back to Intl", async (t) => {
+  const directory = await fs.mkdtemp(path.join(base, "tz-"));
+  t.after(() => fs.rm(directory, { recursive: true }));
+  const link = path.join(directory, "localtime");
+  const zoneOf = (target, environment = {}) => fs.rm(link, { force: true })
+    .then(() => fs.symlink(target, link)).then(() => currentTimeZone(link, environment));
+  assert.equal(await zoneOf("/var/db/timezone/zoneinfo/Asia/Tokyo"), "Asia/Tokyo");
+  assert.equal(await zoneOf("/usr/share/zoneinfo/Etc/UTC"), "UTC");
+  assert.equal(await zoneOf("zoneinfo/Asia/Tokyo"), "Asia/Tokyo");
+  assert.equal(await zoneOf("/usr/share/zoneinfo/posix/Europe/Paris"), "Europe/Paris");
+  assert.equal(await zoneOf("/usr/share/zoneinfo/right/Europe/Paris"), "Europe/Paris");
+  assert.equal(await zoneOf("/var/db/timezone/zoneinfo/Asia/Tokyo", { TZ: "Europe/Paris" }), "Europe/Paris");
+  assert.equal(await zoneOf("/var/db/timezone/zoneinfo/Asia/Tokyo", { TZ: ":Europe/Paris" }), "Europe/Paris");
+  assert.equal(await zoneOf("/var/db/timezone/zoneinfo/Asia/Tokyo", { TZ: "Not/AZone" }), "Asia/Tokyo");
+  const fallback = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  assert.equal(await zoneOf("/var/db/timezone/zoneinfo/Not/AZone"), fallback);
+  await fs.rm(link);
+  await fs.writeFile(link, "not a link");
+  assert.equal(await currentTimeZone(link, {}), fallback);
+  assert.equal(await currentTimeZone(path.join(directory, "missing"), {}), fallback);
+});
+
+test("a time zone change re-registers each Beat in the new zone; an unchanged zone changes nothing", async (t) => {
+  const beat = makeBeat();
+  let zone = "America/New_York";
+  const entries = [], calls = [];
+  let nextId = 1;
+  const running = startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), pollMs: 60_000,
+    tz: async () => zone, read: async () => [beat],
+    gateway: {
+      list: async () => entries.map((entry) => ({ ...entry })),
+      add: async (entry) => { calls.push("add"); entries.push({ id: nextId, ...entry }); return nextId++; },
+      remove: async (id) => { calls.push("remove"); entries.splice(entries.findIndex((entry) => entry.id === id), 1); },
+    },
+    diagnostic: (error) => assert.fail(error),
+  });
+  t.after(() => running.close());
+  await running.ready;
+  await running.sync();
+  await running.sync();
+  assert.deepEqual(calls, ["add"]);
+  zone = "Europe/Paris";
+  await running.sync();
+  assert.deepEqual(entries.map((entry) => entry.tz), ["Europe/Paris"]);
+  assert.deepEqual(calls, ["add", "remove", "add"]);
 });
 
 async function beatsController(t, home) {

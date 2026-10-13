@@ -41,6 +41,11 @@ Notable changes are recorded using Keep a Changelog categories.
   a just-paused Beat and leave it until the next poll. A sync requested mid-run now stops
   the running pass from starting further changes and reruns it, and no schedule change
   starts after the session's Beats are closed.
+- Follow a Mac time zone change in a running session. The extension fixed its zone when
+  the session started (and Node caches the zone anyway), so Beats kept firing in the old
+  zone. Each sync now uses `TZ` when set, as Copilot's scheduler does, else reads the
+  current zone from `/etc/localtime` (falling back to the runtime's zone), and re-registers
+  Beats when it changes.
 - Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
   dependency-free `pet_kit.py` drawing kit instead of requiring `hatch-pet`, whose
   Codex-only image generation was unavailable to Copilot.
