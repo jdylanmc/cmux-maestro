@@ -807,6 +807,40 @@ struct SidebarPinnedDetailsTests {
         }
     }
 
+    @Test(arguments: [(nil, 38.0), (300, 120.0), (80, 73.0)] as [(Double?, CGFloat)])
+    func userSizedFooterScalesPetWithinHalfWidthAndVisibleBody(stored: Double?, expectedWidth: CGFloat) async throws {
+        let width: CGFloat = 240
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 480),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = NSHostingView(rootView: VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            SidebarPinnedFooter(content: pinned(nodes: [managed()]), maximumHeight: 420, dragLimit: 420,
+                                userHeight: .constant(stored), inspect: {})
+        }
+        .frame(width: width, height: 480)
+        .environment(\.accessibilityEnabled, true))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        try await settle(hosting)
+        try await settle(hosting)
+
+        // SwiftUI omits the scrolled pet row from the child walk; hit-test the body's top-leading corner.
+        let scroll = try #require(views(hosting).compactMap { $0 as? NSScrollView }.first)
+        let bodyFrame = window.convertToScreen(scroll.convert(scroll.bounds, to: nil))
+        let pet = try #require(hosting.accessibilityHitTest(NSPoint(x: bodyFrame.minX + 10, y: bodyFrame.maxY - 10)) as AnyObject?)
+        #expect((pet.accessibilityIdentifier?() ?? nil) == "sidebar-pet-button")
+        let petFrame = try #require(pet.accessibilityFrame?())
+        #expect(abs(petFrame.width - expectedWidth) < 0.5, "pet \(petFrame) body \(bodyFrame)")
+        #expect(petFrame.width <= width / 2 + 0.5)
+        #expect(abs(petFrame.height - SidebarFooterPetSize.height(forWidth: petFrame.width)) < 1)
+        #expect(petFrame.minY >= bodyFrame.minY - 0.5, "pet \(petFrame) body \(bodyFrame)")
+        #expect(petFrame.maxY <= bodyFrame.maxY + 0.5)
+        if let stored {
+            #expect(abs(bodyFrame.height - stored) < 0.5)
+        }
+    }
+
     @Test func passiveProjectionAndHoverHaveNoInteractionOrUnsupportedMetrics() throws {
         let before = pinned(nodes: [managed()])
         _ = SidebarAgentHoverContent.card(
@@ -830,7 +864,7 @@ struct SidebarPinnedDetailsTests {
         #expect(!source.contains("selectionDetails"))
         let footer = try #require(source.components(separatedBy: "struct SidebarPinnedFooter: View").last?
             .components(separatedBy: "private struct PathDetail").first)
-        #expect(footer.contains("if content.isAgent { SidebarPetButton(content: content) }"))
+        #expect(footer.contains("if content.isAgent { SidebarPetButton(content: content, width: petWidth) }"))
         for forbidden in ["SidebarCloseButton", "prepareSeen(", "FocusButton", ".onHover", "RoundedRectangle"] {
             #expect(!footer.contains(forbidden))
         }

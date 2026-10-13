@@ -2952,12 +2952,20 @@ struct SidebarPinnedFooter: View {
     let inspect: () -> Void
     var copyValue: (String) -> Bool = { SidebarSessionCopy.copy($0) }
     @State private var contentHeight: CGFloat = 80
-    @State private var petRowHeight: CGFloat = 48
+    /// Pet row height measured only at baseline pet width, so a growing pet cannot ratchet the minimum.
+    @State private var restingRowHeight: CGFloat = 48
+    @State private var footerWidth: CGFloat = 0
     @State private var dragStart: CGFloat?
 
     private let headerHeight: CGFloat = 5
     private var iconRowHeight: CGFloat { content.isAgent ? 14 : 0 }
-    private var minimumBodyHeight: CGFloat { petRowHeight }
+    private var minimumBodyHeight: CGFloat {
+        max(SidebarFooterPetSize.height(forWidth: SidebarFooterPetSize.baselineWidth), restingRowHeight)
+    }
+    private var petWidth: CGFloat {
+        SidebarFooterPetSize.width(bodyHeight: bodyHeight, footerWidth: footerWidth,
+                                   userSized: userHeight.wrappedValue != nil)
+    }
     private var maximumBodyHeight: CGFloat { max(minimumBodyHeight, dragLimit - headerHeight - iconRowHeight) }
     private var bodyHeight: CGFloat {
         if let stored = userHeight.wrappedValue {
@@ -3003,6 +3011,7 @@ struct SidebarPinnedFooter: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { footerWidth = $0 }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("sidebar-pinned-details")
     }
@@ -3033,7 +3042,7 @@ struct SidebarPinnedFooter: View {
     private var footerContents: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .top, spacing: 8) {
-                if content.isAgent { SidebarPetButton(content: content) }
+                if content.isAgent { SidebarPetButton(content: content, width: petWidth) }
                 VStack(alignment: .leading, spacing: 2) {
                     titleView
                     if let visual = content.visual {
@@ -3048,7 +3057,9 @@ struct SidebarPinnedFooter: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { petRowHeight = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                if petWidth <= SidebarFooterPetSize.baselineWidth { restingRowHeight = height }
+            }
             ForEach(content.lines.filter { $0.copyableValue != nil }) { line in
                 SidebarSessionDetail(line: line, copyValue: copyValue)
             }

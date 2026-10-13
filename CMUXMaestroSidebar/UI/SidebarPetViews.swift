@@ -36,9 +36,25 @@ struct SidebarPetView: View {
     }
 }
 
+/// Footer pet sizing: grows with a user-sized footer, keeping the cell aspect ratio within
+/// half the footer width and the visible body height, never below the baseline.
+enum SidebarFooterPetSize {
+    static let baselineWidth: CGFloat = 38
+    static let maximumWidthFraction: CGFloat = 0.5
+    static var aspect: CGFloat { CGFloat(SidebarPetSheet.cellHeight) / CGFloat(SidebarPetSheet.cellWidth) }
+
+    static func width(bodyHeight: CGFloat, footerWidth: CGFloat, userSized: Bool) -> CGFloat {
+        guard userSized, footerWidth > 0, bodyHeight.isFinite, footerWidth.isFinite else { return baselineWidth }
+        return max(baselineWidth, min(bodyHeight / aspect, footerWidth * maximumWidthFraction).rounded(.down))
+    }
+
+    static func height(forWidth width: CGFloat) -> CGFloat { width * aspect }
+}
+
 /// The active/hovered agent's pet. Click to choose a different pet for this agent session.
 struct SidebarPetButton: View {
     let content: SidebarDetailContent
+    var width: CGFloat = SidebarFooterPetSize.baselineWidth
     @State private var showingPicker = false
     @State private var hovering = false
     @State private var captured = false
@@ -52,7 +68,7 @@ struct SidebarPetButton: View {
         // An agent-made pet in use can be captured into the shared collection.
         let capturable = descriptor?.source == .session && content.petSessionID != nil
         Button { showingPicker = true } label: {
-            SidebarPetView(petID: petID, session: content.petSessionID, state: state, width: 38)
+            SidebarPetView(petID: petID, session: content.petSessionID, state: state, width: width)
         }
         .buttonStyle(.plain)
         .help("\(name) · \(state.title). Click to choose a pet.")
