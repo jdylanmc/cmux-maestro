@@ -1018,6 +1018,50 @@ test("a pause noticed during a sync stops its stale changes and reruns from the 
   assert.deepEqual(f.calls, [], "the stale snapshot never registered the paused Beat");
 });
 
+test("a failure after an interrupted success is reported again", async (t) => {
+  const beat = makeBeat();
+  const events = [], entries = [];
+  let wanted = [beat], outcomes = ["fail", "succeed", "fail"], gate = null, nextId = 1;
+  const running = startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    read: async () => wanted,
+    gateway: {
+      list: async () => entries.map((entry) => ({ ...entry })),
+      add: async (entry) => {
+        const outcome = outcomes.shift();
+        if (outcome === "fail") throw Object.assign(new Error("synthetic"), { code: "REJECTED" });
+        entries.push({ id: nextId, ...entry });
+        await gate?.();                          // a newer request arrives; the schedule then disappears
+        return nextId++;
+      },
+      remove: async (id) => { entries.splice(entries.findIndex((entry) => entry.id === id), 1); },
+    },
+    diagnostic: (error, beatId) => events.push([error.code, beatId]),
+  });
+  t.after(() => running.close());
+  await running.ready;                           // fail: reported
+  gate = () => { gate = null; wanted = [{ ...beat }]; running.sync(); entries.length = 0; };
+  await running.sync();                          // succeeds while a newer request interrupts; rerun fails
+  assert.deepEqual(events, [["REJECTED", beat.id], ["REJECTED", beat.id]]);
+});
+
+test("the periodic poll never interrupts a running sync", async (t) => {
+  const entries = [];
+  const running = startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 1,
+    read: async () => { await delay(20); return [makeBeat()]; },
+    gateway: {
+      list: async () => entries.map((entry) => ({ ...entry })),
+      add: async (entry) => { entries.push({ id: 1, ...entry }); return 1; },
+      remove: async () => {},
+    },
+    diagnostic: (error) => assert.fail(error),
+  });
+  t.after(() => running.close());
+  await running.ready;
+  assert.equal(entries.length, 1);
+});
+
 test("closing Beats during a sync starts no schedule change", async (t) => {
   const f = gatedBeats(t, []);
   await f.running.ready;

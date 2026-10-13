@@ -756,9 +756,10 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
   // One diagnostic per failing schedule change until it succeeds; one schedule's failure never
   // blocks the others. Each pass attempts every change at most once; nothing retries within it.
   let failed = new Set();
-  // A sync requested during a pass stops that pass from starting further changes and reruns it from
-  // the newest store, so a stale snapshot never adds a just-paused Beat. Callers share the running
-  // promise, so awaiting sync() means the latest store was applied. No change starts after close.
+  // A store change noticed during a pass stops that pass from starting further changes and reruns it
+  // from the newest store; a change already started is corrected by the rerun. The periodic poll
+  // never interrupts. Callers share the running promise, so awaiting sync() means the latest store
+  // was applied. No change starts after close.
   function sync() {
     if (closed) return Promise.resolve();
     if (running) {
@@ -782,11 +783,12 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
       const wanted = await read(sessionId), entries = await gateway.list();
       const plan = planBeatSchedules({ wanted, entries, tz });
       failing = false;
-      const failingNow = new Set();
+      const failingNow = new Set(), succeeded = new Set();
       const attempt = async (key, beatId, change) => {
         if (closed || again) return null;
         try {
           await change();
+          succeeded.add(key);
           return true;
         } catch (error) {
           if (!failed.has(key)) diagnostic(error, beatId);
@@ -807,14 +809,17 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
         if (stuck.some((owner) => beatId.startsWith(owner))) continue;
         await attempt(`add ${beatId}`, beatId, () => gateway.add(entry));
       }
-      // An interrupted pass keeps earlier failures so the rerun does not report them twice.
-      failed = closed || again ? new Set([...failed, ...failingNow]) : failingNow;
+      // An interrupted pass keeps earlier failures it did not resolve, so the rerun neither reports
+      // them twice nor hides a new failure after a success.
+      failed = closed || again
+        ? new Set([...[...failed].filter((key) => !succeeded.has(key)), ...failingNow])
+        : failingNow;
     } catch (error) {
       if (!failing) diagnostic(error);
       failing = true;
     }
   }
-  const timer = setInterval(sync, pollMs);
+  const timer = setInterval(() => running ?? sync(), pollMs);
   timer.unref?.();
   let watcher;
   try {
