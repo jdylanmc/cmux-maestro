@@ -16,6 +16,10 @@ Notable changes are recorded using Keep a Changelog categories.
   (`beats-snapshot`, read-only under the shared lock) for its session's runnable Beats, and
   an invalid store now leaves Copilot schedules untouched instead of silently dropping a
   Beat and stopping its schedule.
+- Write the Beats store as UTF-8 from the orchestrator too. It escaped non-ASCII text
+  (`\u00e9`, up to 6 bytes a character), so a store the sidebar saved under 1 MiB could
+  exceed the limit when re-encoded and block even `beats list`. Both writers now produce
+  byte-identical files.
 - Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
   dependency-free `pet_kit.py` drawing kit instead of requiring `hatch-pet`, whose
   Codex-only image generation was unavailable to Copilot.

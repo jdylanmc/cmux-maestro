@@ -100,11 +100,11 @@ class SharedFixtureTests(unittest.TestCase):
             with self.assertRaises(OrchestrationError, msg=repr(expression)):
                 parse_cron(expression)
 
-    def test_store_sample_is_valid_and_round_trips(self):
-        raw = (FIXTURES / "beats-store-sample.json").read_text()
-        state = json.loads(raw)
-        API["validate_beats_state"](state)
-        self.assertEqual(json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n", raw)
+    def test_store_sample_is_valid_and_canonical(self):
+        # The Swift sidebar encodes the same sample to the same bytes (SidebarBeatsTests).
+        raw = (FIXTURES / "beats-store-sample.json").read_bytes()
+        self.assertEqual(API["beats_encode"](API["beats_decode"](raw)), raw)
+        self.assertIn("😀".encode(), raw)
 
     def test_store_contract_cases(self):
         cases = json.loads((FIXTURES / "beats-store-cases.json").read_text())
@@ -263,6 +263,17 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(OrchestrationError):
             store_mutate(corrupt, root=self.root)
         self.assertEqual((self.root / "beats.json").read_bytes(), before)
+
+    def test_size_limit_counts_utf8_bytes(self):
+        # Escaped as \\u00e9 this store would be about 1.7 MiB; as UTF-8 it is about 0.6 MiB.
+        prompt = "é" * 1360
+
+        def fill(state):
+            state["beats"].extend(beat("0 9 * * *", session=str(uuid.uuid4()), prompt=prompt) for _ in range(200))
+        store_mutate(fill, root=self.root)
+        self.assertLess((self.root / "beats.json").stat().st_size, 1024 * 1024)
+        self.assertEqual(len(API["beats_store_snapshot"](root=self.root)["beats"]), 200)
+        self.assertEqual(len(store_mutate(lambda state: state["beats"], root=self.root)), 200)
 
 
 FAKE_HELPER = """#!/usr/bin/env python3

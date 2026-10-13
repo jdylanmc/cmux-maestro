@@ -65,16 +65,17 @@ struct SidebarBeatsTests {
 
     // MARK: Store
 
-    @Test func sampleStoreFromTheOrchestratorDecodesAndRoundTrips() throws {
+    @Test func sampleStoreFromTheOrchestratorDecodesAndEncodesToTheSameBytes() throws {
         let data = try Data(contentsOf: Self.fixtures.appendingPathComponent("beats-store-sample.json"))
         let state = try SidebarBeatsState.decode(data)
-        #expect(state.beats.count == 2)
+        #expect(state.beats.count == 3)
         #expect(state.beats[0].lastFiredMinute == nil && state.beats[1].lastFiredMinute == "2026-10-05T09:00")
         #expect(state.beats[0].prompt == "Check the board.\nSummarize blockers / risks.")
         #expect(state.beats[1].status == .needsRecovery)
-        let again = try SidebarBeatsState.decode(state.encoded())
-        #expect(again == state)
-        #expect(String(decoding: try state.encoded(), as: UTF8.self).contains("\"lastFiredMinute\":null"))
+        #expect(state.beats[2].prompt.contains("😀") && state.beats[2].prompt.contains("\u{2028}"))
+        // Byte-identical to the orchestrator's beats_encode (test-beats.py), so both writers
+        // measure the same size limit.
+        #expect(try state.encoded() == data)
     }
 
     @Test func storeContractMatchesTheOrchestrator() throws {

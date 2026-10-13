@@ -4649,6 +4649,12 @@ def beats_decode(raw):
     return validate_beats_state(state)
 
 
+def beats_encode(state):
+    """Canonical store bytes: sorted, compact UTF-8. Byte-identical to the Swift sidebar's
+    SidebarBeatsState.encoded(), so both writers measure the same size limit."""
+    return json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+
+
 def beats_open_store(path):
     """Read the private store file, or None when it does not exist. Caller holds the lock."""
     try:
@@ -4683,7 +4689,7 @@ def beats_store_mutate(operation, *, root=None):
         state = beats_open_store(path) or {"version": BEATS_VERSION, "beats": []}
         result = operation(state)
         validate_beats_state(state)
-        encoded = json.dumps(state, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        encoded = beats_encode(state)
         if len(encoded) > BEATS_MAX_STORE_BYTES:
             raise OrchestrationError("The Beats store size limit was reached.")
         write_private(path, encoded)
