@@ -667,10 +667,10 @@ export async function startReadiness({ joinSession, environment = process.env, s
 // SDK's typed client, so it is reached through the raw connection behind this one function. If a
 // Copilot release changes it, the gateway fails and Beats stop registering; nothing else breaks.
 
-const BEAT_LABEL = /^Beat \[([0-9a-f]{8})\]/;
+// The full Beat ID: two Beats may share any shorter prefix.
+const BEAT_LABEL = /^Beat \[([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]/;
 
-const beatKey = (beat) => beat.id.slice(0, 8);
-const beatLabel = (beat) => `Beat [${beatKey(beat)}] ${beat.prompt.split("\n")[0].slice(0, 60)}`;
+const beatLabel = (beat) => `Beat [${beat.id}] ${beat.prompt.split("\n")[0].slice(0, 60)}`;
 
 export function createScheduleGateway(session) {
   const sessionId = session?.sessionId;
@@ -701,20 +701,19 @@ export function createScheduleGateway(session) {
 // Beats, as returned by the controller). Schedules this section did not create (the user's own
 // /every, /after) are never touched.
 export function planBeatSchedules({ wanted, entries, tz }) {
-  const wantedKeys = new Set(wanted.map(beatKey));
   const remove = [];
   const present = new Set();
   for (const entry of entries) {
     const key = BEAT_LABEL.exec(entry.label)?.[1];
     if (key === undefined) continue;
-    const beat = wanted.find((item) => beatKey(item) === key);
+    const beat = wanted.find((item) => item.id === key);
     if (beat && !present.has(key) && entry.cron === beat.cron && entry.tz === tz && entry.prompt === beat.prompt) {
       present.add(key);
     } else {
       remove.push(entry.id);
     }
   }
-  const add = wanted.filter((beat) => !present.has(beatKey(beat)) && wantedKeys.has(beatKey(beat)))
+  const add = wanted.filter((beat) => !present.has(beat.id))
     .map((beat) => ({ cron: beat.cron, tz, prompt: beat.prompt, label: beatLabel(beat) }));
   return { add, remove };
 }

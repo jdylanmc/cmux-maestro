@@ -785,7 +785,7 @@ const makeBeat = (overrides = {}) => ({
   id: randomUUID(), cron: "*/5 * * * *", prompt: "Run the checks.\nThen report.", ...overrides,
 });
 const TZ = "America/New_York";
-const beatLabelOf = (beat) => `Beat [${beat.id.slice(0, 8)}] Run the checks.`;
+const beatLabelOf = (beat) => `Beat [${beat.id}] Run the checks.`;
 
 test("Beat planning adds, replaces and removes only its own schedules", () => {
   const live = makeBeat();
@@ -799,10 +799,19 @@ test("Beat planning adds, replaces and removes only its own schedules", () => {
   assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [edited], tz: TZ }), {
     add: [{ cron: live.cron, tz: TZ, prompt: live.prompt, label: beatLabelOf(live) }], remove: [7],
   });
-  const orphan = { id: 9, cron: "* * * * *", tz: TZ, prompt: "x", label: "Beat [deadbeef] gone" };
+  const orphan = { id: 9, cron: "* * * * *", tz: TZ, prompt: "x", label: `Beat [${randomUUID()}] gone` };
   assert.deepEqual(planBeatSchedules({ wanted: [], entries: [orphan, users], tz: TZ }), { add: [], remove: [9] });
   const duplicate = { ...current, id: 8 };
   assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [current, duplicate], tz: TZ }), { add: [], remove: [8] });
+});
+
+test("Beats whose IDs share a prefix each keep their own schedule across syncs", () => {
+  const first = makeBeat({ id: "deadbeef-0000-4000-8000-000000000001" });
+  const second = makeBeat({ id: "deadbeef-0000-4000-8000-000000000002" });
+  const plan = planBeatSchedules({ wanted: [first, second], entries: [], tz: TZ });
+  assert.deepEqual(plan.add.map((entry) => entry.label), [beatLabelOf(first), beatLabelOf(second)]);
+  const entries = plan.add.map((entry, index) => ({ id: index + 1, ...entry }));
+  assert.deepEqual(planBeatSchedules({ wanted: [first, second], entries, tz: TZ }), { add: [], remove: [] });
 });
 
 test("the schedule gateway hides Copilot's raw add behind a narrow interface", async () => {
@@ -811,16 +820,16 @@ test("the schedule gateway hides Copilot's raw add behind a narrow interface", a
     sessionId: beatSession,
     connection: { sendRequest: async (method, params) => { calls.push([method, params]); return { entry: { id: 5 } }; } },
     rpc: { schedule: {
-      list: async () => ({ entries: [{ id: 5, cron: "* * * * *", tz: TZ, prompt: "p", displayPrompt: "Beat [aaaaaaaa] p" }] }),
+      list: async () => ({ entries: [{ id: 5, cron: "* * * * *", tz: TZ, prompt: "p", displayPrompt: "Beat [aaaaaaaa-0000-4000-8000-000000000000] p" }] }),
       stop: async (params) => { calls.push(["stop", params]); return {}; },
     } },
   };
   const gateway = createScheduleGateway(session);
-  assert.equal(await gateway.add({ cron: "* * * * *", tz: TZ, prompt: "p", label: "Beat [aaaaaaaa] p" }), 5);
+  assert.equal(await gateway.add({ cron: "* * * * *", tz: TZ, prompt: "p", label: "Beat [aaaaaaaa-0000-4000-8000-000000000000] p" }), 5);
   assert.deepEqual(calls[0], ["session.schedule.addCron", {
-    sessionId: beatSession, cron: "* * * * *", tz: TZ, prompt: "p", displayPrompt: "Beat [aaaaaaaa] p", recurring: true,
+    sessionId: beatSession, cron: "* * * * *", tz: TZ, prompt: "p", displayPrompt: "Beat [aaaaaaaa-0000-4000-8000-000000000000] p", recurring: true,
   }]);
-  assert.deepEqual(await gateway.list(), [{ id: 5, cron: "* * * * *", tz: TZ, prompt: "p", label: "Beat [aaaaaaaa] p" }]);
+  assert.deepEqual(await gateway.list(), [{ id: 5, cron: "* * * * *", tz: TZ, prompt: "p", label: "Beat [aaaaaaaa-0000-4000-8000-000000000000] p" }]);
   await gateway.remove(5);
   assert.deepEqual(calls[1], ["stop", { id: 5 }]);
   await assert.rejects(createScheduleGateway({ sessionId: beatSession, rpc: session.rpc })
