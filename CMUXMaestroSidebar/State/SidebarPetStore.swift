@@ -96,6 +96,7 @@ final class SidebarPetStore {
     private(set) var overrides: [String: String] = [:]
     private(set) var notice: String?
     private var sheets: [String: CGImage] = [:]
+    private var frames: [String: CGImage] = [:]
     private var sessionCache: [UUID: (date: Date, pets: [SidebarPetDescriptor])] = [:]
     private let defaults: UserDefaults
     private let uploadDirectory: URL
@@ -194,6 +195,7 @@ final class SidebarPetStore {
         guard installed.first(where: { $0.id == id })?.source == .uploaded else { return }
         try? FileManager.default.removeItem(at: uploadDirectory.appendingPathComponent(id, isDirectory: true))
         sheets[id] = nil
+        frames.removeAll()
         refresh()
     }
 
@@ -243,6 +245,7 @@ final class SidebarPetStore {
             try JSONEncoder().encode(manifest).write(to: target.appendingPathComponent("pet.json"), options: .atomic)
             notice = nil
             sheets[id] = nil
+            frames.removeAll()
             refresh()
             if let session, id != package.id { choose(id, session: session) }
             return id
@@ -279,11 +282,15 @@ final class SidebarPetStore {
         guard let sheet = sheet(for: petID, session: session) ?? sheet(for: Self.defaultID, session: nil),
               state.frameCount > 0 else { return nil }
         let column = ((index % state.frameCount) + state.frameCount) % state.frameCount
+        let key = "\(ObjectIdentifier(sheet).hashValue)/\(state.row)/\(column)"
+        if let cached = frames[key] { return cached }
         let scale = SidebarPetSheet.scale(width: sheet.width)
         let cellWidth = CGFloat(SidebarPetSheet.cellWidth) * scale, cellHeight = CGFloat(SidebarPetSheet.cellHeight) * scale
-        return sheet.cropping(to: CGRect(
+        let cell = sheet.cropping(to: CGRect(
             x: (CGFloat(column) * cellWidth).rounded(), y: (CGFloat(state.row) * cellHeight).rounded(),
             width: cellWidth.rounded(), height: cellHeight.rounded()))
+        if let cell { frames[key] = cell }
+        return cell
     }
 
     nonisolated private static func sheet(in folder: URL, manifest: SidebarPetManifest) -> CGImage? {
@@ -308,7 +315,17 @@ final class SidebarPetStore {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
               SidebarPetSheet.accepts(width: image.width, height: image.height) else { return nil }
-        return image
+        return decoded(image)
+    }
+
+    /// Lazy WebP/PNG images re-decode the whole sheet on every render; draw once into a bitmap.
+    nonisolated private static func decoded(_ image: CGImage) -> CGImage? {
+        guard let context = CGContext(
+            data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return context.makeImage()
     }
 
     nonisolated private static func slug(_ value: String) -> String {
