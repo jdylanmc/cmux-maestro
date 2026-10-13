@@ -2956,13 +2956,14 @@ struct SidebarPinnedFooter: View {
     @State private var dragStart: CGFloat?
 
     private let headerHeight: CGFloat = 5
+    private var iconRowHeight: CGFloat { content.isAgent ? 14 : 0 }
     private var minimumBodyHeight: CGFloat { petRowHeight }
-    private var maximumBodyHeight: CGFloat { max(minimumBodyHeight, dragLimit - headerHeight) }
+    private var maximumBodyHeight: CGFloat { max(minimumBodyHeight, dragLimit - headerHeight - iconRowHeight) }
     private var bodyHeight: CGFloat {
         if let stored = userHeight.wrappedValue {
             return min(max(CGFloat(stored), minimumBodyHeight), maximumBodyHeight)
         }
-        return min(contentHeight, max(0, maximumHeight - headerHeight))
+        return min(contentHeight, max(0, maximumHeight - headerHeight - iconRowHeight))
     }
 
     private func setBodyHeight(_ value: CGFloat) {
