@@ -4124,6 +4124,245 @@ class DirectLaunchTests(unittest.TestCase):
                 caller.communicate(timeout=5)
 
 
+class ReservationAndLeaseTests(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness(interactive=True)
+        self.h.env["FAKE_NO_OBSERVATION"] = "1"
+        self.addCleanup(self.h.close)
+
+    @staticmethod
+    def dead_process():
+        child = subprocess.Popen(["/usr/bin/true"])
+        child.wait()
+        return {"pid": child.pid, "start": "Thu Jan  1 00:00:00 1970"}
+
+    def failed_attach(self):
+        result = self.h.run(
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Attach fails", "--cwd", str(self.h.path), "--task", "May already run",
+            env={**self.h.env, "CMUX_MAESTRO_TEST_ATTACH_FAILURE": "1"}, check=False,
+        )
+        self.assertNotEqual(result["returncode"], 0)
+        return next(item for item in self.h.state()["nodes"].values() if item["label"] == "Attach fails")
+
+    def status(self, identifier):
+        return self.h.run("status", "--actor-id", self.h.node, "--token", self.h.token,
+                          "--worker-id", identifier)["workers"][0]
+
+    def test_projection_failure_after_reservation_cancels_the_unlaunched_lease(self):
+        args = CONTROLLER_API["parser"]().parse_args([
+            "spawn", "--actor-id", self.h.node, "--token", self.h.token,
+            "--name", "Reserved", "--cwd", str(self.h.path), "--task", "Never launched",
+        ])
+        store, original = CONTROLLER_API["Store"], CONTROLLER_API["Store"]._atomic
+        failures = []
+
+        def flaky(directory, name, data):
+            if name == "current.json" and not failures:
+                failures.append(name)
+                raise OSError(28, "No space left on device")
+            return original(directory, name, data)
+        with patch.dict(os.environ, self.h.env), patch.object(store, "_atomic", staticmethod(flaky)):
+            with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "reservation was cancelled"):
+                CONTROLLER_API["command_spawn"](args, self.h.root, CONTROLLER_API["Cmux"]())
+        state = self.h.state()
+        node = next(item for item in state["nodes"].values() if item["label"] == "Reserved")
+        self.assertEqual(state["launches"], {})
+        self.assertEqual(node["phase"], "launch-failed")
+        self.assertTrue(node["runtimeNotStarted"])
+        self.assertFalse([call for call in self.h.cmux_data()["calls"] if "surface.create" in call])
+        self.assertTrue(CONTROLLER_API["worker_processes_exited"](node))
+
+    def test_pre_commit_reservation_refusal_leaves_no_node_or_lease(self):
+        args = CONTROLLER_API["parser"]().parse_args([
+            "spawn", "--actor-id", self.h.node, "--token", "0" * 64,
+            "--name", "Refused", "--cwd", str(self.h.path), "--task", "Never reserved",
+        ])
+        with patch.dict(os.environ, self.h.env):
+            with self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+                CONTROLLER_API["command_spawn"](args, self.h.root, CONTROLLER_API["Cmux"]())
+        self.assertEqual(self.h.state()["launches"], {})
+        self.assertEqual(len(self.h.state()["nodes"]), 1)
+
+    def test_failed_attach_lease_releases_once_exit_and_surface_loss_are_proven(self):
+        node = self.failed_attach()
+        identifier = node["id"]
+        self.assertIn(identifier, self.h.state()["launches"])
+        self.h.change_state(lambda state: state["nodes"][identifier].update(providerProcess=self.dead_process()))
+        self.assertEqual(self.status(identifier)["phase"], "launching")
+        self.assertIn(identifier, self.h.state()["launches"])
+        self.h.remove_surface(node["surfaceId"])
+        self.assertEqual(self.status(identifier)["phase"], "terminal-disappeared")
+        self.assertEqual(self.h.state()["launches"], {})
+        archived = self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token)
+        self.assertTrue(archived["archived"])
+
+    def test_failed_attach_lease_is_kept_without_a_provider_exit_anchor(self):
+        node = self.failed_attach()
+        self.h.remove_surface(node["surfaceId"])
+        self.status(node["id"])
+        self.assertIn(node["id"], self.h.state()["launches"])
+        refused = self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token, check=False)
+        self.assertNotEqual(refused["returncode"], 0)
+
+
+class RoutePublicationTests(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.close)
+        self.routes = self.h.path / "routes"
+        self.routes.mkdir(mode=0o700)
+        self.node = {
+            "id": str(uuid.uuid4()), "workspaceId": self.h.workspace, "label": "Peer",
+            "copilotSessionId": str(uuid.uuid4()), "generation": 1,
+            "messaging": {"routes": str(self.routes)},
+        }
+        CONTROLLER_API["bind_messaging"](self.node)
+        self.route = self.routes / f"{CONTROLLER_API['message_peer'](self.node)}.json"
+
+    def retire(self, operation):
+        return CONTROLLER_API["mutate_retiring_routes"](self.h.root, operation)
+
+    def test_aborted_mutation_leaves_routes_intact(self):
+        def abort(state, retiring):
+            retiring.append(self.node)
+            raise CONTROLLER_API["OrchestrationError"]("Workspace retained-resource limit reached.")
+        with self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+            self.retire(abort)
+        self.assertTrue(self.route.exists())
+
+    def test_committed_mutation_retires_routes_after_the_commit(self):
+        seen = []
+
+        def commit(state, retiring):
+            retiring.append(self.node)
+            seen.append(self.route.exists())
+            return {"ok": True}
+        self.assertEqual(self.retire(commit), {"ok": True})
+        self.assertEqual(seen, [True])
+        self.assertFalse(self.route.exists())
+
+    def test_committed_state_with_failed_projection_still_retires_and_reports_commit(self):
+        store, original = CONTROLLER_API["Store"], CONTROLLER_API["Store"]._atomic
+
+        def flaky(directory, name, data):
+            if name == "current.json":
+                raise OSError(28, "No space left on device")
+            return original(directory, name, data)
+        marker = str(uuid.uuid4())
+
+        def commit(state, retiring):
+            retiring.append(self.node)
+            state["archives"].append({"runId": marker, "coordinatorLabel": "x", "nodeCount": 0, "archivedAt": CONTROLLER_API["now"]()})
+        with patch.object(store, "_atomic", staticmethod(flaky)):
+            with self.assertRaisesRegex(CONTROLLER_API["CommittedProjectionError"], "was committed"):
+                self.retire(commit)
+        self.assertEqual(self.h.state()["archives"][-1]["runId"], marker)
+        self.assertFalse(self.route.exists())
+
+    def test_unprovable_route_is_left_in_place_and_reported(self):
+        self.route.write_text(json.dumps({"peer": "someone-else"}))
+        self.route.chmod(0o600)
+
+        def commit(state, retiring):
+            retiring.append(self.node)
+            return {"ok": True}
+        self.assertEqual(self.retire(commit), {"ok": True, "routesNotRetired": 1})
+        self.assertTrue(self.route.exists())
+
+    def test_interrupted_binding_never_publishes_a_partial_route(self):
+        self.route.unlink()
+        real_dump = json.dump
+
+        def torn(value, stream, *args, **kwargs):
+            stream.write('{"peer": "torn')
+            raise OSError(28, "No space left on device")
+        with patch.object(json, "dump", torn):
+            with self.assertRaises(OSError):
+                CONTROLLER_API["bind_messaging"](self.node)
+        self.assertEqual(list(self.routes.iterdir()), [])
+        with patch.object(json, "dump", real_dump):
+            CONTROLLER_API["bind_messaging"](self.node)
+        self.assertEqual(json.loads(self.route.read_text())["nodeId"], self.node["id"])
+        self.assertEqual(self.route.stat().st_mode & 0o777, 0o600)
+        with self.assertRaises(FileExistsError):
+            CONTROLLER_API["bind_messaging"](self.node)
+        self.assertEqual(len(list(self.routes.iterdir())), 1)
+
+
+class OwnPetPublicationTests(unittest.TestCase):
+    SESSION = "11111111-2222-4333-8444-555555555555"
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name).resolve()
+        patcher = patch.object(Path, "home", return_value=self.home)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.library = CONTROLLER_API["pet_session_root"](self.SESSION)
+        existing = self.library / "duck"
+        existing.mkdir(parents=True, mode=0o700)
+        (existing / "pet.json").write_text('{"displayName": "Original"}')
+        (existing / "spritesheet.png").write_bytes(b"original-sheet")
+        self.source = self.home / "incoming"
+        self.source.mkdir()
+        (self.source / "pet.json").write_text(json.dumps({
+            "id": "duck", "displayName": "Replacement", "spritesheetPath": "sheet.png"}))
+        (self.source / "sheet.png").write_bytes(PetSheetSizeTests.png(1536, 1872))
+
+    def select(self, ok):
+        completed = unittest.mock.Mock(returncode=0 if ok else 1, stdout=json.dumps(
+            {"ok": ok, "sessionId": self.SESSION, "petId": "duck"}))
+        return patch.dict(CONTROLLER_API["select_own_pet"].__globals__, {
+            "identity_helper_path": lambda feature: "/synthetic/helper",
+            "subprocess": unittest.mock.Mock(run=unittest.mock.Mock(return_value=completed),
+                                             TimeoutExpired=subprocess.TimeoutExpired),
+        })
+
+    def add(self):
+        args = CONTROLLER_API["parser"]().parse_args([
+            "pet", "--self", "--session-id", self.SESSION, "--add", str(self.source)])
+        return CONTROLLER_API["command_self_pet"](args)
+
+    def library_names(self):
+        return sorted(item.name for item in self.library.iterdir())
+
+    def test_refused_ownership_restores_the_existing_pet(self):
+        with self.select(False), self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "prove ownership"):
+            self.add()
+        self.assertEqual((self.library / "duck/pet.json").read_text(), '{"displayName": "Original"}')
+        self.assertEqual((self.library / "duck/spritesheet.png").read_bytes(), b"original-sheet")
+        self.assertEqual(self.library_names(), ["duck"])
+
+    def test_refused_first_add_leaves_no_pet_behind(self):
+        shutil.rmtree(self.library / "duck")
+        with self.select(False), self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+            self.add()
+        self.assertEqual(self.library_names(), [])
+
+    def test_accepted_add_replaces_the_pet_and_leaves_no_staging(self):
+        with self.select(True):
+            result = self.add()
+        self.assertTrue(result["added"])
+        self.assertEqual(json.loads((self.library / "duck/pet.json").read_text())["displayName"], "Replacement")
+        self.assertEqual(self.library_names(), ["duck"])
+
+    def test_missing_identity_helper_restores_the_existing_pet(self):
+        with patch.dict(CONTROLLER_API["select_own_pet"].__globals__, {
+            "identity_helper_path": unittest.mock.Mock(side_effect=CONTROLLER_API["OrchestrationError"]("Refresh Maestro integration.")),
+        }), self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+            self.add()
+        self.assertEqual((self.library / "duck/spritesheet.png").read_bytes(), b"original-sheet")
+        self.assertEqual(self.library_names(), ["duck"])
+
+    def test_non_image_sheet_is_refused_without_a_traceback(self):
+        (self.source / "sheet.png").write_bytes(b"not an image")
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "readable PNG or WebP"):
+            self.add()
+        self.assertEqual((self.library / "duck/spritesheet.png").read_bytes(), b"original-sheet")
+
+
 class PetSheetSizeTests(unittest.TestCase):
     """Pet sheets are flexible: 8 columns of 192:208 cells, any scale, nine or more rows."""
 
