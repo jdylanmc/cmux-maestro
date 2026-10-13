@@ -9,7 +9,9 @@ Notable changes are recorded using Keep a Changelog categories.
 - Make every Beats reader apply one store contract. The Swift sidebar and the orchestrator
   now refuse the same stores (shared `scripts/test-fixtures/beats-store-cases.json`):
   `true`, `1.0` or out-of-range integers, uppercase UUIDs, non-text timestamps, lone
-  surrogates, `NaN`, duplicate keys, and a store file or folder readable by others. The
+  surrogates, `NaN`, U+FEFF anywhere, whitespace-only prompts (U+200B counts as whitespace),
+  and a store file or folder readable by others. The orchestrator also refuses duplicate
+  keys; the sidebar cannot detect them and keeps the first value. The
   installed extension no longer parses `beats.json`; it asks the controller
   (`beats-snapshot`, read-only under the shared lock) for its session's runnable Beats, and
   an invalid store now leaves Copilot schedules untouched instead of silently dropping a

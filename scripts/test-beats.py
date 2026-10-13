@@ -119,6 +119,13 @@ class SharedFixtureTests(unittest.TestCase):
         with self.assertRaises(OrchestrationError):
             API["beats_decode"](b'{"version":1,"version":1,"beats":[]}')
 
+    def test_writers_refuse_prompts_readers_refuse(self):
+        for prompt in ("\u200b", " \u200b\n", "\ufeff", "\ufeffHello", "a\ufeffb"):
+            with self.assertRaises(OrchestrationError, msg=repr(prompt)):
+                API["validate_beat_prompt"](prompt)
+        API["validate_beat_prompt"]("a\u200bb")
+        API["validate_beat_prompt"]("see \\ufeff here")
+
 
 class DaylightSavingTests(LocalTimeCase):
     def simulate(self, cron, start, end):
@@ -234,6 +241,16 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(len(API["beats_store_snapshot"](root=self.root)["beats"]), 1)
         after = os.stat(self.root / "beats.json")
         self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+
+    def test_snapshot_refuses_fifos_without_blocking(self):
+        self.root.mkdir(mode=0o700)
+        os.mkfifo(self.root / ".lock", 0o600)
+        with self.assertRaises(OrchestrationError):
+            API["beats_store_snapshot"](root=self.root)
+        (self.root / ".lock").unlink()
+        os.mkfifo(self.root / "beats.json", 0o600)
+        with self.assertRaises(OrchestrationError):
+            API["beats_store_snapshot"](root=self.root)
 
     def test_invalid_mutation_is_not_persisted(self):
         store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)

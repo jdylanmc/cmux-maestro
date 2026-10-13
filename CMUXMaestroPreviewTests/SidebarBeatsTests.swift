@@ -88,6 +88,17 @@ struct SidebarBeatsTests {
         }
     }
 
+    @Test func writersRefusePromptsReadersRefuse() throws {
+        var state = SidebarBeatsState()
+        for prompt in ["\u{200B}", " \u{200B}\n", "\u{FEFF}", "\u{FEFF}Hello", "a\u{FEFF}b"] {
+            #expect(throws: BeatsError.self, "\(prompt.debugDescription)") {
+                _ = try state.create(session: UUID(), cron: "* * * * *", prompt: prompt)
+            }
+        }
+        _ = try state.create(session: UUID(), cron: "* * * * *", prompt: "see \\ufeff here")
+        #expect(try SidebarBeatsState.decode(state.encoded()) == state)
+    }
+
     @Test func sharedStoreOrDirectoryIsRefused() throws {
         let root = try temporaryRoot().appendingPathComponent("Beats")
         defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }

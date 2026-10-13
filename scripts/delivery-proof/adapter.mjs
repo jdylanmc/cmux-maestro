@@ -722,7 +722,13 @@ export function planBeatSchedules({ wanted, entries, tz }) {
 // Maestro's controller owns the store contract; the adapter never parses beats.json itself. Any
 // refusal (invalid store, missing controller) throws, so the caller changes no schedule.
 export async function readBeats(sessionId, controller) {
-  const result = await invokeController("beats-snapshot", { sessionId }, controller);
+  let result;
+  try {
+    result = await invokeController("beats-snapshot", { sessionId }, controller);
+  } catch (cause) {
+    throw Object.assign(new Error("Maestro refused or could not read the Beats store.", { cause }),
+      { code: "BEATS_SNAPSHOT" });
+  }
   requireCondition(Array.isArray(result.beats) && result.beats.every((beat) =>
     typeof beat?.id === "string" && UUID.test(beat.id) && typeof beat.cron === "string" &&
     typeof beat.prompt === "string"));

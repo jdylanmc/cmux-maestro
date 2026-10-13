@@ -189,7 +189,7 @@ nonisolated struct SidebarBeatsState: Equatable {
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw BeatsError("A Beat needs a nonempty prompt.")
         }
-        guard prompt.utf8.count <= BeatsLimits.maximumPromptBytes,
+        guard prompt.utf8.count <= BeatsLimits.maximumPromptBytes, !prompt.unicodeScalars.contains("\u{FEFF}"),
               !prompt.unicodeScalars.contains(where: { $0.value < 32 && $0 != "\n" && $0 != "\t" }) else {
             throw BeatsError("A Beat prompt must be at most 4 KiB of text without control characters.")
         }
@@ -205,7 +205,7 @@ nonisolated struct SidebarBeatsState: Equatable {
     /// `scripts/test-fixtures/beats-store-cases.json`. Types are checked on the raw JSON because
     /// `JSONDecoder` would accept `true` or `1.0` where the contract requires an integer.
     static func decode(_ data: Data) throws -> SidebarBeatsState {
-        guard data.count <= BeatsLimits.maximumStoreBytes,
+        guard data.count <= BeatsLimits.maximumStoreBytes, !containsByteOrderMark(data),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == ["version", "beats"], strictInteger(object["version"]) == 1,
               let raw = object["beats"] as? [[String: Any]], raw.count <= BeatsLimits.maximumTotal,
@@ -222,6 +222,23 @@ nonisolated struct SidebarBeatsState: Equatable {
             }
         }
         return SidebarBeatsState(beats: beats)
+    }
+
+    /// U+FEFF as raw UTF-8 or as an unescaped `\uFEFF` escape. `JSONSerialization` drops it from the
+    /// start of a string, so it is refused outright (the orchestrator's `BEATS_BYTE_ORDER_MARK`).
+    static func containsByteOrderMark(_ data: Data) -> Bool {
+        let bytes = [UInt8](data)
+        var backslashes = 0
+        for index in bytes.indices {
+            let byte = bytes[index]
+            if byte == 0xEF, index + 2 < bytes.count, bytes[index + 1] == 0xBB, bytes[index + 2] == 0xBF { return true }
+            if byte == UInt8(ascii: "u"), backslashes % 2 == 1, index + 4 < bytes.count,
+               String(decoding: bytes[(index + 1)...(index + 4)], as: UTF8.self).lowercased() == "feff" {
+                return true
+            }
+            backslashes = byte == UInt8(ascii: "\\") ? backslashes + 1 : 0
+        }
+        return false
     }
 
     private static func hasContractTypes(_ beat: [String: Any]) -> Bool {

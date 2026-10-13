@@ -929,7 +929,33 @@ test("readBeats takes this session's runnable Beats from the real controller and
   await assert.rejects(readBeats(beatSession, controller));
   await fs.writeFile(store, JSON.stringify({ version: 1, beats }), { mode: 0o600 });
   await fs.chmod(store, 0o644);
-  await assert.rejects(readBeats(beatSession, controller));
+  await assert.rejects(readBeats(beatSession, controller), { code: "BEATS_SNAPSHOT" });
+});
+
+test("startBeats finds the controller through CMUX_MAESTRO_ORCHESTRATOR without an injected reader", async (t) => {
+  const home = await fs.mkdtemp(path.join(base, "bh-"));
+  t.after(() => fs.rm(home, { recursive: true }));
+  const controller = await beatsController(t, home);
+  const saved = process.env.CMUX_MAESTRO_ORCHESTRATOR;
+  process.env.CMUX_MAESTRO_ORCHESTRATOR = controller;
+  t.after(() => { if (saved === undefined) delete process.env.CMUX_MAESTRO_ORCHESTRATOR; else process.env.CMUX_MAESTRO_ORCHESTRATOR = saved; });
+  const root = path.join(home, "Library/Application Support/CMUXMaestroPreview/Beats");
+  await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  const stamp = "2026-01-01T00:00:00Z";
+  const live = {
+    id: randomUUID(), sessionId: beatSession, cron: "*/5 * * * *", prompt: "Run the checks.", enabled: true,
+    recoveryGate: false, targetEnded: false, lastFiredMinute: null, createdAt: stamp, updatedAt: stamp, revision: 1,
+  };
+  await fs.writeFile(path.join(root, "beats.json"), JSON.stringify({ version: 1, beats: [live] }), { mode: 0o600 });
+  const entries = [];
+  const running = startBeats({
+    session: { sessionId: beatSession }, root, tz: TZ, pollMs: 60_000,
+    gateway: { list: async () => entries, add: async (entry) => { entries.push(entry); return 1; }, remove: async () => {} },
+    diagnostic: (error) => assert.fail(error),
+  });
+  t.after(() => running.close());
+  await running.ready;
+  assert.deepEqual(entries.map((entry) => entry.prompt), ["Run the checks."]);
 });
 
 test("managed steering does not wait for native admission or serialize behind an earlier send", async (t) => {
