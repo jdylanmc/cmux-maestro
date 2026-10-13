@@ -1432,45 +1432,32 @@ struct SidebarPinnedDetailsTests {
         let background = try #require(expected.colorAt(
             x: Int(bounds.maxX) - 1, y: Int(bounds.midY)
         )?.usingColorSpace(.deviceRGB))
-        var best = Double.infinity
-        var differingPixels = Int.max
-        var alignment = [0, 0]
-        var referenceInk: [Int] = []
-        for dy in -1...1 {
-            for dx in -1...1 {
-                var error = 0.0, differences = 0
-                var ink = Array(repeating: 0, count: regions.count)
-                for (index, region) in regions.enumerated() {
-                    for y in Int(region.bounds.minY)..<Int(region.bounds.maxY) {
-                        for x in Int(region.bounds.minX)..<Int(region.bounds.maxX) {
-                            let a = try #require(actual.colorAt(x: x + dx, y: y + dy)?.usingColorSpace(.deviceRGB))
-                            let e = try #require(expected.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
-                            let delta = Double(max(abs(a.redComponent - e.redComponent),
-                                                   abs(a.greenComponent - e.greenComponent),
-                                                   abs(a.blueComponent - e.blueComponent),
-                                                   abs(a.alphaComponent - e.alphaComponent)))
-                            error = max(error, delta)
-                            if delta > 0 { differences += 1 }
-                            if max(abs(background.redComponent - e.redComponent),
-                                   abs(background.greenComponent - e.greenComponent),
-                                   abs(background.blueComponent - e.blueComponent)) > 0.1 {
-                                ink[index] += 1
-                            }
-                        }
+        // Exact means unshifted: a 1px offset is a layout regression, not an alignment to search away.
+        var best = 0.0, differingPixels = 0
+        var referenceInk = Array(repeating: 0, count: regions.count)
+        for (index, region) in regions.enumerated() {
+            for y in Int(region.bounds.minY)..<Int(region.bounds.maxY) {
+                for x in Int(region.bounds.minX)..<Int(region.bounds.maxX) {
+                    let a = try #require(actual.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                    let e = try #require(expected.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                    let delta = Double(max(abs(a.redComponent - e.redComponent),
+                                           abs(a.greenComponent - e.greenComponent),
+                                           abs(a.blueComponent - e.blueComponent),
+                                           abs(a.alphaComponent - e.alphaComponent)))
+                    best = max(best, delta)
+                    if delta > 0 { differingPixels += 1 }
+                    if max(abs(background.redComponent - e.redComponent),
+                           abs(background.greenComponent - e.greenComponent),
+                           abs(background.blueComponent - e.blueComponent)) > 0.1 {
+                        referenceInk[index] += 1
                     }
-                    try #require(ink[index] > region.minimumInk, "Blank or incomplete literal reference")
-                }
-                if error < best || (error == best && differences < differingPixels) {
-                    best = error
-                    differingPixels = differences
-                    alignment = [dx, dy]
-                    referenceInk = ink
                 }
             }
+            try #require(referenceInk[index] > region.minimumInk, "Blank or incomplete literal reference")
         }
         let evidence: [String: Any] = [
             "maximumChannelDifference": best, "differingPixels": differingPixels,
-            "alignmentPixels": alignment, "referenceInkPixels": referenceInk,
+            "alignmentPixels": [0, 0], "referenceInkPixels": referenceInk,
             "regionPixels": [Int(bounds.minX), Int(bounds.minY), Int(bounds.width), Int(bounds.height)], "tolerance": 0
         ]
         try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys])
