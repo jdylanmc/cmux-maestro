@@ -15,7 +15,6 @@ nonisolated struct BeatsError: Error, Equatable {
     init(_ message: String) { self.message = message }
 }
 
-/// Five numeric fields (minute hour day-of-month month weekday), evaluated in local time.
 nonisolated struct BeatsCron: Equatable {
     private static let ranges: [(name: String, low: Int, high: Int)] = [
         ("minute", 0, 59), ("hour", 0, 23), ("day", 1, 31), ("month", 1, 12), ("weekday", 0, 7)
@@ -142,7 +141,6 @@ nonisolated struct SidebarBeat: Codable, Equatable, Identifiable {
     var updatedAt: String
     var revision: Int
 
-    /// The orchestrator writes `lastFiredMinute: null`; keep the key present for parity.
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
@@ -311,8 +309,7 @@ nonisolated struct SidebarBeatsState: Equatable {
     }
 }
 
-/// One authoritative store shared with the orchestrator: writers serialize on a lock file and
-/// replace the data file atomically.
+/// Store shared with the orchestrator; lock file plus atomic replace.
 nonisolated struct SidebarBeatsFile {
     let root: URL
 

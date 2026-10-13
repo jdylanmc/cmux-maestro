@@ -32,7 +32,7 @@ struct ContentView: View {
 
             Text("Copilot integration maintenance")
                 .font(.headline)
-            Text("The alpha installer configures Copilot automatically. These explicit controls repair or remove integration. The native sidebar reads validated metadata locally; terminal-backed control stays outside the sandboxed extension.")
+            Text("The installer configures Copilot. These controls repair or remove the integration.")
                 .foregroundStyle(.secondary)
 
             HStack {
@@ -43,7 +43,7 @@ struct ContentView: View {
                     .disabled(busy)
             }
 
-            Text("Enable installs the hookless cmux-maestro-native lifecycle and icon plugin, ~/.copilot/hooks/cmux-maestro-observer.json, the local controller and the loader under ~/.copilot/extensions/maestro. Private observer-registration.json provenance and .observer-setup.lock live in the app's Copilot support directory. The loader is inert outside newly Maestro-launched participating sessions. Settings values and disable choices are preserved; coordinated rollback can restore verified prior settings bytes after CLI normalization. Choose only a Copilot executable you trust.")
+            Text("Installs and verifies the Copilot integration. Settings and disable choices are preserved. Choose only a Copilot executable you trust.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -78,9 +78,9 @@ struct ContentView: View {
             SettingsLink {
                 Label("Settings…", systemImage: "gearshape")
             }
-            Text("Next: choose an initial coordinator account and explicit model in Agent launch settings, then use Maestro’s launch-coordinator entry. Managed children inherit their invoking session’s account. Existing conversations are not adopted. Messaging preserves focus and human input and does not guarantee delivery; the sidebar is optional.")
+            Text("Next: choose an account and model in Agent launch settings, then launch a coordinator. Existing conversations are not adopted.")
                 .font(.callout)
-            Text("Keep this app at its installed location and use the alpha installer for updates. A pending coordinated installation must be recovered before separate maintenance. Uses the standard ~/.copilot/session-state location only.")
+            Text("Keep the app installed in place. Recover pending installs before maintenance.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -99,7 +99,7 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) { pendingAction = nil }
         } message: {
-            Text("This runs bounded metadata checks and plugin commands through the selected Copilot CLI. Enable stages only a disabled owned hook file, replaces recognized legacy observer declarations, then verifies before activation. Maestro never clears disable keys. The CLI may rewrite settings without value changes or add an empty plugin map; other changed values stop setup. Unresolvable disables, foreign content and unsafe paths also stop setup. Remove deletes only recognized owned observer registration and its native messaging entry point. Partial changes are reported. Existing CLI sessions and other integrations are not restarted, adopted or removed.")
+            Text("Checks and updates only Maestro-owned integration files. Maestro never clears disable keys. Existing sessions and other integrations are unchanged.")
         }
     }
 

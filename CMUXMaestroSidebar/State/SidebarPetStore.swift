@@ -22,7 +22,6 @@ enum SidebarPetSheet {
     /// Pixel scale of a sheet relative to the 1536-wide standard.
     static func scale(width: Int) -> CGFloat { CGFloat(width) / CGFloat(Self.width) }
     static let maximumBytes = 10 * 1024 * 1024
-    /// Populated frames per row: idle, run right, run left, wave, jump, failure, waiting, working, review.
     static let frameCounts = [6, 8, 8, 4, 5, 8, 6, 6, 6]
 }
 
