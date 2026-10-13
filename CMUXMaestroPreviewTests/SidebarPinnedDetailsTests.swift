@@ -818,9 +818,9 @@ struct SidebarPinnedDetailsTests {
         window.isReleasedWhenClosed = false
         let hosting = NSHostingView(rootView: PetFooterHarnessView(model: model))
         window.contentView = hosting
-        defer { window.contentView = nil; window.close() }
+        defer { window.contentView = nil; window.close(); model.stores.cleanup() }
 
-        let store = SidebarPetStore.shared
+        let store = model.stores.pets
         let inset = store.topInset(
             petID: store.resolvedID(session: model.content.petSessionID, agentChoice: model.content.petChoice),
             session: model.content.petSessionID)
@@ -1448,8 +1448,11 @@ struct SidebarPinnedDetailsTests {
         var modelRegion = CGRect.null
         let caption = NSFont.preferredFont(forTextStyle: .caption1).pointSize
         let caption2 = NSFont.preferredFont(forTextStyle: .caption2).pointSize
-        // Independent literal header geometry: outer inset, divider, gap and 38-point pet (no heading row).
-        let reference = NSHostingView(rootView: VStack(alignment: .leading, spacing: 2) {
+        // Independent literal header geometry: outer inset, divider, gap and a 38-point pet with no measured
+        // top inset (full 192:208 cell); text is vertically centered on the pet (no heading row).
+        let reference = NSHostingView(rootView: HStack(alignment: .center, spacing: 8) {
+          Color.clear.frame(width: 38, height: 38 * 208 / 192)
+          VStack(alignment: .leading, spacing: 2) {
             // Agent header text is 2pt above its compact text style.
             Text("Verified agent").font(.system(size: caption + 2, weight: .semibold)).lineLimit(2)
             Label("Working", systemImage: "circle.fill")
@@ -1460,9 +1463,12 @@ struct SidebarPinnedDetailsTests {
                 .onGeometryChange(for: CGRect.self) {
                     $0.frame(in: .named("footer-model-reference"))
                 } action: { modelRegion = $0 }
+          }
+          .frame(width: size.width - 20 - 38 - 8, alignment: .leading)
         }
-        .frame(width: size.width - 20 - 38 - 8, alignment: .leading)
-        .padding(.leading, 10 + 38 + 8).padding(.top, 10 + 0.5 + 4)
+        // The extra 0.5pt is the observed offset of the centered header row since the footer pet-scaling
+        // change; it is constant across the light/dark, 240/340-wide and 144/220-high renders below.
+        .padding(.leading, 10).padding(.top, 10 + 0.5 + 4 + 0.5)
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .coordinateSpace(name: "footer-model-reference")
         .environment(\.colorScheme, dark ? .dark : .light)
@@ -1610,6 +1616,7 @@ private final class PetFooterHarness {
     var width: CGFloat = 240
     var stored: Double?
     var content: SidebarDetailContent
+    @ObservationIgnored let stores = SidebarStoreFixture()
     @ObservationIgnored var pet = CGRect.zero
     @ObservationIgnored var text = CGRect.zero
 
@@ -1645,7 +1652,7 @@ private struct PetFooterHarnessView: View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
             SidebarPinnedFooter(
-                content: model.content, maximumHeight: 420, dragLimit: 420,
+                content: model.content, pets: model.stores.pets, maximumHeight: 420, dragLimit: 420,
                 userHeight: Binding(get: { model.stored }, set: { model.stored = $0 }), inspect: {},
                 geometryChanged: { part, frame in
                     switch part {

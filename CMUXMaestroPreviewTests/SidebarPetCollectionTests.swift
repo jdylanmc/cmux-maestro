@@ -103,7 +103,7 @@ struct SidebarPetCollectionTests {
 
         var frame = CGRect.null
         let hosting = NSHostingView(rootView: SidebarPetView(
-            petID: "blob", session: session, state: .idle, width: 48, animated: false, topTrim: inset)
+            store: store, petID: "blob", session: session, state: .idle, width: 48, animated: false, topTrim: inset)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
             .fixedSize())
         hosting.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
