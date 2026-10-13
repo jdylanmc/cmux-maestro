@@ -34,6 +34,26 @@ struct SidebarBeatsTests {
         }
     }
 
+    @Test func previewsMatchCopilotsRecordedNextRuns() throws {
+        let data = try Data(contentsOf: Self.fixtures.appendingPathComponent("beats-cron-cases.json"))
+        let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let oracle = try #require(root["copilotNextRuns"] as? [String: Any])
+        let zone = try #require(oracle["timeZone"] as? String)
+        let from = try #require(oracle["from"] as? String)
+        let calendar = newYork(zone)
+        let parse = DateFormatter()
+        parse.calendar = calendar; parse.timeZone = calendar.timeZone
+        parse.locale = Locale(identifier: "en_US_POSIX"); parse.dateFormat = "yyyy-MM-dd HH:mm"
+        let start = try #require(parse.date(from: from))
+        let cases = try #require(oracle["cases"] as? [[String: Any]])
+        for item in cases {
+            let cron = try #require(item["cron"] as? String)
+            let expected = try #require(item["next"] as? [String])
+            let times = try BeatsCron(cron).nextTimes(after: start, count: expected.count, calendar: calendar)
+            #expect(times.map { parse.string(from: $0) } == expected, "\(cron)")
+        }
+    }
+
     @Test func weekdaySevenIsSundayAndBothDayFieldsAreOred() throws {
         #expect(try BeatsCron("0 0 * * 7").weekdays == [0])
         let spec = try BeatsCron("0 9 13 * 5")
@@ -65,23 +85,74 @@ struct SidebarBeatsTests {
 
     // MARK: Store
 
-    @Test func sampleStoreFromTheOrchestratorDecodesAndRoundTrips() throws {
+    @Test func sampleStoreFromTheOrchestratorDecodesAndEncodesToTheSameBytes() throws {
         let data = try Data(contentsOf: Self.fixtures.appendingPathComponent("beats-store-sample.json"))
         let state = try SidebarBeatsState.decode(data)
-        #expect(state.beats.count == 2)
-        #expect(state.beats[0].lastFiredMinute == nil && state.beats[1].lastFiredMinute == "2026-10-05T09:00")
+        #expect(state.beats.count == 3)
         #expect(state.beats[0].prompt == "Check the board.\nSummarize blockers / risks.")
-        #expect(state.beats[1].status == .needsRecovery)
-        let again = try SidebarBeatsState.decode(state.encoded())
-        #expect(again == state)
-        #expect(String(decoding: try state.encoded(), as: UTF8.self).contains("\"lastFiredMinute\":null"))
+        #expect(state.beats[0].status == .active && state.beats[1].status == .paused)
+        #expect(state.beats[2].prompt.contains("😀") && state.beats[2].prompt.contains("\u{2028}"))
+        // Byte-identical to the orchestrator's beats_encode (test-beats.py), so both writers
+        // measure the same size limit.
+        #expect(try state.encoded() == data)
+    }
+
+    @Test func storeContractMatchesTheOrchestrator() throws {
+        let data = try Data(contentsOf: Self.fixtures.appendingPathComponent("beats-store-cases.json"))
+        let cases = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        for item in try #require(cases["valid"] as? [[String: String]]) {
+            #expect(throws: Never.self, "\(item["name"] ?? "")") { _ = try SidebarBeatsState.decode(Data(item["raw"]!.utf8)) }
+        }
+        for item in try #require(cases["invalid"] as? [[String: String]]) {
+            #expect(throws: BeatsError.self, "\(item["name"] ?? "")") { _ = try SidebarBeatsState.decode(Data(item["raw"]!.utf8)) }
+        }
+        for item in try #require(cases["legacyEmpty"] as? [[String: String]]) {
+            #expect(try SidebarBeatsState.decode(Data(item["raw"]!.utf8)) == SidebarBeatsState(), "\(item["name"] ?? "")")
+        }
+        let valid = try #require((cases["valid"] as? [[String: String]])?.first?["raw"])
+        #expect(throws: BeatsError.self) { _ = try SidebarBeatsState.decode(Data([0xEF, 0xBB, 0xBF]) + Data(valid.utf8)) }
+        // UTF-8 only; JSONSerialization would otherwise accept UTF-16/32 that the orchestrator refuses.
+        let legacy = "{\"version\":1,\"beats\":[]}"
+        let encodings: [String.Encoding] = [.utf16LittleEndian, .utf16BigEndian, .utf16, .utf32LittleEndian, .utf32]
+        for raw in encodings.map({ legacy.data(using: $0)! }) + [
+            Data([0x7B, 0x00, 0x22, 0x00, 0x31, 0x00, 0x31, 0x5C, 0x00, 0x5C, 0x22, 0x00, 0x3A, 0x00, 0x5B, 0x00, 0x5D, 0x00, 0x7D, 0x00]),
+            Data("{\"version\":1,\"beats\":[\"".utf8) + Data([0xFF]) + Data("\"]}".utf8)
+        ] {
+            #expect(throws: BeatsError.self, "\(Array(raw))") { _ = try SidebarBeatsState.decode(raw) }
+        }
+    }
+
+    @Test func writersRefusePromptsReadersRefuse() throws {
+        var state = SidebarBeatsState()
+        for prompt in ["\u{200B}", " \u{200B}\n", "\u{FEFF}", "\u{FEFF}Hello", "a\u{FEFF}b"] {
+            #expect(throws: BeatsError.self, "\(prompt.debugDescription)") {
+                _ = try state.create(session: UUID(), cron: "* * * * *", prompt: prompt)
+            }
+        }
+        _ = try state.create(session: UUID(), cron: "* * * * *", prompt: "see \\ufeff here")
+        #expect(try SidebarBeatsState.decode(state.encoded()) == state)
+    }
+
+    @Test func sharedStoreOrDirectoryIsRefused() throws {
+        let root = try temporaryRoot().appendingPathComponent("Beats")
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        let file = SidebarBeatsFile(root: root)
+        _ = try file.mutate { _ = try $0.create(session: UUID(), cron: "0 9 * * *", prompt: "x") }
+        let store = root.appendingPathComponent("beats.json").path
+        try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: store)
+        #expect(throws: BeatsError.self) { _ = try file.read() }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: store)
+        try FileManager.default.setAttributes([.posixPermissions: 0o750], ofItemAtPath: root.path)
+        #expect(throws: BeatsError.self) { _ = try file.read() }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        #expect(try file.read().beats.count == 1)
     }
 
     @Test func malformedStoresAreRefused() throws {
         let sample = try Data(contentsOf: Self.fixtures.appendingPathComponent("beats-store-sample.json"))
         var object = try #require(JSONSerialization.jsonObject(with: sample) as? [String: Any])
         for mutate: (inout [String: Any]) -> Void in [
-            { $0["version"] = 2 },
+            { $0["version"] = 3 },
             { $0["extra"] = true },
             { var beats = $0["beats"] as! [[String: Any]]; beats[0]["surprise"] = 1; $0["beats"] = beats },
             { var beats = $0["beats"] as! [[String: Any]]; beats[0].removeValue(forKey: "cron"); $0["beats"] = beats },
@@ -96,14 +167,14 @@ struct SidebarBeatsTests {
                 _ = try SidebarBeatsState.decode(JSONSerialization.data(withJSONObject: copy))
             }
         }
-        object["version"] = 1
+        object["version"] = 2
         _ = try SidebarBeatsState.decode(JSONSerialization.data(withJSONObject: object))
         #expect(throws: BeatsError.self) { _ = try SidebarBeatsState.decode(Data("nope".utf8)) }
     }
 
     // MARK: Human operations
 
-    @Test func humanOperationsFollowTheRecoveryPolicy() throws {
+    @Test func humanOperationsTurnBeatsOnAndOff() throws {
         var state = SidebarBeatsState()
         let first = UUID(), second = UUID()
         let beat = try state.create(session: first, cron: "  0   9 * * 1-5", prompt: "Plan the day")
@@ -115,17 +186,13 @@ struct SidebarBeatsTests {
         // Editing never changes whether recurrence runs.
         try state.edit(id: beat.id, cron: "30 9 * * *", prompt: nil, session: nil)
         #expect(state.beats[0].status == .active && state.beats[0].revision == 4)
-        // Repair to another session leaves it paused behind the human gate, never silently resumed.
+        // Moving to another session keeps it on or off (ADR 0007: a Beat is simply on or off).
         try state.edit(id: beat.id, cron: nil, prompt: "New words", session: second)
         #expect(state.beats[0].sessionId == second.uuidString.lowercased())
-        #expect(state.beats[0].status == .needsRecovery && state.beats[0].prompt == "New words")
-        try state.enable(id: beat.id)
-        #expect(state.beats[0].status == .active)
-        // A human cannot enable a Beat whose target ended until another session is chosen.
-        state.beats[0].targetEnded = true
-        #expect(throws: BeatsError.self) { try state.enable(id: beat.id) }
+        #expect(state.beats[0].status == .active && state.beats[0].prompt == "New words")
+        try state.pause(id: beat.id)
         try state.edit(id: beat.id, cron: nil, prompt: nil, session: first)
-        #expect(state.beats[0].status == .needsRecovery)
+        #expect(state.beats[0].status == .paused)
         try state.delete(id: beat.id)
         #expect(state.beats.isEmpty)
         #expect(throws: BeatsError.self) { try state.delete(id: beat.id) }
@@ -178,9 +245,10 @@ struct SidebarBeatsTests {
     @Test func symlinkedStoreIsRefused() throws {
         let root = try temporaryRoot().appendingPathComponent("Beats")
         defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
         let elsewhere = root.deletingLastPathComponent().appendingPathComponent("elsewhere.json")
-        try Data("{\"beats\":[],\"version\":1}\n".utf8).write(to: elsewhere)
+        try Data("{\"beats\":[],\"version\":2}\n".utf8).write(to: elsewhere)
         try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("beats.json"), withDestinationURL: elsewhere)
         #expect(throws: BeatsError.self) { _ = try SidebarBeatsFile(root: root).read() }
     }

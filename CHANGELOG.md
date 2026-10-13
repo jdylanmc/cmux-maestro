@@ -6,6 +6,53 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Make every Beats reader apply one store contract. The Swift sidebar and the orchestrator
+  now refuse the same stores (shared `scripts/test-fixtures/beats-store-cases.json`):
+  `true`, `1.0` or out-of-range integers, uppercase UUIDs, non-text timestamps, lone
+  surrogates, `NaN`, U+FEFF anywhere, whitespace-only prompts (U+200B counts as whitespace),
+  and a store file or folder readable by others. The
+  installed extension no longer parses `beats.json`; it asks the controller
+  (`beats-snapshot`, read-only under the shared lock) for its session's runnable Beats, and
+  an invalid store now leaves Copilot schedules untouched instead of silently dropping a
+  Beat and stopping its schedule.
+- Write the Beats store as UTF-8 from the orchestrator too. It escaped non-ASCII text
+  (`\u00e9`, up to 6 bytes a character), so a store the sidebar saved under 1 MiB could
+  exceed the limit when re-encoded and block even `beats list`. Both writers now produce
+  byte-identical files.
+- **Breaking:** make a Beat simply on or off, as ADR 0007 decided. The Beats store is now version 2:
+  `recoveryGate`, `targetEnded` and `lastFiredMinute` are gone, with the unused Maestro
+  clock (`beats_due`), the unreachable `beats gate-session` command, and the sidebar's
+  "Needs recovery", "Target ended" and **Re-enable** states. Moving a Beat to another
+  session keeps it on or off, and an agent's `beats resume` always resumes. A version 1
+  store reads as empty and is replaced on the next write; its Beats are not migrated.
+  Every store must also be plain JSON for both readers: unique keys, Int64 integers only,
+  Unicode text and at most 8 nested levels, so a duplicate `version` can no longer make
+  the sidebar and the orchestrator read different versions.
+- Key each Copilot schedule by the full Beat ID (`Beat [<id>] …`). The extension matched
+  only the first 8 characters, so two Beats sharing a prefix collapsed into one schedule
+  and the second never ran. Schedules with the old 8-character label are removed on the
+  next sync and re-added under the full ID, so nothing fires twice.
+- Keep one Beat's failure from blocking the rest. When Copilot rejected one schedule, the
+  extension stopped the sync there, so every later Beat in that session never registered,
+  and it logged a single generic diagnostic. Each schedule change is now attempted on its
+  own, and a failure is logged once per Beat (with its ID) until it succeeds.
+- Apply a pause or edit noticed during a sync from the newest store. The change-triggered
+  sync was dropped while one ran, so a sync that had already read the store could register
+  a just-paused Beat and leave it until the next poll. A sync requested mid-run now stops
+  the running pass from starting further changes and reruns it, and no schedule change
+  starts after the session's Beats are closed.
+- Follow a Mac time zone change in a running session. The extension fixed its zone when
+  the session started (and Node caches the zone anyway), so Beats kept firing in the old
+  zone. Each sync now uses an IANA zone name in `TZ` when set, else reads the
+  current zone from `/etc/localtime` (falling back to the runtime's zone), and re-registers
+  Beats when it changes.
+- Preview stepped day fields the way Copilot fires them. A day-of-month or weekday field
+  such as `*/2` was treated as "any day", so `0 0 */2 * *` previewed every day and
+  `0 0 */2 * 1` previewed Mondays only, while Copilot runs odd days, and odd days or
+  Mondays. Only a bare `*` is unrestricted now; previews in the sidebar and `cron-check`
+  match next runs recorded from Copilot's scheduler (outside daylight-saving changes;
+  re-check with `scripts/check-copilot-cron-oracle.mjs`). A bare `*` inside a list (`*,5`),
+  which Copilot refuses, is now refused when saving instead of silently never firing.
 - Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
   dependency-free `pet_kit.py` drawing kit instead of requiring `hatch-pet`, whose
   Codex-only image generation was unavailable to Copilot.

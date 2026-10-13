@@ -192,21 +192,23 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
 
 - Cron is five numeric fields, `minute hour day-of-month month weekday` (weekday 0 or 7
   = Sunday), with lists, ranges and steps; no names or macros. It runs in the Mac's
-  local time. A nonexistent local time (spring-forward) is skipped, a repeated one
-  (fall-back) fires once, and missed minutes are never replayed.
+  local time. Copilot's scheduler decides exactly when it fires, including around
+  daylight-saving changes; `cron-check` is only a preview.
 - Prompts are plain text up to 4 KiB. At most 16 Beats per session.
 - **One handoff attempt per due occurrence** is Copilot's own: no retries, receipts,
   completion tracking or queue editing. Pause, edit and delete affect future
   occurrences only.
 - A Beat is simply on or off. You cannot reassign a Beat or touch another session's Beats.
 - Beats run on **Copilot's own scheduler**. The Maestro extension in each CMUX session
-  mirrors that session's enabled Beats into Copilot schedules (labelled `Beat [id]`),
+  asks the Maestro controller for that session's enabled Beats and mirrors them into
+  Copilot schedules (labelled `Beat [id]`),
   within about 15 seconds of a change and again whenever the session starts; Copilot owns
   timing, time zone and queueing. There is no separate clock and no managed launch is
   needed. A Beat fires only while its session is running.
 - Do not edit or stop `Beat [...]` schedules with `/every` or `/after`; manage Beats with
-  the commands above. If Copilot scheduling is unavailable the extension logs one
-  diagnostic and Beats stay saved but inert, so do not promise a firing you have not seen.
+  the commands above. If Copilot scheduling is unavailable, or the Beats store is invalid,
+  the extension logs one diagnostic and changes no schedule, so do not promise a firing you
+  have not seen.
 
 ## Permissions, failures and lifecycle boundaries
 

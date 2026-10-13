@@ -8,7 +8,7 @@ struct SidebarBeatTarget: Identifiable, Equatable {
 }
 
 /// Human management of the shared Beats store. The sidebar is the human actor: it may
-/// reassign a target and clear the recovery gate, which agents cannot.
+/// move a Beat to another session, which agents cannot.
 @Observable
 @MainActor
 final class SidebarBeatsController {
@@ -136,7 +136,6 @@ private struct BeatRow: View {
         switch beat.status {
         case .active: SidebarQuestionGlow.lightBlue
         case .paused: .secondary
-        case .needsRecovery, .targetEnded: SidebarTone.attention.color
         }
     }
 
@@ -186,12 +185,6 @@ private struct BeatRow: View {
             Button("Pause") { actionError = controller.perform { try $0.pause(id: beat.id) } }.buttonStyle(.borderless)
         case .paused:
             Button("Resume") { actionError = controller.perform { try $0.enable(id: beat.id) } }.buttonStyle(.borderless)
-        case .needsRecovery:
-            Button("Re-enable") { actionError = controller.perform { try $0.enable(id: beat.id) } }
-                .buttonStyle(.borderless)
-                .help("Restored; re-enable recurrence.")
-        case .targetEnded:
-            Text("Choose a session in Edit").font(.caption2).foregroundStyle(.secondary)
         }
     }
 }
@@ -243,10 +236,6 @@ private struct BeatsForm: View {
                 ForEach(targetOptions) { Text($0.title).tag(Optional($0.id)) }
             }
             .accessibilityIdentifier("sidebar-beats-target")
-            if let existing, existing.targetEnded || session.map({ $0.uuidString.lowercased() != existing.sessionId }) == true {
-                Text("Changing sessions pauses this beat; re-enable it.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
             HStack {
                 TextField("Cron (minute hour day month weekday)", text: $cron)
                     .textFieldStyle(.roundedBorder).font(.system(.caption, design: .monospaced))

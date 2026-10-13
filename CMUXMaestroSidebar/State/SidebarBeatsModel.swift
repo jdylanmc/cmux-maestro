@@ -2,12 +2,18 @@ import Foundation
 
 /// Beats: saved recurring prompts for exact agent sessions. This mirrors the Python
 /// orchestrator's `beats` store and cron rules (scripts/cmux-maestro-orchestrator.py); the two
-/// share `scripts/test-fixtures/beats-cron-cases.json`. Policy lives in issue #42.
+/// share `scripts/test-fixtures/beats-cron-cases.json` and `beats-store-cases.json`. Policy: docs/adr/0007
+/// (a Beat is on or off; Copilot's own scheduler runs it).
 nonisolated enum BeatsLimits {
     static let maximumTotal = 256
     static let maximumPerSession = 16
     static let maximumPromptBytes = 4096
     static let maximumStoreBytes = 1_048_576
+    static let version = 2
+    /// Version 1 carried the rejected recovery gate and Maestro clock; it reads as empty.
+    static let legacyVersion = 1
+    /// A valid store nests three containers; the orchestrator's `BEATS_MAX_DEPTH`.
+    static let maximumDepth = 8
 }
 
 nonisolated struct BeatsError: Error, Equatable {
@@ -43,12 +49,18 @@ nonisolated struct BeatsCron: Equatable {
         var stars: [Bool] = []
         for (text, range) in zip(fields, Self.ranges) {
             var values = Set<Int>()
-            for item in text.split(separator: ",", omittingEmptySubsequences: false) {
+            // Copilot's scheduler refuses a bare * inside a list (for example *,5).
+            let items = text.split(separator: ",", omittingEmptySubsequences: false)
+            guard items.count == 1 || !items.contains("*") else {
+                throw BeatsError("Cron \(range.name) field cannot list * with other values.")
+            }
+            for item in items {
                 values.formUnion(try Self.expand(String(item), range))
             }
             if range.name == "weekday" { values = Set(values.map { $0 % 7 }) }
             sets.append(values)
-            stars.append(text.hasPrefix("*"))
+            // Only a bare `*` leaves a day field unrestricted; `*/2` restricts it (Copilot's scheduler).
+            stars.append(text == "*")
         }
         expression = fields.joined(separator: " ")
         minutes = sets[0]; hours = sets[1]; days = sets[2]; months = sets[3]; weekdays = sets[4]
@@ -125,59 +137,25 @@ nonisolated struct BeatsCron: Equatable {
 }
 
 nonisolated struct SidebarBeat: Codable, Equatable, Identifiable {
-    static let fieldNames: Set<String> = [
-        "id", "sessionId", "cron", "prompt", "enabled", "recoveryGate", "targetEnded",
-        "lastFiredMinute", "createdAt", "updatedAt", "revision"
-    ]
+    static let fieldNames: Set<String> = ["id", "sessionId", "cron", "prompt", "enabled", "createdAt", "updatedAt", "revision"]
     var id: String
     var sessionId: String
     var cron: String
     var prompt: String
     var enabled: Bool
-    var recoveryGate: Bool
-    var targetEnded: Bool
-    var lastFiredMinute: String?
     var createdAt: String
     var updatedAt: String
     var revision: Int
 
-    func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(sessionId, forKey: .sessionId)
-        try container.encode(cron, forKey: .cron)
-        try container.encode(prompt, forKey: .prompt)
-        try container.encode(enabled, forKey: .enabled)
-        try container.encode(recoveryGate, forKey: .recoveryGate)
-        try container.encode(targetEnded, forKey: .targetEnded)
-        if let lastFiredMinute { try container.encode(lastFiredMinute, forKey: .lastFiredMinute) }
-        else { try container.encodeNil(forKey: .lastFiredMinute) }
-        try container.encode(createdAt, forKey: .createdAt)
-        try container.encode(updatedAt, forKey: .updatedAt)
-        try container.encode(revision, forKey: .revision)
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id, sessionId, cron, prompt, enabled, recoveryGate, targetEnded
-        case lastFiredMinute, createdAt, updatedAt, revision
-    }
-
-    /// Why recurrence is not running, if it is not.
-    var status: SidebarBeatStatus {
-        if targetEnded { return .targetEnded }
-        if recoveryGate { return .needsRecovery }
-        return enabled ? .active : .paused
-    }
+    var status: SidebarBeatStatus { enabled ? .active : .paused }
 }
 
 nonisolated enum SidebarBeatStatus: Equatable {
-    case active, paused, needsRecovery, targetEnded
+    case active, paused
     var title: String {
         switch self {
         case .active: "Active"
         case .paused: "Paused"
-        case .needsRecovery: "Needs recovery"
-        case .targetEnded: "Target ended"
         }
     }
 }
@@ -189,7 +167,7 @@ nonisolated struct SidebarBeatsState: Equatable {
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw BeatsError("A Beat needs a nonempty prompt.")
         }
-        guard prompt.utf8.count <= BeatsLimits.maximumPromptBytes,
+        guard prompt.utf8.count <= BeatsLimits.maximumPromptBytes, !prompt.unicodeScalars.contains("\u{FEFF}"),
               !prompt.unicodeScalars.contains(where: { $0.value < 32 && $0 != "\n" && $0 != "\t" }) else {
             throw BeatsError("A Beat prompt must be at most 4 KiB of text without control characters.")
         }
@@ -201,12 +179,20 @@ nonisolated struct SidebarBeatsState: Equatable {
         return value
     }
 
+    /// The store contract. The orchestrator applies the same rules (`validate_beats_state`); both run
+    /// `scripts/test-fixtures/beats-store-cases.json`. Types are checked on the raw JSON because
+    /// `JSONDecoder` would accept `true` or `1.0` where the contract requires an integer.
     static func decode(_ data: Data) throws -> SidebarBeatsState {
-        guard data.count <= BeatsLimits.maximumStoreBytes,
+        // UTF-8 only: a zero byte means UTF-16/32, which JSONSerialization would otherwise accept.
+        guard data.count <= BeatsLimits.maximumStoreBytes, !data.contains(0), !containsByteOrderMark(data),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(object.keys) == ["version", "beats"], object["version"] as? Int == 1,
+              isPlainJSON(data) else {
+            throw BeatsError("The Beats store is invalid or from a newer version.")
+        }
+        if strictInteger(object["version"]) == BeatsLimits.legacyVersion { return SidebarBeatsState() }
+        guard Set(object.keys) == ["version", "beats"], strictInteger(object["version"]) == BeatsLimits.version,
               let raw = object["beats"] as? [[String: Any]], raw.count <= BeatsLimits.maximumTotal,
-              raw.allSatisfy({ Set($0.keys) == SidebarBeat.fieldNames }),
+              raw.allSatisfy(hasContractTypes),
               let beats = try? JSONDecoder().decode([SidebarBeat].self, from: JSONSerialization.data(withJSONObject: raw))
         else { throw BeatsError("The Beats store is invalid or from a newer version.") }
         var seen = Set<String>()
@@ -221,11 +207,90 @@ nonisolated struct SidebarBeatsState: Equatable {
         return SidebarBeatsState(beats: beats)
     }
 
+    /// U+FEFF as raw UTF-8 or as an unescaped `\uFEFF` escape. `JSONSerialization` drops it from the
+    /// start of a string, so it is refused outright (the orchestrator's `BEATS_BYTE_ORDER_MARK`).
+    static func containsByteOrderMark(_ data: Data) -> Bool {
+        let bytes = [UInt8](data)
+        var backslashes = 0
+        for index in bytes.indices {
+            let byte = bytes[index]
+            if byte == 0xEF, index + 2 < bytes.count, bytes[index + 1] == 0xBB, bytes[index + 2] == 0xBF { return true }
+            if byte == UInt8(ascii: "u"), backslashes % 2 == 1, index + 4 < bytes.count,
+               String(decoding: bytes[(index + 1)...(index + 4)], as: UTF8.self).lowercased() == "feff" {
+                return true
+            }
+            backslashes = byte == UInt8(ascii: "\\") ? backslashes + 1 : 0
+        }
+        return false
+    }
+
+    /// Unique keys, Int64 integers only and bounded nesting, as the orchestrator's `beats_decode`
+    /// requires. `JSONSerialization` keeps the first of duplicate keys, so a store with a duplicate
+    /// `version` could otherwise read as a different version here than in the orchestrator.
+    /// Call only on bytes `JSONSerialization` already parsed.
+    static func isPlainJSON(_ data: Data) -> Bool {
+        let bytes = [UInt8](data)
+        // Keys compare by scalar values; Swift `String` equality would merge canonically equivalent keys.
+        var containers: [(isObject: Bool, keys: Set<[UInt32]>, expectsKey: Bool)] = []
+        var index = 0
+        while index < bytes.count {
+            switch bytes[index] {
+            case UInt8(ascii: "{"), UInt8(ascii: "["):
+                let isObject = bytes[index] == UInt8(ascii: "{")
+                containers.append((isObject, [], isObject))
+                if containers.count > BeatsLimits.maximumDepth { return false }
+            case UInt8(ascii: "}"), UInt8(ascii: "]"):
+                guard containers.popLast() != nil else { return false }
+            case UInt8(ascii: ","):
+                if containers.last?.isObject == true { containers[containers.count - 1].expectsKey = true }
+            case UInt8(ascii: "\""):
+                var end = index + 1
+                while end < bytes.count, bytes[end] != UInt8(ascii: "\"") { end += bytes[end] == UInt8(ascii: "\\") ? 2 : 1 }
+                guard end < bytes.count else { return false }
+                if let last = containers.last, last.isObject, last.expectsKey {
+                    guard let key = try? JSONSerialization.jsonObject(with: Data(bytes[index...end]),
+                                                                      options: .fragmentsAllowed) as? String,
+                          containers[containers.count - 1].keys.insert(key.unicodeScalars.map(\.value)).inserted else { return false }
+                    containers[containers.count - 1].expectsKey = false
+                }
+                index = end
+            case UInt8(ascii: "-"), UInt8(ascii: "0")...UInt8(ascii: "9"):
+                var end = index
+                while end < bytes.count, "+-0123456789.eE".utf8.contains(bytes[end]) { end += 1 }
+                guard let token = String(bytes: bytes[index..<end], encoding: .ascii), Int64(token) != nil else { return false }
+                index = end - 1
+            default:
+                break
+            }
+            index += 1
+        }
+        return true
+    }
+
+    private static func hasContractTypes(_ beat: [String: Any]) -> Bool {
+        guard Set(beat.keys) == SidebarBeat.fieldNames else { return false }
+        let texts = ["id", "sessionId", "cron", "prompt", "createdAt", "updatedAt"]
+        return texts.allSatisfy { beat[$0] is String } && strictBool(beat["enabled"])
+            && strictInteger(beat["revision"]) != nil
+    }
+
+    private static func strictBool(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) == CFBooleanGetTypeID()
+    }
+
+    /// An integral JSON number (not a boolean or a decimal/exponent form) that fits in `Int`.
+    private static func strictInteger(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              !CFNumberIsFloatType(number as CFNumber) else { return nil }
+        return number as? Int
+    }
+
     func encoded() throws -> Data {
         // Match the orchestrator's sorted, compact encoding.
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        struct Envelope: Encodable { let version = 1; let beats: [SidebarBeat] }
+        struct Envelope: Encodable { let version = BeatsLimits.version; let beats: [SidebarBeat] }
         let data = try encoder.encode(Envelope(beats: beats)) + Data([10])
         guard data.count <= BeatsLimits.maximumStoreBytes else { throw BeatsError("The Beats store size limit was reached.") }
         return data
@@ -250,8 +315,7 @@ nonisolated struct SidebarBeatsState: Equatable {
         let stamp = Self.stamp()
         let beat = SidebarBeat(
             id: UUID().uuidString.lowercased(), sessionId: sessionID, cron: spec.expression, prompt: text,
-            enabled: true, recoveryGate: false, targetEnded: false, lastFiredMinute: nil,
-            createdAt: stamp, updatedAt: stamp, revision: 1)
+            enabled: true, createdAt: stamp, updatedAt: stamp, revision: 1)
         beats.append(beat)
         return beat
     }
@@ -263,7 +327,7 @@ nonisolated struct SidebarBeatsState: Equatable {
         return position
     }
 
-    /// Cron, prompt and (repair) target may change; enabled and recovery state do not.
+    /// Cron, prompt and target session may change; whether the Beat is on does not.
     mutating func edit(id: String, cron: String?, prompt: String?, session: UUID?) throws {
         let position = try index(id)
         var beat = beats[position]
@@ -276,11 +340,6 @@ nonisolated struct SidebarBeatsState: Equatable {
                     throw BeatsError("That session already has the maximum number of Beats.")
                 }
                 beat.sessionId = target
-                // Repair never silently resumes: a human re-enables after choosing the target.
-                beat.enabled = false
-                beat.recoveryGate = true
-                beat.targetEnded = false
-                beat.lastFiredMinute = nil
             }
         }
         beat.updatedAt = Self.stamp(); beat.revision += 1
@@ -293,14 +352,9 @@ nonisolated struct SidebarBeatsState: Equatable {
         beats[position].updatedAt = Self.stamp(); beats[position].revision += 1
     }
 
-    /// Only a human clears the recovery gate (first recurring enable after relaunch or repair).
     mutating func enable(id: String) throws {
         let position = try index(id)
-        guard !beats[position].targetEnded else {
-            throw BeatsError("Choose an existing session for this Beat before re-enabling it.")
-        }
         beats[position].enabled = true
-        beats[position].recoveryGate = false
         beats[position].updatedAt = Self.stamp(); beats[position].revision += 1
     }
 
@@ -348,6 +402,11 @@ nonisolated struct SidebarBeatsFile {
     }
 
     private func readLocked() throws -> SidebarBeatsState {
+        var directory = stat()
+        guard lstat(root.path, &directory) == 0, directory.st_mode & S_IFMT == S_IFDIR,
+              directory.st_uid == getuid(), directory.st_mode & 0o077 == 0 else {
+            throw BeatsError("The Beats store directory is not private to this user.")
+        }
         let path = root.appendingPathComponent("beats.json").path
         let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         if descriptor < 0 {
@@ -357,7 +416,7 @@ nonisolated struct SidebarBeatsFile {
         defer { close(descriptor) }
         var info = stat()
         guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid(),
-              info.st_size <= BeatsLimits.maximumStoreBytes else {
+              info.st_mode & 0o077 == 0, info.st_size <= BeatsLimits.maximumStoreBytes else {
             throw BeatsError("The Beats store is not a private regular file within its size limit.")
         }
         let data = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false).readData(ofLength: BeatsLimits.maximumStoreBytes + 1)

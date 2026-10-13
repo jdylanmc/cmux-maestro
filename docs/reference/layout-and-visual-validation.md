@@ -12,7 +12,9 @@ internal-task rows; those stay in Hierarchy. Select card to focus its terminal.
 Beats opens native popover. Create, edit,
 pause, delete recurring prompts there. Icon lights while a Beat is enabled.
 Beats run on Copilot's own scheduler. Maestro extension loaded in each CMUX Copilot
-session mirrors that session's enabled Beats into native cron schedules. No clock process,
+session asks the controller (`beats-snapshot`) for that session's enabled Beats and
+mirrors them into native cron schedules; it never parses `beats.json` itself. An invalid
+store changes no schedule. No clock process,
 managed launch or socket frame involved. Beats are only on or off. Session
 re-registers its enabled Beats on every start. Copilot-specific
 scheduling call is isolated in `createScheduleGateway` in installed adapter.

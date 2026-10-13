@@ -4438,18 +4438,23 @@ def command_self_pet(args):
 
 
 # --- Beats: recurring prompts for exact agent sessions -------------------------
-# Policy lives in issue #42. Definitions persist in one local store; this module
-# owns cron evaluation and exact-self management. The CMUX-lifetime clock and the
-# human UI use the same store and rules.
-BEATS_VERSION = 1
+# Policy: docs/adr/0007. A Beat is on or off; Copilot's own scheduler runs it. Definitions
+# persist in one local store shared with the sidebar; this module owns validation, cron
+# previews and exact-self management.
+BEATS_VERSION = 2
+BEATS_LEGACY_VERSION = 1
 BEATS_MAX_TOTAL = 256
 BEATS_MAX_PER_SESSION = 16
 BEATS_MAX_PROMPT_BYTES = 4096
 BEATS_MAX_STORE_BYTES = 1024 * 1024
-BEATS_FIELDS = frozenset((
-    "id", "sessionId", "cron", "prompt", "enabled", "recoveryGate", "targetEnded",
-    "lastFiredMinute", "createdAt", "updatedAt", "revision",
-))
+BEATS_MAX_REVISION = (1 << 63) - 1
+# Any store, of any version, is plain JSON: unique keys, Int64 integers only, Unicode text, and
+# at most this many nested containers (a valid store uses three). Swift applies the same rule.
+BEATS_MAX_DEPTH = 8
+# U+FEFF in any form, raw UTF-8 or an unescaped \u escape. Swift's JSONSerialization drops it from
+# the start of a string, so the readers could otherwise see different text.
+BEATS_BYTE_ORDER_MARK = re.compile(rb"\xef\xbb\xbf|(?<!\\)(?:\\\\)*\\u[fF][eE][fF][fF]")
+BEATS_FIELDS = frozenset(("id", "sessionId", "cron", "prompt", "enabled", "createdAt", "updatedAt", "revision"))
 CRON_FIELD_RANGES = (("minute", 0, 59), ("hour", 0, 23), ("day", 1, 31), ("month", 1, 12), ("weekday", 0, 7))
 CRON_ITEM = re.compile(r"^(\*|[0-9]{1,2}(?:-[0-9]{1,2})?)(?:/([0-9]{1,2}))?$")
 DAYS_IN_MONTH = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
@@ -4464,6 +4469,9 @@ class CronSpec:
         sets, stars = [], []
         for text, (name, low, high) in zip(fields, CRON_FIELD_RANGES):
             values = set()
+            # Copilot's scheduler refuses a bare * inside a list (for example *,5).
+            if "," in text and "*" in text.split(","):
+                raise OrchestrationError(f"Cron {name} field cannot list * with other values.")
             for item in text.split(","):
                 match = CRON_ITEM.fullmatch(item)
                 if not match:
@@ -4487,7 +4495,8 @@ class CronSpec:
             if name == "weekday":
                 values = {value % 7 for value in values}
             sets.append(frozenset(values))
-            stars.append(text.startswith("*"))
+            # Only a bare `*` leaves a day field unrestricted; `*/2` restricts it (Copilot's scheduler).
+            stars.append(text == "*")
         self.minutes, self.hours, self.days, self.months, self.weekdays = sets
         self.day_star, self.weekday_star = stars[2], stars[4]
         if not self.day_star and self.weekday_star:
@@ -4553,96 +4562,200 @@ def cron_next_times(spec, epoch, count=5, horizon_days=800):
     return results
 
 
-def beats_due(state, epoch):
-    """Enabled, ungated Beats whose cron matches this local minute and have not fired for it.
-    Only the current minute is considered: missed minutes are never replayed, nonexistent local
-    minutes never occur, and a repeated local minute fires once."""
-    key = local_minute_key(epoch)
-    local = time.localtime(epoch)
-    # A local minute that physically happened before (clocks moved back) was already served.
-    if any(local_minute_key(epoch - shift) == key for shift in (1800, 3600, 7200)):
-        return key, []
-    due = []
-    for beat in state["beats"]:
-        if (beat["enabled"] and not beat["recoveryGate"] and not beat["targetEnded"]
-                and beat["lastFiredMinute"] != key and parse_cron(beat["cron"]).matches(local)):
-            due.append(beat)
-    return key, due
-
-
 def beats_root():
     return Path.home() / "Library/Application Support/CMUXMaestroPreview/Beats"
 
 
+def beats_text(value):
+    """A JSON string that is valid Unicode text (no lone surrogates)."""
+    if not isinstance(value, str):
+        return False
+    try:
+        value.encode()
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def validate_beat_prompt(prompt):
-    if not isinstance(prompt, str) or not prompt.strip():
+    # U+200B counts as whitespace, matching Swift's whitespacesAndNewlines.
+    if not beats_text(prompt) or not prompt.replace("\u200b", "").strip():
         raise OrchestrationError("A Beat needs a nonempty prompt.")
-    if len(prompt.encode()) > BEATS_MAX_PROMPT_BYTES or any(
+    if len(prompt.encode()) > BEATS_MAX_PROMPT_BYTES or "\ufeff" in prompt or any(
             ord(character) < 32 and character not in "\n\t" for character in prompt):
         raise OrchestrationError("A Beat prompt must be at most 4 KiB of text without control characters.")
     return prompt
 
 
 def validate_beats_state(state):
-    if not isinstance(state, dict) or set(state) != {"version", "beats"} or state["version"] != BEATS_VERSION \
-            or not isinstance(state["beats"], list) or len(state["beats"]) > BEATS_MAX_TOTAL:
+    """The store contract. The Swift sidebar applies the same rules (SidebarBeatsState.decode); both
+    run scripts/test-fixtures/beats-store-cases.json."""
+    if not isinstance(state, dict) or set(state) != {"version", "beats"} or type(state["version"]) is not int \
+            or state["version"] != BEATS_VERSION or not isinstance(state["beats"], list) \
+            or len(state["beats"]) > BEATS_MAX_TOTAL:
         raise OrchestrationError("The Beats store is invalid or from a newer version.")
     seen = set()
     for beat in state["beats"]:
         if not isinstance(beat, dict) or set(beat) != BEATS_FIELDS:
             raise OrchestrationError("The Beats store has a malformed definition.")
-        canonical_uuid(beat["id"], "Beat ID")
-        canonical_uuid(beat["sessionId"], "Beat session ID")
+        for name in ("id", "sessionId"):
+            if not beats_text(beat[name]) or canonical_uuid(beat[name], "Beat ID") != beat[name]:
+                raise OrchestrationError("The Beats store has a malformed definition.")
+        if not beats_text(beat["cron"]):
+            raise OrchestrationError("The Beats store has a malformed definition.")
         parse_cron(beat["cron"])
         validate_beat_prompt(beat["prompt"])
-        if beat["id"] in seen or not all(type(beat[name]) is bool for name in ("enabled", "recoveryGate", "targetEnded")) \
-                or type(beat["revision"]) is not int or beat["revision"] < 1:
+        if beat["id"] in seen or type(beat["enabled"]) is not bool \
+                or not all(beats_text(beat[name]) for name in ("createdAt", "updatedAt")) \
+                or type(beat["revision"]) is not int or not 1 <= beat["revision"] <= BEATS_MAX_REVISION:
             raise OrchestrationError("The Beats store has an inconsistent definition.")
         seen.add(beat["id"])
     return state
+
+
+def beats_plain_json(value):
+    pending = [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        if isinstance(item, (dict, list)):
+            if depth > BEATS_MAX_DEPTH:
+                raise ValueError("too deep")
+            if isinstance(item, dict):
+                if not all(beats_text(key) for key in item):
+                    raise ValueError("key is not text")
+                pending.extend((child, depth + 1) for child in item.values())
+            else:
+                pending.extend((child, depth + 1) for child in item)
+        elif isinstance(item, str) and not beats_text(item):
+            raise ValueError("string is not text")
+
+
+def beats_decode(raw):
+    """Parse and validate stored bytes. Every reader must see the same values, so anything a JSON
+    parser may resolve differently (duplicate keys, decimals, huge numbers, lone surrogates, deep
+    nesting) is refused before the version is read."""
+    if len(raw) > BEATS_MAX_STORE_BYTES:
+        raise OrchestrationError("The Beats store is not a private regular file within its size limit.")
+    # UTF-8 only: a zero byte means UTF-16/32 (or binary), which JSON parsers detect differently.
+    if b"\x00" in raw or BEATS_BYTE_ORDER_MARK.search(raw):
+        raise OrchestrationError("The Beats store is not valid JSON.")
+
+    def unique(pairs):
+        value = dict(pairs)
+        if len(value) != len(pairs):
+            raise ValueError("duplicate key")
+        return value
+
+    def refuse(_):
+        raise ValueError("not an Int64 integer")
+
+    def integer(text):
+        value = int(text)
+        if not -(1 << 63) <= value < (1 << 63):
+            raise ValueError("not an Int64 integer")
+        return value
+    try:
+        state = json.loads(raw.decode("utf-8"), object_pairs_hook=unique, parse_constant=refuse, parse_float=refuse,
+                           parse_int=integer)
+        beats_plain_json(state)
+    except (UnicodeError, ValueError, RecursionError) as error:
+        raise OrchestrationError("The Beats store is not valid JSON.") from error
+    if isinstance(state, dict) and type(state.get("version")) is int and state["version"] == BEATS_LEGACY_VERSION:
+        # Version 1 carried the rejected recovery gate and Maestro clock. Its Beats are dropped;
+        # the next write replaces the file with an empty version 2 store.
+        return {"version": BEATS_VERSION, "beats": []}
+    return validate_beats_state(state)
+
+
+def beats_encode(state):
+    """Canonical store bytes: sorted, compact UTF-8. Byte-identical to the Swift sidebar's
+    SidebarBeatsState.encoded(), which also refuses a store over the size limit."""
+    encoded = json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+    if len(encoded) > BEATS_MAX_STORE_BYTES:
+        raise OrchestrationError("The Beats store size limit was reached.")
+    return encoded
+
+
+def beats_open_store(path):
+    """Read the private store file, or None when it does not exist. Caller holds the lock."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 \
+                or info.st_size > BEATS_MAX_STORE_BYTES:
+            raise OrchestrationError("The Beats store is not a private regular file within its size limit.")
+        return beats_decode(os.read(descriptor, BEATS_MAX_STORE_BYTES + 1))
+    finally:
+        os.close(descriptor)
+
+
+def beats_private_root(root):
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise OrchestrationError("The Beats store directory is not private to this user.")
 
 
 def beats_store_mutate(operation, *, root=None):
     """One authoritative store. Writers serialize on a lock file and replace atomically."""
     root = Path(root) if root is not None else beats_root()
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = root.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-        raise OrchestrationError("The Beats store directory is not private to this user.")
+    beats_private_root(root)
     lock_descriptor = os.open(root / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
         path = root / "beats.json"
-        try:
-            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-        except FileNotFoundError:
-            state = {"version": BEATS_VERSION, "beats": []}
-        else:
-            try:
-                fileinfo = os.fstat(descriptor)
-                if not stat.S_ISREG(fileinfo.st_mode) or fileinfo.st_uid != os.getuid() \
-                        or fileinfo.st_size > BEATS_MAX_STORE_BYTES:
-                    raise OrchestrationError("The Beats store is not a private regular file within its size limit.")
-                try:
-                    state = json.loads(os.read(descriptor, BEATS_MAX_STORE_BYTES + 1))
-                except ValueError as error:
-                    raise OrchestrationError("The Beats store is not valid JSON.") from error
-            finally:
-                os.close(descriptor)
-        validate_beats_state(state)
+        state = beats_open_store(path) or {"version": BEATS_VERSION, "beats": []}
         result = operation(state)
         validate_beats_state(state)
-        encoded = json.dumps(state, sort_keys=True, separators=(",", ":")).encode() + b"\n"
-        if len(encoded) > BEATS_MAX_STORE_BYTES:
-            raise OrchestrationError("The Beats store size limit was reached.")
-        write_private(path, encoded)
+        write_private(path, beats_encode(state))
         return result
     finally:
         os.close(lock_descriptor)
 
 
-def beats_store_read(*, root=None):
-    return beats_store_mutate(lambda state: json.loads(json.dumps(state)), root=root)
+def beats_store_snapshot(*, root=None):
+    """Read-only, validated view under the shared lock. Creates nothing."""
+    root = Path(root) if root is not None else beats_root()
+    try:
+        beats_private_root(root)
+    except FileNotFoundError:
+        return {"version": BEATS_VERSION, "beats": []}
+    try:
+        lock_descriptor = os.open(root / ".lock", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        lock_descriptor = None
+    try:
+        if lock_descriptor is not None:
+            if not stat.S_ISREG(os.fstat(lock_descriptor).st_mode):
+                raise OrchestrationError("The Beats store lock is not a regular file.")
+            fcntl.flock(lock_descriptor, fcntl.LOCK_SH)
+        return beats_open_store(root / "beats.json") or {"version": BEATS_VERSION, "beats": []}
+    finally:
+        if lock_descriptor is not None:
+            os.close(lock_descriptor)
+
+
+def command_beats_snapshot():
+    """The native adapter's only Beats input: this session's enabled Beats from the validated store.
+    Any invalid store fails the whole call, so the adapter changes no schedule."""
+    try:
+        raw = sys.stdin.buffer.read(1025)
+        if len(raw) > 1024:
+            raise ValueError()
+        request = json.loads(raw)
+        if not isinstance(request, dict) or set(request) != {"sessionId"} or not beats_text(request["sessionId"]):
+            raise ValueError()
+    except (UnicodeError, ValueError) as error:
+        raise OrchestrationError("Beats snapshot request is invalid.") from error
+    session = request["sessionId"]
+    if canonical_uuid(session, "session ID") != session:
+        raise OrchestrationError("Beats snapshot request is invalid.")
+    state = beats_store_snapshot()
+    return {"beats": [{"id": beat["id"], "cron": beat["cron"], "prompt": beat["prompt"]}
+                      for beat in state["beats"] if beat["sessionId"] == session and beat["enabled"]]}
 
 
 def beat_view(beat):
@@ -4663,25 +4776,13 @@ def prove_own_session(session):
 
 
 def beats_command(args):
-    """Agent surface: every operation is bound to the caller's own proven session. Human-only
-    operations (reassignment, clearing the recovery gate) are not available here."""
+    """Agent surface: every operation is bound to the caller's own proven session. Reassigning a
+    Beat to another session is human-only (the sidebar)."""
     if args.beats_action == "cron-check":
         spec = parse_cron(args.cron)
         times = cron_next_times(spec, time.time(), count=max(1, min(args.count, 20)))
         return {"cron": spec.expression, "timezone": time.strftime("%Z"), "next": [
             time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(moment)) for moment in times]}
-    if args.beats_action == "gate-session":
-        # Called by a session's own adapter at start; it only pauses, so it needs no ownership proof.
-        session = canonical_uuid(args.session_id, "session ID")
-
-        def gate(state):
-            count = 0
-            for beat in state["beats"]:
-                if beat["sessionId"] == session and beat["enabled"] and not beat["recoveryGate"]:
-                    beat["enabled"], beat["recoveryGate"] = False, True
-                    count += 1
-            return count
-        return {"gated": beats_store_mutate(gate)}
     if not args.own_session:
         raise OrchestrationError("Beats are managed with --self for your own session.")
     session = canonical_uuid(args.session_id, "current session ID")
@@ -4708,8 +4809,7 @@ def beats_command(args):
                     or len(state["beats"]) >= BEATS_MAX_TOTAL:
                 raise OrchestrationError("The Beat limit was reached; delete one first.")
             beat = {"id": str(uuid.uuid4()), "sessionId": session, "cron": spec.expression, "prompt": prompt,
-                    "enabled": True, "recoveryGate": False, "targetEnded": False, "lastFiredMinute": None,
-                    "createdAt": stamp, "updatedAt": stamp, "revision": 1}
+                    "enabled": True, "createdAt": stamp, "updatedAt": stamp, "revision": 1}
             state["beats"].append(beat)
             return {"beat": beat_view(beat)}
         beat = own(state)
@@ -4726,9 +4826,6 @@ def beats_command(args):
         elif action == "pause":
             beat["enabled"] = False
         elif action == "resume":
-            if beat["recoveryGate"] or beat["targetEnded"]:
-                raise OrchestrationError(
-                    "This Beat is waiting for a human to repair or re-enable it; an agent cannot resume it.")
             beat["enabled"] = True
         else:
             raise OrchestrationError("Unknown Beats action.")
@@ -5081,6 +5178,7 @@ def parser():
     commands.add_parser("native-spawn", help="Private session-bound launch ingress; use the native maestro_spawn tool")
     commands.add_parser("native-close", help="Private owned-child close ingress; use the native maestro_close tool")
     commands.add_parser("native-observe", help=argparse.SUPPRESS)
+    commands.add_parser("beats-snapshot", help=argparse.SUPPRESS)
     commands.add_parser("launch-credential", help=argparse.SUPPRESS)
     commands.add_parser(
         "launch-settings",
@@ -5212,6 +5310,9 @@ def main(argv=None):
             return 0
         if args.command == "beats":
             print(json.dumps({"ok": True, **beats_command(args)}, sort_keys=True))
+            return 0
+        if args.command == "beats-snapshot":
+            print(json.dumps({"ok": True, **command_beats_snapshot()}, sort_keys=True))
             return 0
         if args.command == "pets":
             print(json.dumps({"ok": True, **command_pets(args)}, sort_keys=True))

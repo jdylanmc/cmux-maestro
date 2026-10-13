@@ -19,9 +19,7 @@ CONTROLLER = REPO / "scripts" / "cmux-maestro-orchestrator.py"
 API = runpy.run_path(str(CONTROLLER))
 OrchestrationError = API["OrchestrationError"]
 parse_cron = API["parse_cron"]
-beats_due = API["beats_due"]
 cron_next_times = API["cron_next_times"]
-local_minute_key = API["local_minute_key"]
 store_mutate = API["beats_store_mutate"]
 
 SESSION_A = str(uuid.uuid4())
@@ -33,8 +31,7 @@ def local_epoch(year, month, day, hour, minute, dst):
 
 
 def beat(cron, session=SESSION_A, **overrides):
-    value = {"id": str(uuid.uuid4()), "sessionId": session, "cron": cron, "prompt": "go",
-             "enabled": True, "recoveryGate": False, "targetEnded": False, "lastFiredMinute": None,
+    value = {"id": str(uuid.uuid4()), "sessionId": session, "cron": cron, "prompt": "go", "enabled": True,
              "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z", "revision": 1}
     value.update(overrides)
     return value
@@ -100,59 +97,73 @@ class SharedFixtureTests(unittest.TestCase):
             with self.assertRaises(OrchestrationError, msg=repr(expression)):
                 parse_cron(expression)
 
-    def test_store_sample_is_valid_and_round_trips(self):
-        raw = (FIXTURES / "beats-store-sample.json").read_text()
-        state = json.loads(raw)
-        API["validate_beats_state"](state)
-        self.assertEqual(json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n", raw)
+    def test_previews_match_copilots_recorded_next_runs(self):
+        oracle = json.loads((FIXTURES / "beats-cron-cases.json").read_text())["copilotNextRuns"]
+        saved = os.environ.get("TZ")
+        os.environ["TZ"] = oracle["timeZone"]
+        time.tzset()
+        try:
+            start = time.mktime(time.strptime(oracle["from"], "%Y-%m-%d %H:%M"))
+            for case in oracle["cases"]:
+                times = cron_next_times(parse_cron(case["cron"]), start, count=len(case["next"]))
+                self.assertEqual([time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) for t in times], case["next"],
+                                 case["cron"])
+        finally:
+            if saved is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = saved
+            time.tzset()
+
+    def test_store_sample_is_valid_and_canonical(self):
+        # The Swift sidebar encodes the same sample to the same bytes (SidebarBeatsTests).
+        raw = (FIXTURES / "beats-store-sample.json").read_bytes()
+        self.assertEqual(API["beats_encode"](API["beats_decode"](raw)), raw)
+        self.assertIn("😀".encode(), raw)
+
+    def test_store_contract_cases(self):
+        cases = json.loads((FIXTURES / "beats-store-cases.json").read_text())
+        for case in cases["valid"]:
+            API["beats_decode"](case["raw"].encode())
+        for case in cases["invalid"]:
+            with self.assertRaises(OrchestrationError, msg=case["name"]):
+                API["beats_decode"](case["raw"].encode())
+        for case in cases["legacyEmpty"]:
+            self.assertEqual(API["beats_decode"](case["raw"].encode()), {"version": 2, "beats": []}, case["name"])
+        with self.assertRaises(OrchestrationError):
+            API["beats_decode"](b"\xef\xbb\xbf" + cases["valid"][0]["raw"].encode())
+        # UTF-8 only; the Swift suite refuses the same bytes.
+        legacy = '{"version":1,"beats":[]}'
+        for raw in [legacy.encode(codec) for codec in ("utf-16-le", "utf-16-be", "utf-16", "utf-32-le", "utf-32")] + [
+                b'{\x00"\x001\x001\\\x00\\"\x00:\x00[\x00]\x00}\x00', b'{"version":1,"beats":["\xff"]}']:
+            with self.assertRaises(OrchestrationError, msg=repr(raw)):
+                API["beats_decode"](raw)
+
+    def test_duplicate_keys_are_refused(self):
+        # Swift's JSONSerialization keeps the first duplicate and Python the last; refuse instead.
+        with self.assertRaises(OrchestrationError):
+            API["beats_decode"](b'{"version":1,"version":1,"beats":[]}')
+
+    def test_writers_refuse_prompts_readers_refuse(self):
+        for prompt in ("\u200b", " \u200b\n", "\ufeff", "\ufeffHello", "a\ufeffb"):
+            with self.assertRaises(OrchestrationError, msg=repr(prompt)):
+                API["validate_beat_prompt"](prompt)
+        API["validate_beat_prompt"]("a\u200bb")
+        API["validate_beat_prompt"]("see \\ufeff here")
 
 
-class DaylightSavingTests(LocalTimeCase):
-    def simulate(self, cron, start, end):
-        state = {"version": 1, "beats": [beat(cron)]}
-        fired, moment = [], start
-        while moment < end:
-            key, due = beats_due(state, moment)
-            for item in due:
-                item["lastFiredMinute"] = key
-                fired.append(key)
-            moment += 60
-        return fired
+class PreviewDaylightSavingTests(LocalTimeCase):
+    """cron_next_times only previews; Copilot's scheduler decides when a Beat fires."""
 
     def test_nonexistent_local_minute_is_skipped(self):
         # 2026-03-08 02:00-02:59 does not exist in New York.
-        start = local_epoch(2026, 3, 8, 1, 30, 0)
-        end = local_epoch(2026, 3, 8, 4, 0, 1)
-        self.assertEqual(self.simulate("30 2 * * *", start, end), [])
-        self.assertEqual(self.simulate("30 3 * * *", start, end), ["2026-03-08T03:30"])
         times = cron_next_times(parse_cron("30 2 * * *"), local_epoch(2026, 3, 7, 12, 0, 0), count=2)
         self.assertEqual([time.strftime("%m-%d %H:%M", time.localtime(t)) for t in times], ["03-09 02:30", "03-10 02:30"])
 
-    def test_repeated_local_minute_fires_once(self):
+    def test_repeated_local_minute_appears_once(self):
         # 2026-11-01 01:00-01:59 happens twice (EDT then EST).
-        start = local_epoch(2026, 11, 1, 0, 30, 1)
-        end = local_epoch(2026, 11, 1, 3, 0, 0)
-        self.assertEqual(self.simulate("30 1 * * *", start, end), ["2026-11-01T01:30"])
-        self.assertEqual(self.simulate("*/30 1 * * *", start, end), ["2026-11-01T01:00", "2026-11-01T01:30"])
-        times = cron_next_times(parse_cron("30 1 * * *"), local_epoch(2026, 10, 31, 12, 0, 1), count=1)
-        self.assertEqual(len(times), 1)
-
-    def test_missed_minutes_are_never_replayed(self):
-        state = {"version": 1, "beats": [beat("* * * * *")]}
-        key_one, due_one = beats_due(state, local_epoch(2026, 10, 10, 20, 0, 1))
-        self.assertEqual(len(due_one), 1)
-        # A stalled clock that resumes ten minutes later sees only the current minute.
-        key_two, due_two = beats_due(state, local_epoch(2026, 10, 10, 20, 10, 1))
-        self.assertEqual(len(due_two), 1)
-        self.assertEqual(key_two, "2026-10-10T20:10")
-
-    def test_due_requires_enabled_ungated_live_and_unfired(self):
-        moment = local_epoch(2026, 10, 10, 20, 0, 1)
-        key = local_minute_key(moment)
-        for override in ({"enabled": False}, {"recoveryGate": True}, {"targetEnded": True}, {"lastFiredMinute": key}):
-            state = {"version": 1, "beats": [beat("0 20 * * *", **override)]}
-            self.assertEqual(beats_due(state, moment)[1], [], msg=str(override))
-        self.assertEqual(len(beats_due({"version": 1, "beats": [beat("0 20 * * *")]}, moment)[1]), 1)
+        times = cron_next_times(parse_cron("30 1 * * *"), local_epoch(2026, 10, 31, 12, 0, 1), count=2)
+        self.assertEqual([time.strftime("%m-%d %H:%M", time.localtime(t)) for t in times], ["11-01 01:30", "11-02 01:30"])
 
 
 class StoreTests(unittest.TestCase):
@@ -181,9 +192,10 @@ class StoreTests(unittest.TestCase):
     def test_malformed_or_future_store_is_refused_and_untouched(self):
         self.root.mkdir(mode=0o700)
         path = self.root / "beats.json"
-        for content in ('{"version": 2, "beats": []}', '{"version": 1}', "not json",
-                        json.dumps({"version": 1, "beats": [{"id": "x"}]})):
+        for content in ('{"version": 3, "beats": []}', '{"version": 2}', "not json",
+                        json.dumps({"version": 2, "beats": [{"id": "x"}]})):
             path.write_text(content)
+            path.chmod(0o600)
             with self.assertRaises(OrchestrationError):
                 store_mutate(lambda state: None, root=self.root)
             self.assertEqual(path.read_text(), content)
@@ -196,6 +208,41 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises((OrchestrationError, OSError)):
             store_mutate(lambda state: None, root=self.root)
 
+    def test_shared_store_or_directory_is_refused(self):
+        self.root.mkdir(mode=0o700)
+        path = self.root / "beats.json"
+        path.write_text('{"version":1,"beats":[]}')
+        path.chmod(0o640)
+        for read in (lambda: store_mutate(lambda state: None, root=self.root),
+                     lambda: API["beats_store_snapshot"](root=self.root)):
+            with self.assertRaises(OrchestrationError):
+                read()
+        path.chmod(0o600)
+        self.root.chmod(0o750)
+        with self.assertRaises(OrchestrationError):
+            API["beats_store_snapshot"](root=self.root)
+        self.root.chmod(0o700)
+        self.assertEqual(API["beats_store_snapshot"](root=self.root)["beats"], [])
+
+    def test_snapshot_is_read_only(self):
+        self.assertEqual(API["beats_store_snapshot"](root=self.root)["beats"], [])
+        self.assertFalse(self.root.exists())
+        store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
+        before = os.stat(self.root / "beats.json")
+        self.assertEqual(len(API["beats_store_snapshot"](root=self.root)["beats"]), 1)
+        after = os.stat(self.root / "beats.json")
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+
+    def test_snapshot_refuses_fifos_without_blocking(self):
+        self.root.mkdir(mode=0o700)
+        os.mkfifo(self.root / ".lock", 0o600)
+        with self.assertRaises(OrchestrationError):
+            API["beats_store_snapshot"](root=self.root)
+        (self.root / ".lock").unlink()
+        os.mkfifo(self.root / "beats.json", 0o600)
+        with self.assertRaises(OrchestrationError):
+            API["beats_store_snapshot"](root=self.root)
+
     def test_invalid_mutation_is_not_persisted(self):
         store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
         before = (self.root / "beats.json").read_bytes()
@@ -205,6 +252,19 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(OrchestrationError):
             store_mutate(corrupt, root=self.root)
         self.assertEqual((self.root / "beats.json").read_bytes(), before)
+
+    def test_size_limit_counts_utf8_bytes(self):
+        # Escaped as \u00e9 this store would be about 1.6 MiB; as UTF-8 it is about 0.6 MiB.
+        prompt = "é" * 1360
+
+        def fill(state):
+            state["beats"].extend(beat("0 9 * * *", session=str(uuid.uuid4()), prompt=prompt) for _ in range(200))
+        store_mutate(fill, root=self.root)
+        self.assertLess((self.root / "beats.json").stat().st_size, 1024 * 1024)
+        self.assertEqual(len(API["beats_store_snapshot"](root=self.root)["beats"]), 200)
+        self.assertEqual(len(store_mutate(lambda state: state["beats"], root=self.root)), 200)
+        with self.assertRaises(OrchestrationError):
+            API["beats_encode"]({"version": 1, "beats": [{"prompt": "x" * BYTES} for BYTES in (1024 * 1024,)]})
 
 
 FAKE_HELPER = """#!/usr/bin/env python3
@@ -255,7 +315,8 @@ class AgentSurfaceTests(unittest.TestCase):
 
     def test_create_list_edit_pause_resume_delete(self):
         created = self.create()
-        self.assertTrue(created["enabled"] and not created["recoveryGate"])
+        self.assertTrue(created["enabled"])
+        self.assertEqual(set(created), API["BEATS_FIELDS"])
         self.assertEqual(created["cron"], "0 9 * * 1-5")
         code, listed = self.run_beats("list")
         self.assertEqual([item["id"] for item in listed["beats"]], [created["id"]])
@@ -296,26 +357,15 @@ class AgentSurfaceTests(unittest.TestCase):
         self.assertIn("could not prove ownership", value["error"])
         self.assertFalse((self.root / "beats.json").exists())
 
-    def test_agent_resume_cannot_clear_a_recovery_gate_or_ended_target(self):
+    def test_version_one_store_is_dropped_on_next_write(self):
+        self.root.mkdir(mode=0o700, parents=True)
+        path = self.root / "beats.json"
+        path.write_text(json.dumps({"version": 1, "beats": [{"id": "legacy", "recoveryGate": True}]}))
+        path.chmod(0o600)
+        self.assertEqual(self.run_beats("list")[1]["beats"], [])
+        self.assertEqual(json.loads(path.read_text()), {"version": 2, "beats": []})
         created = self.create()
-        for flag in ("recoveryGate", "targetEnded"):
-            def gate(state, flag=flag):
-                state["beats"][0][flag] = True
-            store_mutate(gate, root=self.root)
-            code, value = self.run_beats("resume", "--beat-id", created["id"])
-            self.assertNotEqual(code, 0)
-            self.assertIn("human", value["error"])
-            def clear(state, flag=flag):
-                state["beats"][0][flag] = False
-            store_mutate(clear, root=self.root)
-
-    def test_pause_edit_and_delete_still_work_while_gated(self):
-        created = self.create()
-        store_mutate(lambda state: state["beats"][0].update(recoveryGate=True, enabled=False), root=self.root)
-        code, edited = self.run_beats("edit", "--beat-id", created["id"], "--prompt", "new words")
-        self.assertEqual(code, 0)
-        self.assertTrue(edited["beat"]["recoveryGate"] and not edited["beat"]["enabled"])
-        self.assertEqual(self.run_beats("delete", "--beat-id", created["id"])[0], 0)
+        self.assertEqual([item["id"] for item in json.loads(path.read_text())["beats"]], [created["id"]])
 
     def test_validation_and_limits(self):
         for arguments in (("--cron", "nope", "--prompt", "x"), ("--cron", "* * * * *", "--prompt", "  "),
@@ -336,6 +386,37 @@ class AgentSurfaceTests(unittest.TestCase):
         code, value = self.run_beats("cron-check", "--cron", "0 9 * * *", "--count", "2", own=False)
         self.assertEqual(code, 0)
         self.assertEqual(len(value["next"]), 2)
+
+    def snapshot(self, body):
+        environment = dict(os.environ, HOME=str(self.home))
+        process = subprocess.run([sys.executable, str(self.controller), "beats-snapshot"], input=body,
+                                 capture_output=True, text=True, env=environment, timeout=30)
+        return process.returncode, json.loads(process.stdout or process.stderr)
+
+    def test_snapshot_returns_only_this_sessions_runnable_beats(self):
+        self.assertEqual(self.snapshot(json.dumps({"sessionId": SESSION_A})), (0, {"ok": True, "beats": []}))
+        self.assertFalse(self.root.exists())
+        live = self.create(prompt="live")
+        paused = self.create(prompt="paused")
+        self.run_beats("pause", "--beat-id", paused["id"])
+        self.create(prompt="other", session=SESSION_B)
+        code, value = self.snapshot(json.dumps({"sessionId": SESSION_A}))
+        self.assertEqual(code, 0, value)
+        self.assertEqual(value["beats"], [{"id": live["id"], "cron": live["cron"], "prompt": "live"}])
+
+    def test_snapshot_refuses_bad_requests_and_invalid_stores(self):
+        for body in ("", "nope", json.dumps({"sessionId": "x"}), json.dumps({"sessionId": SESSION_A, "x": 1}),
+                     json.dumps({"sessionId": SESSION_A.upper()}), "x" * 2000):
+            code, value = self.snapshot(body)
+            self.assertNotEqual(code, 0, body[:40])
+            self.assertFalse(value["ok"])
+        self.create()
+        path = self.root / "beats.json"
+        path.write_text(path.read_text().replace('"revision":1', '"revision":0'))
+        self.assertIn('"revision":0', path.read_text())
+        code, value = self.snapshot(json.dumps({"sessionId": SESSION_A}))
+        self.assertNotEqual(code, 0)
+        self.assertFalse(value["ok"])
 
 
 if __name__ == "__main__":

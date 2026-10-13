@@ -667,11 +667,12 @@ export async function startReadiness({ joinSession, environment = process.env, s
 // SDK's typed client, so it is reached through the raw connection behind this one function. If a
 // Copilot release changes it, the gateway fails and Beats stop registering; nothing else breaks.
 
-const BEAT_LABEL = /^Beat \[([0-9a-f]{8})\]/;
-const BEATS_STORE_LIMIT = 1_048_576;
+// The full Beat ID: two Beats may share any shorter prefix.
+const BEAT_LABEL = /^Beat \[([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]/;
+// Earlier releases labelled schedules with only 8 characters; those are always removed.
+const RETIRED_BEAT_LABEL = /^Beat \[([0-9a-f]{8})\] /;
 
-const beatKey = (beat) => beat.id.slice(0, 8);
-const beatLabel = (beat) => `Beat [${beatKey(beat)}] ${beat.prompt.split("\n")[0].slice(0, 60)}`;
+const beatLabel = (beat) => `Beat [${beat.id}] ${beat.prompt.split("\n")[0].slice(0, 60)}`;
 
 export function createScheduleGateway(session) {
   const sessionId = session?.sessionId;
@@ -698,79 +699,147 @@ export function createScheduleGateway(session) {
   };
 }
 
-// Pure: which of this session's Beats need a native schedule added or removed. Schedules this
-// section did not create (the user's own /every, /after) are never touched.
-export function planBeatSchedules({ beats, sessionId, entries, tz }) {
-  const wanted = beats.filter((beat) => beat.sessionId === sessionId && beat.enabled &&
-    !beat.recoveryGate && !beat.targetEnded);
-  const wantedKeys = new Set(wanted.map(beatKey));
+// Pure: which native schedules to add or remove so this session runs exactly `wanted` (its runnable
+// Beats, as returned by the controller). Schedules this section did not create (the user's own
+// /every, /after) are never touched.
+export function planBeatSchedules({ wanted, entries, tz }) {
   const remove = [];
   const present = new Set();
   for (const entry of entries) {
+    if (RETIRED_BEAT_LABEL.test(entry.label)) {
+      remove.push(entry.id);
+      continue;
+    }
     const key = BEAT_LABEL.exec(entry.label)?.[1];
     if (key === undefined) continue;
-    const beat = wanted.find((item) => beatKey(item) === key);
+    const beat = wanted.find((item) => item.id === key);
     if (beat && !present.has(key) && entry.cron === beat.cron && entry.tz === tz && entry.prompt === beat.prompt) {
       present.add(key);
     } else {
       remove.push(entry.id);
     }
   }
-  const add = wanted.filter((beat) => !present.has(beatKey(beat)) && wantedKeys.has(beatKey(beat)))
+  const add = wanted.filter((beat) => !present.has(beat.id))
     .map((beat) => ({ cron: beat.cron, tz, prompt: beat.prompt, label: beatLabel(beat) }));
   return { add, remove };
 }
 
-export async function readBeatsStore(root) {
-  let handle;
+// Maestro's controller owns the store contract; the adapter never parses beats.json itself. Any
+// refusal (invalid store, missing controller) throws, so the caller changes no schedule.
+export async function readBeats(sessionId, controller) {
+  let result;
   try {
-    handle = await fs.open(path.join(root, "beats.json"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  } catch (error) {
-    if (error.code === "ENOENT") return [];
-    throw error;
+    result = await invokeController("beats-snapshot", { sessionId }, controller);
+  } catch (cause) {
+    throw Object.assign(new Error("Maestro refused or could not read the Beats store.", { cause }),
+      { code: "BEATS_SNAPSHOT" });
   }
-  try {
-    const info = await handle.stat();
-    requireCondition(info.isFile() && info.uid === process.getuid() && !(info.mode & 0o077) &&
-      info.size <= BEATS_STORE_LIMIT);
-    const state = JSON.parse(decoder.decode(await handle.readFile()));
-    requireCondition(state?.version === 1 && Array.isArray(state.beats));
-    return state.beats.filter((beat) => typeof beat?.id === "string" && UUID.test(beat.id) &&
-      typeof beat.sessionId === "string" && typeof beat.cron === "string" && typeof beat.prompt === "string" &&
-      typeof beat.enabled === "boolean" && typeof beat.recoveryGate === "boolean" &&
-      typeof beat.targetEnded === "boolean");
-  } finally {
-    await handle.close();
-  }
+  requireCondition(Array.isArray(result.beats) && result.beats.every((beat) =>
+    typeof beat?.id === "string" && UUID.test(beat.id) && typeof beat.cron === "string" &&
+    typeof beat.prompt === "string"));
+  return result.beats;
 }
 
-export function startBeats({ session, root = path.join(os.homedir(), "Library/Application Support/CMUXMaestroPreview/Beats"),
-  gateway = createScheduleGateway(session), pollMs = 15_000,
-  tz = Intl.DateTimeFormat().resolvedOptions().timeZone, diagnostic = (error) => {
+const maestroSupport = path.join(os.homedir(), "Library/Application Support/CMUXMaestroPreview");
+
+// The zone Copilot's own scheduler would use: an IANA name in TZ, else the Mac's current zone. Node
+// caches its zone at startup (only assigning process.env.TZ resets it), so a system change made
+// while a session runs is read from the /etc/localtime link. Like Copilot, TZ names are
+// case-sensitive and a leading ':' is not stripped. Abbreviations such as EST may still resolve
+// differently (Intl: fixed offset; Copilot: a daylight-saving zone).
+export async function currentTimeZone(link = "/etc/localtime", environment = process.env) {
+  const canonical = (zone) => new Intl.DateTimeFormat("en-US", { timeZone: zone }).resolvedOptions().timeZone;
+  try {
+    const zone = environment.TZ;
+    if (zone && /^[A-Z][A-Za-z0-9_+-]*(\/[A-Z0-9][A-Za-z0-9_+-]*)*$/.test(zone)) return canonical(zone);
+  } catch { /* not a zone this runtime knows: use the system zone */ }
+  try {
+    const zone = /(?:^|\/)zoneinfo\/(?:posix\/|right\/)?(.+)$/.exec(await fs.readlink(link))?.[1];
+    if (zone) return canonical(zone);
+  } catch { /* not a link, or not a zone this runtime knows: fall back below */ }
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
+  controller = process.env.CMUX_MAESTRO_ORCHESTRATOR ||
+    path.join(maestroSupport, "Orchestration/bin/cmux-maestro-orchestrator"),
+  read = (sessionId) => readBeats(sessionId, controller), gateway = createScheduleGateway(session), pollMs = 15_000,
+  tz = currentTimeZone, diagnostic = (error, beatId) => {
     const code = typeof error?.code === "string" ? error.code : error?.name ?? "UNKNOWN";
-    console.error(`Maestro Beats could not sync with Copilot scheduling (${code}).`);
+    console.error(`Maestro Beats could not sync with Copilot scheduling${beatId ? ` for Beat ${beatId}` : ""} (${code}).`);
   } }) {
   const sessionId = session?.sessionId;
   requireCondition(typeof sessionId === "string" && UUID.test(sessionId));
-  let busy = false, failing = false, closed = false, debounce;
-  async function sync() {
-    if (busy || closed) return;
-    busy = true;
+  let running = null, again = false, failing = false, closed = false, debounce;
+  // One diagnostic per failing schedule change until it succeeds; one schedule's failure never
+  // blocks the others. Each pass attempts every change at most once; nothing retries within it.
+  let failed = new Set();
+  // A store change noticed during a pass stops that pass from starting further changes and reruns it
+  // from the newest store; a change already started is corrected by the rerun. The periodic poll
+  // never interrupts. Callers share the running promise, so awaiting sync() means the latest store
+  // was applied. No change starts after close.
+  function sync() {
+    if (closed) return Promise.resolve();
+    if (running) {
+      again = true;
+      return running;
+    }
+    running = (async () => {
+      try {
+        do {
+          again = false;
+          await reconcile();
+        } while (again && !closed);
+      } finally {
+        running = null;
+      }
+    })();
+    return running;
+  }
+  async function reconcile() {
     try {
-      const plan = planBeatSchedules({
-        beats: await readBeatsStore(root), sessionId, entries: await gateway.list(), tz,
-      });
-      for (const id of plan.remove) await gateway.remove(id);
-      for (const entry of plan.add) await gateway.add(entry);
+      // Resolved every sync: a time zone change re-registers each Beat in the new zone.
+      const zone = typeof tz === "function" ? await tz() : tz;
+      const wanted = await read(sessionId), entries = await gateway.list();
+      const plan = planBeatSchedules({ wanted, entries, tz: zone });
       failing = false;
+      const failingNow = new Set(), succeeded = new Set();
+      const attempt = async (key, beatId, change) => {
+        if (closed || again) return null;
+        try {
+          await change();
+          succeeded.add(key);
+          return true;
+        } catch (error) {
+          if (!failed.has(key)) diagnostic(error, beatId);
+          failingNow.add(key);
+          return false;
+        }
+      };
+      // The Beat (full ID, or a retired 8-character prefix) whose schedule could not be stopped is
+      // not added again this sync, so an edited Beat never runs under two schedules.
+      const stuck = [];
+      for (const id of plan.remove) {
+        const label = entries.find((entry) => entry.id === id)?.label ?? "";
+        const owner = (BEAT_LABEL.exec(label) ?? RETIRED_BEAT_LABEL.exec(label))?.[1];
+        if (await attempt(`remove ${id}`, owner, () => gateway.remove(id)) === false && owner) stuck.push(owner);
+      }
+      for (const entry of plan.add) {
+        const beatId = BEAT_LABEL.exec(entry.label)[1];
+        if (stuck.some((owner) => beatId.startsWith(owner))) continue;
+        await attempt(`add ${beatId}`, beatId, () => gateway.add(entry));
+      }
+      // An interrupted pass keeps earlier failures it did not resolve, so the rerun neither reports
+      // them twice nor hides a new failure after a success.
+      failed = closed || again
+        ? new Set([...[...failed].filter((key) => !succeeded.has(key)), ...failingNow])
+        : failingNow;
     } catch (error) {
       if (!failing) diagnostic(error);
       failing = true;
-    } finally {
-      busy = false;
     }
   }
-  const timer = setInterval(sync, pollMs);
+  const timer = setInterval(() => running ?? sync(), pollMs);
   timer.unref?.();
   let watcher;
   try {
