@@ -91,6 +91,15 @@ struct SidebarBeatsTests {
         }
         let valid = try #require((cases["valid"] as? [[String: String]])?.first?["raw"])
         #expect(throws: BeatsError.self) { _ = try SidebarBeatsState.decode(Data([0xEF, 0xBB, 0xBF]) + Data(valid.utf8)) }
+        // UTF-8 only; JSONSerialization would otherwise accept UTF-16/32 that the orchestrator refuses.
+        let legacy = "{\"version\":1,\"beats\":[]}"
+        let encodings: [String.Encoding] = [.utf16LittleEndian, .utf16BigEndian, .utf16, .utf32LittleEndian, .utf32]
+        for raw in encodings.map({ legacy.data(using: $0)! }) + [
+            Data([0x7B, 0x00, 0x22, 0x00, 0x31, 0x00, 0x31, 0x5C, 0x00, 0x5C, 0x22, 0x00, 0x3A, 0x00, 0x5B, 0x00, 0x5D, 0x00, 0x7D, 0x00]),
+            Data("{\"version\":1,\"beats\":[\"".utf8) + Data([0xFF]) + Data("\"]}".utf8)
+        ] {
+            #expect(throws: BeatsError.self, "\(Array(raw))") { _ = try SidebarBeatsState.decode(raw) }
+        }
     }
 
     @Test func writersRefusePromptsReadersRefuse() throws {

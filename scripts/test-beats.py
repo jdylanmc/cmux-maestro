@@ -114,6 +114,12 @@ class SharedFixtureTests(unittest.TestCase):
             self.assertEqual(API["beats_decode"](case["raw"].encode()), {"version": 2, "beats": []}, case["name"])
         with self.assertRaises(OrchestrationError):
             API["beats_decode"](b"\xef\xbb\xbf" + cases["valid"][0]["raw"].encode())
+        # UTF-8 only; the Swift suite refuses the same bytes.
+        legacy = '{"version":1,"beats":[]}'
+        for raw in [legacy.encode(codec) for codec in ("utf-16-le", "utf-16-be", "utf-16", "utf-32-le", "utf-32")] + [
+                b'{\x00"\x001\x001\\\x00\\"\x00:\x00[\x00]\x00}\x00', b'{"version":1,"beats":["\xff"]}']:
+            with self.assertRaises(OrchestrationError, msg=repr(raw)):
+                API["beats_decode"](raw)
 
     def test_duplicate_keys_are_refused(self):
         # Swift's JSONSerialization keeps the first duplicate and Python the last; refuse instead.

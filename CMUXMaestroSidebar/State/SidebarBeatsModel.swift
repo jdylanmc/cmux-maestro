@@ -177,7 +177,8 @@ nonisolated struct SidebarBeatsState: Equatable {
     /// `scripts/test-fixtures/beats-store-cases.json`. Types are checked on the raw JSON because
     /// `JSONDecoder` would accept `true` or `1.0` where the contract requires an integer.
     static func decode(_ data: Data) throws -> SidebarBeatsState {
-        guard data.count <= BeatsLimits.maximumStoreBytes, !containsByteOrderMark(data),
+        // UTF-8 only: a zero byte means UTF-16/32, which JSONSerialization would otherwise accept.
+        guard data.count <= BeatsLimits.maximumStoreBytes, !data.contains(0), !containsByteOrderMark(data),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               isPlainJSON(data) else {
             throw BeatsError("The Beats store is invalid or from a newer version.")
@@ -233,12 +234,13 @@ nonisolated struct SidebarBeatsState: Equatable {
                 containers.append((isObject, [], isObject))
                 if containers.count > BeatsLimits.maximumDepth { return false }
             case UInt8(ascii: "}"), UInt8(ascii: "]"):
-                containers.removeLast()
+                guard containers.popLast() != nil else { return false }
             case UInt8(ascii: ","):
                 if containers.last?.isObject == true { containers[containers.count - 1].expectsKey = true }
             case UInt8(ascii: "\""):
                 var end = index + 1
-                while bytes[end] != UInt8(ascii: "\"") { end += bytes[end] == UInt8(ascii: "\\") ? 2 : 1 }
+                while end < bytes.count, bytes[end] != UInt8(ascii: "\"") { end += bytes[end] == UInt8(ascii: "\\") ? 2 : 1 }
+                guard end < bytes.count else { return false }
                 if let last = containers.last, last.isObject, last.expectsKey {
                     guard let key = try? JSONSerialization.jsonObject(with: Data(bytes[index...end]),
                                                                       options: .fragmentsAllowed) as? String,

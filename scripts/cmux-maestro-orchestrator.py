@@ -4632,7 +4632,8 @@ def beats_decode(raw):
     nesting) is refused before the version is read."""
     if len(raw) > BEATS_MAX_STORE_BYTES:
         raise OrchestrationError("The Beats store is not a private regular file within its size limit.")
-    if BEATS_BYTE_ORDER_MARK.search(raw):
+    # UTF-8 only: a zero byte means UTF-16/32 (or binary), which JSON parsers detect differently.
+    if b"\x00" in raw or BEATS_BYTE_ORDER_MARK.search(raw):
         raise OrchestrationError("The Beats store is not valid JSON.")
 
     def unique(pairs):
@@ -4650,7 +4651,7 @@ def beats_decode(raw):
             raise ValueError("not an Int64 integer")
         return value
     try:
-        state = json.loads(raw, object_pairs_hook=unique, parse_constant=refuse, parse_float=refuse,
+        state = json.loads(raw.decode("utf-8"), object_pairs_hook=unique, parse_constant=refuse, parse_float=refuse,
                            parse_int=integer)
         beats_plain_json(state)
     except (UnicodeError, ValueError, RecursionError) as error:
