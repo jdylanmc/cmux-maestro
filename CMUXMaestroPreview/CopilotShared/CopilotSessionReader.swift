@@ -622,9 +622,9 @@ actor CopilotSessionReader {
                 if newline != nil {
                     if !tail.droppingOversizedLine {
                         if tail.partial.last == 13 { tail.partial.removeLast() }
-                        tail.reducer.consume(tail.partial, observedAt: now)
+                        tail.reducer.consume(tail.partial)
                     } else if let metadata = tail.assetEnvelope?.projectedEvent {
-                        tail.reducer.consume(metadata, observedAt: now)
+                        tail.reducer.consume(metadata)
                     } else {
                         tail.reducer.markMalformed()
                         tail.reducer.markLimited()
