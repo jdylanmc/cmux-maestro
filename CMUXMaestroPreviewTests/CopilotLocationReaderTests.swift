@@ -22,6 +22,19 @@ struct CopilotLocationReaderTests: Sendable {
         return try await fixture.reader().read(surfaceIDs: [fixture.surface]).sessions.first
     }
 
+    /// A rejected location must leave the same live session, with no location fields.
+    private func expectSurvivesWithoutLocation(
+        _ fixture: CopilotReaderFixture, baseline: CopilotSessionObservation,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) async throws {
+        let session = try #require(try await read(fixture), sourceLocation: sourceLocation)
+        #expect(session.sessionID == fixture.sessionID, sourceLocation: sourceLocation)
+        #expect(session.surfaceID == fixture.surface, sourceLocation: sourceLocation)
+        #expect(session.liveness == .alive, sourceLocation: sourceLocation)
+        #expect(session.state == baseline.state, sourceLocation: sourceLocation)
+        #expect(session.branch == nil && session.worktree == nil, sourceLocation: sourceLocation)
+    }
+
     @Test func validLocationIsPublishedOnTheLiveSession() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
@@ -34,7 +47,9 @@ struct CopilotLocationReaderTests: Sendable {
     @Test func missingWrongKeysWrongSessionOversizeAndLooseModeAreIgnored() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
-        #expect(try await read(fixture)?.branch == nil)
+        let baseline = try #require(try await read(fixture))
+        #expect(baseline.liveness == .alive)
+        #expect(baseline.branch == nil && baseline.worktree == nil)
         let text = String(decoding: try valid(fixture), as: UTF8.self)
         let other = try CopilotSessionLocation.encode(sessionID: UUID(), location: .init(branch: "b", worktree: false), recordedAt: Date())
         let variants: [Data] = [
@@ -45,25 +60,30 @@ struct CopilotLocationReaderTests: Sendable {
         ]
         for variant in variants {
             _ = try publish(fixture, data: variant)
-            #expect(try await read(fixture)?.branch == nil)
+            try await expectSurvivesWithoutLocation(fixture, baseline: baseline)
         }
         _ = try publish(fixture, data: valid(fixture), mode: 0o644)
-        #expect(try await read(fixture)?.branch == nil)
+        try await expectSurvivesWithoutLocation(fixture, baseline: baseline)
+        // Control: the same record with a private mode is accepted.
+        _ = try publish(fixture, data: valid(fixture))
+        #expect(try await read(fixture)?.branch == "feat/x")
     }
 
     @Test func symlinkedRecordAndNonLiveSessionsAreIgnored() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
+        let baseline = try #require(try await read(fixture))
         let target = try publish(fixture, name: "target.json", data: valid(fixture))
         let link = target.deletingLastPathComponent().appendingPathComponent(fixture.sessionID.uuidString.lowercased() + ".json")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
-        #expect(try await read(fixture)?.branch == nil)
+        try await expectSurvivesWithoutLocation(fixture, baseline: baseline)
         try FileManager.default.removeItem(at: link)
         let stranger = UUID()
         let data = try CopilotSessionLocation.encode(sessionID: stranger, location: .init(branch: "stale", worktree: false), recordedAt: Date())
         _ = try publish(fixture, name: stranger.uuidString.lowercased() + ".json", data: data)
         let snapshot = try await fixture.reader().read(surfaceIDs: [fixture.surface])
         #expect(snapshot.sessions.map(\.sessionID) == [fixture.sessionID])
+        #expect(snapshot.sessions.first?.liveness == .alive)
         #expect(snapshot.sessions.first?.branch == nil)
     }
 }
