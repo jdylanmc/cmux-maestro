@@ -394,6 +394,7 @@ enum SidebarHeaderAction: String, CaseIterable, Identifiable {
 }
 
 struct SidebarHeader: View {
+    let beats: SidebarBeatsController
     let taskboardActive: Bool
     var availability: SidebarOrchestrationAvailability = .ready
     var presented: SidebarHeaderAction? = nil
@@ -404,8 +405,6 @@ struct SidebarHeader: View {
     private func isPresented(_ action: SidebarHeaderAction) -> Binding<Bool> {
         Binding(get: { presented == action }, set: { if !$0 { dismissPopover() } })
     }
-
-    private let beats = SidebarBeatsController.shared
 
     private func lit(_ action: SidebarHeaderAction) -> Bool {
         action == .beats && beats.beats.contains { $0.enabled }
@@ -472,6 +471,8 @@ struct SidebarView: View {
     private static let hostFooterClearance: CGFloat = 50
     let model: SidebarConnectionModel
     @Bindable private var preferences: SidebarPreferences
+    private let beats: SidebarBeatsController
+    private let pets: SidebarPetStore
     // Mutation freshness is independent of the display-only presentation clock.
     private let actionNow: () -> Date
     @State private var showingSettings = false
@@ -490,10 +491,13 @@ struct SidebarView: View {
 
     init(
         model: SidebarConnectionModel, preferences: SidebarPreferences,
+        beats: SidebarBeatsController, pets: SidebarPetStore,
         actionNow: @escaping () -> Date = { Date() }
     ) {
         self.model = model
         self.preferences = preferences
+        self.beats = beats
+        self.pets = pets
         self.actionNow = actionNow
     }
 
@@ -602,7 +606,7 @@ struct SidebarView: View {
         if showingSettings {
             settingsPanel
         } else if showingBeats {
-            SidebarBeatsPanel(targets: beatTargets) { showingBeats = false }
+            SidebarBeatsPanel(controller: beats, targets: beatTargets) { showingBeats = false }
         } else if let action = unavailableHeaderAction, let reason = action.unavailable {
             VStack(alignment: .leading, spacing: 10) {
                 Text(action.title).font(.headline)
@@ -634,6 +638,7 @@ struct SidebarView: View {
 
     private var headerBar: some View {
         SidebarHeader(
+            beats: beats,
             taskboardActive: preferences.selectedMode == .taskboard,
             availability: model.orchestration.availability,
             presented: presentedHeaderAction,
@@ -695,7 +700,7 @@ struct SidebarView: View {
             .accessibilityIdentifier("sidebar-mode-content")
 
             let pinned = pinnedDetails
-            SidebarPinnedFooter(content: pinned, maximumHeight: pinnedHeight, dragLimit: pinnedDragLimit,
+            SidebarPinnedFooter(content: pinned, pets: pets, maximumHeight: pinnedHeight, dragLimit: pinnedDragLimit,
                                 userHeight: $preferences.pinnedFooterHeight, inspect: {
                 guard let target = pinned.inspection?.target else { return }
                 switch target {
@@ -2948,6 +2953,7 @@ private struct SidebarResizeHandle: View {
 
 struct SidebarPinnedFooter: View {
     let content: SidebarDetailContent
+    let pets: SidebarPetStore
     var maximumHeight: CGFloat = 220
     var dragLimit: CGFloat = 220
     var userHeight: Binding<Double?> = .constant(nil)
@@ -3035,7 +3041,7 @@ struct SidebarPinnedFooter: View {
     private var footerContents: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .top, spacing: 8) {
-                if content.isAgent { SidebarPetButton(content: content) }
+                if content.isAgent { SidebarPetButton(store: pets, content: content) }
                 VStack(alignment: .leading, spacing: 2) {
                     titleView
                     if let visual = content.visual {

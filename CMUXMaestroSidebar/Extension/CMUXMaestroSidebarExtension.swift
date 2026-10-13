@@ -16,11 +16,14 @@ final class CMUXMaestroSidebarExtension: @MainActor CmuxSidebarExtension {
 
     private let model = SidebarConnectionModel()
     private let preferences = SidebarPreferences()
+    // Process-wide stores, owned here and injected so views never resolve live storage.
+    @MainActor private static let beats = SidebarBeatsController()
+    @MainActor private static let pets = SidebarPetStore()
 
     required init() {}
 
     var body: some View {
-        SidebarView(model: model, preferences: preferences)
+        SidebarView(model: model, preferences: preferences, beats: Self.beats, pets: Self.pets)
     }
 
     func update(context: CmuxSidebarContext) {

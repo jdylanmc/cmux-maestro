@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 /// One animated Codex pet cell sequence. Reduce Motion shows a single still frame.
 struct SidebarPetView: View {
+    let store: SidebarPetStore
     let petID: String
     var session: UUID? = nil
     let state: SidebarPetState
@@ -14,7 +15,6 @@ struct SidebarPetView: View {
     private var height: CGFloat { width * CGFloat(SidebarPetSheet.cellHeight) / CGFloat(SidebarPetSheet.cellWidth) }
 
     var body: some View {
-        let store = SidebarPetStore.shared
         Group {
             if animated && !reduceMotion {
                 TimelineView(.periodic(from: .now, by: 1.0 / 7.0)) { context in
@@ -38,13 +38,13 @@ struct SidebarPetView: View {
 
 /// The active/hovered agent's pet. Click to choose a different pet for this agent session.
 struct SidebarPetButton: View {
+    let store: SidebarPetStore
     let content: SidebarDetailContent
     @State private var showingPicker = false
     @State private var hovering = false
     @State private var captured = false
 
     var body: some View {
-        let store = SidebarPetStore.shared
         let petID = store.resolvedID(session: content.petSessionID, agentChoice: content.petChoice)
         let state = SidebarPetState.resolve(visual: content.visual, needsInput: content.needsInput)
         let descriptor = store.descriptor(petID, session: content.petSessionID)
@@ -52,7 +52,7 @@ struct SidebarPetButton: View {
         // An agent-made pet in use can be captured into the shared collection.
         let capturable = descriptor?.source == .session && content.petSessionID != nil
         Button { showingPicker = true } label: {
-            SidebarPetView(petID: petID, session: content.petSessionID, state: state, width: 38)
+            SidebarPetView(store: store, petID: petID, session: content.petSessionID, state: state, width: 38)
         }
         .buttonStyle(.plain)
         .help("\(name) · \(state.title). Click to choose a pet.")
@@ -82,7 +82,7 @@ struct SidebarPetButton: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .popover(isPresented: $showingPicker, arrowEdge: .trailing) {
-            SidebarPetPicker(sessionID: content.petSessionID, agentChoice: content.petChoice, state: state) {
+            SidebarPetPicker(store: store, sessionID: content.petSessionID, agentChoice: content.petChoice, state: state) {
                 showingPicker = false
             }
         }
@@ -90,6 +90,7 @@ struct SidebarPetButton: View {
 }
 
 struct SidebarPetPicker: View {
+    let store: SidebarPetStore
     let sessionID: UUID?
     let agentChoice: String?
     let state: SidebarPetState
@@ -98,7 +99,6 @@ struct SidebarPetPicker: View {
     @State private var pendingRemoval: SidebarPetDescriptor?
 
     var body: some View {
-        let store = SidebarPetStore.shared
         let current = store.resolvedID(session: sessionID, agentChoice: agentChoice)
         let collected = store.installed.filter { $0.source == .uploaded }.count
         VStack(alignment: .leading, spacing: 10) {
@@ -115,13 +115,13 @@ struct SidebarPetPicker: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: 8)], spacing: 8) {
                     ForEach(store.available(for: sessionID)) { pet in
                         SidebarPetCell(
-                            pet: pet, session: sessionID, selected: current == pet.id, state: state,
+                            store: store, pet: pet, session: sessionID, selected: current == pet.id, state: state,
                             choose: { if let sessionID { store.choose(pet.id, session: sessionID) } },
                             save: pet.source == .session && sessionID != nil
                                 ? { if let sessionID { store.saveToRepository(pet.id, session: sessionID); refreshToken += 1 } } : nil,
                             remove: pet.source == .uploaded ? { pendingRemoval = pet } : nil
                         )
-                        .contextMenu { cellMenu(pet, store) }
+                        .contextMenu { cellMenu(pet) }
                     }
                 }
                 .padding(2)
@@ -131,7 +131,7 @@ struct SidebarPetPicker: View {
                 Text("No agent session selected.").font(.caption2).foregroundStyle(.secondary)
             }
             HStack {
-                Button("Upload pet…") { upload(store) }
+                Button("Upload pet…") { upload() }
                     .help("Choose a Codex pet folder or spritesheet.")
                     .accessibilityIdentifier("sidebar-pet-upload")
                 if let sessionID, let pet = store.descriptor(current, session: sessionID), pet.source == .session {
@@ -177,7 +177,7 @@ struct SidebarPetPicker: View {
         }
     }
 
-    @ViewBuilder private func cellMenu(_ pet: SidebarPetDescriptor, _ store: SidebarPetStore) -> some View {
+    @ViewBuilder private func cellMenu(_ pet: SidebarPetDescriptor) -> some View {
         if pet.source == .session, let sessionID {
             Button("Save to my pets") { store.saveToRepository(pet.id, session: sessionID); refreshToken += 1 }
         }
@@ -186,7 +186,7 @@ struct SidebarPetPicker: View {
         }
     }
 
-    private func upload(_ store: SidebarPetStore) {
+    private func upload() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
@@ -201,6 +201,7 @@ struct SidebarPetPicker: View {
 }
 
 private struct SidebarPetCell: View {
+    let store: SidebarPetStore
     let pet: SidebarPetDescriptor
     let session: UUID?
     let selected: Bool
@@ -240,7 +241,7 @@ private struct SidebarPetCell: View {
 
     private var content: some View {
         VStack(spacing: 2) {
-            SidebarPetView(petID: pet.id, session: session, state: selected ? state : .idle, width: 56)
+            SidebarPetView(store: store, petID: pet.id, session: session, state: selected ? state : .idle, width: 56)
             Text(pet.displayName).font(.caption2).lineLimit(1).truncationMode(.tail)
             if pet.source != .bundled {
                 Text(pet.source == .session ? "agent-made · not saved" : "collected")

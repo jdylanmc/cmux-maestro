@@ -324,7 +324,7 @@ struct SidebarPinnedDetailsTests {
             var copied: [String] = []
             var inspections = 0
             let hosting = NSHostingView(rootView: SidebarPinnedFooter(
-                content: content, inspect: { inspections += 1 },
+                content: content, pets: SidebarStoreFixture().pets, inspect: { inspections += 1 },
                 copyValue: { copied.append($0); return SidebarSessionCopy.copy($0, to: pasteboard) }
             ).frame(width: 300))
             hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 220)
@@ -830,7 +830,7 @@ struct SidebarPinnedDetailsTests {
         #expect(!source.contains("selectionDetails"))
         let footer = try #require(source.components(separatedBy: "struct SidebarPinnedFooter: View").last?
             .components(separatedBy: "private struct PathDetail").first)
-        #expect(footer.contains("if content.isAgent { SidebarPetButton(content: content) }"))
+        #expect(footer.contains("if content.isAgent { SidebarPetButton(store: pets, content: content) }"))
         for forbidden in ["SidebarCloseButton", "prepareSeen(", "FocusButton", ".onHover", "RoundedRectangle"] {
             #expect(!footer.contains(forbidden))
         }
@@ -963,7 +963,7 @@ struct SidebarPinnedDetailsTests {
                     window.isReleasedWhenClosed = false
                     window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
                     let hosting = NSHostingView(rootView: VStack {
-                        SidebarPinnedFooter(content: content, maximumHeight: height, inspect: { inspections += 1 },
+                        SidebarPinnedFooter(content: content, pets: SidebarStoreFixture().pets, maximumHeight: height, inspect: { inspections += 1 },
                                             copyValue: { copies.append($0); return SidebarSessionCopy.copy($0, to: pasteboard) })
                         Spacer(minLength: 50)
                     }
@@ -1069,7 +1069,7 @@ struct SidebarPinnedDetailsTests {
         ] {
             let content = pinned(hierarchy, sessions: sessions, nodes: nodes)
             cards.append((name, AnyView(SidebarPinnedFooter(
-                content: content, maximumHeight: 900, inspect: { Issue.record("Offscreen render must not inspect") },
+                content: content, pets: SidebarStoreFixture().pets, maximumHeight: 900, inspect: { Issue.record("Offscreen render must not inspect") },
                 copyValue: { _ in Issue.record("Offscreen render must not copy"); return false }
             )), "Surface directory"))
         }
@@ -1128,7 +1128,7 @@ struct SidebarPinnedDetailsTests {
             window.isReleasedWhenClosed = false
             window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             let hosting = NSHostingView(rootView: VStack {
-                SidebarPinnedFooter(content: content, maximumHeight: 144,
+                SidebarPinnedFooter(content: content, pets: SidebarStoreFixture().pets, maximumHeight: 144,
                                     inspect: { Issue.record("Rendering must not inspect") },
                                     copyValue: { _ in Issue.record("Rendering must not copy"); return false })
                     .frame(height: control == "clipped" ? 30 : nil, alignment: .top)
