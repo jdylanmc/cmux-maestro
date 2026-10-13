@@ -295,13 +295,23 @@ struct CopilotHookTests: Sendable {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         try marker(root)
-        let calls = HookProbeCalls()
+        // The bindings lock exists only after ownership was proven; the owner dies after that.
+        let lock = root.appendingPathComponent("integration/bindings/.\(session.uuidString.lowercased()).lock").path
+        let proven = HookProbeCalls()
+        let afterProof = HookProbeCalls()
         let changing: @Sendable (Int32) -> HookLookup = { pid in
-            if pid == 101, calls.next() > 1 { return .dead }
-            return lookup(pid)
+            guard pid == 101 else { return lookup(pid) }
+            guard FileManager.default.fileExists(atPath: lock) else { _ = proven.next(); return lookup(pid) }
+            _ = afterProof.next()
+            return .dead
         }
         #expect(recorder(root, process: changing).record(payload: payload, environment: environment) == .noOwner)
+        #expect(proven.next() > 2, "The owner must be found and verified before the commit check")
+        #expect(afterProof.next() > 1, "The commit check must look the owner up again")
         #expect(throws: (any Error).self) { try binding(root) }
+        // Control: the same live owner commits.
+        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        #expect(try binding(root).ownerPID == 101)
     }
 
     @Test func symlinkSourceMarkerAndDestinationAreRejected() throws {
