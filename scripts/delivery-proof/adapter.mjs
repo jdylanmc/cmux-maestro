@@ -746,21 +746,37 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
   controller = process.env.CMUX_MAESTRO_ORCHESTRATOR ||
     path.join(maestroSupport, "Orchestration/bin/cmux-maestro-orchestrator"),
   read = (sessionId) => readBeats(sessionId, controller), gateway = createScheduleGateway(session), pollMs = 15_000,
-  tz = Intl.DateTimeFormat().resolvedOptions().timeZone, diagnostic = (error) => {
+  tz = Intl.DateTimeFormat().resolvedOptions().timeZone, diagnostic = (error, beatId) => {
     const code = typeof error?.code === "string" ? error.code : error?.name ?? "UNKNOWN";
-    console.error(`Maestro Beats could not sync with Copilot scheduling (${code}).`);
+    console.error(`Maestro Beats could not sync with Copilot scheduling${beatId ? ` for Beat ${beatId}` : ""} (${code}).`);
   } }) {
   const sessionId = session?.sessionId;
   requireCondition(typeof sessionId === "string" && UUID.test(sessionId));
   let busy = false, failing = false, closed = false, debounce;
+  // One diagnostic per failing schedule change until it succeeds; one schedule's failure never
+  // blocks the others. Each sync attempts every change once; nothing retries in between.
+  let failed = new Set();
   async function sync() {
     if (busy || closed) return;
     busy = true;
     try {
       const plan = planBeatSchedules({ wanted: await read(sessionId), entries: await gateway.list(), tz });
-      for (const id of plan.remove) await gateway.remove(id);
-      for (const entry of plan.add) await gateway.add(entry);
       failing = false;
+      const failingNow = new Set();
+      const attempt = async (key, beatId, change) => {
+        try {
+          await change();
+        } catch (error) {
+          if (!failed.has(key)) diagnostic(error, beatId);
+          failingNow.add(key);
+        }
+      };
+      for (const id of plan.remove) await attempt(`remove ${id}`, undefined, () => gateway.remove(id));
+      for (const entry of plan.add) {
+        const beatId = BEAT_LABEL.exec(entry.label)[1];
+        await attempt(`add ${beatId}`, beatId, () => gateway.add(entry));
+      }
+      failed = failingNow;
     } catch (error) {
       if (!failing) diagnostic(error);
       failing = true;

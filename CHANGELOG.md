@@ -32,6 +32,10 @@ Notable changes are recorded using Keep a Changelog categories.
   only the first 8 characters, so two Beats sharing a prefix collapsed into one schedule
   and the second never ran. Schedules with the old 8-character label are removed on the
   next sync and re-added under the full ID, so nothing fires twice.
+- Keep one Beat's failure from blocking the rest. When Copilot rejected one schedule, the
+  extension stopped the sync there, so every later Beat in that session never registered,
+  and it logged a single generic diagnostic. Each schedule change is now attempted on its
+  own, and a failure is logged once per Beat (with its ID) until it succeeds.
 - Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
   dependency-free `pet_kit.py` drawing kit instead of requiring `hatch-pet`, whose
   Codex-only image generation was unavailable to Copilot.

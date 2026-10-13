@@ -914,6 +914,39 @@ test("Beat sync reports one diagnostic per outage and recovers without retry sto
   assert.equal(f.entries.length, 1);
 });
 
+test("one rejected Beat never blocks the others and is reported once until it succeeds", async (t) => {
+  const rejected = makeBeat({ prompt: "Rejected by Copilot." }), accepted = makeBeat({ prompt: "Accepted." });
+  const entries = [], events = [];
+  let reject = true, nextId = 1;
+  const running = startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    read: async () => [rejected, accepted],
+    gateway: {
+      list: async () => entries.map((entry) => ({ ...entry })),
+      add: async (entry) => {
+        if (reject && entry.prompt === rejected.prompt) throw Object.assign(new Error("synthetic"), { code: "REJECTED" });
+        entries.push({ id: nextId, ...entry });
+        return nextId++;
+      },
+      remove: async () => {},
+    },
+    diagnostic: (error, beatId) => events.push([error.code, beatId]),
+  });
+  t.after(() => running.close());
+  await running.ready;
+  assert.deepEqual(entries.map((entry) => entry.prompt), [accepted.prompt]);
+  await running.sync();
+  await running.sync();
+  assert.deepEqual(events, [["REJECTED", rejected.id]]);
+  reject = false;
+  await running.sync();
+  assert.deepEqual(entries.map((entry) => entry.prompt).sort(), [accepted.prompt, rejected.prompt].sort());
+  reject = true;
+  entries.splice(entries.findIndex((entry) => entry.prompt === rejected.prompt), 1);
+  await running.sync();
+  assert.deepEqual(events, [["REJECTED", rejected.id], ["REJECTED", rejected.id]], "a new failure after recovery is reported again");
+});
+
 async function beatsController(t, home) {
   const directory = await fs.mkdtemp(path.join(base, "bc-"));
   t.after(() => fs.rm(directory, { recursive: true }));
