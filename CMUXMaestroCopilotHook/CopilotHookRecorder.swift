@@ -134,30 +134,13 @@ nonisolated struct CopilotHookRecorder {
         record(payload: payload, environment: environment, intent: .prove)
     }
 
-    // Compatibility entry point. An appearance is validated even when proof
-    // alone is requested; proof then wins and nothing is written.
-    func record(
-        payload: Data, environment: [String: String], appearance: CopilotSessionAppearance? = nil,
-        verifyOnly: Bool = false
-    ) -> HookOutcome {
-        let intent: Intent = verifyOnly ? .prove : appearance.map { .setAppearance($0) } ?? .bind
-        return record(payload: payload, environment: environment, intent: intent, validating: appearance)
-    }
-
-    func record(payload: Data, environment: [String: String], intent: Intent) -> HookOutcome {
-        var appearance: CopilotSessionAppearance?
-        if case .setAppearance(let choice) = intent { appearance = choice }
-        return record(payload: payload, environment: environment, intent: intent, validating: appearance)
-    }
-
-    private func record(
-        payload: Data, environment: [String: String], intent: Intent, validating appearance: CopilotSessionAppearance?
-    ) -> HookOutcome {
+    private func record(payload: Data, environment: [String: String], intent: Intent) -> HookOutcome {
         guard !Self.isDisabled(environment) else { return .disabled }
         guard let request = HookRequest(payload: payload, environment: environment) else {
             return diagnose(.invalidInput)
         }
-        if let appearance, (!appearance.isValid || appearance.sessionID != request.session) {
+        if case .setAppearance(let appearance) = intent,
+           !appearance.isValid || appearance.sessionID != request.session {
             return diagnose(.invalidInput)
         }
         do {
