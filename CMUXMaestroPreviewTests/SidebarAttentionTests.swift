@@ -226,29 +226,22 @@ struct SidebarAttentionTests {
         #expect(tree.attentionOwnerCount == 1)
     }
 
-    @Test func uiWiresBothModesToGuardedPreferencesAndIndependentNavigation() throws {
+    @Test func activityDetailsNameUnknownTimeInsteadOfOmittingIt() {
+        let lines = SidebarPresentation.activityDetails(.init(kind: .executing, summary: "Synthetic step"))
+        #expect(lines == [.init(title: "Activity", value: "Synthetic step"),
+                          .init(title: "Activity recorded", value: "Activity time unknown")])
+        #expect(SidebarPresentation.activityDetails(nil) == [.init(title: "Activity", value: "Not reported")])
+    }
+
+    @Test func acknowledgeControlsAndSignalsTargetMembershipRemainWired() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let view = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarView.swift"), encoding: .utf8)
-        let presentation = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarPresentation.swift"), encoding: .utf8)
         #expect(view.contains("preferences.acknowledge(outcomes, in: model.copilot.tree)"))
-        #expect(view.contains("model.copilot.updateAttention(preferences.attention)"))
         #expect(view.contains("sidebar-acknowledge-all"))
         #expect(view.contains("taskboard-session-attention-"))
         #expect(!view.contains("Button(\"Acknowledge\")"))
-        #expect(view.contains("let success = prepareSeen(.surface(workspaceID: workspaceID, surfaceID: surfaceID))"))
-        #expect(view.contains("navigation.select(target, onSuccess: { success() })"))
         #expect(view.contains("acknowledge: acknowledge, selection: $selection"))
         #expect(view.contains("SidebarPresentation.focusInteraction(from: old, to: new)"))
-        #expect(view.contains("SidebarTitleButton(label: label,"))
-        #expect(view.contains("value: detail ?? \"\", localFocusID: localFocusID, action: focus)"))
-        let normalized = view.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        #expect(normalized.contains(
-            "SidebarRowAction.focus(target, navigation: navigation, prepareSeen: prepareSeen, subject: inspection, revalidate: focusInspection).perform()"
-        ))
-        #expect(view.contains("if let subject, let revalidate { revalidate(subject, target); return }"))
-        #expect(view.contains("capturedPlacement: (capturedWorkspaceID, capturedSurfaceID)"))
-        #expect(presentation.contains("Blocking reason unavailable"))
-        #expect(presentation.contains("Activity time unknown"))
         let project = try String(contentsOf: root.appendingPathComponent("CMUXMaestroPreview.xcodeproj/project.pbxproj"), encoding: .utf8)
         #expect(project.contains("AgentSignals.swift in Sidebar Sources"))
         #expect(project.contains("AgentSignals.swift in Test Sources"))

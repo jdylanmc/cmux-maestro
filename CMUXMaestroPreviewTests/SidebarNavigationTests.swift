@@ -8,7 +8,8 @@ struct SidebarNavigationTests {
 
     @Test func seenCallbackRunsOnlyAfterSuccessfulCurrentNavigation() async {
         let recorder = SidebarHostRecorder()
-        let model = responseOrderingModel()
+        let probe = SidebarResponseProbe()
+        let model = responseOrderingModel(probe)
         model.update(context: context(recorder: recorder))
         let target = SidebarNavigationTarget.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA)
         var seen = 0
@@ -27,7 +28,7 @@ struct SidebarNavigationTests {
         await sidebarEventually { recorder.actions.count == 3 }
         model.setVisible(false)
         recorder.reply(2, .accepted)
-        await Task.yield()
+        await sidebarEventually { probe.processed == 3 }
         #expect(seen == 1)
         model.navigation.select(.surface(workspaceID: fixtures.workspaceA, surfaceID: UUID())) { seen += 1 }
         #expect(seen == 1)
@@ -80,6 +81,23 @@ struct SidebarNavigationTests {
     }
 
     @Test
+    func rejectedWorkspaceSwitchSkipsSurfaceActionAndNeverReportsSuccess() async {
+        let recorder = SidebarHostRecorder()
+        let probe = SidebarResponseProbe()
+        let model = responseOrderingModel(probe)
+        model.update(context: context(recorder: recorder, moved: true))
+        var seen = 0
+        model.navigation.select(.surface(workspaceID: fixtures.workspaceB, surfaceID: fixtures.surfaceA)) { seen += 1 }
+        await sidebarEventually { recorder.actions.count == 1 }
+        #expect(recorder.actions[0] == .selectWorkspace(fixtures.workspaceB))
+        recorder.reply(0, .rejected("workspace switch refused"))
+        await sidebarEventually { probe.processed == 1 }
+        #expect(model.navigation.status == .rejected)
+        #expect(recorder.actions.count == 1)
+        #expect(seen == 0)
+    }
+
+    @Test
     func deniedActionAndOffWindowTargetsNeverReachHost() async {
         let recorder = SidebarHostRecorder()
         let model = SidebarConnectionModel()
@@ -106,13 +124,14 @@ struct SidebarNavigationTests {
     @Test
     func staleTargetReplyCannotOverrideTopologyChange() async {
         let recorder = SidebarHostRecorder()
-        let model = responseOrderingModel()
+        let probe = SidebarResponseProbe()
+        let model = responseOrderingModel(probe)
         model.update(context: context(recorder: recorder))
         model.navigation.select(.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA))
         await sidebarEventually { recorder.actions.count == 1 }
         model.update(context: context(recorder: recorder, moved: true, sequence: 2))
         recorder.reply(0, .accepted)
-        await Task.yield()
+        await sidebarEventually { probe.processed == 1 }
         #expect(model.navigation.status == .staleTarget)
         #expect(model.navigation.disabledReason(for: .surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA)) != nil)
         #expect(model.navigation.disabledReason(for: .surface(workspaceID: fixtures.workspaceB, surfaceID: fixtures.surfaceA)) == nil)
@@ -121,7 +140,8 @@ struct SidebarNavigationTests {
     @Test
     func rapidClicksIgnoreLateResponsesAndKeepLastExplicitTarget() async {
         let recorder = SidebarHostRecorder()
-        let model = responseOrderingModel()
+        let probe = SidebarResponseProbe()
+        let model = responseOrderingModel(probe)
         model.update(context: context(recorder: recorder))
         model.navigation.select(.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA))
         await sidebarEventually { recorder.actions.count == 1 }
@@ -132,7 +152,7 @@ struct SidebarNavigationTests {
         recorder.reply(2, .accepted)
         await sidebarEventually { model.navigation.status == .selected }
         recorder.reply(0, .rejected("private host detail"))
-        await Task.yield()
+        await sidebarEventually { probe.processed == 2 }
         #expect(model.navigation.status == .selected)
         #expect(recorder.actions[1] == .selectWorkspace(fixtures.workspaceB))
         #expect(recorder.actions[2] == .selectSurface(workspaceID: fixtures.workspaceB, surfaceID: fixtures.surfaceB))
@@ -142,10 +162,11 @@ struct SidebarNavigationTests {
     func injectedNavigationTimeoutRejectsLateHostSuccess() async {
         let (ticks, deadline) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         defer { deadline.finish() }
+        let probe = SidebarResponseProbe()
         let navigation = SidebarNavigation(timeout: {
             for await _ in ticks { return }
             try Task.checkCancellation()
-        })
+        }, responseProcessed: { probe.record() })
         let recorder = SidebarHostRecorder()
         let model = SidebarConnectionModel(navigation: navigation)
         model.update(context: context(recorder: recorder))
@@ -156,7 +177,7 @@ struct SidebarNavigationTests {
         deadline.yield(())
         await sidebarEventually { model.navigation.status == .timedOut }
         recorder.reply(0, .accepted)
-        await Task.yield()
+        await sidebarEventually { probe.processed == 1 }
         #expect(model.navigation.status == .timedOut)
         #expect(successes == 0)
     }
@@ -164,7 +185,8 @@ struct SidebarNavigationTests {
     @Test
     func hostRejectionsCancellationAndDisconnectNeverExposeRawText() async {
         let recorder = SidebarHostRecorder()
-        let model = responseOrderingModel()
+        let probe = SidebarResponseProbe()
+        let model = responseOrderingModel(probe)
         model.update(context: context(recorder: recorder))
         let target = SidebarNavigationTarget.workspace(fixtures.workspaceA)
         model.navigation.select(target)
@@ -180,7 +202,7 @@ struct SidebarNavigationTests {
         await sidebarEventually { recorder.actions.count == 3 }
         model.connectionStatusDidChange(.error("private transport detail"))
         recorder.reply(2, .accepted)
-        await Task.yield()
+        await sidebarEventually { probe.processed == 3 }
         #expect(model.navigation.status == .disconnected)
         #expect(model.navigation.status.message?.contains("private") == false)
     }
@@ -188,14 +210,15 @@ struct SidebarNavigationTests {
     @Test
     func permissionRevocationAndHideInvalidatePendingNavigation() async {
         let recorder = SidebarHostRecorder()
-        let model = responseOrderingModel()
+        let probe = SidebarResponseProbe()
+        let model = responseOrderingModel(probe)
         model.update(context: context(recorder: recorder))
         let target = SidebarNavigationTarget.workspace(fixtures.workspaceA)
         model.navigation.select(target)
         await sidebarEventually { recorder.actions.count == 1 }
         model.update(context: context(recorder: recorder, sequence: 2, actions: []))
         recorder.reply(0, .accepted)
-        await Task.yield()
+        await sidebarEventually { probe.processed == 1 }
         #expect(model.navigation.status == .staleTarget)
         #expect(model.navigation.disabledReason(for: target) != nil)
 
@@ -204,7 +227,7 @@ struct SidebarNavigationTests {
         await sidebarEventually { recorder.actions.count == 2 }
         model.setVisible(false)
         recorder.reply(1, .accepted)
-        await Task.yield()
+        await sidebarEventually { probe.processed == 2 }
         #expect(model.navigation.status == .cancelled)
     }
 
@@ -297,7 +320,9 @@ struct SidebarNavigationTests {
 
     @Test
     func unresponsiveNavigationTimesOutWithoutWaitingForCancelledHostWork() async {
-        let navigation = SidebarNavigation(timeout: { try await Task.sleep(for: .milliseconds(15)) })
+        let probe = SidebarResponseProbe()
+        let navigation = SidebarNavigation(timeout: { try await Task.sleep(for: .milliseconds(15)) },
+                                           responseProcessed: { probe.record() })
         let reply = SidebarNavigationGate()
         navigation.update(
             topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true,
@@ -305,8 +330,9 @@ struct SidebarNavigationTests {
         )
         navigation.select(.workspace(fixtures.workspaceA))
         await sidebarEventually { navigation.status == .timedOut }
+        #expect(probe.processed == 0)
         await reply.finish()
-        await Task.yield()
+        await sidebarEventually { probe.processed == 1 }
         #expect(navigation.status == .timedOut)
         navigation.update(
             topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true,
@@ -405,8 +431,6 @@ struct SidebarNavigationTests {
         #expect(view.contains("selection = .surface(workspaceID: workspaceID, surfaceID: surface.id)"))
         #expect(view.components(separatedBy: "selection: unmanagedSelection").count == 3,
                 "Hierarchy and Taskboard retain the inspection binding")
-        #expect(view.contains("SidebarPresentation.inspectorDetails("))
-        #expect(view.contains("SidebarInspector(content: inspectorDetails)"))
         let now = Date()
         for granted in [true, false] {
             let scopes: Set<CmuxExtensionScope> = granted
@@ -497,7 +521,13 @@ struct SidebarNavigationTests {
 
     // Response ordering must not race the unrelated wall-clock selection deadline.
     private func responseOrderingModel() -> SidebarConnectionModel {
-        SidebarConnectionModel(navigation: SidebarNavigation(timeout: { try await sidebarFrozenExpiry(0) }))
+        responseOrderingModel(SidebarResponseProbe())
+    }
+
+    private func responseOrderingModel(_ probe: SidebarResponseProbe) -> SidebarConnectionModel {
+        SidebarConnectionModel(navigation: SidebarNavigation(
+            timeout: { try await sidebarFrozenExpiry(0) }, responseProcessed: { probe.record() }
+        ))
     }
 
     private func context(
@@ -531,6 +561,12 @@ struct SidebarNavigationTests {
             host: CmuxSidebarHost(performAction: { action, reply in recorder.record(action, reply: reply) })
         )
     }
+}
+
+@MainActor
+private final class SidebarResponseProbe {
+    private(set) var processed = 0
+    func record() { processed += 1 }
 }
 
 @MainActor

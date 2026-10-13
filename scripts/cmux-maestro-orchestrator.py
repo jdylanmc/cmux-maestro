@@ -21,8 +21,10 @@ import shlex
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
+import zlib
 
 VERSION = 1
 MAX_BYTES = 1_048_576
@@ -51,6 +53,16 @@ STALE_SECONDS = 600
 HEARTBEAT_SECONDS = 15
 STARTUP_SECONDS = 8
 ARCHIVE_SECONDS = 5
+GIT_EXECUTABLE = "/usr/bin/git"
+# How workers and terminals re-enter this controller.
+CONTROLLER_ENTRYPOINT = Path(__file__).resolve()
+# The only CMUX_MAESTRO_ names a direct provider receives; the launch script sets each one.
+DIRECT_ENVIRONMENT_KEYS = frozenset((
+    "CMUX_MAESTRO_WORKER_ID", "CMUX_MAESTRO_CONTROL_TOKEN", "CMUX_MAESTRO_RUN_ID",
+    "CMUX_MAESTRO_GENERATION", "CMUX_MAESTRO_ORCHESTRATOR", "CMUX_MAESTRO_EXECUTION_MODE",
+    "CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER", "CMUX_MAESTRO_SESSION_ID",
+    "CMUX_MAESTRO_LAUNCH_PID", "CMUX_MAESTRO_DIRECT_LAUNCH",
+))
 REPORT_PHASES = {
     "blocked": "reported-blocked",
     "completed": "reported-completed",
@@ -72,6 +84,12 @@ REPORT_KEYS = {
 
 class OrchestrationError(Exception):
     pass
+
+
+class CommittedProjectionError(OrchestrationError):
+    """Control state committed; only the derived observer projection failed to publish."""
+
+    routesNotRetired = 0
 
 
 class CloseBudgetExhausted(OrchestrationError):
@@ -195,9 +213,21 @@ def bind_messaging(node):
         "workspaceId": node["workspaceId"], "sessionId": node["copilotSessionId"],
         "generation": node["generation"], "capability": secrets.token_hex(32),
     }
-    descriptor = os.open(routes / f"{peer}.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, "w") as stream:
-        json.dump(binding, stream)
+    # Peers discover only complete bindings: stage privately, then link without clobbering.
+    staged = routes / f".{peer}.json.{secrets.token_hex(4)}.pending"
+    final = routes / f"{peer}.json"
+    descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(binding, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(staged, final)
+    finally:
+        try:
+            staged.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def retire_messaging(node):
@@ -464,9 +494,9 @@ def github_cli():
     for candidate in ("gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"):
         if candidate != "gh" and not Path(candidate).is_file():
             continue
-        if candidate == "gh" and not shutil_which(candidate) and not os.environ.get("CMUX_MAESTRO_GH"):
+        if candidate == "gh" and not shutil_which(candidate):
             continue
-        return trusted_executable("CMUX_MAESTRO_GH", candidate)
+        return trusted_executable(candidate)
     raise OrchestrationError("GitHub CLI is unavailable; install it to choose a pinned Copilot subscription.")
 
 
@@ -589,7 +619,7 @@ def git_display_metadata(cwd):
         "gitChangesStatus": "unavailable", "gitChanges": None, "gitChangesAt": captured_at,
     }
     try:
-        git = trusted_executable("CMUX_MAESTRO_GIT", "/usr/bin/git")
+        git = trusted_executable(GIT_EXECUTABLE)
     except OrchestrationError:
         return unavailable
 
@@ -853,39 +883,7 @@ def recorded_native_permissions(actor):
 
 
 def default_root():
-    override = os.environ.get("CMUX_MAESTRO_ROOT")
-    if override:
-        if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-            raise OrchestrationError("CMUX_MAESTRO_ROOT is test-only.")
-        return Path(override)
     return Path.home() / "Library/Application Support/CMUXMaestroPreview/Orchestration"
-
-
-def timeout(name, production):
-    value = os.environ.get(name)
-    if value is not None:
-        if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-            raise OrchestrationError(f"{name} is test-only.")
-        try:
-            return float(value)
-        except ValueError:
-            raise OrchestrationError(f"{name} is invalid.")
-    return production
-
-
-def test_barrier(name):
-    path = os.environ.get(name)
-    if path is None:
-        return
-    if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-        raise OrchestrationError(f"{name} is test-only.")
-    marker = Path(path)
-    marker.with_suffix(".ready").write_text("ready")
-    deadline = time.monotonic() + 10
-    while not marker.with_suffix(".release").exists():
-        if time.monotonic() >= deadline:
-            raise OrchestrationError(f"{name} timed out.")
-        time.sleep(0.01)
 
 
 def shutil_which(name):
@@ -896,15 +894,12 @@ def shutil_which(name):
     return None
 
 
-def trusted_executable(variable, fallback):
-    value = os.environ.get(variable)
-    if value and os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-        raise OrchestrationError(f"{variable} is test-only.")
-    candidate = Path(value or fallback)
+def trusted_executable(name):
+    candidate = Path(name)
     if not candidate.is_absolute():
         resolved = shutil_which(str(candidate))
         if resolved is None:
-            raise OrchestrationError(f"Required executable is unavailable: {fallback}")
+            raise OrchestrationError(f"Required executable is unavailable: {name}")
         candidate = Path(resolved)
     try:
         resolved = candidate.resolve(strict=True)
@@ -920,9 +915,7 @@ def trusted_executable(variable, fallback):
 
 def provider_launch_context(actor=None):
     actor = actor or {}
-    executable = trusted_executable(
-        "CMUX_MAESTRO_COPILOT", actor.get("copilotExecutable") or "copilot"
-    )
+    executable = trusted_executable(actor.get("copilotExecutable") or "copilot")
     launch_path = actor.get("launchPath") or os.environ.get("PATH", "/usr/bin:/bin")
     bounded_text(launch_path, "provider launch PATH", MAX_LAUNCH_PATH)
     return executable, launch_path
@@ -946,7 +939,29 @@ def is_direct_launch(node):
     return node.get("launchMethod") == "direct"
 
 
-def validate_state(state):
+class _StateIndex:
+    """Cross-record facts accumulated while each stored node is validated."""
+
+    def __init__(self):
+        self.workspace_nodes = {}
+        self.surfaces = set()
+        self.roots_by_run = {}
+
+    def count_workspace_node(self, workspace):
+        self.workspace_nodes[workspace] = self.workspace_nodes.get(workspace, 0) + 1
+        if self.workspace_nodes[workspace] > MAX_NODES:
+            raise OrchestrationError("Workspace stored-node limit reached.")
+
+    def claim_surface(self, surface):
+        if surface in self.surfaces:
+            raise OrchestrationError("Stored active surfaces must be unique.")
+        self.surfaces.add(surface)
+
+    def count_root(self, run):
+        self.roots_by_run[run] = self.roots_by_run.get(run, 0) + 1
+
+
+def _validate_state_header(state):
     if state.get("version") != VERSION or not isinstance(state.get("nodes"), dict):
         raise OrchestrationError("Control state version is unsupported.")
     state.setdefault("archives", [])
@@ -959,224 +974,253 @@ def validate_state(state):
         if canonical_uuid(workspace, "capacity workspace ID") != workspace:
             raise OrchestrationError("Stored capacity workspace ID must be canonical lowercase.")
         validate_capacity_limit(limit)
-    nodes = state["nodes"]
     launches = state["launches"]
     if not isinstance(launches, dict) or len(launches) > MAX_HOST_NODES:
         raise OrchestrationError("Launch transactions exceed their safe limit.")
-    if len(nodes) > MAX_HOST_NODES:
+    if len(state["nodes"]) > MAX_HOST_NODES:
         raise OrchestrationError("Host stored-node safety limit reached.")
     if len(state["archives"]) > MAX_ARCHIVES:
         raise OrchestrationError("Control state exceeds its archive retention limit.")
     if len(state["retainedResources"]) > MAX_HOST_NODES:
         raise OrchestrationError("Host retained-resource safety limit reached.")
-    workspace_nodes = {}
-    surfaces = set()
-    roots_by_run = {}
-    for identifier, node in nodes.items():
-        if canonical_uuid(identifier, "stored node ID") != node.get("id"):
-            raise OrchestrationError("Stored node identity is invalid.")
-        for field in ("runId", "workspaceId"):
-            canonical_uuid(node.get(field), f"stored {field}")
-        workspace = canonical_uuid(node["workspaceId"], "stored workspace ID")
-        workspace_nodes[workspace] = workspace_nodes.get(workspace, 0) + 1
-        if workspace_nodes[workspace] > MAX_NODES:
-            raise OrchestrationError("Workspace stored-node limit reached.")
-        surface = node.get("surfaceId")
-        if surface is not None:
-            canonical_uuid(surface, "stored surfaceId")
-            if surface in surfaces:
-                raise OrchestrationError("Stored active surfaces must be unique.")
-            surfaces.add(surface)
-        parent = node.get("parentId")
-        if parent is not None:
-            canonical_uuid(parent, "stored parent ID")
-        role = node.get("role")
-        if role not in {"coordinator", "worker"}:
-            raise OrchestrationError("Stored node role is invalid.")
-        mode = node.get("executionMode", "bounded")
-        if mode not in {"bounded", "interactive"}:
-            raise OrchestrationError("Stored execution mode is invalid.")
-        if "launchMethod" in node and (node["launchMethod"] != "direct" or mode != "interactive"):
-            raise OrchestrationError("Stored launch method is invalid.")
-        if "launchError" in node and (
-            not is_direct_launch(node) or not isinstance(node["launchError"], str)
-            or node["launchError"] not in {"launch-failed", "terminal-disappeared"}
-        ):
-            raise OrchestrationError("Stored direct launch error is invalid.")
-        runtime_version = node.get("runtimeProtocolVersion", 1)
-        if type(runtime_version) is not int or runtime_version not in {1, 2}:
-            raise OrchestrationError("Stored runtime protocol is unsupported.")
-        if node.get("launchSettings") is not None:
-            validate_launch_settings(node["launchSettings"])
-        if "launchSelection" in node:
-            validate_launch_selection(node["launchSelection"])
-            configured = node["launchSelection"]["configured"]
-            if "model" in configured and configured["model"] != (node.get("launchSettings") or {}).get("model"):
-                raise OrchestrationError("Stored launch selection does not match its configured model.")
-        if ("copilotExecutable" in node) != ("launchPath" in node):
-            raise OrchestrationError("Stored provider executable context is incomplete.")
-        if "copilotExecutable" in node:
-            executable = bounded_text(node["copilotExecutable"], "stored provider executable", 4096)
-            if not Path(executable).is_absolute():
-                raise OrchestrationError("Stored provider executable must be absolute.")
-            bounded_text(node["launchPath"], "stored provider PATH", MAX_LAUNCH_PATH)
-        if (not isinstance(node.get("permissionMode", "default"), str)
-                or node.get("permissionMode", "default") not in {"default", "yolo"}):
-            raise OrchestrationError("Stored launch permission mode is invalid.")
-        if node.get("permissionMode") == "yolo" and mode != "interactive":
-            raise OrchestrationError("YOLO requires an explicitly launched interactive session.")
-        if "permissionPolicyUnverified" in node and node["permissionPolicyUnverified"] is not True:
-            raise OrchestrationError("Stored permission policy provenance is invalid.")
-        messaging = node.get("messaging")
-        if messaging is not None and (
-            not isinstance(messaging, dict) or set(messaging) != {"version", "routes", "extension"}
-            or type(messaging["version"]) is not int or messaging["version"] != 1
-            or not isinstance(messaging["routes"], str) or len(messaging["routes"]) > 1024
-            or not Path(messaging["routes"]).is_absolute()
-            or not isinstance(messaging["extension"], str) or len(messaging["extension"]) > 1024
-            or not Path(messaging["extension"]).is_absolute()
-            or mode != "interactive"
-        ):
-            raise OrchestrationError("Stored messaging configuration is invalid.")
-        proof = node.get("deliveryProof")
-        if proof is not None and (
-            not isinstance(proof, dict)
-            or set(proof) not in ({"fixture", "experimental"}, {"fixture", "experimental", "yolo"})
-            or not isinstance(proof["fixture"], str) or len(proof["fixture"]) > 1024
-            or type(proof["experimental"]) is not bool
-            or type(proof.get("yolo", False)) is not bool
-            or role != "worker" or mode != "interactive"
-        ):
-            raise OrchestrationError("Stored delivery proof configuration is invalid.")
-        provider = node.get("providerProcess")
-        if provider is not None and (
-            not isinstance(provider, dict) or set(provider) != {"pid", "start"}
-            or type(provider["pid"]) is not int or provider["pid"] <= 0
-            or not isinstance(provider["start"], str) or not 1 <= len(provider["start"]) <= 100
-            or mode != "interactive"
-        ):
-            raise OrchestrationError("Stored interactive process identity is invalid.")
-        supervisor = node.get("supervisor")
-        if supervisor is not None and (
-            not isinstance(supervisor, dict) or set(supervisor) != {"pid", "start"}
-            or type(supervisor["pid"]) is not int or supervisor["pid"] <= 0
-            or not isinstance(supervisor["start"], str) or not 1 <= len(supervisor["start"]) <= 100
-        ):
-            raise OrchestrationError("Stored supervisor process identity is invalid.")
-        if node.get("iconId") is not None:
-            if not isinstance(node["iconId"], str) or not re.fullmatch(r"[a-z0-9_-]{1,128}", node["iconId"]):
-                raise OrchestrationError("Stored session glyph name is invalid.")
-        if node.get("iconColor") is not None and (
-            not isinstance(node["iconColor"], str) or node["iconColor"] not in ICON_COLORS
-        ):
-            raise OrchestrationError("Stored session icon color is not in the palette.")
-        if (role == "coordinator") != (parent is None):
-            raise OrchestrationError("Stored coordinator ancestry is invalid.")
-        if role == "coordinator":
-            roots_by_run[node["runId"]] = roots_by_run.get(node["runId"], 0) + 1
-        if not isinstance(node.get("generation"), int) or node["generation"] < 0:
-            raise OrchestrationError("Stored generation is invalid.")
-        for field in ("worktreeLabel", "branchLabel"):
-            value = node.get(field)
-            if value is not None:
-                bounded_text(value, f"stored {field}", MAX_DISPLAY_METADATA)
-        evidence_status = node.get("gitEvidenceStatus")
-        evidence_at = node.get("gitEvidenceAt")
-        changes_status = node.get("gitChangesStatus")
-        changes = node.get("gitChanges")
-        changes_at = node.get("gitChangesAt")
-        if changes_status == "verified":
-            if not valid_git_changes(changes) or changes_at is None:
-                raise OrchestrationError("Stored Git change counts are invalid.")
-        elif changes_status not in {None, "unavailable"} or changes is not None:
-            raise OrchestrationError("Unavailable Git changes cannot retain counts.")
-        if changes_at is not None:
-            if changes_status is None or parse_date(changes_at, "stored Git counts time") > now_date() + datetime.timedelta(minutes=5):
-                raise OrchestrationError("Stored Git counts timestamp is invalid.")
-        if evidence_status is None:
-            if evidence_at is not None or node.get("worktreeLabel") is not None or node.get("branchLabel") is not None:
-                raise OrchestrationError("Stored Git evidence is incomplete.")
-        else:
-            if evidence_status not in GIT_EVIDENCE_STATUSES or evidence_at is None:
-                raise OrchestrationError("Stored Git evidence status is invalid.")
-            captured = parse_date(evidence_at, "stored Git evidence time")
-            if captured > now_date() + datetime.timedelta(minutes=5):
-                raise OrchestrationError("Stored Git evidence timestamp is invalid.")
-            if evidence_status == "verified" and node.get("worktreeLabel") is None:
-                raise OrchestrationError("Verified Git evidence requires a worktree label.")
-            if evidence_status == "unavailable" and (
-                node.get("worktreeLabel") is not None or node.get("branchLabel") is not None
-            ):
-                raise OrchestrationError("Unavailable Git evidence cannot retain labels.")
-        session_id = node.get("copilotSessionId")
-        if session_id is not None:
-            canonical_uuid(session_id, "stored Copilot session ID")
-        if role == "coordinator":
-            if mode == "interactive":
-                if (session_id is None or node["generation"] != 1
-                        or node.get("launchSettings") is None or runtime_version != 2):
-                    raise OrchestrationError("Managed coordinator requires an exact launch identity.")
-            elif session_id is not None or node["generation"] != 0:
-                raise OrchestrationError("Registered coordinator cannot claim a controlled Copilot session.")
-        boundary_generation = node.get("verifiedBoundaryGeneration")
-        if (
-            boundary_generation is not None
-            and (
-                type(boundary_generation) is not int
-                or boundary_generation < 1
-                or boundary_generation > node["generation"]
-                or role != "worker"
-            )
-        ):
-            raise OrchestrationError("Stored verified boundary generation is invalid.")
-        validate_tool_policy(node.get("toolPolicy"))
-        if not isinstance(node.get("archiving", False), bool):
-            raise OrchestrationError("Stored archive state is invalid.")
-        if "launchAccepted" in node and (
-            node["launchAccepted"] is not True or not surface or not has_managed_runtime(node)
-        ):
-            raise OrchestrationError("Stored launch acceptance is invalid.")
-        if "surfaceUnknown" in node and (
-            node["surfaceUnknown"] is not True or surface or not has_managed_runtime(node)
-        ):
-            raise OrchestrationError("Stored unresolved surface evidence is invalid.")
-        if "runtimeNotStarted" in node and (
-            node["runtimeNotStarted"] is not True or not has_managed_runtime(node)
-            or node.get("supervisor") or provider or identifier in state["launches"]
-            or node["phase"] not in {
-                "launch-failed", "startup-failed", "resource-retired",
-                "process-disappeared", "terminal-disappeared",
-            }
-        ):
-            raise OrchestrationError("Stored pre-runtime failure evidence is invalid.")
-        created = parse_date(node.get("createdAt"), "stored creation time")
-        updated = parse_date(node.get("updatedAt"), "stored update time")
-        if created > updated or updated > now_date() + datetime.timedelta(minutes=5):
-            raise OrchestrationError("Stored node timestamps are inconsistent.")
-        phase, availability = node.get("phase"), node.get("availability")
-        valid_lifecycle = (
-            role == "coordinator" and mode != "interactive"
-            and phase == "registered" and availability == "active"
-        ) or (
-            has_managed_runtime(node) and (
-                (phase == "launching" and availability == "busy")
-                or (phase == "turn-running" and availability == "busy")
-                or (mode == "bounded" and phase == "turn-queued" and availability == "busy")
-                or (phase == "turn-failed" and availability == "idle")
-                or (mode == "bounded" and phase in {
-                    "reported-blocked", "reported-completed", "reported-failed",
-                    "report-missing", "permission-denied", "turn-failed",
-                } and availability == "idle")
-                or (phase in {
-                    "process-disappeared", "terminal-disappeared", "launch-failed",
-                    "startup-failed", "resource-retired",
-                } and availability == "unavailable")
-            )
+
+
+def _validate_node_identity(identifier, node):
+    if canonical_uuid(identifier, "stored node ID") != node.get("id"):
+        raise OrchestrationError("Stored node identity is invalid.")
+    for field in ("runId", "workspaceId"):
+        canonical_uuid(node.get(field), f"stored {field}")
+    return canonical_uuid(node["workspaceId"], "stored workspace ID")
+
+
+def _validate_node_mode(node):
+    role = node.get("role")
+    if role not in {"coordinator", "worker"}:
+        raise OrchestrationError("Stored node role is invalid.")
+    mode = node.get("executionMode", "bounded")
+    if mode not in {"bounded", "interactive"}:
+        raise OrchestrationError("Stored execution mode is invalid.")
+    if "launchMethod" in node and (node["launchMethod"] != "direct" or mode != "interactive"):
+        raise OrchestrationError("Stored launch method is invalid.")
+    if "launchError" in node and (
+        not is_direct_launch(node) or not isinstance(node["launchError"], str)
+        or node["launchError"] not in {"launch-failed", "terminal-disappeared"}
+    ):
+        raise OrchestrationError("Stored direct launch error is invalid.")
+    runtime_version = node.get("runtimeProtocolVersion", 1)
+    if type(runtime_version) is not int or runtime_version not in {1, 2}:
+        raise OrchestrationError("Stored runtime protocol is unsupported.")
+    return role, mode, runtime_version
+
+
+def _validate_node_launch_configuration(node, mode):
+    if node.get("launchSettings") is not None:
+        validate_launch_settings(node["launchSettings"])
+    if "launchSelection" in node:
+        validate_launch_selection(node["launchSelection"])
+        configured = node["launchSelection"]["configured"]
+        if "model" in configured and configured["model"] != (node.get("launchSettings") or {}).get("model"):
+            raise OrchestrationError("Stored launch selection does not match its configured model.")
+    if ("copilotExecutable" in node) != ("launchPath" in node):
+        raise OrchestrationError("Stored provider executable context is incomplete.")
+    if "copilotExecutable" in node:
+        executable = bounded_text(node["copilotExecutable"], "stored provider executable", 4096)
+        if not Path(executable).is_absolute():
+            raise OrchestrationError("Stored provider executable must be absolute.")
+        bounded_text(node["launchPath"], "stored provider PATH", MAX_LAUNCH_PATH)
+    if (not isinstance(node.get("permissionMode", "default"), str)
+            or node.get("permissionMode", "default") not in {"default", "yolo"}):
+        raise OrchestrationError("Stored launch permission mode is invalid.")
+    if node.get("permissionMode") == "yolo" and mode != "interactive":
+        raise OrchestrationError("YOLO requires an explicitly launched interactive session.")
+    if "permissionPolicyUnverified" in node and node["permissionPolicyUnverified"] is not True:
+        raise OrchestrationError("Stored permission policy provenance is invalid.")
+
+
+def _valid_process_identity(value):
+    return (
+        isinstance(value, dict) and set(value) == {"pid", "start"}
+        and type(value["pid"]) is int and value["pid"] > 0
+        and isinstance(value["start"], str) and 1 <= len(value["start"]) <= 100
+    )
+
+
+def _validate_node_attachments(node, role, mode):
+    messaging = node.get("messaging")
+    if messaging is not None and (
+        not isinstance(messaging, dict) or set(messaging) != {"version", "routes", "extension"}
+        or type(messaging["version"]) is not int or messaging["version"] != 1
+        or not isinstance(messaging["routes"], str) or len(messaging["routes"]) > 1024
+        or not Path(messaging["routes"]).is_absolute()
+        or not isinstance(messaging["extension"], str) or len(messaging["extension"]) > 1024
+        or not Path(messaging["extension"]).is_absolute()
+        or mode != "interactive"
+    ):
+        raise OrchestrationError("Stored messaging configuration is invalid.")
+    proof = node.get("deliveryProof")
+    if proof is not None and (
+        not isinstance(proof, dict)
+        or set(proof) not in ({"fixture", "experimental"}, {"fixture", "experimental", "yolo"})
+        or not isinstance(proof["fixture"], str) or len(proof["fixture"]) > 1024
+        or type(proof["experimental"]) is not bool
+        or type(proof.get("yolo", False)) is not bool
+        or role != "worker" or mode != "interactive"
+    ):
+        raise OrchestrationError("Stored delivery proof configuration is invalid.")
+    provider = node.get("providerProcess")
+    if provider is not None and (not _valid_process_identity(provider) or mode != "interactive"):
+        raise OrchestrationError("Stored interactive process identity is invalid.")
+    supervisor = node.get("supervisor")
+    if supervisor is not None and not _valid_process_identity(supervisor):
+        raise OrchestrationError("Stored supervisor process identity is invalid.")
+    if node.get("iconId") is not None:
+        if not isinstance(node["iconId"], str) or not re.fullmatch(r"[a-z0-9_-]{1,128}", node["iconId"]):
+            raise OrchestrationError("Stored session glyph name is invalid.")
+    if node.get("iconColor") is not None and (
+        not isinstance(node["iconColor"], str) or node["iconColor"] not in ICON_COLORS
+    ):
+        raise OrchestrationError("Stored session icon color is not in the palette.")
+
+
+def _validate_node_git_evidence(node):
+    for field in ("worktreeLabel", "branchLabel"):
+        value = node.get(field)
+        if value is not None:
+            bounded_text(value, f"stored {field}", MAX_DISPLAY_METADATA)
+    evidence_status = node.get("gitEvidenceStatus")
+    evidence_at = node.get("gitEvidenceAt")
+    changes_status = node.get("gitChangesStatus")
+    changes = node.get("gitChanges")
+    changes_at = node.get("gitChangesAt")
+    if changes_status == "verified":
+        if not valid_git_changes(changes) or changes_at is None:
+            raise OrchestrationError("Stored Git change counts are invalid.")
+    elif changes_status not in {None, "unavailable"} or changes is not None:
+        raise OrchestrationError("Unavailable Git changes cannot retain counts.")
+    if changes_at is not None:
+        if changes_status is None or parse_date(changes_at, "stored Git counts time") > now_date() + datetime.timedelta(minutes=5):
+            raise OrchestrationError("Stored Git counts timestamp is invalid.")
+    if evidence_status is None:
+        if evidence_at is not None or node.get("worktreeLabel") is not None or node.get("branchLabel") is not None:
+            raise OrchestrationError("Stored Git evidence is incomplete.")
+        return
+    if evidence_status not in GIT_EVIDENCE_STATUSES or evidence_at is None:
+        raise OrchestrationError("Stored Git evidence status is invalid.")
+    captured = parse_date(evidence_at, "stored Git evidence time")
+    if captured > now_date() + datetime.timedelta(minutes=5):
+        raise OrchestrationError("Stored Git evidence timestamp is invalid.")
+    if evidence_status == "verified" and node.get("worktreeLabel") is None:
+        raise OrchestrationError("Verified Git evidence requires a worktree label.")
+    if evidence_status == "unavailable" and (
+        node.get("worktreeLabel") is not None or node.get("branchLabel") is not None
+    ):
+        raise OrchestrationError("Unavailable Git evidence cannot retain labels.")
+
+
+def _validate_node_session_claim(node, role, mode, runtime_version):
+    session_id = node.get("copilotSessionId")
+    if session_id is not None:
+        canonical_uuid(session_id, "stored Copilot session ID")
+    if role == "coordinator":
+        if mode == "interactive":
+            if (session_id is None or node["generation"] != 1
+                    or node.get("launchSettings") is None or runtime_version != 2):
+                raise OrchestrationError("Managed coordinator requires an exact launch identity.")
+        elif session_id is not None or node["generation"] != 0:
+            raise OrchestrationError("Registered coordinator cannot claim a controlled Copilot session.")
+    boundary_generation = node.get("verifiedBoundaryGeneration")
+    if (
+        boundary_generation is not None
+        and (
+            type(boundary_generation) is not int
+            or boundary_generation < 1
+            or boundary_generation > node["generation"]
+            or role != "worker"
         )
-        if not valid_lifecycle:
-            raise OrchestrationError("Stored node lifecycle is invalid.")
-    if any(count != 1 for count in roots_by_run.values()):
-        raise OrchestrationError("Each stored run must have exactly one coordinator.")
+    ):
+        raise OrchestrationError("Stored verified boundary generation is invalid.")
+
+
+def _validate_node_launch_evidence(identifier, node, surface, launches):
+    if "launchAccepted" in node and (
+        node["launchAccepted"] is not True or not surface or not has_managed_runtime(node)
+    ):
+        raise OrchestrationError("Stored launch acceptance is invalid.")
+    if "surfaceUnknown" in node and (
+        node["surfaceUnknown"] is not True or surface or not has_managed_runtime(node)
+    ):
+        raise OrchestrationError("Stored unresolved surface evidence is invalid.")
+    if "runtimeNotStarted" in node and (
+        node["runtimeNotStarted"] is not True or not has_managed_runtime(node)
+        or node.get("supervisor") or node.get("providerProcess") or identifier in launches
+        or node["phase"] not in {
+            "launch-failed", "startup-failed", "resource-retired",
+            "process-disappeared", "terminal-disappeared",
+        }
+    ):
+        raise OrchestrationError("Stored pre-runtime failure evidence is invalid.")
+
+
+def _validate_node_lifecycle(node, role, mode):
+    created = parse_date(node.get("createdAt"), "stored creation time")
+    updated = parse_date(node.get("updatedAt"), "stored update time")
+    if created > updated or updated > now_date() + datetime.timedelta(minutes=5):
+        raise OrchestrationError("Stored node timestamps are inconsistent.")
+    phase, availability = node.get("phase"), node.get("availability")
+    valid_lifecycle = (
+        role == "coordinator" and mode != "interactive"
+        and phase == "registered" and availability == "active"
+    ) or (
+        has_managed_runtime(node) and (
+            (phase == "launching" and availability == "busy")
+            or (phase == "turn-running" and availability == "busy")
+            or (mode == "bounded" and phase == "turn-queued" and availability == "busy")
+            or (phase == "turn-failed" and availability == "idle")
+            or (mode == "bounded" and phase in {
+                "reported-blocked", "reported-completed", "reported-failed",
+                "report-missing", "permission-denied", "turn-failed",
+            } and availability == "idle")
+            or (phase in {
+                "process-disappeared", "terminal-disappeared", "launch-failed",
+                "startup-failed", "resource-retired",
+            } and availability == "unavailable")
+        )
+    )
+    if not valid_lifecycle:
+        raise OrchestrationError("Stored node lifecycle is invalid.")
+
+
+# Per-record checks run in their original order; the index's cross-record
+# limits interleave at the same points so the first reported error is unchanged.
+def _validate_node(identifier, node, launches, index):
+    workspace = _validate_node_identity(identifier, node)
+    index.count_workspace_node(workspace)
+    surface = node.get("surfaceId")
+    if surface is not None:
+        canonical_uuid(surface, "stored surfaceId")
+        index.claim_surface(surface)
+    parent = node.get("parentId")
+    if parent is not None:
+        canonical_uuid(parent, "stored parent ID")
+    role, mode, runtime_version = _validate_node_mode(node)
+    _validate_node_launch_configuration(node, mode)
+    _validate_node_attachments(node, role, mode)
+    if (role == "coordinator") != (parent is None):
+        raise OrchestrationError("Stored coordinator ancestry is invalid.")
+    if role == "coordinator":
+        index.count_root(node["runId"])
+    if not isinstance(node.get("generation"), int) or node["generation"] < 0:
+        raise OrchestrationError("Stored generation is invalid.")
+    _validate_node_git_evidence(node)
+    _validate_node_session_claim(node, role, mode, runtime_version)
+    validate_tool_policy(node.get("toolPolicy"))
+    if not isinstance(node.get("archiving", False), bool):
+        raise OrchestrationError("Stored archive state is invalid.")
+    _validate_node_launch_evidence(identifier, node, surface, launches)
+    _validate_node_lifecycle(node, role, mode)
+
+
+def _validate_ancestry(nodes):
     for node in nodes.values():
         seen = {node["id"]}
         current = node
@@ -1194,9 +1238,12 @@ def validate_state(state):
             depth += 1
             if depth > MAX_DEPTH:
                 raise OrchestrationError("Stored ancestry exceeds the depth limit.")
+
+
+def _validate_retained_resources(resources, surfaces):
     retained_ids = set()
     workspace_retained = {}
-    for resource in state["retainedResources"]:
+    for resource in resources:
         identifier = canonical_uuid(resource.get("surfaceId"), "retained surface ID")
         canonical_uuid(resource.get("workspaceId"), "retained workspace ID")
         workspace = canonical_uuid(resource["workspaceId"], "retained workspace ID")
@@ -1206,40 +1253,57 @@ def validate_state(state):
         if identifier in retained_ids or identifier in surfaces:
             raise OrchestrationError("Retained resource ownership is duplicated.")
         retained_ids.add(identifier)
-    for identifier, launch in launches.items():
-        if canonical_uuid(identifier, "launch worker ID") != launch.get("workerId"):
-            raise OrchestrationError("Launch transaction identity is invalid.")
-        node = nodes.get(identifier)
-        if (
-            node is None or not has_managed_runtime(node) or node["phase"] != "launching"
-            or launch.get("runId") != node["runId"]
-            or launch.get("workspaceId") != node["workspaceId"]
-            or launch.get("state") not in {"creating", "attaching", "starting"}
-        ):
-            raise OrchestrationError("Launch transaction ownership is invalid.")
-        if ("sessionId" in launch or "generation" in launch) and (
-            launch.get("sessionId") != node["copilotSessionId"]
-            or type(launch.get("generation")) is not int
-            or launch["generation"] != node["generation"]
-        ):
-            raise OrchestrationError("Launch transaction session or generation changed.")
-        parse_date(launch.get("createdAt"), "launch creation time")
-        updated = parse_date(launch.get("updatedAt"), "launch update time")
-        if updated > now_date() + datetime.timedelta(minutes=5):
-            raise OrchestrationError("Launch transaction timestamp is invalid.")
-        surface = launch.get("surfaceId")
-        if (launch["state"] in {"attaching", "starting"} and surface is None
-                or launch["state"] == "starting" and surface != node.get("surfaceId")):
-            raise OrchestrationError("Launch attachment identity is incomplete.")
-        if surface is not None:
-            canonical_uuid(surface, "launch surface ID")
-            owner = next(
-                (item["id"] for item in nodes.values() if item.get("surfaceId") == surface),
-                None,
-            )
-            if (owner is not None and owner != identifier) or surface in retained_ids:
-                raise OrchestrationError("Launch surface ownership is duplicated.")
+    return retained_ids
 
+
+def _validate_launch(identifier, launch, nodes, retained_ids):
+    if canonical_uuid(identifier, "launch worker ID") != launch.get("workerId"):
+        raise OrchestrationError("Launch transaction identity is invalid.")
+    node = nodes.get(identifier)
+    if (
+        node is None or not has_managed_runtime(node) or node["phase"] != "launching"
+        or launch.get("runId") != node["runId"]
+        or launch.get("workspaceId") != node["workspaceId"]
+        or launch.get("state") not in {"creating", "attaching", "starting"}
+    ):
+        raise OrchestrationError("Launch transaction ownership is invalid.")
+    if ("sessionId" in launch or "generation" in launch) and (
+        launch.get("sessionId") != node["copilotSessionId"]
+        or type(launch.get("generation")) is not int
+        or launch["generation"] != node["generation"]
+    ):
+        raise OrchestrationError("Launch transaction session or generation changed.")
+    parse_date(launch.get("createdAt"), "launch creation time")
+    updated = parse_date(launch.get("updatedAt"), "launch update time")
+    if updated > now_date() + datetime.timedelta(minutes=5):
+        raise OrchestrationError("Launch transaction timestamp is invalid.")
+    surface = launch.get("surfaceId")
+    if (launch["state"] in {"attaching", "starting"} and surface is None
+            or launch["state"] == "starting" and surface != node.get("surfaceId")):
+        raise OrchestrationError("Launch attachment identity is incomplete.")
+    if surface is not None:
+        canonical_uuid(surface, "launch surface ID")
+        owner = next(
+            (item["id"] for item in nodes.values() if item.get("surfaceId") == surface),
+            None,
+        )
+        if (owner is not None and owner != identifier) or surface in retained_ids:
+            raise OrchestrationError("Launch surface ownership is duplicated.")
+
+
+def validate_state(state):
+    _validate_state_header(state)
+    nodes = state["nodes"]
+    launches = state["launches"]
+    index = _StateIndex()
+    for identifier, node in nodes.items():
+        _validate_node(identifier, node, launches, index)
+    if any(count != 1 for count in index.roots_by_run.values()):
+        raise OrchestrationError("Each stored run must have exactly one coordinator.")
+    _validate_ancestry(nodes)
+    retained_ids = _validate_retained_resources(state["retainedResources"], index.surfaces)
+    for identifier, launch in launches.items():
+        _validate_launch(identifier, launch, nodes, retained_ids)
 
 class Store:
     def __init__(self, root, *, blocking=False, read_only=False):
@@ -1458,7 +1522,14 @@ class Store:
             {"version": 1, "icons": icons}, sort_keys=True, separators=(",", ":")
         ).encode() + b"\n"
         self._atomic(self.control_fd, "state.json", encoded)
-        self._atomic(self.observer_fd, "current.json", projection)
+        try:
+            self._atomic(self.observer_fd, "current.json", projection)
+        except (OSError, OrchestrationError) as error:
+            # The next write republishes the full projection from committed state.
+            raise CommittedProjectionError(
+                "Control state was committed, but observer projection publication failed; "
+                "the next successful operation republishes it."
+            ) from error
         # Icons are cosmetic: an oversized or unwritable overlay never fails the mutation.
         if len(icon_data) <= MAX_BYTES:
             try:
@@ -1558,6 +1629,38 @@ def mutate(root, operation, *, wait=1):
         store.write(state)
         return result
     return with_store(root, apply, wait=wait)
+
+
+def retire_committed_routes(nodes):
+    """Unlink routes only after the state that retired them committed.
+
+    Returns how many routes were left in place because their identity could not be proven.
+    """
+    left = 0
+    for node in nodes:
+        try:
+            retire_messaging(node)
+        except (OrchestrationError, OSError, ValueError):
+            left += 1
+    return left
+
+
+def mutate_retiring_routes(root, operation, *, wait=1):
+    """Run operation(state, retiring); routes of appended nodes are retired after commit."""
+    retiring = []
+    try:
+        result = mutate(root, lambda state: operation(state, retiring), wait=wait)
+    except CommittedProjectionError as error:
+        left = retire_committed_routes(retiring)
+        if left:
+            reported = CommittedProjectionError(f"{error} {left} message route(s) were not retired.")
+            reported.routesNotRetired = left
+            raise reported from error
+        raise
+    left = retire_committed_routes(retiring)
+    if left and isinstance(result, dict):
+        result = {**result, "routesNotRetired": left}
+    return result
 
 
 def read_state(root, *, wait=1):
@@ -1665,7 +1768,7 @@ def remove_launch_credential(root, worker_id):
 
 class Cmux:
     def __init__(self):
-        self.executable = trusted_executable("CMUX_MAESTRO_CMUX", "cmux")
+        self.executable = trusted_executable("cmux")
 
     def run(self, command, *arguments):
         invocation = [self.executable, "--json", "--id-format", "uuids", command, *arguments]
@@ -2077,25 +2180,12 @@ def command_launch_coordinator(args, root, cmux):
         message = launch_failure_message(error)
         reservation_state = "committed" if reservation_committed else "uncertain"
         if not reservation_committed:
-            # state.json may have committed before observer publication failed.
-            # Reconcile under the same lock; no ticket or host launch was attempted.
-            def failed_reservation(store):
-                nonlocal reservation_state
-                state = store.read()
-                if node["id"] not in state["nodes"]:
-                    reservation_state = "uncommitted"
-                    return
-                current = authorize(state, node["id"], token)
-                if any(current.get(key) != node.get(key) for key in (
-                    "runId", "workspaceId", "copilotSessionId", "generation",
-                )):
-                    raise OrchestrationError("Reserved coordinator ownership changed.")
-                reservation_state = "committed"
-                record_launch_failure(state, node["id"])
-                store.write(state)
             try:
-                with_store(root, failed_reservation)
+                reservation_state = cancel_unlaunched_reservation(
+                    root, node["id"], token, node["copilotSessionId"], node["generation"]
+                )
             except (OrchestrationError, OSError) as recovery_error:
+                reservation_state = getattr(recovery_error, "state", reservation_state)
                 message += f" Failure recording also failed: {launch_failure_message(recovery_error)}"
         if reservation_state == "uncommitted":
             raise OrchestrationError(message) from error
@@ -2105,6 +2195,41 @@ def command_launch_coordinator(args, root, cmux):
             message, {**receipt, "reservationState": reservation_state},
         ) from error
     return {**result, **receipt}
+
+
+class ReservationCleanupError(OrchestrationError):
+    """The reservation is known committed, but recording its cancellation failed."""
+
+    state = "committed"
+
+
+def cancel_unlaunched_reservation(root, identifier, token, session_id, generation):
+    """Reconcile a reservation whose publication failed; no host launch was attempted.
+
+    state.json may have committed before observer publication failed. Under the
+    same lock, cancel only that exact committed lease. Returns "committed" or
+    "uncommitted".
+    """
+    outcome = "uncommitted"
+
+    def cancel(store):
+        nonlocal outcome
+        state = store.read()
+        if identifier not in state["nodes"]:
+            return
+        current = authorize(state, identifier, token)
+        if (current["copilotSessionId"], current["generation"]) != (session_id, generation):
+            raise OrchestrationError("Reserved launch ownership changed.")
+        outcome = "committed"
+        record_launch_failure(state, identifier)
+        try:
+            store.write(state)
+        except CommittedProjectionError:
+            pass
+        except (OrchestrationError, OSError) as error:
+            raise ReservationCleanupError(launch_failure_message(error)) from error
+    with_store(root, cancel)
+    return outcome
 
 
 def resource_observations(state, cmux, workspace):
@@ -2705,7 +2830,7 @@ def command_spawn(args, root, cmux, *, native_identity=None):
         )
     if actor.get("messaging") and native_identity is None:
         raise OrchestrationError("Managed sessions must use maestro_spawn to verify their current Copilot account.")
-    if native_identity is None and proof is None and os.environ.get("CMUX_MAESTRO_TESTING") != "1":
+    if native_identity is None and proof is None:
         raise OrchestrationError("New managed workers require maestro_spawn from a managed coordinator; registration and saved accounts are not parent-account evidence.")
     messaging = None if proof is not None else messaging_configuration(root)
     launch_settings = worker_launch_settings(root)
@@ -2799,7 +2924,21 @@ def command_spawn(args, root, cmux, *, native_identity=None):
             "state": "creating", "createdAt": timestamp, "updatedAt": timestamp,
         }
         current["lastControlAt"] = timestamp
-    mutate(root, reserve)
+    try:
+        mutate(root, reserve)
+    except (OrchestrationError, OSError) as error:
+        try:
+            cancelled = cancel_unlaunched_reservation(root, identifier, worker_token, session_id, 1)
+        except (OrchestrationError, OSError) as recovery_error:
+            raise OrchestrationError(
+                f"{launch_failure_message(error)} Reservation cleanup also failed: "
+                f"{launch_failure_message(recovery_error)}"
+            ) from error
+        if cancelled == "uncommitted":
+            raise
+        raise OrchestrationError(
+            f"{launch_failure_message(error)} The reservation was cancelled; no session was launched."
+        ) from error
     result = launch_reserved_session(
         root, cmux, identifier, session_id, worker_token, actor["workspaceId"], pane, cwd, label
     )
@@ -2870,7 +3009,7 @@ def maestro_task(task, coordinator=None):
 
 def interactive_arguments(node, prompt):
     arguments = [
-        trusted_executable("CMUX_MAESTRO_COPILOT", node.get("copilotExecutable") or "copilot"),
+        trusted_executable(node.get("copilotExecutable") or "copilot"),
         "--no-auto-update", "--interactive", prompt,
         "--session-id", node["copilotSessionId"], "--name", node["label"],
         "-C", node["workingDirectory"],
@@ -2923,14 +3062,16 @@ def prepare_direct_launch(root, node, token):
         "CMUX_MAESTRO_GENERATION", "CMUX_MAESTRO_ORCHESTRATOR", "CMUX_MAESTRO_EXECUTION_MODE",
         "CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER", "CMUX_MAESTRO_SESSION_ID",
     }
-    script = "unset CMUX_MAESTRO_MESSAGE_ROOT CMUX_MAESTRO_MESSAGE_PEER\n"
+    # Every allowlisted name is reset here; direct-exec then drops all other
+    # CMUX_MAESTRO_ names the host shell carried, whatever their spelling.
+    script = "unset " + " ".join(sorted(DIRECT_ENVIRONMENT_KEYS)) + "\n"
     script += "".join(f"export {key}={shlex.quote(environment[key])}\n"
                       for key in sorted(keys) if key in environment)
     script += 'export CMUX_MAESTRO_LAUNCH_PID=$$\nexport CMUX_MAESTRO_DIRECT_LAUNCH=1\n'
     script += "unset CMUX_MAESTRO_INITIAL_TASK\n"
     script += f"CMUX_MAESTRO_INITIAL_TASK={shlex.quote(arguments[3])}\n"
     if (node.get("launchSettings") or {}).get("copilotAccount"):
-        credential = shlex.join([sys.executable, str(Path(__file__).resolve()), "launch-credential"])
+        credential = shlex.join([sys.executable, str(CONTROLLER_ENTRYPOINT), "launch-credential"])
         script += (
             f'COPILOT_GITHUB_TOKEN="$({credential})" || return 1\n'
             "export COPILOT_GITHUB_TOKEN\n"
@@ -2946,8 +3087,9 @@ def prepare_direct_launch(root, node, token):
             delivery_proof_api()["bind"](node["deliveryProof"], node)
         except (ValueError, OSError) as error:
             raise OrchestrationError("Delivery proof binding failed; use fresh fixtures.") from error
+    bootstrap = shlex.join([sys.executable, str(CONTROLLER_ENTRYPOINT), "direct-exec", "--"])
     argv = shlex.join(arguments[:3]) + ' "$CMUX_MAESTRO_INITIAL_TASK" ' + shlex.join(arguments[4:])
-    command = f". {shlex.quote(str(root / 'control' / filename))} && exec {argv}"
+    command = f". {shlex.quote(str(root / 'control' / filename))} && exec {bootstrap} {argv}"
     return shlex.join(["/bin/sh", "-c", command])
 
 
@@ -2981,12 +3123,7 @@ def launch_direct_session(root, cmux, node, token, pane):
                 raise OrchestrationError("Direct launch returned a conflicting surface.")
             lease.update(surfaceId=surface, state="attaching", updatedAt=now())
         mutate(root, created)
-        test_barrier("CMUX_MAESTRO_TEST_ATTACH_BARRIER")
         confirmed_pane = cmux.validate_surface(workspace, surface)
-        if os.environ.get("CMUX_MAESTRO_TEST_ATTACH_FAILURE") == "1":
-            if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-                raise OrchestrationError("CMUX_MAESTRO_TEST_ATTACH_FAILURE is test-only.")
-            raise OrchestrationError("Injected attachment commit failure.")
         cmux.rename(workspace, surface, node["label"])
 
         def attach(state):
@@ -3009,12 +3146,17 @@ def launch_direct_session(root, cmux, node, token, pane):
             }
         return mutate(root, attach)
     except (OrchestrationError, OSError) as error:
-        def failed(state):
+        def failed(state, retiring):
             current = state["nodes"].get(identifier)
             if current is not None and all(current.get(key) == node.get(key) for key in (
                 "runId", "workspaceId", "copilotSessionId", "generation", "tokenHash", "launchMethod",
             )):
                 record_launch_failure(state, identifier, surface)
+                # The route was published before any terminal existed; retire it only
+                # when no surface was created or left uncertain.
+                if (current.get("runtimeNotStarted") and surface is None
+                        and not current.get("surfaceUnknown")):
+                    retiring.append(current)
             elif surface is not None and not any(item.get("surfaceId") == surface
                                                  for item in state["nodes"].values()) and not any(
                 item["surfaceId"] == surface for item in state["retainedResources"]
@@ -3026,7 +3168,7 @@ def launch_direct_session(root, cmux, node, token, pane):
                     "surfaceId": surface, "archivedAt": now(),
                 })
         try:
-            mutate(root, failed)
+            mutate_retiring_routes(root, failed)
         except (OrchestrationError, OSError) as recovery_error:
             raise SessionLaunchError(
                 f"{launch_failure_message(error)} Failure recording also failed: "
@@ -3052,7 +3194,7 @@ def launch_legacy_session(root, cmux, identifier, session_id, worker_token, work
             return descriptor
         attachment = with_store(root, credential)
         bootstrap = shlex.join([
-            sys.executable, str(Path(__file__).resolve()), "runtime", "--worker-id", identifier
+            sys.executable, str(CONTROLLER_ENTRYPOINT), "runtime", "--worker-id", identifier
         ])
         def creating(state):
             node = authorize(state, identifier, worker_token)
@@ -3075,12 +3217,7 @@ def launch_legacy_session(root, cmux, identifier, session_id, worker_token, work
                 surface, "attaching", now()
             )
         mutate(root, created, wait=1)
-        test_barrier("CMUX_MAESTRO_TEST_ATTACH_BARRIER")
         confirmed_pane = cmux.validate_surface(workspace, surface)
-        if os.environ.get("CMUX_MAESTRO_TEST_ATTACH_FAILURE") == "1":
-            if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-                raise OrchestrationError("CMUX_MAESTRO_TEST_ATTACH_FAILURE is test-only.")
-            raise OrchestrationError("Injected attachment commit failure.")
 
         def attach(state):
             node = state["nodes"].get(identifier)
@@ -3127,7 +3264,7 @@ def launch_legacy_session(root, cmux, identifier, session_id, worker_token, work
             raise OrchestrationError("Worker launch lease is no longer active.")
         return node
 
-    deadline = time.monotonic() + timeout("CMUX_MAESTRO_STARTUP_SECONDS", STARTUP_SECONDS)
+    deadline = time.monotonic() + STARTUP_SECONDS
     while True:
         state = read_state(root, wait=1)
         node = owned_node(state)
@@ -3296,19 +3433,17 @@ def terminal_bookkeeping(event):
 
 
 def worker_environment(worker_id, token, node, *, credentials=True):
-    environment = os.environ.copy()
+    # The controller owns this namespace; a worker inherits none of the caller's keys.
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("CMUX_MAESTRO_")}
     if "launchPath" in node:
         environment["PATH"] = node["launchPath"]
-    for key in ("CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER",
-                "CMUX_MAESTRO_DIRECT_LAUNCH", "CMUX_MAESTRO_LAUNCH_PID"):
-        environment.pop(key, None)
     environment.update({
         "CMUX_MAESTRO_WORKER_ID": worker_id,
         "CMUX_MAESTRO_CONTROL_TOKEN": token,
         "CMUX_MAESTRO_RUN_ID": node["runId"],
         "CMUX_MAESTRO_GENERATION": str(node["generation"]),
         "CMUX_MAESTRO_SESSION_ID": node["copilotSessionId"],
-        "CMUX_MAESTRO_ORCHESTRATOR": str(Path(__file__).resolve()),
+        "CMUX_MAESTRO_ORCHESTRATOR": str(CONTROLLER_ENTRYPOINT),
         "CMUX_MAESTRO_EXECUTION_MODE": node.get("executionMode", "bounded"),
     })
     if node.get("messaging"):
@@ -3375,7 +3510,7 @@ def run_interactive_session(root, worker_id, token, node):
                 raise OrchestrationError("Interactive session ownership changed during launch.")
             current["providerProcess"] = anchor
         mutate(root, attach, wait=2)
-        interval = timeout("CMUX_MAESTRO_HEARTBEAT_SECONDS", HEARTBEAT_SECONDS)
+        interval = HEARTBEAT_SECONDS
         if interval <= 0:
             raise OrchestrationError("Interactive heartbeat interval is invalid.")
         next_heartbeat = time.monotonic() + interval
@@ -3410,9 +3545,7 @@ def run_interactive_session(root, worker_id, token, node):
 
 
 def run_copilot_turn(root, worker_id, token, node):
-    copilot = trusted_executable(
-        "CMUX_MAESTRO_COPILOT", node.get("copilotExecutable") or "copilot"
-    )
+    copilot = trusted_executable(node.get("copilotExecutable") or "copilot")
     prompt = node["task"] + report_instruction(node)
     arguments = [copilot, "--no-auto-update", "-p", prompt, "--output-format", "json"]
     if node["generation"] > 1:
@@ -3435,7 +3568,7 @@ def run_copilot_turn(root, worker_id, token, node):
         arguments.extend(["--deny-tool", rule])
     arguments.extend(["-C", node["workingDirectory"]])
     environment = worker_environment(worker_id, token, node)
-    heartbeat_interval = timeout("CMUX_MAESTRO_HEARTBEAT_SECONDS", HEARTBEAT_SECONDS)
+    heartbeat_interval = HEARTBEAT_SECONDS
     if heartbeat_interval <= 0:
         return (
             "protocol-failed",
@@ -3891,7 +4024,7 @@ def identity_helper_path(feature):
             raise ValueError()
     except (OSError, ValueError, TypeError) as error:
         raise OrchestrationError(f"Refresh Maestro integration to enable {feature}.") from error
-    return trusted_executable("CMUX_MAESTRO_IDENTITY_HELPER", config["helper"])
+    return trusted_executable(config["helper"])
 
 
 def command_self_icon(args):
@@ -3959,6 +4092,111 @@ def image_size(data):
     return None
 
 
+PNG_DEPTHS = {0: (1, 2, 4, 8, 16), 2: (8, 16), 3: (1, 2, 4, 8), 4: (8, 16), 6: (8, 16)}
+PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+ADAM7 = ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
+PET_DECODER = "/usr/bin/sips"
+PET_DECODE_SECONDS = 30
+
+
+def png_complete(data):
+    """Preflight: chunk framing, CRCs, header fields, palette and every scanline's filter byte."""
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return False
+    position, header, palette, compressed = 8, None, None, []
+    while position + 12 <= len(data):
+        length = int.from_bytes(data[position:position + 4], "big")
+        kind, body = data[position + 4:position + 8], data[position + 8:position + 8 + length]
+        end = position + 12 + length
+        if end > len(data) or zlib.crc32(kind + body) != int.from_bytes(data[end - 4:end], "big"):
+            return False
+        if (position == 8) != (kind == b"IHDR"):
+            return False
+        position = end
+        if kind == b"IHDR":
+            if length != 13:
+                return False
+            header = body
+        elif kind == b"PLTE":
+            if palette is not None or compressed or not length or length % 3 or length > 768:
+                return False
+            palette = length // 3
+        elif kind == b"IDAT":
+            compressed.append(body)
+        elif kind == b"IEND":
+            return position == len(data) and bool(compressed) and png_pixels_complete(header, palette, compressed)
+    return False
+
+
+def png_pixels_complete(header, palette, compressed):
+    width, height = int.from_bytes(header[:4], "big"), int.from_bytes(header[4:8], "big")
+    depth, color, method, filtering, interlace = header[8:13]
+    if (not width or not height or depth not in PNG_DEPTHS.get(color, ()) or method or filtering
+            or interlace not in (0, 1)):
+        return False
+    if color == 3 and (palette is None or palette > 1 << depth):
+        return False
+    if color in (0, 4) and palette is not None:
+        return False
+    bits = depth * PNG_CHANNELS[color]
+    filters = []
+    for x, y, dx, dy in (ADAM7 if interlace else ((0, 0, 1, 1),)):
+        columns, rows = -(-(width - x) // dx), -(-(height - y) // dy)
+        if columns > 0 and rows > 0:
+            stride = 1 + -(-columns * bits // 8)
+            start = filters[-1][0] + filters[-1][1] * filters[-1][2] if filters else 0
+            filters.append((start, stride, rows))
+    expected = filters[-1][0] + filters[-1][1] * filters[-1][2]
+    offsets = (start + row * stride for start, stride, rows in filters for row in range(rows))
+    next_filter = next(offsets, None)
+    inflater, produced = zlib.decompressobj(), 0
+    try:
+        for chunk in compressed:
+            pending = chunk
+            while pending:
+                output = inflater.decompress(pending, 1 << 20)
+                pending = inflater.unconsumed_tail
+                while next_filter is not None and next_filter < produced + len(output):
+                    if output[next_filter - produced] > 4:
+                        return False
+                    next_filter = next(offsets, None)
+                produced += len(output)
+                if produced > expected:
+                    return False
+    except zlib.error:
+        return False
+    return inflater.eof and not inflater.unused_data and produced == expected
+
+
+def decoded_size(data, extension):
+    """Pixel size after a full decode by ImageIO, the decoder the sidebar uses; None if it cannot decode."""
+    if not os.access(PET_DECODER, os.X_OK):
+        raise OrchestrationError("The spritesheet cannot be verified without macOS sips.")
+    with tempfile.TemporaryDirectory(prefix="maestro-pet-") as scratch:
+        source, decoded = Path(scratch) / ("sheet" + extension), Path(scratch) / "decoded.png"
+        source.write_bytes(data)
+        try:
+            result = subprocess.run([PET_DECODER, "-s", "format", "png", str(source), "--out", str(decoded)],
+                                    stdin=subprocess.DEVNULL, capture_output=True, timeout=PET_DECODE_SECONDS)
+        except subprocess.TimeoutExpired:
+            return None
+        if result.returncode or not decoded.is_file():
+            return None
+        with decoded.open("rb") as handle:
+            return image_size(handle.read(33))
+
+
+def webp_complete(data):
+    """RIFF framing must account for every byte; pixel decoding is left to the reader."""
+    if len(data) < 20 or int.from_bytes(data[4:8], "little") + 8 != len(data):
+        return False
+    position = 12
+    while position + 8 <= len(data):
+        length = int.from_bytes(data[position + 4:position + 8], "little")
+        position += 8 + length + (length & 1)
+    return position == len(data)
+
+
 def pet_slug(value):
     slug = "-".join(part for part in re.sub(r"[^a-z0-9]+", "-", str(value).lower()).split("-") if part)
     return slug[:48].strip("-")
@@ -3999,11 +4237,17 @@ def read_pet_source(source, requested_id):
         data = sheet.read_bytes()
     except OSError as error:
         raise OrchestrationError("The spritesheet could not be read.") from error
-    if not pet_sheet_ok(*image_size(data)):
+    size = image_size(data)
+    if size is None:
+        raise OrchestrationError("The spritesheet is not a readable PNG or WebP image.")
+    if not pet_sheet_ok(*size):
         raise OrchestrationError(
             "The spritesheet needs 8 columns of 192:208 cells and at least 9 rows "
             f"(standard {PET_SIZE[0]}x{PET_SIZE[1]}; larger scales and extra rows such as Codex v2's "
             "1536x2288 are fine). Width must be a multiple of 8 between 512 and 4096.")
+    if (not (png_complete(data) if data[:4] == b"\x89PNG" else webp_complete(data))
+            or decoded_size(data, sheet.suffix.lower()) != size):
+        raise OrchestrationError("The spritesheet is corrupt or truncated.")
     if not identifier or not PET_ID_PATTERN.fullmatch(identifier) or identifier == PET_DEFAULT_ID:
         identifier = pet_slug(f"{identifier or 'pet'}-custom")
     return identifier, display, description, data, sheet.suffix.lower()
@@ -4028,11 +4272,102 @@ def write_private(path, data):
             temporary.unlink()
 
 
+class PetPublication:
+    """Stage a pet beside its folder, swap it in, and restore the previous pet on refusal.
+
+    An exclusive per-(session, pet) lock is held from construction until commit or
+    restore, so concurrent adds of one pet are serialized. Restore also verifies the
+    published directory is still the staged one before deleting anything.
+    """
+
+    def __init__(self, session, identifier, files):
+        self.sessions = pet_session_root(session)
+        self.folder = self.sessions / identifier
+        self.previous = self.sessions / f".{identifier}.previous-{secrets.token_hex(4)}"
+        self.stage = self.sessions / f".{identifier}.stage-{secrets.token_hex(4)}"
+        self.replaced = False
+        self.created = False
+        self.identity = None
+        private_directory(self.sessions)
+        self.lock = os.open(self.sessions / f".{identifier}.lock",
+                            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(self.lock, fcntl.LOCK_EX)
+            if self.folder.is_symlink() or (self.folder.exists() and not self.folder.is_dir()):
+                raise OrchestrationError("The Maestro pet library is not a private directory.")
+            private_directory(self.stage)
+            try:
+                for name, data in files:
+                    write_private(self.stage / name, data)
+            except BaseException:
+                shutil.rmtree(self.stage, ignore_errors=True)
+                raise
+            info = self.stage.lstat()
+            self.identity = (info.st_dev, info.st_ino)
+        except BaseException:
+            self._unlock()
+            raise
+
+    def _unlock(self):
+        if self.lock is not None:
+            os.close(self.lock)
+            self.lock = None
+
+    def publish(self):
+        self.created = not self.folder.exists()
+        try:
+            if not self.created:
+                os.rename(self.folder, self.previous)
+                self.replaced = True
+            os.rename(self.stage, self.folder)
+        except BaseException:
+            self.restore()
+            raise
+
+    def commit(self):
+        shutil.rmtree(self.previous, ignore_errors=True)
+        self._unlock()
+
+    def restore(self):
+        try:
+            shutil.rmtree(self.stage, ignore_errors=True)
+            if not (self.replaced or self.created):
+                return
+            # Never delete a pathname after a separate check: take the visible folder
+            # out of the namespace first, then judge and delete only what we hold.
+            quarantine = self.sessions / f".{self.folder.name}.quarantine-{secrets.token_hex(4)}"
+            try:
+                os.rename(self.folder, quarantine)
+            except FileNotFoundError:
+                quarantine = None
+            if quarantine is not None:
+                info = quarantine.lstat()
+                if (info.st_dev, info.st_ino) != self.identity:
+                    if not os.path.lexists(self.folder):
+                        os.rename(quarantine, self.folder)
+                        kept = "it and any previous pet were retained"
+                    else:
+                        kept = "it was quarantined beside the library and any previous pet was retained"
+                    raise OrchestrationError(f"The pet folder changed during the add; {kept}.")
+                shutil.rmtree(quarantine, ignore_errors=True)
+            if self.replaced:
+                if os.path.lexists(self.folder):
+                    raise OrchestrationError(
+                        "A pet appeared during the add; the previous pet was retained beside the library."
+                    )
+                os.rename(self.previous, self.folder)
+                self.replaced = False
+        finally:
+            self._unlock()
+
+
 def list_session_pets(session):
     root = pet_session_root(session)
     pets = []
     if root.is_dir() and not root.is_symlink():
         for folder in sorted(root.iterdir()):
+            if not PET_ID_PATTERN.fullmatch(folder.name):
+                continue  # staging and backup folders are never selectable pets
             try:
                 manifest = json.loads((folder / "pet.json").read_bytes()[:65536])
                 pets.append({"petId": folder.name, "displayName": manifest.get("displayName", folder.name)})
@@ -4048,6 +4383,24 @@ def command_pets(args):
             "sessionPets": list_session_pets(session) if session else []}
 
 
+def select_own_pet(session, chosen):
+    if chosen != PET_DEFAULT_ID and (not PET_ID_PATTERN.fullmatch(chosen or "")
+                                     or chosen not in {pet["petId"] for pet in list_session_pets(session)}):
+        raise OrchestrationError("That pet is not available to this session. Use --add PATH first.")
+    helper = identity_helper_path("session pets")
+    try:
+        process = subprocess.run([helper, "icon", "--session-id", session, "--pet", chosen],
+                                 capture_output=True, text=True, timeout=5)
+        value = json.loads(process.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+        raise OrchestrationError("Own-session identity verification did not complete.") from error
+    if process.returncode != 0 or not isinstance(value, dict) or value.get("ok") is not True:
+        raise OrchestrationError("This caller could not prove ownership of that session; no pet was selected.")
+    if str(value.get("sessionId", "")).lower() != session or value.get("petId") != chosen:
+        raise OrchestrationError("The identity helper returned a mismatched selection.")
+    return value
+
+
 def command_self_pet(args):
     if not args.own_session:
         raise OrchestrationError("Pets are chosen with --self for your own session.")
@@ -4055,42 +4408,31 @@ def command_self_pet(args):
     if args.add is None and args.pet_id is None:
         raise OrchestrationError("Give --pet-id to select a pet, or --add PATH to add and select one.")
     installed = None
-    created = False
+    publication = None
     if args.add is not None:
         identifier, display, description, data, extension = read_pet_source(args.add, args.pet_id)
         existing = {pet["petId"] for pet in list_session_pets(session)}
         if identifier not in existing and len(existing) >= PET_MAX_PER_SESSION:
             raise OrchestrationError("This session already has the maximum number of its own pets.")
-        folder = pet_session_root(session) / identifier
-        created = not folder.exists()
-        private_directory(folder)
-        write_private(folder / f"spritesheet{extension}", data)
-        write_private(folder / "pet.json", json.dumps({
-            "id": identifier, "displayName": display, "description": description,
-            "spritesheetPath": f"spritesheet{extension}"}, sort_keys=True).encode())
+        # The identity helper both proves ownership and requires the pet to exist,
+        # so publish atomically and restore the previous pet on any refusal.
+        publication = PetPublication(session, identifier, (
+            (f"spritesheet{extension}", data),
+            ("pet.json", json.dumps({
+                "id": identifier, "displayName": display, "description": description,
+                "spritesheetPath": f"spritesheet{extension}"}, sort_keys=True).encode()),
+        ))
+        publication.publish()
         installed = identifier
-    chosen = installed or args.pet_id
-    if chosen != PET_DEFAULT_ID and (not PET_ID_PATTERN.fullmatch(chosen or "")
-                                     or chosen not in {pet["petId"] for pet in list_session_pets(session)}):
-        raise OrchestrationError("That pet is not available to this session. Use --add PATH first.")
-    helper = identity_helper_path("session pets")
-
-    def discard():
-        if installed is not None and created:
-            shutil.rmtree(pet_session_root(session) / installed, ignore_errors=True)
-
     try:
-        process = subprocess.run([helper, "icon", "--session-id", session, "--pet", chosen],
-                                 capture_output=True, text=True, timeout=5)
-        value = json.loads(process.stdout)
-    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
-        discard()
-        raise OrchestrationError("Own-session identity verification did not complete.") from error
-    if process.returncode != 0 or not isinstance(value, dict) or value.get("ok") is not True:
-        discard()
-        raise OrchestrationError("This caller could not prove ownership of that session; no pet was selected.")
-    if str(value.get("sessionId", "")).lower() != session or value.get("petId") != chosen:
-        raise OrchestrationError("The identity helper returned a mismatched selection.")
+        select_own_pet(session, installed or args.pet_id)
+    except BaseException:
+        if publication is not None:
+            publication.restore()
+        raise
+    if publication is not None:
+        publication.commit()
+    chosen = installed or args.pet_id
     return {"sessionId": session, "petId": chosen, "added": installed is not None,
             "scope": "this session only until saved from the Maestro pet picker"}
 
@@ -4229,11 +4571,6 @@ def beats_due(state, epoch):
 
 
 def beats_root():
-    override = os.environ.get("CMUX_MAESTRO_BEATS_ROOT")
-    if override:
-        if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-            raise OrchestrationError("CMUX_MAESTRO_BEATS_ROOT is test-only.")
-        return Path(override)
     return Path.home() / "Library/Application Support/CMUXMaestroPreview/Beats"
 
 
@@ -4314,295 +4651,7 @@ def beat_view(beat):
 
 def prove_own_session(session):
     """Exact-self authority through the native identity helper (no side effects)."""
-    testing_helper = os.environ.get("CMUX_MAESTRO_IDENTITY_HELPER") if os.environ.get("CMUX_MAESTRO_TESTING") == "1" else None
-    helper = trusted_executable("CMUX_MAESTRO_IDENTITY_HELPER", testing_helper) if testing_helper \
-        else identity_helper_path("Beats")
-    try:
-        process = subprocess.run([helper, "prove", "--session-id", session], capture_output=True, text=True, timeout=5)
-        value = json.loads(process.stdout)
-    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
-        raise OrchestrationError("Own-session identity verification did not complete.") from error
-    if process.returncode != 0 or not isinstance(value, dict) or value.get("ok") is not True \
-            or str(value.get("sessionId", "")).lower() != session:
-        raise OrchestrationError("This caller could not prove ownership of that session; no Beat was changed.")
-
-
-def beats_command(args):
-    """Agent surface: every operation is bound to the caller's own proven session. Human-only
-    operations (reassignment, clearing the recovery gate) are not available here."""
-    if args.beats_action == "cron-check":
-        spec = parse_cron(args.cron)
-        times = cron_next_times(spec, time.time(), count=max(1, min(args.count, 20)))
-        return {"cron": spec.expression, "timezone": time.strftime("%Z"), "next": [
-            time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(moment)) for moment in times]}
-    if not args.own_session:
-        raise OrchestrationError("Pets are chosen with --self for your own session.")
-    session = canonical_uuid(args.session_id, "current session ID")
-    if args.add is None and args.pet_id is None:
-        raise OrchestrationError("Give --pet-id to select a pet, or --add PATH to add and select one.")
-    installed = None
-    created = False
-    if args.add is not None:
-        identifier, display, description, data, extension = read_pet_source(args.add, args.pet_id)
-        existing = {pet["petId"] for pet in list_session_pets(session)}
-        if identifier not in existing and len(existing) >= PET_MAX_PER_SESSION:
-            raise OrchestrationError("This session already has the maximum number of its own pets.")
-        folder = pet_session_root(session) / identifier
-        created = not folder.exists()
-        private_directory(folder)
-        write_private(folder / f"spritesheet{extension}", data)
-        write_private(folder / "pet.json", json.dumps({
-            "id": identifier, "displayName": display, "description": description,
-            "spritesheetPath": f"spritesheet{extension}"}, sort_keys=True).encode())
-        installed = identifier
-    chosen = installed or args.pet_id
-    if chosen != PET_DEFAULT_ID and (not PET_ID_PATTERN.fullmatch(chosen or "")
-                                     or chosen not in {pet["petId"] for pet in list_session_pets(session)}):
-        raise OrchestrationError("That pet is not available to this session. Use --add PATH first.")
-    helper = identity_helper_path("session pets")
-
-    def discard():
-        if installed is not None and created:
-            shutil.rmtree(pet_session_root(session) / installed, ignore_errors=True)
-
-    try:
-        process = subprocess.run([helper, "icon", "--session-id", session, "--pet", chosen],
-                                 capture_output=True, text=True, timeout=5)
-        value = json.loads(process.stdout)
-    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
-        discard()
-        raise OrchestrationError("Own-session identity verification did not complete.") from error
-    if process.returncode != 0 or not isinstance(value, dict) or value.get("ok") is not True:
-        discard()
-        raise OrchestrationError("This caller could not prove ownership of that session; no pet was selected.")
-    if str(value.get("sessionId", "")).lower() != session or value.get("petId") != chosen:
-        raise OrchestrationError("The identity helper returned a mismatched selection.")
-    return {"sessionId": session, "petId": chosen, "added": installed is not None,
-            "scope": "this session only until saved from the Maestro pet picker"}
-
-
-# --- Beats: recurring prompts for exact agent sessions -------------------------
-# Policy lives in issue #42. Definitions persist in one local store; this module
-# owns cron evaluation and exact-self management. The CMUX-lifetime clock and the
-# human UI use the same store and rules.
-BEATS_VERSION = 1
-BEATS_MAX_TOTAL = 256
-BEATS_MAX_PER_SESSION = 16
-BEATS_MAX_PROMPT_BYTES = 4096
-BEATS_MAX_STORE_BYTES = 1024 * 1024
-BEATS_FIELDS = frozenset((
-    "id", "sessionId", "cron", "prompt", "enabled", "recoveryGate", "targetEnded",
-    "lastFiredMinute", "createdAt", "updatedAt", "revision",
-))
-CRON_FIELD_RANGES = (("minute", 0, 59), ("hour", 0, 23), ("day", 1, 31), ("month", 1, 12), ("weekday", 0, 7))
-CRON_ITEM = re.compile(r"^(\*|[0-9]{1,2}(?:-[0-9]{1,2})?)(?:/([0-9]{1,2}))?$")
-DAYS_IN_MONTH = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
-
-
-class CronSpec:
-    """Five numeric fields: minute hour day-of-month month weekday, evaluated in local time."""
-
-    def __init__(self, expression):
-        self.expression = expression
-        fields = re.split(r"[ \t]+", expression.strip(" \t"))
-        sets, stars = [], []
-        for text, (name, low, high) in zip(fields, CRON_FIELD_RANGES):
-            values = set()
-            for item in text.split(","):
-                match = CRON_ITEM.fullmatch(item)
-                if not match:
-                    raise OrchestrationError(
-                        f"Cron {name} field is invalid. Use numbers, ranges, lists and steps only (for example */15 or 1-5).")
-                base, step = match.group(1), match.group(2)
-                if base == "*":
-                    first, last = low, high
-                elif "-" in base:
-                    first, last = (int(part) for part in base.split("-"))
-                else:
-                    if step is not None:
-                        raise OrchestrationError(f"Cron {name} step needs * or a range.")
-                    first = last = int(base)
-                if not (low <= first <= last <= high):
-                    raise OrchestrationError(f"Cron {name} values must be {low}-{high}.")
-                increment = int(step) if step is not None else 1
-                if increment < 1:
-                    raise OrchestrationError(f"Cron {name} step must be at least 1.")
-                values.update(range(first, last + 1, increment))
-            if name == "weekday":
-                values = {value % 7 for value in values}
-            sets.append(frozenset(values))
-            stars.append(text.startswith("*"))
-        self.minutes, self.hours, self.days, self.months, self.weekdays = sets
-        self.day_star, self.weekday_star = stars[2], stars[4]
-        if not self.day_star and self.weekday_star:
-            if not any(day <= DAYS_IN_MONTH[month - 1] for month in self.months for day in self.days):
-                raise OrchestrationError("That cron expression can never match a real date.")
-
-    def matches_day(self, month, day, weekday):
-        """weekday: cron numbering, 0 = Sunday."""
-        if month not in self.months:
-            return False
-        day_ok, weekday_ok = day in self.days, weekday in self.weekdays
-        if self.day_star and self.weekday_star:
-            return True
-        if self.day_star:
-            return weekday_ok
-        if self.weekday_star:
-            return day_ok
-        return day_ok or weekday_ok
-
-    def matches(self, local):
-        """local: a time.struct_time in the Mac's current local time zone."""
-        return (local.tm_min in self.minutes and local.tm_hour in self.hours
-                and self.matches_day(local.tm_mon, local.tm_mday, (local.tm_wday + 1) % 7))
-
-
-def parse_cron(expression):
-    if not isinstance(expression, str) or not expression.strip() or len(expression) > 100 \
-            or any(ord(character) < 32 and character not in "\t" for character in expression):
-        raise OrchestrationError("Cron must be five space-separated numeric fields: minute hour day month weekday.")
-    if len(re.split(r"[ \t]+", expression.strip(" \t"))) != 5:
-        raise OrchestrationError("Cron must have exactly five fields: minute hour day-of-month month weekday.")
-    return CronSpec(" ".join(re.split(r"[ \t]+", expression.strip(" \t"))))
-
-
-def local_minute_key(epoch):
-    local = time.localtime(epoch)
-    return "%04d-%02d-%02dT%02d:%02d" % (local.tm_year, local.tm_mon, local.tm_mday, local.tm_hour, local.tm_min)
-
-
-def cron_next_times(spec, epoch, count=5, horizon_days=800):
-    """Upcoming local fire times after `epoch`. Nonexistent local times are skipped; a repeated
-    local minute appears once."""
-    results, seen = [], set()
-    start = time.localtime(epoch)
-    day_epoch = time.mktime((start.tm_year, start.tm_mon, start.tm_mday, 12, 0, 0, 0, 0, -1))
-    for offset in range(horizon_days):
-        local_day = time.localtime(day_epoch + offset * 86400)
-        if not spec.matches_day(local_day.tm_mon, local_day.tm_mday, (local_day.tm_wday + 1) % 7):
-            continue
-        for hour in sorted(spec.hours):
-            for minute in sorted(spec.minutes):
-                candidate = time.mktime((local_day.tm_year, local_day.tm_mon, local_day.tm_mday, hour, minute, 0, 0, 0, -1))
-                actual = time.localtime(candidate)
-                if (actual.tm_mday, actual.tm_hour, actual.tm_min) != (local_day.tm_mday, hour, minute):
-                    continue
-                key = local_minute_key(candidate)
-                if candidate <= epoch or key in seen:
-                    continue
-                seen.add(key)
-                results.append(candidate)
-                if len(results) == count:
-                    return results
-    return results
-
-
-def beats_due(state, epoch):
-    """Enabled, ungated Beats whose cron matches this local minute and have not fired for it.
-    Only the current minute is considered: missed minutes are never replayed, nonexistent local
-    minutes never occur, and a repeated local minute fires once."""
-    key = local_minute_key(epoch)
-    local = time.localtime(epoch)
-    # A local minute that physically happened before (clocks moved back) was already served.
-    if any(local_minute_key(epoch - shift) == key for shift in (1800, 3600, 7200)):
-        return key, []
-    due = []
-    for beat in state["beats"]:
-        if (beat["enabled"] and not beat["recoveryGate"] and not beat["targetEnded"]
-                and beat["lastFiredMinute"] != key and parse_cron(beat["cron"]).matches(local)):
-            due.append(beat)
-    return key, due
-
-
-def beats_root():
-    override = os.environ.get("CMUX_MAESTRO_BEATS_ROOT")
-    if override:
-        if os.environ.get("CMUX_MAESTRO_TESTING") != "1":
-            raise OrchestrationError("CMUX_MAESTRO_BEATS_ROOT is test-only.")
-        return Path(override)
-    return Path.home() / "Library/Application Support/CMUXMaestroPreview/Beats"
-
-
-def validate_beat_prompt(prompt):
-    if not isinstance(prompt, str) or not prompt.strip():
-        raise OrchestrationError("A Beat needs a nonempty prompt.")
-    if len(prompt.encode()) > BEATS_MAX_PROMPT_BYTES or any(
-            ord(character) < 32 and character not in "\n\t" for character in prompt):
-        raise OrchestrationError("A Beat prompt must be at most 4 KiB of text without control characters.")
-    return prompt
-
-
-def validate_beats_state(state):
-    if not isinstance(state, dict) or set(state) != {"version", "beats"} or state["version"] != BEATS_VERSION \
-            or not isinstance(state["beats"], list) or len(state["beats"]) > BEATS_MAX_TOTAL:
-        raise OrchestrationError("The Beats store is invalid or from a newer version.")
-    seen = set()
-    for beat in state["beats"]:
-        if not isinstance(beat, dict) or set(beat) != BEATS_FIELDS:
-            raise OrchestrationError("The Beats store has a malformed definition.")
-        canonical_uuid(beat["id"], "Beat ID")
-        canonical_uuid(beat["sessionId"], "Beat session ID")
-        parse_cron(beat["cron"])
-        validate_beat_prompt(beat["prompt"])
-        if beat["id"] in seen or not all(type(beat[name]) is bool for name in ("enabled", "recoveryGate", "targetEnded")) \
-                or type(beat["revision"]) is not int or beat["revision"] < 1:
-            raise OrchestrationError("The Beats store has an inconsistent definition.")
-        seen.add(beat["id"])
-    return state
-
-
-def beats_store_mutate(operation, *, root=None):
-    """One authoritative store. Writers serialize on a lock file and replace atomically."""
-    root = Path(root) if root is not None else beats_root()
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = root.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-        raise OrchestrationError("The Beats store directory is not private to this user.")
-    lock_descriptor = os.open(root / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    try:
-        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
-        path = root / "beats.json"
-        try:
-            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-        except FileNotFoundError:
-            state = {"version": BEATS_VERSION, "beats": []}
-        else:
-            try:
-                fileinfo = os.fstat(descriptor)
-                if not stat.S_ISREG(fileinfo.st_mode) or fileinfo.st_uid != os.getuid() \
-                        or fileinfo.st_size > BEATS_MAX_STORE_BYTES:
-                    raise OrchestrationError("The Beats store is not a private regular file within its size limit.")
-                try:
-                    state = json.loads(os.read(descriptor, BEATS_MAX_STORE_BYTES + 1))
-                except ValueError as error:
-                    raise OrchestrationError("The Beats store is not valid JSON.") from error
-            finally:
-                os.close(descriptor)
-        validate_beats_state(state)
-        result = operation(state)
-        validate_beats_state(state)
-        encoded = json.dumps(state, sort_keys=True, separators=(",", ":")).encode() + b"\n"
-        if len(encoded) > BEATS_MAX_STORE_BYTES:
-            raise OrchestrationError("The Beats store size limit was reached.")
-        write_private(path, encoded)
-        return result
-    finally:
-        os.close(lock_descriptor)
-
-
-def beats_store_read(*, root=None):
-    return beats_store_mutate(lambda state: json.loads(json.dumps(state)), root=root)
-
-
-def beat_view(beat):
-    return {name: beat[name] for name in sorted(BEATS_FIELDS)}
-
-
-def prove_own_session(session):
-    """Exact-self authority through the native identity helper (no side effects)."""
-    testing_helper = os.environ.get("CMUX_MAESTRO_IDENTITY_HELPER") if os.environ.get("CMUX_MAESTRO_TESTING") == "1" else None
-    helper = trusted_executable("CMUX_MAESTRO_IDENTITY_HELPER", testing_helper) if testing_helper \
-        else identity_helper_path("Beats")
+    helper = identity_helper_path("Beats")
     try:
         process = subprocess.run([helper, "prove", "--session-id", session], capture_output=True, text=True, timeout=5)
         value = json.loads(process.stdout)
@@ -4747,7 +4796,7 @@ def command_status(args, root, cmux):
     )
     cancelled = []
 
-    def refresh(state):
+    def refresh(state, retiring):
         current_actor = authorize(state, args.actor_id, args.token)
         current_actor["lastControlAt"] = now()
         current_targets = descendants(state, current_actor)
@@ -4765,6 +4814,17 @@ def command_status(args, root, cmux):
                         node["phase"], node["availability"], node["updatedAt"] = (
                             "terminal-disappeared", "unavailable", now()
                         )
+                    elif (node.get("launchError") and exited and surface is False
+                            and node["id"] in state["launches"]
+                            and state["launches"][node["id"]] == snapshot["launches"].get(node["id"])):
+                        # Failed attach with exact provider exit and surface absence proven:
+                        # nothing remains to fence, so the lease no longer protects anything.
+                        del state["launches"][node["id"]]
+                        node["phase"], node["availability"], node["updatedAt"] = (
+                            "terminal-disappeared", "unavailable", now()
+                        )
+                        retiring.append(node)
+                        cancelled.append(node["id"])
                     continue
                 if (node["phase"] == "launching" and node.get("surfaceId") and surface is False
                         and state["launches"].get(node["id"]) == snapshot["launches"].get(node["id"])
@@ -4785,7 +4845,7 @@ def command_status(args, root, cmux):
                 if is_direct_launch(node):
                     node["result"] = "Exact Copilot process exited; no task outcome is inferred."
             if exited:
-                retire_messaging(node)
+                retiring.append(node)
         apply_git_evidence(state, git_evidence)
         return {"runId": current_actor["runId"],
                 "capacity": workspace_capacity(state, current_actor["workspaceId"]), "workers": [{
@@ -4809,7 +4869,7 @@ def command_status(args, root, cmux):
             "phase": node["phase"], "availability": node["availability"],
             "result": node["result"],
         } for node in current_targets]}
-    result = mutate(root, refresh)
+    result = mutate_retiring_routes(root, refresh)
     for identifier in cancelled:
         remove_launch_credential(root, identifier)
     return result
@@ -4880,7 +4940,7 @@ def command_archive(args, root, cmux):
                 node["archiving"] = True
                 node["updatedAt"] = now()
     mutate(root, begin)
-    deadline = time.monotonic() + timeout("CMUX_MAESTRO_ARCHIVE_SECONDS", ARCHIVE_SECONDS)
+    deadline = time.monotonic() + ARCHIVE_SECONDS
     while time.monotonic() < deadline:
         state = read_state(root, wait=1)
         workers = [
@@ -4895,7 +4955,7 @@ def command_archive(args, root, cmux):
             "Run archive is pending because a worker turn or supervisor remains live; retry."
         )
 
-    def finish(state):
+    def finish(state, retiring):
         current = authorize(state, args.actor_id, args.token, allow_archiving=True)
         if tuple(current.get(key) for key in identity_keys) != identity:
             raise OrchestrationError("Coordinator ownership changed during archive.")
@@ -4910,7 +4970,7 @@ def command_archive(args, root, cmux):
         state["archives"].append(archive_summary(state, run_id))
         state["archives"] = state["archives"][-MAX_ARCHIVES:]
         for node in nodes:
-            retire_messaging(node)
+            retiring.append(node)
             if has_managed_runtime(node) and node.get("surfaceId"):
                 state["retainedResources"].append({
                     "runId": run_id, "workspaceId": node["workspaceId"],
@@ -4923,7 +4983,7 @@ def command_archive(args, root, cmux):
         if len(state["retainedResources"]) > MAX_HOST_NODES:
             raise OrchestrationError("Host retained-resource safety limit reached; archived terminals remain owned.")
         return {"runId": run_id, "archived": True}
-    result = mutate(root, finish, wait=1)
+    result = mutate_retiring_routes(root, finish, wait=1)
     direct_nodes = [node for node in snapshot["nodes"].values()
                     if node["runId"] == run_id and is_direct_launch(node)]
     if direct_nodes:
@@ -4976,7 +5036,7 @@ def command_recover(args, root, cmux):
         ):
             raise OrchestrationError("Stale recovery refuses competing live worker ownership.")
 
-    def recover(state):
+    def recover(state, retiring):
         current = state["nodes"].get(previous["id"])
         if not current or current["runId"] != previous["runId"]:
             raise OrchestrationError("Coordinator ownership changed during recovery.")
@@ -4999,8 +5059,7 @@ def command_recover(args, root, cmux):
                 or (node.get("surfaceId") and cmux.surface_exists(node["workspaceId"], node["surfaceId"]) is not False)
             ):
                 raise OrchestrationError("Stale recovery refuses live or uncertain worker ownership.")
-        for node in current_nodes.values():
-            retire_messaging(node)
+        retiring.extend(current_nodes.values())
         state["archives"].append(archive_summary(state, current["runId"]))
         state["archives"] = state["archives"][-MAX_ARCHIVES:]
         for node_id in current_nodes:
@@ -5012,7 +5071,7 @@ def command_recover(args, root, cmux):
             "controlToken": token, "recoveredRunId": previous["runId"],
             "workspaceId": workspace, "surfaceId": surface,
         }
-    return mutate(root, recover)
+    return mutate_retiring_routes(root, recover)
 
 
 def parser():
@@ -5126,7 +5185,23 @@ def parser():
     return result
 
 
+def direct_exec(provider):
+    """Become the direct provider with only the controller's CMUX_MAESTRO_ names."""
+    if not provider or not Path(provider[0]).is_absolute():
+        raise OrchestrationError("Direct provider executable must be absolute.")
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith("CMUX_MAESTRO_") or key in DIRECT_ENVIRONMENT_KEYS}
+    os.execve(provider[0], provider, environment)
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:2] == ["direct-exec", "--"]:
+        try:
+            direct_exec(argv[2:])
+        except (OrchestrationError, OSError) as error:
+            print(json.dumps({"ok": False, "error": str(error)}), file=sys.stderr)
+            return 2
     args = parser().parse_args(argv)
     try:
         if args.command == "accounts":

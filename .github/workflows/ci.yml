@@ -29,6 +29,8 @@ jobs:
         run: python3 scripts/test-build-metadata.py
       - name: Verify local preview transactions and recovery
         run: python3 scripts/test-local-preview.py
+      - name: Verify compiled shell notification reducer
+        run: ./scripts/test-copilot-shell-reducer.sh
       - name: Verify SDK fetch concurrency and cleanup
         run: ./scripts/test-fetch-sdk-concurrency.sh
       - name: Build isolated validation targets

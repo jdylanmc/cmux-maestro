@@ -304,6 +304,61 @@ nonisolated struct CopilotReplayGuard: Sendable {
     }
 }
 
+// Typed reducer dispatch over the decoded event type. Unrecognized types stay
+// `.other`; prefix-based lifecycle classification keeps reading the raw type.
+private nonisolated enum CopilotEventKind: Sendable {
+    case sessionStart, sessionResume, sessionIdle, sessionModelChange, sessionShutdown, sessionError, abort
+    case turnStart, turnEnd, assistantMessage
+    case toolStart, toolComplete, toolPartialResult
+    case subagentStarted, subagentCompleted, subagentFailed, subagentConfigured, subagentSelected, skillInvoked
+    case permissionRequested, permissionCompleted, userInputRequested, userInputCompleted
+    case systemNotification, other
+
+    init(_ type: String) {
+        switch type {
+        case "session.start": self = .sessionStart
+        case "session.resume": self = .sessionResume
+        case "session.idle": self = .sessionIdle
+        case "session.model_change": self = .sessionModelChange
+        case "session.shutdown": self = .sessionShutdown
+        case "session.error": self = .sessionError
+        case "abort": self = .abort
+        case "assistant.turn_start": self = .turnStart
+        case "assistant.turn_end": self = .turnEnd
+        case "assistant.message": self = .assistantMessage
+        case "tool.execution_start": self = .toolStart
+        case "tool.execution_complete": self = .toolComplete
+        case "tool.execution_partial_result": self = .toolPartialResult
+        case "subagent.started": self = .subagentStarted
+        case "subagent.completed": self = .subagentCompleted
+        case "subagent.failed": self = .subagentFailed
+        case "subagent.configured": self = .subagentConfigured
+        case "subagent.selected": self = .subagentSelected
+        case "skill.invoked": self = .skillInvoked
+        case "permission.requested": self = .permissionRequested
+        case "permission.completed": self = .permissionCompleted
+        case "user_input.requested": self = .userInputRequested
+        case "user_input.completed": self = .userInputCompleted
+        case "system.notification": self = .systemNotification
+        default: self = .other
+        }
+    }
+}
+
+private extension CopilotEventProjection {
+    nonisolated private static let lifecyclePrefixes = [
+        "session.", "assistant.turn_", "tool.execution_", "subagent.", "skill.",
+        "permission.", "user_input.", "system.notification", "abort"
+    ]
+
+    nonisolated var kind: CopilotEventKind { CopilotEventKind(type) }
+
+    // Lifecycle evidence is deduplicated by event identity before dispatch.
+    nonisolated var isLifecycle: Bool {
+        type == "assistant.message" || Self.lifecyclePrefixes.contains(where: { type.hasPrefix($0) })
+    }
+}
+
 nonisolated struct CopilotEventReducer: Sendable {
     private struct Work: Sendable {
         var id: String
@@ -397,8 +452,8 @@ nonisolated struct CopilotEventReducer: Sendable {
         replay = CopilotReplayGuard(capacity: maximumRelationships, wordCount: maximumReplayFilterWords)
     }
 
-    // Retain the input API, but read time must never decide lifecycle acceptance.
-    mutating func consume(_ line: Data, observedAt _: Date = Date()) {
+    // Read time must never decide lifecycle acceptance, so none is accepted.
+    mutating func consume(_ line: Data) {
         do {
             let event = try JSONDecoder().decode(CopilotEventProjection.self, from: line)
             apply(event)
@@ -463,404 +518,150 @@ nonisolated struct CopilotEventReducer: Sendable {
     }
 
     private mutating func apply(_ event: CopilotEventProjection) {
+        let kind = event.kind
         // Source identity/schema validation must not be bypassed by deduplication or limits.
-        if event.type == "session.start" {
-            guard event.sessionID == sessionID else { addIssue(.identityChanged); return }
-            // The installed schema specifies a positive integer, not a closed version enum.
-            guard let version = event.version, version > 0 else {
-                unsupportedSession = true
-                addIssue(.unsupportedFormat)
-                addIssue(.ambiguousIdentity)
-                return
-            }
+        if kind == .sessionStart {
+            guard admitSource(event) else { return }
         }
-        if event.type == "tool.execution_partial_result" {
+        if kind == .toolPartialResult {
             observeToolCausality(event)
             return
         }
-        // An obsolete completion cannot degrade a newer invocation even when
-        // the replay ledger can no longer admit new event identities.
-        if event.type == "subagent.completed" || event.type == "subagent.failed" {
-            guard let tool = event.toolCallID, let id = agentForTool[tool],
-                  work[id]?.spawnTool == tool else { return }
+        guard targetsCurrentInvocation(event, kind: kind) else { return }
+        if event.isLifecycle {
+            guard admitLifecycle(event, kind: kind) else { return }
         }
-        if event.type == "tool.execution_complete", let tool = event.toolCallID {
+        defer { observeCausalEvent(event) }
+        dispatch(event, kind: kind)
+    }
+
+    // MARK: Admission
+
+    private mutating func admitSource(_ event: CopilotEventProjection) -> Bool {
+        guard event.sessionID == sessionID else { addIssue(.identityChanged); return false }
+        // The installed schema specifies a positive integer, not a closed version enum.
+        guard let version = event.version, version > 0 else {
+            unsupportedSession = true
+            addIssue(.unsupportedFormat)
+            addIssue(.ambiguousIdentity)
+            return false
+        }
+        return true
+    }
+
+    // An obsolete completion cannot degrade a newer invocation even when
+    // the replay ledger can no longer admit new event identities.
+    private mutating func targetsCurrentInvocation(_ event: CopilotEventProjection, kind: CopilotEventKind) -> Bool {
+        switch kind {
+        case .subagentCompleted, .subagentFailed:
+            guard let tool = event.toolCallID, let id = agentForTool[tool] else { return false }
+            return work[id]?.spawnTool == tool
+        case .toolComplete:
+            guard let tool = event.toolCallID else { return true }
             guard let invocation = toolOwners[tool] else {
                 // Missing ownership cannot mutate another current invocation.
                 remember("tool:\(tool)")
-                return
+                return false
             }
-            guard invocation.agentID == event.agentID, !invocation.completed else { return }
+            guard invocation.agentID == event.agentID, !invocation.completed else { return false }
             if let origin = invocation.turnOrigin {
-                guard turnTagsMatch(event, turnID: origin.turnID, interactionID: origin.interactionID) else { return }
-            } else if let current = turns[Owner(agentID: event.agentID)] {
-                guard turnTagsMatch(event, turnID: current.id, interactionID: current.interactionID) else { return }
+                return turnTagsMatch(event, turnID: origin.turnID, interactionID: origin.interactionID)
             }
+            if let current = turns[Owner(agentID: event.agentID)] {
+                return turnTagsMatch(event, turnID: current.id, interactionID: current.interactionID)
+            }
+            return true
+        default:
+            return true
         }
-        let start = startIdentity(for: event)
-        let lifecyclePrefixes = ["session.", "assistant.turn_", "tool.execution_", "subagent.", "skill.",
-                                 "permission.", "user_input.", "system.notification", "abort"]
-        if event.type == "assistant.message" || lifecyclePrefixes.contains(where: { event.type.hasPrefix($0) }) {
-            let eventMatch = seenLifecycleEvents.match(event.id)
-            let startMatch = startReplayMatch(for: event)
-            if eventMatch == .exact || startMatch == .exact { return }
-            if event.type == "tool.execution_start", let tool = event.toolCallID {
-                // Delayed ownership for an ended spawn is not fresh activity.
-                if let id = agentForTool[tool], let item = work[id],
-                   item.spawnTool != tool || Self.terminal(item.state) { return }
-                if Self.terminal(work["shell:\(tool)"]?.state ?? .unknown) { return }
-            }
-            // A cold match may be a fresh start's false positive. Terminal history
-            // must fail open, but a possible old A replay cannot change live B.
-            if startMatch == .uncertain {
-                addIssue(.readLimitReached)
-                demoteTerminalForColdStart(event)
-                return
-            }
-            if eventMatch == .uncertain {
-                if start != nil { limitLifecycle(event) } else { addIssue(.readLimitReached) }
-                return
-            }
-            guard !replayExhausted, seenLifecycleEvents.remember(event.id) else {
-                limitLifecycle(event)
-                return
-            }
+    }
+
+    private mutating func admitLifecycle(_ event: CopilotEventProjection, kind: CopilotEventKind) -> Bool {
+        let eventMatch = seenLifecycleEvents.match(event.id)
+        let startMatch = startReplayMatch(for: event)
+        if eventMatch == .exact || startMatch == .exact { return false }
+        if kind == .toolStart, let tool = event.toolCallID, ownsEndedWork(tool) { return false }
+        // A cold match may be a fresh start's false positive. Terminal history
+        // must fail open, but a possible old A replay cannot change live B.
+        if startMatch == .uncertain {
+            addIssue(.readLimitReached)
+            demoteTerminalForColdStart(event)
+            return false
         }
-        defer { observeCausalEvent(event) }
-        switch event.type {
-        case "session.start":
+        if eventMatch == .uncertain {
+            if startIdentity(for: event) != nil { limitLifecycle(event) } else { addIssue(.readLimitReached) }
+            return false
+        }
+        guard !replayExhausted, seenLifecycleEvents.remember(event.id) else {
+            limitLifecycle(event)
+            return false
+        }
+        return true
+    }
+
+    // Delayed ownership for an ended spawn is not fresh activity.
+    private func ownsEndedWork(_ tool: String) -> Bool {
+        if let id = agentForTool[tool], let item = work[id],
+           item.spawnTool != tool || Self.terminal(item.state) { return true }
+        return Self.terminal(work["shell:\(tool)"]?.state ?? .unknown)
+    }
+
+    // MARK: Dispatch
+
+    private mutating func dispatch(_ event: CopilotEventProjection, kind: CopilotEventKind) {
+        switch kind {
+        case .sessionStart:
             if let model = event.model { rootModel = model }
-        case "session.resume":
-            retireInteractions()
-            ended = false
-            rootState = .unknown
-            clearSignals()
-            rootStartedAt = event.timestamp
-            resumedAt = event.timestamp
-            rootTurnID = nil
-            retireRequests()
-            demoteNonterminalChildren()
-        case "session.model_change":
+        case .sessionResume:
+            resumeSession(event)
+        case .sessionModelChange:
             // A sub-agent's model change belongs to that sub-agent, not the session.
             if let id = event.agentID { setModel(event.model, agent: id) } else { rootModel = event.model }
-        case "session.idle":
+        case .sessionIdle:
             if !ended && rootState != .failed && rootState != .cancelled { rootState = .idle }
-        case "session.shutdown":
-            guard !isStale(event, owner: nil) else { return }
-            retireInteractions()
-            if event.shutdownType == "error" {
-                if rootState != .failed { recordOutcome(.error, owner: nil, event: event) }
-                rootState = .failed
-            }
-            else if rootState != .failed && rootState != .cancelled { rootState = .completed }
-            if let model = event.model { rootModel = model }
-            ended = true
-            turns.removeAll()
-            stopTools()
-            retireRequests()
-            demoteNonterminalChildren()
-        case "session.error", "abort":
-            let state: CopilotWorkState = event.type == "abort" ? .cancelled : .failed
-            if let id = event.agentID {
-                guard !isStale(event, owner: id) else { return }
-                guard ensureOwner(id, event: event) else { return }
-                finish(id, state: state, event: event)
-            } else {
-                guard !isStale(event, owner: nil),
-                      rootState != .failed,
-                      rootState != .cancelled || state == .failed else { return }
-                rootState = state
-                recordOutcome(state == .failed ? .error : .aborted, owner: nil, event: event)
-                // A primary-turn abort/error is not evidence that background children ended.
-                retireRequests(owner: nil)
-                turns.removeValue(forKey: Owner(agentID: nil))
-                stopTools(owner: Owner(agentID: nil))
-            }
-        case "assistant.turn_start":
-            guard let turn = event.turnID else { return }
-            let key = Self.turnKey(turn, owner: event.agentID, interaction: event.interactionID)
-            let reusedRawTurn = replay.match(Self.rawTurnKey(turn, owner: event.agentID)) != .absent
-                || (event.interactionID != nil && replay.match(Self.turnKey(turn, owner: event.agentID)) != .absent)
-            guard prepareInteraction(event) else { limitLifecycle(event); return }
-            if let id = event.agentID {
-                let previous = work[id]
-                let continuation = previous?.multiTurn == true && !ended
-                    && previous?.kind == .subagent
-                    && previous?.interactionID != nil && event.interactionID != nil
-                    && previous?.interactionID != event.interactionID
-                    && (previous?.state == .completed || previous?.state.isTerminal == false)
-                if continuation {
-                    // The spawn task's result cannot finish a later interaction,
-                    // even if that result arrives for the first time after it.
-                    guard removeSpawnJoins(for: id) else { limitLifecycle(event); return }
-                    work[id]?.spawnTool = nil
-                }
-                work[id]?.configurationStart = nil
-                if let previous, !Self.terminal(previous.state) || continuation {
-                    guard remember(key) else { limitLifecycle(event); return }
-                    // Fresh scoped identity wins over an untrusted wall clock.
-                    work[id]?.startedAt = event.timestamp
-                    work[id]?.terminalEvent = nil
-                    work[id]?.turnID = turn
-                    if let interaction = event.interactionID { work[id]?.interactionID = interaction }
-                    work[id]?.state = .working
-                    setModel(event.model, agent: id)
-                } else {
-                    // A fresh turn attests activity, not the old spawn's name,
-                    // parent or tool pairing, even if that row was retained.
-                    if !insert(Work(
-                        id: id, parent: "unresolved-owner", kind: .unknown,
-                        name: "Unknown agent", state: .working, model: event.model,
-                        startedAt: event.timestamp, lifecycle: key, turnID: turn,
-                        interactionID: event.interactionID
-                    ), validatedStart: true) { failAdmission(event); return }
-                }
-            } else {
-                guard remember(key) else { limitLifecycle(event); return }
-                ended = false
-                rootTurnID = turn
-                if let interaction = event.interactionID { rootInteractionID = interaction }
-                rootState = .working
-                setModel(event.model, agent: nil)
-            }
-            let owner = Owner(agentID: event.agentID)
-            if event.agentID == nil {
-                rootStartedAt = event.timestamp
-                // A new primary turn bounds outcomes, not background requests or history.
-                outcomes.removeAll()
-                primaryCompletion = nil
-            } else {
-                outcomes.removeValue(forKey: owner)
-            }
-            turns[owner] = Turn(
-                id: turn, interactionID: event.interactionID, eventID: event.id,
-                startedAt: event.timestamp, causalTip: event.id, requiresCausalProof: reusedRawTurn
-            )
-            lastToolActivity.removeValue(forKey: owner)
-            stopTools(owner: owner)
-        case "assistant.turn_end":
-            guard let turn = event.turnID else { return }
-            let owner = Owner(agentID: event.agentID)
-            let activeTurn = turns[owner]
-            if let id = event.agentID, work[id]?.state.isTerminal != false { return }
-            if let activeTurn {
-                guard activeTurn.id == turn else { return }
-                if let interaction = event.interactionID {
-                    guard interaction == activeTurn.interactionID else { return }
-                } else if activeTurn.requiresCausalProof && !isCausallyLinked(event, to: activeTurn) {
-                    markTurnUnknown(owner: event.agentID)
-                    addIssue(.ambiguousTurn)
-                    return
-                }
-            } else {
-                // Missing-start legacy evidence can establish idle, never a primary
-                // completion. It cannot be assigned to a known interaction namespace.
-                guard event.interactionID == nil, currentInteraction(owner: event.agentID) == nil,
-                      replay.match(Self.rawTurnKey(turn, owner: event.agentID)) == .absent else { return }
-                let current = event.agentID.flatMap { work[$0]?.turnID } ?? (event.agentID == nil ? rootTurnID : nil)
-                guard current == nil || current == turn,
-                      !rejectReplay(Self.turnKey(turn, owner: event.agentID)) else { return }
-            }
-            turns.removeValue(forKey: owner)
-            if event.agentID == nil {
-                rootTurnID = turn
-                remember(Self.turnKey(turn, owner: nil, interaction: activeTurn?.interactionID))
-                if !ended && !Self.terminal(rootState) {
-                    rootState = .idle
-                    if let activeTurn {
-                        recordOutcome(.turnFinished, owner: nil,
-                                      evidence: completionEvidence(event, startedAt: activeTurn.startedAt))
-                    }
-                }
-            } else if let id = event.agentID, let item = work[id], !Self.terminal(item.state) {
-                remember(Self.turnKey(turn, owner: id, interaction: activeTurn?.interactionID))
-                work[id]?.turnID = turn
-                work[id]?.state = .idle
-            } else {
-                return
-            }
-            setModel(event.model, agent: event.agentID)
-        case "tool.execution_start":
-            guard let tool = event.toolCallID else { return }
-            guard ensureOwner(event.agentID, event: event) else { return }
-            if toolOwners[tool] == nil {
-                if toolOwners.count >= maximumRelationships {
-                    guard let retired = toolOrder.first(where: {
-                        toolOwners[$0]?.completed == true || toolOwners[$0]?.executing == false
-                    }),
-                          remember("tool:\(retired)") else {
-                        addIssue(.readLimitReached)
-                        demoteTerminalForColdStart(event)
-                        return
-                    }
-                    removeTool(retired)
-                }
-                let currentTurn = turns[Owner(agentID: event.agentID)]
-                let origin = currentTurn.flatMap {
-                    !$0.requiresCausalProof || isCausallyLinked(event, to: $0)
-                        ? TurnOrigin(eventID: $0.eventID, turnID: $0.id, interactionID: $0.interactionID) : nil
-                }
-                toolOwners[tool] = Tool(
-                    agentID: event.agentID, name: event.toolName, startedAt: event.timestamp, turnOrigin: origin
-                )
-                toolOrder.append(tool)
-            }
-            guard remember("start-tool:\(tool)") else { limitLifecycle(event); return }
-            let owner = Owner(agentID: event.agentID)
-            outcomes.removeValue(forKey: owner)
-            if let id = event.agentID {
-                if work[id]?.state.isTerminal == true {
-                    guard removeSpawnJoins(for: id) else { limitLifecycle(event); return }
-                    work[id]?.spawnTool = nil
-                    work[id]?.turnID = nil
-                    turns.removeValue(forKey: owner)
-                }
-                if work[id]?.startedAt == nil || work[id]?.state.isTerminal == true {
-                    work[id]?.startedAt = event.timestamp
-                }
-                work[id]?.terminalEvent = nil
-                work[id]?.state = .working
-            } else {
-                primaryCompletion = nil
-                ended = false
-                if rootStartedAt == nil || rootState.isTerminal { rootStartedAt = event.timestamp }
-                rootState = .working
-            }
-            for id in order where work[id]?.unresolvedTool == tool {
-                work[id]?.parent = event.agentID
-                work[id]?.unresolvedTool = nil
-            }
-            if let name = event.toolName, ["bash", "powershell", "local_shell"].contains(name) {
-                insert(Work(
-                    id: "shell:\(tool)", parent: event.agentID, kind: .shell,
-                    name: "\(name) invocation", state: .working, model: event.model,
-                    startedAt: event.timestamp
-                ), validatedStart: true)
-            }
-            observeToolCausality(event)
-            // Current Copilot builds emit no user_input.requested event; the
-            // ask_user tool lifetime is the only evidence of a pending question.
-            if event.toolName == "ask_user", !ended {
-                let key = Request(owner: Owner(agentID: event.agentID), kind: .answer, id: tool)
-                if pending[key] == nil, pending.count < maximumRelationships {
-                    pending[key] = signal(.answer, event: event)
-                }
-            }
-        case "tool.execution_complete":
-            guard let tool = event.toolCallID else { return }
-            pending.removeValue(forKey: Request(owner: Owner(agentID: event.agentID), kind: .answer, id: tool))
-            guard let invocation = toolOwners[tool] else {
-                remember("tool:\(tool)")
-                return
-            }
-            guard invocation.agentID == event.agentID, !invocation.completed else { return }
-            let evidence = completionEvidence(event, startedAt: invocation.startedAt)
-            observeToolCausality(event)
-            toolOwners[tool]?.completed = true
-            toolOwners[tool]?.executing = false
-            if invocation.executing, let name = invocation.name {
-                lastToolActivity[Owner(agentID: invocation.agentID)] = AgentActivity(
-                    kind: .idle, summary: "Last completed tool: \(name)", lastEventAt: evidence.timestamp
-                )
-            }
-            if work["shell:\(tool)"] != nil {
-                // This is the tool invocation's lifetime, not evidence that a
-                // background shell process has exited.
-                finish("shell:\(tool)", state: event.success == true ? .completed : .failed,
-                       event: event, matchedEvidence: evidence)
-            } else if invocation.executing, event.success == false {
-                recordOutcome(.error, owner: invocation.agentID, evidence: evidence)
-            }
-            // Shell joins are fully projected. Keep other completed owners until
-            // pressure, so a delayed subagent.started still gets its known parent.
-            if remember("tool:\(tool)") {
-                toolOwners[tool]?.completed = true
-                if work["shell:\(tool)"] != nil { removeTool(tool) }
-            }
-        case "system.notification":
+        case .sessionShutdown:
+            shutDownSession(event)
+        case .sessionError:
+            interrupt(event, state: .failed)
+        case .abort:
+            interrupt(event, state: .cancelled)
+        case .turnStart:
+            startTurn(event)
+        case .turnEnd:
+            endTurn(event)
+        case .toolStart:
+            startTool(event)
+        case .toolComplete:
+            completeTool(event)
+        case .systemNotification:
             // Background-process metadata does not create UI work or outcome
             // attention. Independently observed shell tool invocations remain.
             break
-        case "subagent.started":
-            guard let tool = event.toolCallID else { return }
-            let id = event.agentID ?? tool
-            let lifecycle = "subagent:\(tool)"
-            guard agentForTool[tool] == nil || agentForTool[tool] == id else {
-                addIssue(.malformedData); return
-            }
-            let owner = toolOwners[tool]
-            let parent = event.parentAgentID ?? owner?.agentID
-            let unresolved = event.parentAgentID == nil && owner == nil ? tool : nil
-            if agentForTool[tool] == nil && !agentForTool.values.contains(id) {
-                while agentForTool.count >= maximumRelationships && retireTerminalLeaf(protecting: parent) {}
-                guard agentForTool.count < maximumRelationships else {
-                    failAdmission(event); return
-                }
-            }
-            if insert(Work(
-                id: id, parent: parent, unresolvedTool: unresolved, kind: .subagent,
-                name: event.name ?? "Subagent", state: .working, model: event.model,
-                startedAt: event.timestamp, lifecycle: lifecycle, spawnTool: tool,
-                configurationStart: event.agentID != nil && work[id] == nil ? event.timestamp : nil
-            ), validatedStart: true) {
-                agentForTool[tool] = id
-            } else {
-                failAdmission(event)
-            }
-        case "subagent.completed", "subagent.failed":
-            guard let tool = event.toolCallID, let id = agentForTool[tool],
-                  let item = work[id], item.spawnTool == tool else { return }
-            finish(id, state: event.type == "subagent.failed" ? .failed
-                : event.cancelled == true ? .cancelled : .completed, event: event)
-        case "subagent.configured":
-            guard let agent = event.agentID else { return }
-            setModel(event.model, agent: agent)
-            guard !predatesLifecycle(event, owner: agent) else { return }
-            if event.multiTurn == false { work[agent]?.multiTurn = false }
-            // Configuration has no spawn/interaction tag. Admit it only in the
-            // timestamped initial spawn window, never from a pending side table
-            // or again for a previously configured raw agent ID.
-            guard !ended, let item = work[agent], item.kind == .subagent,
-                  !item.state.isTerminal, item.turnID == nil,
-                  let tool = item.spawnTool, agentForTool[tool] == agent,
-                  let start = item.configurationStart, let timestamp = event.timestamp,
-                  timestamp >= start else { return }
-            work[agent]?.configurationStart = nil
-            let key = "configured-agent:\(agent)"
-            guard !rejectReplay(key), remember(key) else { return }
-            work[agent]?.multiTurn = event.multiTurn == true
-        case "subagent.selected":
+        case .subagentStarted:
+            startSubagent(event)
+        case .subagentCompleted:
+            finishSubagent(event, state: event.cancelled == true ? .cancelled : .completed)
+        case .subagentFailed:
+            finishSubagent(event, state: .failed)
+        case .subagentConfigured:
+            configureSubagent(event)
+        case .subagentSelected:
             // Profile selection is not a new instance, spawn name or task outcome.
             break
-        case "skill.invoked":
+        case .skillInvoked:
             insert(Work(
                 id: "skill:\(event.id)", parent: event.agentID, kind: .skill,
                 name: event.name ?? "Skill", state: .unknown, model: event.model
             ))
-        case "permission.requested", "user_input.requested":
-            guard let request = event.requestID else { return }
-            let kind: AgentAttentionKind = event.type.hasPrefix("permission.") ? .permission : .answer
-            let key = Request(owner: Owner(agentID: event.agentID), kind: kind, id: request)
-            if event.type == "permission.requested" && event.resolvedByHook == true {
-                pending.removeValue(forKey: key)
-                remember(Self.requestKey(key))
-                return
-            }
-            guard !ended, !rejectReplay(Self.requestKey(key)),
-                  !predatesLifecycle(event, owner: event.agentID) else { return }
-            if let id = event.agentID, work[id]?.state.isTerminal == true { return }
-            guard ensureOwner(event.agentID, event: event) else { return }
-            guard pending[key] != nil || pending.count < maximumRelationships else {
-                addIssue(.readLimitReached); return
-            }
-            if pending[key] == nil { pending[key] = signal(kind, event: event) }
-        case "permission.completed", "user_input.completed":
-            guard let request = event.requestID else { return }
-            let key = Request(owner: Owner(agentID: event.agentID),
-                              kind: event.type.hasPrefix("permission.") ? .permission : .answer, id: request)
-            pending.removeValue(forKey: key)
-            remember(Self.requestKey(key))
-        default:
+        case .permissionRequested:
+            openRequest(event, kind: .permission)
+        case .userInputRequested:
+            openRequest(event, kind: .answer)
+        case .permissionCompleted:
+            resolveRequest(event, kind: .permission)
+        case .userInputCompleted:
+            resolveRequest(event, kind: .answer)
+        case .toolPartialResult, .assistantMessage, .other:
             if event.isUnknownWorkLifecycle {
                 addIssue(.unsupportedFormat)
                 demoteUncertainLifecycle(affectedBy: event)
@@ -868,14 +669,398 @@ nonisolated struct CopilotEventReducer: Sendable {
         }
     }
 
+    // MARK: Session transitions
+
+    private mutating func resumeSession(_ event: CopilotEventProjection) {
+        retireInteractions()
+        ended = false
+        rootState = .unknown
+        clearSignals()
+        rootStartedAt = event.timestamp
+        resumedAt = event.timestamp
+        rootTurnID = nil
+        retireRequests()
+        demoteNonterminalChildren()
+    }
+
+    private mutating func shutDownSession(_ event: CopilotEventProjection) {
+        guard !isStale(event, owner: nil) else { return }
+        retireInteractions()
+        if event.shutdownType == "error" {
+            if rootState != .failed { recordOutcome(.error, owner: nil, event: event) }
+            rootState = .failed
+        }
+        else if rootState != .failed && rootState != .cancelled { rootState = .completed }
+        if let model = event.model { rootModel = model }
+        ended = true
+        turns.removeAll()
+        stopTools()
+        retireRequests()
+        demoteNonterminalChildren()
+    }
+
+    private mutating func interrupt(_ event: CopilotEventProjection, state: CopilotWorkState) {
+        if let id = event.agentID {
+            guard !isStale(event, owner: id) else { return }
+            guard ensureOwner(id, event: event) else { return }
+            finish(id, state: state, event: event)
+            return
+        }
+        guard !isStale(event, owner: nil),
+              rootState != .failed,
+              rootState != .cancelled || state == .failed else { return }
+        rootState = state
+        recordOutcome(state == .failed ? .error : .aborted, owner: nil, event: event)
+        // A primary-turn abort/error is not evidence that background children ended.
+        retireRequests(owner: nil)
+        turns.removeValue(forKey: Owner(agentID: nil))
+        stopTools(owner: Owner(agentID: nil))
+    }
+
+    // MARK: Turn transitions
+
+    private mutating func startTurn(_ event: CopilotEventProjection) {
+        guard let turn = event.turnID else { return }
+        let key = Self.turnKey(turn, owner: event.agentID, interaction: event.interactionID)
+        let reusedRawTurn = replay.match(Self.rawTurnKey(turn, owner: event.agentID)) != .absent
+            || (event.interactionID != nil && replay.match(Self.turnKey(turn, owner: event.agentID)) != .absent)
+        guard prepareInteraction(event) else { limitLifecycle(event); return }
+        let admitted: Bool
+        if let id = event.agentID {
+            admitted = startAgentTurn(event, agent: id, turn: turn, key: key)
+        } else {
+            admitted = startRootTurn(event, turn: turn, key: key)
+        }
+        guard admitted else { return }
+        openTurn(event, turn: turn, requiresCausalProof: reusedRawTurn)
+    }
+
+    private mutating func startAgentTurn(
+        _ event: CopilotEventProjection, agent id: String, turn: String, key: String
+    ) -> Bool {
+        let previous = work[id]
+        let continuation = previous?.multiTurn == true && !ended
+            && previous?.kind == .subagent
+            && previous?.interactionID != nil && event.interactionID != nil
+            && previous?.interactionID != event.interactionID
+            && (previous?.state == .completed || previous?.state.isTerminal == false)
+        if continuation {
+            // The spawn task's result cannot finish a later interaction,
+            // even if that result arrives for the first time after it.
+            guard removeSpawnJoins(for: id) else { limitLifecycle(event); return false }
+            work[id]?.spawnTool = nil
+        }
+        work[id]?.configurationStart = nil
+        if let previous, !Self.terminal(previous.state) || continuation {
+            guard remember(key) else { limitLifecycle(event); return false }
+            // Fresh scoped identity wins over an untrusted wall clock.
+            work[id]?.startedAt = event.timestamp
+            work[id]?.terminalEvent = nil
+            work[id]?.turnID = turn
+            if let interaction = event.interactionID { work[id]?.interactionID = interaction }
+            work[id]?.state = .working
+            setModel(event.model, agent: id)
+            return true
+        }
+        // A fresh turn attests activity, not the old spawn's name,
+        // parent or tool pairing, even if that row was retained.
+        guard insert(Work(
+            id: id, parent: "unresolved-owner", kind: .unknown,
+            name: "Unknown agent", state: .working, model: event.model,
+            startedAt: event.timestamp, lifecycle: key, turnID: turn,
+            interactionID: event.interactionID
+        ), validatedStart: true) else { failAdmission(event); return false }
+        return true
+    }
+
+    private mutating func startRootTurn(_ event: CopilotEventProjection, turn: String, key: String) -> Bool {
+        guard remember(key) else { limitLifecycle(event); return false }
+        ended = false
+        rootTurnID = turn
+        if let interaction = event.interactionID { rootInteractionID = interaction }
+        rootState = .working
+        setModel(event.model, agent: nil)
+        return true
+    }
+
+    private mutating func openTurn(_ event: CopilotEventProjection, turn: String, requiresCausalProof: Bool) {
+        let owner = Owner(agentID: event.agentID)
+        if event.agentID == nil {
+            rootStartedAt = event.timestamp
+            // A new primary turn bounds outcomes, not background requests or history.
+            outcomes.removeAll()
+            primaryCompletion = nil
+        } else {
+            outcomes.removeValue(forKey: owner)
+        }
+        turns[owner] = Turn(
+            id: turn, interactionID: event.interactionID, eventID: event.id,
+            startedAt: event.timestamp, causalTip: event.id, requiresCausalProof: requiresCausalProof
+        )
+        lastToolActivity.removeValue(forKey: owner)
+        stopTools(owner: owner)
+    }
+
+    private mutating func endTurn(_ event: CopilotEventProjection) {
+        guard let turn = event.turnID else { return }
+        let owner = Owner(agentID: event.agentID)
+        let activeTurn = turns[owner]
+        if let id = event.agentID, work[id]?.state.isTerminal != false { return }
+        if let activeTurn {
+            guard endsActiveTurn(event, activeTurn: activeTurn, turn: turn) else { return }
+        } else {
+            guard endsUnstartedTurn(event, turn: turn) else { return }
+        }
+        turns.removeValue(forKey: owner)
+        guard settleEndedTurn(event, turn: turn, activeTurn: activeTurn) else { return }
+        setModel(event.model, agent: event.agentID)
+    }
+
+    private mutating func endsActiveTurn(_ event: CopilotEventProjection, activeTurn: Turn, turn: String) -> Bool {
+        guard activeTurn.id == turn else { return false }
+        if let interaction = event.interactionID {
+            return interaction == activeTurn.interactionID
+        }
+        if activeTurn.requiresCausalProof && !isCausallyLinked(event, to: activeTurn) {
+            markTurnUnknown(owner: event.agentID)
+            addIssue(.ambiguousTurn)
+            return false
+        }
+        return true
+    }
+
+    // Missing-start legacy evidence can establish idle, never a primary
+    // completion. It cannot be assigned to a known interaction namespace.
+    private mutating func endsUnstartedTurn(_ event: CopilotEventProjection, turn: String) -> Bool {
+        guard event.interactionID == nil, currentInteraction(owner: event.agentID) == nil,
+              replay.match(Self.rawTurnKey(turn, owner: event.agentID)) == .absent else { return false }
+        let current = event.agentID.flatMap { work[$0]?.turnID } ?? (event.agentID == nil ? rootTurnID : nil)
+        return (current == nil || current == turn) && !rejectReplay(Self.turnKey(turn, owner: event.agentID))
+    }
+
+    private mutating func settleEndedTurn(_ event: CopilotEventProjection, turn: String, activeTurn: Turn?) -> Bool {
+        if event.agentID == nil {
+            rootTurnID = turn
+            remember(Self.turnKey(turn, owner: nil, interaction: activeTurn?.interactionID))
+            if !ended && !Self.terminal(rootState) {
+                rootState = .idle
+                if let activeTurn {
+                    recordOutcome(.turnFinished, owner: nil,
+                                  evidence: completionEvidence(event, startedAt: activeTurn.startedAt))
+                }
+            }
+            return true
+        }
+        guard let id = event.agentID, let item = work[id], !Self.terminal(item.state) else { return false }
+        remember(Self.turnKey(turn, owner: id, interaction: activeTurn?.interactionID))
+        work[id]?.turnID = turn
+        work[id]?.state = .idle
+        return true
+    }
+
+    // MARK: Tool transitions
+
+    private mutating func startTool(_ event: CopilotEventProjection) {
+        guard let tool = event.toolCallID else { return }
+        guard ensureOwner(event.agentID, event: event) else { return }
+        if toolOwners[tool] == nil {
+            guard registerInvocation(event, tool: tool) else { return }
+        }
+        guard remember("start-tool:\(tool)") else { limitLifecycle(event); return }
+        guard markInvocationOwnerWorking(event) else { return }
+        for id in order where work[id]?.unresolvedTool == tool {
+            work[id]?.parent = event.agentID
+            work[id]?.unresolvedTool = nil
+        }
+        if let name = event.toolName, ["bash", "powershell", "local_shell"].contains(name) {
+            insert(Work(
+                id: "shell:\(tool)", parent: event.agentID, kind: .shell,
+                name: "\(name) invocation", state: .working, model: event.model,
+                startedAt: event.timestamp
+            ), validatedStart: true)
+        }
+        observeToolCausality(event)
+        // Current Copilot builds emit no user_input.requested event; the
+        // ask_user tool lifetime is the only evidence of a pending question.
+        if event.toolName == "ask_user", !ended {
+            let key = Request(owner: Owner(agentID: event.agentID), kind: .answer, id: tool)
+            if pending[key] == nil, pending.count < maximumRelationships {
+                pending[key] = signal(.answer, event: event)
+            }
+        }
+    }
+
+    private mutating func registerInvocation(_ event: CopilotEventProjection, tool: String) -> Bool {
+        if toolOwners.count >= maximumRelationships {
+            guard let retired = toolOrder.first(where: {
+                toolOwners[$0]?.completed == true || toolOwners[$0]?.executing == false
+            }),
+                  remember("tool:\(retired)") else {
+                addIssue(.readLimitReached)
+                demoteTerminalForColdStart(event)
+                return false
+            }
+            removeTool(retired)
+        }
+        let currentTurn = turns[Owner(agentID: event.agentID)]
+        let origin = currentTurn.flatMap {
+            !$0.requiresCausalProof || isCausallyLinked(event, to: $0)
+                ? TurnOrigin(eventID: $0.eventID, turnID: $0.id, interactionID: $0.interactionID) : nil
+        }
+        toolOwners[tool] = Tool(
+            agentID: event.agentID, name: event.toolName, startedAt: event.timestamp, turnOrigin: origin
+        )
+        toolOrder.append(tool)
+        return true
+    }
+
+    private mutating func markInvocationOwnerWorking(_ event: CopilotEventProjection) -> Bool {
+        let owner = Owner(agentID: event.agentID)
+        outcomes.removeValue(forKey: owner)
+        guard let id = event.agentID else {
+            primaryCompletion = nil
+            ended = false
+            if rootStartedAt == nil || rootState.isTerminal { rootStartedAt = event.timestamp }
+            rootState = .working
+            return true
+        }
+        if work[id]?.state.isTerminal == true {
+            guard removeSpawnJoins(for: id) else { limitLifecycle(event); return false }
+            work[id]?.spawnTool = nil
+            work[id]?.turnID = nil
+            turns.removeValue(forKey: owner)
+        }
+        if work[id]?.startedAt == nil || work[id]?.state.isTerminal == true {
+            work[id]?.startedAt = event.timestamp
+        }
+        work[id]?.terminalEvent = nil
+        work[id]?.state = .working
+        return true
+    }
+
+    private mutating func completeTool(_ event: CopilotEventProjection) {
+        guard let tool = event.toolCallID else { return }
+        pending.removeValue(forKey: Request(owner: Owner(agentID: event.agentID), kind: .answer, id: tool))
+        guard let invocation = toolOwners[tool] else {
+            remember("tool:\(tool)")
+            return
+        }
+        guard invocation.agentID == event.agentID, !invocation.completed else { return }
+        let evidence = completionEvidence(event, startedAt: invocation.startedAt)
+        observeToolCausality(event)
+        toolOwners[tool]?.completed = true
+        toolOwners[tool]?.executing = false
+        if invocation.executing, let name = invocation.name {
+            lastToolActivity[Owner(agentID: invocation.agentID)] = AgentActivity(
+                kind: .idle, summary: "Last completed tool: \(name)", lastEventAt: evidence.timestamp
+            )
+        }
+        if work["shell:\(tool)"] != nil {
+            // This is the tool invocation's lifetime, not evidence that a
+            // background shell process has exited.
+            finish("shell:\(tool)", state: event.success == true ? .completed : .failed,
+                   event: event, matchedEvidence: evidence)
+        } else if invocation.executing, event.success == false {
+            recordOutcome(.error, owner: invocation.agentID, evidence: evidence)
+        }
+        // Shell joins are fully projected. Keep other completed owners until
+        // pressure, so a delayed subagent.started still gets its known parent.
+        if remember("tool:\(tool)") {
+            toolOwners[tool]?.completed = true
+            if work["shell:\(tool)"] != nil { removeTool(tool) }
+        }
+    }
+
+    // MARK: Subagent transitions
+
+    private mutating func startSubagent(_ event: CopilotEventProjection) {
+        guard let tool = event.toolCallID else { return }
+        let id = event.agentID ?? tool
+        let lifecycle = "subagent:\(tool)"
+        guard agentForTool[tool] == nil || agentForTool[tool] == id else {
+            addIssue(.malformedData); return
+        }
+        let owner = toolOwners[tool]
+        let parent = event.parentAgentID ?? owner?.agentID
+        let unresolved = event.parentAgentID == nil && owner == nil ? tool : nil
+        if agentForTool[tool] == nil && !agentForTool.values.contains(id) {
+            while agentForTool.count >= maximumRelationships && retireTerminalLeaf(protecting: parent) {}
+            guard agentForTool.count < maximumRelationships else {
+                failAdmission(event); return
+            }
+        }
+        if insert(Work(
+            id: id, parent: parent, unresolvedTool: unresolved, kind: .subagent,
+            name: event.name ?? "Subagent", state: .working, model: event.model,
+            startedAt: event.timestamp, lifecycle: lifecycle, spawnTool: tool,
+            configurationStart: event.agentID != nil && work[id] == nil ? event.timestamp : nil
+        ), validatedStart: true) {
+            agentForTool[tool] = id
+        } else {
+            failAdmission(event)
+        }
+    }
+
+    private mutating func finishSubagent(_ event: CopilotEventProjection, state: CopilotWorkState) {
+        guard let tool = event.toolCallID, let id = agentForTool[tool],
+              let item = work[id], item.spawnTool == tool else { return }
+        finish(id, state: state, event: event)
+    }
+
+    private mutating func configureSubagent(_ event: CopilotEventProjection) {
+        guard let agent = event.agentID else { return }
+        setModel(event.model, agent: agent)
+        guard !predatesLifecycle(event, owner: agent) else { return }
+        if event.multiTurn == false { work[agent]?.multiTurn = false }
+        // Configuration has no spawn/interaction tag. Admit it only in the
+        // timestamped initial spawn window, never from a pending side table
+        // or again for a previously configured raw agent ID.
+        guard !ended, let item = work[agent], item.kind == .subagent,
+              !item.state.isTerminal, item.turnID == nil,
+              let tool = item.spawnTool, agentForTool[tool] == agent,
+              let start = item.configurationStart, let timestamp = event.timestamp,
+              timestamp >= start else { return }
+        work[agent]?.configurationStart = nil
+        let key = "configured-agent:\(agent)"
+        guard !rejectReplay(key), remember(key) else { return }
+        work[agent]?.multiTurn = event.multiTurn == true
+    }
+
+    // MARK: Attention requests
+
+    private mutating func openRequest(_ event: CopilotEventProjection, kind: AgentAttentionKind) {
+        guard let request = event.requestID else { return }
+        let key = Request(owner: Owner(agentID: event.agentID), kind: kind, id: request)
+        if kind == .permission && event.resolvedByHook == true {
+            pending.removeValue(forKey: key)
+            remember(Self.requestKey(key))
+            return
+        }
+        guard !ended, !rejectReplay(Self.requestKey(key)),
+              !predatesLifecycle(event, owner: event.agentID) else { return }
+        if let id = event.agentID, work[id]?.state.isTerminal == true { return }
+        guard ensureOwner(event.agentID, event: event) else { return }
+        guard pending[key] != nil || pending.count < maximumRelationships else {
+            addIssue(.readLimitReached); return
+        }
+        if pending[key] == nil { pending[key] = signal(kind, event: event) }
+    }
+
+    private mutating func resolveRequest(_ event: CopilotEventProjection, kind: AgentAttentionKind) {
+        guard let request = event.requestID else { return }
+        let key = Request(owner: Owner(agentID: event.agentID), kind: kind, id: request)
+        pending.removeValue(forKey: key)
+        remember(Self.requestKey(key))
+    }
+
     private func startIdentity(for event: CopilotEventProjection) -> String? {
-        switch event.type {
-        case "subagent.started":
+        switch event.kind {
+        case .subagentStarted:
             guard let tool = event.toolCallID else { return nil }
             return "subagent:\(tool)"
-        case "tool.execution_start":
+        case .toolStart:
             return event.toolCallID.map { "start-tool:\($0)" }
-        case "assistant.turn_start":
+        case .turnStart:
             return event.turnID.map { Self.turnKey($0, owner: event.agentID, interaction: event.interactionID) }
         default: return nil
         }
@@ -884,13 +1069,13 @@ nonisolated struct CopilotEventReducer: Sendable {
     private func startReplayMatch(for event: CopilotEventProjection) -> CopilotReplayGuard.Match {
         guard let start = startIdentity(for: event) else { return .absent }
         var keys = [start]
-        if event.type == "tool.execution_start", let tool = event.toolCallID {
+        if event.kind == .toolStart, let tool = event.toolCallID {
             // Keep the legacy shell-row alias even for non-shell names: tool IDs
             // share replay protection across names. Classify every alias before
             // adopting any owner state, model, timestamp or executing activity.
             keys += ["tool:\(tool)", "work:shell:\(tool)"]
         }
-        if event.type == "assistant.turn_start", let interaction = event.interactionID,
+        if event.kind == .turnStart, let interaction = event.interactionID,
            interaction != currentInteraction(owner: event.agentID) {
             keys.append(Self.interactionKey(interaction, owner: event.agentID))
         }
@@ -901,7 +1086,7 @@ nonisolated struct CopilotEventReducer: Sendable {
             case .uncertain: uncertain = true
             case .absent: break
             }
-            if event.type == "assistant.turn_start", event.interactionID == nil, let turn = event.turnID,
+            if event.kind == .turnStart, event.interactionID == nil, let turn = event.turnID,
                replay.match(Self.rawTurnKey(turn, owner: event.agentID)) != .absent {
                 uncertain = true
             }
@@ -910,16 +1095,16 @@ nonisolated struct CopilotEventReducer: Sendable {
     }
 
     private mutating func demoteTerminalForColdStart(_ event: CopilotEventProjection) {
-        if event.type == "assistant.turn_start",
+        if event.kind == .turnStart,
            let active = turns[Owner(agentID: event.agentID)], active.id == event.turnID,
            active.interactionID != event.interactionID {
             turns[Owner(agentID: event.agentID)]?.requiresCausalProof = true
         }
         let id: String?
-        switch event.type {
-        case "subagent.started":
+        switch event.kind {
+        case .subagentStarted:
             id = event.agentID ?? event.toolCallID
-        case "assistant.turn_start", "tool.execution_start":
+        case .turnStart, .toolStart:
             id = event.agentID
             if id == nil {
                 if Self.terminal(rootState) {
@@ -948,7 +1133,7 @@ nonisolated struct CopilotEventReducer: Sendable {
 
     private mutating func limitLifecycle(_ event: CopilotEventProjection) {
         addIssue(.readLimitReached)
-        if event.type == "assistant.turn_start" || event.type == "assistant.turn_end" {
+        if event.kind == .turnStart || event.kind == .turnEnd {
             markTurnUnknown(owner: event.agentID)
             demoteTerminalForColdStart(event)
             return
@@ -956,14 +1141,14 @@ nonisolated struct CopilotEventReducer: Sendable {
         rootState = .unknown
         clearActivities()
         demoteNonterminalChildren()
-        if startIdentity(for: event) != nil || event.isUnknownWorkLifecycle || event.type == "session.resume" {
+        if startIdentity(for: event) != nil || event.isUnknownWorkLifecycle || event.kind == .sessionResume {
             demoteUncertainLifecycle(affectedBy: event)
         }
     }
 
     private mutating func failAdmission(_ event: CopilotEventProjection) {
         addIssue(.readLimitReached)
-        let id = event.agentID ?? (event.type == "subagent.started" ? event.toolCallID : nil)
+        let id = event.agentID ?? (event.kind == .subagentStarted ? event.toolCallID : nil)
         if let id, work[id] != nil { demoteUncertainLifecycle(affectedBy: event) }
     }
 
@@ -971,7 +1156,7 @@ nonisolated struct CopilotEventReducer: Sendable {
         var affected: Set<String> = []
         if let id = event.agentID, work[id] != nil { affected.insert(id) }
         if let tool = event.toolCallID {
-            if event.type == "subagent.started", event.agentID == nil, work[tool] != nil {
+            if event.kind == .subagentStarted, event.agentID == nil, work[tool] != nil {
                 affected.insert(tool)
             }
             if let id = agentForTool[tool] { affected.insert(id) }
@@ -1165,11 +1350,11 @@ nonisolated struct CopilotEventReducer: Sendable {
     private mutating func observeCausalEvent(_ event: CopilotEventProjection) {
         // One tip per active owner, not a transcript graph. Unknown gaps fail
         // closed unless a message explicitly attests that owner's current turn.
-        guard event.type != "assistant.turn_start", event.type != "assistant.turn_end",
+        guard event.kind != .turnStart, event.kind != .turnEnd,
               !event.type.hasPrefix("tool.execution_"), event.toolCallID == nil, event.shellID == nil else { return }
         let owner = Owner(agentID: event.agentID)
         guard let turn = turns[owner], event.id != turn.eventID else { return }
-        if event.type == "assistant.message", event.messageHasTurnMetadata {
+        if event.kind == .assistantMessage, event.messageHasTurnMetadata {
             guard let interaction = event.interactionID, interaction == turn.interactionID,
                   event.turnID == turn.id else { return }
         } else {

@@ -129,7 +129,6 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
     let fixture: ObserverFixture
     var installed: Bool
     var result: CopilotProcessResult = .exited(0)
-    var calls: [[String]] = []
     var metadataCalls = 0
     var providerHomes: [URL?] = []
     var failingMetadataCall: Int?
@@ -138,7 +137,8 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
     var cancelDuringStaging = false
     var settingsEffect: String?
     var afterMutationResult: CopilotProcessResult?
-    var pluginOperations: [String] = []
+    /// Every plugin request setup made (install, uninstall, disable), in order.
+    var calls: [String] = []
     private var nativeEnabled = true
     private var loseReceipt = false
     private var receiptIdentity = "opaque-provider-source"
@@ -200,12 +200,11 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
     }
     func changeReceipt(onMetadataCall call: Int) { changeReceiptAtMetadataCall = call }
     func failDisabling(_ value: Bool) { disableFailure = value }
-    func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
-        providerHomes.append(providerHome)
-        calls.append([executable.path] + arguments)
+    /// The provider's effect for an install or uninstall request.
+    private func apply(uninstall: Bool) -> CopilotProcessResult {
         guard result == .exited(0) else { return result }
         do {
-            if arguments.contains("uninstall") {
+            if uninstall {
                 installed = false
                 if FileManager.default.fileExists(atPath: fixture.cache.path) {
                     try FileManager.default.removeItem(at: fixture.cache)
@@ -295,28 +294,29 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
 
     func plugin(executable: URL, operation: CopilotPluginOperation, path: String,
                 providerHome: URL?) async -> CopilotPluginOperationResult {
-        let arguments: [String]
+        let uninstall: Bool
         switch operation {
         case .install(let source, let identity):
             guard identity == nil || identity == "opaque-provider-source" else { return .failed(.unavailable) }
-            pluginOperations.append("install:\(source.path)")
+            calls.append("install:\(source.path)")
             let staged = try? CopilotSetupJSON.object(Data(contentsOf: fixture.file))
             installedWithInactiveObserver.append(staged?["disableAllHooks"] as? Bool == true)
-            arguments = ["--no-auto-update", "plugin", "install", source.path]
+            uninstall = false
         case .uninstall(let identity):
             guard identity == "opaque-provider-source" else { return .failed(.unavailable) }
-            pluginOperations.append("uninstall:\(identity)")
-            arguments = ["--no-auto-update", "plugin", "uninstall", CopilotPluginManifest.name]
+            calls.append("uninstall:\(identity)")
+            uninstall = true
         case .disable(let identity):
             guard installed, identity == selectedIdentity else { return .failed(.unavailable) }
-            pluginOperations.append("disable:\(identity)")
+            calls.append("disable:\(identity)")
             guard !disableFailure else { return .failed(.exited(9)) }
             nativeEnabled = false
             return .value(.init(plugin: .init(name: CopilotPluginManifest.name, marketplace: "", enabled: false,
                                               directSourceId: identity), directInstallDeprecated: false))
         }
         let respondsBeforeFailure = afterMutationResult != nil
-        let result = await run(executable: executable, arguments: arguments, path: path, providerHome: providerHome)
+        providerHomes.append(providerHome)
+        let result = apply(uninstall: uninstall)
         let value = installed ? CopilotSetupMetadata.Plugin(name: CopilotPluginManifest.name, marketplace: "",
             enabled: nativeEnabled, directSourceId: receiptIdentity) : nil
         let receipt = CopilotPluginReceipt(plugin: value, directInstallDeprecated: installed)
@@ -330,9 +330,6 @@ private struct CheckpointOfficialProvider: CopilotSetupProcessRunner {
     let home: URL
     private let runner = LocalCopilotSetupRunner()
 
-    func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
-        await runner.run(executable: executable, arguments: arguments, path: path, providerHome: providerHome)
-    }
     func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult {
         let result = await runner.metadata(executable: executable, path: path, providerHome: providerHome)
         let marker = home.appendingPathComponent(".fixture-crash-after-receipt-publication")
@@ -388,13 +385,11 @@ private actor CheckpointProcessProvider: CopilotSetupProcessRunner {
         .value(.init(source: source.path, version: "1.0.89", protocolVersion: 3, directSourceId: "fixture-stable-source"))
     }
 
-    func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
+    /// The provider's effect for an install (from `source`) or an uninstall.
+    private func apply(installing source: URL?) -> CopilotProcessResult {
         do {
-            if arguments.contains("uninstall") {
-                if FileManager.default.fileExists(atPath: cache.path) { try FileManager.default.removeItem(at: cache) }
-                if FileManager.default.fileExists(atPath: marker.path) { try FileManager.default.removeItem(at: marker) }
-            } else {
-                guard arguments.last == root.appendingPathComponent("plugin").path else { return .exited(3) }
+            if let source {
+                guard source.path == root.appendingPathComponent("plugin").path else { return .exited(3) }
                 for name in ["plugin.json", "hooks.json", "skills/cmux-maestro-orchestrate/SKILL.md",
                              "skills/maestro-icon/SKILL.md", "skills/maestro-pet/SKILL.md",
                              "skills/maestro-pet/pet_kit.py", "skills/maestro/SKILL.md"] {
@@ -407,9 +402,11 @@ private actor CheckpointProcessProvider: CopilotSetupProcessRunner {
                     } else if FileManager.default.fileExists(atPath: target.path) {
                         try FileManager.default.removeItem(at: target)
                     }
-
                 }
                 try Data("installed".utf8).write(to: marker)
+            } else {
+                if FileManager.default.fileExists(atPath: cache.path) { try FileManager.default.removeItem(at: cache) }
+                if FileManager.default.fileExists(atPath: marker.path) { try FileManager.default.removeItem(at: marker) }
             }
             return .exited(0)
         } catch { return .exited(9) }
@@ -417,18 +414,17 @@ private actor CheckpointProcessProvider: CopilotSetupProcessRunner {
 
     func plugin(executable: URL, operation: CopilotPluginOperation, path: String,
                 providerHome: URL?) async -> CopilotPluginOperationResult {
-        let arguments: [String]
+        let result: CopilotProcessResult
         switch operation {
         case .install(let source, let identity):
             guard identity == nil || identity == "fixture-stable-source" else { return .failed(.unavailable) }
-            arguments = ["--no-auto-update", "plugin", "install", source.path]
+            result = apply(installing: source)
         case .uninstall(let identity):
             guard identity == "fixture-stable-source" else { return .failed(.unavailable) }
-            arguments = ["--no-auto-update", "plugin", "uninstall", CopilotPluginManifest.name]
+            result = apply(installing: nil)
         case .disable:
             return .failed(.unavailable)
         }
-        let result = await run(executable: executable, arguments: arguments, path: path, providerHome: providerHome)
         guard result == .exited(0) else { return .failed(result) }
         let installed = FileManager.default.fileExists(atPath: marker.path)
         return .value(.init(plugin: installed ? .init(name: CopilotPluginManifest.name, marketplace: "",
@@ -613,7 +609,7 @@ struct CopilotInstallCheckpointTests {
             try CopilotSetupFileState.read(URL(fileURLWithPath: $0.path), maximum: $0.maximum)
         }
         let pending = try CopilotSetupFileState.read(journal, maximum: CopilotInstallCheckpoint.maximum)
-        let calls = await value.runner.pluginOperations
+        let calls = await value.runner.calls
         do {
             _ = try await value.checkpoint(id: id).perform("restore")
             Issue.record("Receipt absence must not match the generic desired:nil placeholder")
@@ -621,7 +617,7 @@ struct CopilotInstallCheckpointTests {
         #expect(!FileManager.default.fileExists(atPath: receipt.path))
         for resource in resources { try resource.revalidate() }
         try pending.revalidate()
-        #expect(await value.runner.pluginOperations == calls)
+        #expect(await value.runner.calls == calls)
     }
 
     @Test(arguments: [false, true], ["pluginIdentity", "source-path", "source-id"])
@@ -650,14 +646,14 @@ struct CopilotInstallCheckpointTests {
         let resources = try value.record().entries.map {
             try CopilotSetupFileState.read(URL(fileURLWithPath: $0.path), maximum: $0.maximum)
         }
-        let calls = await value.runner.pluginOperations
+        let calls = await value.runner.calls
         do {
             _ = try await value.checkpoint().perform("restore")
             Issue.record("Edited provenance must not be accepted as an owned intermediate receipt")
         } catch {}
         try before.revalidate()
         for resource in resources { try resource.revalidate() }
-        #expect(await value.runner.pluginOperations == calls)
+        #expect(await value.runner.calls == calls)
         #expect(try value.record().phase == (durableAfter ? "applied" : "applying"))
     }
 
@@ -680,13 +676,13 @@ struct CopilotInstallCheckpointTests {
             await value.runner.configureSource(identity: "foreign-source")
             await value.runner.failDisabling(false)
         }
-        let calls = await value.runner.pluginOperations
+        let calls = await value.runner.calls
         let receipt = try CopilotSetupFileState.read(value.fixture.registration.receiptFile)
         do {
             _ = try await value.checkpoint().perform("restore")
             Issue.record("New choice or foreign source must not be disabled or overwritten")
         } catch is CopilotRegistrationConflict {}
-        #expect(await value.runner.pluginOperations == calls)
+        #expect(await value.runner.calls == calls)
         try receipt.revalidate()
     }
 
@@ -705,12 +701,12 @@ struct CopilotInstallCheckpointTests {
         #expect(await value.runner.installed == false)
         #expect(try value.record().phase == "restoring")
         #expect(try CopilotSetupFileState.read(value.fixture.source.appendingPathComponent("plugin.json")).data != nil)
-        let calls = await value.runner.pluginOperations
+        let calls = await value.runner.calls
         #expect(calls.last == "uninstall:opaque-provider-source")
         await value.runner.configure()
         _ = try await value.checkpoint().perform("restore")
         try value.verifyRestored(original)
-        #expect(await value.runner.pluginOperations == calls)
+        #expect(await value.runner.calls == calls)
         #expect(try CopilotSetupFileState.read(value.fixture.source.appendingPathComponent("plugin.json")).data == nil)
         _ = try await value.checkpoint().perform("release")
     }
@@ -729,7 +725,7 @@ struct CopilotInstallCheckpointTests {
         let id = UUID()
         _ = try await value.checkpoint(id: id).perform("prepare")
         await value.runner.changeReceipt(onMetadataCall: await value.runner.metadataCalls + 2)
-        let calls = await value.runner.pluginOperations
+        let calls = await value.runner.calls
         do {
             _ = try await value.checkpoint(id: id).perform("apply")
             Issue.record("Do not enrich a receipt changed after preparation")
@@ -741,7 +737,7 @@ struct CopilotInstallCheckpointTests {
             Issue.record("Do not erase a foreign receipt change during compensation")
         } catch {}
         try changed.revalidate()
-        #expect(await value.runner.pluginOperations == calls)
+        #expect(await value.runner.calls == calls)
         #expect(try value.record().phase == "applying")
     }
 
@@ -763,13 +759,13 @@ struct CopilotInstallCheckpointTests {
         }
         try value.fixture.write(object, to: receipt)
         await value.runner.nativePlugin(enabled: false)
-        let beforeCalls = await value.runner.pluginOperations
+        let beforeCalls = await value.runner.calls
         let hooks = try CopilotSetupFileState.read(value.fixture.file)
         let id = UUID()
         #expect(try await value.checkpoint(id: id).perform("prepare") == false)
         _ = try await value.checkpoint(id: id).perform("apply")
         _ = try await value.checkpoint(id: id).perform("verify")
-        #expect(await value.runner.pluginOperations == beforeCalls)
+        #expect(await value.runner.calls == beforeCalls)
         try hooks.revalidate()
         let updated = try #require(CopilotSetupJSON.object(Data(contentsOf: receipt))["sourceIdentity"] as? [String: Any])
         #expect(updated["directSourceId"] as? String == "opaque-provider-source")
@@ -786,7 +782,7 @@ struct CopilotInstallCheckpointTests {
             _ = try await value.checkpoint().perform(action)
         }
         await value.runner.nativePlugin(enabled: false)
-        let beforeCalls = await value.runner.pluginOperations
+        let beforeCalls = await value.runner.calls
         let oldController = value.fixture.root.deletingLastPathComponent()
             .appendingPathComponent("Orchestration/bin/cmux-maestro-orchestrator")
         let beforeController = try CopilotSetupFileState.read(oldController)
@@ -800,7 +796,7 @@ struct CopilotInstallCheckpointTests {
         let before = try value.record()
         #expect(try await value.checkpoint(id: id).perform("apply") == !resourceUpdate)
         _ = try await value.checkpoint(id: id).perform("verify")
-        #expect(await value.runner.pluginOperations == beforeCalls)
+        #expect(await value.runner.calls == beforeCalls)
         #expect(try CopilotSetupFileState.read(value.fixture.file) == observer)
         if resourceUpdate {
             #expect(try CopilotSetupFileState.read(oldController).data != beforeController.data)
@@ -810,7 +806,7 @@ struct CopilotInstallCheckpointTests {
         } else {
             _ = try await value.checkpoint(id: id).perform("finish")
         }
-        #expect(await value.runner.pluginOperations == beforeCalls)
+        #expect(await value.runner.calls == beforeCalls)
         _ = try await value.checkpoint(id: id).perform("release")
     }
 
@@ -860,7 +856,7 @@ struct CopilotInstallCheckpointTests {
         }
         #expect(metadata.plugins.first(where: { $0.name == CopilotPluginManifest.name })?.enabled == false)
         #expect(await value.runner.installedWithInactiveObserver.allSatisfy { $0 })
-        #expect(await value.runner.pluginOperations.contains("disable:opaque-provider-source"))
+        #expect(await value.runner.calls.contains("disable:opaque-provider-source"))
         _ = try await value.checkpoint(id: id).perform("release")
     }
 
@@ -874,9 +870,9 @@ struct CopilotInstallCheckpointTests {
             Issue.record("A lost provider receipt must fail installation")
         } catch is CopilotRegistrationConflict {}
         #expect(await value.runner.installed)
-        let beforeCalls = await value.runner.pluginOperations
+        let beforeCalls = await value.runner.calls
         _ = try await value.checkpoint().perform("restore")
-        #expect(await value.runner.pluginOperations == beforeCalls + ["uninstall:opaque-provider-source"])
+        #expect(await value.runner.calls == beforeCalls + ["uninstall:opaque-provider-source"])
         #expect(try value.record().phase == "restored")
         #expect(await value.runner.installed == false)
         #expect(try CopilotSetupFileState.read(value.fixture.file).data == nil)
@@ -904,12 +900,12 @@ struct CopilotInstallCheckpointTests {
         _ = try await value.checkpoint().perform("prepare")
         _ = try await value.checkpoint().perform("apply")
         await value.runner.nativePlugin(enabled: false)
-        let beforeCalls = await value.runner.pluginOperations
+        let beforeCalls = await value.runner.calls
         do {
             _ = try await value.checkpoint().perform("restore")
             Issue.record("A newer explicit disabled choice must survive compensation")
         } catch is CopilotRegistrationConflict {}
-        #expect(await value.runner.pluginOperations == beforeCalls)
+        #expect(await value.runner.calls == beforeCalls)
     }
 
     @Test func checkpointRemainsOutsideAllSidebarReadableSupportPrefixes() throws {
@@ -944,7 +940,7 @@ struct CopilotInstallCheckpointTests {
         } == stamps)
         _ = try await value.checkpoint(id: repeated).perform("finish")
         _ = try await value.checkpoint(id: repeated).perform("release")
-        #expect(await value.runner.calls.allSatisfy { $0.last == value.fixture.source.path })
+        #expect(await value.runner.calls.allSatisfy { $0 == "install:\(value.fixture.source.path)" })
     }
 
     @Test(arguments: [false, true])
@@ -1090,7 +1086,7 @@ struct CopilotInstallCheckpointTests {
         try value.verifyRestored(before)
         #expect(try Data(contentsOf: source) == sourceBefore)
         #expect(try Data(contentsOf: cache) == installedBefore)
-        #expect(await value.runner.calls.allSatisfy { $0.last == value.fixture.source.path })
+        #expect(await value.runner.calls.allSatisfy { $0 == "install:\(value.fixture.source.path)" })
         _ = try await value.checkpoint(id: id).perform("release")
     }
 }

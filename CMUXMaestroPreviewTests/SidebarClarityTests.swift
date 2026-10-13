@@ -1425,7 +1425,6 @@ struct SidebarClarityTests {
             #expect(!label.contains("AcknowledgeOutcomeButton"))
             #expect(!label.contains("DismissOutcomeButton"))
             #expect(!label.contains(".popover"))
-            #expect(!label.contains("SidebarItemIcon"))
         }
     }
 

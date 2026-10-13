@@ -480,7 +480,8 @@ struct SidebarHoverTests {
         root.addSubview(anchor)
         window.contentView = root
         defer { window.contentView = nil; window.close() }
-        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in })
+        let clock = SidebarManualHoverClock()
+        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in }, schedule: clock.schedule)
         anchor.presenter = presenter
         anchor.tracksName = true
         presenter.update(anchor: anchor, data: .init(id: "name", category: "Workspace", title: "Long workspace name"),
@@ -493,10 +494,13 @@ struct SidebarHoverTests {
             anchor.mouseEntered(with: event)
             anchor.mouseExited(with: event)
         }
-        try await Task.sleep(for: .milliseconds(400))
+        #expect(clock.elapse(SidebarHoverPresenter.openDelay) == 0, "Leaving the name must cancel every pending open")
+        #expect(clock.pending.isEmpty)
         #expect(presenter.state.mode == .hidden && presenter.panel == nil)
         anchor.mouseEntered(with: event)
-        await sidebarEventually { presenter.state.mode == .hover }
+        #expect(clock.pending == [SidebarHoverPresenter.openDelay])
+        #expect(presenter.state.mode == .hidden, "Hover must wait for the open delay")
+        #expect(clock.elapse(SidebarHoverPresenter.openDelay) == 1)
         #expect(presenter.state.mode == .hover)
         anchor.mouseExited(with: event)
         #expect(presenter.state.mode == .hidden)
@@ -560,7 +564,8 @@ struct SidebarHoverTests {
         let anchor = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 30))
         window.contentView = anchor
         defer { window.contentView = nil; window.close() }
-        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in })
+        let clock = SidebarManualHoverClock()
+        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in }, schedule: clock.schedule)
         defer { presenter.detach() }
         presenter.update(anchor: anchor, data: .init(
             id: "focus-retained", category: "Agent preview", title: "Synthetic agent",
@@ -570,25 +575,33 @@ struct SidebarHoverTests {
         presenter.open(explicit: false)
         presenter.hoverAnchor(false)
         presenter.copyActionFocus(true)
-        try await Task.sleep(for: .milliseconds(260))
+        #expect(clock.pending == [SidebarHoverPresenter.closeDelay])
+        #expect(clock.elapse(SidebarHoverPresenter.closeDelay) == 1, "The delayed close must run its recheck")
         #expect(presenter.state.mode == .hover)
         #expect(presenter.panel != nil)
         presenter.copyActionFocus(false)
-        try await Task.sleep(for: .milliseconds(260))
+        #expect(clock.pending == [SidebarHoverPresenter.closeDelay])
+        #expect(presenter.state.mode == .hover, "Dismissal must wait for the close delay")
+        #expect(clock.elapse(SidebarHoverPresenter.closeDelay) == 1)
         #expect(presenter.state.mode == .hidden)
         #expect(presenter.panel?.contentView == nil)
         #expect(!presenter.isMonitoring)
     }
 
     @Test func leavingOrDetachingCancelsPendingHover() async throws {
-        let presenter = SidebarHoverPresenter()
+        let clock = SidebarManualHoverClock()
+        let presenter = SidebarHoverPresenter(schedule: clock.schedule)
         presenter.hoverAnchor(true)
+        #expect(clock.pending == [SidebarHoverPresenter.openDelay])
         presenter.hoverAnchor(false)
-        try await Task.sleep(for: .milliseconds(400))
+        #expect(clock.pending.isEmpty)
+        #expect(clock.elapse(SidebarHoverPresenter.openDelay) == 0, "Leaving cancels the pending open")
         #expect(presenter.panel == nil && presenter.state.mode == .hidden)
         presenter.hoverAnchor(true)
+        #expect(clock.pending == [SidebarHoverPresenter.openDelay])
         presenter.detach()
-        try await Task.sleep(for: .milliseconds(400))
+        #expect(clock.pending.isEmpty)
+        #expect(clock.elapse(SidebarHoverPresenter.openDelay) == 0, "Detaching cancels the pending open")
         #expect(presenter.panel == nil && presenter.state.mode == .hidden)
     }
 
@@ -692,8 +705,23 @@ struct SidebarHoverTests {
         for forbidden in ["SidebarNavigation", "SidebarPreferences", "SidebarSeen", "UserDefaults", "context.host", "markSeen", "acknowledge"] {
             #expect(!source.contains(forbidden))
         }
-        #expect(source.contains(".nonactivatingPanel"))
-        #expect(source.contains("override var canBecomeMain: Bool { false }"))
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 400, height: 400),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let anchor = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 30))
+        window.contentView = anchor
+        defer { window.contentView = nil; window.close() }
+        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in })
+        defer { presenter.detach() }
+        presenter.update(anchor: anchor, data: .init(id: "passive", category: "Workspace", title: "Synthetic"), group: nil)
+        for explicit in [false, true] {
+            presenter.open(explicit: explicit)
+            let panel = try #require(presenter.panel)
+            #expect(panel.styleMask.contains(.nonactivatingPanel), "Previews never activate the app")
+            #expect(!panel.canBecomeMain)
+            #expect(panel.canBecomeKey == explicit, "Only an explicit preview may take keyboard focus")
+            presenter.dismiss(restoreFocus: false)
+        }
     }
 
     @Test(arguments: [false, true])
@@ -738,11 +766,48 @@ struct SidebarHoverTests {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let image = root.appendingPathComponent("hover-workspace-\(Int(size.width))-\(dark ? "dark" : "light").png")
             try #require(bitmap.representation(using: .png, properties: [:])).write(to: image)
-            let text = try SidebarRenderingEvidence.recognizedLines(in: image, dark: dark, naturalLanguage: true).joined(separator: " ")
-            #expect(text.contains("Maestro design"))
-            #expect(text.contains("rename"))
+            let text = try SidebarRenderingEvidence.recognizedLines(in: image, dark: dark, naturalLanguage: true)
+            #expect(text.contains("Maestro design"), "OCR: \(text)")
+            // The leading shortcut glyph OCRs inconsistently; the reminder wording must end its line.
+            #expect(text.contains { $0.hasSuffix(" to rename") }, "OCR: \(text)")
         }
         #expect(preferences.history == before.0 && preferences.attention == before.1)
         #expect(preferences.layout == before.2 && preferences.icons == before.3)
+    }
+}
+
+/// Hover open/close delays advance only when a test elapses them. Elapsing runs each due, uncancelled
+/// action synchronously, so a returned count means every recheck has completed; nothing depends on
+/// executor scheduling order.
+@MainActor
+final class SidebarManualHoverClock {
+    private struct Entry {
+        let duration: Duration
+        let task: Task<Void, Never>
+        let action: @MainActor () -> Void
+    }
+    private var entries: [Entry] = []
+    var pending: [Duration] { entries.filter { !$0.task.isCancelled }.map(\.duration) }
+
+    func schedule(_ delay: Duration, _ action: @escaping @MainActor () -> Void) -> Task<Void, Never> {
+        // The handle only carries the presenter's cancellation; it suspends until cancelled.
+        let task = Task<Void, Never> { _ = try? await sidebarFrozenExpiry(0) }
+        entries.append(Entry(duration: delay, task: task, action: action))
+        return task
+    }
+
+    @discardableResult
+    func elapse(_ duration: Duration) -> Int {
+        let due = entries.filter { $0.duration <= duration }
+        entries.removeAll { $0.duration <= duration }
+        var ran = 0
+        for entry in due {
+            if !entry.task.isCancelled {
+                entry.action()
+                ran += 1
+            }
+            entry.task.cancel()
+        }
+        return ran
     }
 }

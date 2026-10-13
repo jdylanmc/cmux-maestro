@@ -59,7 +59,7 @@ extension SidebarConnectionModel {
                         let selected = self?.hierarchy.workspaces.first { $0.id == workspaceID }
                         if case .available(false)? = selected?.isSelected,
                            context.grantedActionScopes.contains(.selectWorkspace) {
-                            try? await context.host.selectWorkspace(workspaceID)
+                            try await context.host.selectWorkspace(workspaceID)
                         }
                         try await context.host.selectSurface(workspaceID: workspaceID, surfaceID: surfaceID)
                     }

@@ -29,7 +29,8 @@ struct SidebarPetCollectionTests {
         return try #require(rep.representation(using: .png, properties: [:]))
     }
 
-    private func makeStore(sheet: Data? = nil) throws -> (SidebarPetStore, URL, UUID) {
+    /// `reopen` builds an independent store over the same persisted state.
+    private func makeStore(sheet: Data? = nil) throws -> (SidebarPetStore, URL, UUID, reopen: () -> SidebarPetStore) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("pet-collection-\(UUID().uuidString)", isDirectory: true)
         let sessions = root.appendingPathComponent("sessions", isDirectory: true)
@@ -40,15 +41,17 @@ struct SidebarPetCollectionTests {
         try (sheet ?? pngSheet()).write(to: petFolder.appendingPathComponent("spritesheet.png"))
         let manifest = #"{"id":"blob","displayName":"Blob","spritesheetPath":"spritesheet.png"}"#
         try Data(manifest.utf8).write(to: petFolder.appendingPathComponent("pet.json"))
-        let defaults = try #require(UserDefaults(suiteName: "pet-collection-\(UUID().uuidString)"))
-        let store = SidebarPetStore(
-            defaults: defaults, uploadDirectory: root.appendingPathComponent("Pets", isDirectory: true),
-            sessionDirectory: sessions)
-        return (store, root, session)
+        let suite = "pet-collection-\(UUID().uuidString)"
+        let reopen = {
+            SidebarPetStore(
+                defaults: UserDefaults(suiteName: suite)!, uploadDirectory: root.appendingPathComponent("Pets", isDirectory: true),
+                sessionDirectory: sessions)
+        }
+        return (reopen(), root, session, reopen)
     }
 
     @Test func capturedPetIsSharedAndRemovalFallsBack() throws {
-        let (store, root, session) = try makeStore()
+        let (store, root, session, reopen) = try makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
         let other = UUID()
 
@@ -58,23 +61,30 @@ struct SidebarPetCollectionTests {
         #expect(store.saveToRepository("blob", session: session) != nil)
         #expect(store.descriptor("blob", session: session)?.source == .uploaded)
         #expect(store.available(for: other).contains { $0.id == "blob" })
+        #expect(reopen().descriptor("blob", session: other)?.source == .uploaded)
 
         store.choose("blob", session: other)
         #expect(store.resolvedID(session: other, agentChoice: nil) == "blob")
+        #expect(reopen().resolvedID(session: other, agentChoice: nil) == "blob")
         store.removeUpload("blob")
         #expect(!store.available(for: other).contains { $0.id == "blob" })
         #expect(store.resolvedID(session: other, agentChoice: nil) == SidebarPetStore.defaultID)
+        let reopened = reopen()
+        #expect(!reopened.available(for: other).contains { $0.id == "blob" })
+        #expect(reopened.resolvedID(session: other, agentChoice: nil) == SidebarPetStore.defaultID)
+        #expect(reopened.hasOverride(session: other))
     }
 
     @Test func bundledPetCannotBeRemoved() throws {
-        let (store, root, _) = try makeStore()
+        let (store, root, _, reopen) = try makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
         store.removeUpload(SidebarPetStore.defaultID)
         #expect(store.available(for: nil).contains { $0.id == SidebarPetStore.defaultID })
+        #expect(reopen().available(for: nil).contains { $0.id == SidebarPetStore.defaultID })
     }
 
     @Test func framesAreCachedAndWrapByIndex() throws {
-        let (store, root, session) = try makeStore()
+        let (store, root, session, _) = try makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
         let first = try #require(store.frame(petID: "blob", session: session, state: .idle, index: 0))
         let again = try #require(store.frame(petID: "blob", session: session, state: .idle, index: 0))
@@ -85,7 +95,7 @@ struct SidebarPetCollectionTests {
     }
 
     @Test func opaqueTopSheetHasNoInsetAndLaysOutTheFullCell() async throws {
-        let (store, root, session) = try makeStore(sheet: pngSheet(clearRows: 0))
+        let (store, root, session, _) = try makeStore(sheet: pngSheet(clearRows: 0))
         defer { try? FileManager.default.removeItem(at: root) }
         let inset = store.topInset(petID: "blob", session: session)
         #expect(inset == 0)
@@ -93,7 +103,7 @@ struct SidebarPetCollectionTests {
 
         var frame = CGRect.null
         let hosting = NSHostingView(rootView: SidebarPetView(
-            petID: "blob", session: session, state: .idle, width: 48, animated: false, topTrim: inset)
+            store: store, petID: "blob", session: session, state: .idle, width: 48, animated: false, topTrim: inset)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
             .fixedSize())
         hosting.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
@@ -104,11 +114,11 @@ struct SidebarPetCollectionTests {
     }
 
     @Test func transparentTopSheetMeasuresItsSharedClearBand() throws {
-        let (store, root, session) = try makeStore(sheet: pngSheet(clearRows: 12))
+        let (store, root, session, _) = try makeStore(sheet: pngSheet(clearRows: 12))
         defer { try? FileManager.default.removeItem(at: root) }
         #expect(abs(store.topInset(petID: "blob", session: session) - 12.0 / 208) < 0.0001)
 
-        let (deep, deepRoot, deepSession) = try makeStore(sheet: pngSheet(clearRows: 60))
+        let (deep, deepRoot, deepSession, _) = try makeStore(sheet: pngSheet(clearRows: 60))
         defer { try? FileManager.default.removeItem(at: deepRoot) }
         #expect(abs(deep.topInset(petID: "blob", session: deepSession) - SidebarPetSheet.maximumTopInset) < 0.0001)
     }

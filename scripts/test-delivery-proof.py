@@ -591,11 +591,22 @@ class ProofTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CMUX_MAESTRO_PLUGIN_DIR": "/foreign/plugin"}):
             self.assertNotIn("--plugin-dir", self.run_mocked_launcher())
 
+    # Literal digests (sha256("<session>:<generation>")[:16]) computed outside the controller.
+    FIXED_SESSION = "11111111-2222-4333-8444-555555555555"
+    FIXED_PEERS = {1: "9534c811ed72e030", 2: "40c1a7d6f3e3a9b4"}
+
+    def test_message_peer_is_a_stable_literal_digest(self):
+        for generation, peer in self.FIXED_PEERS.items():
+            node = {"copilotSessionId": self.FIXED_SESSION, "generation": generation}
+            self.assertEqual(CONTROLLER["message_peer"](node), peer)
+
     def test_installed_binding_generation_exclusivity_cleanup_and_readiness(self):
         routes, config = self.install_synthetic_messaging()
         self.assertEqual(CONTROLLER["messaging_configuration"](self.root), config)
+        self.node["copilotSessionId"] = self.FIXED_SESSION
         CONTROLLER["bind_messaging"](self.node)
-        peer = CONTROLLER["message_peer"](self.node)
+        peer = self.FIXED_PEERS[1]
+        self.assertEqual([path.name for path in routes.iterdir()], [f"{peer}.json"])
         binding = PROOF["read_private"](routes / f"{peer}.json")
         self.assertEqual(binding["nodeId"], self.node["id"])
         self.assertEqual(binding["generation"], 1)
@@ -713,7 +724,7 @@ class ProofTests(unittest.TestCase):
             with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "maestro_spawn"):
                 spawn(args, self.root, mock.Mock())
 
-    def test_registered_caller_cannot_launch_using_only_saved_account_in_production(self):
+    def test_registered_caller_cannot_launch_using_only_saved_account_even_with_retired_testing_flag(self):
         state, actor = self.lifecycle_state()
         spawn = CONTROLLER["command_spawn"]
         args = CONTROLLER["parser"]().parse_args([
@@ -721,7 +732,7 @@ class ProofTests(unittest.TestCase):
             "--name", "Child", "--task", "No fallback", "--cwd", self.paths["a"],
         ])
         forbidden = mock.Mock(side_effect=AssertionError("must refuse before launch effects"))
-        with mock.patch.dict(os.environ, {"CMUX_MAESTRO_TESTING": ""}), \
+        with mock.patch.dict(os.environ, {"CMUX_MAESTRO_TESTING": "1"}), \
                 mock.patch.dict(spawn.__globals__, {
                     "read_state": lambda _: state,
                     "authorize": lambda *a: actor,
@@ -812,7 +823,7 @@ class ProofTests(unittest.TestCase):
             "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
             "worker_launch_settings": lambda _: {"version": 1, "copilotAccount": "saved-other", "model": "pinned-model"},
             "resolve_copilot_token": mock.Mock(return_value=None),
-            "mutate": lambda _root, operation: operation(state),
+            "mutate": lambda _root, operation, **_kw: operation(state),
             "launch_reserved_session": launcher,
         }):
             result = command(args, self.root, cmux)
@@ -846,7 +857,7 @@ class ProofTests(unittest.TestCase):
             "read_state": lambda _: state,
             "worker_launch_settings": lambda _: {"version": 1, "model": "pinned-model"},
             "resolve_copilot_token": mock.Mock(return_value=None),
-            "mutate": lambda _root, operation: operation(state),
+            "mutate": lambda _root, operation, **_kw: operation(state),
             "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
             "launch_reserved_session": mock.Mock(side_effect=CONTROLLER["OrchestrationError"]("Synthetic startup failure")),
         }):
@@ -923,7 +934,7 @@ class ProofTests(unittest.TestCase):
         with mock.patch.dict(status.__globals__, {
             "read_state": lambda _: snapshot,
             "authorize": lambda state, *a: state["nodes"][actor["id"]],
-            "mutate": lambda root, callback: callback(state),
+            "mutate": lambda root, callback, **_kw: callback(state),
             "collect_git_evidence": lambda *a: {},
             "apply_git_evidence": lambda *a: None,
             "process_start": process_start,
@@ -1059,7 +1070,7 @@ class ProofTests(unittest.TestCase):
         with mock.patch.dict(recover.__globals__, {
             "read_state": lambda _: snapshot,
             "require_current_surface": lambda *a: None,
-            "mutate": lambda root, callback: callback(state),
+            "mutate": lambda root, callback, **_kw: callback(state),
             "new_root": lambda *a: (replacement, "synthetic"),
             "process_start": process_start,
         }), mock.patch("os.kill", side_effect=kill_error):
@@ -1146,12 +1157,14 @@ class ProofTests(unittest.TestCase):
         binding = PROOF["read_private"](route)
         binding["nodeId"] = str(uuid.uuid4())
         route.write_text(json.dumps(binding))
-        before = copy.deepcopy(state)
-        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "identity changed"):
-            self.recover_interleaving(
-                state, actor, copy.deepcopy(state), process_start=lambda _: None,
-            )
-        self.assertEqual(state, before)
+        # Routes retire only after the state commit; an unprovable binding is never
+        # deleted and is reported rather than aborting committed recovery.
+        result = self.recover_interleaving(
+            state, actor, copy.deepcopy(state), process_start=lambda _: None,
+        )
+        self.assertEqual(result["recoveredRunId"], actor["runId"])
+        self.assertNotIn(self.node["id"], state["nodes"])
+        self.assertEqual(result["routesNotRetired"], 1)
         self.assertEqual(PROOF["read_private"](route), binding)
 
     def test_installed_spawn_automatically_participates_and_requires_pins(self):
@@ -1221,15 +1234,23 @@ class ProofTests(unittest.TestCase):
 
     def test_managed_environment_is_exact_and_legacy_does_not_inherit_route(self):
         routes, _ = self.install_synthetic_messaging()
+        self.node["copilotSessionId"] = self.FIXED_SESSION
         environment = CONTROLLER["worker_environment"]
         with mock.patch.dict(environment.__globals__, {"resolve_copilot_token": lambda _: None}), \
                 mock.patch.dict(os.environ, {
                     "CMUX_MAESTRO_MESSAGE_ROOT": "stale-parent", "CMUX_MAESTRO_MESSAGE_PEER": "stale-peer",
                     "CMUX_WORKSPACE_ID": str(uuid.uuid4()),
+                    "CMUX_MAESTRO_TESTING": "1", "CMUX_MAESTRO_TEST_ATTACH_FAILURE": "1",
+                    "CMUX_MAESTRO_ROOT": "/synthetic/root", "CMUX_MAESTRO_IDENTITY_HELPER": "/synthetic/helper",
                 }):
             result = environment(self.node["id"], "synthetic", self.node)
+            self.assertEqual({key for key in result if key.startswith("CMUX_MAESTRO_")}, {
+                "CMUX_MAESTRO_WORKER_ID", "CMUX_MAESTRO_CONTROL_TOKEN", "CMUX_MAESTRO_RUN_ID",
+                "CMUX_MAESTRO_GENERATION", "CMUX_MAESTRO_SESSION_ID", "CMUX_MAESTRO_ORCHESTRATOR",
+                "CMUX_MAESTRO_EXECUTION_MODE", "CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER",
+            })
             self.assertEqual(result["CMUX_MAESTRO_MESSAGE_ROOT"], str(routes))
-            self.assertEqual(result["CMUX_MAESTRO_MESSAGE_PEER"], CONTROLLER["message_peer"](self.node))
+            self.assertEqual(result["CMUX_MAESTRO_MESSAGE_PEER"], self.FIXED_PEERS[1])
             self.assertEqual(result["CMUX_WORKSPACE_ID"], self.node["workspaceId"])
             legacy = dict(self.node)
             legacy.pop("messaging")
@@ -2785,6 +2806,21 @@ class LifecycleFailureTests(unittest.TestCase):
         self.mutations = 0
         self.before_mutate = lambda _: None
 
+    def native_parent(self):
+        """Give the coordinator the private route evidence its native adapter would hold."""
+        routes = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, routes)
+        self.actor.update(copilotSessionId=str(uuid.uuid4()),
+                          messaging={"version": 1, "routes": str(routes), "extension": "/synthetic/extension"})
+        identity = {key: self.actor[field] for key, field in (
+            ("nodeId", "id"), ("workspaceId", "workspaceId"), ("sessionId", "copilotSessionId"),
+            ("generation", "generation"),
+        )} | {"capability": "c" * 64}
+        binding = routes / f"{CONTROLLER['message_peer'](self.actor)}.json"
+        binding.write_text(json.dumps(identity))
+        binding.chmod(0o600)
+        return identity | {"login": "parent-account", "host": "github.com"}
+
     def mutate(self, _root, callback, **_kwargs):
         self.mutations += 1
         self.before_mutate(self.mutations)
@@ -3261,6 +3297,7 @@ class LifecycleFailureTests(unittest.TestCase):
             "spawn", "--actor-id", self.actor["id"], "--token", self.token,
             "--name", "Capacity changed", "--task", "Synthetic", "--cwd", str(REPO),
         ])
+        identity = self.native_parent()
         with mock.patch.dict(spawn.__globals__, {
             "read_state": lambda *a, **k: copy.deepcopy(self.state),
             "mutate": self.mutate,
@@ -3271,9 +3308,9 @@ class LifecycleFailureTests(unittest.TestCase):
             "resource_observations": lambda *_: ({}, set()),
             "git_display_metadata": lambda _: CONTROLLER["absent_git_metadata"](),
             "launch_reserved_session": launcher,
-        }), mock.patch.dict(os.environ, {"CMUX_MAESTRO_TESTING": "1"}):
+        }):
             with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "resource limit"):
-                spawn(args, self.root, self.cmux)
+                spawn(args, self.root, self.cmux, native_identity=identity)
         launcher.assert_not_called()
         self.assertEqual(self.state["launches"], {})
         self.assertEqual(len(self.state["nodes"]), 2)

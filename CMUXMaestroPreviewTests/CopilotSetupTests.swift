@@ -3,18 +3,22 @@ import Foundation
 import Testing
 @testable import CMUXMaestroPreview
 
+/// Records every provider request; setup policy makes no other kind.
 private actor SetupRunnerSpy: CopilotSetupProcessRunner {
-    var calls: [[String]] = []
-    let result: CopilotProcessResult
-    init(result: CopilotProcessResult = .exited(0)) { self.result = result }
-    func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult {
-        calls.append([executable.path] + arguments)
-        return result
+    var calls: [String] = []
+    func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult {
+        calls.append("metadata")
+        return .failed(.unavailable)
     }
-    func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult { .failed(.unavailable) }
     func plugin(executable: URL, operation: CopilotPluginOperation, path: String,
-                providerHome: URL?) async -> CopilotPluginOperationResult { .failed(.unavailable) }
-    func sourceIdentity(executable: URL, source: URL, path: String) async -> CopilotSourceIdentityResult { .failed(.unavailable) }
+                providerHome: URL?) async -> CopilotPluginOperationResult {
+        calls.append("plugin")
+        return .failed(.unavailable)
+    }
+    func sourceIdentity(executable: URL, source: URL, path: String) async -> CopilotSourceIdentityResult {
+        calls.append("sourceIdentity")
+        return .failed(.unavailable)
+    }
 }
 
 private struct SetupFileStub: CopilotSetupFileSystem {
@@ -464,7 +468,7 @@ struct CopilotSetupTests {
         #expect(process.terminationStatus == 0, Comment(rawValue: detail))
     }
 
-    @Test func constructionDoesNotInstallAndConsentUsesExactOwnPluginArguments() async throws {
+    @Test func constructionDoesNotInstallAndConsentUsesExactOwnPluginOperations() async throws {
         let fixture = try ObserverFixture()
         defer { try? fixture.clean() }
         let runner = ObserverSetupRunner(fixture)
@@ -477,10 +481,7 @@ struct CopilotSetupTests {
                                     controller: controller, skill: skill) == .installed)
         #expect(await setup.perform(.uninstall, selected: nil, path: "", root: fixture.root, helper: fixture.helper,
                                     controller: controller, skill: skill) == .uninstalled)
-        #expect(await runner.calls == [
-            [fixture.helper.path, "--no-auto-update", "plugin", "install", fixture.source.path],
-            [fixture.helper.path, "--no-auto-update", "plugin", "uninstall", "cmux-maestro-native"],
-        ])
+        #expect(await runner.calls == ["install:\(fixture.source.path)", "uninstall:opaque-provider-source"])
     }
 
     @Test func reportsRealFailureAndNeverRunsWhenFilesystemFails() async throws {
@@ -1169,4 +1170,72 @@ struct CopilotSetupTests {
         #expect(!FileManager.default.fileExists(atPath: installed.deletingLastPathComponent().appendingPathComponent("messaging.json").path))
         #expect(FileManager.default.fileExists(atPath: retained.path))
     }
+}
+
+struct CopilotProcessQuiescenceTests {
+    @Test func unkillableGroupStopsWaitingAtItsDeadline() {
+        var polls = 0
+        let stopped = LocalCopilotSetupRunner.waitForQuiescence(
+            until: .now.advanced(by: .milliseconds(50)), pollInterval: 0.001
+        ) { polls += 1; return false }
+        #expect(!stopped)
+        #expect(polls > 1)
+    }
+
+    private func seam(quiescent: @escaping (Int) -> Bool, signals: Box<[Int32]>, reaps: Box<Int>,
+                      postKillGrace: TimeInterval = 0.05) -> LocalCopilotSetupRunner.GroupStopSeam {
+        var seam = LocalCopilotSetupRunner.GroupStopSeam()
+        let polls = Box(0)
+        seam.signal = { _, signal in signals.value.append(signal); return 0 }
+        seam.childUnavailable = { _ in false }
+        seam.isQuiescent = { _ in polls.value += 1; return quiescent(polls.value) }
+        seam.reap = { _ in reaps.value += 1 }
+        seam.postKillGrace = postKillGrace
+        return seam
+    }
+
+    @Test func stopGroupTimesOutWithinItsHardBoundIgnoringALargeCallerGraceAndDoesNotReap() {
+        let signals = Box<[Int32]>([]), reaps = Box(0)
+        // Quiescence is reported after SIGTERM's zero grace but never after SIGKILL.
+        let started = ContinuousClock.now
+        let stopped = LocalCopilotSetupRunner.stopGroup(
+            4242, grace: 0, seam: seam(quiescent: { _ in false }, signals: signals, reaps: reaps))
+        #expect(!stopped)
+        #expect(signals.value == [SIGTERM, SIGKILL])
+        #expect(reaps.value == 0)
+        #expect(ContinuousClock.now - started < .seconds(2))
+    }
+
+    @Test func postKillBoundDoesNotGrowWithTheCallerGrace() {
+        let signals = Box<[Int32]>([]), reaps = Box(0)
+        let started = ContinuousClock.now
+        // A caller grace of 0.2 s is consumed by the SIGTERM wait; the post-kill wait must
+        // still use its own 0.05 s bound rather than max(grace, bound).
+        let stopped = LocalCopilotSetupRunner.stopGroup(
+            4242, grace: 0.2, seam: seam(quiescent: { _ in false }, signals: signals, reaps: reaps))
+        #expect(!stopped)
+        #expect(ContinuousClock.now - started < .milliseconds(400))
+    }
+
+    @Test func stopGroupReapsOnlyAfterQuiescence() {
+        let signals = Box<[Int32]>([]), reaps = Box(0)
+        let stopped = LocalCopilotSetupRunner.stopGroup(
+            4242, grace: 0, seam: seam(quiescent: { $0 >= 3 }, signals: signals, reaps: reaps, postKillGrace: 5))
+        #expect(stopped)
+        #expect(reaps.value == 1)
+    }
+
+    @Test func quiescenceObservedBeforeTheDeadlineSucceeds() {
+        var polls = 0
+        let stopped = LocalCopilotSetupRunner.waitForQuiescence(
+            until: .now.advanced(by: .seconds(5)), pollInterval: 0.001
+        ) { polls += 1; return polls == 3 }
+        #expect(stopped)
+        #expect(polls == 3)
+    }
+}
+
+private final class Box<Value>: @unchecked Sendable {
+    var value: Value
+    init(_ value: Value) { self.value = value }
 }

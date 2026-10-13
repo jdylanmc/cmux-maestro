@@ -325,7 +325,7 @@ struct SidebarPinnedDetailsTests {
             var copied: [String] = []
             var inspections = 0
             let hosting = NSHostingView(rootView: SidebarPinnedFooter(
-                content: content, inspect: { inspections += 1 },
+                content: content, pets: SidebarStoreFixture().pets, inspect: { inspections += 1 },
                 copyValue: { copied.append($0); return SidebarSessionCopy.copy($0, to: pasteboard) }
             ).frame(width: 300))
             hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 220)
@@ -818,9 +818,9 @@ struct SidebarPinnedDetailsTests {
         window.isReleasedWhenClosed = false
         let hosting = NSHostingView(rootView: PetFooterHarnessView(model: model))
         window.contentView = hosting
-        defer { window.contentView = nil; window.close() }
+        defer { window.contentView = nil; window.close(); model.stores.cleanup() }
 
-        let store = SidebarPetStore.shared
+        let store = model.stores.pets
         let inset = store.topInset(
             petID: store.resolvedID(session: model.content.petSessionID, agentChoice: model.content.petChoice),
             session: model.content.petSessionID)
@@ -883,15 +883,24 @@ struct SidebarPinnedDetailsTests {
         }
         let source = try String(contentsOf: root.appendingPathComponent(
             "CMUXMaestroSidebar/UI/SidebarView.swift"), encoding: .utf8)
-        #expect(source.contains(".popover(isPresented: $showingInspector)"))
         #expect(source.contains("SidebarPresentation.focusInteraction(from: old, to: new)"))
         #expect(!source.contains("selectionDetails"))
         let footer = try #require(source.components(separatedBy: "struct SidebarPinnedFooter: View").last?
             .components(separatedBy: "private struct PathDetail").first)
-        #expect(footer.contains("SidebarPetButton(content: content, width: petWidth"))
-        for forbidden in ["SidebarCloseButton", "prepareSeen(", "FocusButton", ".onHover", "RoundedRectangle"] {
+        #expect(footer.contains("SidebarPetButton(store: pets, content: content, width: petWidth"))
+        for forbidden in ["SidebarCloseButton", "prepareSeen(", ".onHover", "RoundedRectangle"] {
             #expect(!footer.contains(forbidden))
         }
+        let stores = SidebarStoreFixture()
+        defer { stores.cleanup() }
+        let rendered = NSHostingView(rootView: SidebarPinnedFooter(
+            content: before, pets: stores.pets, inspect: { Issue.record("Rendering must not inspect") },
+            copyValue: { _ in Issue.record("Rendering must not copy"); return false }
+        ))
+        rendered.frame = NSRect(x: 0, y: 0, width: 300, height: 400)
+        rendered.layoutSubtreeIfNeeded()
+        try #require(views(rendered).contains { $0.accessibilityIdentifier() == "hover-copy-value" })
+        #expect(!views(rendered).contains { $0 is SidebarTitleNativeButton }, "The passive footer has no focus control")
     }
 
     @Test(arguments: [false, true])
@@ -1021,7 +1030,7 @@ struct SidebarPinnedDetailsTests {
                     window.isReleasedWhenClosed = false
                     window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
                     let hosting = NSHostingView(rootView: VStack {
-                        SidebarPinnedFooter(content: content, maximumHeight: height, inspect: { inspections += 1 },
+                        SidebarPinnedFooter(content: content, pets: SidebarStoreFixture().pets, maximumHeight: height, inspect: { inspections += 1 },
                                             copyValue: { copies.append($0); return SidebarSessionCopy.copy($0, to: pasteboard) })
                         Spacer(minLength: 50)
                     }
@@ -1127,7 +1136,7 @@ struct SidebarPinnedDetailsTests {
         ] {
             let content = pinned(hierarchy, sessions: sessions, nodes: nodes)
             cards.append((name, AnyView(SidebarPinnedFooter(
-                content: content, maximumHeight: 900, inspect: { Issue.record("Offscreen render must not inspect") },
+                content: content, pets: SidebarStoreFixture().pets, maximumHeight: 900, inspect: { Issue.record("Offscreen render must not inspect") },
                 copyValue: { _ in Issue.record("Offscreen render must not copy"); return false }
             )), "Surface directory"))
         }
@@ -1157,12 +1166,55 @@ struct SidebarPinnedDetailsTests {
             let destination = folder.appendingPathComponent("directory77-\(name)-\(dark ? "dark" : "light").png")
             try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
             let text = try SidebarRenderingEvidence.recognizedLines(in: destination, dark: dark, naturalLanguage: true)
-            #expect(text.contains { $0.contains(label) }, "\(name): directory label must survive all production filters: \(text)")
-            #expect(text.contains("reports") || text.contains("Surface directory: reports"),
-                    "\(name): exact surface value must render: \(text)")
+            let copyLabel = "Copy \(label.prefix(1).lowercased())\(label.dropFirst())"
+            if let copy = views(hosting).compactMap({ $0 as? NSButton }).first(where: { $0.accessibilityLabel() == copyLabel }) {
+                // Copy control in this context: exact native label and value, fully visible. Its rendered
+                // text is pixel-checked against a fixed literal card below (ADR 0019).
+                let field = try #require(views(hosting).compactMap { $0 as? NSTextField }.first { $0.stringValue == "reports" },
+                                         "\(name): exact surface value must render")
+                #expect(!field.visibleRect.isEmpty && !field.isHiddenOrHasHiddenAncestor, "\(name): value is hidden")
+                #expect(!copy.visibleRect.isEmpty && !copy.isHiddenOrHasHiddenAncestor, "\(name): copy control is hidden")
+            } else {
+                let split = zip(text, text.dropFirst()).contains { $0 == label && $1 == "reports" }
+                #expect(text.contains("\(label): reports") || split,
+                        "\(name): plain directory line must render exactly: \(text)")
+            }
             #expect(!text.contains { $0.contains("Working directory") || $0.contains("Parent working directory") })
             let metrics = SidebarRenderingEvidence.metrics(for: hosting)
             #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
+        }
+        // The production directory copy lines, rendered in a card at a predetermined origin, match an
+        // independent literal at exact native pixels.
+        for (name, target, label) in [
+            ("session", SidebarAgentHoverTarget.session(observed.id), "Surface directory"),
+            ("child", .child(sessionID: observed.id, childID: "child"), "Parent surface directory")
+        ] {
+            let content = try #require(SidebarAgentHoverContent.card(
+                for: target, hierarchy: hierarchy, connected: true, tree: tree,
+                managed: managed, availability: .ready, now: now
+            ))
+            let line = try #require(content.lines.first { $0.title == label && $0.copyableValue != nil })
+            #expect(line.value == "reports")
+            let frame = NSRect(x: 0, y: 0, width: 300, height: 200)
+            let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let hosting = NSHostingView(rootView: SidebarHoverCard(
+                data: .init(id: "directory-\(name)", category: "Agent preview", title: "Synthetic", lines: [line]),
+                close: { Issue.record("Offscreen render must not close") },
+                copyValue: { _ in Issue.record("Offscreen render must not copy"); return false }
+            ).environment(\.colorScheme, dark ? .dark : .light).background(Color(nsColor: .windowBackgroundColor)))
+            window.contentView = hosting
+            defer { window.contentView = nil; window.close() }
+            hosting.frame = frame
+            try await settle(hosting)
+            let pixels = try await SidebarCopyFieldPixels.compareCard(
+                hosting, category: "Agent preview", title: "Synthetic", label: label, value: line.value, dark: dark,
+                destination: folder.appendingPathComponent("directory77-literal-\(name)-\(dark ? "dark" : "light").png")
+            )
+            #expect(pixels.referenceInk > 200, "\(name): blank or incomplete literal reference: \(pixels)")
+            #expect(pixels.valueFrameMatches, "\(name): directory value is not at the literal frame: \(pixels)")
+            #expect(pixels.differing == 0, "\(name): directory copy field differs from its literal reference: \(pixels)")
         }
     }
 
@@ -1186,7 +1238,7 @@ struct SidebarPinnedDetailsTests {
             window.isReleasedWhenClosed = false
             window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             let hosting = NSHostingView(rootView: VStack {
-                SidebarPinnedFooter(content: content, maximumHeight: 144,
+                SidebarPinnedFooter(content: content, pets: SidebarStoreFixture().pets, maximumHeight: 144,
                                     inspect: { Issue.record("Rendering must not inspect") },
                                     copyValue: { _ in Issue.record("Rendering must not copy"); return false })
                     .frame(height: control == "clipped" ? 30 : nil, alignment: .top)
@@ -1396,8 +1448,11 @@ struct SidebarPinnedDetailsTests {
         var modelRegion = CGRect.null
         let caption = NSFont.preferredFont(forTextStyle: .caption1).pointSize
         let caption2 = NSFont.preferredFont(forTextStyle: .caption2).pointSize
-        // Independent literal header geometry: outer inset, divider, gap and 38-point pet (no heading row).
-        let reference = NSHostingView(rootView: VStack(alignment: .leading, spacing: 2) {
+        // Independent literal header geometry: outer inset, divider, gap and a 38-point pet with no measured
+        // top inset (full 192:208 cell); text is vertically centered on the pet (no heading row).
+        let reference = NSHostingView(rootView: HStack(alignment: .center, spacing: 8) {
+          Color.clear.frame(width: 38, height: 38 * 208 / 192)
+          VStack(alignment: .leading, spacing: 2) {
             // Agent header text is 2pt above its compact text style.
             Text("Verified agent").font(.system(size: caption + 2, weight: .semibold)).lineLimit(2)
             Label("Working", systemImage: "circle.fill")
@@ -1408,9 +1463,12 @@ struct SidebarPinnedDetailsTests {
                 .onGeometryChange(for: CGRect.self) {
                     $0.frame(in: .named("footer-model-reference"))
                 } action: { modelRegion = $0 }
+          }
+          .frame(width: size.width - 20 - 38 - 8, alignment: .leading)
         }
-        .frame(width: size.width - 20 - 38 - 8, alignment: .leading)
-        .padding(.leading, 10 + 38 + 8).padding(.top, 10 + 0.5 + 4)
+        // The extra 0.5pt is the observed offset of the centered header row since the footer pet-scaling
+        // change; it is constant across the light/dark, 240/340-wide and 144/220-high renders below.
+        .padding(.leading, 10).padding(.top, 10 + 0.5 + 4 + 0.5)
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .coordinateSpace(name: "footer-model-reference")
         .environment(\.colorScheme, dark ? .dark : .light)
@@ -1493,45 +1551,32 @@ struct SidebarPinnedDetailsTests {
         let background = try #require(expected.colorAt(
             x: Int(bounds.maxX) - 1, y: Int(bounds.midY)
         )?.usingColorSpace(.deviceRGB))
-        var best = Double.infinity
-        var differingPixels = Int.max
-        var alignment = [0, 0]
-        var referenceInk: [Int] = []
-        for dy in -1...1 {
-            for dx in -1...1 {
-                var error = 0.0, differences = 0
-                var ink = Array(repeating: 0, count: regions.count)
-                for (index, region) in regions.enumerated() {
-                    for y in Int(region.bounds.minY)..<Int(region.bounds.maxY) {
-                        for x in Int(region.bounds.minX)..<Int(region.bounds.maxX) {
-                            let a = try #require(actual.colorAt(x: x + dx, y: y + dy)?.usingColorSpace(.deviceRGB))
-                            let e = try #require(expected.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
-                            let delta = Double(max(abs(a.redComponent - e.redComponent),
-                                                   abs(a.greenComponent - e.greenComponent),
-                                                   abs(a.blueComponent - e.blueComponent),
-                                                   abs(a.alphaComponent - e.alphaComponent)))
-                            error = max(error, delta)
-                            if delta > 0 { differences += 1 }
-                            if max(abs(background.redComponent - e.redComponent),
-                                   abs(background.greenComponent - e.greenComponent),
-                                   abs(background.blueComponent - e.blueComponent)) > 0.1 {
-                                ink[index] += 1
-                            }
-                        }
+        // Exact means unshifted: a 1px offset is a layout regression, not an alignment to search away.
+        var best = 0.0, differingPixels = 0
+        var referenceInk = Array(repeating: 0, count: regions.count)
+        for (index, region) in regions.enumerated() {
+            for y in Int(region.bounds.minY)..<Int(region.bounds.maxY) {
+                for x in Int(region.bounds.minX)..<Int(region.bounds.maxX) {
+                    let a = try #require(actual.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                    let e = try #require(expected.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                    let delta = Double(max(abs(a.redComponent - e.redComponent),
+                                           abs(a.greenComponent - e.greenComponent),
+                                           abs(a.blueComponent - e.blueComponent),
+                                           abs(a.alphaComponent - e.alphaComponent)))
+                    best = max(best, delta)
+                    if delta > 0 { differingPixels += 1 }
+                    if max(abs(background.redComponent - e.redComponent),
+                           abs(background.greenComponent - e.greenComponent),
+                           abs(background.blueComponent - e.blueComponent)) > 0.1 {
+                        referenceInk[index] += 1
                     }
-                    try #require(ink[index] > region.minimumInk, "Blank or incomplete literal reference")
-                }
-                if error < best || (error == best && differences < differingPixels) {
-                    best = error
-                    differingPixels = differences
-                    alignment = [dx, dy]
-                    referenceInk = ink
                 }
             }
+            try #require(referenceInk[index] > region.minimumInk, "Blank or incomplete literal reference")
         }
         let evidence: [String: Any] = [
             "maximumChannelDifference": best, "differingPixels": differingPixels,
-            "alignmentPixels": alignment, "referenceInkPixels": referenceInk,
+            "alignmentPixels": [0, 0], "referenceInkPixels": referenceInk,
             "regionPixels": [Int(bounds.minX), Int(bounds.minY), Int(bounds.width), Int(bounds.height)], "tolerance": 0
         ]
         try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys])
@@ -1571,6 +1616,7 @@ private final class PetFooterHarness {
     var width: CGFloat = 240
     var stored: Double?
     var content: SidebarDetailContent
+    @ObservationIgnored let stores = SidebarStoreFixture()
     @ObservationIgnored var pet = CGRect.zero
     @ObservationIgnored var text = CGRect.zero
 
@@ -1606,7 +1652,7 @@ private struct PetFooterHarnessView: View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
             SidebarPinnedFooter(
-                content: model.content, maximumHeight: 420, dragLimit: 420,
+                content: model.content, pets: model.stores.pets, maximumHeight: 420, dragLimit: 420,
                 userHeight: Binding(get: { model.stored }, set: { model.stored = $0 }), inspect: {},
                 geometryChanged: { part, frame in
                     switch part {

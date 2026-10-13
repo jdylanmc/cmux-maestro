@@ -57,6 +57,31 @@ struct SidebarSessionCopyTests {
         return bitmap
     }
 
+    /// Unshifted, zero-tolerance comparison of every pixel outside `excluded` (view points).
+    private func exactPixels(
+        _ actual: NSBitmapImageRep, reference: NSBitmapImageRep, excluding excluded: CGRect, in view: NSView
+    ) throws -> (differing: Int, referenceInk: Int) {
+        try #require(actual.pixelsWide == reference.pixelsWide && actual.pixelsHigh == reference.pixelsHigh)
+        let scale = CGFloat(actual.pixelsWide) / view.bounds.width
+        // Bitmap rows run top-down; flipped hosting views already match, otherwise mirror the rect.
+        let flippedY = view.isFlipped ? excluded.minY : view.bounds.height - excluded.maxY
+        let hole = CGRect(x: excluded.minX * scale, y: flippedY * scale,
+                          width: excluded.width * scale, height: excluded.height * scale)
+        var differing = 0, ink = 0
+        for y in 0..<actual.pixelsHigh {
+            for x in 0..<actual.pixelsWide where !hole.contains(CGPoint(x: CGFloat(x) + 0.5, y: CGFloat(y) + 0.5)) {
+                let a = try #require(actual.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                let e = try #require(reference.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                if max(abs(a.redComponent - e.redComponent), abs(a.greenComponent - e.greenComponent),
+                       abs(a.blueComponent - e.blueComponent), abs(a.alphaComponent - e.alphaComponent)) > 0 {
+                    differing += 1
+                }
+                if min(e.redComponent, e.greenComponent, e.blueComponent) < 0.9 { ink += 1 }
+            }
+        }
+        return (differing, ink)
+    }
+
     private func feedbackInk(in bitmap: NSBitmapImageRep, label: NSTextField, view: NSView) throws -> Int {
         let rect = view.convert(label.alignmentRect(forFrame: label.bounds), from: label)
         let scale = CGFloat(bitmap.pixelsWide) / view.bounds.width
@@ -160,12 +185,33 @@ struct SidebarSessionCopyTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let image = folder.appendingPathComponent("copy-field-label-owner.png")
         try #require(fieldImage.representation(using: .png, properties: [:])).write(to: image)
-        let lines = try SidebarRenderingEvidence.recognizedLines(in: image, dark: false, naturalLanguage: true)
-        let labelIndex = try #require(lines.firstIndex { $0.hasPrefix("Workspace path") })
-        let valueIndex = try #require(lines.firstIndex {
-            $0.localizedCaseInsensitiveContains("project") && !$0.localizedCaseInsensitiveContains("Workspace")
-        })
-        #expect(labelIndex < valueIndex)
+        // ADR 0019: copy-control text matches an independent literal reference exactly, outside the icon.
+        let referenceWindow = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        referenceWindow.isReleasedWhenClosed = false
+        referenceWindow.appearance = NSAppearance(named: .aqua)
+        let reference = NSHostingView(rootView: VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .center, spacing: 0) {
+                Text("Workspace path").font(.caption).foregroundStyle(.secondary)
+                Color.clear.frame(width: 24, height: 24)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            Text("~/project").textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.caption)
+        .environment(\.colorScheme, .light)
+        .background(Color.white))
+        referenceWindow.contentView = reference
+        defer { referenceWindow.contentView = nil; referenceWindow.close() }
+        reference.frame = frame
+        try await settle(reference)
+        try await prepareOffscreenRender(referenceWindow, content: reference)
+        let referenceImage = try capture(reference)
+        try #require(referenceImage.representation(using: .png, properties: [:]))
+            .write(to: folder.appendingPathComponent("copy-field-label-owner.reference.png"))
+        let pixels = try exactPixels(fieldImage, reference: referenceImage, excluding: buttonRect.insetBy(dx: -1, dy: -1),
+                                     in: hosting)
+        #expect(pixels.referenceInk > 400, "Blank or incomplete literal reference")
+        #expect(pixels.differing == 0, "Copy field label/value differ from the literal reference: \(pixels)")
 
         #expect(window.makeFirstResponder(button))
         try await settle(hosting)
@@ -666,6 +712,38 @@ struct SidebarSessionCopyTests {
         #expect(try feedbackInk(in: capture(hosting), label: label, view: hosting) > 0)
     }
 
+    /// The copy-field oracle must reject a production field moved by one native pixel in either axis.
+    @Test(arguments: [CGSize(width: 0.5, height: 0), CGSize(width: 0, height: 0.5), .zero])
+    func copyFieldPixelOracleRejectsOnePixelShift(shift: CGSize) async throws {
+        let frame = NSRect(x: 0, y: 0, width: 300, height: 260)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        let hosting = NSHostingView(rootView: SidebarHoverCard(
+            data: .init(id: "shifted", category: "Agent preview", title: "Synthetic child",
+                        lines: [.sessionID(parentID, isParent: true)]),
+            close: {}, copyValue: { _ in Issue.record("Rendering must not copy"); return false }
+        ).offset(shift).environment(\.colorScheme, .light).background(Color(nsColor: .windowBackgroundColor)))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        hosting.frame = frame
+        try await settle(hosting)
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let pixels = try await SidebarCopyFieldPixels.compareCard(
+            hosting, category: "Agent preview", title: "Synthetic child",
+            label: "Parent session ID", value: parentID.uuidString, dark: false,
+            destination: folder.appendingPathComponent("copy-field-shift-\(shift.width)-\(shift.height).png")
+        )
+        if shift == .zero {
+            #expect(pixels.valueFrameMatches && pixels.differing == 0, "Unshifted control must match: \(pixels)")
+        } else {
+            #expect(!pixels.valueFrameMatches, "A 1px shift must move the value frame: \(pixels)")
+            #expect(pixels.differing > 0, "A 1px shift must change pixels: \(pixels)")
+        }
+    }
+
     @Test(arguments: [false, true])
     func narrowCardKeepsCopyAccessibleAndFeedbackVisible(dark: Bool) async throws {
         for width in [224, 300] {
@@ -687,6 +765,17 @@ struct SidebarSessionCopyTests {
             try await settle(hosting)
             #expect(copies == 0)
             #expect(feedbackControl(in: hosting) == nil)
+            let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent(".build/layout-validation/offscreen")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let pixels = try await SidebarCopyFieldPixels.compareCard(
+                hosting, category: "Agent preview", title: "Synthetic child",
+                label: "Parent session ID", value: parentID.uuidString, dark: dark,
+                destination: folder.appendingPathComponent("hover-session-copy-\(width)-\(dark ? "dark" : "light").png")
+            )
+            #expect(pixels.referenceInk > 400, "Blank or incomplete literal reference: \(pixels)")
+            #expect(pixels.valueFrameMatches, "Production value is not at the literal card's value frame: \(pixels)")
+            #expect(pixels.differing == 0, "Parent session ID copy field differs from its literal reference: \(pixels)")
             for success in [true, false] {
                 succeeds = success
                 let button = try copyButton(in: hosting)
@@ -727,9 +816,6 @@ struct SidebarSessionCopyTests {
                     "hover-session-copy-\(width)-\(dark ? "dark" : "light")-\(success ? "success" : "failure").png"
                 )
                 try #require(bitmap.representation(using: .png, properties: [:])).write(to: image)
-                let text = try SidebarRenderingEvidence.recognizedLines(in: image, dark: dark, naturalLanguage: true)
-                    .joined(separator: " ")
-                #expect(text.localizedCaseInsensitiveContains("Parent session ID"))
             }
             #expect(copies == 2)
         }

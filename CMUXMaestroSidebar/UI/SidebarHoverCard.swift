@@ -261,6 +261,8 @@ extension EnvironmentValues {
 
 @MainActor
 final class SidebarHoverPresenter {
+    static let openDelay: Duration = .milliseconds(350)
+    static let closeDelay: Duration = .milliseconds(220)
     private(set) var state = SidebarHoverState()
     private(set) var panel: SidebarHoverPanel?
     private weak var anchor: NSView?
@@ -276,6 +278,15 @@ final class SidebarHoverPresenter {
     private var hosting: NSHostingView<AnyView>?
     private var copyValue: (String) -> Bool
     private let showPanel: (NSWindow, SidebarHoverPanel, Bool) -> Void
+    /// Runs `action` after `delay` unless the returned task is cancelled first.
+    typealias Schedule = @MainActor (_ delay: Duration, _ action: @escaping @MainActor () -> Void) -> Task<Void, Never>
+    static let sleepThenRun: Schedule = { delay, action in
+        Task { @MainActor in
+            do { try await Task.sleep(for: delay) } catch { return }
+            action()
+        }
+    }
+    private let schedule: Schedule
     var isMonitoring: Bool { eventMonitor != nil || !windowObservers.isEmpty }
 
     init(copyValue: @escaping (String) -> Bool = { SidebarSessionCopy.copy($0) },
@@ -283,9 +294,10 @@ final class SidebarHoverPresenter {
         window.addChildWindow(panel, ordered: .above)
         panel.orderFront(nil)
         if explicit { panel.makeKey() }
-    }) {
+    }, schedule: @escaping Schedule = SidebarHoverPresenter.sleepThenRun) {
         self.copyValue = copyValue
         self.showPanel = showPanel
+        self.schedule = schedule
     }
 
     func update(anchor: NSView, data: SidebarHoverCardData?, group: SidebarHoverGroup?) {
@@ -319,8 +331,7 @@ final class SidebarHoverPresenter {
         }
         if state.shouldOpen {
             if data != nil, let window = anchor?.window { installObservers(window: window) }
-            openTask = Task { @MainActor [weak self] in
-                do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+            openTask = schedule(Self.openDelay) { [weak self] in
                 guard let self, self.state.shouldOpen else { return }
                 self.open(explicit: false)
             }
@@ -354,8 +365,7 @@ final class SidebarHoverPresenter {
     private func scheduleClose() {
         closeTask?.cancel()
         guard state.shouldClose else { return }
-        closeTask = Task { @MainActor [weak self] in
-            do { try await Task.sleep(for: .milliseconds(220)) } catch { return }
+        closeTask = schedule(Self.closeDelay) { [weak self] in
             guard let self, self.state.shouldClose else { return }
             self.dismiss(restoreFocus: false)
         }

@@ -295,12 +295,57 @@ def validate_remaining(summary, tests, *, benchmark_enabled, isolated_excluded=T
         else:
             raise ValueError(f"Unattributed or enabled skipped integrated test: {case.identity}")
         attributed.append({"identity": case.identity, "policyReason": reason,
+                           "allowlistReason": INTENTIONAL_SKIPS[case.identity],
                            "reportedDetails": case.reported_details})
     remaining = [case for case in selected if not isolated_excluded or case.identity != SELECTOR]
     require(any(status != "Skipped" for case in remaining for _, status in case.executions),
             "The remaining integrated scope has no executed tests.")
     require(measured["executionCounts"]["skippedTests"] == len(attributed), "Unattributed skipped integrated tests.")
     return {**measured, "skippedTestsByIdentity": attributed}
+
+
+# Every test the build may legitimately report as not run, with why. Nothing else may be absent.
+INTENTIONAL_SKIPS = {
+    SELECTOR: "Runs alone in the isolated scope; skipped from the remaining scope.",
+    BENCHMARK_SELECTOR: f"Opt-in reader benchmark; runs only when {BENCHMARK_FLAG}=1.",
+}
+
+
+def enumerate_command(command, output):
+    return [*command, "test-without-building", "-enumerate-tests", "-test-enumeration-format", "json",
+            "-test-enumeration-style", "flat", "-test-enumeration-output-path", str(output)]
+
+
+def enumerated_tests(document):
+    """Enabled test identities the built product declares under the same build settings."""
+    require(isinstance(document, dict) and document.get("errors") == [], "Test enumeration reported errors.")
+    values = document.get("values")
+    require(isinstance(values, list) and len(values) == 1 and isinstance(values[0], dict),
+            "Expected one enumerated test plan.")
+
+    def identities(key):
+        entries = values[0].get(key)
+        require(isinstance(entries, list) and all(isinstance(entry, dict) and isinstance(entry.get("identifier"), str)
+                                                   for entry in entries), f"Invalid enumerated {key}.")
+        return [entry["identifier"] for entry in entries]
+    enabled, disabled = identities("enabledTests"), identities("disabledTests")
+    require(enabled, "Test enumeration found no enabled tests.")
+    require(len(set(enabled)) == len(enabled), "Repeated enumerated test identities.")
+    unexplained = sorted(set(disabled) - set(INTENTIONAL_SKIPS))
+    require(not unexplained, f"Disabled tests need an INTENTIONAL_SKIPS reason: {unexplained[:20]}")
+    return set(enabled) | set(disabled)
+
+
+def validate_inventory(expected, isolated, remaining, *, isolated_excluded):
+    observed = Counter(case.identity for case in isolated)
+    observed.update(case.identity for case in remaining if not (isolated_excluded and case.identity == SELECTOR))
+    missing = sorted(set(expected) - set(observed))
+    unexpected = sorted(set(observed) - set(expected))
+    repeated = sorted(identity for identity, count in observed.items() if count > 1)
+    require(not missing and not unexpected and not repeated,
+            f"Reported tests disagree with the built test inventory; missing={missing[:20]} ({len(missing)}), "
+            f"unexpected={unexpected[:20]} ({len(unexpected)}), repeated={repeated[:20]}.")
+    return {"expectedTests": len(expected), "reportedTests": sum(observed.values())}
 
 
 def validate_arguments(command):
@@ -601,6 +646,16 @@ def run(command, directory, runner=subprocess.run):
     save()
     if build.returncode:
         return build.returncode
+    inventory = None
+    enumeration = directory / "enumeration.json"
+    listed = runner(enumerate_command(command, enumeration), check=False, env=test_environment)
+    try:
+        require(listed.returncode == 0, "Test enumeration failed.")
+        inventory = enumerated_tests(json.loads(enumeration.read_text()))
+        evidence["enumeratedTests"] = len(inventory)
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        evidence["inventoryError"] = str(error)
+    save()
     try:
         guide = produce_guide_acceptance(directory, runner)
         evidence["guideAcceptance"] = guide
@@ -615,8 +670,10 @@ def run(command, directory, runner=subprocess.run):
                        "-resultBundlePath", str(isolated_bundle)], check=False, env=test_environment)
     evidence["isolatedExitCode"] = isolated.returncode
     isolated_summary = None
+    isolated_cases = []
     try:
         isolated_summary, tests = read_result(isolated_bundle, directory, "isolated", runner)
+        isolated_cases = cases(tests)
         print("Isolated hosted summary: " + json.dumps(isolated_summary), flush=True)
         print("Isolated hosted test tree: " + json.dumps(tests)[:16384], flush=True)
         evidence["isolatedCounts"] = validate_isolated(isolated_summary, tests)
@@ -642,6 +699,12 @@ def run(command, directory, runner=subprocess.run):
         validate_original_guide_cases(tests)
     except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         evidence["remainingValidationError"] = str(error)
+    if inventory is not None and remaining_summary is not None:
+        try:
+            evidence["inventoryCoverage"] = validate_inventory(
+                inventory, isolated_cases if selection else [], cases(tests), isolated_excluded=bool(selection))
+        except (ValueError, KeyError, TypeError) as error:
+            evidence["inventoryError"] = str(error)
     try:
         revalidate_guide_acceptance(guide, runner)
     except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as error:
@@ -649,6 +712,7 @@ def run(command, directory, runner=subprocess.run):
     success = ("guideAcceptanceError" not in evidence and guide["exitCode"] == 0
                and evidence["selectorVerifiedByHostedResult"] and not isolated.returncode and not remaining.returncode
                and "remainingValidationError" not in evidence
+               and "inventoryCoverage" in evidence and "inventoryError" not in evidence
                and isolated_summary is not None and isolated_summary.get("result") == "Passed"
                and remaining_summary is not None and remaining_summary.get("result") == "Passed"
                and remaining_summary.get("failedTests") == 0)
@@ -677,7 +741,8 @@ def run(command, directory, runner=subprocess.run):
     save()
     print("Integrated scope counts: " + json.dumps({
         key: evidence[key] for key in ("selectorVerifiedByHostedResult", "isolatedCounts", "remainingCounts",
-                                       "combinedExecutedTestCount", "passed") if key in evidence
+                                       "combinedExecutedTestCount", "inventoryCoverage", "inventoryError",
+                                       "passed") if key in evidence
     }), flush=True)
     print(f"Integrated test coverage: {evidence_path}", flush=True)
     if not success:

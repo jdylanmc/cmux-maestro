@@ -38,6 +38,10 @@ continued history updates stay part of deployment acceptance.
 blocking-observer concurrency regression alone in the integrated host. It verifies
 exact identity/count from the hosted xcresult. Then it runs all other tests
 from that same build without suite serialization. Both scopes must pass.
+Before testing, it enumerates the built test product under the same settings
+(`-enumerate-tests`). Reported identities across both scopes must equal that
+inventory; a missing, unexpected or repeated test fails. Disabled tests and
+skips need a reason in `INTENTIONAL_SKIPS`.
 Results and count evidence stay under `.build/tests/scoped-results/`.
 This full-coverage entrypoint rejects selection/retry overrides.
 Existing `CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()`
@@ -263,3 +267,31 @@ covering this project's macOS 14 deployment target.
 
 These tests do **not** prove actual plugin installation, cached-hook loading,
 live owner ancestry, or ExtensionKit-hosted runtime behavior.
+
+## Orchestrator fixture edges
+
+The shipped orchestrator reads no test variables and has no testing mode.
+Worker admission's parent-evidence check and identity-helper proof always run.
+Fixture launches use `native-spawn` from a coordinator holding managed-session
+evidence: a live synthetic provider, a recorded launch policy and its adapter's
+private route. Tests about runs from before that admission seed a registered
+root explicitly. The Python suites fake only the outside world:
+
+- `HOME` selects the synthetic Orchestration and Beats stores.
+- `PATH` supplies synthetic `cmux`, `copilot` and `gh` executables.
+- An installed-style `identity-helper.json` beside a copied controller selects
+  a synthetic identity helper.
+- The synthetic host (`FAKE_ATTACH_BARRIER`, `FAKE_ATTACH_FAILURE`) holds or
+  fails the creator's first `identify` of a new surface.
+- `controller-fixture.py`, written by `scripts/test-cmux-maestro-orchestrator.py`,
+  is the only reader of `FAKE_STARTUP_SECONDS`, `FAKE_HEARTBEAT_SECONDS`,
+  `FAKE_ARCHIVE_SECONDS` and `FAKE_GIT`. It also becomes the re-entry point for
+  runtimes and terminals.
+
+Worker Copilot processes receive only the controller's `CMUX_MAESTRO_`
+allowlist. Bounded runtimes build the provider environment without any inherited
+`CMUX_MAESTRO_` key. A direct launch's sourced script resets each allowlisted
+name and the recorded launch `PATH`, then `exec`s the controller's `direct-exec`
+bootstrap. It builds the provider environment as a mapping that drops every other
+`CMUX_MAESTRO_` key, including names that are not shell identifiers, and
+`execve`s the provider in place. Other variables such as `HOME` pass through.

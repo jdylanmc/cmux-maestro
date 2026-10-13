@@ -468,6 +468,17 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         }
     }
 
+    // Journal phase strings are persisted; keep raw values stable.
+    enum Phase: String {
+        case prepared, applying, applied, committed, restoring, restored
+    }
+
+    enum Action: String {
+        case prepare, apply, verify, restore, finish, release
+
+        var toleratesAbsentJournal: Bool { self == .restore || self == .release }
+    }
+
     struct Entry: Codable {
         let path: String
         let before: Image
@@ -495,6 +506,8 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         var keepsProviderRegistration: Bool? = nil
         var providerMutationStarted: Bool? = nil
         var receiptIntents: [Image]? = nil
+
+        var stage: Phase? { Phase(rawValue: phase) }
 
         var resourceOnly: Bool {
             keepsProviderRegistration ?? (metadata.plugins.first { $0.name == CopilotPluginManifest.name }?.enabled == false)
@@ -552,7 +565,8 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
     }
 
     func perform(_ action: String, allowAbsent: Bool = false) async throws -> Bool {
-        if allowAbsent && ["restore", "release"].contains(action) {
+        let requested = Action(rawValue: action)
+        if allowAbsent, requested?.toleratesAbsentJournal == true {
             let absent = try await CopilotSetupFileWork.run {
                 try CopilotSetupFileState.read(self.journalURL, maximum: Self.maximum).data == nil
             }
@@ -563,110 +577,132 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
             if observerLease >= 0 { flock(observerLease, LOCK_UN); close(observerLease); observerLease = -1 }
             if lease >= 0 { flock(lease, LOCK_UN); close(lease); lease = -1 }
         }
-        if action == "prepare" {
-            try await CopilotSetupFileWork.run {
-                let directory = try HookFiles.directory(self.root, create: true)
-                defer { close(directory) }
-                self.observerLease = openat(directory, ".observer-setup.lock",
-                    O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
-                guard self.observerLease >= 0 else { throw CopilotFileError.current() }
-                _ = try HookFiles.metadata(self.observerLease)
-                guard flock(self.observerLease, LOCK_EX | LOCK_NB) == 0 else {
-                    throw CopilotRegistrationConflict("A separate observer setup is still running.")
-                }
-            }
+        if requested == .prepare {
+            try await CopilotSetupFileWork.run { try self.acquireObserverLease() }
         }
         try await CopilotSetupFileWork.run { try self.load() }
-        switch action {
-        case "prepare":
-            if let record {
-                guard record.phase == "prepared" else { throw CopilotFileError.changed }
-                try await verifyBefore()
-                return record.unchanged
-            }
-            return try await prepare()
-        case "apply":
-            guard let record else { throw CopilotFileError.missing }
-            if record.phase == "applied" { try await verifyApplied(); return record.unchanged }
-            guard record.phase == "prepared" else {
-                throw CopilotRegistrationConflict("Interrupted integration must be restored before another apply.")
-            }
-            try await verifyBefore()
-            if !record.unchanged {
-                try await CopilotSetupFileWork.run { try self.phase("applying") }
-                if record.resourceOnly {
-                    try await CopilotSetupFileWork.run {
-                        _ = try self.files.preparePlugin(root: self.root, helper: self.helper,
-                                                        controller: self.controller, skill: self.skill)
-                    }
-                } else {
-                    let result = await CopilotSetup(files: files, runner: runner,
-                        bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier, registration: registration,
-                        beforePluginMutation: {
-                            self.record?.providerMutationStarted = true
-                            try self.save()
-                        }).perform(
-                            .install, selected: URL(fileURLWithPath: record.executable), path: path,
-                            root: root, helper: helper, controller: controller, skill: skill)
-                    guard CopilotSetupCommandLine.completion(result).exitCode == 0 else {
-                        throw CopilotRegistrationConflict(result.message)
-                    }
-                }
-            }
-            let observed = try await metadata()
-            try await CopilotSetupFileWork.run {
-                try self.verifyForeign(observed)
-                if record.resourceOnly,
-                   let identity = record.sourceIdentity {
-                    try self.verifyAllowed(self.readEntries())
-                    try self.registration.refreshCurrentProvenance(observed, identity: identity)
-                }
-                let identity = try self.registration.recordedSourceIdentity()
-                guard identity != nil,
-                      self.record?.sourceIdentity == nil || self.record?.sourceIdentity == identity,
-                      try self.registration.verifyCurrent(observed, identity: identity) else { throw CopilotFileError.changed }
-                self.record?.sourceIdentity = identity
-                try self.verifyDesiredCache()
-                let states = try self.readEntries()
-                try self.verifyAllowed(states)
-                self.record?.after = states.map(Image.init)
-                try self.phase("applied")
-            }
-            return record.unchanged
-        case "verify":
+        // An unknown action still takes the leases and validates the journal first.
+        guard let requested else { throw CopilotFileError.io }
+        switch requested {
+        case .prepare: return try await prepareCheckpoint()
+        case .apply: return try await applyCheckpoint()
+        case .verify:
             guard let record else { throw CopilotFileError.missing }
             try await verifyApplied()
             return record.unchanged
-        case "restore":
+        case .restore:
             if record == nil {
                 guard allowAbsent else { throw CopilotFileError.missing }
                 return true
             }
             try await restore()
             return true
-        case "finish":
-            guard let record else { throw CopilotFileError.missing }
-            if ["applied", "committed"].contains(record.phase) {
-                try await verifyApplied()
-                try await CopilotSetupFileWork.run { try self.phase("committed") }
-            }
-            else if record.phase == "restored" { try await verifyBefore() }
-            else { throw CopilotFileError.changed }
-            return true
-        case "release":
-            guard let record else {
-                guard allowAbsent else { throw CopilotFileError.missing }
-                return true
-            }
-            guard ["committed", "restored"].contains(record.phase) else { throw CopilotFileError.changed }
-            try await CopilotSetupFileWork.run {
-                guard let journal = self.journal else { throw CopilotFileError.missing }
-                self.journal = try journal.replacing(with: nil)
-                self.record = nil
-            }
-            return true
-        default: throw CopilotFileError.io
+        case .finish: return try await finishCheckpoint()
+        case .release: return try await releaseCheckpoint(allowAbsent: allowAbsent)
         }
+    }
+
+    private func acquireObserverLease() throws {
+        let directory = try HookFiles.directory(root, create: true)
+        defer { close(directory) }
+        observerLease = openat(directory, ".observer-setup.lock",
+            O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
+        guard observerLease >= 0 else { throw CopilotFileError.current() }
+        _ = try HookFiles.metadata(observerLease)
+        guard flock(observerLease, LOCK_EX | LOCK_NB) == 0 else {
+            throw CopilotRegistrationConflict("A separate observer setup is still running.")
+        }
+    }
+
+    private func prepareCheckpoint() async throws -> Bool {
+        guard let record else { return try await prepare() }
+        guard record.stage == .prepared else { throw CopilotFileError.changed }
+        try await verifyBefore()
+        return record.unchanged
+    }
+
+    private func applyCheckpoint() async throws -> Bool {
+        guard let record else { throw CopilotFileError.missing }
+        if record.stage == .applied { try await verifyApplied(); return record.unchanged }
+        guard record.stage == .prepared else {
+            throw CopilotRegistrationConflict("Interrupted integration must be restored before another apply.")
+        }
+        try await verifyBefore()
+        if !record.unchanged { try await applyChanges(record) }
+        let observed = try await metadata()
+        try await CopilotSetupFileWork.run { try self.recordApplied(record, observed: observed) }
+        return record.unchanged
+    }
+
+    private func applyChanges(_ record: Record) async throws {
+        try await CopilotSetupFileWork.run { try self.phase(.applying) }
+        if record.resourceOnly {
+            try await CopilotSetupFileWork.run {
+                _ = try self.files.preparePlugin(root: self.root, helper: self.helper,
+                                                controller: self.controller, skill: self.skill)
+            }
+            return
+        }
+        let result = await CopilotSetup(files: files, runner: runner,
+            bundleIdentifier: CopilotSetupAccess.productionBundleIdentifier, registration: registration,
+            beforePluginMutation: {
+                self.record?.providerMutationStarted = true
+                try self.save()
+            }).perform(
+                .install, selected: URL(fileURLWithPath: record.executable), path: path,
+                root: root, helper: helper, controller: controller, skill: skill)
+        guard CopilotSetupCommandLine.completion(result).exitCode == 0 else {
+            throw CopilotRegistrationConflict(result.message)
+        }
+    }
+
+    // `record` is the pre-apply snapshot; receipt intents may since have
+    // recorded a source identity on the live record.
+    private func recordApplied(_ record: Record, observed: CopilotSetupMetadata) throws {
+        try verifyForeign(observed)
+        if record.resourceOnly,
+           let identity = record.sourceIdentity {
+            try verifyAllowed(readEntries())
+            try registration.refreshCurrentProvenance(observed, identity: identity)
+        }
+        let identity = try registration.recordedSourceIdentity()
+        guard identity != nil,
+              self.record?.sourceIdentity == nil || self.record?.sourceIdentity == identity,
+              try registration.verifyCurrent(observed, identity: identity) else { throw CopilotFileError.changed }
+        self.record?.sourceIdentity = identity
+        try verifyDesiredCache()
+        let states = try readEntries()
+        try verifyAllowed(states)
+        self.record?.after = states.map(Image.init)
+        try phase(.applied)
+    }
+
+    private func finishCheckpoint() async throws -> Bool {
+        guard let record else { throw CopilotFileError.missing }
+        switch record.stage {
+        case .applied?, .committed?:
+            try await verifyApplied()
+            try await CopilotSetupFileWork.run { try self.phase(.committed) }
+        case .restored?:
+            try await verifyBefore()
+        default:
+            throw CopilotFileError.changed
+        }
+        return true
+    }
+
+    private func releaseCheckpoint(allowAbsent: Bool) async throws -> Bool {
+        guard let record else {
+            guard allowAbsent else { throw CopilotFileError.missing }
+            return true
+        }
+        guard record.stage == .committed || record.stage == .restored else { throw CopilotFileError.changed }
+        try await CopilotSetupFileWork.run {
+            guard let journal = self.journal else { throw CopilotFileError.missing }
+            self.journal = try journal.replacing(with: nil)
+            self.record = nil
+        }
+        return true
     }
 
     private func acquire() throws {
@@ -696,7 +732,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
               value.executable.hasPrefix("/"),
               !value.executable.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
               value.metadata.hooks.count <= 256, value.metadata.plugins.count <= 128,
-              ["prepared", "applying", "applied", "committed", "restoring", "restored"].contains(value.phase),
+              value.stage != nil,
               value.entries.count <= 32,
               value.settings.valid(maximum: 65_536), value.cache.allSatisfy({ $0.valid(maximum: 65_536) }),
               value.after == nil || value.after?.count == value.entries.count else { throw CopilotFileError.unsafePath }
@@ -731,7 +767,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
 
     private func recordReceiptIntent(before: CopilotSetupFileState, data: Data?, permissions: UInt16,
                                      identity: CopilotSourceIdentity?) throws {
-        guard let record, record.phase == "applying",
+        guard let record, record.stage == .applying,
               before.url == registration.receiptFile,
               let entry = record.entries.first(where: { $0.path == before.url.path }),
               entry.before.matches(before) || record.receiptIntents?.contains(where: { $0.matches(before) }) == true
@@ -767,8 +803,8 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         self.journal = try journal.replacing(with: data, permissions: 0o600)
     }
 
-    private func phase(_ value: String) throws {
-        record?.phase = value
+    private func phase(_ value: Phase) throws {
+        record?.phase = value.rawValue
         try save()
     }
 
@@ -844,7 +880,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
                 entries: zip(targets, before).map { target, state in
                     Entry(path: target.file.path, before: Image(state), desired: target.data,
                           permissions: target.permissions, maximum: target.maximum)
-                }, unchanged: unchanged, phase: "prepared", after: nil)
+                }, unchanged: unchanged, phase: Phase.prepared.rawValue, after: nil)
             self.record?.sourceIdentity = operation.sourceIdentity
             self.record?.keepsProviderRegistration = resourceOnly
             self.record?.providerMutationStarted = false
@@ -942,7 +978,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
     }
 
     private func verifyApplied() async throws {
-        guard let record, ["applied", "committed"].contains(record.phase), let after = record.after else { throw CopilotFileError.changed }
+        guard let record, record.stage == .applied || record.stage == .committed, let after = record.after else { throw CopilotFileError.changed }
         let observed = try await metadata()
         try await CopilotSetupFileWork.run {
             try self.verifyForeign(observed)
@@ -965,10 +1001,10 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
                       state.stamp?.permissions == entry.before.permissions else { throw CopilotFileError.changed }
                 continue
             }
-            if record.phase == "restoring",
+            if record.stage == .restoring,
                let cacheIndex = pluginEntries().firstIndex(where: { $0.path == entry.path }),
                record.cache[cacheIndex].matches(state) { continue }
-            if entry.path == registration.file.path, record.after == nil || record.phase == "restoring", let data = state.data,
+            if entry.path == registration.file.path, record.after == nil || record.stage == .restoring, let data = state.data,
                try record.generation.recognizes(data) { continue }
             if entry.path == registration.receiptFile.path {
                 guard record.after == nil, record.receiptIntents?.contains(where: { $0.matches(state) }) == true else {
@@ -1013,197 +1049,272 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         }
     }
 
+    // MARK: Restore
+
+    private struct RestorePlan {
+        enum Route { case confirmUntouched, restoreResources, compensateProvider }
+
+        let route: Route
+        let priorInstalled: Bool
+        let priorDisabled: Bool
+        // A provider mutation interrupted while the owned plugin was disabled
+        // must be disabled again; the settings it rewrote are then expected.
+        let reapplyDisabled: Bool
+        var verifiesSettings: Bool { !reapplyDisabled }
+
+        init(_ record: Record) {
+            let own = record.metadata.plugins.first { $0.name == CopilotPluginManifest.name }
+            priorInstalled = own != nil
+            priorDisabled = own?.enabled == false
+            reapplyDisabled = priorDisabled && !record.resourceOnly && record.providerMutationStarted == true
+                && (record.stage == .applying || record.stage == .restoring)
+            if record.stage == .prepared || record.stage == .restored {
+                route = .confirmUntouched
+            } else {
+                route = record.resourceOnly ? .restoreResources : .compensateProvider
+            }
+        }
+    }
+
+    private struct CompensationStaging {
+        let installed: Bool
+        let identity: String?
+        let observer: CopilotSetupFileState
+        let receipt: CopilotSetupFileState
+        let sources: [CopilotSetupFileState]
+    }
+
     private func restore() async throws {
         guard let record else { throw CopilotFileError.missing }
-        if record.phase == "prepared" || record.phase == "restored" {
-            try await verifyBefore()
-            try await CopilotSetupFileWork.run { try self.phase("restored") }
+        let plan = RestorePlan(record)
+        if plan.route == .confirmUntouched {
+            try await markRestored()
             return
         }
         let observed = try await metadata()
-        let priorInstalled = record.metadata.plugins.contains { $0.name == CopilotPluginManifest.name }
-        let priorDisabled = record.metadata.plugins.first { $0.name == CopilotPluginManifest.name }?.enabled == false
-        let reapplyDisabled = priorDisabled && !record.resourceOnly && record.providerMutationStarted == true
-            && ["applying", "restoring"].contains(record.phase)
-        if priorDisabled && !reapplyDisabled,
+        if plan.priorDisabled && !plan.reapplyDisabled,
            observed.plugins.first(where: { $0.name == CopilotPluginManifest.name })?.enabled != false {
             throw CopilotRegistrationConflict("The owned disabled state changed outside an in-progress provider mutation; recovery will not overwrite the newer choice.")
         }
-        let binding: CopilotSourceIdentity?
-        if priorInstalled || observed.plugins.contains(where: { $0.name == CopilotPluginManifest.name }) {
-            let sources = try await CopilotSetupFileWork.run {
-                try self.verifyForeign(observed, verifySettings: !reapplyDisabled)
-                let states = try self.readEntries()
-                try self.verifyAllowed(states)
-                return try self.pluginEntries().map {
-                    try CopilotSetupFileState.read(URL(fileURLWithPath: $0.path), maximum: $0.maximum)
-                }
-            }
-            let executable = try files.executable(selected: URL(fileURLWithPath: record.executable), path: path)
-            let identity = try await CopilotSetup.bootstrap(runner: runner, executable: executable,
-                                                           source: registration.plugin, path: path)
-            let current = try await metadata()
-            try await CopilotSetupFileWork.run {
-                for source in sources { try source.revalidate() }
-                try self.verifyForeign(current, verifySettings: !reapplyDisabled)
-                guard identity.version == record.metadata.version,
-                      record.sourceIdentity == nil || record.sourceIdentity == identity,
-                      current.plugins.filter({ $0.name == CopilotPluginManifest.name })
-                        == observed.plugins.filter({ $0.name == CopilotPluginManifest.name }),
-                      current.plugins.filter({ $0.name == CopilotPluginManifest.name }).allSatisfy({
-                          $0.isUnmanagedDirectInstall && $0.directSourceId == identity.directSourceId
-                      }),
-                      record.metadata.plugins.filter({ $0.name == CopilotPluginManifest.name }).allSatisfy({
-                          $0.directSourceId == identity.directSourceId
-                      }) else {
-                    throw CopilotRegistrationConflict("Restoration source authority changed; no same-name replacement is authorized.")
-                }
-            }
-            binding = identity
-        } else { binding = nil }
-        let restoringMetadata: CopilotSetupMetadata
-        if reapplyDisabled, observed.plugins.first(where: { $0.name == CopilotPluginManifest.name })?.enabled == true {
-            guard let binding else { throw CopilotFileError.changed }
-            let executable = try files.executable(selected: URL(fileURLWithPath: record.executable), path: path)
-            try await CopilotSetup.reapplyDisabled(runner: runner, executable: executable, identity: binding.directSourceId,
-                                                  path: path, providerHome: registration.providerHome)
-            restoringMetadata = try await metadata()
-        } else { restoringMetadata = observed }
-        if record.resourceOnly {
-            try await CopilotSetupFileWork.run {
-                let settings = try self.verifyForeign(observed)
-                try self.verifyProvider(observed)
-                let states = try self.readEntries()
-                try self.verifyAllowed(states)
-                try self.phase("restoring")
-                for (entry, state) in zip(record.entries, states) {
-                    _ = try state.replacing(with: entry.before.data, permissions: entry.before.permissions)
-                }
-                _ = try settings.replacing(with: record.settings.data, permissions: record.settings.permissions)
-            }
-            try await verifyBefore()
-            try await CopilotSetupFileWork.run { try self.phase("restored") }
+        let binding = try await bindRestorationSource(record, plan: plan, observed: observed)
+        let restoringMetadata = try await reapplyDisabledIfInterrupted(
+            record, plan: plan, observed: observed, binding: binding
+        )
+        if plan.route == .restoreResources {
+            try await CopilotSetupFileWork.run { try self.restoreResources(record, observed: observed) }
+            try await markRestored()
             return
         }
         let unchanged = try await CopilotSetupFileWork.run {
-            _ = try self.verifyForeign(restoringMetadata, verifySettings: !reapplyDisabled)
-            let states = try self.readEntries()
-            try self.verifyAllowed(states)
-            guard zip(record.entries, states).allSatisfy({ $0.before.matches($1) }),
-                  try self.providerMatches(restoringMetadata) else { return false }
-            let settings = try self.verifyForeign(restoringMetadata)
-            _ = try settings.replacing(with: record.settings.data, permissions: record.settings.permissions)
-            return true
+            try self.restoreSettingsIfProviderUnchanged(record, plan: plan, metadata: restoringMetadata)
         }
         if unchanged {
-            try await verifyBefore()
-            try await CopilotSetupFileWork.run { try self.phase("restored") }
+            try await markRestored()
             return
         }
         let replaceProvider = try await CopilotSetupFileWork.run {
-            try priorInstalled && !(priorDisabled && self.installedPayloadMatches(restoringMetadata))
+            try plan.priorInstalled && !(plan.priorDisabled && self.installedPayloadMatches(restoringMetadata))
         }
         let staging = try await CopilotSetupFileWork.run {
-            try self.verifyForeign(restoringMetadata, verifySettings: !reapplyDisabled)
-            try self.verifyAllowed(self.readEntries())
-            let helpers = [record.generation.helper] + record.entries.compactMap { entry -> String? in
-                guard entry.path.hasSuffix("/identity-helper.json"), let data = entry.before.data else { return nil }
-                return try? CopilotSetupJSON.object(data)["helper"] as? String
-            }
-            let identity = binding?.directSourceId
-            let pluginEntries = self.pluginEntries()
-            let manifestIndex = pluginEntries.firstIndex { $0.path == self.registration.plugin.appendingPathComponent("plugin.json").path }
-            let hooksIndex = pluginEntries.firstIndex { $0.path == self.registration.plugin.appendingPathComponent("hooks.json").path }
-            guard let manifestIndex, let hooksIndex else { throw CopilotFileError.io }
-            let installed = try self.registration.verifyCompensatablePlugin(restoringMetadata, identity: identity, helpers: helpers,
-                previousManifest: record.cache[manifestIndex].data, previousHooks: record.cache[hooksIndex].data)
-            guard priorDisabled || restoringMetadata.plugins.first(where: { $0.name == CopilotPluginManifest.name })?.enabled != false else {
-                throw CopilotRegistrationConflict("The native plugin was disabled after preparation; compensation will not re-enable it.")
-            }
-            if let binding { self.record?.sourceIdentity = binding }
-            try self.phase("restoring")
-            let owned = try CopilotSetupFileState.read(self.registration.file)
-            let observer = try owned.replacing(with: record.generation.manifest(disabled: true))
-            let receipt = try CopilotSetupFileState.read(self.registration.receiptFile)
-            let states = try self.readEntries()
-            for (entry, state) in zip(record.entries, states) where
-                entry.path != self.registration.file.path && entry.path != self.registration.receiptFile.path {
-                if !priorInstalled && installed && entry.path.hasPrefix(self.registration.plugin.path + "/") { continue }
-                _ = try state.replacing(with: entry.before.data, permissions: entry.before.permissions)
-            }
-            if replaceProvider {
-                // Reinstall the previous selected payload at the same source,
-                // even when an earlier incomplete setup had changed its source
-                // files without updating the provider's installed copy.
-                for (entry, image) in zip(pluginEntries, record.cache) {
-                    let current = try CopilotSetupFileState.read(URL(fileURLWithPath: entry.path), maximum: entry.maximum)
-                    guard entry.before.matches(current) else { throw CopilotFileError.changed }
-                    _ = try current.replacing(with: image.data, permissions: image.permissions)
-                }
-            }
-            let sources = try pluginEntries.map {
-                try CopilotSetupFileState.read(URL(fileURLWithPath: $0.path), maximum: $0.maximum)
-            }
-            return (installed: installed, identity: identity, observer: observer, receipt: receipt, sources: sources)
+            try self.stageCompensation(record, plan: plan, metadata: restoringMetadata,
+                                       binding: binding, replaceProvider: replaceProvider)
         }
-        if replaceProvider || (!priorInstalled && staging.installed) {
-            let executable = try files.executable(selected: URL(fileURLWithPath: record.executable), path: path)
-            guard let identity = staging.identity else {
-                throw CopilotRegistrationConflict("No authoritative plugin identity was retained; compensation cannot target a same-name installation.")
-            }
-            let operation: CopilotPluginOperation = priorInstalled
-                ? .install(source: registration.plugin, expectedIdentity: identity)
-                : .uninstall(identity: identity)
-            if priorDisabled {
-                try await CopilotSetupFileWork.run {
-                    self.record?.providerMutationStarted = true
-                    try self.save()
-                }
-            }
-            let result = await runner.plugin(executable: executable, operation: operation, path: path,
-                                             providerHome: registration.providerHome)
-            if priorDisabled {
-                try await CopilotSetup.reapplyDisabled(runner: runner, executable: executable, identity: identity,
-                                                      path: path, providerHome: registration.providerHome)
-            }
-            guard case .value(let receipt) = result else {
-                throw CopilotRegistrationConflict("Official plugin compensation failed; preserve the install checkpoint.")
-            }
-            if priorInstalled {
-                guard let plugin = receipt.plugin, plugin.isUnmanagedDirectInstall, plugin.enabled,
-                      plugin.name == CopilotPluginManifest.name, plugin.directSourceId == identity else {
-                    throw CopilotRegistrationConflict("Official compensation did not return the previous owned source identity.")
-                }
-            } else if receipt.plugin != nil { throw CopilotFileError.changed }
+        if replaceProvider || (!plan.priorInstalled && staging.installed) {
+            try await compensateProvider(record, plan: plan, staging: staging)
         }
         let compensated = try await metadata()
         try await CopilotSetupFileWork.run {
-            let settings = try self.verifyForeign(compensated)
-            let own = compensated.plugins.filter { $0.name == CopilotPluginManifest.name }
-            guard own == record.metadata.plugins.filter({ $0.name == CopilotPluginManifest.name }) else {
-                throw CopilotFileError.changed
-            }
-            if priorInstalled {
-                for (index, pair) in zip(self.pluginEntries(), record.cache).enumerated() {
-                    let (entry, image) = pair
-                    guard image.matches(try CopilotSetupFileState.read(self.cacheURL(source: entry.path), maximum: entry.maximum))
-                    else { throw CopilotFileError.changed }
-                    let source = staging.sources[index]
-                    _ = try source.replacing(with: entry.before.data, permissions: entry.before.permissions)
-                }
-            } else {
-                for (source, entry) in zip(staging.sources, self.pluginEntries()) {
-                    _ = try source.replacing(with: entry.before.data, permissions: entry.before.permissions)
-                }
-            }
-            for entry in record.entries where entry.path == self.registration.file.path || entry.path == self.registration.receiptFile.path {
-                let current = entry.path == self.registration.file.path ? staging.observer : staging.receipt
-                _ = try current.replacing(with: entry.before.data, permissions: entry.before.permissions)
-            }
-            _ = try settings.replacing(with: record.settings.data, permissions: record.settings.permissions)
+            try self.restoreCompensatedFiles(record, plan: plan, staging: staging, compensated: compensated)
         }
+        try await markRestored()
+    }
+
+    private func markRestored() async throws {
         try await verifyBefore()
-        try await CopilotSetupFileWork.run { try self.phase("restored") }
+        try await CopilotSetupFileWork.run { try self.phase(.restored) }
+    }
+
+    // Binds the exact plugin source that restoration may target, if any owned plugin exists.
+    private func bindRestorationSource(
+        _ record: Record, plan: RestorePlan, observed: CopilotSetupMetadata
+    ) async throws -> CopilotSourceIdentity? {
+        guard plan.priorInstalled || observed.plugins.contains(where: { $0.name == CopilotPluginManifest.name })
+        else { return nil }
+        let sources = try await CopilotSetupFileWork.run {
+            try self.verifyForeign(observed, verifySettings: plan.verifiesSettings)
+            let states = try self.readEntries()
+            try self.verifyAllowed(states)
+            return try self.pluginEntries().map {
+                try CopilotSetupFileState.read(URL(fileURLWithPath: $0.path), maximum: $0.maximum)
+            }
+        }
+        let executable = try files.executable(selected: URL(fileURLWithPath: record.executable), path: path)
+        let identity = try await CopilotSetup.bootstrap(runner: runner, executable: executable,
+                                                       source: registration.plugin, path: path)
+        let current = try await metadata()
+        try await CopilotSetupFileWork.run {
+            for source in sources { try source.revalidate() }
+            try self.verifyForeign(current, verifySettings: plan.verifiesSettings)
+            guard identity.version == record.metadata.version,
+                  record.sourceIdentity == nil || record.sourceIdentity == identity,
+                  current.plugins.filter({ $0.name == CopilotPluginManifest.name })
+                    == observed.plugins.filter({ $0.name == CopilotPluginManifest.name }),
+                  current.plugins.filter({ $0.name == CopilotPluginManifest.name }).allSatisfy({
+                      $0.isUnmanagedDirectInstall && $0.directSourceId == identity.directSourceId
+                  }),
+                  record.metadata.plugins.filter({ $0.name == CopilotPluginManifest.name }).allSatisfy({
+                      $0.directSourceId == identity.directSourceId
+                  }) else {
+                throw CopilotRegistrationConflict("Restoration source authority changed; no same-name replacement is authorized.")
+            }
+        }
+        return identity
+    }
+
+    private func reapplyDisabledIfInterrupted(
+        _ record: Record, plan: RestorePlan, observed: CopilotSetupMetadata, binding: CopilotSourceIdentity?
+    ) async throws -> CopilotSetupMetadata {
+        guard plan.reapplyDisabled,
+              observed.plugins.first(where: { $0.name == CopilotPluginManifest.name })?.enabled == true
+        else { return observed }
+        guard let binding else { throw CopilotFileError.changed }
+        let executable = try files.executable(selected: URL(fileURLWithPath: record.executable), path: path)
+        try await CopilotSetup.reapplyDisabled(runner: runner, executable: executable, identity: binding.directSourceId,
+                                              path: path, providerHome: registration.providerHome)
+        return try await metadata()
+    }
+
+    private func restoreResources(_ record: Record, observed: CopilotSetupMetadata) throws {
+        let settings = try verifyForeign(observed)
+        try verifyProvider(observed)
+        let states = try readEntries()
+        try verifyAllowed(states)
+        try phase(.restoring)
+        for (entry, state) in zip(record.entries, states) {
+            _ = try state.replacing(with: entry.before.data, permissions: entry.before.permissions)
+        }
+        _ = try settings.replacing(with: record.settings.data, permissions: record.settings.permissions)
+    }
+
+    // Returns whether only the settings needed restoring.
+    private func restoreSettingsIfProviderUnchanged(
+        _ record: Record, plan: RestorePlan, metadata: CopilotSetupMetadata
+    ) throws -> Bool {
+        _ = try verifyForeign(metadata, verifySettings: plan.verifiesSettings)
+        let states = try readEntries()
+        try verifyAllowed(states)
+        guard zip(record.entries, states).allSatisfy({ $0.before.matches($1) }),
+              try providerMatches(metadata) else { return false }
+        let settings = try verifyForeign(metadata)
+        _ = try settings.replacing(with: record.settings.data, permissions: record.settings.permissions)
+        return true
+    }
+
+    private func stageCompensation(
+        _ record: Record, plan: RestorePlan, metadata: CopilotSetupMetadata,
+        binding: CopilotSourceIdentity?, replaceProvider: Bool
+    ) throws -> CompensationStaging {
+        try verifyForeign(metadata, verifySettings: plan.verifiesSettings)
+        try verifyAllowed(readEntries())
+        let helpers = [record.generation.helper] + record.entries.compactMap { entry -> String? in
+            guard entry.path.hasSuffix("/identity-helper.json"), let data = entry.before.data else { return nil }
+            return try? CopilotSetupJSON.object(data)["helper"] as? String
+        }
+        let identity = binding?.directSourceId
+        let pluginEntries = self.pluginEntries()
+        let manifestIndex = pluginEntries.firstIndex { $0.path == registration.plugin.appendingPathComponent("plugin.json").path }
+        let hooksIndex = pluginEntries.firstIndex { $0.path == registration.plugin.appendingPathComponent("hooks.json").path }
+        guard let manifestIndex, let hooksIndex else { throw CopilotFileError.io }
+        let installed = try registration.verifyCompensatablePlugin(metadata, identity: identity, helpers: helpers,
+            previousManifest: record.cache[manifestIndex].data, previousHooks: record.cache[hooksIndex].data)
+        guard plan.priorDisabled || metadata.plugins.first(where: { $0.name == CopilotPluginManifest.name })?.enabled != false else {
+            throw CopilotRegistrationConflict("The native plugin was disabled after preparation; compensation will not re-enable it.")
+        }
+        if let binding { self.record?.sourceIdentity = binding }
+        try phase(.restoring)
+        let owned = try CopilotSetupFileState.read(registration.file)
+        let observer = try owned.replacing(with: record.generation.manifest(disabled: true))
+        let receipt = try CopilotSetupFileState.read(registration.receiptFile)
+        let states = try readEntries()
+        for (entry, state) in zip(record.entries, states) where
+            entry.path != registration.file.path && entry.path != registration.receiptFile.path {
+            if !plan.priorInstalled && installed && entry.path.hasPrefix(registration.plugin.path + "/") { continue }
+            _ = try state.replacing(with: entry.before.data, permissions: entry.before.permissions)
+        }
+        if replaceProvider {
+            // Reinstall the previous selected payload at the same source,
+            // even when an earlier incomplete setup had changed its source
+            // files without updating the provider's installed copy.
+            for (entry, image) in zip(pluginEntries, record.cache) {
+                let current = try CopilotSetupFileState.read(URL(fileURLWithPath: entry.path), maximum: entry.maximum)
+                guard entry.before.matches(current) else { throw CopilotFileError.changed }
+                _ = try current.replacing(with: image.data, permissions: image.permissions)
+            }
+        }
+        let sources = try pluginEntries.map {
+            try CopilotSetupFileState.read(URL(fileURLWithPath: $0.path), maximum: $0.maximum)
+        }
+        return CompensationStaging(installed: installed, identity: identity, observer: observer,
+                                   receipt: receipt, sources: sources)
+    }
+
+    private func compensateProvider(_ record: Record, plan: RestorePlan, staging: CompensationStaging) async throws {
+        let executable = try files.executable(selected: URL(fileURLWithPath: record.executable), path: path)
+        guard let identity = staging.identity else {
+            throw CopilotRegistrationConflict("No authoritative plugin identity was retained; compensation cannot target a same-name installation.")
+        }
+        let operation: CopilotPluginOperation = plan.priorInstalled
+            ? .install(source: registration.plugin, expectedIdentity: identity)
+            : .uninstall(identity: identity)
+        if plan.priorDisabled {
+            try await CopilotSetupFileWork.run {
+                self.record?.providerMutationStarted = true
+                try self.save()
+            }
+        }
+        let result = await runner.plugin(executable: executable, operation: operation, path: path,
+                                         providerHome: registration.providerHome)
+        if plan.priorDisabled {
+            try await CopilotSetup.reapplyDisabled(runner: runner, executable: executable, identity: identity,
+                                                  path: path, providerHome: registration.providerHome)
+        }
+        guard case .value(let receipt) = result else {
+            throw CopilotRegistrationConflict("Official plugin compensation failed; preserve the install checkpoint.")
+        }
+        if plan.priorInstalled {
+            guard let plugin = receipt.plugin, plugin.isUnmanagedDirectInstall, plugin.enabled,
+                  plugin.name == CopilotPluginManifest.name, plugin.directSourceId == identity else {
+                throw CopilotRegistrationConflict("Official compensation did not return the previous owned source identity.")
+            }
+        } else if receipt.plugin != nil { throw CopilotFileError.changed }
+    }
+
+    private func restoreCompensatedFiles(
+        _ record: Record, plan: RestorePlan, staging: CompensationStaging, compensated: CopilotSetupMetadata
+    ) throws {
+        let settings = try verifyForeign(compensated)
+        let own = compensated.plugins.filter { $0.name == CopilotPluginManifest.name }
+        guard own == record.metadata.plugins.filter({ $0.name == CopilotPluginManifest.name }) else {
+            throw CopilotFileError.changed
+        }
+        if plan.priorInstalled {
+            for (index, pair) in zip(pluginEntries(), record.cache).enumerated() {
+                let (entry, image) = pair
+                guard image.matches(try CopilotSetupFileState.read(cacheURL(source: entry.path), maximum: entry.maximum))
+                else { throw CopilotFileError.changed }
+                let source = staging.sources[index]
+                _ = try source.replacing(with: entry.before.data, permissions: entry.before.permissions)
+            }
+        } else {
+            for (source, entry) in zip(staging.sources, pluginEntries()) {
+                _ = try source.replacing(with: entry.before.data, permissions: entry.before.permissions)
+            }
+        }
+        for entry in record.entries where entry.path == registration.file.path || entry.path == registration.receiptFile.path {
+            let current = entry.path == registration.file.path ? staging.observer : staging.receipt
+            _ = try current.replacing(with: entry.before.data, permissions: entry.before.permissions)
+        }
+        _ = try settings.replacing(with: record.settings.data, permissions: record.settings.permissions)
     }
 }
 
@@ -1212,7 +1323,6 @@ nonisolated enum CopilotProcessResult: Equatable, Sendable {
 }
 
 nonisolated protocol CopilotSetupProcessRunner: Sendable {
-    func run(executable: URL, arguments: [String], path: String, providerHome: URL?) async -> CopilotProcessResult
     func metadata(executable: URL, path: String, providerHome: URL?) async -> CopilotMetadataResult
     func plugin(executable: URL, operation: CopilotPluginOperation, path: String, providerHome: URL?) async -> CopilotPluginOperationResult
     func sourceIdentity(executable: URL, source: URL, path: String) async -> CopilotSourceIdentityResult
@@ -1687,33 +1797,72 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         return quiescent
     }
 
+    struct GroupStopSeam {
+        var signal: (Int32, Int32) -> Int32 = { kill(-$0, $1) }
+        var childUnavailable: (Int32) -> Bool = { pid in
+            if case .unavailable = LocalCopilotSetupRunner.childState(pid) { return true }
+            return false
+        }
+        var isQuiescent: (Int32) -> Bool = { LocalCopilotSetupRunner.groupIsQuiescent($0) }
+        var reap: (Int32) -> Void = { LocalCopilotSetupRunner.reap($0) }
+        var postKillGrace: TimeInterval = LocalCopilotSetupRunner.postKillQuiescenceGrace
+    }
+
     private static func stopGroup(_ pid: Int32, grace: TimeInterval, observation: CopilotSetupObservation? = nil) -> Bool {
+        var seam = GroupStopSeam()
+        seam.childUnavailable = { if case .unavailable = childState($0, observation: observation) { true } else { false } }
+        seam.isQuiescent = { groupIsQuiescent($0, observation: observation) }
+        seam.reap = { reap($0, observation: observation) }
         observation?.begin(.stopGroup)
         defer { observation?.end(.stopGroup) }
+        return stopGroup(pid, grace: grace, seam: seam, observation: observation)
+    }
+
+    static func stopGroup(_ pid: Int32, grace: TimeInterval, seam: GroupStopSeam,
+                          observation: CopilotSetupObservation? = nil) -> Bool {
         // posix_spawn atomically gave this invocation a new group named by its
         // PID. WNOWAIT retains its leader until cleanup, preventing group-ID
         // reuse. Never signal the application's group or a reaped invocation.
         guard pid > 1, pid != getpgrp() else { return false }
-        if case .unavailable = childState(pid, observation: observation) { return false }
+        if seam.childUnavailable(pid) { return false }
         observation?.begin(.termSignal)
-        let termResult = kill(-pid, SIGTERM)
+        let termResult = seam.signal(pid, SIGTERM)
         let termError = termResult < 0 ? errno : 0
         let deadline = ContinuousClock.now.advanced(by: .seconds(grace))
         observation?.note(.termSignal, .init(result: termResult, error: termError, pid: pid, status: SIGTERM))
         observation?.end(.termSignal)
-        while !groupIsQuiescent(pid, observation: observation), ContinuousClock.now < deadline {
+        while !seam.isQuiescent(pid), ContinuousClock.now < deadline {
             Thread.sleep(forTimeInterval: 0.01)
         }
-        if case .unavailable = childState(pid, observation: observation) { return false }
+        if seam.childUnavailable(pid) { return false }
         observation?.begin(.killSignal)
-        let killResult = kill(-pid, SIGKILL)
+        let killResult = seam.signal(pid, SIGKILL)
         let killError = killResult < 0 ? errno : 0
         observation?.note(.killSignal, .init(result: killResult, error: killError, pid: pid, status: SIGKILL))
         observation?.end(.killSignal)
-        while !groupIsQuiescent(pid, observation: observation) {
-            Thread.sleep(forTimeInterval: 0.01)
+        // SIGKILL cannot be ignored, but an uninterruptible member or failing enumeration
+        // must not hold the dispatch worker forever. The bound is independent of the
+        // caller's SIGTERM grace. Leave the leader unreaped so its process-group anchor
+        // stays valid, and report the group as not stopped.
+        let stopped = waitForQuiescence(
+            until: .now.advanced(by: .seconds(seam.postKillGrace))
+        ) { seam.isQuiescent(pid) }
+        guard stopped else { return false }
+        seam.reap(pid)
+        return true
+    }
+
+    static let postKillQuiescenceGrace: TimeInterval = 5
+
+    static func waitForQuiescence(
+        until deadline: ContinuousClock.Instant,
+        pollInterval: TimeInterval = 0.01,
+        isQuiescent: () -> Bool
+    ) -> Bool {
+        while !isQuiescent() {
+            guard ContinuousClock.now < deadline else { return false }
+            Thread.sleep(forTimeInterval: pollInterval)
         }
-        reap(pid, observation: observation)
         return true
     }
 
