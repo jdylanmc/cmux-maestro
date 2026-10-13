@@ -260,8 +260,8 @@ struct SidebarCopilotTree: Equatable {
         }
         // Cosmetic warnings are shown but never decide trust; session-scoped
         // doubt is attributed to its own session below.
-        let trustIssues = (snapshot.issues ?? []).filter { !$0.isCosmetic }
-        var issues = snapshot.issues ?? []
+        let trustIssues = snapshot.globalIssues.filter { !$0.isCosmetic }
+        var issues = snapshot.globalIssues
         for scoped in snapshot.sessions.flatMap({ $0.sessionIssues ?? [] }) where !issues.contains(scoped) {
             issues.append(scoped)
         }
