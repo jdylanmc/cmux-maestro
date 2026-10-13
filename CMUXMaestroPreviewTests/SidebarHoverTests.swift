@@ -494,16 +494,14 @@ struct SidebarHoverTests {
             anchor.mouseEntered(with: event)
             anchor.mouseExited(with: event)
         }
-        await presenter.settleScheduledTransitions()
-        clock.elapse(SidebarHoverPresenter.openDelay)
-        await presenter.settleScheduledTransitions()
-        #expect(clock.pending.isEmpty, "Leaving the name must cancel every pending open")
+        #expect(await clock.elapse(SidebarHoverPresenter.openDelay) == 0, "Leaving the name must cancel every pending open")
+        #expect(clock.pending.isEmpty)
         #expect(presenter.state.mode == .hidden && presenter.panel == nil)
         anchor.mouseEntered(with: event)
         await sidebarEventually { clock.pending == [SidebarHoverPresenter.openDelay] }
         #expect(presenter.state.mode == .hidden, "Hover must wait for the open delay")
-        clock.elapse(SidebarHoverPresenter.openDelay)
-        await presenter.settleScheduledTransitions()
+        #expect(await clock.elapse(SidebarHoverPresenter.openDelay) == 1)
+        await sidebarEventually { presenter.state.mode == .hover }
         #expect(presenter.state.mode == .hover)
         anchor.mouseExited(with: event)
         #expect(presenter.state.mode == .hidden)
@@ -579,15 +577,14 @@ struct SidebarHoverTests {
         presenter.hoverAnchor(false)
         presenter.copyActionFocus(true)
         await sidebarEventually { clock.pending == [SidebarHoverPresenter.closeDelay] }
-        clock.elapse(SidebarHoverPresenter.closeDelay)
-        await presenter.settleScheduledTransitions()
+        #expect(await clock.elapse(SidebarHoverPresenter.closeDelay) == 1, "The delayed close must run its recheck")
         #expect(presenter.state.mode == .hover)
         #expect(presenter.panel != nil)
         presenter.copyActionFocus(false)
         await sidebarEventually { clock.pending == [SidebarHoverPresenter.closeDelay] }
         #expect(presenter.state.mode == .hover, "Dismissal must wait for the close delay")
-        clock.elapse(SidebarHoverPresenter.closeDelay)
-        await presenter.settleScheduledTransitions()
+        #expect(await clock.elapse(SidebarHoverPresenter.closeDelay) == 1)
+        await sidebarEventually { presenter.state.mode == .hidden }
         #expect(presenter.state.mode == .hidden)
         #expect(presenter.panel?.contentView == nil)
         #expect(!presenter.isMonitoring)
@@ -599,18 +596,14 @@ struct SidebarHoverTests {
         presenter.hoverAnchor(true)
         await sidebarEventually { clock.pending == [SidebarHoverPresenter.openDelay] }
         presenter.hoverAnchor(false)
-        await presenter.settleScheduledTransitions()
-        #expect(clock.pending.isEmpty)
-        clock.elapse(SidebarHoverPresenter.openDelay)
-        await presenter.settleScheduledTransitions()
+        await sidebarEventually { clock.pending.isEmpty }
+        #expect(await clock.elapse(SidebarHoverPresenter.openDelay) == 0, "Leaving cancels the pending open")
         #expect(presenter.panel == nil && presenter.state.mode == .hidden)
         presenter.hoverAnchor(true)
         await sidebarEventually { clock.pending == [SidebarHoverPresenter.openDelay] }
         presenter.detach()
-        await presenter.settleScheduledTransitions()
-        #expect(clock.pending.isEmpty)
-        clock.elapse(SidebarHoverPresenter.openDelay)
-        await presenter.settleScheduledTransitions()
+        await sidebarEventually { clock.pending.isEmpty }
+        #expect(await clock.elapse(SidebarHoverPresenter.openDelay) == 0, "Detaching cancels the pending open")
         #expect(presenter.panel == nil && presenter.state.mode == .hidden)
     }
 
@@ -813,10 +806,15 @@ final class SidebarManualHoverClock {
         }
     }
 
-    func elapse(_ duration: Duration) {
+    /// Resumes due waiters, then returns only after their main-actor continuations have run:
+    /// the hop below is enqueued on the serial main executor behind every resumed job.
+    @discardableResult
+    func elapse(_ duration: Duration) async -> Int {
         let due = waiters.filter { $0.duration <= duration }
         waiters.removeAll { $0.duration <= duration }
         for waiter in due { waiter.continuation.resume() }
+        await Task { @MainActor in }.value
+        return due.count
     }
 
     private func cancel(_ id: Int) {

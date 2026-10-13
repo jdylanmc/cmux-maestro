@@ -292,12 +292,6 @@ final class SidebarHoverPresenter {
         self.pause = pause
     }
 
-    /// Waits for any scheduled open or close transition to finish its check.
-    func settleScheduledTransitions() async {
-        await openTask?.value
-        await closeTask?.value
-    }
-
     func update(anchor: NSView, data: SidebarHoverCardData?, group: SidebarHoverGroup?) {
         self.anchor = anchor
         self.group = group
