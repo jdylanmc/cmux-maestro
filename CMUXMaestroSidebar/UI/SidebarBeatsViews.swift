@@ -71,7 +71,7 @@ struct SidebarBeatsPanel: View {
                 Spacer()
                 SidebarCloseButton(label: "Close Beats", id: "sidebar-close-beats", action: close)
             }
-            Text("Recurring prompts for exact agent sessions. Each session schedules its own through Copilot, so the session must be running.")
+            Text("Recurring prompts for agent sessions. The session must be running.")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let notice = controller.notice ?? actionError {
                 Text(notice).font(.caption).foregroundStyle(SidebarTone.attention.color)
@@ -114,7 +114,7 @@ private struct BeatsList: View {
         ScrollView {
             VStack(spacing: 8) {
                 if controller.beats.isEmpty {
-                    Text("No Beats yet.").font(.caption).foregroundStyle(.secondary).padding(.vertical, 12)
+                    Text("No beats.").font(.caption).foregroundStyle(.secondary).padding(.vertical, 12)
                 }
                 ForEach(controller.beats) { beat in
                     BeatRow(beat: beat, target: targets.first { $0.id.uuidString.lowercased() == beat.sessionId },
@@ -191,7 +191,7 @@ private struct BeatRow: View {
         case .needsRecovery:
             Button("Re-enable") { actionError = controller.perform { try $0.enable(id: beat.id) } }
                 .buttonStyle(.borderless)
-                .help("Restored after a relaunch or repair. A human re-enables recurrence.")
+                .help("Restored; re-enable recurrence.")
         case .targetEnded:
             Text("Choose a session in Edit").font(.caption2).foregroundStyle(.secondary)
         }
@@ -246,7 +246,7 @@ private struct BeatsForm: View {
             }
             .accessibilityIdentifier("sidebar-beats-target")
             if let existing, existing.targetEnded || session.map({ $0.uuidString.lowercased() != existing.sessionId }) == true {
-                Text("Choosing another session leaves this Beat paused until you re-enable it.")
+                Text("Changing sessions pauses this beat; re-enable it.")
                     .font(.caption2).foregroundStyle(.secondary)
             }
             HStack {

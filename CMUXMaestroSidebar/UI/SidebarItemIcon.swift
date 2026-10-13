@@ -59,8 +59,8 @@ struct SidebarItemIcon: View {
                 .popover(isPresented: showingPicker, arrowEdge: .trailing) {
                     if !Self.requestIsCurrent(picker?.wrappedValue, target: target) {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Icon target changed").font(.headline)
-                            Text("Close this preview and choose the current row. No icon has changed.").font(.callout)
+                            Text("Selection changed").font(.headline)
+                            Text("Close and choose the current row.").font(.callout)
                             Button("Close") { showingPicker.wrappedValue = false }
                         }
                         .padding(14).frame(width: 260)
