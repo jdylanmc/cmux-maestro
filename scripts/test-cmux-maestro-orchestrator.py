@@ -3922,7 +3922,10 @@ class DirectLaunchTests(unittest.TestCase):
                  "CMUX_MAESTRO_ROOT": str(self.h.path / "elsewhere"),
                  "CMUX_MAESTRO_IDENTITY_HELPER": str(self.h.path / "forged-helper"),
                  "CMUX_MAESTRO_FUTURE_SWITCH": "unknown value\nCMUX_MAESTRO_INJECTED=1",
-                 "CMUX_MAESTRO_MESSAGE_ROOT": "stale-parent", "CMUX_MAESTRO_WORKER_ID": "stale-worker"}
+                 "CMUX_MAESTRO_MESSAGE_ROOT": "stale-parent", "CMUX_MAESTRO_WORKER_ID": "stale-worker",
+                 # Legal environment names that are not shell identifiers.
+                 "CMUX_MAESTRO_ODD-NAME": "1", "CMUX_MAESTRO_DOT.NAME": "1", "CMUX_MAESTRO_": "1",
+                 "CMUX_MAESTRO_INITIAL_TASK": "stale task"}
         receipt = self.h.spawn_native("Report the environment.", "Scrubbed", env={**self.h.env, **stale})
         self.wait_file(self.h.path / "interactive-ready")
         call = self.h.calls()[0]
