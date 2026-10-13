@@ -51,6 +51,7 @@ review. Maestro is flexible: any sheet with 8 columns and at least nine rows of 
 cells at any whole-pixel scale works (width a multiple of 8, 512-4096). A **v2** pet
 (`spriteVersionNumber` 2, 1536x2288, 11 rows) adds look-direction rows below those; the
 extra rows are ignored and only the first nine play.
+`--add` refuses a corrupt or truncated sheet even when its header is valid.
 Maestro shows `idle`, `running` (working), `waiting` (needs input), `waving`
 (turn finished) and `failed` (blocked or failed).
 
