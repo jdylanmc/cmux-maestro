@@ -589,24 +589,33 @@ struct SidebarMotionTests {
         (coordinate * scale).rounded() / scale
     }
 
-    /// Wall time plus a test-advanced offset, so aging needs no real sleep.
+    /// A logical clock: a fixed base captured once, a test-advanced offset, and a 1ms tick per reading.
+    /// Production rejects snapshots not strictly newer than an invalidation, so readings stay monotonic
+    /// without consulting wall time; only `advance` moves time by a meaningful amount.
     private final class SidebarMotionClock: @unchecked Sendable {
         private let lock = NSLock()
+        private let base = Date()
         private var offset: TimeInterval = 0
-        var now: Date { lock.withLock { Date().addingTimeInterval(offset) } }
+        private var readings = 0
+        var now: Date {
+            lock.withLock {
+                readings += 1
+                return base.addingTimeInterval(offset + Double(readings) / 1_000)
+            }
+        }
         func advance(_ seconds: TimeInterval) { lock.withLock { offset += seconds } }
     }
 
     private actor SidebarMotionSnapshots {
         private var snapshot: CopilotSnapshot
-        private let clock: SidebarMotionClock
-        init(_ snapshot: CopilotSnapshot, clock: SidebarMotionClock = SidebarMotionClock()) {
+        private let clock: SidebarMotionClock?
+        init(_ snapshot: CopilotSnapshot, clock: SidebarMotionClock? = nil) {
             self.snapshot = snapshot
             self.clock = clock
         }
         func read() -> CopilotSnapshot {
-            // Production rows use wall time; each synthetic read is a new observation.
-            let now = clock.now
+            // Each synthetic read is a new observation, stamped by the injected clock or wall time.
+            let now = clock?.now ?? Date()
             return .init(generatedAt: now, sessions: snapshot.sessions.map { session in
                 var observation = CopilotSessionObservation(
                     sessionID: session.sessionID, surfaceID: session.surfaceID,
