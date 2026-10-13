@@ -44,11 +44,15 @@ final class SidebarNavigation {
     private var watchdog: Task<Void, Never>?
     private var activeTarget: SidebarNavigationTarget?
     private let timeout: @Sendable () async throws -> Void
+    private let responseProcessed: @MainActor () -> Void
 
+    /// `responseProcessed` runs once each host response has been fully handled,
+    /// including responses discarded as stale.
     init(timeout: @escaping @Sendable () async throws -> Void = {
         try await Task.sleep(for: .seconds(10))
-    }) {
+    }, responseProcessed: @escaping @MainActor () -> Void = {}) {
         self.timeout = timeout
+        self.responseProcessed = responseProcessed
     }
 
     var permissionSummary: String? {
@@ -126,7 +130,9 @@ final class SidebarNavigation {
         guard isAllowed(target) else { status = .denied; return }
         status = .selecting
         activeTarget = target
+        let processed = responseProcessed
         task = Task { [weak self] in
+            defer { processed() }
             let result: SidebarNavigationStatus
             do {
                 try await perform(target)
