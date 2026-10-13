@@ -67,6 +67,7 @@ python3 scripts/test-delivery-proof.py
 node --test scripts/test-delivery-proof.mjs
 python3 scripts/test-build-metadata.py
 python3 scripts/test-local-preview.py
+./scripts/test-copilot-shell-reducer.sh
 ./scripts/test-fetch-sdk-concurrency.sh
 ./scripts/build-unsigned.sh
 ./scripts/test.sh
