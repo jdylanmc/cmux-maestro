@@ -947,6 +947,38 @@ test("one rejected Beat never blocks the others and is reported once until it su
   assert.deepEqual(events, [["REJECTED", rejected.id], ["REJECTED", rejected.id]], "a new failure after recovery is reported again");
 });
 
+test("a schedule that cannot be stopped blocks its Beat's replacement and names the Beat", async (t) => {
+  const beat = makeBeat({ prompt: "Old words." });
+  const entries = [], events = [];
+  let wanted = [beat], stopRejected = true, nextId = 1;
+  const running = startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    read: async () => wanted,
+    gateway: {
+      list: async () => entries.map((entry) => ({ ...entry })),
+      add: async (entry) => { entries.push({ id: nextId, ...entry }); return nextId++; },
+      remove: async (id) => {
+        if (stopRejected) throw Object.assign(new Error("synthetic"), { code: "STOP_REJECTED" });
+        entries.splice(entries.findIndex((entry) => entry.id === id), 1);
+      },
+    },
+    diagnostic: (error, beatId) => events.push([error.code, beatId]),
+  });
+  t.after(() => running.close());
+  await running.ready;
+  wanted = [{ ...beat, prompt: "New words." }];
+  await running.sync();
+  await running.sync();
+  assert.deepEqual(entries.map((entry) => entry.prompt), ["Old words."], "never two schedules for one Beat");
+  assert.deepEqual(events, [["STOP_REJECTED", beat.id]]);
+  entries.push({ id: 99, cron: beat.cron, tz: TZ, prompt: "Old words.", label: `Beat [${beat.id.slice(0, 8)}] Old words.` });
+  await running.sync();
+  assert.equal(entries.filter((entry) => entry.prompt === "New words.").length, 0, "retired label blocks it too");
+  stopRejected = false;
+  await running.sync();
+  assert.deepEqual(entries.map((entry) => entry.prompt), ["New words."]);
+});
+
 async function beatsController(t, home) {
   const directory = await fs.mkdtemp(path.join(base, "bc-"));
   t.after(() => fs.rm(directory, { recursive: true }));

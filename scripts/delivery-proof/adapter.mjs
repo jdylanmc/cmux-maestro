@@ -670,7 +670,7 @@ export async function startReadiness({ joinSession, environment = process.env, s
 // The full Beat ID: two Beats may share any shorter prefix.
 const BEAT_LABEL = /^Beat \[([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]/;
 // Earlier releases labelled schedules with only 8 characters; those are always removed.
-const RETIRED_BEAT_LABEL = /^Beat \[[0-9a-f]{8}\] /;
+const RETIRED_BEAT_LABEL = /^Beat \[([0-9a-f]{8})\] /;
 
 const beatLabel = (beat) => `Beat [${beat.id}] ${beat.prompt.split("\n")[0].slice(0, 60)}`;
 
@@ -760,20 +760,31 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
     if (busy || closed) return;
     busy = true;
     try {
-      const plan = planBeatSchedules({ wanted: await read(sessionId), entries: await gateway.list(), tz });
+      const wanted = await read(sessionId), entries = await gateway.list();
+      const plan = planBeatSchedules({ wanted, entries, tz });
       failing = false;
       const failingNow = new Set();
       const attempt = async (key, beatId, change) => {
         try {
           await change();
+          return true;
         } catch (error) {
           if (!failed.has(key)) diagnostic(error, beatId);
           failingNow.add(key);
+          return false;
         }
       };
-      for (const id of plan.remove) await attempt(`remove ${id}`, undefined, () => gateway.remove(id));
+      // The Beat (full ID, or a retired 8-character prefix) whose schedule could not be stopped is
+      // not added again this sync, so an edited Beat never runs under two schedules.
+      const stuck = [];
+      for (const id of plan.remove) {
+        const label = entries.find((entry) => entry.id === id)?.label ?? "";
+        const owner = (BEAT_LABEL.exec(label) ?? RETIRED_BEAT_LABEL.exec(label))?.[1];
+        if (!await attempt(`remove ${id}`, owner, () => gateway.remove(id)) && owner) stuck.push(owner);
+      }
       for (const entry of plan.add) {
         const beatId = BEAT_LABEL.exec(entry.label)[1];
+        if (stuck.some((owner) => beatId.startsWith(owner))) continue;
         await attempt(`add ${beatId}`, beatId, () => gateway.add(entry));
       }
       failed = failingNow;
