@@ -805,6 +805,17 @@ test("Beat planning adds, replaces and removes only its own schedules", () => {
   assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [current, duplicate], tz: TZ }), { add: [], remove: [8] });
 });
 
+test("schedules with the retired 8-character label are removed, never kept", () => {
+  const live = makeBeat();
+  const retired = { id: 3, cron: live.cron, tz: TZ, prompt: live.prompt, label: `Beat [${live.id.slice(0, 8)}] Run the checks.` };
+  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [retired], tz: TZ }), {
+    add: [{ cron: live.cron, tz: TZ, prompt: live.prompt, label: beatLabelOf(live) }], remove: [3],
+  });
+  assert.deepEqual(planBeatSchedules({ wanted: [], entries: [retired], tz: TZ }), { add: [], remove: [3] });
+  const user = { ...retired, id: 4, label: "Beat the traffic" };
+  assert.deepEqual(planBeatSchedules({ wanted: [], entries: [user], tz: TZ }), { add: [], remove: [] });
+});
+
 test("Beats whose IDs share a prefix each keep their own schedule across syncs", () => {
   const first = makeBeat({ id: "deadbeef-0000-4000-8000-000000000001" });
   const second = makeBeat({ id: "deadbeef-0000-4000-8000-000000000002" });

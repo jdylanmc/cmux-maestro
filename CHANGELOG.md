@@ -30,8 +30,8 @@ Notable changes are recorded using Keep a Changelog categories.
   the sidebar and the orchestrator read different versions.
 - Key each Copilot schedule by the full Beat ID (`Beat [<id>] …`). The extension matched
   only the first 8 characters, so two Beats sharing a prefix collapsed into one schedule
-  and the second never ran. Schedules labelled with the old 8-character form are no
-  longer recognized.
+  and the second never ran. Schedules with the old 8-character label are removed on the
+  next sync and re-added under the full ID, so nothing fires twice.
 - Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
   dependency-free `pet_kit.py` drawing kit instead of requiring `hatch-pet`, whose
   Codex-only image generation was unavailable to Copilot.

@@ -669,6 +669,8 @@ export async function startReadiness({ joinSession, environment = process.env, s
 
 // The full Beat ID: two Beats may share any shorter prefix.
 const BEAT_LABEL = /^Beat \[([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]/;
+// Earlier releases labelled schedules with only 8 characters; those are always removed.
+const RETIRED_BEAT_LABEL = /^Beat \[[0-9a-f]{8}\] /;
 
 const beatLabel = (beat) => `Beat [${beat.id}] ${beat.prompt.split("\n")[0].slice(0, 60)}`;
 
@@ -704,6 +706,10 @@ export function planBeatSchedules({ wanted, entries, tz }) {
   const remove = [];
   const present = new Set();
   for (const entry of entries) {
+    if (RETIRED_BEAT_LABEL.test(entry.label)) {
+      remove.push(entry.id);
+      continue;
+    }
     const key = BEAT_LABEL.exec(entry.label)?.[1];
     if (key === undefined) continue;
     const beat = wanted.find((item) => item.id === key);
