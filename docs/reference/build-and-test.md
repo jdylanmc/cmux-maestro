@@ -38,8 +38,10 @@ continued history updates stay part of deployment acceptance.
 blocking-observer concurrency regression alone in the integrated host. It verifies
 exact identity/count from the hosted xcresult. Then it runs all other tests
 from that same build without suite serialization. Both scopes must pass.
-Reported test names across both scopes must equal the `@Test` functions
-declared in `CMUXMaestroPreviewTests/`; a missing or unexpected test fails.
+Before testing, it enumerates the built test product under the same settings
+(`-enumerate-tests`). Reported identities across both scopes must equal that
+inventory; a missing, unexpected or repeated test fails. Disabled tests and
+skips need a reason in `INTENTIONAL_SKIPS`.
 Results and count evidence stay under `.build/tests/scoped-results/`.
 This full-coverage entrypoint rejects selection/retry overrides.
 Existing `CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()`
