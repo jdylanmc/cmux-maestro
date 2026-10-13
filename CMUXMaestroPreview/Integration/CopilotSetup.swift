@@ -1684,37 +1684,58 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         return quiescent
     }
 
+    struct GroupStopSeam {
+        var signal: (Int32, Int32) -> Int32 = { kill(-$0, $1) }
+        var childUnavailable: (Int32) -> Bool = { pid in
+            if case .unavailable = LocalCopilotSetupRunner.childState(pid) { return true }
+            return false
+        }
+        var isQuiescent: (Int32) -> Bool = { LocalCopilotSetupRunner.groupIsQuiescent($0) }
+        var reap: (Int32) -> Void = { LocalCopilotSetupRunner.reap($0) }
+        var postKillGrace: TimeInterval = LocalCopilotSetupRunner.postKillQuiescenceGrace
+    }
+
     private static func stopGroup(_ pid: Int32, grace: TimeInterval, observation: CopilotSetupObservation? = nil) -> Bool {
+        var seam = GroupStopSeam()
+        seam.childUnavailable = { if case .unavailable = childState($0, observation: observation) { true } else { false } }
+        seam.isQuiescent = { groupIsQuiescent($0, observation: observation) }
+        seam.reap = { reap($0, observation: observation) }
         observation?.begin(.stopGroup)
         defer { observation?.end(.stopGroup) }
+        return stopGroup(pid, grace: grace, seam: seam, observation: observation)
+    }
+
+    static func stopGroup(_ pid: Int32, grace: TimeInterval, seam: GroupStopSeam,
+                          observation: CopilotSetupObservation? = nil) -> Bool {
         // posix_spawn atomically gave this invocation a new group named by its
         // PID. WNOWAIT retains its leader until cleanup, preventing group-ID
         // reuse. Never signal the application's group or a reaped invocation.
         guard pid > 1, pid != getpgrp() else { return false }
-        if case .unavailable = childState(pid, observation: observation) { return false }
+        if seam.childUnavailable(pid) { return false }
         observation?.begin(.termSignal)
-        let termResult = kill(-pid, SIGTERM)
+        let termResult = seam.signal(pid, SIGTERM)
         let termError = termResult < 0 ? errno : 0
         let deadline = ContinuousClock.now.advanced(by: .seconds(grace))
         observation?.note(.termSignal, .init(result: termResult, error: termError, pid: pid, status: SIGTERM))
         observation?.end(.termSignal)
-        while !groupIsQuiescent(pid, observation: observation), ContinuousClock.now < deadline {
+        while !seam.isQuiescent(pid), ContinuousClock.now < deadline {
             Thread.sleep(forTimeInterval: 0.01)
         }
-        if case .unavailable = childState(pid, observation: observation) { return false }
+        if seam.childUnavailable(pid) { return false }
         observation?.begin(.killSignal)
-        let killResult = kill(-pid, SIGKILL)
+        let killResult = seam.signal(pid, SIGKILL)
         let killError = killResult < 0 ? errno : 0
         observation?.note(.killSignal, .init(result: killResult, error: killError, pid: pid, status: SIGKILL))
         observation?.end(.killSignal)
         // SIGKILL cannot be ignored, but an uninterruptible member or failing enumeration
-        // must not hold the dispatch worker forever. Leave the leader unreaped so its
-        // process-group anchor stays valid, and report the group as not stopped.
+        // must not hold the dispatch worker forever. The bound is independent of the
+        // caller's SIGTERM grace. Leave the leader unreaped so its process-group anchor
+        // stays valid, and report the group as not stopped.
         let stopped = waitForQuiescence(
-            until: .now.advanced(by: .seconds(max(grace, postKillQuiescenceGrace)))
-        ) { groupIsQuiescent(pid, observation: observation) }
+            until: .now.advanced(by: .seconds(seam.postKillGrace))
+        ) { seam.isQuiescent(pid) }
         guard stopped else { return false }
-        reap(pid, observation: observation)
+        seam.reap(pid)
         return true
     }
 
