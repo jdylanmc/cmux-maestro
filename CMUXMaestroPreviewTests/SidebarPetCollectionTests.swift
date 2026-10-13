@@ -54,4 +54,15 @@ struct SidebarPetCollectionTests {
         store.removeUpload(SidebarPetStore.defaultID)
         #expect(store.available(for: nil).contains { $0.id == SidebarPetStore.defaultID })
     }
+
+    @Test func framesAreCachedAndWrapByIndex() throws {
+        let (store, root, session) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = try #require(store.frame(petID: "blob", session: session, state: .idle, index: 0))
+        let again = try #require(store.frame(petID: "blob", session: session, state: .idle, index: 0))
+        let wrapped = try #require(store.frame(petID: "blob", session: session, state: .idle, index: SidebarPetState.idle.frameCount))
+        #expect(first === again)
+        #expect(first === wrapped)
+        #expect(first.width == SidebarPetSheet.cellWidth)
+    }
 }
