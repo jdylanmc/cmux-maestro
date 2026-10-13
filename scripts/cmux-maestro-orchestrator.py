@@ -21,6 +21,7 @@ import shlex
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 import zlib
@@ -4020,16 +4021,18 @@ def image_size(data):
     return None
 
 
+PNG_DEPTHS = {0: (1, 2, 4, 8, 16), 2: (8, 16), 3: (1, 2, 4, 8), 4: (8, 16), 6: (8, 16)}
 PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
 ADAM7 = ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
+PET_DECODER = "/usr/bin/sips"
+PET_DECODE_SECONDS = 30
 
 
 def png_complete(data):
-    """Whether a PNG's chunks, CRCs and image data are intact, so a decoder can read it.
-    A valid header alone is not enough: the sidebar drops sheets it cannot decode."""
+    """Preflight: chunk framing, CRCs, header fields, palette and every scanline's filter byte."""
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         return False
-    position, header, compressed = 8, None, []
+    position, header, palette, compressed = 8, None, None, []
     while position + 12 <= len(data):
         length = int.from_bytes(data[position:position + 4], "big")
         kind, body = data[position + 4:position + 8], data[position + 8:position + 8 + length]
@@ -4043,44 +4046,73 @@ def png_complete(data):
             if length != 13:
                 return False
             header = body
+        elif kind == b"PLTE":
+            if palette is not None or compressed or not length or length % 3 or length > 768:
+                return False
+            palette = length // 3
         elif kind == b"IDAT":
             compressed.append(body)
         elif kind == b"IEND":
-            return position == len(data) and bool(compressed) and png_pixels_complete(header, compressed)
+            return position == len(data) and bool(compressed) and png_pixels_complete(header, palette, compressed)
     return False
 
 
-def png_pixels_complete(header, compressed):
+def png_pixels_complete(header, palette, compressed):
     width, height = int.from_bytes(header[:4], "big"), int.from_bytes(header[4:8], "big")
-    depth, color, interlace = header[8], header[9], header[12]
-    if color not in PNG_CHANNELS or depth not in (1, 2, 4, 8, 16) or interlace not in (0, 1):
+    depth, color, method, filtering, interlace = header[8:13]
+    if (not width or not height or depth not in PNG_DEPTHS.get(color, ()) or method or filtering
+            or interlace not in (0, 1)):
+        return False
+    if color == 3 and (palette is None or palette > 1 << depth):
+        return False
+    if color in (0, 4) and palette is not None:
         return False
     bits = depth * PNG_CHANNELS[color]
-    passes = ADAM7 if interlace else ((0, 0, 1, 1),)
-    expected = 0
-    for x, y, dx, dy in passes:
+    filters = []
+    for x, y, dx, dy in (ADAM7 if interlace else ((0, 0, 1, 1),)):
         columns, rows = -(-(width - x) // dx), -(-(height - y) // dy)
         if columns > 0 and rows > 0:
-            expected += rows * (1 + -(-columns * bits // 8))
+            stride = 1 + -(-columns * bits // 8)
+            start = filters[-1][0] + filters[-1][1] * filters[-1][2] if filters else 0
+            filters.append((start, stride, rows))
+    expected = filters[-1][0] + filters[-1][1] * filters[-1][2]
+    offsets = (start + row * stride for start, stride, rows in filters for row in range(rows))
+    next_filter = next(offsets, None)
     inflater, produced = zlib.decompressobj(), 0
     try:
         for chunk in compressed:
             pending = chunk
             while pending:
-                produced += len(inflater.decompress(pending, 1 << 20))
+                output = inflater.decompress(pending, 1 << 20)
                 pending = inflater.unconsumed_tail
+                while next_filter is not None and next_filter < produced + len(output):
+                    if output[next_filter - produced] > 4:
+                        return False
+                    next_filter = next(offsets, None)
+                produced += len(output)
                 if produced > expected:
                     return False
-        while not inflater.eof:
-            more = inflater.decompress(b"", 1 << 20)
-            if not more:
-                break
-            produced += len(more)
-            if produced > expected:
-                return False
     except zlib.error:
         return False
     return inflater.eof and not inflater.unused_data and produced == expected
+
+
+def decoded_size(data, extension):
+    """Pixel size after a full decode by ImageIO, the decoder the sidebar uses; None if it cannot decode."""
+    if not os.access(PET_DECODER, os.X_OK):
+        raise OrchestrationError("The spritesheet cannot be verified without macOS sips.")
+    with tempfile.TemporaryDirectory(prefix="maestro-pet-") as scratch:
+        source, decoded = Path(scratch) / ("sheet" + extension), Path(scratch) / "decoded.png"
+        source.write_bytes(data)
+        try:
+            result = subprocess.run([PET_DECODER, "-s", "format", "png", str(source), "--out", str(decoded)],
+                                    stdin=subprocess.DEVNULL, capture_output=True, timeout=PET_DECODE_SECONDS)
+        except subprocess.TimeoutExpired:
+            return None
+        if result.returncode or not decoded.is_file():
+            return None
+        with decoded.open("rb") as handle:
+            return image_size(handle.read(33))
 
 
 def webp_complete(data):
@@ -4142,7 +4174,8 @@ def read_pet_source(source, requested_id):
             "The spritesheet needs 8 columns of 192:208 cells and at least 9 rows "
             f"(standard {PET_SIZE[0]}x{PET_SIZE[1]}; larger scales and extra rows such as Codex v2's "
             "1536x2288 are fine). Width must be a multiple of 8 between 512 and 4096.")
-    if not (png_complete(data) if data[:4] == b"\x89PNG" else webp_complete(data)):
+    if (not (png_complete(data) if data[:4] == b"\x89PNG" else webp_complete(data))
+            or decoded_size(data, sheet.suffix.lower()) != size):
         raise OrchestrationError("The spritesheet is corrupt or truncated.")
     if not identifier or not PET_ID_PATTERN.fullmatch(identifier) or identifier == PET_DEFAULT_ID:
         identifier = pet_slug(f"{identifier or 'pet'}-custom")
