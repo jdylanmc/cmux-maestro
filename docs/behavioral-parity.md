@@ -37,6 +37,7 @@ and reducer without launching the app or a UI test host. It checks both
 notification kinds across zero, ordinary nonzero, signal-compatible and missing
 exit codes, replay/reconstruction, independent error preservation, real-work
 retirement, request reuse, one-word replay saturation and 128 bounded lifecycles.
+CI runs it as its own step.
 The former notification-based retirement fixtures now admit and complete real
 shell tool work while preserving original assertions, bounds and stress, with
 explicit retirement preconditions. These scoped checks do not substitute for
