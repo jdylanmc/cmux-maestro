@@ -280,6 +280,7 @@ record = {
     "cwd": os.getcwd(),
     "pinnedSubscription": os.environ.get("COPILOT_GITHUB_TOKEN") == "synthetic-work-token",
     "gitTokenUnchanged": os.environ.get("GH_TOKEN") == "synthetic-personal-token",
+    "maestroKeys": sorted(key for key in os.environ if key.startswith("CMUX_MAESTRO_")),
     "pid": os.getpid(),
     "start": subprocess.run(
         ["/bin/ps", "-o", "lstart=", "-p", str(os.getpid())],
@@ -3890,6 +3891,48 @@ class DirectLaunchTests(unittest.TestCase):
         with patch.dict(launch.__globals__, {"launch_direct_session": sleep_before_launch}):
             with self.assertRaisesRegex(AssertionError, "startup sleep"):
                 self.test_acceptance_has_no_startup_probe_sleep_or_observation_dependency()
+
+    def test_native_spawn_children_keep_recorded_parent_denies_and_cannot_escalate(self):
+        def record(state):
+            state["nodes"][self.h.node]["toolPolicy"] = {"allow": ["read", "shell(git status)"], "deny": ["web"]}
+        self.h.change_state(record)
+        subset = self.h.spawn_native("Subset child.", "Subset", allow=["read"], deny=["network"])
+        self.wait_file(self.h.path / "interactive-ready")
+        child = self.h.state()["nodes"][subset["workerId"]]
+        self.assertEqual(child["toolPolicy"], {"allow": ["read"], "deny": ["web", "network"]})
+        self.assertEqual(child["permissionMode"], "default")
+        args = self.h.calls()[0]["args"]
+        flags = [(flag, args[index + 1]) for index, flag in enumerate(args)
+                 if flag in {"--allow-tool", "--deny-tool"}]
+        self.assertEqual(flags, [("--allow-tool", "read"), ("--deny-tool", "web"), ("--deny-tool", "network")])
+        self.assertNotIn("--allow-all", args)
+
+        before, surfaces = self.h.state(), list(self.h.cmux_data()["surfaces"])
+        escalated = self.h.spawn_native("Escalating child.", "Escalating", allow=["write"], check=False)
+        self.assertEqual(escalated["returncode"], 2)
+        self.assertIn("cannot grant a child additional", escalated["stderr"])
+        self.assertEqual(self.h.state()["nodes"].keys(), before["nodes"].keys())
+        self.assertEqual(self.h.state()["launches"], before["launches"])
+        self.assertEqual(self.h.cmux_data()["surfaces"], surfaces)
+        self.assertEqual(len(self.h.calls()), 1)
+
+    def test_direct_provider_sees_only_the_controller_maestro_variables(self):
+        # The host shell inherits whatever its creator carried, including retired switches.
+        stale = {"CMUX_MAESTRO_TESTING": "1", "CMUX_MAESTRO_TEST_ATTACH_FAILURE": "1",
+                 "CMUX_MAESTRO_ROOT": str(self.h.path / "elsewhere"),
+                 "CMUX_MAESTRO_IDENTITY_HELPER": str(self.h.path / "forged-helper"),
+                 "CMUX_MAESTRO_FUTURE_SWITCH": "unknown value\nCMUX_MAESTRO_INJECTED=1",
+                 "CMUX_MAESTRO_MESSAGE_ROOT": "stale-parent", "CMUX_MAESTRO_WORKER_ID": "stale-worker"}
+        receipt = self.h.spawn_native("Report the environment.", "Scrubbed", env={**self.h.env, **stale})
+        self.wait_file(self.h.path / "interactive-ready")
+        call = self.h.calls()[0]
+        self.assertEqual(call["session"], receipt["sessionId"])
+        self.assertEqual(call["maestroKeys"], sorted([
+            "CMUX_MAESTRO_CONTROL_TOKEN", "CMUX_MAESTRO_DIRECT_LAUNCH", "CMUX_MAESTRO_EXECUTION_MODE",
+            "CMUX_MAESTRO_GENERATION", "CMUX_MAESTRO_LAUNCH_PID", "CMUX_MAESTRO_ORCHESTRATOR",
+            "CMUX_MAESTRO_RUN_ID", "CMUX_MAESTRO_SESSION_ID", "CMUX_MAESTRO_WORKER_ID",
+        ]))
+        self.assertTrue(call["pinnedSubscription"])
 
     def test_initial_command_preserves_task_bytes_quotes_path_cwd_and_policy(self):
         cwd = self.h.path / "cwd ' ; $(not-a-command)"
