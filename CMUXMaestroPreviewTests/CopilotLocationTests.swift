@@ -215,7 +215,7 @@ struct CopilotLocationHookTests: Sendable {
         )
         var body = payload
         body["sessionId"] = session.uuidString
-        return recorder.record(
+        return recorder.bind(
             payload: try JSONSerialization.data(withJSONObject: body),
             environment: ["CMUX_SURFACE_ID": surface.uuidString, "CMUX_WORKSPACE_ID": workspace.uuidString]
         )

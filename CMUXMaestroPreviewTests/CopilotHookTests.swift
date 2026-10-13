@@ -33,52 +33,72 @@ struct CopilotHookTests: Sendable {
         defer { try? FileManager.default.removeItem(at: root) }
         try marker(root)
         let choice = CMUXMaestroPreview.CopilotSessionAppearance(sessionID: session, iconId: "md-duck", iconColor: "teal")
-        #expect(recorder(root).record(payload: payload, environment: environment, appearance: choice) == .noOwner)
-        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        #expect(recorder(root).setAppearance(choice, payload: payload, environment: environment) == .noOwner)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
         let before = try binding(root)
-        #expect(recorder(root).record(payload: payload, environment: environment, appearance: choice) == .recorded)
+        #expect(recorder(root).setAppearance(choice, payload: payload, environment: environment) == .recorded)
         #expect(try binding(root) == before)
         let file = root.appendingPathComponent("integration/bindings/appearance-\(session.uuidString.lowercased()).json")
         let selected = try JSONDecoder().decode(CMUXMaestroPreview.CopilotSessionAppearance.self, from: Data(contentsOf: file))
         #expect(selected == choice)
-        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
         #expect(try JSONDecoder().decode(CMUXMaestroPreview.CopilotSessionAppearance.self, from: Data(contentsOf: file)) == choice)
         let colorOnly = CMUXMaestroPreview.CopilotSessionAppearance(sessionID: session, iconId: nil, iconColor: "blue")
-        #expect(recorder(root).record(payload: payload, environment: environment, appearance: colorOnly) == .recorded)
+        #expect(recorder(root).setAppearance(colorOnly, payload: payload, environment: environment) == .recorded)
         let recolored = try JSONDecoder().decode(CMUXMaestroPreview.CopilotSessionAppearance.self, from: Data(contentsOf: file))
         #expect(recolored.iconId == "md-duck")
         #expect(recolored.iconColor == "blue")
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("Orchestration").path))
     }
 
-    @Test func verifyOnlyProofNeedsExistingBindingAndWritesNothing() throws {
+    @Test func proveNeedsExistingBindingAndWritesNothing() throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         try marker(root)
-        #expect(recorder(root).record(payload: payload, environment: environment, verifyOnly: true) == .noOwner)
-        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        #expect(recorder(root).prove(payload: payload, environment: environment) == .noOwner)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
         let before = try binding(root)
-        #expect(recorder(root).record(payload: payload, environment: environment, verifyOnly: true) == .recorded)
+        #expect(recorder(root).prove(payload: payload, environment: environment) == .recorded)
         #expect(try binding(root) == before)
         let appearance = root.appendingPathComponent("integration/bindings/appearance-\(session.uuidString.lowercased()).json")
         #expect(!FileManager.default.fileExists(atPath: appearance.path))
         let different = environment.merging(["CMUX_SURFACE_ID": UUID().uuidString]) { _, value in value }
-        #expect(recorder(root).record(payload: payload, environment: different, verifyOnly: true) == .noOwner)
+        #expect(recorder(root).prove(payload: payload, environment: different) == .noOwner)
+    }
+
+    @Test func everyIntentSharesTheDisabledAndInputGatesWithoutWriting() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        let choice = CMUXMaestroPreview.CopilotSessionAppearance(sessionID: session, iconId: "md-duck", iconColor: "teal")
+        let disabled = environment.merging(["MAESTRO_NATIVE_DISABLED": "1"]) { _, new in new }
+        #expect(recorder(root).bind(payload: payload, environment: disabled) == .disabled)
+        #expect(recorder(root).setAppearance(choice, payload: payload, environment: disabled) == .disabled)
+        #expect(recorder(root).prove(payload: payload, environment: disabled) == .disabled)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("integration").path))
+        let malformed = Data("{}".utf8)
+        #expect(recorder(root).bind(payload: malformed, environment: environment) == .invalidInput)
+        #expect(recorder(root).setAppearance(choice, payload: malformed, environment: environment) == .invalidInput)
+        #expect(recorder(root).prove(payload: malformed, environment: environment) == .invalidInput)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let foreign = CMUXMaestroPreview.CopilotSessionAppearance(sessionID: UUID(), iconId: "md-duck", iconColor: "teal")
+        #expect(recorder(root).setAppearance(foreign, payload: payload, environment: environment) == .invalidInput)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(
+            "integration/bindings/appearance-\(session.uuidString.lowercased()).json"
+        ).path))
     }
 
     @Test func ownSessionAppearanceRejectsDifferentSurfaceInvalidColorAndUncertainOwner() throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         try marker(root)
-        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
         let choice = CMUXMaestroPreview.CopilotSessionAppearance(sessionID: session, iconId: "md-duck", iconColor: "teal")
         let different = environment.merging(["CMUX_SURFACE_ID": UUID().uuidString]) { _, value in value }
-        #expect(recorder(root).record(payload: payload, environment: different, appearance: choice) == .noOwner)
+        #expect(recorder(root).setAppearance(choice, payload: payload, environment: different) == .noOwner)
         let invalid = CMUXMaestroPreview.CopilotSessionAppearance(sessionID: session, iconId: "md-duck", iconColor: "orange")
-        #expect(recorder(root).record(payload: payload, environment: environment, appearance: invalid) == .invalidInput)
-        #expect(recorder(root, process: { _ in .unavailable }).record(
-            payload: payload, environment: environment, appearance: choice
-        ) == .noOwner)
+        #expect(recorder(root).setAppearance(invalid, payload: payload, environment: environment) == .invalidInput)
+        #expect(recorder(root, process: { _ in .unavailable }).setAppearance(choice, payload: payload, environment: environment) == .noOwner)
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(
             "integration/bindings/appearance-\(session.uuidString.lowercased()).json"
         ).path))
@@ -122,7 +142,7 @@ struct CopilotHookTests: Sendable {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         try marker(root)
-        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
         let identity = try binding(root)
         #expect(identity.sessionID == session)
         #expect(identity.surfaceID == surface)
@@ -150,9 +170,9 @@ struct CopilotHookTests: Sendable {
             Data(repeating: 32, count: 65_537),
         ]
         for input in inputs {
-            #expect(recorder(root).record(payload: input, environment: environment) == .invalidInput)
+            #expect(recorder(root).bind(payload: input, environment: environment) == .invalidInput)
         }
-        #expect(recorder(root).record(payload: payload, environment: ["CMUX_SURFACE_ID": "bad"]) == .invalidInput)
+        #expect(recorder(root).bind(payload: payload, environment: ["CMUX_SURFACE_ID": "bad"]) == .invalidInput)
         let diagnostic = try String(contentsOf: root.appendingPathComponent("integration/hook-status.json"), encoding: .utf8)
         #expect(diagnostic == "{\"status\":\"invalidInput\"}\n")
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("integration/bindings").path))
@@ -163,7 +183,7 @@ struct CopilotHookTests: Sendable {
         defer { try? FileManager.default.removeItem(at: root) }
         try marker(root)
         let input = Data("{\"session_id\":\"\(session.uuidString)\",\"transcriptPath\":\"/not/used\"}".utf8)
-        #expect(recorder(root).record(payload: input, environment: environment) == .recorded)
+        #expect(recorder(root).bind(payload: input, environment: environment) == .recorded)
     }
 
     @Test(arguments: [19, 1_048_577])
@@ -174,7 +194,7 @@ struct CopilotHookTests: Sendable {
         try Data(repeating: 0x61, count: size).write(to: file)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
         if getuid() != 0 { #expect(access(file.path, R_OK) == -1) }
-        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
         #expect(try binding(root).ownerPID == 101)
     }
 
@@ -220,7 +240,7 @@ struct CopilotHookTests: Sendable {
             }
             return lookup(pid)
         }
-        #expect(recorder(root, process: changing).record(payload: payload, environment: environment) == .noOwner)
+        #expect(recorder(root, process: changing).bind(payload: payload, environment: environment) == .noOwner)
         var changed = stat()
         #expect(fstat(fd, &changed) == 0)
         #expect(changed.st_ino == original.st_ino)
@@ -251,7 +271,7 @@ struct CopilotHookTests: Sendable {
                 }
                 return lookup(pid)
             }
-            #expect(recorder(root, process: conflicting).record(payload: payload, environment: environment) == .noOwner)
+            #expect(recorder(root, process: conflicting).bind(payload: payload, environment: environment) == .noOwner)
             #expect(throws: (any Error).self) { try binding(root) }
         }
     }
@@ -261,26 +281,26 @@ struct CopilotHookTests: Sendable {
         defer { try? FileManager.default.removeItem(at: root) }
         try marker(root)
         for key in ["CMUX_COPILOT_HOOKS_DISABLED", "MAESTRO_NATIVE_DISABLED"] {
-            #expect(recorder(root).record(payload: payload, environment: environment.merging([key: "1"]) { _, new in new }) == .disabled)
+            #expect(recorder(root).bind(payload: payload, environment: environment.merging([key: "1"]) { _, new in new }) == .disabled)
         }
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("integration").path))
-        #expect(recorder(root).record(payload: payload,
+        #expect(recorder(root).bind(payload: payload,
             environment: environment.merging(["MAESTRO_DISABLED": "1"]) { _, new in new }) == .recorded)
     }
 
     @Test func absentMarkerNeverGuessesAndLaterHookCanRecord() throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
-        #expect(recorder(root).record(payload: payload, environment: environment) == .noOwner)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .noOwner)
         try marker(root)
-        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
     }
 
     @Test func unrelatedMarkerAndDifferentUserAreRejected() throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         try marker(root, pid: 999)
-        #expect(recorder(root).record(payload: payload, environment: environment) == .noOwner)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .noOwner)
         try marker(root)
         let foreign: @Sendable (Int32) -> HookLookup = { pid in
             guard case .found(let value) = lookup(pid) else { return .dead }
@@ -288,7 +308,7 @@ struct CopilotHookTests: Sendable {
                 uid: pid == 101 ? getuid() + 1 : getuid(),
                 startSeconds: value.startSeconds, startMicroseconds: value.startMicroseconds))
         }
-        #expect(recorder(root, process: foreign).record(payload: payload, environment: environment) == .noOwner)
+        #expect(recorder(root, process: foreign).bind(payload: payload, environment: environment) == .noOwner)
     }
 
     @Test func replacedGenerationDuringCommitCannotBind() throws {
@@ -305,12 +325,12 @@ struct CopilotHookTests: Sendable {
             _ = afterProof.next()
             return .dead
         }
-        #expect(recorder(root, process: changing).record(payload: payload, environment: environment) == .noOwner)
+        #expect(recorder(root, process: changing).bind(payload: payload, environment: environment) == .noOwner)
         #expect(proven.next() > 2, "The owner must be found and verified before the commit check")
         #expect(afterProof.next() > 1, "The commit check must look the owner up again")
         #expect(throws: (any Error).self) { try binding(root) }
         // Control: the same live owner commits.
-        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
         #expect(try binding(root).ownerPID == 101)
     }
 
@@ -335,7 +355,7 @@ struct CopilotHookTests: Sendable {
                 try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("integration"),
                                                           withDestinationURL: external)
             }
-            #expect(recorder(root).record(payload: payload, environment: environment) != .recorded)
+            #expect(recorder(root).bind(payload: payload, environment: environment) != .recorded)
             #expect(!FileManager.default.fileExists(atPath: external.appendingPathComponent("bindings").path))
         }
     }
@@ -344,7 +364,7 @@ struct CopilotHookTests: Sendable {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         try marker(root)
-        #expect(recorder(root).record(payload: payload, environment: environment) == .recorded)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
         try marker(root, pid: 201)
         let livePrevious: @Sendable (Int32) -> HookLookup = { pid in
             if pid == 103 { return .found(HookProcess(pid: 103, parentPID: 201, uid: getuid(), startSeconds: 5, startMicroseconds: 0)) }
@@ -352,10 +372,10 @@ struct CopilotHookTests: Sendable {
             return lookup(pid)
         }
         let moved = environment.merging(["CMUX_SURFACE_ID": UUID().uuidString]) { _, new in new }
-        #expect(recorder(root, process: livePrevious).record(payload: payload, environment: moved) == .noOwner)
+        #expect(recorder(root, process: livePrevious).bind(payload: payload, environment: moved) == .noOwner)
         #expect(try binding(root).surfaceID == surface)
         let deadPrevious: @Sendable (Int32) -> HookLookup = { $0 == 101 ? .dead : livePrevious($0) }
-        #expect(recorder(root, process: deadPrevious).record(payload: payload, environment: moved) == .recorded)
+        #expect(recorder(root, process: deadPrevious).bind(payload: payload, environment: moved) == .recorded)
         #expect(try binding(root).surfaceID.uuidString == moved["CMUX_SURFACE_ID"])
     }
 

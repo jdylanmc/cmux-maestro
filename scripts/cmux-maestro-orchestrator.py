@@ -939,7 +939,29 @@ def is_direct_launch(node):
     return node.get("launchMethod") == "direct"
 
 
-def validate_state(state):
+class _StateIndex:
+    """Cross-record facts accumulated while each stored node is validated."""
+
+    def __init__(self):
+        self.workspace_nodes = {}
+        self.surfaces = set()
+        self.roots_by_run = {}
+
+    def count_workspace_node(self, workspace):
+        self.workspace_nodes[workspace] = self.workspace_nodes.get(workspace, 0) + 1
+        if self.workspace_nodes[workspace] > MAX_NODES:
+            raise OrchestrationError("Workspace stored-node limit reached.")
+
+    def claim_surface(self, surface):
+        if surface in self.surfaces:
+            raise OrchestrationError("Stored active surfaces must be unique.")
+        self.surfaces.add(surface)
+
+    def count_root(self, run):
+        self.roots_by_run[run] = self.roots_by_run.get(run, 0) + 1
+
+
+def _validate_state_header(state):
     if state.get("version") != VERSION or not isinstance(state.get("nodes"), dict):
         raise OrchestrationError("Control state version is unsupported.")
     state.setdefault("archives", [])
@@ -952,224 +974,253 @@ def validate_state(state):
         if canonical_uuid(workspace, "capacity workspace ID") != workspace:
             raise OrchestrationError("Stored capacity workspace ID must be canonical lowercase.")
         validate_capacity_limit(limit)
-    nodes = state["nodes"]
     launches = state["launches"]
     if not isinstance(launches, dict) or len(launches) > MAX_HOST_NODES:
         raise OrchestrationError("Launch transactions exceed their safe limit.")
-    if len(nodes) > MAX_HOST_NODES:
+    if len(state["nodes"]) > MAX_HOST_NODES:
         raise OrchestrationError("Host stored-node safety limit reached.")
     if len(state["archives"]) > MAX_ARCHIVES:
         raise OrchestrationError("Control state exceeds its archive retention limit.")
     if len(state["retainedResources"]) > MAX_HOST_NODES:
         raise OrchestrationError("Host retained-resource safety limit reached.")
-    workspace_nodes = {}
-    surfaces = set()
-    roots_by_run = {}
-    for identifier, node in nodes.items():
-        if canonical_uuid(identifier, "stored node ID") != node.get("id"):
-            raise OrchestrationError("Stored node identity is invalid.")
-        for field in ("runId", "workspaceId"):
-            canonical_uuid(node.get(field), f"stored {field}")
-        workspace = canonical_uuid(node["workspaceId"], "stored workspace ID")
-        workspace_nodes[workspace] = workspace_nodes.get(workspace, 0) + 1
-        if workspace_nodes[workspace] > MAX_NODES:
-            raise OrchestrationError("Workspace stored-node limit reached.")
-        surface = node.get("surfaceId")
-        if surface is not None:
-            canonical_uuid(surface, "stored surfaceId")
-            if surface in surfaces:
-                raise OrchestrationError("Stored active surfaces must be unique.")
-            surfaces.add(surface)
-        parent = node.get("parentId")
-        if parent is not None:
-            canonical_uuid(parent, "stored parent ID")
-        role = node.get("role")
-        if role not in {"coordinator", "worker"}:
-            raise OrchestrationError("Stored node role is invalid.")
-        mode = node.get("executionMode", "bounded")
-        if mode not in {"bounded", "interactive"}:
-            raise OrchestrationError("Stored execution mode is invalid.")
-        if "launchMethod" in node and (node["launchMethod"] != "direct" or mode != "interactive"):
-            raise OrchestrationError("Stored launch method is invalid.")
-        if "launchError" in node and (
-            not is_direct_launch(node) or not isinstance(node["launchError"], str)
-            or node["launchError"] not in {"launch-failed", "terminal-disappeared"}
-        ):
-            raise OrchestrationError("Stored direct launch error is invalid.")
-        runtime_version = node.get("runtimeProtocolVersion", 1)
-        if type(runtime_version) is not int or runtime_version not in {1, 2}:
-            raise OrchestrationError("Stored runtime protocol is unsupported.")
-        if node.get("launchSettings") is not None:
-            validate_launch_settings(node["launchSettings"])
-        if "launchSelection" in node:
-            validate_launch_selection(node["launchSelection"])
-            configured = node["launchSelection"]["configured"]
-            if "model" in configured and configured["model"] != (node.get("launchSettings") or {}).get("model"):
-                raise OrchestrationError("Stored launch selection does not match its configured model.")
-        if ("copilotExecutable" in node) != ("launchPath" in node):
-            raise OrchestrationError("Stored provider executable context is incomplete.")
-        if "copilotExecutable" in node:
-            executable = bounded_text(node["copilotExecutable"], "stored provider executable", 4096)
-            if not Path(executable).is_absolute():
-                raise OrchestrationError("Stored provider executable must be absolute.")
-            bounded_text(node["launchPath"], "stored provider PATH", MAX_LAUNCH_PATH)
-        if (not isinstance(node.get("permissionMode", "default"), str)
-                or node.get("permissionMode", "default") not in {"default", "yolo"}):
-            raise OrchestrationError("Stored launch permission mode is invalid.")
-        if node.get("permissionMode") == "yolo" and mode != "interactive":
-            raise OrchestrationError("YOLO requires an explicitly launched interactive session.")
-        if "permissionPolicyUnverified" in node and node["permissionPolicyUnverified"] is not True:
-            raise OrchestrationError("Stored permission policy provenance is invalid.")
-        messaging = node.get("messaging")
-        if messaging is not None and (
-            not isinstance(messaging, dict) or set(messaging) != {"version", "routes", "extension"}
-            or type(messaging["version"]) is not int or messaging["version"] != 1
-            or not isinstance(messaging["routes"], str) or len(messaging["routes"]) > 1024
-            or not Path(messaging["routes"]).is_absolute()
-            or not isinstance(messaging["extension"], str) or len(messaging["extension"]) > 1024
-            or not Path(messaging["extension"]).is_absolute()
-            or mode != "interactive"
-        ):
-            raise OrchestrationError("Stored messaging configuration is invalid.")
-        proof = node.get("deliveryProof")
-        if proof is not None and (
-            not isinstance(proof, dict)
-            or set(proof) not in ({"fixture", "experimental"}, {"fixture", "experimental", "yolo"})
-            or not isinstance(proof["fixture"], str) or len(proof["fixture"]) > 1024
-            or type(proof["experimental"]) is not bool
-            or type(proof.get("yolo", False)) is not bool
-            or role != "worker" or mode != "interactive"
-        ):
-            raise OrchestrationError("Stored delivery proof configuration is invalid.")
-        provider = node.get("providerProcess")
-        if provider is not None and (
-            not isinstance(provider, dict) or set(provider) != {"pid", "start"}
-            or type(provider["pid"]) is not int or provider["pid"] <= 0
-            or not isinstance(provider["start"], str) or not 1 <= len(provider["start"]) <= 100
-            or mode != "interactive"
-        ):
-            raise OrchestrationError("Stored interactive process identity is invalid.")
-        supervisor = node.get("supervisor")
-        if supervisor is not None and (
-            not isinstance(supervisor, dict) or set(supervisor) != {"pid", "start"}
-            or type(supervisor["pid"]) is not int or supervisor["pid"] <= 0
-            or not isinstance(supervisor["start"], str) or not 1 <= len(supervisor["start"]) <= 100
-        ):
-            raise OrchestrationError("Stored supervisor process identity is invalid.")
-        if node.get("iconId") is not None:
-            if not isinstance(node["iconId"], str) or not re.fullmatch(r"[a-z0-9_-]{1,128}", node["iconId"]):
-                raise OrchestrationError("Stored session glyph name is invalid.")
-        if node.get("iconColor") is not None and (
-            not isinstance(node["iconColor"], str) or node["iconColor"] not in ICON_COLORS
-        ):
-            raise OrchestrationError("Stored session icon color is not in the palette.")
-        if (role == "coordinator") != (parent is None):
-            raise OrchestrationError("Stored coordinator ancestry is invalid.")
-        if role == "coordinator":
-            roots_by_run[node["runId"]] = roots_by_run.get(node["runId"], 0) + 1
-        if not isinstance(node.get("generation"), int) or node["generation"] < 0:
-            raise OrchestrationError("Stored generation is invalid.")
-        for field in ("worktreeLabel", "branchLabel"):
-            value = node.get(field)
-            if value is not None:
-                bounded_text(value, f"stored {field}", MAX_DISPLAY_METADATA)
-        evidence_status = node.get("gitEvidenceStatus")
-        evidence_at = node.get("gitEvidenceAt")
-        changes_status = node.get("gitChangesStatus")
-        changes = node.get("gitChanges")
-        changes_at = node.get("gitChangesAt")
-        if changes_status == "verified":
-            if not valid_git_changes(changes) or changes_at is None:
-                raise OrchestrationError("Stored Git change counts are invalid.")
-        elif changes_status not in {None, "unavailable"} or changes is not None:
-            raise OrchestrationError("Unavailable Git changes cannot retain counts.")
-        if changes_at is not None:
-            if changes_status is None or parse_date(changes_at, "stored Git counts time") > now_date() + datetime.timedelta(minutes=5):
-                raise OrchestrationError("Stored Git counts timestamp is invalid.")
-        if evidence_status is None:
-            if evidence_at is not None or node.get("worktreeLabel") is not None or node.get("branchLabel") is not None:
-                raise OrchestrationError("Stored Git evidence is incomplete.")
-        else:
-            if evidence_status not in GIT_EVIDENCE_STATUSES or evidence_at is None:
-                raise OrchestrationError("Stored Git evidence status is invalid.")
-            captured = parse_date(evidence_at, "stored Git evidence time")
-            if captured > now_date() + datetime.timedelta(minutes=5):
-                raise OrchestrationError("Stored Git evidence timestamp is invalid.")
-            if evidence_status == "verified" and node.get("worktreeLabel") is None:
-                raise OrchestrationError("Verified Git evidence requires a worktree label.")
-            if evidence_status == "unavailable" and (
-                node.get("worktreeLabel") is not None or node.get("branchLabel") is not None
-            ):
-                raise OrchestrationError("Unavailable Git evidence cannot retain labels.")
-        session_id = node.get("copilotSessionId")
-        if session_id is not None:
-            canonical_uuid(session_id, "stored Copilot session ID")
-        if role == "coordinator":
-            if mode == "interactive":
-                if (session_id is None or node["generation"] != 1
-                        or node.get("launchSettings") is None or runtime_version != 2):
-                    raise OrchestrationError("Managed coordinator requires an exact launch identity.")
-            elif session_id is not None or node["generation"] != 0:
-                raise OrchestrationError("Registered coordinator cannot claim a controlled Copilot session.")
-        boundary_generation = node.get("verifiedBoundaryGeneration")
-        if (
-            boundary_generation is not None
-            and (
-                type(boundary_generation) is not int
-                or boundary_generation < 1
-                or boundary_generation > node["generation"]
-                or role != "worker"
-            )
-        ):
-            raise OrchestrationError("Stored verified boundary generation is invalid.")
-        validate_tool_policy(node.get("toolPolicy"))
-        if not isinstance(node.get("archiving", False), bool):
-            raise OrchestrationError("Stored archive state is invalid.")
-        if "launchAccepted" in node and (
-            node["launchAccepted"] is not True or not surface or not has_managed_runtime(node)
-        ):
-            raise OrchestrationError("Stored launch acceptance is invalid.")
-        if "surfaceUnknown" in node and (
-            node["surfaceUnknown"] is not True or surface or not has_managed_runtime(node)
-        ):
-            raise OrchestrationError("Stored unresolved surface evidence is invalid.")
-        if "runtimeNotStarted" in node and (
-            node["runtimeNotStarted"] is not True or not has_managed_runtime(node)
-            or node.get("supervisor") or provider or identifier in state["launches"]
-            or node["phase"] not in {
-                "launch-failed", "startup-failed", "resource-retired",
-                "process-disappeared", "terminal-disappeared",
-            }
-        ):
-            raise OrchestrationError("Stored pre-runtime failure evidence is invalid.")
-        created = parse_date(node.get("createdAt"), "stored creation time")
-        updated = parse_date(node.get("updatedAt"), "stored update time")
-        if created > updated or updated > now_date() + datetime.timedelta(minutes=5):
-            raise OrchestrationError("Stored node timestamps are inconsistent.")
-        phase, availability = node.get("phase"), node.get("availability")
-        valid_lifecycle = (
-            role == "coordinator" and mode != "interactive"
-            and phase == "registered" and availability == "active"
-        ) or (
-            has_managed_runtime(node) and (
-                (phase == "launching" and availability == "busy")
-                or (phase == "turn-running" and availability == "busy")
-                or (mode == "bounded" and phase == "turn-queued" and availability == "busy")
-                or (phase == "turn-failed" and availability == "idle")
-                or (mode == "bounded" and phase in {
-                    "reported-blocked", "reported-completed", "reported-failed",
-                    "report-missing", "permission-denied", "turn-failed",
-                } and availability == "idle")
-                or (phase in {
-                    "process-disappeared", "terminal-disappeared", "launch-failed",
-                    "startup-failed", "resource-retired",
-                } and availability == "unavailable")
-            )
+
+
+def _validate_node_identity(identifier, node):
+    if canonical_uuid(identifier, "stored node ID") != node.get("id"):
+        raise OrchestrationError("Stored node identity is invalid.")
+    for field in ("runId", "workspaceId"):
+        canonical_uuid(node.get(field), f"stored {field}")
+    return canonical_uuid(node["workspaceId"], "stored workspace ID")
+
+
+def _validate_node_mode(node):
+    role = node.get("role")
+    if role not in {"coordinator", "worker"}:
+        raise OrchestrationError("Stored node role is invalid.")
+    mode = node.get("executionMode", "bounded")
+    if mode not in {"bounded", "interactive"}:
+        raise OrchestrationError("Stored execution mode is invalid.")
+    if "launchMethod" in node and (node["launchMethod"] != "direct" or mode != "interactive"):
+        raise OrchestrationError("Stored launch method is invalid.")
+    if "launchError" in node and (
+        not is_direct_launch(node) or not isinstance(node["launchError"], str)
+        or node["launchError"] not in {"launch-failed", "terminal-disappeared"}
+    ):
+        raise OrchestrationError("Stored direct launch error is invalid.")
+    runtime_version = node.get("runtimeProtocolVersion", 1)
+    if type(runtime_version) is not int or runtime_version not in {1, 2}:
+        raise OrchestrationError("Stored runtime protocol is unsupported.")
+    return role, mode, runtime_version
+
+
+def _validate_node_launch_configuration(node, mode):
+    if node.get("launchSettings") is not None:
+        validate_launch_settings(node["launchSettings"])
+    if "launchSelection" in node:
+        validate_launch_selection(node["launchSelection"])
+        configured = node["launchSelection"]["configured"]
+        if "model" in configured and configured["model"] != (node.get("launchSettings") or {}).get("model"):
+            raise OrchestrationError("Stored launch selection does not match its configured model.")
+    if ("copilotExecutable" in node) != ("launchPath" in node):
+        raise OrchestrationError("Stored provider executable context is incomplete.")
+    if "copilotExecutable" in node:
+        executable = bounded_text(node["copilotExecutable"], "stored provider executable", 4096)
+        if not Path(executable).is_absolute():
+            raise OrchestrationError("Stored provider executable must be absolute.")
+        bounded_text(node["launchPath"], "stored provider PATH", MAX_LAUNCH_PATH)
+    if (not isinstance(node.get("permissionMode", "default"), str)
+            or node.get("permissionMode", "default") not in {"default", "yolo"}):
+        raise OrchestrationError("Stored launch permission mode is invalid.")
+    if node.get("permissionMode") == "yolo" and mode != "interactive":
+        raise OrchestrationError("YOLO requires an explicitly launched interactive session.")
+    if "permissionPolicyUnverified" in node and node["permissionPolicyUnverified"] is not True:
+        raise OrchestrationError("Stored permission policy provenance is invalid.")
+
+
+def _valid_process_identity(value):
+    return (
+        isinstance(value, dict) and set(value) == {"pid", "start"}
+        and type(value["pid"]) is int and value["pid"] > 0
+        and isinstance(value["start"], str) and 1 <= len(value["start"]) <= 100
+    )
+
+
+def _validate_node_attachments(node, role, mode):
+    messaging = node.get("messaging")
+    if messaging is not None and (
+        not isinstance(messaging, dict) or set(messaging) != {"version", "routes", "extension"}
+        or type(messaging["version"]) is not int or messaging["version"] != 1
+        or not isinstance(messaging["routes"], str) or len(messaging["routes"]) > 1024
+        or not Path(messaging["routes"]).is_absolute()
+        or not isinstance(messaging["extension"], str) or len(messaging["extension"]) > 1024
+        or not Path(messaging["extension"]).is_absolute()
+        or mode != "interactive"
+    ):
+        raise OrchestrationError("Stored messaging configuration is invalid.")
+    proof = node.get("deliveryProof")
+    if proof is not None and (
+        not isinstance(proof, dict)
+        or set(proof) not in ({"fixture", "experimental"}, {"fixture", "experimental", "yolo"})
+        or not isinstance(proof["fixture"], str) or len(proof["fixture"]) > 1024
+        or type(proof["experimental"]) is not bool
+        or type(proof.get("yolo", False)) is not bool
+        or role != "worker" or mode != "interactive"
+    ):
+        raise OrchestrationError("Stored delivery proof configuration is invalid.")
+    provider = node.get("providerProcess")
+    if provider is not None and (not _valid_process_identity(provider) or mode != "interactive"):
+        raise OrchestrationError("Stored interactive process identity is invalid.")
+    supervisor = node.get("supervisor")
+    if supervisor is not None and not _valid_process_identity(supervisor):
+        raise OrchestrationError("Stored supervisor process identity is invalid.")
+    if node.get("iconId") is not None:
+        if not isinstance(node["iconId"], str) or not re.fullmatch(r"[a-z0-9_-]{1,128}", node["iconId"]):
+            raise OrchestrationError("Stored session glyph name is invalid.")
+    if node.get("iconColor") is not None and (
+        not isinstance(node["iconColor"], str) or node["iconColor"] not in ICON_COLORS
+    ):
+        raise OrchestrationError("Stored session icon color is not in the palette.")
+
+
+def _validate_node_git_evidence(node):
+    for field in ("worktreeLabel", "branchLabel"):
+        value = node.get(field)
+        if value is not None:
+            bounded_text(value, f"stored {field}", MAX_DISPLAY_METADATA)
+    evidence_status = node.get("gitEvidenceStatus")
+    evidence_at = node.get("gitEvidenceAt")
+    changes_status = node.get("gitChangesStatus")
+    changes = node.get("gitChanges")
+    changes_at = node.get("gitChangesAt")
+    if changes_status == "verified":
+        if not valid_git_changes(changes) or changes_at is None:
+            raise OrchestrationError("Stored Git change counts are invalid.")
+    elif changes_status not in {None, "unavailable"} or changes is not None:
+        raise OrchestrationError("Unavailable Git changes cannot retain counts.")
+    if changes_at is not None:
+        if changes_status is None or parse_date(changes_at, "stored Git counts time") > now_date() + datetime.timedelta(minutes=5):
+            raise OrchestrationError("Stored Git counts timestamp is invalid.")
+    if evidence_status is None:
+        if evidence_at is not None or node.get("worktreeLabel") is not None or node.get("branchLabel") is not None:
+            raise OrchestrationError("Stored Git evidence is incomplete.")
+        return
+    if evidence_status not in GIT_EVIDENCE_STATUSES or evidence_at is None:
+        raise OrchestrationError("Stored Git evidence status is invalid.")
+    captured = parse_date(evidence_at, "stored Git evidence time")
+    if captured > now_date() + datetime.timedelta(minutes=5):
+        raise OrchestrationError("Stored Git evidence timestamp is invalid.")
+    if evidence_status == "verified" and node.get("worktreeLabel") is None:
+        raise OrchestrationError("Verified Git evidence requires a worktree label.")
+    if evidence_status == "unavailable" and (
+        node.get("worktreeLabel") is not None or node.get("branchLabel") is not None
+    ):
+        raise OrchestrationError("Unavailable Git evidence cannot retain labels.")
+
+
+def _validate_node_session_claim(node, role, mode, runtime_version):
+    session_id = node.get("copilotSessionId")
+    if session_id is not None:
+        canonical_uuid(session_id, "stored Copilot session ID")
+    if role == "coordinator":
+        if mode == "interactive":
+            if (session_id is None or node["generation"] != 1
+                    or node.get("launchSettings") is None or runtime_version != 2):
+                raise OrchestrationError("Managed coordinator requires an exact launch identity.")
+        elif session_id is not None or node["generation"] != 0:
+            raise OrchestrationError("Registered coordinator cannot claim a controlled Copilot session.")
+    boundary_generation = node.get("verifiedBoundaryGeneration")
+    if (
+        boundary_generation is not None
+        and (
+            type(boundary_generation) is not int
+            or boundary_generation < 1
+            or boundary_generation > node["generation"]
+            or role != "worker"
         )
-        if not valid_lifecycle:
-            raise OrchestrationError("Stored node lifecycle is invalid.")
-    if any(count != 1 for count in roots_by_run.values()):
-        raise OrchestrationError("Each stored run must have exactly one coordinator.")
+    ):
+        raise OrchestrationError("Stored verified boundary generation is invalid.")
+
+
+def _validate_node_launch_evidence(identifier, node, surface, launches):
+    if "launchAccepted" in node and (
+        node["launchAccepted"] is not True or not surface or not has_managed_runtime(node)
+    ):
+        raise OrchestrationError("Stored launch acceptance is invalid.")
+    if "surfaceUnknown" in node and (
+        node["surfaceUnknown"] is not True or surface or not has_managed_runtime(node)
+    ):
+        raise OrchestrationError("Stored unresolved surface evidence is invalid.")
+    if "runtimeNotStarted" in node and (
+        node["runtimeNotStarted"] is not True or not has_managed_runtime(node)
+        or node.get("supervisor") or node.get("providerProcess") or identifier in launches
+        or node["phase"] not in {
+            "launch-failed", "startup-failed", "resource-retired",
+            "process-disappeared", "terminal-disappeared",
+        }
+    ):
+        raise OrchestrationError("Stored pre-runtime failure evidence is invalid.")
+
+
+def _validate_node_lifecycle(node, role, mode):
+    created = parse_date(node.get("createdAt"), "stored creation time")
+    updated = parse_date(node.get("updatedAt"), "stored update time")
+    if created > updated or updated > now_date() + datetime.timedelta(minutes=5):
+        raise OrchestrationError("Stored node timestamps are inconsistent.")
+    phase, availability = node.get("phase"), node.get("availability")
+    valid_lifecycle = (
+        role == "coordinator" and mode != "interactive"
+        and phase == "registered" and availability == "active"
+    ) or (
+        has_managed_runtime(node) and (
+            (phase == "launching" and availability == "busy")
+            or (phase == "turn-running" and availability == "busy")
+            or (mode == "bounded" and phase == "turn-queued" and availability == "busy")
+            or (phase == "turn-failed" and availability == "idle")
+            or (mode == "bounded" and phase in {
+                "reported-blocked", "reported-completed", "reported-failed",
+                "report-missing", "permission-denied", "turn-failed",
+            } and availability == "idle")
+            or (phase in {
+                "process-disappeared", "terminal-disappeared", "launch-failed",
+                "startup-failed", "resource-retired",
+            } and availability == "unavailable")
+        )
+    )
+    if not valid_lifecycle:
+        raise OrchestrationError("Stored node lifecycle is invalid.")
+
+
+# Per-record checks run in their original order; the index's cross-record
+# limits interleave at the same points so the first reported error is unchanged.
+def _validate_node(identifier, node, launches, index):
+    workspace = _validate_node_identity(identifier, node)
+    index.count_workspace_node(workspace)
+    surface = node.get("surfaceId")
+    if surface is not None:
+        canonical_uuid(surface, "stored surfaceId")
+        index.claim_surface(surface)
+    parent = node.get("parentId")
+    if parent is not None:
+        canonical_uuid(parent, "stored parent ID")
+    role, mode, runtime_version = _validate_node_mode(node)
+    _validate_node_launch_configuration(node, mode)
+    _validate_node_attachments(node, role, mode)
+    if (role == "coordinator") != (parent is None):
+        raise OrchestrationError("Stored coordinator ancestry is invalid.")
+    if role == "coordinator":
+        index.count_root(node["runId"])
+    if not isinstance(node.get("generation"), int) or node["generation"] < 0:
+        raise OrchestrationError("Stored generation is invalid.")
+    _validate_node_git_evidence(node)
+    _validate_node_session_claim(node, role, mode, runtime_version)
+    validate_tool_policy(node.get("toolPolicy"))
+    if not isinstance(node.get("archiving", False), bool):
+        raise OrchestrationError("Stored archive state is invalid.")
+    _validate_node_launch_evidence(identifier, node, surface, launches)
+    _validate_node_lifecycle(node, role, mode)
+
+
+def _validate_ancestry(nodes):
     for node in nodes.values():
         seen = {node["id"]}
         current = node
@@ -1187,9 +1238,12 @@ def validate_state(state):
             depth += 1
             if depth > MAX_DEPTH:
                 raise OrchestrationError("Stored ancestry exceeds the depth limit.")
+
+
+def _validate_retained_resources(resources, surfaces):
     retained_ids = set()
     workspace_retained = {}
-    for resource in state["retainedResources"]:
+    for resource in resources:
         identifier = canonical_uuid(resource.get("surfaceId"), "retained surface ID")
         canonical_uuid(resource.get("workspaceId"), "retained workspace ID")
         workspace = canonical_uuid(resource["workspaceId"], "retained workspace ID")
@@ -1199,40 +1253,57 @@ def validate_state(state):
         if identifier in retained_ids or identifier in surfaces:
             raise OrchestrationError("Retained resource ownership is duplicated.")
         retained_ids.add(identifier)
-    for identifier, launch in launches.items():
-        if canonical_uuid(identifier, "launch worker ID") != launch.get("workerId"):
-            raise OrchestrationError("Launch transaction identity is invalid.")
-        node = nodes.get(identifier)
-        if (
-            node is None or not has_managed_runtime(node) or node["phase"] != "launching"
-            or launch.get("runId") != node["runId"]
-            or launch.get("workspaceId") != node["workspaceId"]
-            or launch.get("state") not in {"creating", "attaching", "starting"}
-        ):
-            raise OrchestrationError("Launch transaction ownership is invalid.")
-        if ("sessionId" in launch or "generation" in launch) and (
-            launch.get("sessionId") != node["copilotSessionId"]
-            or type(launch.get("generation")) is not int
-            or launch["generation"] != node["generation"]
-        ):
-            raise OrchestrationError("Launch transaction session or generation changed.")
-        parse_date(launch.get("createdAt"), "launch creation time")
-        updated = parse_date(launch.get("updatedAt"), "launch update time")
-        if updated > now_date() + datetime.timedelta(minutes=5):
-            raise OrchestrationError("Launch transaction timestamp is invalid.")
-        surface = launch.get("surfaceId")
-        if (launch["state"] in {"attaching", "starting"} and surface is None
-                or launch["state"] == "starting" and surface != node.get("surfaceId")):
-            raise OrchestrationError("Launch attachment identity is incomplete.")
-        if surface is not None:
-            canonical_uuid(surface, "launch surface ID")
-            owner = next(
-                (item["id"] for item in nodes.values() if item.get("surfaceId") == surface),
-                None,
-            )
-            if (owner is not None and owner != identifier) or surface in retained_ids:
-                raise OrchestrationError("Launch surface ownership is duplicated.")
+    return retained_ids
 
+
+def _validate_launch(identifier, launch, nodes, retained_ids):
+    if canonical_uuid(identifier, "launch worker ID") != launch.get("workerId"):
+        raise OrchestrationError("Launch transaction identity is invalid.")
+    node = nodes.get(identifier)
+    if (
+        node is None or not has_managed_runtime(node) or node["phase"] != "launching"
+        or launch.get("runId") != node["runId"]
+        or launch.get("workspaceId") != node["workspaceId"]
+        or launch.get("state") not in {"creating", "attaching", "starting"}
+    ):
+        raise OrchestrationError("Launch transaction ownership is invalid.")
+    if ("sessionId" in launch or "generation" in launch) and (
+        launch.get("sessionId") != node["copilotSessionId"]
+        or type(launch.get("generation")) is not int
+        or launch["generation"] != node["generation"]
+    ):
+        raise OrchestrationError("Launch transaction session or generation changed.")
+    parse_date(launch.get("createdAt"), "launch creation time")
+    updated = parse_date(launch.get("updatedAt"), "launch update time")
+    if updated > now_date() + datetime.timedelta(minutes=5):
+        raise OrchestrationError("Launch transaction timestamp is invalid.")
+    surface = launch.get("surfaceId")
+    if (launch["state"] in {"attaching", "starting"} and surface is None
+            or launch["state"] == "starting" and surface != node.get("surfaceId")):
+        raise OrchestrationError("Launch attachment identity is incomplete.")
+    if surface is not None:
+        canonical_uuid(surface, "launch surface ID")
+        owner = next(
+            (item["id"] for item in nodes.values() if item.get("surfaceId") == surface),
+            None,
+        )
+        if (owner is not None and owner != identifier) or surface in retained_ids:
+            raise OrchestrationError("Launch surface ownership is duplicated.")
+
+
+def validate_state(state):
+    _validate_state_header(state)
+    nodes = state["nodes"]
+    launches = state["launches"]
+    index = _StateIndex()
+    for identifier, node in nodes.items():
+        _validate_node(identifier, node, launches, index)
+    if any(count != 1 for count in index.roots_by_run.values()):
+        raise OrchestrationError("Each stored run must have exactly one coordinator.")
+    _validate_ancestry(nodes)
+    retained_ids = _validate_retained_resources(state["retainedResources"], index.surfaces)
+    for identifier, launch in launches.items():
+        _validate_launch(identifier, launch, nodes, retained_ids)
 
 class Store:
     def __init__(self, root, *, blocking=False, read_only=False):
