@@ -1167,13 +1167,13 @@ struct SidebarPinnedDetailsTests {
             try #require(bitmap.representation(using: .png, properties: [:])).write(to: destination)
             let text = try SidebarRenderingEvidence.recognizedLines(in: destination, dark: dark, naturalLanguage: true)
             let copyLabel = "Copy \(label.prefix(1).lowercased())\(label.dropFirst())"
-            if views(hosting).contains(where: { ($0 as? NSButton)?.accessibilityLabel() == copyLabel }) {
-                // Copy-control text: exact native pixels (ADR 0019), not OCR.
-                let pixels = try await SidebarCopyFieldPixels.compare(
-                    in: hosting, label: label, value: "reports", dark: dark, destination: destination
-                )
-                #expect(pixels.referenceInk > 200, "\(name): blank or incomplete literal reference: \(pixels)")
-                #expect(pixels.differing == 0, "\(name): directory copy field differs from its literal reference: \(pixels)")
+            if let copy = views(hosting).compactMap({ $0 as? NSButton }).first(where: { $0.accessibilityLabel() == copyLabel }) {
+                // Copy control in this context: exact native label and value, fully visible. Its rendered
+                // text is pixel-checked against a fixed literal card below (ADR 0019).
+                let field = try #require(views(hosting).compactMap { $0 as? NSTextField }.first { $0.stringValue == "reports" },
+                                         "\(name): exact surface value must render")
+                #expect(!field.visibleRect.isEmpty && !field.isHiddenOrHasHiddenAncestor, "\(name): value is hidden")
+                #expect(!copy.visibleRect.isEmpty && !copy.isHiddenOrHasHiddenAncestor, "\(name): copy control is hidden")
             } else {
                 let split = zip(text, text.dropFirst()).contains { $0 == label && $1 == "reports" }
                 #expect(text.contains("\(label): reports") || split,
@@ -1182,6 +1182,39 @@ struct SidebarPinnedDetailsTests {
             #expect(!text.contains { $0.contains("Working directory") || $0.contains("Parent working directory") })
             let metrics = SidebarRenderingEvidence.metrics(for: hosting)
             #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
+        }
+        // The production directory copy lines, rendered in a card at a predetermined origin, match an
+        // independent literal at exact native pixels.
+        for (name, target, label) in [
+            ("session", SidebarAgentHoverTarget.session(observed.id), "Surface directory"),
+            ("child", .child(sessionID: observed.id, childID: "child"), "Parent surface directory")
+        ] {
+            let content = try #require(SidebarAgentHoverContent.card(
+                for: target, hierarchy: hierarchy, connected: true, tree: tree,
+                managed: managed, availability: .ready, now: now
+            ))
+            let line = try #require(content.lines.first { $0.title == label && $0.copyableValue != nil })
+            #expect(line.value == "reports")
+            let frame = NSRect(x: 0, y: 0, width: 300, height: 200)
+            let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let hosting = NSHostingView(rootView: SidebarHoverCard(
+                data: .init(id: "directory-\(name)", category: "Agent preview", title: "Synthetic", lines: [line]),
+                close: { Issue.record("Offscreen render must not close") },
+                copyValue: { _ in Issue.record("Offscreen render must not copy"); return false }
+            ).environment(\.colorScheme, dark ? .dark : .light).background(Color(nsColor: .windowBackgroundColor)))
+            window.contentView = hosting
+            defer { window.contentView = nil; window.close() }
+            hosting.frame = frame
+            try await settle(hosting)
+            let pixels = try await SidebarCopyFieldPixels.compareCard(
+                hosting, category: "Agent preview", title: "Synthetic", label: label, value: line.value, dark: dark,
+                destination: folder.appendingPathComponent("directory77-literal-\(name)-\(dark ? "dark" : "light").png")
+            )
+            #expect(pixels.referenceInk > 200, "\(name): blank or incomplete literal reference: \(pixels)")
+            #expect(pixels.valueFrameMatches, "\(name): directory value is not at the literal frame: \(pixels)")
+            #expect(pixels.differing == 0, "\(name): directory copy field differs from its literal reference: \(pixels)")
         }
     }
 

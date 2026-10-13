@@ -712,6 +712,38 @@ struct SidebarSessionCopyTests {
         #expect(try feedbackInk(in: capture(hosting), label: label, view: hosting) > 0)
     }
 
+    /// The copy-field oracle must reject a production field moved by one native pixel in either axis.
+    @Test(arguments: [CGSize(width: 0.5, height: 0), CGSize(width: 0, height: 0.5), .zero])
+    func copyFieldPixelOracleRejectsOnePixelShift(shift: CGSize) async throws {
+        let frame = NSRect(x: 0, y: 0, width: 300, height: 260)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        let hosting = NSHostingView(rootView: SidebarHoverCard(
+            data: .init(id: "shifted", category: "Agent preview", title: "Synthetic child",
+                        lines: [.sessionID(parentID, isParent: true)]),
+            close: {}, copyValue: { _ in Issue.record("Rendering must not copy"); return false }
+        ).offset(shift).environment(\.colorScheme, .light).background(Color(nsColor: .windowBackgroundColor)))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        hosting.frame = frame
+        try await settle(hosting)
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let pixels = try await SidebarCopyFieldPixels.compareCard(
+            hosting, category: "Agent preview", title: "Synthetic child",
+            label: "Parent session ID", value: parentID.uuidString, dark: false,
+            destination: folder.appendingPathComponent("copy-field-shift-\(shift.width)-\(shift.height).png")
+        )
+        if shift == .zero {
+            #expect(pixels.valueFrameMatches && pixels.differing == 0, "Unshifted control must match: \(pixels)")
+        } else {
+            #expect(!pixels.valueFrameMatches, "A 1px shift must move the value frame: \(pixels)")
+            #expect(pixels.differing > 0, "A 1px shift must change pixels: \(pixels)")
+        }
+    }
+
     @Test(arguments: [false, true])
     func narrowCardKeepsCopyAccessibleAndFeedbackVisible(dark: Bool) async throws {
         for width in [224, 300] {
@@ -736,11 +768,13 @@ struct SidebarSessionCopyTests {
             let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent(".build/layout-validation/offscreen")
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let pixels = try await SidebarCopyFieldPixels.compare(
-                in: hosting, label: "Parent session ID", value: parentID.uuidString, dark: dark,
+            let pixels = try await SidebarCopyFieldPixels.compareCard(
+                hosting, category: "Agent preview", title: "Synthetic child",
+                label: "Parent session ID", value: parentID.uuidString, dark: dark,
                 destination: folder.appendingPathComponent("hover-session-copy-\(width)-\(dark ? "dark" : "light").png")
             )
             #expect(pixels.referenceInk > 400, "Blank or incomplete literal reference: \(pixels)")
+            #expect(pixels.valueFrameMatches, "Production value is not at the literal card's value frame: \(pixels)")
             #expect(pixels.differing == 0, "Parent session ID copy field differs from its literal reference: \(pixels)")
             for success in [true, false] {
                 succeeds = success
