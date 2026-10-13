@@ -54,6 +54,13 @@ ARCHIVE_SECONDS = 5
 GIT_EXECUTABLE = "/usr/bin/git"
 # How workers and terminals re-enter this controller.
 CONTROLLER_ENTRYPOINT = Path(__file__).resolve()
+# The only CMUX_MAESTRO_ names a direct provider receives; the launch script sets each one.
+DIRECT_ENVIRONMENT_KEYS = frozenset((
+    "CMUX_MAESTRO_WORKER_ID", "CMUX_MAESTRO_CONTROL_TOKEN", "CMUX_MAESTRO_RUN_ID",
+    "CMUX_MAESTRO_GENERATION", "CMUX_MAESTRO_ORCHESTRATOR", "CMUX_MAESTRO_EXECUTION_MODE",
+    "CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER", "CMUX_MAESTRO_SESSION_ID",
+    "CMUX_MAESTRO_LAUNCH_PID", "CMUX_MAESTRO_DIRECT_LAUNCH",
+))
 REPORT_PHASES = {
     "blocked": "reported-blocked",
     "completed": "reported-completed",
@@ -2982,12 +2989,9 @@ def prepare_direct_launch(root, node, token):
         "CMUX_MAESTRO_GENERATION", "CMUX_MAESTRO_ORCHESTRATOR", "CMUX_MAESTRO_EXECUTION_MODE",
         "CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER", "CMUX_MAESTRO_SESSION_ID",
     }
-    # The host shell may carry any caller's CMUX_MAESTRO_ names; the provider gets only these.
-    script = (
-        "for maestro_name in $(/usr/bin/env | /usr/bin/sed -n "
-        "'s/^\\(CMUX_MAESTRO_[A-Za-z0-9_]*\\)=.*/\\1/p'); do unset \"$maestro_name\"; done\n"
-        "unset maestro_name\n"
-    )
+    # Every allowlisted name is reset here; direct-exec then drops all other
+    # CMUX_MAESTRO_ names the host shell carried, whatever their spelling.
+    script = "unset " + " ".join(sorted(DIRECT_ENVIRONMENT_KEYS)) + "\n"
     script += "".join(f"export {key}={shlex.quote(environment[key])}\n"
                       for key in sorted(keys) if key in environment)
     script += 'export CMUX_MAESTRO_LAUNCH_PID=$$\nexport CMUX_MAESTRO_DIRECT_LAUNCH=1\n'
@@ -3010,8 +3014,9 @@ def prepare_direct_launch(root, node, token):
             delivery_proof_api()["bind"](node["deliveryProof"], node)
         except (ValueError, OSError) as error:
             raise OrchestrationError("Delivery proof binding failed; use fresh fixtures.") from error
+    bootstrap = shlex.join([sys.executable, str(CONTROLLER_ENTRYPOINT), "direct-exec", "--"])
     argv = shlex.join(arguments[:3]) + ' "$CMUX_MAESTRO_INITIAL_TASK" ' + shlex.join(arguments[4:])
-    command = f". {shlex.quote(str(root / 'control' / filename))} && exec {argv}"
+    command = f". {shlex.quote(str(root / 'control' / filename))} && exec {bootstrap} {argv}"
     return shlex.join(["/bin/sh", "-c", command])
 
 
@@ -4999,7 +5004,23 @@ def parser():
     return result
 
 
+def direct_exec(provider):
+    """Become the direct provider with only the controller's CMUX_MAESTRO_ names."""
+    if not provider or not Path(provider[0]).is_absolute():
+        raise OrchestrationError("Direct provider executable must be absolute.")
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith("CMUX_MAESTRO_") or key in DIRECT_ENVIRONMENT_KEYS}
+    os.execve(provider[0], provider, environment)
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:2] == ["direct-exec", "--"]:
+        try:
+            direct_exec(argv[2:])
+        except (OrchestrationError, OSError) as error:
+            print(json.dumps({"ok": False, "error": str(error)}), file=sys.stderr)
+            return 2
     args = parser().parse_args(argv)
     try:
         if args.command == "accounts":

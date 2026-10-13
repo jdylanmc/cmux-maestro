@@ -286,7 +286,8 @@ root explicitly. The Python suites fake only the outside world:
 
 Worker Copilot processes receive only the controller's `CMUX_MAESTRO_`
 allowlist. Bounded runtimes build the provider environment without any inherited
-`CMUX_MAESTRO_` key. A direct launch's sourced script unsets every
-`CMUX_MAESTRO_` name present in the host shell, then exports the allowlist and
-`exec`s the provider with the recorded launch `PATH`; other variables such as
-`HOME` pass through.
+`CMUX_MAESTRO_` key. A direct launch's sourced script resets each allowlisted
+name and the recorded launch `PATH`, then `exec`s the controller's `direct-exec`
+bootstrap. It builds the provider environment as a mapping that drops every other
+`CMUX_MAESTRO_` key, including names that are not shell identifiers, and
+`execve`s the provider in place. Other variables such as `HOME` pass through.
