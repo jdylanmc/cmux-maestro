@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
+  dependency-free `pet_kit.py` drawing kit instead of requiring `hatch-pet`, whose
+  Codex-only image generation was unavailable to Copilot.
 - Stop a sub-agent's model change from replacing the session's model in the footer and
   previews (a Copilot `session.model_change` event carrying a sub-agent ID now updates only
   that sub-agent).
