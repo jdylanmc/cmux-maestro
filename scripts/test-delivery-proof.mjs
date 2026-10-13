@@ -1086,7 +1086,11 @@ test("currentTimeZone prefers TZ, then follows the /etc/localtime link, then fal
   assert.equal(await zoneOf("/usr/share/zoneinfo/posix/Europe/Paris"), "Europe/Paris");
   assert.equal(await zoneOf("/usr/share/zoneinfo/right/Europe/Paris"), "Europe/Paris");
   assert.equal(await zoneOf("/var/db/timezone/zoneinfo/Asia/Tokyo", { TZ: "Europe/Paris" }), "Europe/Paris");
-  assert.equal(await zoneOf("/var/db/timezone/zoneinfo/Asia/Tokyo", { TZ: ":Europe/Paris" }), "Europe/Paris");
+  assert.equal(await zoneOf("/var/db/timezone/zoneinfo/Asia/Tokyo", { TZ: ":Europe/Paris" }), "Asia/Tokyo");
+  assert.equal(await zoneOf("/var/db/timezone/zoneinfo/Asia/Tokyo", { TZ: "europe/paris" }), "Asia/Tokyo");
+  assert.equal(await zoneOf("/var/db/timezone/zoneinfo/Asia/Tokyo", { TZ: "America/Argentina/Buenos_Aires" }),
+    "America/Buenos_Aires");
+  assert.equal(await zoneOf("/var/db/timezone/zoneinfo/Asia/Tokyo", { TZ: "UTC" }), "UTC");
   assert.equal(await zoneOf("/var/db/timezone/zoneinfo/Asia/Tokyo", { TZ: "Not/AZone" }), "Asia/Tokyo");
   const fallback = Intl.DateTimeFormat().resolvedOptions().timeZone;
   assert.equal(await zoneOf("/var/db/timezone/zoneinfo/Not/AZone"), fallback);

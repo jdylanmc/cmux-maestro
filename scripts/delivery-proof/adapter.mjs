@@ -742,13 +742,16 @@ export async function readBeats(sessionId, controller) {
 
 const maestroSupport = path.join(os.homedir(), "Library/Application Support/CMUXMaestroPreview");
 
-// The zone Copilot's own scheduler would use: TZ when set, else the Mac's current zone. Node caches
-// its zone at startup (only assigning process.env.TZ resets it), so a system change made while a
-// session runs is read from the /etc/localtime link.
+// The zone Copilot's own scheduler would use: an IANA name in TZ, else the Mac's current zone. Node
+// caches its zone at startup (only assigning process.env.TZ resets it), so a system change made
+// while a session runs is read from the /etc/localtime link. Like Copilot, TZ names are
+// case-sensitive and a leading ':' is not stripped. Abbreviations such as EST may still resolve
+// differently (Intl: fixed offset; Copilot: a daylight-saving zone).
 export async function currentTimeZone(link = "/etc/localtime", environment = process.env) {
   const canonical = (zone) => new Intl.DateTimeFormat("en-US", { timeZone: zone }).resolvedOptions().timeZone;
   try {
-    if (environment.TZ) return canonical(environment.TZ.replace(/^:/, ""));
+    const zone = environment.TZ;
+    if (zone && /^[A-Z][A-Za-z0-9_+-]*(\/[A-Z0-9][A-Za-z0-9_+-]*)*$/.test(zone)) return canonical(zone);
   } catch { /* not a zone this runtime knows: use the system zone */ }
   try {
     const zone = /(?:^|\/)zoneinfo\/(?:posix\/|right\/)?(.+)$/.exec(await fs.readlink(link))?.[1];

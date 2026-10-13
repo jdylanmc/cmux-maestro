@@ -43,7 +43,7 @@ Notable changes are recorded using Keep a Changelog categories.
   starts after the session's Beats are closed.
 - Follow a Mac time zone change in a running session. The extension fixed its zone when
   the session started (and Node caches the zone anyway), so Beats kept firing in the old
-  zone. Each sync now uses `TZ` when set, as Copilot's scheduler does, else reads the
+  zone. Each sync now uses an IANA zone name in `TZ` when set, else reads the
   current zone from `/etc/localtime` (falling back to the runtime's zone), and re-registers
   Beats when it changes.
 - Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
