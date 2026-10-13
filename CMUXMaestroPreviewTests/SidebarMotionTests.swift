@@ -589,21 +589,21 @@ struct SidebarMotionTests {
         (coordinate * scale).rounded() / scale
     }
 
-    /// A logical clock: a fixed base captured once, a test-advanced offset, and a 1ms tick per reading.
-    /// Production rejects snapshots not strictly newer than an invalidation, so readings stay monotonic
-    /// without consulting wall time; only `advance` moves time by a meaningful amount.
+    /// A fixed base captured once plus an offset. Reading `now` never moves time; it moves only when a
+    /// test advances it or the synthetic source publishes a new observation (strictly newer, as polling
+    /// requires after an invalidation).
     private final class SidebarMotionClock: @unchecked Sendable {
         private let lock = NSLock()
         private let base = Date()
         private var offset: TimeInterval = 0
-        private var readings = 0
-        var now: Date {
+        var now: Date { lock.withLock { base.addingTimeInterval(offset) } }
+        func advance(_ seconds: TimeInterval) { lock.withLock { offset += seconds } }
+        func nextObservationTime() -> Date {
             lock.withLock {
-                readings += 1
-                return base.addingTimeInterval(offset + Double(readings) / 1_000)
+                offset += 0.001
+                return base.addingTimeInterval(offset)
             }
         }
-        func advance(_ seconds: TimeInterval) { lock.withLock { offset += seconds } }
     }
 
     private actor SidebarMotionSnapshots {
@@ -615,7 +615,7 @@ struct SidebarMotionTests {
         }
         func read() -> CopilotSnapshot {
             // Each synthetic read is a new observation, stamped by the injected clock or wall time.
-            let now = clock?.now ?? Date()
+            let now = clock?.nextObservationTime() ?? Date()
             return .init(generatedAt: now, sessions: snapshot.sessions.map { session in
                 var observation = CopilotSessionObservation(
                     sessionID: session.sessionID, surfaceID: session.surfaceID,
