@@ -169,16 +169,18 @@ struct SidebarMotionTests {
                 .init(kind: .answer, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
             ] : []
         )
+        let clock = SidebarMotionClock()
         let snapshots = SidebarMotionSnapshots(f.snapshot(sessions: [
             oldObservation, currentObservation(.working), childObservation, otherObservation
-        ], now: now))
+        ], now: now), clock: clock)
         if scenario.delayedIdle {
             await snapshots.replace(f.snapshot(sessions: [
                 f.session(id: f.otherSessionID, state: .idle, now: now), childObservation, otherObservation
             ], now: now))
         }
         let poller = SidebarCopilotPolling(read: neutralRead { _ in await snapshots.read() },
-                                          pause: { try await Task.sleep(for: .milliseconds(10)) })
+                                          pause: { try await Task.sleep(for: .milliseconds(10)) },
+                                          now: { clock.now })
         let orchestration = SidebarOrchestrationPolling(read: {
             .init(version: 1, generatedAt: oldDate, complete: true, omittedCount: 0, nodes: [old, child, otherRoot])
         }, pause: { try await Task.sleep(for: .seconds(60)) })
@@ -209,7 +211,8 @@ struct SidebarMotionTests {
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .aqua)
-        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences))
+        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences, actionNow: { clock.now })
+            .environment(\.sidebarPresentationNow, { clock.now }))
         window.contentView = hosting
         defer { window.contentView = nil; window.close() }
         await sidebarEventually {
@@ -242,9 +245,7 @@ struct SidebarMotionTests {
         let history = preferences.history
         for state: CopilotWorkState in [.working, .idle] {
             if state == .idle {
-                if scenario.delayedIdle {
-                    try await Task.sleep(for: .seconds(SidebarCopilotTree.maximumAge + 0.1))
-                }
+                if scenario.delayedIdle { clock.advance(SidebarCopilotTree.maximumAge + 0.1) }
                 await snapshots.replace(f.snapshot(sessions: [
                     oldObservation, currentObservation(state), childObservation, otherObservation
                 ], now: now))
@@ -332,7 +333,7 @@ struct SidebarMotionTests {
             let summary = SidebarPresentation.workspaceSummary(
                 surfaces: [], sessions: visible.tree.sessions, managed: visible.managed,
                 orchestrationAvailability: orchestration.availability, countsComplete: true,
-                now: Date(), observations: visible.tree
+                now: clock.now, observations: visible.tree
             )
             print("Retained rows mode=\(mode.rawValue) scenario=\(scenario) state=\(state.rawValue) agents=\(summary.agentCount) "
                   + "states=\(summary.states.map { "\($0.title):\($0.count)" }) "
@@ -588,12 +589,24 @@ struct SidebarMotionTests {
         (coordinate * scale).rounded() / scale
     }
 
+    /// Wall time plus a test-advanced offset, so aging needs no real sleep.
+    private final class SidebarMotionClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var offset: TimeInterval = 0
+        var now: Date { lock.withLock { Date().addingTimeInterval(offset) } }
+        func advance(_ seconds: TimeInterval) { lock.withLock { offset += seconds } }
+    }
+
     private actor SidebarMotionSnapshots {
         private var snapshot: CopilotSnapshot
-        init(_ snapshot: CopilotSnapshot) { self.snapshot = snapshot }
+        private let clock: SidebarMotionClock
+        init(_ snapshot: CopilotSnapshot, clock: SidebarMotionClock = SidebarMotionClock()) {
+            self.snapshot = snapshot
+            self.clock = clock
+        }
         func read() -> CopilotSnapshot {
             // Production rows use wall time; each synthetic read is a new observation.
-            let now = Date()
+            let now = clock.now
             return .init(generatedAt: now, sessions: snapshot.sessions.map { session in
                 var observation = CopilotSessionObservation(
                     sessionID: session.sessionID, surfaceID: session.surfaceID,

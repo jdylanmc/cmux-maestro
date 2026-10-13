@@ -2929,10 +2929,10 @@ class OrchestratorTests(unittest.TestCase):
             for reader in readers:
                 reader.join(timeout=3)
                 self.assertFalse(reader.is_alive())
-            # Allow the real runtime to finish its existing two-second failed
-            # lock attempt/finalizer, or publish another successful heartbeat.
-            time.sleep(0.5)
-            current = h.state()["nodes"][node["id"]]
+            # Wait for a heartbeat published after the slow status released the
+            # store: the runtime survived its failed lock attempt and resumed.
+            released = h.state()["nodes"][node["id"]]["updatedAt"]
+            current = h.wait_node(node["id"], lambda item: item["updatedAt"] > released)
             evidence = {
                 "providerProbeCount": len(probes), "statusSeconds": round(elapsed, 3),
                 "storeReads": store_reads,
