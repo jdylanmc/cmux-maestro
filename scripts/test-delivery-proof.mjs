@@ -916,18 +916,17 @@ test("readBeats takes this session's runnable Beats from the real controller and
   const stamp = "2026-01-01T00:00:00Z";
   const stored = (overrides) => ({
     id: randomUUID(), sessionId: beatSession, cron: "*/5 * * * *", prompt: "Run the checks.", enabled: true,
-    recoveryGate: false, targetEnded: false, lastFiredMinute: null, createdAt: stamp, updatedAt: stamp, revision: 1,
-    ...overrides,
+    createdAt: stamp, updatedAt: stamp, revision: 1, ...overrides,
   });
   const live = stored({});
-  const beats = [live, stored({ enabled: false }), stored({ recoveryGate: true }), stored({ sessionId: randomUUID() })];
+  const beats = [live, stored({ enabled: false }), stored({ sessionId: randomUUID() })];
   const store = path.join(root, "beats.json");
-  await fs.writeFile(store, JSON.stringify({ version: 1, beats }), { mode: 0o600 });
+  await fs.writeFile(store, JSON.stringify({ version: 2, beats }), { mode: 0o600 });
   assert.deepEqual(await readBeats(beatSession, controller), [{ id: live.id, cron: live.cron, prompt: live.prompt }]);
   // One invalid definition refuses the whole store; nothing is dropped silently.
-  await fs.writeFile(store, JSON.stringify({ version: 1, beats: [...beats, stored({ revision: 1.5 })] }), { mode: 0o600 });
+  await fs.writeFile(store, JSON.stringify({ version: 2, beats: [...beats, stored({ revision: 1.5 })] }), { mode: 0o600 });
   await assert.rejects(readBeats(beatSession, controller));
-  await fs.writeFile(store, JSON.stringify({ version: 1, beats }), { mode: 0o600 });
+  await fs.writeFile(store, JSON.stringify({ version: 2, beats }), { mode: 0o600 });
   await fs.chmod(store, 0o644);
   await assert.rejects(readBeats(beatSession, controller), { code: "BEATS_SNAPSHOT" });
 });
@@ -944,9 +943,9 @@ test("startBeats finds the controller through CMUX_MAESTRO_ORCHESTRATOR without 
   const stamp = "2026-01-01T00:00:00Z";
   const live = {
     id: randomUUID(), sessionId: beatSession, cron: "*/5 * * * *", prompt: "Run the checks.", enabled: true,
-    recoveryGate: false, targetEnded: false, lastFiredMinute: null, createdAt: stamp, updatedAt: stamp, revision: 1,
+    createdAt: stamp, updatedAt: stamp, revision: 1,
   };
-  await fs.writeFile(path.join(root, "beats.json"), JSON.stringify({ version: 1, beats: [live] }), { mode: 0o600 });
+  await fs.writeFile(path.join(root, "beats.json"), JSON.stringify({ version: 2, beats: [live] }), { mode: 0o600 });
   const entries = [];
   const running = startBeats({
     session: { sessionId: beatSession }, root, tz: TZ, pollMs: 60_000,

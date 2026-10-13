@@ -2,12 +2,16 @@ import Foundation
 
 /// Beats: saved recurring prompts for exact agent sessions. This mirrors the Python
 /// orchestrator's `beats` store and cron rules (scripts/cmux-maestro-orchestrator.py); the two
-/// share `scripts/test-fixtures/beats-cron-cases.json` and `beats-store-cases.json`. Policy lives in issue #42.
+/// share `scripts/test-fixtures/beats-cron-cases.json` and `beats-store-cases.json`. Policy: docs/adr/0007
+/// (a Beat is on or off; Copilot's own scheduler runs it).
 nonisolated enum BeatsLimits {
     static let maximumTotal = 256
     static let maximumPerSession = 16
     static let maximumPromptBytes = 4096
     static let maximumStoreBytes = 1_048_576
+    static let version = 2
+    /// Version 1 carried the rejected recovery gate and Maestro clock; it reads as empty.
+    static let legacyVersion = 1
 }
 
 nonisolated struct BeatsError: Error, Equatable {
@@ -125,59 +129,25 @@ nonisolated struct BeatsCron: Equatable {
 }
 
 nonisolated struct SidebarBeat: Codable, Equatable, Identifiable {
-    static let fieldNames: Set<String> = [
-        "id", "sessionId", "cron", "prompt", "enabled", "recoveryGate", "targetEnded",
-        "lastFiredMinute", "createdAt", "updatedAt", "revision"
-    ]
+    static let fieldNames: Set<String> = ["id", "sessionId", "cron", "prompt", "enabled", "createdAt", "updatedAt", "revision"]
     var id: String
     var sessionId: String
     var cron: String
     var prompt: String
     var enabled: Bool
-    var recoveryGate: Bool
-    var targetEnded: Bool
-    var lastFiredMinute: String?
     var createdAt: String
     var updatedAt: String
     var revision: Int
 
-    func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(sessionId, forKey: .sessionId)
-        try container.encode(cron, forKey: .cron)
-        try container.encode(prompt, forKey: .prompt)
-        try container.encode(enabled, forKey: .enabled)
-        try container.encode(recoveryGate, forKey: .recoveryGate)
-        try container.encode(targetEnded, forKey: .targetEnded)
-        if let lastFiredMinute { try container.encode(lastFiredMinute, forKey: .lastFiredMinute) }
-        else { try container.encodeNil(forKey: .lastFiredMinute) }
-        try container.encode(createdAt, forKey: .createdAt)
-        try container.encode(updatedAt, forKey: .updatedAt)
-        try container.encode(revision, forKey: .revision)
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id, sessionId, cron, prompt, enabled, recoveryGate, targetEnded
-        case lastFiredMinute, createdAt, updatedAt, revision
-    }
-
-    /// Why recurrence is not running, if it is not.
-    var status: SidebarBeatStatus {
-        if targetEnded { return .targetEnded }
-        if recoveryGate { return .needsRecovery }
-        return enabled ? .active : .paused
-    }
+    var status: SidebarBeatStatus { enabled ? .active : .paused }
 }
 
 nonisolated enum SidebarBeatStatus: Equatable {
-    case active, paused, needsRecovery, targetEnded
+    case active, paused
     var title: String {
         switch self {
         case .active: "Active"
         case .paused: "Paused"
-        case .needsRecovery: "Needs recovery"
-        case .targetEnded: "Target ended"
         }
     }
 }
@@ -206,8 +176,11 @@ nonisolated struct SidebarBeatsState: Equatable {
     /// `JSONDecoder` would accept `true` or `1.0` where the contract requires an integer.
     static func decode(_ data: Data) throws -> SidebarBeatsState {
         guard data.count <= BeatsLimits.maximumStoreBytes, !containsByteOrderMark(data),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(object.keys) == ["version", "beats"], strictInteger(object["version"]) == 1,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw BeatsError("The Beats store is invalid or from a newer version.")
+        }
+        if strictInteger(object["version"]) == BeatsLimits.legacyVersion { return SidebarBeatsState() }
+        guard Set(object.keys) == ["version", "beats"], strictInteger(object["version"]) == BeatsLimits.version,
               let raw = object["beats"] as? [[String: Any]], raw.count <= BeatsLimits.maximumTotal,
               raw.allSatisfy(hasContractTypes),
               let beats = try? JSONDecoder().decode([SidebarBeat].self, from: JSONSerialization.data(withJSONObject: raw))
@@ -244,9 +217,7 @@ nonisolated struct SidebarBeatsState: Equatable {
     private static func hasContractTypes(_ beat: [String: Any]) -> Bool {
         guard Set(beat.keys) == SidebarBeat.fieldNames else { return false }
         let texts = ["id", "sessionId", "cron", "prompt", "createdAt", "updatedAt"]
-        let flags = ["enabled", "recoveryGate", "targetEnded"]
-        return texts.allSatisfy { beat[$0] is String } && flags.allSatisfy { strictBool(beat[$0]) }
-            && (beat["lastFiredMinute"] is NSNull || beat["lastFiredMinute"] is String)
+        return texts.allSatisfy { beat[$0] is String } && strictBool(beat["enabled"])
             && strictInteger(beat["revision"]) != nil
     }
 
@@ -266,7 +237,7 @@ nonisolated struct SidebarBeatsState: Equatable {
         // Match the orchestrator's sorted, compact encoding.
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        struct Envelope: Encodable { let version = 1; let beats: [SidebarBeat] }
+        struct Envelope: Encodable { let version = BeatsLimits.version; let beats: [SidebarBeat] }
         let data = try encoder.encode(Envelope(beats: beats)) + Data([10])
         guard data.count <= BeatsLimits.maximumStoreBytes else { throw BeatsError("The Beats store size limit was reached.") }
         return data
@@ -291,8 +262,7 @@ nonisolated struct SidebarBeatsState: Equatable {
         let stamp = Self.stamp()
         let beat = SidebarBeat(
             id: UUID().uuidString.lowercased(), sessionId: sessionID, cron: spec.expression, prompt: text,
-            enabled: true, recoveryGate: false, targetEnded: false, lastFiredMinute: nil,
-            createdAt: stamp, updatedAt: stamp, revision: 1)
+            enabled: true, createdAt: stamp, updatedAt: stamp, revision: 1)
         beats.append(beat)
         return beat
     }
@@ -304,7 +274,7 @@ nonisolated struct SidebarBeatsState: Equatable {
         return position
     }
 
-    /// Cron, prompt and (repair) target may change; enabled and recovery state do not.
+    /// Cron, prompt and target session may change; whether the Beat is on does not.
     mutating func edit(id: String, cron: String?, prompt: String?, session: UUID?) throws {
         let position = try index(id)
         var beat = beats[position]
@@ -317,11 +287,6 @@ nonisolated struct SidebarBeatsState: Equatable {
                     throw BeatsError("That session already has the maximum number of Beats.")
                 }
                 beat.sessionId = target
-                // Repair never silently resumes: a human re-enables after choosing the target.
-                beat.enabled = false
-                beat.recoveryGate = true
-                beat.targetEnded = false
-                beat.lastFiredMinute = nil
             }
         }
         beat.updatedAt = Self.stamp(); beat.revision += 1
@@ -334,14 +299,9 @@ nonisolated struct SidebarBeatsState: Equatable {
         beats[position].updatedAt = Self.stamp(); beats[position].revision += 1
     }
 
-    /// Only a human clears the recovery gate (first recurring enable after relaunch or repair).
     mutating func enable(id: String) throws {
         let position = try index(id)
-        guard !beats[position].targetEnded else {
-            throw BeatsError("Choose an existing session for this Beat before re-enabling it.")
-        }
         beats[position].enabled = true
-        beats[position].recoveryGate = false
         beats[position].updatedAt = Self.stamp(); beats[position].revision += 1
     }
 

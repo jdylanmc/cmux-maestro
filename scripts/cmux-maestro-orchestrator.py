@@ -4438,10 +4438,11 @@ def command_self_pet(args):
 
 
 # --- Beats: recurring prompts for exact agent sessions -------------------------
-# Policy lives in issue #42. Definitions persist in one local store; this module
-# owns cron evaluation and exact-self management. The CMUX-lifetime clock and the
-# human UI use the same store and rules.
-BEATS_VERSION = 1
+# Policy: docs/adr/0007. A Beat is on or off; Copilot's own scheduler runs it. Definitions
+# persist in one local store shared with the sidebar; this module owns validation, cron
+# previews and exact-self management.
+BEATS_VERSION = 2
+BEATS_LEGACY_VERSION = 1
 BEATS_MAX_TOTAL = 256
 BEATS_MAX_PER_SESSION = 16
 BEATS_MAX_PROMPT_BYTES = 4096
@@ -4450,10 +4451,7 @@ BEATS_MAX_REVISION = (1 << 63) - 1
 # U+FEFF in any form, raw UTF-8 or an unescaped \u escape. Swift's JSONSerialization drops it from
 # the start of a string, so the readers could otherwise see different text.
 BEATS_BYTE_ORDER_MARK = re.compile(rb"\xef\xbb\xbf|(?<!\\)(?:\\\\)*\\u[fF][eE][fF][fF]")
-BEATS_FIELDS = frozenset((
-    "id", "sessionId", "cron", "prompt", "enabled", "recoveryGate", "targetEnded",
-    "lastFiredMinute", "createdAt", "updatedAt", "revision",
-))
+BEATS_FIELDS = frozenset(("id", "sessionId", "cron", "prompt", "enabled", "createdAt", "updatedAt", "revision"))
 CRON_FIELD_RANGES = (("minute", 0, 59), ("hour", 0, 23), ("day", 1, 31), ("month", 1, 12), ("weekday", 0, 7))
 CRON_ITEM = re.compile(r"^(\*|[0-9]{1,2}(?:-[0-9]{1,2})?)(?:/([0-9]{1,2}))?$")
 DAYS_IN_MONTH = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
@@ -4557,23 +4555,6 @@ def cron_next_times(spec, epoch, count=5, horizon_days=800):
     return results
 
 
-def beats_due(state, epoch):
-    """Enabled, ungated Beats whose cron matches this local minute and have not fired for it.
-    Only the current minute is considered: missed minutes are never replayed, nonexistent local
-    minutes never occur, and a repeated local minute fires once."""
-    key = local_minute_key(epoch)
-    local = time.localtime(epoch)
-    # A local minute that physically happened before (clocks moved back) was already served.
-    if any(local_minute_key(epoch - shift) == key for shift in (1800, 3600, 7200)):
-        return key, []
-    due = []
-    for beat in state["beats"]:
-        if (beat["enabled"] and not beat["recoveryGate"] and not beat["targetEnded"]
-                and beat["lastFiredMinute"] != key and parse_cron(beat["cron"]).matches(local)):
-            due.append(beat)
-    return key, due
-
-
 def beats_root():
     return Path.home() / "Library/Application Support/CMUXMaestroPreview/Beats"
 
@@ -4617,9 +4598,8 @@ def validate_beats_state(state):
             raise OrchestrationError("The Beats store has a malformed definition.")
         parse_cron(beat["cron"])
         validate_beat_prompt(beat["prompt"])
-        if beat["id"] in seen or not all(type(beat[name]) is bool for name in ("enabled", "recoveryGate", "targetEnded")) \
+        if beat["id"] in seen or type(beat["enabled"]) is not bool \
                 or not all(beats_text(beat[name]) for name in ("createdAt", "updatedAt")) \
-                or not (beat["lastFiredMinute"] is None or beats_text(beat["lastFiredMinute"])) \
                 or type(beat["revision"]) is not int or not 1 <= beat["revision"] <= BEATS_MAX_REVISION:
             raise OrchestrationError("The Beats store has an inconsistent definition.")
         seen.add(beat["id"])
@@ -4646,6 +4626,10 @@ def beats_decode(raw):
         state = json.loads(raw, object_pairs_hook=unique, parse_constant=finite)
     except (UnicodeError, ValueError, RecursionError) as error:
         raise OrchestrationError("The Beats store is not valid JSON.") from error
+    if isinstance(state, dict) and type(state.get("version")) is int and state["version"] == BEATS_LEGACY_VERSION:
+        # Version 1 carried the rejected recovery gate and Maestro clock. Its Beats are dropped;
+        # the next write replaces the file with an empty version 2 store.
+        return {"version": BEATS_VERSION, "beats": []}
     return validate_beats_state(state)
 
 
@@ -4737,8 +4721,7 @@ def command_beats_snapshot():
         raise OrchestrationError("Beats snapshot request is invalid.")
     state = beats_store_snapshot()
     return {"beats": [{"id": beat["id"], "cron": beat["cron"], "prompt": beat["prompt"]}
-                      for beat in state["beats"] if beat["sessionId"] == session and beat["enabled"]
-                      and not beat["recoveryGate"] and not beat["targetEnded"]]}
+                      for beat in state["beats"] if beat["sessionId"] == session and beat["enabled"]]}
 
 
 def beat_view(beat):
@@ -4759,25 +4742,13 @@ def prove_own_session(session):
 
 
 def beats_command(args):
-    """Agent surface: every operation is bound to the caller's own proven session. Human-only
-    operations (reassignment, clearing the recovery gate) are not available here."""
+    """Agent surface: every operation is bound to the caller's own proven session. Reassigning a
+    Beat to another session is human-only (the sidebar)."""
     if args.beats_action == "cron-check":
         spec = parse_cron(args.cron)
         times = cron_next_times(spec, time.time(), count=max(1, min(args.count, 20)))
         return {"cron": spec.expression, "timezone": time.strftime("%Z"), "next": [
             time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(moment)) for moment in times]}
-    if args.beats_action == "gate-session":
-        # Called by a session's own adapter at start; it only pauses, so it needs no ownership proof.
-        session = canonical_uuid(args.session_id, "session ID")
-
-        def gate(state):
-            count = 0
-            for beat in state["beats"]:
-                if beat["sessionId"] == session and beat["enabled"] and not beat["recoveryGate"]:
-                    beat["enabled"], beat["recoveryGate"] = False, True
-                    count += 1
-            return count
-        return {"gated": beats_store_mutate(gate)}
     if not args.own_session:
         raise OrchestrationError("Beats are managed with --self for your own session.")
     session = canonical_uuid(args.session_id, "current session ID")
@@ -4804,8 +4775,7 @@ def beats_command(args):
                     or len(state["beats"]) >= BEATS_MAX_TOTAL:
                 raise OrchestrationError("The Beat limit was reached; delete one first.")
             beat = {"id": str(uuid.uuid4()), "sessionId": session, "cron": spec.expression, "prompt": prompt,
-                    "enabled": True, "recoveryGate": False, "targetEnded": False, "lastFiredMinute": None,
-                    "createdAt": stamp, "updatedAt": stamp, "revision": 1}
+                    "enabled": True, "createdAt": stamp, "updatedAt": stamp, "revision": 1}
             state["beats"].append(beat)
             return {"beat": beat_view(beat)}
         beat = own(state)
@@ -4822,9 +4792,6 @@ def beats_command(args):
         elif action == "pause":
             beat["enabled"] = False
         elif action == "resume":
-            if beat["recoveryGate"] or beat["targetEnded"]:
-                raise OrchestrationError(
-                    "This Beat is waiting for a human to repair or re-enable it; an agent cannot resume it.")
             beat["enabled"] = True
         else:
             raise OrchestrationError("Unknown Beats action.")

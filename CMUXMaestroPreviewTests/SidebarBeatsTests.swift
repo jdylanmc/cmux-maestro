@@ -69,9 +69,8 @@ struct SidebarBeatsTests {
         let data = try Data(contentsOf: Self.fixtures.appendingPathComponent("beats-store-sample.json"))
         let state = try SidebarBeatsState.decode(data)
         #expect(state.beats.count == 3)
-        #expect(state.beats[0].lastFiredMinute == nil && state.beats[1].lastFiredMinute == "2026-10-05T09:00")
         #expect(state.beats[0].prompt == "Check the board.\nSummarize blockers / risks.")
-        #expect(state.beats[1].status == .needsRecovery)
+        #expect(state.beats[0].status == .active && state.beats[1].status == .paused)
         #expect(state.beats[2].prompt.contains("😀") && state.beats[2].prompt.contains("\u{2028}"))
         // Byte-identical to the orchestrator's beats_encode (test-beats.py), so both writers
         // measure the same size limit.
@@ -86,6 +85,9 @@ struct SidebarBeatsTests {
         }
         for item in try #require(cases["invalid"] as? [[String: String]]) {
             #expect(throws: BeatsError.self, "\(item["name"] ?? "")") { _ = try SidebarBeatsState.decode(Data(item["raw"]!.utf8)) }
+        }
+        for item in try #require(cases["legacyEmpty"] as? [[String: String]]) {
+            #expect(try SidebarBeatsState.decode(Data(item["raw"]!.utf8)) == SidebarBeatsState(), "\(item["name"] ?? "")")
         }
         let valid = try #require((cases["valid"] as? [[String: String]])?.first?["raw"])
         #expect(throws: BeatsError.self) { _ = try SidebarBeatsState.decode(Data([0xEF, 0xBB, 0xBF]) + Data(valid.utf8)) }
@@ -121,7 +123,7 @@ struct SidebarBeatsTests {
         let sample = try Data(contentsOf: Self.fixtures.appendingPathComponent("beats-store-sample.json"))
         var object = try #require(JSONSerialization.jsonObject(with: sample) as? [String: Any])
         for mutate: (inout [String: Any]) -> Void in [
-            { $0["version"] = 2 },
+            { $0["version"] = 3 },
             { $0["extra"] = true },
             { var beats = $0["beats"] as! [[String: Any]]; beats[0]["surprise"] = 1; $0["beats"] = beats },
             { var beats = $0["beats"] as! [[String: Any]]; beats[0].removeValue(forKey: "cron"); $0["beats"] = beats },
@@ -136,14 +138,14 @@ struct SidebarBeatsTests {
                 _ = try SidebarBeatsState.decode(JSONSerialization.data(withJSONObject: copy))
             }
         }
-        object["version"] = 1
+        object["version"] = 2
         _ = try SidebarBeatsState.decode(JSONSerialization.data(withJSONObject: object))
         #expect(throws: BeatsError.self) { _ = try SidebarBeatsState.decode(Data("nope".utf8)) }
     }
 
     // MARK: Human operations
 
-    @Test func humanOperationsFollowTheRecoveryPolicy() throws {
+    @Test func humanOperationsTurnBeatsOnAndOff() throws {
         var state = SidebarBeatsState()
         let first = UUID(), second = UUID()
         let beat = try state.create(session: first, cron: "  0   9 * * 1-5", prompt: "Plan the day")
@@ -155,17 +157,13 @@ struct SidebarBeatsTests {
         // Editing never changes whether recurrence runs.
         try state.edit(id: beat.id, cron: "30 9 * * *", prompt: nil, session: nil)
         #expect(state.beats[0].status == .active && state.beats[0].revision == 4)
-        // Repair to another session leaves it paused behind the human gate, never silently resumed.
+        // Moving to another session keeps it on or off (ADR 0007: a Beat is simply on or off).
         try state.edit(id: beat.id, cron: nil, prompt: "New words", session: second)
         #expect(state.beats[0].sessionId == second.uuidString.lowercased())
-        #expect(state.beats[0].status == .needsRecovery && state.beats[0].prompt == "New words")
-        try state.enable(id: beat.id)
-        #expect(state.beats[0].status == .active)
-        // A human cannot enable a Beat whose target ended until another session is chosen.
-        state.beats[0].targetEnded = true
-        #expect(throws: BeatsError.self) { try state.enable(id: beat.id) }
+        #expect(state.beats[0].status == .active && state.beats[0].prompt == "New words")
+        try state.pause(id: beat.id)
         try state.edit(id: beat.id, cron: nil, prompt: nil, session: first)
-        #expect(state.beats[0].status == .needsRecovery)
+        #expect(state.beats[0].status == .paused)
         try state.delete(id: beat.id)
         #expect(state.beats.isEmpty)
         #expect(throws: BeatsError.self) { try state.delete(id: beat.id) }
@@ -221,7 +219,7 @@ struct SidebarBeatsTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         let elsewhere = root.deletingLastPathComponent().appendingPathComponent("elsewhere.json")
-        try Data("{\"beats\":[],\"version\":1}\n".utf8).write(to: elsewhere)
+        try Data("{\"beats\":[],\"version\":2}\n".utf8).write(to: elsewhere)
         try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("beats.json"), withDestinationURL: elsewhere)
         #expect(throws: BeatsError.self) { _ = try SidebarBeatsFile(root: root).read() }
     }

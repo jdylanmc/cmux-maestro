@@ -20,6 +20,12 @@ Notable changes are recorded using Keep a Changelog categories.
   (`\u00e9`, up to 6 bytes a character), so a store the sidebar saved under 1 MiB could
   exceed the limit when re-encoded and block even `beats list`. Both writers now produce
   byte-identical files.
+- Make a Beat simply on or off, as ADR 0007 decided. The Beats store is now version 2:
+  `recoveryGate`, `targetEnded` and `lastFiredMinute` are gone, with the unused Maestro
+  clock (`beats_due`), the unreachable `beats gate-session` command, and the sidebar's
+  "Needs recovery", "Target ended" and **Re-enable** states. Moving a Beat to another
+  session keeps it on or off, and an agent's `beats resume` always resumes. A version 1
+  store reads as empty and is replaced on the next write; its Beats are not migrated.
 - Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
   dependency-free `pet_kit.py` drawing kit instead of requiring `hatch-pet`, whose
   Codex-only image generation was unavailable to Copilot.

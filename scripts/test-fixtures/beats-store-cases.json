@@ -1,41 +1,41 @@
 {
- "_comment": "Store contract shared by the Swift sidebar (SidebarBeatsTests) and the orchestrator (test-beats.py). Each case is raw beats.json text. A raw case cannot start with U+FEFF (Swift's JSONSerialization would strip it while loading this file); each suite tests a leading file BOM directly.",
+ "_comment": "Store contract (version 2) shared by the Swift sidebar (SidebarBeatsTests) and the orchestrator (test-beats.py). Each case is raw beats.json text. legacyEmpty stores (version 1) read as an empty store. A raw case cannot start with U+FEFF (Swift's JSONSerialization would strip it while loading this file); each suite tests a leading file BOM directly.",
  "valid": [
   {
    "name": "empty",
-   "raw": "{\"version\": 1, \"beats\": []}"
+   "raw": "{\"version\": 2, \"beats\": []}"
   },
   {
    "name": "one beat",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
-   "name": "unicode prompt and fired minute",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}, {\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": false, \"id\": \"33333333-3333-4333-8333-333333333333\", \"lastFiredMinute\": \"2026-10-05T09:00\", \"prompt\": \"Weekly planning — é ☃\", \"recoveryGate\": true, \"revision\": 4, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "name": "unicode prompt, paused",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}, {\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": false, \"id\": \"33333333-3333-4333-8333-333333333333\", \"prompt\": \"Weekly planning — é ☃\", \"revision\": 4, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "pretty printed",
-   "raw": "{\n  \"version\": 1,\n  \"beats\": [\n    {\n      \"createdAt\": \"2026-10-11T00:25:14.063050Z\",\n      \"cron\": \"*/15 9-17 * * 1-5\",\n      \"enabled\": true,\n      \"id\": \"11111111-1111-4111-8111-111111111111\",\n      \"lastFiredMinute\": null,\n      \"prompt\": \"Check the board.\",\n      \"recoveryGate\": false,\n      \"revision\": 1,\n      \"sessionId\": \"22222222-2222-4222-8222-222222222222\",\n      \"targetEnded\": false,\n      \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"\n    }\n  ]\n}"
+   "raw": "{\n  \"version\": 2,\n  \"beats\": [\n    {\n      \"createdAt\": \"2026-10-11T00:25:14.063050Z\",\n      \"cron\": \"*/15 9-17 * * 1-5\",\n      \"enabled\": true,\n      \"id\": \"11111111-1111-4111-8111-111111111111\",\n      \"prompt\": \"Check the board.\",\n      \"revision\": 1,\n      \"sessionId\": \"22222222-2222-4222-8222-222222222222\",\n      \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"\n    }\n  ]\n}"
   },
   {
    "name": "escaped ascii text",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"caf\\u00e9\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"caf\\u00e9\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "prompt with newline and tab",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Line one\\n\\tLine two\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Line one\\n\\tLine two\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "max revision",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 9223372036854775807, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 9223372036854775807, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "prompt with literal backslash-ufeff text",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"see \\\\ufeff here\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"see \\\\ufeff here\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "prompt with inner zero-width space",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"a​b\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"a​b\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   }
  ],
  "invalid": [
@@ -53,19 +53,23 @@
   },
   {
    "name": "missing beats",
-   "raw": "{\"version\":1}"
+   "raw": "{\"version\":2}"
   },
   {
    "name": "extra top key",
-   "raw": "{\"version\": 1, \"beats\": [], \"extra\": true}"
+   "raw": "{\"version\": 2, \"beats\": [], \"extra\": true}"
   },
   {
-   "name": "version 2",
-   "raw": "{\"version\":2,\"beats\":[]}"
+   "name": "version 3",
+   "raw": "{\"version\":3,\"beats\":[]}"
   },
   {
    "name": "version true",
    "raw": "{\"version\":true,\"beats\":[]}"
+  },
+  {
+   "name": "version 2.0",
+   "raw": "{\"version\":2.0,\"beats\":[]}"
   },
   {
    "name": "version 1.0",
@@ -73,151 +77,169 @@
   },
   {
    "name": "version string",
-   "raw": "{\"version\":\"1\",\"beats\":[]}"
+   "raw": "{\"version\":\"2\",\"beats\":[]}"
+  },
+  {
+   "name": "version missing",
+   "raw": "{\"beats\":[]}"
   },
   {
    "name": "beats not array",
-   "raw": "{\"version\":1,\"beats\":{}}"
+   "raw": "{\"version\":2,\"beats\":{}}"
   },
   {
    "name": "beat not object",
-   "raw": "{\"version\":1,\"beats\":[\"beat\"]}"
+   "raw": "{\"version\":2,\"beats\":[\"beat\"]}"
   },
   {
    "name": "beat null",
-   "raw": "{\"version\":1,\"beats\":[null]}"
+   "raw": "{\"version\":2,\"beats\":[null]}"
   },
   {
    "name": "missing cron",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "extra beat field",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\", \"surprise\": 1}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\", \"surprise\": 1}]}"
+  },
+  {
+   "name": "retired recoveryGate field",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\", \"recoveryGate\": false}]}"
+  },
+  {
+   "name": "retired targetEnded field",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\", \"targetEnded\": false}]}"
+  },
+  {
+   "name": "retired lastFiredMinute field",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\", \"lastFiredMinute\": null}]}"
   },
   {
    "name": "id not uuid",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"not-a-uuid\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"not-a-uuid\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "id uppercase",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "id braces",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"{11111111-1111-4111-8111-111111111111}\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"{11111111-1111-4111-8111-111111111111}\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "session uppercase",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"ABCDEF00-0000-4000-8000-000000000000\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"ABCDEF00-0000-4000-8000-000000000000\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "duplicate id",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}, {\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}, {\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "cron invalid",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"bogus\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"bogus\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "cron number",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": 5, \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": 5, \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "prompt empty",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "prompt whitespace",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \" \\n\\t 　\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \" \\n\\t 　\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "prompt control char",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"bell\\u0007\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"bell\\u0007\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "prompt over 4 KiB",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "prompt lone surrogate",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"x\\ud800y\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"x\\ud800y\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "prompt number",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": 1, \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
-  },
-  {
-   "name": "createdAt number",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": 0, \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
-  },
-  {
-   "name": "updatedAt null",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": null}]}"
-  },
-  {
-   "name": "lastFiredMinute number",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": 5, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
-  },
-  {
-   "name": "enabled string",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": \"true\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
-  },
-  {
-   "name": "recoveryGate number",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": 1, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
-  },
-  {
-   "name": "targetEnded null",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": null, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
-  },
-  {
-   "name": "revision zero",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 0, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
-  },
-  {
-   "name": "revision 1.0",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1.0, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
-  },
-  {
-   "name": "revision 1e0",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1e0, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
-  },
-  {
-   "name": "revision true",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": true, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
-  },
-  {
-   "name": "revision over Int64",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 9223372036854775808, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
-  },
-  {
-   "name": "NaN value",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": NaN, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": 1, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "prompt zero-width space only",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"\\u200b\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"\\u200b\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "prompt leading byte order mark escape",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"\\ufeffHello\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"\\ufeffHello\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "prompt byte order mark only",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"\\uFEFF\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"\\uFEFF\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "prompt raw byte order mark",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"﻿Hello\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"﻿Hello\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "id leading byte order mark",
-   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"\\ufeff11111111-1111-4111-8111-111111111111\", \"lastFiredMinute\": null, \"prompt\": \"Check the board.\", \"recoveryGate\": false, \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"targetEnded\": false, \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"\\ufeff11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "createdAt number",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": 0, \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "updatedAt null",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": null}]}"
+  },
+  {
+   "name": "enabled string",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": \"true\", \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "enabled number",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": 1, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "revision zero",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 0, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "revision 1.0",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1.0, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "revision 1e0",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1e0, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "revision true",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": true, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "revision over Int64",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 9223372036854775808, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
+  },
+  {
+   "name": "NaN value",
+   "raw": "{\"version\": 2, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": true, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": NaN, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\"}]}"
   },
   {
    "name": "deeply nested",
-   "raw": "{\"version\":1,\"beats\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}"
+   "raw": "{\"version\":2,\"beats\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}"
+  }
+ ],
+ "legacyEmpty": [
+  {
+   "name": "version 1 with gated beat",
+   "raw": "{\"version\": 1, \"beats\": [{\"createdAt\": \"2026-10-11T00:25:14.063050Z\", \"cron\": \"*/15 9-17 * * 1-5\", \"enabled\": false, \"id\": \"11111111-1111-4111-8111-111111111111\", \"prompt\": \"Check the board.\", \"revision\": 1, \"sessionId\": \"22222222-2222-4222-8222-222222222222\", \"updatedAt\": \"2026-10-11T00:25:14.063050Z\", \"recoveryGate\": true, \"targetEnded\": false, \"lastFiredMinute\": \"2026-10-05T09:00\"}]}"
+  },
+  {
+   "name": "version 1 empty",
+   "raw": "{\"version\":1,\"beats\":[]}"
   }
  ]
 }
