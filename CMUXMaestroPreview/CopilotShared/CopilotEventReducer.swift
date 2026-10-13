@@ -397,8 +397,8 @@ nonisolated struct CopilotEventReducer: Sendable {
         replay = CopilotReplayGuard(capacity: maximumRelationships, wordCount: maximumReplayFilterWords)
     }
 
-    // Retain the input API, but read time must never decide lifecycle acceptance.
-    mutating func consume(_ line: Data, observedAt _: Date = Date()) {
+    // Read time must never decide lifecycle acceptance, so none is accepted.
+    mutating func consume(_ line: Data) {
         do {
             let event = try JSONDecoder().decode(CopilotEventProjection.self, from: line)
             apply(event)
