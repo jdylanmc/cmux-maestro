@@ -49,7 +49,12 @@ nonisolated struct BeatsCron: Equatable {
         var stars: [Bool] = []
         for (text, range) in zip(fields, Self.ranges) {
             var values = Set<Int>()
-            for item in text.split(separator: ",", omittingEmptySubsequences: false) {
+            // Copilot's scheduler refuses a bare * inside a list (for example *,5).
+            let items = text.split(separator: ",", omittingEmptySubsequences: false)
+            guard items.count == 1 || !items.contains("*") else {
+                throw BeatsError("Cron \(range.name) field cannot list * with other values.")
+            }
+            for item in items {
                 values.formUnion(try Self.expand(String(item), range))
             }
             if range.name == "weekday" { values = Set(values.map { $0 % 7 }) }

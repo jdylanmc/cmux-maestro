@@ -50,7 +50,9 @@ Notable changes are recorded using Keep a Changelog categories.
   such as `*/2` was treated as "any day", so `0 0 */2 * *` previewed every day and
   `0 0 */2 * 1` previewed Mondays only, while Copilot runs odd days, and odd days or
   Mondays. Only a bare `*` is unrestricted now; previews in the sidebar and `cron-check`
-  match next runs recorded from Copilot's scheduler (outside daylight-saving changes).
+  match next runs recorded from Copilot's scheduler (outside daylight-saving changes;
+  re-check with `scripts/check-copilot-cron-oracle.mjs`). A bare `*` inside a list (`*,5`),
+  which Copilot refuses, is now refused when saving instead of silently never firing.
 - Let any Copilot agent in CMUX make its own pet: `maestro-pet` now ships a
   dependency-free `pet_kit.py` drawing kit instead of requiring `hatch-pet`, whose
   Codex-only image generation was unavailable to Copilot.

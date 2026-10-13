@@ -4469,6 +4469,9 @@ class CronSpec:
         sets, stars = [], []
         for text, (name, low, high) in zip(fields, CRON_FIELD_RANGES):
             values = set()
+            # Copilot's scheduler refuses a bare * inside a list (for example *,5).
+            if "," in text and "*" in text.split(","):
+                raise OrchestrationError(f"Cron {name} field cannot list * with other values.")
             for item in text.split(","):
                 match = CRON_ITEM.fullmatch(item)
                 if not match:
