@@ -11,7 +11,8 @@ struct SidebarPetCollectionTests {
         return try #require(rep.representation(using: .png, properties: [:]))
     }
 
-    private func makeStore() throws -> (SidebarPetStore, URL, UUID) {
+    /// `reopen` builds an independent store over the same persisted state.
+    private func makeStore() throws -> (SidebarPetStore, URL, UUID, reopen: () -> SidebarPetStore) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("pet-collection-\(UUID().uuidString)", isDirectory: true)
         let sessions = root.appendingPathComponent("sessions", isDirectory: true)
@@ -22,15 +23,17 @@ struct SidebarPetCollectionTests {
         try pngSheet().write(to: petFolder.appendingPathComponent("spritesheet.png"))
         let manifest = #"{"id":"blob","displayName":"Blob","spritesheetPath":"spritesheet.png"}"#
         try Data(manifest.utf8).write(to: petFolder.appendingPathComponent("pet.json"))
-        let defaults = try #require(UserDefaults(suiteName: "pet-collection-\(UUID().uuidString)"))
-        let store = SidebarPetStore(
-            defaults: defaults, uploadDirectory: root.appendingPathComponent("Pets", isDirectory: true),
-            sessionDirectory: sessions)
-        return (store, root, session)
+        let suite = "pet-collection-\(UUID().uuidString)"
+        let reopen = {
+            SidebarPetStore(
+                defaults: UserDefaults(suiteName: suite)!, uploadDirectory: root.appendingPathComponent("Pets", isDirectory: true),
+                sessionDirectory: sessions)
+        }
+        return (reopen(), root, session, reopen)
     }
 
     @Test func capturedPetIsSharedAndRemovalFallsBack() throws {
-        let (store, root, session) = try makeStore()
+        let (store, root, session, reopen) = try makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
         let other = UUID()
 
@@ -40,18 +43,25 @@ struct SidebarPetCollectionTests {
         #expect(store.saveToRepository("blob", session: session) != nil)
         #expect(store.descriptor("blob", session: session)?.source == .uploaded)
         #expect(store.available(for: other).contains { $0.id == "blob" })
+        #expect(reopen().descriptor("blob", session: other)?.source == .uploaded)
 
         store.choose("blob", session: other)
         #expect(store.resolvedID(session: other, agentChoice: nil) == "blob")
+        #expect(reopen().resolvedID(session: other, agentChoice: nil) == "blob")
         store.removeUpload("blob")
         #expect(!store.available(for: other).contains { $0.id == "blob" })
         #expect(store.resolvedID(session: other, agentChoice: nil) == SidebarPetStore.defaultID)
+        let reopened = reopen()
+        #expect(!reopened.available(for: other).contains { $0.id == "blob" })
+        #expect(reopened.resolvedID(session: other, agentChoice: nil) == SidebarPetStore.defaultID)
+        #expect(reopened.hasOverride(session: other))
     }
 
     @Test func bundledPetCannotBeRemoved() throws {
-        let (store, root, _) = try makeStore()
+        let (store, root, _, reopen) = try makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
         store.removeUpload(SidebarPetStore.defaultID)
         #expect(store.available(for: nil).contains { $0.id == SidebarPetStore.defaultID })
+        #expect(reopen().available(for: nil).contains { $0.id == SidebarPetStore.defaultID })
     }
 }
