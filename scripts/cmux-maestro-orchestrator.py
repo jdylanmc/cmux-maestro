@@ -74,6 +74,10 @@ class OrchestrationError(Exception):
     pass
 
 
+class CommittedProjectionError(OrchestrationError):
+    """Control state committed; only the derived observer projection failed to publish."""
+
+
 class CloseBudgetExhausted(OrchestrationError):
     pass
 
@@ -195,9 +199,21 @@ def bind_messaging(node):
         "workspaceId": node["workspaceId"], "sessionId": node["copilotSessionId"],
         "generation": node["generation"], "capability": secrets.token_hex(32),
     }
-    descriptor = os.open(routes / f"{peer}.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, "w") as stream:
-        json.dump(binding, stream)
+    # Peers discover only complete bindings: stage privately, then link without clobbering.
+    staged = routes / f".{peer}.json.{secrets.token_hex(4)}.pending"
+    final = routes / f"{peer}.json"
+    descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(binding, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(staged, final)
+    finally:
+        try:
+            staged.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def retire_messaging(node):
@@ -1458,7 +1474,14 @@ class Store:
             {"version": 1, "icons": icons}, sort_keys=True, separators=(",", ":")
         ).encode() + b"\n"
         self._atomic(self.control_fd, "state.json", encoded)
-        self._atomic(self.observer_fd, "current.json", projection)
+        try:
+            self._atomic(self.observer_fd, "current.json", projection)
+        except (OSError, OrchestrationError) as error:
+            # The next write republishes the full projection from committed state.
+            raise CommittedProjectionError(
+                "Control state was committed, but observer projection publication failed; "
+                "the next successful operation republishes it."
+            ) from error
         # Icons are cosmetic: an oversized or unwritable overlay never fails the mutation.
         if len(icon_data) <= MAX_BYTES:
             try:
@@ -1558,6 +1581,34 @@ def mutate(root, operation, *, wait=1):
         store.write(state)
         return result
     return with_store(root, apply, wait=wait)
+
+
+def retire_committed_routes(nodes):
+    """Unlink routes only after the state that retired them committed.
+
+    Returns how many routes were left in place because their identity could not be proven.
+    """
+    left = 0
+    for node in nodes:
+        try:
+            retire_messaging(node)
+        except (OrchestrationError, OSError, ValueError):
+            left += 1
+    return left
+
+
+def mutate_retiring_routes(root, operation, *, wait=1):
+    """Run operation(state, retiring); routes of appended nodes are retired after commit."""
+    retiring = []
+    try:
+        result = mutate(root, lambda state: operation(state, retiring), wait=wait)
+    except CommittedProjectionError:
+        retire_committed_routes(retiring)
+        raise
+    left = retire_committed_routes(retiring)
+    if left and isinstance(result, dict):
+        result = {**result, "routesNotRetired": left}
+    return result
 
 
 def read_state(root, *, wait=1):
@@ -2077,24 +2128,10 @@ def command_launch_coordinator(args, root, cmux):
         message = launch_failure_message(error)
         reservation_state = "committed" if reservation_committed else "uncertain"
         if not reservation_committed:
-            # state.json may have committed before observer publication failed.
-            # Reconcile under the same lock; no ticket or host launch was attempted.
-            def failed_reservation(store):
-                nonlocal reservation_state
-                state = store.read()
-                if node["id"] not in state["nodes"]:
-                    reservation_state = "uncommitted"
-                    return
-                current = authorize(state, node["id"], token)
-                if any(current.get(key) != node.get(key) for key in (
-                    "runId", "workspaceId", "copilotSessionId", "generation",
-                )):
-                    raise OrchestrationError("Reserved coordinator ownership changed.")
-                reservation_state = "committed"
-                record_launch_failure(state, node["id"])
-                store.write(state)
             try:
-                with_store(root, failed_reservation)
+                reservation_state = cancel_unlaunched_reservation(
+                    root, node["id"], token, node["copilotSessionId"], node["generation"]
+                )
             except (OrchestrationError, OSError) as recovery_error:
                 message += f" Failure recording also failed: {launch_failure_message(recovery_error)}"
         if reservation_state == "uncommitted":
@@ -2105,6 +2142,33 @@ def command_launch_coordinator(args, root, cmux):
             message, {**receipt, "reservationState": reservation_state},
         ) from error
     return {**result, **receipt}
+
+
+def cancel_unlaunched_reservation(root, identifier, token, session_id, generation):
+    """Reconcile a reservation whose publication failed; no host launch was attempted.
+
+    state.json may have committed before observer publication failed. Under the
+    same lock, cancel only that exact committed lease. Returns "committed" or
+    "uncommitted".
+    """
+    outcome = "uncommitted"
+
+    def cancel(store):
+        nonlocal outcome
+        state = store.read()
+        if identifier not in state["nodes"]:
+            return
+        current = authorize(state, identifier, token)
+        if (current["copilotSessionId"], current["generation"]) != (session_id, generation):
+            raise OrchestrationError("Reserved launch ownership changed.")
+        outcome = "committed"
+        record_launch_failure(state, identifier)
+        try:
+            store.write(state)
+        except CommittedProjectionError:
+            pass
+    with_store(root, cancel)
+    return outcome
 
 
 def resource_observations(state, cmux, workspace):
@@ -2799,7 +2863,21 @@ def command_spawn(args, root, cmux, *, native_identity=None):
             "state": "creating", "createdAt": timestamp, "updatedAt": timestamp,
         }
         current["lastControlAt"] = timestamp
-    mutate(root, reserve)
+    try:
+        mutate(root, reserve)
+    except (OrchestrationError, OSError) as error:
+        try:
+            cancelled = cancel_unlaunched_reservation(root, identifier, worker_token, session_id, 1)
+        except (OrchestrationError, OSError) as recovery_error:
+            raise OrchestrationError(
+                f"{launch_failure_message(error)} Reservation cleanup also failed: "
+                f"{launch_failure_message(recovery_error)}"
+            ) from error
+        if cancelled == "uncommitted":
+            raise
+        raise OrchestrationError(
+            f"{launch_failure_message(error)} The reservation was cancelled; no session was launched."
+        ) from error
     result = launch_reserved_session(
         root, cmux, identifier, session_id, worker_token, actor["workspaceId"], pane, cwd, label
     )
@@ -3999,7 +4077,10 @@ def read_pet_source(source, requested_id):
         data = sheet.read_bytes()
     except OSError as error:
         raise OrchestrationError("The spritesheet could not be read.") from error
-    if not pet_sheet_ok(*image_size(data)):
+    size = image_size(data)
+    if size is None:
+        raise OrchestrationError("The spritesheet is not a readable PNG or WebP image.")
+    if not pet_sheet_ok(*size):
         raise OrchestrationError(
             "The spritesheet needs 8 columns of 192:208 cells and at least 9 rows "
             f"(standard {PET_SIZE[0]}x{PET_SIZE[1]}; larger scales and extra rows such as Codex v2's "
@@ -4028,11 +4109,58 @@ def write_private(path, data):
             temporary.unlink()
 
 
+class PetPublication:
+    """Stage a pet beside its folder, swap it in, and restore the previous pet on refusal."""
+
+    def __init__(self, session, identifier, files):
+        self.sessions = pet_session_root(session)
+        self.folder = self.sessions / identifier
+        self.previous = self.sessions / f".{identifier}.previous-{secrets.token_hex(4)}"
+        self.stage = self.sessions / f".{identifier}.stage-{secrets.token_hex(4)}"
+        self.replaced = False
+        self.created = False
+        private_directory(self.sessions)
+        if self.folder.is_symlink() or (self.folder.exists() and not self.folder.is_dir()):
+            raise OrchestrationError("The Maestro pet library is not a private directory.")
+        private_directory(self.stage)
+        try:
+            for name, data in files:
+                write_private(self.stage / name, data)
+        except BaseException:
+            shutil.rmtree(self.stage, ignore_errors=True)
+            raise
+
+    def publish(self):
+        self.created = not self.folder.exists()
+        try:
+            if not self.created:
+                os.rename(self.folder, self.previous)
+                self.replaced = True
+            os.rename(self.stage, self.folder)
+        except BaseException:
+            self.restore()
+            raise
+
+    def commit(self):
+        shutil.rmtree(self.previous, ignore_errors=True)
+
+    def restore(self):
+        shutil.rmtree(self.stage, ignore_errors=True)
+        if self.replaced:
+            shutil.rmtree(self.folder, ignore_errors=True)
+            os.rename(self.previous, self.folder)
+            self.replaced = False
+        elif self.created:
+            shutil.rmtree(self.folder, ignore_errors=True)
+
+
 def list_session_pets(session):
     root = pet_session_root(session)
     pets = []
     if root.is_dir() and not root.is_symlink():
         for folder in sorted(root.iterdir()):
+            if not PET_ID_PATTERN.fullmatch(folder.name):
+                continue  # staging and backup folders are never selectable pets
             try:
                 manifest = json.loads((folder / "pet.json").read_bytes()[:65536])
                 pets.append({"petId": folder.name, "displayName": manifest.get("displayName", folder.name)})
@@ -4048,6 +4176,24 @@ def command_pets(args):
             "sessionPets": list_session_pets(session) if session else []}
 
 
+def select_own_pet(session, chosen):
+    if chosen != PET_DEFAULT_ID and (not PET_ID_PATTERN.fullmatch(chosen or "")
+                                     or chosen not in {pet["petId"] for pet in list_session_pets(session)}):
+        raise OrchestrationError("That pet is not available to this session. Use --add PATH first.")
+    helper = identity_helper_path("session pets")
+    try:
+        process = subprocess.run([helper, "icon", "--session-id", session, "--pet", chosen],
+                                 capture_output=True, text=True, timeout=5)
+        value = json.loads(process.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+        raise OrchestrationError("Own-session identity verification did not complete.") from error
+    if process.returncode != 0 or not isinstance(value, dict) or value.get("ok") is not True:
+        raise OrchestrationError("This caller could not prove ownership of that session; no pet was selected.")
+    if str(value.get("sessionId", "")).lower() != session or value.get("petId") != chosen:
+        raise OrchestrationError("The identity helper returned a mismatched selection.")
+    return value
+
+
 def command_self_pet(args):
     if not args.own_session:
         raise OrchestrationError("Pets are chosen with --self for your own session.")
@@ -4055,42 +4201,31 @@ def command_self_pet(args):
     if args.add is None and args.pet_id is None:
         raise OrchestrationError("Give --pet-id to select a pet, or --add PATH to add and select one.")
     installed = None
-    created = False
+    publication = None
     if args.add is not None:
         identifier, display, description, data, extension = read_pet_source(args.add, args.pet_id)
         existing = {pet["petId"] for pet in list_session_pets(session)}
         if identifier not in existing and len(existing) >= PET_MAX_PER_SESSION:
             raise OrchestrationError("This session already has the maximum number of its own pets.")
-        folder = pet_session_root(session) / identifier
-        created = not folder.exists()
-        private_directory(folder)
-        write_private(folder / f"spritesheet{extension}", data)
-        write_private(folder / "pet.json", json.dumps({
-            "id": identifier, "displayName": display, "description": description,
-            "spritesheetPath": f"spritesheet{extension}"}, sort_keys=True).encode())
+        # The identity helper both proves ownership and requires the pet to exist,
+        # so publish atomically and restore the previous pet on any refusal.
+        publication = PetPublication(session, identifier, (
+            (f"spritesheet{extension}", data),
+            ("pet.json", json.dumps({
+                "id": identifier, "displayName": display, "description": description,
+                "spritesheetPath": f"spritesheet{extension}"}, sort_keys=True).encode()),
+        ))
+        publication.publish()
         installed = identifier
-    chosen = installed or args.pet_id
-    if chosen != PET_DEFAULT_ID and (not PET_ID_PATTERN.fullmatch(chosen or "")
-                                     or chosen not in {pet["petId"] for pet in list_session_pets(session)}):
-        raise OrchestrationError("That pet is not available to this session. Use --add PATH first.")
-    helper = identity_helper_path("session pets")
-
-    def discard():
-        if installed is not None and created:
-            shutil.rmtree(pet_session_root(session) / installed, ignore_errors=True)
-
     try:
-        process = subprocess.run([helper, "icon", "--session-id", session, "--pet", chosen],
-                                 capture_output=True, text=True, timeout=5)
-        value = json.loads(process.stdout)
-    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
-        discard()
-        raise OrchestrationError("Own-session identity verification did not complete.") from error
-    if process.returncode != 0 or not isinstance(value, dict) or value.get("ok") is not True:
-        discard()
-        raise OrchestrationError("This caller could not prove ownership of that session; no pet was selected.")
-    if str(value.get("sessionId", "")).lower() != session or value.get("petId") != chosen:
-        raise OrchestrationError("The identity helper returned a mismatched selection.")
+        select_own_pet(session, installed or args.pet_id)
+    except BaseException:
+        if publication is not None:
+            publication.restore()
+        raise
+    if publication is not None:
+        publication.commit()
+    chosen = installed or args.pet_id
     return {"sessionId": session, "petId": chosen, "added": installed is not None,
             "scope": "this session only until saved from the Maestro pet picker"}
 
@@ -4747,7 +4882,7 @@ def command_status(args, root, cmux):
     )
     cancelled = []
 
-    def refresh(state):
+    def refresh(state, retiring):
         current_actor = authorize(state, args.actor_id, args.token)
         current_actor["lastControlAt"] = now()
         current_targets = descendants(state, current_actor)
@@ -4765,6 +4900,17 @@ def command_status(args, root, cmux):
                         node["phase"], node["availability"], node["updatedAt"] = (
                             "terminal-disappeared", "unavailable", now()
                         )
+                    elif (node.get("launchError") and exited and surface is False
+                            and node["id"] in state["launches"]
+                            and state["launches"][node["id"]] == snapshot["launches"].get(node["id"])):
+                        # Failed attach with exact provider exit and surface absence proven:
+                        # nothing remains to fence, so the lease no longer protects anything.
+                        del state["launches"][node["id"]]
+                        node["phase"], node["availability"], node["updatedAt"] = (
+                            "terminal-disappeared", "unavailable", now()
+                        )
+                        retiring.append(node)
+                        cancelled.append(node["id"])
                     continue
                 if (node["phase"] == "launching" and node.get("surfaceId") and surface is False
                         and state["launches"].get(node["id"]) == snapshot["launches"].get(node["id"])
@@ -4785,7 +4931,7 @@ def command_status(args, root, cmux):
                 if is_direct_launch(node):
                     node["result"] = "Exact Copilot process exited; no task outcome is inferred."
             if exited:
-                retire_messaging(node)
+                retiring.append(node)
         apply_git_evidence(state, git_evidence)
         return {"runId": current_actor["runId"],
                 "capacity": workspace_capacity(state, current_actor["workspaceId"]), "workers": [{
@@ -4809,7 +4955,7 @@ def command_status(args, root, cmux):
             "phase": node["phase"], "availability": node["availability"],
             "result": node["result"],
         } for node in current_targets]}
-    result = mutate(root, refresh)
+    result = mutate_retiring_routes(root, refresh)
     for identifier in cancelled:
         remove_launch_credential(root, identifier)
     return result
@@ -4895,7 +5041,7 @@ def command_archive(args, root, cmux):
             "Run archive is pending because a worker turn or supervisor remains live; retry."
         )
 
-    def finish(state):
+    def finish(state, retiring):
         current = authorize(state, args.actor_id, args.token, allow_archiving=True)
         if tuple(current.get(key) for key in identity_keys) != identity:
             raise OrchestrationError("Coordinator ownership changed during archive.")
@@ -4910,7 +5056,7 @@ def command_archive(args, root, cmux):
         state["archives"].append(archive_summary(state, run_id))
         state["archives"] = state["archives"][-MAX_ARCHIVES:]
         for node in nodes:
-            retire_messaging(node)
+            retiring.append(node)
             if has_managed_runtime(node) and node.get("surfaceId"):
                 state["retainedResources"].append({
                     "runId": run_id, "workspaceId": node["workspaceId"],
@@ -4923,7 +5069,7 @@ def command_archive(args, root, cmux):
         if len(state["retainedResources"]) > MAX_HOST_NODES:
             raise OrchestrationError("Host retained-resource safety limit reached; archived terminals remain owned.")
         return {"runId": run_id, "archived": True}
-    result = mutate(root, finish, wait=1)
+    result = mutate_retiring_routes(root, finish, wait=1)
     direct_nodes = [node for node in snapshot["nodes"].values()
                     if node["runId"] == run_id and is_direct_launch(node)]
     if direct_nodes:
@@ -4976,7 +5122,7 @@ def command_recover(args, root, cmux):
         ):
             raise OrchestrationError("Stale recovery refuses competing live worker ownership.")
 
-    def recover(state):
+    def recover(state, retiring):
         current = state["nodes"].get(previous["id"])
         if not current or current["runId"] != previous["runId"]:
             raise OrchestrationError("Coordinator ownership changed during recovery.")
@@ -4999,8 +5145,7 @@ def command_recover(args, root, cmux):
                 or (node.get("surfaceId") and cmux.surface_exists(node["workspaceId"], node["surfaceId"]) is not False)
             ):
                 raise OrchestrationError("Stale recovery refuses live or uncertain worker ownership.")
-        for node in current_nodes.values():
-            retire_messaging(node)
+        retiring.extend(current_nodes.values())
         state["archives"].append(archive_summary(state, current["runId"]))
         state["archives"] = state["archives"][-MAX_ARCHIVES:]
         for node_id in current_nodes:
@@ -5012,7 +5157,7 @@ def command_recover(args, root, cmux):
             "controlToken": token, "recoveredRunId": previous["runId"],
             "workspaceId": workspace, "surfaceId": surface,
         }
-    return mutate(root, recover)
+    return mutate_retiring_routes(root, recover)
 
 
 def parser():
