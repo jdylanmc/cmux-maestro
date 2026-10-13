@@ -4,6 +4,33 @@ import Testing
 
 @MainActor
 struct SidebarOrchestrationTests {
+    /// The controller's projected phases, read by executing it, must each decode into the typed sidebar vocabulary.
+    @Test func controllerProjectedPhasesDecodeExactlyIntoTypedPhases() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [
+            "python3", "-c",
+            "import json, runpy, sys; api = runpy.run_path(sys.argv[1]); print(json.dumps(sorted(api['PROJECTED_PHASES'])))",
+            root.appendingPathComponent("scripts/cmux-maestro-orchestrator.py").path
+        ]
+        process.currentDirectoryURL = root
+        process.standardInput = FileHandle.nullDevice
+        let output = Pipe(), errors = Pipe()
+        process.standardOutput = output
+        process.standardError = errors
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let detail = String(decoding: errors.fileHandleForReading.readDataToEndOfFile().prefix(4_096), as: UTF8.self)
+        try #require(process.terminationStatus == 0, Comment(rawValue: detail))
+        let projected = try JSONDecoder().decode([String].self, from: data)
+        try #require(!projected.isEmpty)
+        let decoded = projected.compactMap(SidebarOrchestrationPhase.init(rawValue:))
+        #expect(decoded.count == projected.count, "Undecodable projected phases: \(projected)")
+        #expect(Set(decoded) == Set(SidebarOrchestrationPhase.allCases), "Typed phases the controller never projects")
+    }
+
     @Test func projectionKeepsExplicitAncestryWithoutDisclosingOffWindowCount() async throws {
         let workspace = UUID()
         let run = UUID()

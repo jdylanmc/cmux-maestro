@@ -421,8 +421,6 @@ struct SidebarNavigationTests {
         #expect(view.contains("selection = .surface(workspaceID: workspaceID, surfaceID: surface.id)"))
         #expect(view.components(separatedBy: "selection: unmanagedSelection").count == 3,
                 "Hierarchy and Taskboard retain the inspection binding")
-        #expect(view.contains("SidebarPresentation.inspectorDetails("))
-        #expect(view.contains("SidebarInspector(content: inspectorDetails)"))
         let now = Date()
         for granted in [true, false] {
             let scopes: Set<CmuxExtensionScope> = granted

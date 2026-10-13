@@ -714,8 +714,23 @@ struct SidebarHoverTests {
         for forbidden in ["SidebarNavigation", "SidebarPreferences", "SidebarSeen", "UserDefaults", "context.host", "markSeen", "acknowledge"] {
             #expect(!source.contains(forbidden))
         }
-        #expect(source.contains(".nonactivatingPanel"))
-        #expect(source.contains("override var canBecomeMain: Bool { false }"))
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 400, height: 400),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let anchor = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 30))
+        window.contentView = anchor
+        defer { window.contentView = nil; window.close() }
+        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in })
+        defer { presenter.detach() }
+        presenter.update(anchor: anchor, data: .init(id: "passive", category: "Workspace", title: "Synthetic"), group: nil)
+        for explicit in [false, true] {
+            presenter.open(explicit: explicit)
+            let panel = try #require(presenter.panel)
+            #expect(panel.styleMask.contains(.nonactivatingPanel), "Previews never activate the app")
+            #expect(!panel.canBecomeMain)
+            #expect(panel.canBecomeKey == explicit, "Only an explicit preview may take keyboard focus")
+            presenter.dismiss(restoreFocus: false)
+        }
     }
 
     @Test(arguments: [false, true])

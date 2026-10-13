@@ -14,9 +14,16 @@ struct WorkerLaunchSettingsTests {
         #expect(pasteboard.string(forType: .string) == expected)
         #expect(!expected.contains("--yes"))
         let model = CLIIntegrationGuideModel(read: { .referenceUnavailable })
-        let view = NSHostingView(rootView: CLIIntegrationSettingsView(model: model, copyCommand: { false }))
+        var copies = 0
+        let view = NSHostingView(rootView: CLIIntegrationSettingsView(model: model, copyCommand: { copies += 1; return false }))
         #expect(view.fittingSize.width == 600)
         #expect(view.fittingSize.height == 350)
+        view.frame = NSRect(origin: .zero, size: view.fittingSize)
+        view.layoutSubtreeIfNeeded()
+        func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+        let shown = descendants(view).compactMap { ($0 as? NSTextField)?.stringValue }
+        #expect(shown.filter { $0 == expected }.count == 1, "The exact user-run command is shown once: \(shown)")
+        #expect(copies == 0, "Rendering the guide never copies")
         let settings = NSHostingView(rootView: MaestroSettingsView())
         #expect(settings.fittingSize.width == 640)
         #expect(settings.fittingSize.height == 450)
@@ -38,8 +45,6 @@ struct WorkerLaunchSettingsTests {
         #expect(scene.contains("WorkerLaunchSettingsView()"))
         #expect(scene.contains("CLIIntegrationSettingsView()"))
         #expect(scene.contains(#"Label("CLI Integration", systemImage: "terminal")"#))
-        #expect(guide.contains("Text(CLIIntegrationGuide.installCommand)"))
-        #expect(guide.contains(#"Button("Copy install command")"#))
         #expect(guide.contains("CLIIntegrationGuide.copyInstallCommand()"))
         for forbidden in [
             "Process(", "NSWorkspace", "CopilotSetup()", "--yes",

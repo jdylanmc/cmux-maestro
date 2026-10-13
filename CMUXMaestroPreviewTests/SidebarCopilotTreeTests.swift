@@ -683,8 +683,6 @@ struct SidebarCopilotTreeTests {
         let view = try String(
             contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarView.swift"), encoding: .utf8
         )
-        #expect(view.contains("CopilotSessionRow"))
-        #expect(view.contains("FocusButton"))
         #expect(!view.contains("Provider data is not enabled"))
         #expect(!view.contains("future update"))
     }

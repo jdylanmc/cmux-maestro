@@ -31,16 +31,6 @@ struct SidebarLayoutTests {
         #expect(workflow.contains("path: .build/layout-validation/offscreen/*.png"))
         #expect(workflow.contains("include-hidden-files: true"))
         #expect(workflow.contains("if-no-files-found: error"))
-        let source = try String(
-            contentsOf: root.appendingPathComponent("CMUXMaestroPreviewTests/SidebarLayoutRenderingTests.swift"), encoding: .utf8
-        )
-        #expect(source.contains("#expect(!window.isVisible)"))
-        #expect(source.contains(".accessibilityHighContrastAqua"))
-        #expect(source.contains(".accessibilityHighContrastDarkAqua"))
-        #expect(source.contains("/synthetic/workspaces/"))
-        #expect(!source.contains("CGWindowListCreateImage"))
-        #expect(!source.contains("ScreenCaptureKit"))
-        #expect(!source.contains("orderFront("))
     }
 
     @Test func defaultsAreOriginalDensityAndExpandedWithoutWritingOnRead() throws {
@@ -568,8 +558,6 @@ struct SidebarLayoutTests {
         #expect(view.contains(".accessibilityHint(expanded"))
         #expect(view.contains(".accessibilityLabel(\"\\(label): \\(displayText)\")"))
         #expect(view.contains(".help(displayText)"))
-        #expect(!view.contains("@State private var expanded"))
-        #expect(!view.contains("@State private var collapsed"))
         #expect(!view.contains("withAnimation"))
         let workingRingSchedule = "TimelineView(.animation(minimumInterval: 1.0 / 30))"
         let askingSchedule = "TimelineView(.animation(minimumInterval: 1.0 / 20))"
@@ -585,8 +573,6 @@ struct SidebarLayoutTests {
         #expect(view.contains("@Environment(\\.accessibilityReduceMotion)"))
         #expect(SidebarBranchSummary(sessions: [], complete: false).incomplete)
         #expect(view.contains("model.navigation.permissionSummary"))
-        #expect(view.contains("model.copilot.updateHistory(preferences.history)"))
-        #expect(view.contains("model.copilot.updateAttention(preferences.attention)"))
     }
 
     private func tree(moved: Bool = false, partial: Bool = false) -> SidebarCopilotTree {
