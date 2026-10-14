@@ -23,6 +23,8 @@ struct SidebarInspection: Equatable {
 
 struct SidebarDetailContent: Equatable {
     var title: String
+    /// The title is Copilot's session name (ADR 0022), not CMUX's terminal title.
+    var titleIsSessionName = false
     var visual: SidebarVisual? = nil
     var lines: [SidebarDetailLine] = []
     var notice: String? = nil
@@ -526,7 +528,10 @@ enum SidebarPresentation {
             return result
         }
         result.isAgent = true
-        if let name = session.sessionName { result.title = name }
+        if let name = session.sessionName {
+            result.title = name
+            result.titleIsSessionName = true
+        }
         result.petSessionID = session.id
         result.petChoice = session.petId
         result.visual = sessionState(session)
@@ -545,6 +550,7 @@ enum SidebarPresentation {
            (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(node.updatedAt)),
            managedSession(for: node, in: tree, now: now)?.id == session.id {
             result.title = node.label
+            result.titleIsSessionName = false
             result.visual = managedState(node, availability: availability, now: now, tree: tree)
             let fields = Set([
                 "Model", "Branch", "Worktree", "Git evidence", "Git changes",
