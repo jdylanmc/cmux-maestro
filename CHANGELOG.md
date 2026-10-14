@@ -20,6 +20,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Internal tasks no longer have their own "N internal tasks" header and chevron. They show
+  whenever their owning row is expanded; that row's chevron is the only collapse control.
 - Make Beats store writes atomic and synced. The orchestrator now fsyncs the temporary file
   before the rename and the folder after it, and the sidebar syncs the folder after its rename,
   so a crash or OS failure can't tear the store. A failed folder sync, after the change has
