@@ -739,7 +739,42 @@ export function fileLedger(file) {
     requireCondition(info.isDirectory() && info.uid === process.getuid() && !(info.mode & 0o077));
   };
   const text = (value) => typeof value === "string";
+  const lock = `${file}.lock`;
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return error.code === "EPERM";
+    }
+  };
   return {
+    // One extension process per session owns the ledger for its lifetime. A lock whose owner has
+    // exited is reclaimed; ownership is re-checked every pass, so a lost race stops the loser.
+    async acquire() {
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      await privateDirectory().catch((error) => { throw invalid(error); });
+      const holder = async () => Number((await fs.readFile(lock, "utf8").catch(() => "")).trim());
+      if (await holder() === process.pid) return true;
+      try {
+        await fs.writeFile(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        const pid = await holder();
+        if (Number.isSafeInteger(pid) && pid > 0 && alive(pid)) return false;
+        await fs.rm(lock, { force: true });
+        try {
+          await fs.writeFile(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+        } catch (retry) {
+          if (retry.code === "EEXIST") return false;
+          throw retry;
+        }
+      }
+      return await holder() === process.pid;
+    },
+    async release() {
+      if (Number((await fs.readFile(lock, "utf8").catch(() => "")).trim()) === process.pid) await fs.rm(lock, { force: true });
+    },
     async read() {
       let handle;
       try {
@@ -756,9 +791,9 @@ export function fileLedger(file) {
         const value = JSON.parse(decoder.decode(await handle.readFile()));
         requireCondition(value?.version === 1 && Array.isArray(value.schedules) && value.schedules.every((item) =>
           Number.isSafeInteger(item?.id) && text(item.beatId) && UUID.test(item.beatId)) &&
-          Array.isArray(value.pending) && value.pending.every((item) => text(item?.beatId) && UUID.test(item.beatId) &&
+          (value.pending === undefined || Array.isArray(value.pending)) && (value.pending ?? []).every((item) => text(item?.beatId) && UUID.test(item.beatId) &&
             Number.isSafeInteger(item.after) && text(item.cron) && text(item.tz) && text(item.prompt) && text(item.label)));
-        return { owned: new Map(value.schedules.map((item) => [item.id, item.beatId])), pending: value.pending };
+        return { owned: new Map(value.schedules.map((item) => [item.id, item.beatId])), pending: value.pending ?? [] };
       } catch (error) {
         throw invalid(error);
       } finally {
@@ -878,6 +913,11 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
     try {
       // Resolved every sync: a time zone change re-registers each Beat in the new zone.
       const zone = typeof tz === "function" ? await tz() : tz;
+      if (!await (ledger.acquire?.() ?? true)) {
+        // Another extension process owns this session's schedules; it keeps them in sync.
+        failing = false;
+        return;
+      }
       const wanted = await read(sessionId), entries = await gateway.list();
       // Every ledger change re-reads the file first, so another process's records are kept.
       const change = async (edit) => {
@@ -890,11 +930,17 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
       const listed = new Set(entries.map((entry) => entry.id));
       if (state.pending.length || [...state.owned.keys()].some((id) => !listed.has(id))) {
         state = await change((current) => {
+          // Adopt only an unambiguous match: newer than the intent, same cron, zone and prompt, and the
+          // same label when Copilot lists one. Two or more candidates are reported, never guessed.
           for (const intent of current.pending) {
-            const created = entries.find((entry) => !current.owned.has(entry.id) && entry.id > intent.after &&
-              entry.label === intent.label && entry.cron === intent.cron && entry.tz === intent.tz &&
-              entry.prompt === intent.prompt);
-            if (created) current.owned.set(created.id, intent.beatId);
+            const candidates = entries.filter((entry) => !current.owned.has(entry.id) && entry.id > intent.after &&
+              (!entry.label || entry.label === intent.label) && entry.cron === intent.cron &&
+              entry.tz === intent.tz && entry.prompt === intent.prompt);
+            if (candidates.length === 1) current.owned.set(candidates[0].id, intent.beatId);
+            else if (candidates.length > 1) {
+              diagnostic(Object.assign(new Error("A pending Beat schedule matched more than one schedule."),
+                { code: "BEATS_AMBIGUOUS" }), intent.beatId);
+            }
           }
           current.pending = [];
           for (const id of [...current.owned.keys()]) if (!listed.has(id)) current.owned.delete(id);
@@ -933,6 +979,10 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
         if (stuck.has(beatId)) continue;
         await attempt(`add ${beatId}`, beatId, async () => {
           await change((current) => current.pending.push({ beatId, after: highest, ...entry }));
+          if (closed || again) {
+            await change((current) => { current.pending = current.pending.filter((intent) => intent.beatId !== beatId); });
+            return;
+          }
           const id = await gateway.add(entry);
           highest = Math.max(highest, id);
           try {
@@ -977,7 +1027,7 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
     sync, ready: first,
     close() {
       closed = true; clearInterval(timer); clearTimeout(debounce); watcher?.close();
-      return running ?? Promise.resolve();
+      return (running ?? Promise.resolve()).then(() => ledger.release?.()).catch(() => {});
     },
   };
 }

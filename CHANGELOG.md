@@ -26,7 +26,8 @@ Notable changes are recorded using Keep a Changelog categories.
   (`~/Library/Application Support/CMUXMaestroPreview/BeatSchedules/<session>.json`, outside
   every sidebar grant) and keeps or removes only those. Each add is recorded as pending
   before Copilot is asked, so a schedule created just before the extension stopped is
-  adopted instead of duplicated; shutdown waits up to two seconds for a sync in flight. An
+  adopted instead of duplicated (only an unambiguous match); shutdown waits up to two
+  seconds for a sync in flight; one extension process per session owns the ledger. An
   add whose ID cannot be recorded is stopped again (or reported if it cannot be), and an
   invalid ledger changes nothing and says how to recover. Schedules made by earlier
   versions are no longer recognized, and Copilot keeps schedules across resume: stop
