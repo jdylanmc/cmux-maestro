@@ -2,10 +2,12 @@
 """Fast, deterministic tests for Beats: cron evaluation, local-time/DST rules, the shared
 definition store, and the exact-self agent surface. No real clock, session or network."""
 import fcntl
+import io
 import json
 import os
 import runpy
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -13,6 +15,7 @@ import threading
 import time
 import unittest
 import uuid
+from unittest import mock
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -306,6 +309,49 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(OrchestrationError):
             store_mutate(corrupt, root=self.root)
         self.assertEqual((self.root / "beats.json").read_bytes(), before)
+
+    def test_writes_fsync_the_file_before_the_rename_and_the_folder_after(self):
+        self.root.mkdir(mode=0o700)
+        root_inode = os.stat(self.root).st_ino
+        path = self.root / "beats.json"
+        real_fsync, calls = os.fsync, []
+
+        def record(descriptor):
+            info = os.fstat(descriptor)
+            calls.append((stat.S_ISDIR(info.st_mode), info.st_ino, path.exists()))
+            real_fsync(descriptor)
+        with mock.patch("os.fsync", side_effect=record):
+            store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
+        # The temporary file (now beats.json) before the rename, then the folder after it.
+        self.assertEqual(calls, [(False, os.stat(path).st_ino, False), (True, root_inode, True)])
+        self.assertEqual(sorted(os.listdir(self.root)), [".lock", "beats.json"])
+
+    def test_failed_file_fsync_fails_the_write_and_changes_nothing(self):
+        store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
+        path = self.root / "beats.json"
+        before = path.read_bytes()
+
+        def fail_files(descriptor):
+            if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError(5, "Input/output error")
+        with mock.patch("os.fsync", side_effect=fail_files):
+            with self.assertRaises(OSError):
+                store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(sorted(os.listdir(self.root)), [".lock", "beats.json"])
+
+    def test_failed_folder_fsync_is_a_warning_not_a_failure(self):
+        real_fsync = os.fsync
+
+        def fail_folders(descriptor):
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError(5, "Input/output error")
+            real_fsync(descriptor)
+        with mock.patch("os.fsync", side_effect=fail_folders), mock.patch("sys.stderr", new=io.StringIO()) as stderr:
+            result = store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")) or "done", root=self.root)
+        self.assertEqual(result, "done")
+        self.assertIn("could not be synced", stderr.getvalue())
+        self.assertEqual(len(API["beats_store_snapshot"](root=self.root)["beats"]), 1)
 
     def test_size_limit_counts_utf8_bytes(self):
         # Escaped as \u00e9 this store would be about 1.6 MiB; as UTF-8 it is about 0.6 MiB.

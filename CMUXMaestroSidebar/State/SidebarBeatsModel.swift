@@ -440,5 +440,12 @@ nonisolated struct SidebarBeatsFile {
             unlink(temporary.path)
             throw BeatsError("The Beats store could not be written.")
         }
+        // Harden the rename, as the orchestrator does. The change has already landed, so a failed
+        // folder sync is not a write failure; reporting one would invite a repeated change.
+        let folder = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        if folder >= 0 {
+            _ = fsync(folder)
+            close(folder)
+        }
     }
 }

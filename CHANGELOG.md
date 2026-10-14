@@ -6,6 +6,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Make Beats store writes atomic and synced. The orchestrator now fsyncs the temporary file
+  before the rename and the folder after it, and the sidebar syncs the folder after its rename,
+  so a crash or OS failure can't tear the store. A failed folder sync, after the change has
+  landed, is a warning rather than an error, so a retry can't repeat the change. The bytes
+  written are unchanged.
+
 - Turn a Beat on and off with **Enable** and **Disable**, matching its On/Off label.
   `beats enable` and `beats disable` are the documented commands; `beats pause` and
   `beats resume` still work as aliases. "Resume" now means only resuming a Copilot session.

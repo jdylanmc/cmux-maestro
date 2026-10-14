@@ -4693,6 +4693,40 @@ def beats_open_store(path):
         os.close(descriptor)
 
 
+def beats_write_store(root, data):
+    """Atomic replace: write a temporary file in the store folder, fsync it, then rename it over
+    beats.json. A failed file fsync fails the write. The folder fsync that follows only hardens the
+    rename, which has already landed, so a failure there is a warning: reporting the change as
+    failed would invite a retry that repeats it."""
+    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        temporary = f".beats.json.{secrets.token_hex(4)}"
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                             dir_fd=directory)
+        try:
+            try:
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(descriptor, view):]
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(temporary, "beats.json", src_dir_fd=directory, dst_dir_fd=directory)
+        except BaseException:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except OSError:
+                pass
+            raise
+        try:
+            os.fsync(directory)
+        except OSError as error:
+            print(f"warning: the Beats store was written but its folder could not be synced ({error.strerror}).",
+                  file=sys.stderr)
+    finally:
+        os.close(directory)
+
+
 def beats_private_root(root):
     info = root.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
@@ -4707,11 +4741,10 @@ def beats_store_mutate(operation, *, root=None):
     lock_descriptor = os.open(root / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
-        path = root / "beats.json"
-        state = beats_open_store(path) or {"version": BEATS_VERSION, "beats": []}
+        state = beats_open_store(root / "beats.json") or {"version": BEATS_VERSION, "beats": []}
         result = operation(state)
         validate_beats_state(state)
-        write_private(path, beats_encode(state))
+        beats_write_store(root, beats_encode(state))
         return result
     finally:
         os.close(lock_descriptor)
