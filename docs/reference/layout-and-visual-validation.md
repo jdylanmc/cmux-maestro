@@ -115,6 +115,18 @@ of available width. Full Git diagnostics remain in hover/details so titles keep 
 At eight levels and 280 points, stable overflow slot leaves at least 124 points
 for name without hover-time reflow. 50-point host-footer clearance unchanged.
 
+An expanded agent block is one row group: a managed root agent with its descendants, a
+terminal surface row with its session's children or sessions, or a listed Copilot session
+with its children. Workspace headers are not grouped. One tracking area covers the group, so
+the pointer moving between its rows never exits it. Hovering any row draws one rounded
+highlight behind the whole group and shows the agent row's actions (…); rows inside add no
+highlight of their own and show their own actions (…) or dismiss controls on their own hover.
+When the agent row's surface is focused, the leading blue focus bar spans the group; collapsed,
+it spans the row only. Nested blocks join the outermost expanded group: no inner highlight or
+bar. One bar at a time: rows inside a focused group that share its surface draw none, and a
+descendant with its own focused surface keeps its own row-height bar. Presentation only:
+hover, grouping and the bar change no focus, read state, expansion or order.
+
 Hierarchy expansion persists by workspace/surface UUID and provider/session/
 child identity—not names, paths or current window. Moves and reloads keep
 the setting. New identities start expanded. Reusing same child ID in a

@@ -220,21 +220,28 @@ private struct SidebarFocusBorder: ViewModifier {
     let surfaceID: UUID
     var enabled = true
     @Environment(\.sidebarFocusedSurface) private var target
-    @Environment(\.sidebarFocusBarNamespace) private var barNamespace
-    private var focused: Bool { enabled && target == .surface(workspaceID: workspaceID, surfaceID: surfaceID) }
+    @Environment(\.sidebarRowGroup) private var group
+    private var surface: SidebarSeenTarget { .surface(workspaceID: workspaceID, surfaceID: surfaceID) }
+    private var focused: Bool { enabled && target == surface }
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .leading) {
-                if focused {
-                    bar
+                // A row group whose head owns this surface draws the one group-height bar instead.
+                if focused && group?.focus != surface {
+                    SidebarFocusBar()
                 }
             }
             .accessibilityAddTraits(focused ? .isSelected : [])
     }
+}
+
+/// The leading accent bar marking the focused surface's row or row group.
+struct SidebarFocusBar: View {
+    @Environment(\.sidebarFocusBarNamespace) private var barNamespace
 
     // One shared identity lets the bar glide to the newly focused row.
-    @ViewBuilder private var bar: some View {
+    var body: some View {
         let capsule = Capsule()
             .fill(Color.accentColor)
             .frame(width: 2)
@@ -242,6 +249,7 @@ private struct SidebarFocusBorder: ViewModifier {
             .padding(.vertical, 2)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+            .accessibilityIdentifier("sidebar-focus-bar")
         if let barNamespace {
             capsule.matchedGeometryEffect(id: "sidebar-focus-bar", in: barNamespace)
         } else {
@@ -1382,6 +1390,12 @@ struct ManagedHierarchyContent: View {
                                 }
                                 }
                               }
+                              .sidebarRowGroup(
+                                  focus: displaced.contains(root.id) ? nil
+                                      : .surface(workspaceID: root.workspaceId, surfaceID: root.surfaceId),
+                                  expanded: layout.isExpanded(.managed(root.id))
+                                      && hasVisibleChildren(root, evidenceDate: evidenceDate)
+                              )
                               // The whole branch is one drop target and moves as one.
                               .sidebarReorderDrop(handle)
                             }
@@ -1413,6 +1427,16 @@ struct ManagedHierarchyContent: View {
             return "Workspace"
         }
         return title
+    }
+
+    /// Matches the root row's disclosure: managed children or retained session work.
+    private func hasVisibleChildren(_ root: SidebarOrchestrationNode, evidenceDate: Date) -> Bool {
+        if !children(of: root.id).isEmpty { return true }
+        return SidebarPresentation.sessionPlacements(
+            copilotTree.sessions, managed: nodes, observations: copilotTree, now: evidenceDate
+        ).contains {
+            $0.contentOwnerID == root.id && ($0.session.hasShownOutline(layout) || $0.session.internalTaskCountsIncomplete)
+        }
     }
 
     private func descendantCount(of id: UUID) -> Int {
@@ -1552,6 +1576,7 @@ private struct ManagedNodeRow: View {
             SidebarBeatIndicator(session: beatSession, titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
                                  belowTitle: 18)
         }
+        .environment(\.sidebarRowGroupHead, depth == 0)
         .background { SidebarActivityBackground(visual: stateVisual,
                                                 needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate)) }
         .modifier(SidebarFocusBorder(workspaceID: node.workspaceId, surfaceID: node.surfaceId, enabled: !isRetainedRecord))
@@ -2156,6 +2181,7 @@ private struct SurfaceRow: View {
                                      titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
                                      belowTitle: 18)
             }
+            .environment(\.sidebarRowGroupHead, true)
             .background {
                 if let singleSession {
                     SidebarActivityBackground(visual: SidebarPresentation.sessionState(singleSession),
@@ -2178,6 +2204,7 @@ private struct SurfaceRow: View {
                 }
             }
         }
+        .sidebarRowGroup(focus: .surface(workspaceID: workspaceID, surfaceID: surface.id), expanded: expanded && hasChildren)
         .sidebarReorderDrop(reorder)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("surface-\(surface.id.uuidString)")
@@ -2223,6 +2250,7 @@ private struct CopilotSessionRow: View {
     private var focusUnavailable: Bool { retained || session.statusOnly }
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
+    @Environment(\.sidebarRowGroup) private var outerGroup
     @State private var showingPicker: SidebarIconTarget?
     private var expanded: Bool { layout.isExpanded(.session(session.id)) }
     /// Work-context rows keep their "Session context" label; current rows lead with the session name.
@@ -2292,6 +2320,8 @@ private struct CopilotSessionRow: View {
                                      titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
                                      belowTitle: 18)
             }
+            // Nested inside an expanded surface group, this row is one of that group's children.
+            .environment(\.sidebarRowGroupHead, outerGroup == nil)
             .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session),
                                                 needsInput: SidebarPresentation.needsInput(session.attention)) }
             CopilotSessionContents(
@@ -2301,6 +2331,7 @@ private struct CopilotSessionRow: View {
                 parentFocusUnavailable: focusUnavailable ? SidebarPresentation.retainedFocusUnavailable : nil
             )
         }
+        .sidebarRowGroup(focus: nil, expanded: expanded && session.hasShownOutline(layout))
         .padding(.leading, density.spacing(8))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("copilot-session-\(session.id)")

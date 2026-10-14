@@ -28,6 +28,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- An expanded agent row and everything rendered under it (sub-agents, internal tasks, nested
+  workers and sessions) now hover as one block: one continuous highlight behind the whole
+  group, whichever row the pointer is over, with the agent's actions (…) shown. The focused
+  agent's blue bar runs down the full group; collapsed, it marks just the row as before.
+  Nested blocks join the outermost one, so there is never a second highlight or bar.
 - Agent rows for one Copilot session show that session's name instead of the terminal title,
   which Copilot sets to "name - status". The name comes from the `name:` field of the session's
   `workspace.yaml` (ADR 0022), read only for the exact bound session, bounded and strictly
