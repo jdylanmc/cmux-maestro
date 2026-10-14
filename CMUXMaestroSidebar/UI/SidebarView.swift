@@ -2379,58 +2379,22 @@ struct SidebarInternalTaskGroup<Activity: View>: View {
     var ownerDepth = 0
     var taskboard = false
     @ViewBuilder let activity: (SidebarChildRow) -> Activity
-    @Environment(\.sidebarDensity) private var density
-    @Environment(\.sidebarContentWidth) private var width
 
+    // No group header or chevron: the owning row's disclosure already collapses these tasks.
     var body: some View {
-        let shownTasks = section.rows.filter { showsRow($0) && $0.node.isInternalTask }.count
-        if let disclosure = section.taskDisclosure, shownTasks > 0 {
-            let expanded = layout.isExpanded(disclosure)
-            let summary = session.taskSummary(for: section)
+        let rows = section.rows.filter(showsRow)
+        if section.taskDisclosure != nil, rows.contains(where: { $0.node.isInternalTask }) {
             VStack(alignment: .leading, spacing: 0) {
-                SidebarTitleButton(
-                    label: "Internal tasks. \(summary.taskCount) observed. Related branch activity: \(summary.lines.joined(separator: ". "))",
-                    hint: "Related branch activity: \(summary.lines.joined(separator: ". "))", value: expanded ? "Expanded" : "Collapsed",
-                    localFocusID: "task-disclosure:\(session.id):\(disclosure.childID ?? "session")",
-                    action: { setExpanded(disclosure, !expanded) }
-                ) {
-                    HStack(spacing: 4) {
-                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 8, weight: .semibold)).frame(width: 12)
-                        Text("\(shownTasks) internal \(shownTasks == 1 ? "task" : "tasks")")
-                            .lineLimit(1)
-                        if !expanded {
-                            if summary.running > 0 {
-                                SidebarStateBadge(visual: SidebarPresentation.state(.working))
-                            }
-                            if summary.blocked > 0 { Image(systemName: "pause") }
-                            if summary.attention > 0 { Image(systemName: "exclamationmark") }
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .font(.system(size: density.rowMetadataSize))
-                    .foregroundStyle(.secondary)
-                    .frame(minHeight: 24)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Internal tasks. \(summary.taskCount) observed. Related branch activity: \(summary.lines.joined(separator: ". "))")
-                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-                .accessibilityIdentifier("internal-tasks-disclosure-\(session.id)-\(disclosure.childID ?? "session")")
-                .help("Related branch activity: \(summary.lines.joined(separator: ". "))")
-                .padding(.leading, SidebarInternalTaskRow.indentation(depth: ownerDepth, width: width))
-                if expanded {
-                    ForEach(section.rows.filter(showsRow)) { row in
-                        if row.node.isInternalTask {
-                            SidebarInternalTaskRow(
-                                row: row, sessionID: session.id,
-                                baseDepth: (section.rows.first?.node.depth ?? 0) - ownerDepth,
-                                followingDepth: followingDepth(row),
-                                setExpanded: setExpanded, dismiss: dismiss
-                            )
-                        } else if !taskboard {
-                            activity(row)
-                        }
+                ForEach(rows) { row in
+                    if row.node.isInternalTask {
+                        SidebarInternalTaskRow(
+                            row: row, sessionID: session.id,
+                            baseDepth: (section.rows.first?.node.depth ?? 0) - ownerDepth,
+                            followingDepth: followingDepth(row),
+                            setExpanded: setExpanded, dismiss: dismiss
+                        )
+                    } else if !taskboard {
+                        activity(row)
                     }
                 }
             }

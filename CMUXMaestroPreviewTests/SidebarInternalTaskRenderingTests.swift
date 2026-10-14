@@ -118,21 +118,13 @@ struct SidebarInternalTaskRenderingTests {
         let reloaded = fixture.preferences()
         let mounted = mount(model, reloaded, width: 350)
         defer { mounted.window.contentView = nil; mounted.window.close() }
-        await sidebarEventually {
-            buttons(mounted.host).contains { $0.localFocusID == "task-disclosure:\(data.sessionID):session" }
-        }
-        let group = try #require(buttons(mounted.host).first { $0.localFocusID == "task-disclosure:\(data.sessionID):session" })
-        #expect(group.toolTip?.contains("1 known running") == true)
-        #expect(group.toolTip?.contains("1 blocked") == true)
-        #expect(group.toolTip?.contains("3 need attention") == true)
-        #expect(group.toolTip?.contains("Counts may be incomplete") == true)
-        #expect(names(mounted.host).isEmpty)
-        try capture(mounted.host, name: "review1-mixed-collapsed-group-\(mode.rawValue)")
+        // A stored collapsed group is ignored: internal tasks have no disclosure of their own.
+        await sidebarEventually { !names(mounted.host).isEmpty }
+        #expect(!buttons(mounted.host).contains { $0.localFocusID?.hasPrefix("task-disclosure:") == true })
+        try capture(mounted.host, name: "review1-mixed-stale-group-\(mode.rawValue)")
         let owner = try #require(model.orchestration.snapshot.nodes.first)
         reloaded.setExpanded(false, for: .managed(owner.id))
-        await sidebarEventually {
-            !buttons(mounted.host).contains { $0.localFocusID == "task-disclosure:\(data.sessionID):session" }
-        }
+        await sidebarEventually { names(mounted.host).isEmpty }
         let summary = SidebarBranchSummary(sessions: model.copilot.tree.sessions)
         #expect(summary.incomplete && summary.running == 1 && summary.blocked == 1 && summary.attention == 3)
         #expect(model.copilot.tree.sessions[0].internalTaskCountsIncomplete)
@@ -411,14 +403,11 @@ struct SidebarInternalTaskRenderingTests {
         #expect(names(mounted.host).count == 256)
         #expect(model.copilot.tree.sessions[0].omittedActiveChildrenCount == 1)
         #expect(!model.copilot.tree.hasCompleteCounts)
-        let header = try #require(buttons(mounted.host).first { $0.localFocusID?.hasPrefix("task-disclosure:") == true })
-        #expect(header.accessibilityLabel()?.contains("256 observed") == true)
-        #expect(header.toolTip?.contains("1 additional working/blocked tasks") == true)
-        #expect(header.toolTip?.contains("Counts may be incomplete") == true)
+        #expect(!buttons(mounted.host).contains { $0.localFocusID?.hasPrefix("task-disclosure:") == true })
         try capture(mounted.host, name: "internal-tasks-production-cap-280")
     }
 
-    @Test func taskDisclosureKeyboardAndPointerSharePersistedIdentityAcrossModes() async throws {
+    @Test func internalTasksHaveNoGroupDisclosureAndChildCollapsePersists() async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
         let preferences = fixture.preferences()
@@ -437,17 +426,9 @@ struct SidebarInternalTaskRenderingTests {
         parent.performClick(nil)
         await sidebarEventually { names(mounted.host).count == 1 }
         #expect(!preferences.layout.isExpanded(.child("parent", sessionID: data.sessionID)))
-        let group = try #require(buttons(mounted.host).first { $0.localFocusID == "task-disclosure:\(data.sessionID):session" })
-        try #require(mounted.window.makeFirstResponder(group))
-        group.keyDown(with: keyEvent(window: mounted.window))
-        await sidebarEventually { names(mounted.host).isEmpty }
-        #expect(!preferences.layout.isExpanded(.internalTasks(sessionID: data.sessionID)))
-        #expect(group.toolTip?.contains("1 known running") == true)
-        #expect(group.toolTip?.contains("1 blocked") == true)
-        let current = try #require(buttons(mounted.host).first { $0.localFocusID == "task-disclosure:\(data.sessionID):session" })
-        current.performClick(nil)
+        #expect(!buttons(mounted.host).contains { $0.localFocusID?.hasPrefix("task-disclosure:") == true })
+        preferences.setExpanded(false, for: .internalTasks(sessionID: data.sessionID))
         await sidebarEventually { names(mounted.host).count == 1 }
-        #expect(fixture.preferences().layout.isExpanded(.internalTasks(sessionID: data.sessionID)))
         #expect(!fixture.preferences().layout.isExpanded(.child("parent", sessionID: data.sessionID)))
         #expect(model.navigation.status == .idle)
     }
