@@ -49,6 +49,9 @@ Notable changes are recorded using Keep a Changelog categories.
   landed, is a warning rather than an error, so a retry can't repeat the change. The bytes
   written are unchanged.
 
+- Make the Beats panel terse: a **+** (New Beat) in the header, one-line rows with an On/Off
+  switch, preset names (Hourly, Every 15 min) or the cron, and the prompt; next-run
+  estimates, "not running" and Copilot timing move to tooltips and VoiceOver.
 - Turn a Beat on and off with **Enable** and **Disable**, matching its On/Off label.
   `beats enable` and `beats disable` are the documented commands; `beats pause` and
   `beats resume` still work as aliases. "Resume" now means only resuming a Copilot session.

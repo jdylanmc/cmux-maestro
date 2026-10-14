@@ -104,6 +104,71 @@ enum SidebarBeatsMode: Equatable {
     }
 }
 
+/// Beats panel copy. Visible text stays terse; the honesty facts (On/Off, estimates, fires only
+/// while the session runs, Copilot decides timing) live in tooltips and accessibility.
+enum SidebarBeatsCopy {
+    static let newBeat = "New Beat"
+    static let empty = "No Beats"
+    static let notRunning = "Session not running"
+    static let firesOnlyWhileRunning = "Beats fire only while the session runs."
+    static let timing = "Local time. Runs roughly on schedule while the session is running; Copilot decides exact timing."
+    static let toggle = "Beat on/off"
+    static let changedElsewhere = "Changed elsewhere"
+    static let loadLatestHelp = "Base your draft on the current version; your typed changes stay."
+    static let latestLoaded = "Latest loaded"
+    static let latestLoadedHelp = "Loaded the latest version; your edits are kept. Save again to apply them."
+    static let deleted = "Beat deleted"
+    static let invalidCron = "Invalid cron"
+    static let lockedHelp = "Locked to this agent's session. Cancel, then Show all, to target another session."
+
+    static let presets: [(label: String, cron: String)] = [
+        ("Every 15 min", "*/15 * * * *"), ("Hourly", "0 * * * *"), ("Daily 9:00", "0 9 * * *"),
+        ("Weekdays 9:00", "0 9 * * 1-5"), ("Mondays 9:00", "0 9 * * 1")
+    ]
+
+    /// A preset's name, or nil when the cron is custom and shown as written.
+    static func presetLabel(_ cron: String) -> String? {
+        let normalized = cron.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return presets.first { $0.cron == normalized }?.label
+    }
+
+    static func sessionTitle(_ sessionId: String) -> String { "Session \(sessionId.prefix(8))" }
+
+    /// The next run, short: a time today, otherwise weekday and time.
+    static func nextShort(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        calendar.isDate(date, inSameDayAs: now)
+            ? date.formatted(.dateTime.hour().minute())
+            : date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+    }
+
+    static func nextLong(_ date: Date) -> String {
+        date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
+    }
+
+    /// Row tooltip and VoiceOver hint: cron, On/Off, estimated next run and when it can fire.
+    static func rowDetail(cron: String, enabled: Bool, running: Bool, next: Date?) -> String {
+        var parts = ["Cron \(cron).", enabled ? "On." : "Off."]
+        if !running {
+            parts += ["\(notRunning).", firesOnlyWhileRunning]
+        } else if enabled, let next {
+            parts += ["Next run estimate: \(nextLong(next)).", "Copilot decides exact timing.", firesOnlyWhileRunning]
+        }
+        return parts.joined(separator: " ")
+    }
+
+    /// The form's next-run caption and its detail.
+    static func preview(_ times: [Date], now: Date = Date()) -> (caption: String, detail: String)? {
+        guard let first = times.first else { return nil }
+        let all = times.map(nextLong).joined(separator: " · ")
+        return ("Next ≈ \(nextShort(first, now: now))", "Next runs (estimate, local time): \(all). \(timing)")
+    }
+
+    /// Prompt size, shown only near or over the limit.
+    static func byteCounter(_ bytes: Int, limit: Int = BeatsLimits.maximumPromptBytes) -> String? {
+        bytes * 4 >= limit * 3 ? "\(bytes)/\(limit) B" : nil
+    }
+}
+
 struct SidebarBeatsPanel: View {
     let controller: SidebarBeatsController
     let targets: [SidebarBeatTarget]
@@ -119,8 +184,9 @@ struct SidebarBeatsPanel: View {
     @State private var actionError: String?
 
     private var scope: UUID? { controller.scopedSession }
+    private var scopeRunning: Bool { scope.map { id in targets.contains { $0.id == id } } ?? true }
     private var scopeTitle: String? {
-        scope.map { id in targets.first { $0.id == id }?.title ?? SidebarBeatsPanel.notRunningTitle(id.uuidString.lowercased()) }
+        scope.map { id in targets.first { $0.id == id }?.title ?? SidebarBeatsCopy.sessionTitle(id.uuidString.lowercased()) }
     }
     private var visibleBeats: [SidebarBeat] {
         guard let scope else { return controller.beats }
@@ -134,21 +200,31 @@ struct SidebarBeatsPanel: View {
     }
     private var newBeatUnavailable: String? { Self.newBeatUnavailable(scope: scope, targets: targets) }
 
-    static func notRunningTitle(_ sessionId: String) -> String { "Session \(sessionId.prefix(8)) (not running)" }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 2) {
                 Text("Beats").font(.headline)
                 Spacer()
+                if mode == .list {
+                    Button { mode = .form(nil) } label: {
+                        Image(systemName: "plus").font(.callout.weight(.medium))
+                            .frame(width: SidebarPresentation.minimumControlSize, height: SidebarPresentation.minimumControlSize)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(newBeatUnavailable != nil)
+                    .help(newBeatUnavailable ?? SidebarBeatsCopy.newBeat)
+                    .accessibilityLabel(SidebarBeatsCopy.newBeat)
+                    .accessibilityHint(newBeatUnavailable ?? "")
+                    .accessibilityIdentifier("sidebar-beats-new")
+                }
                 SidebarCloseButton(label: "Close Beats", id: "sidebar-close-beats", action: close)
             }
-            Text("Recurring prompts for agent sessions. The session must be running.")
-                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let scopeTitle {
-                HStack(spacing: 6) {
+                HStack(spacing: 4) {
                     Text("For \(scopeTitle)").font(.caption.weight(.semibold)).lineLimit(1)
                         .accessibilityIdentifier("sidebar-beats-scope")
+                    if !scopeRunning { SidebarBeatNotRunning() }
                     Spacer(minLength: 0)
                     if mode.offersShowAll {
                         Button("Show all") { controller.showAll() }
@@ -164,17 +240,13 @@ struct SidebarBeatsPanel: View {
             }
             switch mode {
             case .list:
-                BeatsList(controller: controller, beats: visibleBeats, targets: targets, pendingDelete: $pendingDelete,
-                          actionError: $actionError, edit: { mode = .form($0) })
-                Button { mode = .form(nil) } label: { Label("New Beat", systemImage: "plus") }
-                    .disabled(newBeatUnavailable != nil)
-                    .help(newBeatUnavailable ?? "Create a recurring prompt.")
-                    .accessibilityIdentifier("sidebar-beats-new")
+                BeatsList(controller: controller, beats: visibleBeats, targets: targets, scoped: scope != nil,
+                          pendingDelete: $pendingDelete, actionError: $actionError, edit: { mode = .form($0) })
             case .form(let existing):
                 BeatsForm(controller: controller, targets: targets, existing: existing, preferred: scope) { mode = .list }
             }
         }
-        .padding(14)
+        .padding(12)
         .frame(width: 340)
         .onChange(of: scope) { _, _ in mode = mode.afterScopeChange(); pendingDelete = nil }
         .task {
@@ -189,23 +261,35 @@ struct SidebarBeatsPanel: View {
     }
 }
 
+/// Hollow slashed circle for a session that is not running; the fact is in its tooltip and label.
+struct SidebarBeatNotRunning: View {
+    var body: some View {
+        Image(systemName: "circle.slash").font(.caption2).foregroundStyle(.secondary)
+            .help("\(SidebarBeatsCopy.notRunning). \(SidebarBeatsCopy.firesOnlyWhileRunning)")
+            .accessibilityLabel(SidebarBeatsCopy.notRunning)
+            .accessibilityHint(SidebarBeatsCopy.firesOnlyWhileRunning)
+    }
+}
+
 private struct BeatsList: View {
     let controller: SidebarBeatsController
     let beats: [SidebarBeat]
     let targets: [SidebarBeatTarget]
+    let scoped: Bool
     @Binding var pendingDelete: String?
     @Binding var actionError: String?
     let edit: (SidebarBeat) -> Void
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 8) {
+            VStack(spacing: 4) {
                 if beats.isEmpty {
-                    Text("No beats.").font(.caption).foregroundStyle(.secondary).padding(.vertical, 12)
+                    Text(SidebarBeatsCopy.empty).font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity).padding(.vertical, 10)
                 }
                 ForEach(beats) { beat in
                     BeatRow(controller: controller, beat: beat, target: targets.first { $0.id.uuidString.lowercased() == beat.sessionId },
-                            pendingDelete: $pendingDelete, actionError: $actionError, edit: edit)
+                            scoped: scoped, pendingDelete: $pendingDelete, actionError: $actionError, edit: edit)
                 }
             }
         }
@@ -217,60 +301,78 @@ private struct BeatRow: View {
     let controller: SidebarBeatsController
     let beat: SidebarBeat
     let target: SidebarBeatTarget?
+    let scoped: Bool
     @Binding var pendingDelete: String?
     @Binding var actionError: String?
     let edit: (SidebarBeat) -> Void
 
-    private var tone: Color { beat.enabled ? SidebarQuestionGlow.lightBlue : .secondary }
-
     // No estimate for a session that is not running: the Beat cannot fire there.
-    private var nextFire: String? {
-        guard beat.enabled, target != nil, let spec = try? BeatsCron(beat.cron),
-              let next = spec.nextTimes(after: Date(), count: 1).first else { return nil }
-        return next.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
+    private var nextFire: Date? {
+        guard beat.enabled, target != nil, let spec = try? BeatsCron(beat.cron) else { return nil }
+        return spec.nextTimes(after: Date(), count: 1).first
+    }
+
+    private var detail: String {
+        SidebarBeatsCopy.rowDetail(cron: beat.cron, enabled: beat.enabled, running: target != nil, next: nextFire)
+    }
+
+    private var isOn: Binding<Bool> {
+        Binding(get: { beat.enabled }, set: { on in
+            actionError = controller.perform { on ? try $0.enable(id: beat.id) : try $0.disable(id: beat.id) }
+        })
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Circle().fill(tone).frame(width: 7, height: 7)
-                Text(target?.title ?? SidebarBeatsPanel.notRunningTitle(beat.sessionId))
-                    .font(.caption.weight(.semibold)).lineLimit(1)
-                Spacer(minLength: 0)
-                Text(beat.enabled ? "On" : "Off").font(.caption2).foregroundStyle(tone)
-                    .accessibilityLabel(beat.enabled ? "Beat on" : "Beat off")
-            }
-            Text(beat.cron).font(.system(.caption, design: .monospaced))
-            if let nextFire { Text("Next (estimate): \(nextFire)").font(.caption2).foregroundStyle(.secondary) }
-            Text(beat.prompt).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-            HStack(spacing: 8) {
-                primaryAction
-                Button("Edit") { edit(beat) }.buttonStyle(.borderless)
-                Spacer(minLength: 0)
-                if pendingDelete == beat.id {
-                    Button("Delete?", role: .destructive) {
-                        actionError = controller.perform { try $0.delete(id: beat.id) }
-                        pendingDelete = nil
+        HStack(spacing: 8) {
+            Toggle(SidebarBeatsCopy.toggle, isOn: isOn)
+                .toggleStyle(.switch).controlSize(.mini).labelsHidden()
+                .help(beat.enabled ? "On" : "Off")
+                .accessibilityLabel(SidebarBeatsCopy.toggle)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    if let preset = SidebarBeatsCopy.presetLabel(beat.cron) {
+                        Text(preset).font(.caption.weight(.semibold))
+                    } else {
+                        Text(beat.cron).font(.system(.caption, design: .monospaced))
                     }
-                    .buttonStyle(.borderless)
-                    Button("Keep") { pendingDelete = nil }.buttonStyle(.borderless)
-                } else {
-                    Button("Delete", role: .destructive) { pendingDelete = beat.id }.buttonStyle(.borderless)
+                    if !scoped {
+                        Text(target?.title ?? SidebarBeatsCopy.sessionTitle(beat.sessionId))
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                    }
+                    if target == nil { SidebarBeatNotRunning() }
                 }
+                .lineLimit(1)
+                Text(beat.prompt).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
             }
-            .font(.caption)
+            .opacity(beat.enabled ? 1 : 0.6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .help(detail)
+            .accessibilityElement(children: .combine)
+            .accessibilityHint(detail)
+            if pendingDelete == beat.id {
+                Button("Delete", role: .destructive) {
+                    actionError = controller.perform { try $0.delete(id: beat.id) }
+                    pendingDelete = nil
+                }
+                .buttonStyle(.borderless).font(.caption).foregroundStyle(SidebarTone.attention.color)
+                .help("Delete this Beat")
+                Button("Keep") { pendingDelete = nil }.buttonStyle(.borderless).font(.caption)
+            } else {
+                Button { edit(beat) } label: { Image(systemName: "pencil") }
+                    .buttonStyle(.borderless).help("Edit").accessibilityLabel("Edit Beat")
+                Button { pendingDelete = beat.id } label: { Image(systemName: "trash") }
+                    .buttonStyle(.borderless).help("Delete").accessibilityLabel("Delete Beat")
+            }
         }
-        .padding(8)
+        .padding(.horizontal, 8).padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
-        .accessibilityElement(children: .contain)
-    }
-
-    @ViewBuilder private var primaryAction: some View {
-        if beat.enabled {
-            Button("Disable") { actionError = controller.perform { try $0.disable(id: beat.id) } }.buttonStyle(.borderless)
-        } else {
-            Button("Enable") { actionError = controller.perform { try $0.enable(id: beat.id) } }.buttonStyle(.borderless)
+        .contextMenu {
+            Button("Edit") { edit(beat) }
+            Button(beat.enabled ? "Turn Off" : "Turn On") { isOn.wrappedValue.toggle() }
+            Button("Delete", role: .destructive) { pendingDelete = beat.id }
         }
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -285,6 +387,7 @@ private struct BeatsForm: View {
     @State private var cron: String
     @State private var prompt: String
     @State private var error: String?
+    @State private var note: (text: String, help: String)?
     /// The stored Beat this edit is based on; "Load latest" moves it forward and keeps the draft.
     @State private var base: SidebarBeat?
     @State private var conflict = false
@@ -300,26 +403,20 @@ private struct BeatsForm: View {
         _prompt = State(initialValue: existing?.prompt ?? "")
     }
 
-    private static let presets: [(String, String)] = [
-        ("Every 15 minutes", "*/15 * * * *"), ("Hourly", "0 * * * *"), ("Daily at 9:00", "0 9 * * *"),
-        ("Weekdays at 9:00", "0 9 * * 1-5"), ("Mondays at 9:00", "0 9 * * 1")
-    ]
-
     private var parsed: Result<BeatsCron, BeatsError> {
         do { return .success(try BeatsCron(cron)) } catch let error as BeatsError { return .failure(error) } catch { return .failure(BeatsError("Invalid cron.")) }
     }
 
-    private var preview: String {
-        guard case .success(let spec) = parsed else { return "" }
-        let formatter = Date.FormatStyle().weekday(.abbreviated).month(.abbreviated).day().hour().minute()
-        return spec.nextTimes(after: Date(), count: 3).map { $0.formatted(formatter) }.joined(separator: " · ")
+    private var preview: (caption: String, detail: String)? {
+        guard case .success(let spec) = parsed else { return nil }
+        return SidebarBeatsCopy.preview(spec.nextTimes(after: Date(), count: 3))
     }
 
     private var targetOptions: [SidebarBeatTarget] {
         if let lockedSession { return targets.filter { $0.id == lockedSession } }
         var options = targets
         if let existing, let id = UUID(uuidString: existing.sessionId), !options.contains(where: { $0.id == id }) {
-            options.append(.init(id: id, title: SidebarBeatsPanel.notRunningTitle(existing.sessionId), live: false))
+            options.append(.init(id: id, title: SidebarBeatsCopy.sessionTitle(existing.sessionId), live: false))
         }
         return options
     }
@@ -328,40 +425,63 @@ private struct BeatsForm: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(existing == nil ? "New Beat" : "Edit Beat").font(.subheadline.weight(.semibold))
             Picker("Session", selection: $session) {
-                ForEach(targetOptions) { Text($0.title).tag(Optional($0.id)) }
+                ForEach(targetOptions) { option in
+                    Group {
+                        if option.live { Text(option.title) } else { Label(option.title, systemImage: "circle.slash") }
+                    }
+                    .accessibilityLabel(option.live ? option.title : "\(option.title), \(SidebarBeatsCopy.notRunning)")
+                    .tag(Optional(option.id))
+                }
             }
             .disabled(lockedSession != nil)
-            .help(lockedSession != nil ? "This Beat is for this agent. Show all to target another session." : "")
+            .help(lockedSession != nil ? SidebarBeatsCopy.lockedHelp : "")
             .accessibilityIdentifier("sidebar-beats-target")
             HStack {
-                TextField("Cron (minute hour day month weekday)", text: $cron)
+                TextField("Cron", text: $cron, prompt: Text("min hour day month weekday"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder).font(.system(.caption, design: .monospaced))
+                    .help(SidebarBeatsCopy.timing)
+                    .accessibilityLabel("Cron")
+                    .accessibilityHint(SidebarBeatsCopy.timing)
                     .accessibilityIdentifier("sidebar-beats-cron")
                 Menu("Presets") {
-                    ForEach(Self.presets, id: \.1) { preset in Button(preset.0) { cron = preset.1 } }
+                    ForEach(SidebarBeatsCopy.presets, id: \.cron) { preset in Button(preset.label) { cron = preset.cron } }
                 }
                 .fixedSize()
             }
             if case .failure(let failure) = parsed {
-                Text(failure.message).font(.caption2).foregroundStyle(SidebarTone.attention.color)
-            } else if !preview.isEmpty {
-                Text("Next (estimate): \(preview)").font(.caption2).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(SidebarBeatsCopy.invalidCron).font(.caption2).foregroundStyle(SidebarTone.attention.color)
+                    .help(failure.message).accessibilityLabel(failure.message)
+            } else if let preview {
+                Text(preview.caption).font(.caption2).foregroundStyle(.secondary)
+                    .help(preview.detail).accessibilityLabel(preview.detail)
             }
-            Text("Local time. Runs roughly on schedule while the session is running; Copilot decides exact timing.")
-                .font(.caption2).foregroundStyle(.secondary)
             TextEditor(text: $prompt)
                 .font(.caption).frame(height: 90)
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.4)))
                 .accessibilityLabel("Prompt")
                 .accessibilityIdentifier("sidebar-beats-prompt")
-            Text("\(prompt.utf8.count) / \(BeatsLimits.maximumPromptBytes) bytes").font(.caption2)
-                .foregroundStyle(prompt.utf8.count > BeatsLimits.maximumPromptBytes ? SidebarTone.attention.color : .secondary)
-            if let error { Text(error).font(.caption).foregroundStyle(SidebarTone.attention.color) }
+            if let counter = SidebarBeatsCopy.byteCounter(prompt.utf8.count) {
+                Text(counter).font(.caption2).monospacedDigit()
+                    .foregroundStyle(prompt.utf8.count > BeatsLimits.maximumPromptBytes ? SidebarTone.attention.color : .secondary)
+                    .help("Prompt size in bytes; the limit is \(BeatsLimits.maximumPromptBytes).")
+                    .accessibilityLabel("Prompt \(prompt.utf8.count) of \(BeatsLimits.maximumPromptBytes) bytes")
+            }
             if conflict {
-                Button("Load latest") { loadLatest() }
-                    .help("Base your draft on the current version; your typed changes stay.")
-                    .accessibilityIdentifier("sidebar-beats-load-latest")
+                HStack(spacing: 6) {
+                    Text(SidebarBeatsCopy.changedElsewhere).font(.caption).foregroundStyle(SidebarTone.attention.color)
+                        .help(BeatsError.changedElsewhere.message).accessibilityLabel(BeatsError.changedElsewhere.message)
+                    Button("Load latest") { loadLatest() }
+                        .help(SidebarBeatsCopy.loadLatestHelp)
+                        .accessibilityHint(SidebarBeatsCopy.loadLatestHelp)
+                        .accessibilityIdentifier("sidebar-beats-load-latest")
+                }
+            } else if let error {
+                Text(error).font(.caption).foregroundStyle(SidebarTone.attention.color)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let note {
+                Text(note.text).font(.caption).foregroundStyle(.secondary)
+                    .help(note.help).accessibilityLabel(note.help)
             }
             HStack {
                 Button("Save") { save() }.keyboardShortcut(.defaultAction).disabled(session == nil)
@@ -383,18 +503,20 @@ private struct BeatsForm: View {
         } else {
             failure = controller.perform { _ = try $0.create(session: session, cron: cron, prompt: prompt) }
         }
+        note = nil
         if let failure { error = failure } else { done() }
     }
 
     private func loadLatest() {
         controller.refresh()
         guard let latest = controller.beats.first(where: { $0.id == existing?.id }) else {
-            error = "This Beat was deleted."
+            error = SidebarBeatsCopy.deleted
             conflict = false
             return
         }
         base = latest
-        error = "Loaded the latest version; your edits are kept. Save again to apply them."
+        error = nil
+        note = (SidebarBeatsCopy.latestLoaded, SidebarBeatsCopy.latestLoadedHelp)
         conflict = false
     }
 }
