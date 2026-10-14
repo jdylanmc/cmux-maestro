@@ -271,7 +271,8 @@ private struct BeatsForm: View {
         if let existing {
             let current = existing.sessionId == session.uuidString.lowercased()
             failure = controller.perform {
-                try $0.edit(id: existing.id, cron: cron, prompt: prompt, session: current ? nil : session)
+                try $0.edit(id: existing.id, cron: cron, prompt: prompt, session: current ? nil : session,
+                            expectedRevision: existing.revision)
             }
         } else {
             failure = controller.perform { _ = try $0.create(session: session, cron: cron, prompt: prompt) }

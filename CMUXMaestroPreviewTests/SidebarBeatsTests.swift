@@ -198,6 +198,22 @@ struct SidebarBeatsTests {
         #expect(throws: BeatsError.self) { try state.delete(id: beat.id) }
     }
 
+    @Test func staleEditIsRefusedAndKeepsTheNewerChange() throws {
+        var state = SidebarBeatsState()
+        let beat = try state.create(session: UUID(), cron: "0 9 * * *", prompt: "Original")
+        let opened = state.beats[0]
+        // Another writer (an agent) changes the Beat after the form opened.
+        try state.edit(id: beat.id, cron: nil, prompt: "Agent words", session: nil)
+        #expect(throws: BeatsError("This Beat changed elsewhere. Reopen it to see the latest version.")) {
+            try state.edit(id: beat.id, cron: "30 9 * * *", prompt: "Human words", session: nil,
+                           expectedRevision: opened.revision)
+        }
+        #expect(state.beats[0].prompt == "Agent words" && state.beats[0].cron == "0 9 * * *")
+        try state.edit(id: beat.id, cron: "30 9 * * *", prompt: "Human words", session: nil,
+                       expectedRevision: state.beats[0].revision)
+        #expect(state.beats[0].prompt == "Human words" && state.beats[0].revision == 3)
+    }
+
     @Test func validationAndLimits() throws {
         var state = SidebarBeatsState()
         let session = UUID()

@@ -316,9 +316,14 @@ nonisolated struct SidebarBeatsState: Equatable {
     }
 
     /// Cron, prompt and target session may change; whether the Beat is on does not.
-    mutating func edit(id: String, cron: String?, prompt: String?, session: UUID?) throws {
+    /// `expectedRevision` is the revision the edit was based on; a newer stored revision means
+    /// someone else changed the Beat, and the edit is refused rather than overwriting that change.
+    mutating func edit(id: String, cron: String?, prompt: String?, session: UUID?, expectedRevision: Int? = nil) throws {
         let position = try index(id)
         var beat = beats[position]
+        if let expectedRevision, beat.revision != expectedRevision {
+            throw BeatsError("This Beat changed elsewhere. Reopen it to see the latest version.")
+        }
         if let cron { beat.cron = try BeatsCron(cron).expression }
         if let prompt { beat.prompt = try Self.validatePrompt(prompt) }
         if let session {
