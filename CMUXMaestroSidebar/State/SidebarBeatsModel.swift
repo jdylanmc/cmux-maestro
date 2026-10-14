@@ -448,3 +448,33 @@ nonisolated struct SidebarBeatsFile {
         }
     }
 }
+
+/// One session's enabled Beats, as shown on its agent row. Presentation only.
+nonisolated struct SidebarBeatSessionSummary: Equatable {
+    var beatIDs: [String] = []
+    /// Cron expressions, the Beat display name the Beats panel uses.
+    var schedules: [String] = []
+    var enabledCount: Int { beatIDs.count }
+}
+
+/// Enabled Beats grouped by exact session UUID, derived once per store refresh.
+nonisolated struct SidebarBeatSummaries: Equatable {
+    static let empty = SidebarBeatSummaries(beats: [])
+    let sessions: [UUID: SidebarBeatSessionSummary]
+
+    init(beats: [SidebarBeat]) {
+        var sessions: [UUID: SidebarBeatSessionSummary] = [:]
+        // Exact identity only (ADR 0002): a Beat attaches to the canonical session UUID it names.
+        for beat in beats where beat.enabled {
+            guard SidebarBeatsState.canonicalUUID(beat.sessionId) != nil,
+                  let id = UUID(uuidString: beat.sessionId) else { continue }
+            sessions[id, default: .init()].beatIDs.append(beat.id)
+            sessions[id, default: .init()].schedules.append(beat.cron)
+        }
+        self.sessions = sessions
+    }
+
+    func summary(for session: UUID?) -> SidebarBeatSessionSummary? {
+        session.flatMap { sessions[$0] }
+    }
+}

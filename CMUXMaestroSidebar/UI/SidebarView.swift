@@ -597,8 +597,7 @@ struct SidebarView: View {
                 for surface in surfaces { titles[surface.id] = surface.title }
             }
         }
-        return model.copilot.tree.sessions
-            .filter { $0.liveness == .alive }
+        return SidebarBeatIndicators.runningSessions(in: model.copilot.tree)
             .map { SidebarBeatTarget(id: $0.id, title: titles[$0.surfaceID] ?? "Copilot \($0.shortID)", live: true) }
     }
 
@@ -642,10 +641,24 @@ struct SidebarView: View {
         }
     }
 
+    private var beatIndicators: SidebarBeatIndicators {
+        SidebarBeatIndicators(summaries: beats.summaries, tree: model.copilot.tree)
+    }
+
+    /// The Beats panel scoped to one agent's exact session; opening it never focuses or navigates.
+    private func openBeats(for session: UUID) {
+        showingSettings = false
+        unavailableHeaderAction = nil
+        beats.scopedSession = session
+        showingBeats = true
+    }
+
     private func activateHeader(_ action: SidebarHeaderAction) {
         switch action {
         case .directory: openDirectoryAsWorkspace()
-        case .beats: showingBeats = true
+        case .beats:
+            beats.scopedSession = nil
+            showingBeats = true
         case .taskboard:
             preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
         case .settings:
@@ -656,6 +669,7 @@ struct SidebarView: View {
     private func dismissHeaderPopover() {
         showingSettings = false
         showingBeats = false
+        beats.scopedSession = nil
         unavailableHeaderAction = nil
     }
 
@@ -798,6 +812,8 @@ struct SidebarView: View {
         .environment(\.sidebarPrepareSeen, prepareSeen)
         .environment(\.sidebarFocusInspection, focusInspection)
         .environment(\.sidebarDismissManaged, dismissManaged)
+        .environment(\.sidebarBeatIndicators, beatIndicators)
+        .environment(\.sidebarOpenBeats, openBeats(for:))
         .environment(\.sidebarLocalFocus, localFocus)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
@@ -1538,6 +1554,8 @@ private struct ManagedNodeRow: View {
                 .accessibilityLabel("Dismiss failed result for \(node.label)")
                 .accessibilityIdentifier("dismiss-managed-\(node.id)-\(node.generation)")
             }
+            SidebarBeatIndicator(session: beatSession, titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
+                                 belowTitle: 18)
         }
         .frame(minHeight: density.rowHeight)
         .environment(\.sidebarReorderSource, reorder?.dragSource)
@@ -1559,6 +1577,14 @@ private struct ManagedNodeRow: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("managed-node-\(node.id)")
+    }
+
+    /// The exact session this agent's Beats target; a retained work context has none.
+    private var beatSession: UUID? {
+        guard !isRetainedRecord,
+              case .session(let id) = SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate)
+        else { return nil }
+        return id
     }
 
     private var assignedWorktree: String? {
@@ -2126,6 +2152,9 @@ private struct SurfaceRow: View {
                 }
                 if surface.isPinned { StatusBadge(symbol: "pin.fill", label: "Pinned") }
                 if surface.unreadCount > 0 { UnreadBadge(count: surface.unreadCount) }
+                SidebarBeatIndicator(session: singleSession.flatMap { $0.statusOnly ? nil : $0.id },
+                                     titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
+                                     belowTitle: 18)
             }
             .frame(minHeight: density.rowHeight)
             .environment(\.sidebarReorderSource, reorder.dragSource)
@@ -2256,6 +2285,9 @@ private struct CopilotSessionRow: View {
                 if !expanded && session.hasShownOutline(layout) {
                     CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: [session]))
                 }
+                SidebarBeatIndicator(session: focusUnavailable ? nil : session.id,
+                                     titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
+                                     belowTitle: 18)
             }
             .frame(minHeight: density.rowHeight)
             .sidebarRowActions(title: "Copilot \(session.shortID)", groups: actions)
@@ -2947,6 +2979,7 @@ private struct TaskboardAgentCard: View {
             }
             .agentHoverPreview(.session(session.id))
             Spacer(minLength: 0)
+            SidebarBeatIndicator(session: session.statusOnly ? nil : session.id, titleHeight: 16)
         }
         .padding(.vertical, density.spacing(6))
         .padding(.horizontal, density.spacing(4))

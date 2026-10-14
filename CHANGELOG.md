@@ -17,6 +17,13 @@ Notable changes are recorded using Keep a Changelog categories.
   Order in Workspace** in the menu, and **Reset sidebar order** in settings, return to
   CMUX's order. VoiceOver announces each move or why it was refused. Drag is being
   piloted inside CMUX. The disabled "Move or reorder…" item is gone.
+- A Beat icon at the trailing edge of an agent row whose exact Copilot session has an
+  enabled Beat. It glows with a slow pulse while the session is running and stays dim when
+  the session is not running or its liveness is unknown, since Beats fire only while the
+  session runs. Reduce Motion keeps a static glow. Click it, or press it with VoiceOver
+  ("Beats for this agent"), to open Beats scoped to that session; **New Beat** targets it and
+  **Show all** returns to every Beat. It never focuses the row or navigates CMUX. Its tooltip
+  lists the enabled Beats by cron.
 
 ### Changed
 
