@@ -10,7 +10,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import {
-  createScheduleGateway, currentTimeZone, planBeatSchedules, readBeats, start, startBeats, startManaged, startReadiness,
+  createScheduleGateway, currentTimeZone, fileLedger, planBeatSchedules, readBeats, start, startBeats, startManaged, startReadiness,
   validateSend,
 } from "./delivery-proof/adapter.mjs";
 
@@ -787,42 +787,367 @@ const makeBeat = (overrides = {}) => ({
 const TZ = "America/New_York";
 const beatLabelOf = (beat) => `Beat [${beat.id}] Run the checks.`;
 
-test("Beat planning adds, replaces and removes only its own schedules", () => {
+const memoryLedger = (initial = []) => {
+  let state = { owned: new Map(initial), pending: [] };
+  const copy = (value) => ({ owned: new Map(value.owned), pending: value.pending.map((item) => ({ ...item })) });
+  return { read: async () => copy(state), write: async (value) => { state = copy(value); }, state: () => state };
+};
+
+test("Beat planning keeps, replaces and removes only schedules in the ledger", () => {
   const live = makeBeat();
   const users = { id: 1, cron: "0 9 * * *", tz: TZ, prompt: "mine", label: "" };
-  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [users], tz: TZ }), {
-    add: [{ cron: live.cron, tz: TZ, prompt: live.prompt, label: beatLabelOf(live) }], remove: [],
-  });
-  const current = { id: 7, cron: live.cron, tz: TZ, prompt: live.prompt, label: beatLabelOf(live) };
-  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [users, current], tz: TZ }), { add: [], remove: [] });
+  const addLive = { beatId: live.id, cron: live.cron, tz: TZ, prompt: live.prompt, label: beatLabelOf(live) };
+  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [users], tz: TZ, owned: new Map() }),
+    { add: [addLive], remove: [], forget: [] });
+  const current = { id: 7, cron: live.cron, tz: TZ, prompt: live.prompt, label: "anything" };
+  const owned = new Map([[7, live.id]]);
+  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [users, current], tz: TZ, owned }),
+    { add: [], remove: [], forget: [] });
   const edited = { ...current, cron: "0 * * * *" };
-  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [edited], tz: TZ }), {
-    add: [{ cron: live.cron, tz: TZ, prompt: live.prompt, label: beatLabelOf(live) }], remove: [7],
-  });
-  const orphan = { id: 9, cron: "* * * * *", tz: TZ, prompt: "x", label: `Beat [${randomUUID()}] gone` };
-  assert.deepEqual(planBeatSchedules({ wanted: [], entries: [orphan, users], tz: TZ }), { add: [], remove: [9] });
+  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [edited], tz: TZ, owned }),
+    { add: [addLive], remove: [{ id: 7, beatId: live.id }], forget: [] });
+  assert.deepEqual(planBeatSchedules({ wanted: [], entries: [current, users], tz: TZ, owned }),
+    { add: [], remove: [{ id: 7, beatId: live.id }], forget: [] });
   const duplicate = { ...current, id: 8 };
-  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [current, duplicate], tz: TZ }), { add: [], remove: [8] });
+  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [current, duplicate], tz: TZ, owned: new Map([[7, live.id], [8, live.id]]) }),
+    { add: [], remove: [{ id: 8, beatId: live.id }], forget: [] });
+  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [], tz: TZ, owned }),
+    { add: [addLive], remove: [], forget: [7] }, "an owned schedule Copilot no longer has is forgotten");
 });
 
-test("schedules with the retired 8-character label are removed, never kept", () => {
+test("a Beat-labelled schedule outside the ledger is the user's and never touched", () => {
   const live = makeBeat();
-  const retired = { id: 3, cron: live.cron, tz: TZ, prompt: live.prompt, label: `Beat [${live.id.slice(0, 8)}] Run the checks.` };
-  assert.deepEqual(planBeatSchedules({ wanted: [live], entries: [retired], tz: TZ }), {
-    add: [{ cron: live.cron, tz: TZ, prompt: live.prompt, label: beatLabelOf(live) }], remove: [3],
-  });
-  assert.deepEqual(planBeatSchedules({ wanted: [], entries: [retired], tz: TZ }), { add: [], remove: [3] });
-  const user = { ...retired, id: 4, label: "Beat the traffic" };
-  assert.deepEqual(planBeatSchedules({ wanted: [], entries: [user], tz: TZ }), { add: [], remove: [] });
+  const lookalike = { id: 3, cron: live.cron, tz: TZ, prompt: live.prompt, label: beatLabelOf(live) };
+  const retired = { id: 4, cron: live.cron, tz: TZ, prompt: live.prompt, label: `Beat [${live.id.slice(0, 8)}] Run the checks.` };
+  const plan = planBeatSchedules({ wanted: [], entries: [lookalike, retired], tz: TZ, owned: new Map() });
+  assert.deepEqual(plan, { add: [], remove: [], forget: [] });
 });
 
 test("Beats whose IDs share a prefix each keep their own schedule across syncs", () => {
   const first = makeBeat({ id: "deadbeef-0000-4000-8000-000000000001" });
   const second = makeBeat({ id: "deadbeef-0000-4000-8000-000000000002" });
-  const plan = planBeatSchedules({ wanted: [first, second], entries: [], tz: TZ });
-  assert.deepEqual(plan.add.map((entry) => entry.label), [beatLabelOf(first), beatLabelOf(second)]);
-  const entries = plan.add.map((entry, index) => ({ id: index + 1, ...entry }));
-  assert.deepEqual(planBeatSchedules({ wanted: [first, second], entries, tz: TZ }), { add: [], remove: [] });
+  const plan = planBeatSchedules({ wanted: [first, second], entries: [], tz: TZ, owned: new Map() });
+  assert.deepEqual(plan.add.map((entry) => entry.beatId), [first.id, second.id]);
+  const entries = plan.add.map(({ beatId, ...entry }, index) => ({ id: index + 1, ...entry }));
+  const owned = new Map(plan.add.map((entry, index) => [index + 1, entry.beatId]));
+  assert.deepEqual(planBeatSchedules({ wanted: [first, second], entries, tz: TZ, owned }), { add: [], remove: [], forget: [] });
+});
+
+function ledgerBeats(t, { ledger, wanted, entries = [], echoLabel = true, onWrite }) {
+  let nextId = 100 + entries.length;
+  const calls = [], events = [];
+  const store = onWrite ? { read: ledger.read, write: async (value) => { await onWrite(value); return ledger.write(value); } } : ledger;
+  const running = startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    ledger: store, read: async () => wanted,
+    gateway: {
+      list: async () => entries.map((entry) => ({ ...entry, label: echoLabel ? entry.label : "" })),
+      add: async (entry) => { calls.push("add"); entries.push({ id: nextId, ...entry }); return nextId++; },
+      remove: async (id) => { calls.push(`remove ${id}`); entries.splice(entries.findIndex((entry) => entry.id === id), 1); },
+    },
+    diagnostic: (error, beatId) => events.push([error.code, beatId]),
+  });
+  t.after(() => running.close());
+  return { running, entries, calls, events };
+}
+
+test("a schedule list without labels never causes duplicate adds", async (t) => {
+  const f = ledgerBeats(t, { ledger: memoryLedger(), wanted: [makeBeat()], echoLabel: false });
+  await f.running.ready;
+  await f.running.sync();
+  await f.running.sync();
+  assert.deepEqual(f.calls, ["add"]);
+});
+
+test("a restarted extension keeps its recorded schedules and leaves look-alikes alone", async (t) => {
+  const beat = makeBeat();
+  const ledger = memoryLedger();
+  const lookalike = { id: 1, cron: beat.cron, tz: TZ, prompt: beat.prompt, label: beatLabelOf(beat) };
+  const first = ledgerBeats(t, { ledger, wanted: [beat], entries: [lookalike] });
+  await first.running.ready;
+  first.running.close();
+  const again = ledgerBeats(t, { ledger, wanted: [beat], entries: first.entries });
+  await again.running.ready;
+  assert.deepEqual(first.calls, ["add"]);
+  assert.deepEqual(again.calls, []);
+  assert.deepEqual(again.entries.map((entry) => entry.id), [1, 101], "the user's look-alike stays");
+});
+
+test("nothing is added while the ledger cannot be written", async (t) => {
+  const f = ledgerBeats(t, {
+    ledger: memoryLedger(), wanted: [makeBeat()],
+    onWrite: async () => { throw Object.assign(new Error("synthetic"), { code: "EACCES" }); },
+  });
+  await f.running.ready;
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.events.length, 1);
+});
+
+test("an add whose ID cannot be recorded is stopped again", async (t) => {
+  let failRecord = true;
+  const f = ledgerBeats(t, {
+    ledger: memoryLedger(), wanted: [makeBeat()],
+    onWrite: async (value) => {
+      if (failRecord && value.owned.size) throw Object.assign(new Error("synthetic"), { code: "ENOSPC" });
+    },
+  });
+  await f.running.ready;
+  assert.deepEqual(f.entries, []);
+  assert.deepEqual(f.calls, ["add", "remove 100"]);
+  failRecord = false;
+  await f.running.sync();
+  assert.equal(f.entries.length, 1);
+});
+
+test("the file ledger is private, durable, round-trips, and refuses invalid content", async (t) => {
+  const directory = await fs.mkdtemp(path.join(base, "lg-"));
+  t.after(() => fs.rm(directory, { recursive: true }));
+  const file = path.join(directory, "BeatSchedules", `${beatSession}.json`);
+  const ledger = fileLedger(file);
+  assert.deepEqual(await ledger.read(), { owned: new Map(), pending: [] });
+  const beatId = randomUUID();
+  const pending = [{ beatId, after: 3, cron: "* * * * *", tz: TZ, prompt: "p", label: "l" }];
+  await ledger.write({ owned: new Map([[7, beatId]]), pending });
+  assert.deepEqual(await ledger.read(), { owned: new Map([[7, beatId]]), pending });
+  assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+  assert.equal((await fs.stat(path.dirname(file))).mode & 0o777, 0o700);
+  assert.deepEqual((await fs.readdir(path.dirname(file))).length, 1, "no temporary files left");
+  for (const content of ["", "nope", JSON.stringify({ version: 2, schedules: [], pending: [] }),
+    JSON.stringify({ version: 1, schedules: [{ id: "7", beatId }], pending: [] }),
+    JSON.stringify({ version: 1, schedules: [{ id: 7, beatId: "x" }], pending: [] })]) {
+    await fs.writeFile(file, content, { mode: 0o600 });
+    await assert.rejects(ledger.read(), (error) => error.code === "BEATS_LEDGER" && error.hint.includes(file));
+  }
+  await fs.writeFile(file, JSON.stringify({ version: 1, schedules: [] }), { mode: 0o600 });
+  assert.deepEqual(await ledger.read(), { owned: new Map(), pending: [] }, "a ledger without pending reads as none pending");
+  await fs.chmod(file, 0o644);
+  await assert.rejects(ledger.read(), { code: "BEATS_LEDGER" });
+  // The ledger folder must be a private directory, never a link.
+  const elsewhere = path.join(directory, "elsewhere");
+  await fs.mkdir(elsewhere, { mode: 0o755 });
+  const linked = fileLedger(path.join(directory, "Linked", `${beatSession}.json`));
+  await fs.symlink(elsewhere, path.join(directory, "Linked"));
+  await assert.rejects(linked.read(), { code: "BEATS_LEDGER" });
+  await assert.rejects(linked.write({ owned: new Map(), pending: [] }), { code: "BEATS_LEDGER" });
+  assert.deepEqual(await fs.readdir(elsewhere), []);
+});
+
+test("a schedule created just before the process stopped is adopted, not duplicated", async (t) => {
+  const beat = makeBeat();
+  const ledger = memoryLedger();
+  const entries = [];
+  let release, calls = [];
+  const slow = new Promise((resolve) => { release = resolve; });
+  const gateway = (wait) => ({
+    list: async () => entries.map((entry) => ({ ...entry })),
+    add: async (entry) => { calls.push("add"); entries.push({ id: 1, ...entry }); if (wait) await slow; return 1; },
+    remove: async (id) => { calls.push(`remove ${id}`); entries.splice(entries.findIndex((entry) => entry.id === id), 1); },
+  });
+  const first = startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    ledger, read: async () => [beat], gateway: gateway(true), diagnostic: (error) => assert.fail(error),
+  });
+  await delay(5);                                // Copilot created schedule 1; the process stops before recording it
+  first.close();
+  assert.deepEqual(ledger.state().owned, new Map());
+  assert.equal(ledger.state().pending.length, 1);
+  const second = startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    ledger, read: async () => [beat], gateway: gateway(false), diagnostic: (error) => assert.fail(error),
+  });
+  t.after(() => { release(); second.close(); });
+  await second.ready;
+  assert.deepEqual(calls, ["add"], "adopted, never added twice");
+  assert.deepEqual(ledger.state(), { owned: new Map([[1, beat.id]]), pending: [] });
+});
+
+test("close() resolves after the running pass records what it created", async (t) => {
+  const beat = makeBeat();
+  const ledger = memoryLedger();
+  let release;
+  const slow = new Promise((resolve) => { release = resolve; });
+  const running = startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    ledger, read: async () => [beat],
+    gateway: { list: async () => [], add: async () => { await slow; return 4; }, remove: async () => {} },
+    diagnostic: (error) => assert.fail(error),
+  });
+  await delay(5);
+  const closing = running.close();
+  release();
+  await closing;
+  assert.deepEqual(ledger.state().owned, new Map([[4, beat.id]]));
+});
+
+test("two processes on one session keep each other's records", async (t) => {
+  const first = makeBeat({ prompt: "First." }), second = makeBeat({ prompt: "Second." });
+  const ledger = memoryLedger();
+  const entries = [];
+  let nextId = 1;
+  const gateway = {
+    list: async () => entries.map((entry) => ({ ...entry })),
+    add: async (entry) => { await delay(2); entries.push({ id: nextId, ...entry }); return nextId++; },
+    remove: async (id) => { entries.splice(entries.findIndex((entry) => entry.id === id), 1); },
+  };
+  const make = (wanted) => startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    ledger, read: async () => wanted, gateway, diagnostic: (error) => assert.fail(error),
+  });
+  const a = make([first, second]), b = make([first, second]);
+  t.after(() => { a.close(); b.close(); });
+  await Promise.all([a.ready, b.ready]);
+  for (const entry of entries) assert.ok(ledger.state().owned.has(entry.id), `schedule ${entry.id} is recorded`);
+});
+
+test("an unrecorded schedule that cannot be stopped is reported, never duplicated, and adopted once recordable", async (t) => {
+  const beat = makeBeat();
+  const events = [];
+  let failRecord = true;
+  const ledger = memoryLedger();
+  const store = { read: ledger.read, write: async (value) => {
+    if (failRecord && value.owned.size) throw Object.assign(new Error("synthetic"), { code: "ENOSPC" });
+    return ledger.write(value);
+  } };
+  const entries = [];
+  let nextId = 1;
+  const running = startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    ledger: store, read: async () => [beat],
+    gateway: {
+      list: async () => entries.map((entry) => ({ ...entry })),
+      add: async (entry) => { entries.push({ id: nextId, ...entry }); return nextId++; },
+      remove: async () => { throw Object.assign(new Error("synthetic"), { code: "STOP_REJECTED" }); },
+    },
+    diagnostic: (error, beatId) => events.push([error.code, beatId]),
+  });
+  t.after(() => running.close());
+  await running.ready;
+  await running.sync();
+  await running.sync();
+  assert.equal(entries.length, 1, "never a second schedule while the first is unrecorded");
+  assert.ok(events.some(([code, beatId]) => code === "BEATS_UNRECORDED" && beatId === beat.id));
+  failRecord = false;
+  await running.sync();
+  assert.equal(entries.length, 1);
+  assert.deepEqual(ledger.state(), { owned: new Map([[1, beat.id]]), pending: [] }, "adopted from the pending record");
+});
+
+test("the file ledger's lock lets one process own a session and reclaims a dead owner's lock", async (t) => {
+  const directory = await fs.mkdtemp(path.join(base, "lk-"));
+  t.after(() => fs.rm(directory, { recursive: true }));
+  const file = path.join(directory, "BeatSchedules", `${beatSession}.json`);
+  const ledger = fileLedger(file);
+  assert.equal(await ledger.acquire(), true);
+  assert.equal(await ledger.acquire(), true, "re-entrant for the owner");
+  await fs.writeFile(`${file}.lock`, String(process.ppid));
+  assert.equal(await ledger.acquire(), false, "a live owner keeps the session");
+  await fs.writeFile(`${file}.lock`, "999999");
+  assert.equal(await ledger.acquire(), true, "a dead owner's lock is reclaimed");
+  await ledger.release();
+  await assert.rejects(fs.stat(`${file}.lock`), { code: "ENOENT" });
+});
+
+// A shared in-memory ledger with slow reads and writes, and a lock like fileLedger's.
+function slowSharedLedger() {
+  let state = { owned: new Map(), pending: [] }, holder = null;
+  const copy = (value) => ({ owned: new Map(value.owned), pending: value.pending.map((item) => ({ ...item })) });
+  return {
+    state: () => state,
+    view: (owner) => ({
+      read: async () => { await delay(3); return copy(state); },
+      write: async (value) => { await delay(3); state = copy(value); },
+      acquire: async () => { if (holder === null || holder === owner) { holder = owner; return true; } return false; },
+      release: async () => { if (holder === owner) holder = null; },
+    }),
+  };
+}
+
+test("two processes on one session never leave an unrecorded schedule", async (t) => {
+  const first = makeBeat({ prompt: "First." }), second = makeBeat({ prompt: "Second." });
+  const shared = slowSharedLedger();
+  const entries = [];
+  let nextId = 1, wanted = [first, second];
+  const gateway = {
+    list: async () => entries.map((entry) => ({ ...entry })),
+    add: async (entry) => { await delay(2); entries.push({ id: nextId, ...entry }); return nextId++; },
+    remove: async (id) => { entries.splice(entries.findIndex((entry) => entry.id === id), 1); },
+  };
+  const make = (owner) => startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    ledger: shared.view(owner), read: async () => wanted, gateway, diagnostic: (error) => assert.fail(error),
+  });
+  const a = make("a"), b = make("b");
+  t.after(() => { a.close(); b.close(); });
+  await Promise.all([a.ready, b.ready]);
+  assert.equal(entries.length, 2);
+  for (const entry of entries) assert.ok(shared.state().owned.has(entry.id), `schedule ${entry.id} is recorded`);
+  wanted = [];
+  await a.sync();
+  assert.deepEqual(entries, []);
+});
+
+test("crash recovery adopts without labels, and never guesses between two candidates", async (t) => {
+  const beat = makeBeat();
+  const intent = { beatId: beat.id, after: 0, cron: beat.cron, tz: TZ, prompt: beat.prompt, label: beatLabelOf(beat) };
+  const run = async (entries) => {
+    const ledger = memoryLedger();
+    await ledger.write({ owned: new Map(), pending: [intent] });
+    const events = [], calls = [];
+    const running = startBeats({
+      session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+      ledger, read: async () => [beat],
+      gateway: { list: async () => entries, add: async () => { calls.push("add"); return 99; }, remove: async () => {} },
+      diagnostic: (error) => events.push(error.code),
+    });
+    t.after(() => running.close());
+    await running.ready;
+    return { state: ledger.state(), events, calls };
+  };
+  const unlabeled = { id: 5, cron: beat.cron, tz: TZ, prompt: beat.prompt, label: "" };
+  const single = await run([unlabeled]);
+  assert.deepEqual(single.state.owned, new Map([[5, beat.id]]));
+  assert.deepEqual(single.calls, []);
+  const twice = await run([unlabeled, { ...unlabeled, id: 6 }]);
+  assert.deepEqual(twice.events, ["BEATS_AMBIGUOUS"]);
+  assert.equal(twice.state.owned.has(5) || twice.state.owned.has(6), false);
+});
+
+test("no add starts after close, even mid-pending-write", async (t) => {
+  const beat = makeBeat();
+  const calls = [];
+  let slowWrite = null;
+  const ledger = memoryLedger();
+  const store = { read: ledger.read, write: async (value) => { if (slowWrite) await slowWrite; return ledger.write(value); } };
+  let release;
+  slowWrite = new Promise((resolve) => { release = resolve; });
+  const running = startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    ledger: store, read: async () => [beat],
+    gateway: { list: async () => [], add: async () => { calls.push("add"); return 1; }, remove: async () => {} },
+    diagnostic: (error) => assert.fail(error),
+  });
+  await delay(5);
+  const closing = running.close();
+  slowWrite = null;
+  release();
+  await closing;
+  assert.deepEqual(calls, []);
+  assert.deepEqual(ledger.state().pending, [], "the abandoned intent is withdrawn");
+});
+
+test("an invalid ledger changes no schedule", async (t) => {
+  const events = [], calls = [];
+  const running = startBeats({
+    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    ledger: { read: async () => { throw Object.assign(new Error("bad"), { code: "BEATS_LEDGER" }); }, write: async () => {} },
+    read: async () => [makeBeat()],
+    gateway: { list: async () => [], add: async () => { calls.push("add"); return 1; }, remove: async () => { calls.push("remove"); } },
+    diagnostic: (error) => events.push(error.code),
+  });
+  t.after(() => running.close());
+  await running.ready;
+  assert.deepEqual(calls, []);
+  assert.deepEqual(events, ["BEATS_LEDGER"]);
 });
 
 test("the schedule gateway hides Copilot's raw add behind a narrow interface", async () => {
@@ -859,7 +1184,7 @@ function beatsFixture(t, initial) {
     remove: async (id) => { entries.splice(entries.findIndex((entry) => entry.id === id), 1); },
   };
   const running = startBeats({
-    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), gateway, tz: TZ, pollMs: 60_000,
+    ledger: memoryLedger(), session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), gateway, tz: TZ, pollMs: 60_000,
     read: async (sessionId) => {
       assert.equal(sessionId, beatSession);
       if (refuse) throw new Error("Native launch failed or timed out; reconcile owned resources before retrying.");
@@ -919,7 +1244,7 @@ test("one rejected Beat never blocks the others and is reported once until it su
   const entries = [], events = [];
   let reject = true, nextId = 1;
   const running = startBeats({
-    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    ledger: memoryLedger(), session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
     read: async () => [rejected, accepted],
     gateway: {
       list: async () => entries.map((entry) => ({ ...entry })),
@@ -952,7 +1277,7 @@ test("a schedule that cannot be stopped blocks its Beat's replacement and names 
   const entries = [], events = [];
   let wanted = [beat], stopRejected = true, nextId = 1;
   const running = startBeats({
-    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    ledger: memoryLedger(), session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
     read: async () => wanted,
     gateway: {
       list: async () => entries.map((entry) => ({ ...entry })),
@@ -971,9 +1296,6 @@ test("a schedule that cannot be stopped blocks its Beat's replacement and names 
   await running.sync();
   assert.deepEqual(entries.map((entry) => entry.prompt), ["Old words."], "never two schedules for one Beat");
   assert.deepEqual(events, [["STOP_REJECTED", beat.id]]);
-  entries.push({ id: 99, cron: beat.cron, tz: TZ, prompt: "Old words.", label: `Beat [${beat.id.slice(0, 8)}] Old words.` });
-  await running.sync();
-  assert.equal(entries.filter((entry) => entry.prompt === "New words.").length, 0, "retired label blocks it too");
   stopRejected = false;
   await running.sync();
   assert.deepEqual(entries.map((entry) => entry.prompt), ["New words."]);
@@ -984,7 +1306,7 @@ function gatedBeats(t, initial) {
   const entries = [], calls = [];
   let nextId = 1;
   const running = startBeats({
-    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    ledger: memoryLedger(), session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
     read: async () => wanted,
     gateway: {
       list: async () => { await gate?.promise; return entries.map((entry) => ({ ...entry })); },
@@ -1023,7 +1345,7 @@ test("a failure after an interrupted success is reported again", async (t) => {
   const events = [], entries = [];
   let wanted = [beat], outcomes = ["fail", "succeed", "fail"], gate = null, nextId = 1;
   const running = startBeats({
-    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
+    ledger: memoryLedger(), session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 60_000,
     read: async () => wanted,
     gateway: {
       list: async () => entries.map((entry) => ({ ...entry })),
@@ -1048,7 +1370,7 @@ test("a failure after an interrupted success is reported again", async (t) => {
 test("the periodic poll never interrupts a running sync", async (t) => {
   const entries = [];
   const running = startBeats({
-    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 1,
+    ledger: memoryLedger(), session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), tz: TZ, pollMs: 1,
     read: async () => { await delay(20); return [makeBeat()]; },
     gateway: {
       list: async () => entries.map((entry) => ({ ...entry })),
@@ -1106,7 +1428,7 @@ test("a time zone change re-registers each Beat in the new zone; an unchanged zo
   const entries = [], calls = [];
   let nextId = 1;
   const running = startBeats({
-    session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), pollMs: 60_000,
+    ledger: memoryLedger(), session: { sessionId: beatSession }, root: path.join(base, "no-such-beats-root"), pollMs: 60_000,
     tz: async () => zone, read: async () => [beat],
     gateway: {
       list: async () => entries.map((entry) => ({ ...entry })),
@@ -1180,7 +1502,7 @@ test("startBeats finds the controller through CMUX_MAESTRO_ORCHESTRATOR without 
   await fs.writeFile(path.join(root, "beats.json"), JSON.stringify({ version: 2, beats: [live] }), { mode: 0o600 });
   const entries = [];
   const running = startBeats({
-    session: { sessionId: beatSession }, root, tz: TZ, pollMs: 60_000,
+    ledger: memoryLedger(), session: { sessionId: beatSession }, root, tz: TZ, pollMs: 60_000,
     gateway: { list: async () => entries, add: async (entry) => { entries.push(entry); return 1; }, remove: async () => {} },
     diagnostic: (error) => assert.fail(error),
   });

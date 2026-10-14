@@ -7,3 +7,5 @@ Why: the sidebar is the biggest attack surface and the easiest to mislead. A san
 Rejected: a daemon, loopback server, XPC service, or raw CMUX socket client in the sidebar.
 
 Consequence: every new capability needs a helper outside the sandbox plus a sanitized file. No grant widens for convenience. A sandbox probe passing does not prove the host loaded the UI.
+
+Amended by [ADR 0020](0020-sidebar-writes-beats-store-outside-its-container.md): outside its own container, the sidebar's only writable grant is the Beats store.

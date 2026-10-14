@@ -667,11 +667,8 @@ export async function startReadiness({ joinSession, environment = process.env, s
 // SDK's typed client, so it is reached through the raw connection behind this one function. If a
 // Copilot release changes it, the gateway fails and Beats stop registering; nothing else breaks.
 
-// The full Beat ID: two Beats may share any shorter prefix.
-const BEAT_LABEL = /^Beat \[([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]/;
-// Earlier releases labelled schedules with only 8 characters; those are always removed.
-const RETIRED_BEAT_LABEL = /^Beat \[([0-9a-f]{8})\] /;
-
+// The label is for people only. Ownership is the schedule IDs this section created, recorded in a
+// per-session ledger (ADR 0002: exact identity, never titles).
 const beatLabel = (beat) => `Beat [${beat.id}] ${beat.prompt.split("\n")[0].slice(0, 60)}`;
 
 export function createScheduleGateway(session) {
@@ -700,28 +697,139 @@ export function createScheduleGateway(session) {
 }
 
 // Pure: which native schedules to add or remove so this session runs exactly `wanted` (its runnable
-// Beats, as returned by the controller). Schedules this section did not create (the user's own
-// /every, /after) are never touched.
-export function planBeatSchedules({ wanted, entries, tz }) {
+// Beats, as returned by the controller). Only schedules in `owned` (schedule ID -> Beat ID) are ever
+// kept or removed; every other schedule, whatever its label, is the user's. `forget` lists owned IDs
+// Copilot no longer has.
+export function planBeatSchedules({ wanted, entries, tz, owned }) {
   const remove = [];
   const present = new Set();
   for (const entry of entries) {
-    if (RETIRED_BEAT_LABEL.test(entry.label)) {
-      remove.push(entry.id);
-      continue;
-    }
-    const key = BEAT_LABEL.exec(entry.label)?.[1];
-    if (key === undefined) continue;
-    const beat = wanted.find((item) => item.id === key);
-    if (beat && !present.has(key) && entry.cron === beat.cron && entry.tz === tz && entry.prompt === beat.prompt) {
-      present.add(key);
+    const beatId = owned.get(entry.id);
+    if (beatId === undefined) continue;
+    const beat = wanted.find((item) => item.id === beatId);
+    if (beat && !present.has(beatId) && entry.cron === beat.cron && entry.tz === tz && entry.prompt === beat.prompt) {
+      present.add(beatId);
     } else {
-      remove.push(entry.id);
+      remove.push({ id: entry.id, beatId });
     }
   }
+  const listed = new Set(entries.map((entry) => entry.id));
+  const forget = [...owned.keys()].filter((id) => !listed.has(id));
   const add = wanted.filter((beat) => !present.has(beat.id))
-    .map((beat) => ({ cron: beat.cron, tz, prompt: beat.prompt, label: beatLabel(beat) }));
-  return { add, remove };
+    .map((beat) => ({ beatId: beat.id, cron: beat.cron, tz, prompt: beat.prompt, label: beatLabel(beat) }));
+  return { add, remove, forget };
+}
+
+// The per-session ledger of schedule IDs this extension created, outside the Beats store (ADR 0020):
+// `owned` (schedule ID -> Beat ID) and `pending` adds recorded before Copilot is asked, so a schedule
+// created just before the process stopped is adopted instead of duplicated. A missing ledger is
+// empty; an unreadable or invalid one throws, so the caller changes nothing.
+const LEDGER_LIMIT = 65_536;
+
+const emptyLedger = () => ({ owned: new Map(), pending: [] });
+
+export function fileLedger(file) {
+  const directory = path.dirname(file);
+  const invalid = (cause) => Object.assign(new Error("The Beats schedule ledger is invalid.", { cause }), {
+    code: "BEATS_LEDGER",
+    hint: `Move ${file} aside, then stop leftover "Beat [" schedules with Copilot's schedule commands.`,
+  });
+  const privateDirectory = async () => {
+    const info = await fs.lstat(directory);
+    requireCondition(info.isDirectory() && info.uid === process.getuid() && !(info.mode & 0o077));
+  };
+  const text = (value) => typeof value === "string";
+  const lock = `${file}.lock`;
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return error.code === "EPERM";
+    }
+  };
+  return {
+    // One extension process per session owns the ledger for its lifetime. A lock whose owner has
+    // exited is reclaimed; ownership is re-checked every pass, so a lost race stops the loser.
+    async acquire() {
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      await privateDirectory().catch((error) => { throw invalid(error); });
+      const holder = async () => Number((await fs.readFile(lock, "utf8").catch(() => "")).trim());
+      if (await holder() === process.pid) return true;
+      try {
+        await fs.writeFile(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        const pid = await holder();
+        if (Number.isSafeInteger(pid) && pid > 0 && alive(pid)) return false;
+        await fs.rm(lock, { force: true });
+        try {
+          await fs.writeFile(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+        } catch (retry) {
+          if (retry.code === "EEXIST") return false;
+          throw retry;
+        }
+      }
+      return await holder() === process.pid;
+    },
+    async release() {
+      if (Number((await fs.readFile(lock, "utf8").catch(() => "")).trim()) === process.pid) await fs.rm(lock, { force: true });
+    },
+    async read() {
+      let handle;
+      try {
+        await privateDirectory();
+        handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      } catch (error) {
+        if (error.code === "ENOENT") return emptyLedger();
+        throw invalid(error);
+      }
+      try {
+        const info = await handle.stat();
+        requireCondition(info.isFile() && info.uid === process.getuid() && !(info.mode & 0o077) &&
+          info.size <= LEDGER_LIMIT);
+        const value = JSON.parse(decoder.decode(await handle.readFile()));
+        requireCondition(value?.version === 1 && Array.isArray(value.schedules) && value.schedules.every((item) =>
+          Number.isSafeInteger(item?.id) && text(item.beatId) && UUID.test(item.beatId)) &&
+          (value.pending === undefined || Array.isArray(value.pending)) && (value.pending ?? []).every((item) => text(item?.beatId) && UUID.test(item.beatId) &&
+            Number.isSafeInteger(item.after) && text(item.cron) && text(item.tz) && text(item.prompt) && text(item.label)));
+        return { owned: new Map(value.schedules.map((item) => [item.id, item.beatId])), pending: value.pending ?? [] };
+      } catch (error) {
+        throw invalid(error);
+      } finally {
+        await handle.close();
+      }
+    },
+    async write({ owned, pending }) {
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      try {
+        await privateDirectory();
+      } catch (error) {
+        throw invalid(error);
+      }
+      const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+      const schedules = [...owned].map(([id, beatId]) => ({ id, beatId }));
+      const handle = await fs.open(temporary, "wx", 0o600);
+      try {
+        await handle.writeFile(JSON.stringify({ version: 1, schedules, pending }));
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      try {
+        await fs.rename(temporary, file);
+      } catch (error) {
+        await fs.rm(temporary, { force: true });
+        throw error;
+      }
+      const folder = await fs.open(directory, constants.O_RDONLY);
+      try {
+        await folder.sync();
+      } finally {
+        await folder.close();
+      }
+    },
+  };
 }
 
 // Maestro's controller owns the store contract; the adapter never parses beats.json itself. Any
@@ -764,9 +872,11 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
   controller = process.env.CMUX_MAESTRO_ORCHESTRATOR ||
     path.join(maestroSupport, "Orchestration/bin/cmux-maestro-orchestrator"),
   read = (sessionId) => readBeats(sessionId, controller), gateway = createScheduleGateway(session), pollMs = 15_000,
+  ledger = fileLedger(path.join(maestroSupport, "BeatSchedules", `${session?.sessionId}.json`)),
   tz = currentTimeZone, diagnostic = (error, beatId) => {
     const code = typeof error?.code === "string" ? error.code : error?.name ?? "UNKNOWN";
-    console.error(`Maestro Beats could not sync with Copilot scheduling${beatId ? ` for Beat ${beatId}` : ""} (${code}).`);
+    const hint = typeof error?.hint === "string" ? ` ${error.hint}` : "";
+    console.error(`Maestro Beats could not sync with Copilot scheduling${beatId ? ` for Beat ${beatId}` : ""} (${code}).${hint}`);
   } }) {
   const sessionId = session?.sessionId;
   requireCondition(typeof sessionId === "string" && UUID.test(sessionId));
@@ -796,18 +906,53 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
     })();
     return running;
   }
+  // Schedules this process created but could neither record nor stop: stopped first on every pass,
+  // and their Beats are not added again until they are gone.
+  const unrecorded = new Map();
   async function reconcile() {
     try {
       // Resolved every sync: a time zone change re-registers each Beat in the new zone.
       const zone = typeof tz === "function" ? await tz() : tz;
+      if (!await (ledger.acquire?.() ?? true)) {
+        // Another extension process owns this session's schedules; it keeps them in sync.
+        failing = false;
+        return;
+      }
       const wanted = await read(sessionId), entries = await gateway.list();
-      const plan = planBeatSchedules({ wanted, entries, tz: zone });
+      // Every ledger change re-reads the file first, so another process's records are kept.
+      const change = async (edit) => {
+        const state = await ledger.read();
+        edit(state);
+        await ledger.write(state);
+        return state;
+      };
+      let state = await ledger.read();
+      const listed = new Set(entries.map((entry) => entry.id));
+      if (state.pending.length || [...state.owned.keys()].some((id) => !listed.has(id))) {
+        state = await change((current) => {
+          // Adopt only an unambiguous match: newer than the intent, same cron, zone and prompt, and the
+          // same label when Copilot lists one. Two or more candidates are reported, never guessed.
+          for (const intent of current.pending) {
+            const candidates = entries.filter((entry) => !current.owned.has(entry.id) && entry.id > intent.after &&
+              (!entry.label || entry.label === intent.label) && entry.cron === intent.cron &&
+              entry.tz === intent.tz && entry.prompt === intent.prompt);
+            if (candidates.length === 1) current.owned.set(candidates[0].id, intent.beatId);
+            else if (candidates.length > 1) {
+              diagnostic(Object.assign(new Error("A pending Beat schedule matched more than one schedule."),
+                { code: "BEATS_AMBIGUOUS" }), intent.beatId);
+            }
+          }
+          current.pending = [];
+          for (const id of [...current.owned.keys()]) if (!listed.has(id)) current.owned.delete(id);
+        });
+      }
+      const plan = planBeatSchedules({ wanted, entries, tz: zone, owned: state.owned });
       failing = false;
       const failingNow = new Set(), succeeded = new Set();
-      const attempt = async (key, beatId, change) => {
+      const attempt = async (key, beatId, operation) => {
         if (closed || again) return null;
         try {
-          await change();
+          await operation();
           succeeded.add(key);
           return true;
         } catch (error) {
@@ -816,18 +961,46 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
           return false;
         }
       };
-      // The Beat (full ID, or a retired 8-character prefix) whose schedule could not be stopped is
-      // not added again this sync, so an edited Beat never runs under two schedules.
-      const stuck = [];
-      for (const id of plan.remove) {
-        const label = entries.find((entry) => entry.id === id)?.label ?? "";
-        const owner = (BEAT_LABEL.exec(label) ?? RETIRED_BEAT_LABEL.exec(label))?.[1];
-        if (await attempt(`remove ${id}`, owner, () => gateway.remove(id)) === false && owner) stuck.push(owner);
+      for (const [id, beatId] of [...unrecorded]) {
+        if (!listed.has(id) || await attempt(`unrecorded ${id}`, beatId, () => gateway.remove(id))) unrecorded.delete(id);
       }
-      for (const entry of plan.add) {
-        const beatId = BEAT_LABEL.exec(entry.label)[1];
-        if (stuck.some((owner) => beatId.startsWith(owner))) continue;
-        await attempt(`add ${beatId}`, beatId, () => gateway.add(entry));
+      // A Beat whose schedule could not be stopped is not added again this sync, so an edited Beat
+      // never runs under two schedules.
+      const stuck = new Set(unrecorded.values());
+      for (const { id, beatId } of plan.remove) {
+        const removed = await attempt(`remove ${id}`, beatId, async () => {
+          await gateway.remove(id);
+          await change((current) => current.owned.delete(id));
+        });
+        if (removed === false) stuck.add(beatId);
+      }
+      let highest = Math.max(0, ...entries.map((entry) => entry.id));
+      for (const { beatId, ...entry } of plan.add) {
+        if (stuck.has(beatId)) continue;
+        await attempt(`add ${beatId}`, beatId, async () => {
+          await change((current) => current.pending.push({ beatId, after: highest, ...entry }));
+          if (closed || again) {
+            await change((current) => { current.pending = current.pending.filter((intent) => intent.beatId !== beatId); });
+            return;
+          }
+          const id = await gateway.add(entry);
+          highest = Math.max(highest, id);
+          try {
+            await change((current) => {
+              current.owned.set(id, beatId);
+              current.pending = current.pending.filter((intent) => intent.beatId !== beatId);
+            });
+          } catch (error) {
+            try {
+              await gateway.remove(id);
+            } catch (stopError) {
+              unrecorded.set(id, beatId);
+              diagnostic(Object.assign(new Error("An unrecorded Beat schedule could not be stopped.", { cause: stopError }),
+                { code: "BEATS_UNRECORDED" }), beatId);
+            }
+            throw error;
+          }
+        });
       }
       // An interrupted pass keeps earlier failures it did not resolve, so the rerun neither reports
       // them twice nor hides a new failure after a success.
@@ -848,5 +1021,13 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
     watcher.unref?.();
   } catch { /* The directory may not exist yet; polling covers it. */ }
   const first = sync();
-  return { sync, ready: first, close() { closed = true; clearInterval(timer); clearTimeout(debounce); watcher?.close(); } };
+  // close() starts no new change and resolves when the running pass has settled, so a shutdown that
+  // awaits it never cuts off an add between Copilot creating the schedule and the ledger recording it.
+  return {
+    sync, ready: first,
+    close() {
+      closed = true; clearInterval(timer); clearTimeout(debounce); watcher?.close();
+      return (running ?? Promise.resolve()).then(() => ledger.release?.()).catch(() => {});
+    },
+  };
 }

@@ -21,7 +21,8 @@ process.on("SIGTERM", async () => {
   stopping = true;
   shutdown.abort();
   try {
-    beats?.close();
+    // Let a Beats sync in flight record what it created; never wait more than two seconds.
+    await Promise.race([beats?.close(), new Promise((resolve) => setTimeout(resolve, 2000))]);
     await listener?.close();
     process.exit(0);
   } catch (error) {

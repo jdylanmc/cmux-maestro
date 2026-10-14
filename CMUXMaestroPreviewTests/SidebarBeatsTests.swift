@@ -90,7 +90,7 @@ struct SidebarBeatsTests {
         let state = try SidebarBeatsState.decode(data)
         #expect(state.beats.count == 3)
         #expect(state.beats[0].prompt == "Check the board.\nSummarize blockers / risks.")
-        #expect(state.beats[0].status == .active && state.beats[1].status == .paused)
+        #expect(state.beats[0].enabled && !state.beats[1].enabled)
         #expect(state.beats[2].prompt.contains("😀") && state.beats[2].prompt.contains("\u{2028}"))
         // Byte-identical to the orchestrator's beats_encode (test-beats.py), so both writers
         // measure the same size limit.
@@ -178,24 +178,65 @@ struct SidebarBeatsTests {
         var state = SidebarBeatsState()
         let first = UUID(), second = UUID()
         let beat = try state.create(session: first, cron: "  0   9 * * 1-5", prompt: "Plan the day")
-        #expect(beat.cron == "0 9 * * 1-5" && beat.status == .active)
+        #expect(beat.cron == "0 9 * * 1-5" && beat.enabled)
         try state.pause(id: beat.id)
-        #expect(state.beats[0].status == .paused)
+        #expect(!state.beats[0].enabled)
         try state.enable(id: beat.id)
-        #expect(state.beats[0].status == .active)
+        #expect(state.beats[0].enabled)
         // Editing never changes whether recurrence runs.
-        try state.edit(id: beat.id, cron: "30 9 * * *", prompt: nil, session: nil)
-        #expect(state.beats[0].status == .active && state.beats[0].revision == 4)
+        try state.edit(id: beat.id, cron: "30 9 * * *", prompt: nil, session: nil, basedOn: nil)
+        #expect(state.beats[0].enabled && state.beats[0].revision == 4)
         // Moving to another session keeps it on or off (ADR 0007: a Beat is simply on or off).
-        try state.edit(id: beat.id, cron: nil, prompt: "New words", session: second)
+        try state.edit(id: beat.id, cron: nil, prompt: "New words", session: second, basedOn: nil)
         #expect(state.beats[0].sessionId == second.uuidString.lowercased())
-        #expect(state.beats[0].status == .active && state.beats[0].prompt == "New words")
+        #expect(state.beats[0].enabled && state.beats[0].prompt == "New words")
         try state.pause(id: beat.id)
-        try state.edit(id: beat.id, cron: nil, prompt: nil, session: first)
-        #expect(state.beats[0].status == .paused)
+        try state.edit(id: beat.id, cron: nil, prompt: nil, session: first, basedOn: nil)
+        #expect(!state.beats[0].enabled)
         try state.delete(id: beat.id)
         #expect(state.beats.isEmpty)
         #expect(throws: BeatsError.self) { try state.delete(id: beat.id) }
+    }
+
+    @Test func staleEditIsRefusedAndKeepsTheNewerChange() throws {
+        var state = SidebarBeatsState()
+        let beat = try state.create(session: UUID(), cron: "0 9 * * *", prompt: "Original")
+        let opened = state.beats[0]
+        // Another writer (an agent) changes the prompt after the form opened.
+        try state.edit(id: beat.id, cron: nil, prompt: "Agent words", session: nil, basedOn: nil)
+        #expect(throws: BeatsError.changedElsewhere) {
+            try state.edit(id: beat.id, cron: "30 9 * * *", prompt: "Human words", session: nil, basedOn: opened)
+        }
+        #expect(state.beats[0].prompt == "Agent words" && state.beats[0].cron == "0 9 * * *")
+        // "Load latest" bases the same draft on the current Beat.
+        try state.edit(id: beat.id, cron: "30 9 * * *", prompt: "Human words", session: nil, basedOn: state.beats[0])
+        #expect(state.beats[0].prompt == "Human words" && state.beats[0].cron == "30 9 * * *")
+    }
+
+    @Test func pauseOrResumeElsewhereIsNotAConflict() throws {
+        var state = SidebarBeatsState()
+        let beat = try state.create(session: UUID(), cron: "0 9 * * *", prompt: "Original")
+        let opened = state.beats[0]
+        try state.pause(id: beat.id)
+        try state.edit(id: beat.id, cron: nil, prompt: "Human words", session: nil, basedOn: opened)
+        #expect(state.beats[0].prompt == "Human words" && !state.beats[0].enabled)
+    }
+
+    @Test func staleSaveThroughTheSharedFileIsRefused() throws {
+        let root = try temporaryRoot().appendingPathComponent("Beats")
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        let controller = SidebarBeatsController(file: SidebarBeatsFile(root: root))
+        #expect(controller.perform { _ = try $0.create(session: UUID(), cron: "0 9 * * *", prompt: "Original") } == nil)
+        let opened = try #require(controller.beats.first)
+        _ = try SidebarBeatsFile(root: root).mutate {
+            try $0.edit(id: opened.id, cron: nil, prompt: "Agent words", session: nil, basedOn: nil)
+        }
+        let failure = controller.perform {
+            try $0.edit(id: opened.id, cron: nil, prompt: "Human words", session: nil, basedOn: opened)
+        }
+        #expect(failure == BeatsError.changedElsewhere.message)
+        controller.refresh()
+        #expect(controller.beats.first?.prompt == "Agent words")
     }
 
     @Test func validationAndLimits() throws {
@@ -223,7 +264,7 @@ struct SidebarBeatsTests {
         #expect((attributes[.posixPermissions] as? Int) == 0o600)
         #expect(try file.read().beats.map(\.id) == [id])
         let before = try Data(contentsOf: root.appendingPathComponent("beats.json"))
-        #expect(throws: BeatsError.self) { try file.mutate { try $0.edit(id: id, cron: "bogus", prompt: nil, session: nil) } }
+        #expect(throws: BeatsError.self) { try file.mutate { try $0.edit(id: id, cron: "bogus", prompt: nil, session: nil, basedOn: nil) } }
         #expect(try Data(contentsOf: root.appendingPathComponent("beats.json")) == before)
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.hasPrefix(".pending") }
         #expect(leftovers.isEmpty)

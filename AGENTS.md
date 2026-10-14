@@ -38,9 +38,10 @@ do not copy its source or history, modify it, or make this project depend on it.
   a later issue explicitly approves that scope.
 - Do not add a license until the repository's licensing issue is resolved.
 - Keep orchestration control outside the sandboxed sidebar. The sidebar may
-  read only sanitized bounded metadata from the exact `Orchestration/observer/`
-  grant and use typed host navigation; never add
-  raw prompts/results/tokens, a daemon, loopback server, socket client, focus
+  read only sanitized bounded metadata from its exact read-only grants, read and
+  write only its Beats store outside its container (ADR 0020), and use typed host
+  navigation; never add
+  raw observed prompts/results/tokens (Beat prompts are authored definitions, not observed content), a daemon, loopback server, socket client, focus
   inference, automatic tool approval, or automatic terminal/process cleanup.
 - New workers are interactive Copilot sessions with inherited terminal I/O and
   direct human follow-ups. Do not create new headless-worker tabs or infer task
@@ -105,7 +106,7 @@ Moved here from the README. Reasons are in the ADRs.
 
 - Never infer ownership from titles, paths, focus, chronology, or terminal text. Unknown stays unknown. ([ADR 0002](docs/adr/0002-exact-identity-evidence-never-heuristics.md))
 - Never infer success, progress, hang, or completion from process presence, idle time, file timestamps, terminal output, launch acceptance, or expired history. ([ADR 0003](docs/adr/0003-liveness-work-attention-completion-stay-separate.md))
-- Never read, store, or display raw transcripts, prompts, tool arguments or results, credentials, tokens, or unsanitized errors.
+- Never read, store, or display raw transcripts, observed session prompts, tool arguments or results, credentials, tokens, or unsanitized errors. Beat prompts are authored Beat definitions, not observed session content. ([ADR 0020](docs/adr/0020-sidebar-writes-beats-store-outside-its-container.md))
 - Never use terminal keystrokes as a messaging or control fallback. Never restart, adopt, or signal existing sessions. ([ADR 0004](docs/adr/0004-interactive-workers-only.md), [0005](docs/adr/0005-native-peer-messaging-is-fire-and-forget.md))
 - Never treat recorded launch policy as live permissions. Deny wins. Explicit worker YOLO refuses. ([ADR 0006](docs/adr/0006-recorded-launch-policy-deny-wins.md))
 - Never key dismissal by label, path, or timestamp. Keep history presentation limits apart from ingestion limits. ([ADR 0009](docs/adr/0009-dismissal-by-event-identity.md))
@@ -113,7 +114,7 @@ Moved here from the README. Reasons are in the ADRs.
 - Never delete or truncate the install lock. Never force-kill. Never remove source files or deregister foreign registrations. Treat `build-register.sh` and `install` as publication, not validation. ([ADR 0011](docs/adr/0011-coordinated-install-no-force-kill.md))
 - Never run two `build-register.sh` or install commands at once. A second build can rewrite the app mid-install and strand the transaction.
 - Never use a validation build's installer UI. Only the production identity may run setup. ([ADR 0015](docs/adr/0015-isolated-validation-identities.md))
-- Never widen sandbox entitlements or add ancestor traversal for convenience. ([ADR 0001](docs/adr/0001-sandboxed-sidebar-reads-sanitized-evidence.md))
+- Never widen sandbox entitlements or add ancestor traversal for convenience. ([ADR 0001](docs/adr/0001-sandboxed-sidebar-reads-sanitized-evidence.md)) Outside the sidebar's own container, the only writable grant is the Beats store. ([ADR 0020](docs/adr/0020-sidebar-writes-beats-store-outside-its-container.md))
 - Keep layout changes presentation-only. Do not alter evidence, lifecycle state, counts, retention, acknowledgement, or focus. Keep layout, history, and acknowledgement storage separate.
 - Previews stay passive. ([ADR 0017](docs/adr/0017-previews-are-passive-and-rename-is-a-reminder.md))
 - Never claim a compile, parser check, screenshot, synthetic fixture, sandbox probe, registry check, or `build-register.sh` success proves hosted UI, live install, loaded hooks, or ExtensionKit runtime behavior.

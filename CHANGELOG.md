@@ -4,6 +4,35 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ## Unreleased
 
+### Changed
+
+- Record the Beats store as the sidebar's only write grant outside its own container
+  (ADR 0020, amending ADR 0001): the accepted risk that a Beat prompt becomes agent input,
+  that same-user processes may edit the store, and that Beat prompts are authored
+  definitions rather than observed session content. The sandbox reference lists all four
+  file grants.
+- Label a Beat as On or Off and its next run as an estimate. The sidebar showed "Active"
+  without any confirmation from Copilot and promised exact timing ("Missed times are not
+  replayed; one attempt per occurrence") that only Copilot's scheduler decides. The
+  redundant `SidebarBeatStatus` is gone; `enabled` is the single source.
+- Refuse a stale Beat edit in the sidebar. The form saved its cron and prompt over whatever
+  the store held, so an agent's change made while the form was open was silently lost. A
+  save is now refused if the Beat's cron, prompt or session changed since the form opened
+  (pausing or resuming elsewhere is not a conflict); **Load latest** keeps the draft.
+- Own Copilot schedules by ID, not by label. The extension treated any schedule labelled
+  `Beat [<id>] …` as a Beat, so it could stop a user's look-alike schedule, and a schedule
+  list without labels made it add the same Beat again every sync. It now records the IDs
+  Copilot returns in a per-session ledger
+  (`~/Library/Application Support/CMUXMaestroPreview/BeatSchedules/<session>.json`, outside
+  every sidebar grant) and keeps or removes only those. Each add is recorded as pending
+  before Copilot is asked, so a schedule created just before the extension stopped is
+  adopted instead of duplicated (only an unambiguous match); shutdown waits up to two
+  seconds for a sync in flight; one extension process per session owns the ledger. An
+  add whose ID cannot be recorded is stopped again (or reported if it cannot be), and an
+  invalid ledger changes nothing and says how to recover. Schedules made by earlier
+  versions are no longer recognized, and Copilot keeps schedules across resume: stop
+  leftover `Beat [` schedules with Copilot's schedule commands, or start new sessions.
+
 ### Fixed
 
 - Make every Beats reader apply one store contract. The Swift sidebar and the orchestrator

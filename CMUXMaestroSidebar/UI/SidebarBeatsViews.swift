@@ -132,15 +132,11 @@ private struct BeatRow: View {
     @Binding var actionError: String?
     let edit: (SidebarBeat) -> Void
 
-    private var tone: Color {
-        switch beat.status {
-        case .active: SidebarQuestionGlow.lightBlue
-        case .paused: .secondary
-        }
-    }
+    private var tone: Color { beat.enabled ? SidebarQuestionGlow.lightBlue : .secondary }
 
+    // No estimate for a session that is not running: the Beat cannot fire there.
     private var nextFire: String? {
-        guard beat.status == .active, let spec = try? BeatsCron(beat.cron),
+        guard beat.enabled, target != nil, let spec = try? BeatsCron(beat.cron),
               let next = spec.nextTimes(after: Date(), count: 1).first else { return nil }
         return next.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
     }
@@ -149,13 +145,14 @@ private struct BeatRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Circle().fill(tone).frame(width: 7, height: 7)
-                Text(target?.title ?? "Session \(beat.sessionId.prefix(8)) (not open)")
+                Text(target?.title ?? "Session \(beat.sessionId.prefix(8)) (not running)")
                     .font(.caption.weight(.semibold)).lineLimit(1)
                 Spacer(minLength: 0)
-                Text(beat.status.title).font(.caption2).foregroundStyle(tone)
+                Text(beat.enabled ? "On" : "Off").font(.caption2).foregroundStyle(tone)
+                    .accessibilityLabel(beat.enabled ? "Beat on" : "Beat off")
             }
             Text(beat.cron).font(.system(.caption, design: .monospaced))
-            if let nextFire { Text("Next: \(nextFire)").font(.caption2).foregroundStyle(.secondary) }
+            if let nextFire { Text("Next (estimate): \(nextFire)").font(.caption2).foregroundStyle(.secondary) }
             Text(beat.prompt).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
             HStack(spacing: 8) {
                 primaryAction
@@ -180,10 +177,9 @@ private struct BeatRow: View {
     }
 
     @ViewBuilder private var primaryAction: some View {
-        switch beat.status {
-        case .active:
+        if beat.enabled {
             Button("Pause") { actionError = controller.perform { try $0.pause(id: beat.id) } }.buttonStyle(.borderless)
-        case .paused:
+        } else {
             Button("Resume") { actionError = controller.perform { try $0.enable(id: beat.id) } }.buttonStyle(.borderless)
         }
     }
@@ -198,9 +194,13 @@ private struct BeatsForm: View {
     @State private var cron: String
     @State private var prompt: String
     @State private var error: String?
+    /// The stored Beat this edit is based on; "Load latest" moves it forward and keeps the draft.
+    @State private var base: SidebarBeat?
+    @State private var conflict = false
 
     init(controller: SidebarBeatsController, targets: [SidebarBeatTarget], existing: SidebarBeat?, done: @escaping () -> Void) {
         self.controller = controller; self.targets = targets; self.existing = existing; self.done = done
+        _base = State(initialValue: existing)
         _session = State(initialValue: existing.flatMap { UUID(uuidString: $0.sessionId) } ?? targets.first?.id)
         _cron = State(initialValue: existing?.cron ?? "0 9 * * 1-5")
         _prompt = State(initialValue: existing?.prompt ?? "")
@@ -224,7 +224,7 @@ private struct BeatsForm: View {
     private var targetOptions: [SidebarBeatTarget] {
         var options = targets
         if let existing, let id = UUID(uuidString: existing.sessionId), !options.contains(where: { $0.id == id }) {
-            options.append(.init(id: id, title: "Session \(existing.sessionId.prefix(8)) (not open)", live: false))
+            options.append(.init(id: id, title: "Session \(existing.sessionId.prefix(8)) (not running)", live: false))
         }
         return options
     }
@@ -248,10 +248,10 @@ private struct BeatsForm: View {
             if case .failure(let failure) = parsed {
                 Text(failure.message).font(.caption2).foregroundStyle(SidebarTone.attention.color)
             } else if !preview.isEmpty {
-                Text("Next: \(preview)").font(.caption2).foregroundStyle(.secondary)
+                Text("Next (estimate): \(preview)").font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Local time. Missed times are not replayed; one attempt per occurrence.")
+            Text("Local time. Runs roughly on schedule while the session is running; Copilot decides exact timing.")
                 .font(.caption2).foregroundStyle(.secondary)
             TextEditor(text: $prompt)
                 .font(.caption).frame(height: 90)
@@ -261,6 +261,11 @@ private struct BeatsForm: View {
             Text("\(prompt.utf8.count) / \(BeatsLimits.maximumPromptBytes) bytes").font(.caption2)
                 .foregroundStyle(prompt.utf8.count > BeatsLimits.maximumPromptBytes ? SidebarTone.attention.color : .secondary)
             if let error { Text(error).font(.caption).foregroundStyle(SidebarTone.attention.color) }
+            if conflict {
+                Button("Load latest") { loadLatest() }
+                    .help("Base your draft on the current version; your typed changes stay.")
+                    .accessibilityIdentifier("sidebar-beats-load-latest")
+            }
             HStack {
                 Button("Save") { save() }.keyboardShortcut(.defaultAction).disabled(session == nil)
                     .accessibilityIdentifier("sidebar-beats-save")
@@ -275,11 +280,24 @@ private struct BeatsForm: View {
         if let existing {
             let current = existing.sessionId == session.uuidString.lowercased()
             failure = controller.perform {
-                try $0.edit(id: existing.id, cron: cron, prompt: prompt, session: current ? nil : session)
+                try $0.edit(id: existing.id, cron: cron, prompt: prompt, session: current ? nil : session, basedOn: base)
             }
+            conflict = failure == BeatsError.changedElsewhere.message
         } else {
             failure = controller.perform { _ = try $0.create(session: session, cron: cron, prompt: prompt) }
         }
         if let failure { error = failure } else { done() }
+    }
+
+    private func loadLatest() {
+        controller.refresh()
+        guard let latest = controller.beats.first(where: { $0.id == existing?.id }) else {
+            error = "This Beat was deleted."
+            conflict = false
+            return
+        }
+        base = latest
+        error = "Loaded the latest version; your edits are kept. Save again to apply them."
+        conflict = false
     }
 }

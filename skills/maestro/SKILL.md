@@ -192,12 +192,11 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
 
 - Cron is five numeric fields, `minute hour day-of-month month weekday` (weekday 0 or 7
   = Sunday), with lists, ranges and steps; no names or macros. It runs in the Mac's
-  local time. Copilot's scheduler decides exactly when it fires, including around
-  daylight-saving changes; `cron-check` is only a preview.
+  local time. It runs roughly on schedule while the session is running; Copilot decides
+  exact timing, including around daylight-saving changes. `cron-check` is only an estimate.
 - Prompts are plain text up to 4 KiB. At most 16 Beats per session.
-- **One handoff attempt per due occurrence** is Copilot's own: no retries, receipts,
-  completion tracking or queue editing. Pause, edit and delete affect future
-  occurrences only.
+- Maestro adds no retries, receipts, completion tracking or queue editing; Copilot decides
+  delivery. Pause, edit and delete affect future runs.
 - A Beat is simply on or off. You cannot reassign a Beat or touch another session's Beats.
 - Beats run on **Copilot's own scheduler**. The Maestro extension in each CMUX session
   asks the Maestro controller for that session's enabled Beats and mirrors them into
