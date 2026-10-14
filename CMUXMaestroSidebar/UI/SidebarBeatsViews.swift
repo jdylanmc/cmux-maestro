@@ -1,3 +1,4 @@
+import AppKit
 import Observation
 import SwiftUI
 
@@ -12,7 +13,13 @@ struct SidebarBeatTarget: Identifiable, Equatable {
 @Observable
 @MainActor
 final class SidebarBeatsController {
-    private(set) var beats: [SidebarBeat] = []
+    private(set) var beats: [SidebarBeat] = [] {
+        didSet { if beats != oldValue { summaries = SidebarBeatSummaries(beats: beats) } }
+    }
+    /// Enabled Beats per exact session, recomputed only when the store's Beats change.
+    private(set) var summaries = SidebarBeatSummaries.empty
+    /// Session the open Beats panel is scoped to, set by an agent row's Beat icon. Presentation only.
+    var scopedSession: UUID?
     private(set) var notice: String?
     private let file: SidebarBeatsFile?
 
@@ -62,6 +69,23 @@ struct SidebarBeatsPanel: View {
     @State private var pendingDelete: String?
     @State private var actionError: String?
 
+    private var scope: UUID? { controller.scopedSession }
+    private var scopeTitle: String? {
+        scope.map { id in targets.first { $0.id == id }?.title ?? SidebarBeatsPanel.notRunningTitle(id.uuidString.lowercased()) }
+    }
+    private var visibleBeats: [SidebarBeat] {
+        guard let scope else { return controller.beats }
+        let id = scope.uuidString.lowercased()
+        return controller.beats.filter { $0.sessionId == id }
+    }
+    /// A scoped panel creates Beats only for its own session, which must be running to be a target.
+    private var newBeatUnavailable: String? {
+        if let scope { return targets.contains { $0.id == scope } ? nil : "Start this agent's session to add a Beat." }
+        return targets.isEmpty ? "Open an agent session to target it." : nil
+    }
+
+    static func notRunningTitle(_ sessionId: String) -> String { "Session \(sessionId.prefix(8)) (not running)" }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -71,24 +95,36 @@ struct SidebarBeatsPanel: View {
             }
             Text("Recurring prompts for agent sessions. The session must be running.")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if let scopeTitle {
+                HStack(spacing: 6) {
+                    Text("For \(scopeTitle)").font(.caption.weight(.semibold)).lineLimit(1)
+                        .accessibilityIdentifier("sidebar-beats-scope")
+                    Spacer(minLength: 0)
+                    Button("Show all") { controller.scopedSession = nil; mode = .list }
+                        .buttonStyle(.borderless).font(.caption)
+                        .help("Show Beats for every session.")
+                        .accessibilityIdentifier("sidebar-beats-show-all")
+                }
+            }
             if let notice = controller.notice ?? actionError {
                 Text(notice).font(.caption).foregroundStyle(SidebarTone.attention.color)
                     .fixedSize(horizontal: false, vertical: true)
             }
             switch mode {
             case .list:
-                BeatsList(controller: controller, targets: targets, pendingDelete: $pendingDelete,
+                BeatsList(controller: controller, beats: visibleBeats, targets: targets, pendingDelete: $pendingDelete,
                           actionError: $actionError, edit: { mode = .form($0) })
                 Button { mode = .form(nil) } label: { Label("New Beat", systemImage: "plus") }
-                    .disabled(targets.isEmpty)
-                    .help(targets.isEmpty ? "Open an agent session to target it." : "Create a recurring prompt.")
+                    .disabled(newBeatUnavailable != nil)
+                    .help(newBeatUnavailable ?? "Create a recurring prompt.")
                     .accessibilityIdentifier("sidebar-beats-new")
             case .form(let existing):
-                BeatsForm(controller: controller, targets: targets, existing: existing) { mode = .list }
+                BeatsForm(controller: controller, targets: targets, existing: existing, preferred: scope) { mode = .list }
             }
         }
         .padding(14)
         .frame(width: 340)
+        .onChange(of: scope) { _, _ in mode = .list; pendingDelete = nil }
         .task {
             // Agents and the orchestrator write the same store; pick up their changes while open.
             while !Task.isCancelled {
@@ -103,6 +139,7 @@ struct SidebarBeatsPanel: View {
 
 private struct BeatsList: View {
     let controller: SidebarBeatsController
+    let beats: [SidebarBeat]
     let targets: [SidebarBeatTarget]
     @Binding var pendingDelete: String?
     @Binding var actionError: String?
@@ -111,10 +148,10 @@ private struct BeatsList: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 8) {
-                if controller.beats.isEmpty {
+                if beats.isEmpty {
                     Text("No beats.").font(.caption).foregroundStyle(.secondary).padding(.vertical, 12)
                 }
-                ForEach(controller.beats) { beat in
+                ForEach(beats) { beat in
                     BeatRow(controller: controller, beat: beat, target: targets.first { $0.id.uuidString.lowercased() == beat.sessionId },
                             pendingDelete: $pendingDelete, actionError: $actionError, edit: edit)
                 }
@@ -145,7 +182,7 @@ private struct BeatRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Circle().fill(tone).frame(width: 7, height: 7)
-                Text(target?.title ?? "Session \(beat.sessionId.prefix(8)) (not running)")
+                Text(target?.title ?? SidebarBeatsPanel.notRunningTitle(beat.sessionId))
                     .font(.caption.weight(.semibold)).lineLimit(1)
                 Spacer(minLength: 0)
                 Text(beat.enabled ? "On" : "Off").font(.caption2).foregroundStyle(tone)
@@ -198,10 +235,12 @@ private struct BeatsForm: View {
     @State private var base: SidebarBeat?
     @State private var conflict = false
 
-    init(controller: SidebarBeatsController, targets: [SidebarBeatTarget], existing: SidebarBeat?, done: @escaping () -> Void) {
+    init(controller: SidebarBeatsController, targets: [SidebarBeatTarget], existing: SidebarBeat?, preferred: UUID? = nil,
+         done: @escaping () -> Void) {
         self.controller = controller; self.targets = targets; self.existing = existing; self.done = done
         _base = State(initialValue: existing)
-        _session = State(initialValue: existing.flatMap { UUID(uuidString: $0.sessionId) } ?? targets.first?.id)
+        let preferredTarget = preferred.flatMap { id in targets.first { $0.id == id }?.id }
+        _session = State(initialValue: existing.flatMap { UUID(uuidString: $0.sessionId) } ?? preferredTarget ?? targets.first?.id)
         _cron = State(initialValue: existing?.cron ?? "0 9 * * 1-5")
         _prompt = State(initialValue: existing?.prompt ?? "")
     }
@@ -224,7 +263,7 @@ private struct BeatsForm: View {
     private var targetOptions: [SidebarBeatTarget] {
         var options = targets
         if let existing, let id = UUID(uuidString: existing.sessionId), !options.contains(where: { $0.id == id }) {
-            options.append(.init(id: id, title: "Session \(existing.sessionId.prefix(8)) (not running)", live: false))
+            options.append(.init(id: id, title: SidebarBeatsPanel.notRunningTitle(existing.sessionId), live: false))
         }
         return options
     }
@@ -299,5 +338,214 @@ private struct BeatsForm: View {
         base = latest
         error = "Loaded the latest version; your edits are kept. Save again to apply them."
         conflict = false
+    }
+}
+
+// MARK: - Agent row Beat indicator
+
+enum SidebarBeatIndicatorState: Equatable {
+    /// No enabled Beat targets the session.
+    case none
+    /// Enabled Beats, but the session is not known to be running, so none can fire (ADR 0007).
+    case dim
+    /// Enabled Beats on a running session.
+    case lit
+}
+
+/// Row-facing Beat state: the store summary joined with the liveness the Beats panel uses for targets.
+struct SidebarBeatIndicators: Equatable {
+    var summaries = SidebarBeatSummaries.empty
+    var running: Set<UUID> = []
+    var ended: Set<UUID> = []
+
+    init(summaries: SidebarBeatSummaries = .empty, running: Set<UUID> = [], ended: Set<UUID> = []) {
+        self.summaries = summaries; self.running = running; self.ended = ended
+    }
+
+    init(summaries: SidebarBeatSummaries, tree: SidebarCopilotTree) {
+        self.init(summaries: summaries, running: Set(Self.runningSessions(in: tree).map(\.id)),
+                  ended: Set(tree.sessions.filter { $0.liveness == .dead }.map(\.id)))
+    }
+
+    /// The sessions a Beat can currently fire in; the Beats panel's targets and "Next (estimate)".
+    static func runningSessions(in tree: SidebarCopilotTree) -> [SidebarCopilotSession] {
+        tree.sessions.filter { $0.liveness == .alive }
+    }
+
+    func state(for session: UUID?) -> SidebarBeatIndicatorState {
+        guard let session, summaries.summary(for: session) != nil else { return .none }
+        return running.contains(session) ? .lit : .dim
+    }
+
+    func accessibilityValue(for session: UUID?) -> String {
+        guard let session, let summary = summaries.summary(for: session) else { return "" }
+        let liveness = running.contains(session) ? "running"
+            : ended.contains(session) ? "not running" : "not known to be running"
+        return "\(summary.enabledCount) on, \(liveness)"
+    }
+
+    func help(for session: UUID?) -> String {
+        guard let session, let summary = summaries.summary(for: session) else { return "" }
+        let count = summary.enabledCount == 1 ? "1 Beat on" : "\(summary.enabledCount) Beats on"
+        let shown = summary.schedules.prefix(4).joined(separator: "; ")
+        let more = summary.schedules.count > 4 ? "; +\(summary.schedules.count - 4) more" : ""
+        let note = running.contains(session) ? "Session running."
+            : "Session not known to be running; Beats fire only while it runs."
+        return "\(count): \(shown)\(more). \(note) Click to edit this agent's Beats."
+    }
+}
+
+/// The breathing glow of a lit Beat icon. One opacity value per icon; no model updates.
+enum SidebarBeatGlow {
+    static let period: TimeInterval = 2
+    static let staticIntensity = 0.8
+
+    static func animates(_ state: SidebarBeatIndicatorState, reduceMotion: Bool) -> Bool {
+        state == .lit && !reduceMotion
+    }
+
+    static func intensity(_ state: SidebarBeatIndicatorState, at date: Date, reduceMotion: Bool) -> Double {
+        guard state == .lit else { return 0 }
+        guard !reduceMotion else { return staticIntensity }
+        let phase = date.timeIntervalSinceReferenceDate * 2 * .pi / period
+        return 0.35 + 0.65 * (0.5 + 0.5 * sin(phase))
+    }
+}
+
+private struct SidebarBeatIndicatorsKey: EnvironmentKey {
+    static let defaultValue = SidebarBeatIndicators()
+}
+
+private struct SidebarOpenBeatsKey: EnvironmentKey {
+    static let defaultValue: ((UUID) -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var sidebarBeatIndicators: SidebarBeatIndicators {
+        get { self[SidebarBeatIndicatorsKey.self] }
+        set { self[SidebarBeatIndicatorsKey.self] = newValue }
+    }
+    /// Opens the Beats panel scoped to one exact session. Nil where the panel cannot open, such as previews.
+    var sidebarOpenBeats: ((UUID) -> Void)? {
+        get { self[SidebarOpenBeatsKey.self] }
+        set { self[SidebarOpenBeatsKey.self] = newValue }
+    }
+}
+
+/// Trailing Beat icon on a row that represents exactly one Copilot session.
+struct SidebarBeatIndicator: View {
+    static let symbol = SidebarHeaderAction.beats.symbol
+    static let accessibilityLabel = "Beats for this agent"
+    let session: UUID?
+    let titleHeight: CGFloat
+    /// Space under the title line, so the icon centres on the title rather than the whole row.
+    var belowTitle: CGFloat = 0
+    @Environment(\.sidebarBeatIndicators) private var indicators
+    @Environment(\.sidebarOpenBeats) private var openBeats
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    static func titleHeight(fontSize: Double) -> CGFloat {
+        ceil(NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: fontSize, weight: .semibold)))
+    }
+
+    var body: some View {
+        let state = indicators.state(for: session)
+        if state != .none, let session {
+            VStack(spacing: 0) {
+                SidebarBeatGlyph(state: state, reduceMotion: reduceMotion)
+                    .frame(width: 20, height: titleHeight)
+                if belowTitle > 0 { Color.clear.frame(width: 20, height: belowTitle) }
+            }
+            .overlay {
+                SidebarBeatButton(
+                    value: indicators.accessibilityValue(for: session), help: indicators.help(for: session),
+                    action: openBeats.map { open in { open(session) } }
+                )
+            }
+            .fixedSize()
+        }
+    }
+}
+
+struct SidebarBeatGlyph: View {
+    let state: SidebarBeatIndicatorState
+    let reduceMotion: Bool
+
+    var body: some View {
+        if SidebarBeatGlow.animates(state, reduceMotion: reduceMotion) {
+            TimelineView(.animation(minimumInterval: 1.0 / 20)) { context in
+                glyph(glow: SidebarBeatGlow.intensity(state, at: context.date, reduceMotion: false))
+            }
+        } else {
+            glyph(glow: SidebarBeatGlow.intensity(state, at: .distantPast, reduceMotion: true))
+        }
+    }
+
+    private var image: some View {
+        Image(systemName: SidebarBeatIndicator.symbol).font(.system(size: 11, weight: .semibold))
+    }
+
+    // The glow is a pre-blurred copy whose opacity alone changes, so a tick does not re-render the blur.
+    private func glyph(glow: Double) -> some View {
+        image
+            .foregroundStyle(state == .lit ? Color.accentColor : Color.secondary.opacity(0.55))
+            .background {
+                if state == .lit {
+                    image.foregroundStyle(Color.accentColor).blur(radius: 3).opacity(glow)
+                }
+            }
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
+    }
+}
+
+/// Native, transparent hit target over the glyph, so a click never reaches the row's title button.
+final class SidebarBeatNativeButton: NSButton {
+    var activate: (() -> Void)?
+
+    init() {
+        super.init(frame: .zero)
+        title = ""
+        isBordered = false
+        imagePosition = .noImage
+        setButtonType(.momentaryChange)
+        focusRingType = .exterior
+        target = self
+        action = #selector(press)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    @objc private func press() { activate?() }
+
+    // Without a title or image AppKit reports an unknown role; this is a button.
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled, let activate else { return false }
+        activate()
+        return true
+    }
+}
+
+private struct SidebarBeatButton: NSViewRepresentable {
+    let value: String
+    let help: String
+    let action: (() -> Void)?
+
+    func makeNSView(context: Context) -> SidebarBeatNativeButton { SidebarBeatNativeButton() }
+
+    func updateNSView(_ button: SidebarBeatNativeButton, context: Context) {
+        button.activate = action
+        button.isEnabled = action != nil
+        button.toolTip = help
+        button.setAccessibilityLabel(SidebarBeatIndicator.accessibilityLabel)
+        button.setAccessibilityValue(value)
+        button.setAccessibilityHelp(help)
+        button.setAccessibilityIdentifier("sidebar-beat-indicator")
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: SidebarBeatNativeButton, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: CGSize(width: 20, height: 20))
     }
 }
