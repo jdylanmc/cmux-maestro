@@ -132,15 +132,10 @@ private struct BeatRow: View {
     @Binding var actionError: String?
     let edit: (SidebarBeat) -> Void
 
-    private var tone: Color {
-        switch beat.status {
-        case .active: SidebarQuestionGlow.lightBlue
-        case .paused: .secondary
-        }
-    }
+    private var tone: Color { beat.enabled ? SidebarQuestionGlow.lightBlue : .secondary }
 
     private var nextFire: String? {
-        guard beat.status == .active, let spec = try? BeatsCron(beat.cron),
+        guard beat.enabled, let spec = try? BeatsCron(beat.cron),
               let next = spec.nextTimes(after: Date(), count: 1).first else { return nil }
         return next.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
     }
@@ -152,10 +147,10 @@ private struct BeatRow: View {
                 Text(target?.title ?? "Session \(beat.sessionId.prefix(8)) (not open)")
                     .font(.caption.weight(.semibold)).lineLimit(1)
                 Spacer(minLength: 0)
-                Text(beat.status.title).font(.caption2).foregroundStyle(tone)
+                Text(beat.enabled ? "On" : "Off").font(.caption2).foregroundStyle(tone)
             }
             Text(beat.cron).font(.system(.caption, design: .monospaced))
-            if let nextFire { Text("Next: \(nextFire)").font(.caption2).foregroundStyle(.secondary) }
+            if let nextFire { Text("Next (estimate): \(nextFire)").font(.caption2).foregroundStyle(.secondary) }
             Text(beat.prompt).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
             HStack(spacing: 8) {
                 primaryAction
@@ -180,10 +175,9 @@ private struct BeatRow: View {
     }
 
     @ViewBuilder private var primaryAction: some View {
-        switch beat.status {
-        case .active:
+        if beat.enabled {
             Button("Pause") { actionError = controller.perform { try $0.pause(id: beat.id) } }.buttonStyle(.borderless)
-        case .paused:
+        } else {
             Button("Resume") { actionError = controller.perform { try $0.enable(id: beat.id) } }.buttonStyle(.borderless)
         }
     }
@@ -248,10 +242,10 @@ private struct BeatsForm: View {
             if case .failure(let failure) = parsed {
                 Text(failure.message).font(.caption2).foregroundStyle(SidebarTone.attention.color)
             } else if !preview.isEmpty {
-                Text("Next: \(preview)").font(.caption2).foregroundStyle(.secondary)
+                Text("Next (estimate): \(preview)").font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Local time. Missed times are not replayed; one attempt per occurrence.")
+            Text("Local time. Copilot runs it about on schedule while the session is open.")
                 .font(.caption2).foregroundStyle(.secondary)
             TextEditor(text: $prompt)
                 .font(.caption).frame(height: 90)

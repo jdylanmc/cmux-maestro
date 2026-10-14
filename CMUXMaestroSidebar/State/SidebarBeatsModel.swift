@@ -146,18 +146,6 @@ nonisolated struct SidebarBeat: Codable, Equatable, Identifiable {
     var createdAt: String
     var updatedAt: String
     var revision: Int
-
-    var status: SidebarBeatStatus { enabled ? .active : .paused }
-}
-
-nonisolated enum SidebarBeatStatus: Equatable {
-    case active, paused
-    var title: String {
-        switch self {
-        case .active: "Active"
-        case .paused: "Paused"
-        }
-    }
 }
 
 nonisolated struct SidebarBeatsState: Equatable {

@@ -90,7 +90,7 @@ struct SidebarBeatsTests {
         let state = try SidebarBeatsState.decode(data)
         #expect(state.beats.count == 3)
         #expect(state.beats[0].prompt == "Check the board.\nSummarize blockers / risks.")
-        #expect(state.beats[0].status == .active && state.beats[1].status == .paused)
+        #expect(state.beats[0].enabled && !state.beats[1].enabled)
         #expect(state.beats[2].prompt.contains("😀") && state.beats[2].prompt.contains("\u{2028}"))
         // Byte-identical to the orchestrator's beats_encode (test-beats.py), so both writers
         // measure the same size limit.
@@ -178,21 +178,21 @@ struct SidebarBeatsTests {
         var state = SidebarBeatsState()
         let first = UUID(), second = UUID()
         let beat = try state.create(session: first, cron: "  0   9 * * 1-5", prompt: "Plan the day")
-        #expect(beat.cron == "0 9 * * 1-5" && beat.status == .active)
+        #expect(beat.cron == "0 9 * * 1-5" && beat.enabled)
         try state.pause(id: beat.id)
-        #expect(state.beats[0].status == .paused)
+        #expect(!state.beats[0].enabled)
         try state.enable(id: beat.id)
-        #expect(state.beats[0].status == .active)
+        #expect(state.beats[0].enabled)
         // Editing never changes whether recurrence runs.
         try state.edit(id: beat.id, cron: "30 9 * * *", prompt: nil, session: nil)
-        #expect(state.beats[0].status == .active && state.beats[0].revision == 4)
+        #expect(state.beats[0].enabled && state.beats[0].revision == 4)
         // Moving to another session keeps it on or off (ADR 0007: a Beat is simply on or off).
         try state.edit(id: beat.id, cron: nil, prompt: "New words", session: second)
         #expect(state.beats[0].sessionId == second.uuidString.lowercased())
-        #expect(state.beats[0].status == .active && state.beats[0].prompt == "New words")
+        #expect(state.beats[0].enabled && state.beats[0].prompt == "New words")
         try state.pause(id: beat.id)
         try state.edit(id: beat.id, cron: nil, prompt: nil, session: first)
-        #expect(state.beats[0].status == .paused)
+        #expect(!state.beats[0].enabled)
         try state.delete(id: beat.id)
         #expect(state.beats.isEmpty)
         #expect(throws: BeatsError.self) { try state.delete(id: beat.id) }

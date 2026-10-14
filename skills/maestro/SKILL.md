@@ -192,8 +192,9 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
 
 - Cron is five numeric fields, `minute hour day-of-month month weekday` (weekday 0 or 7
   = Sunday), with lists, ranges and steps; no names or macros. It runs in the Mac's
-  local time. Copilot's scheduler decides exactly when it fires, including around
-  daylight-saving changes; `cron-check` is only a preview.
+  local time. Copilot's scheduler runs it about on schedule while the session is open;
+  exact timing (including around daylight-saving changes) is Copilot's. `cron-check` is
+  only an estimate.
 - Prompts are plain text up to 4 KiB. At most 16 Beats per session.
 - **One handoff attempt per due occurrence** is Copilot's own: no retries, receipts,
   completion tracking or queue editing. Pause, edit and delete affect future

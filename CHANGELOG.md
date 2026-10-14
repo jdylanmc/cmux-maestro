@@ -11,6 +11,10 @@ Notable changes are recorded using Keep a Changelog categories.
   that same-user processes may edit the store, and that Beat prompts are authored
   definitions rather than observed session content. The sandbox reference lists all four
   file grants.
+- Label a Beat as On or Off and its next run as an estimate. The sidebar showed "Active"
+  without any confirmation from Copilot and promised exact timing ("Missed times are not
+  replayed; one attempt per occurrence") that only Copilot's scheduler decides. The
+  redundant `SidebarBeatStatus` is gone; `enabled` is the single source.
 
 ### Fixed
 
