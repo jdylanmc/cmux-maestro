@@ -115,7 +115,7 @@ enum SidebarBeatsCopy {
     static let toggle = "Beat on/off"
     static let changedElsewhere = "Changed elsewhere"
     static let loadLatestHelp = "Base your draft on the current version; your typed changes stay."
-    static let latestLoaded = "Latest loaded"
+    static let latestLoaded = "Latest loaded — Save to apply"
     static let latestLoadedHelp = "Loaded the latest version; your edits are kept. Save again to apply them."
     static let deleted = "Beat deleted"
     static let invalidCron = "Invalid cron"
@@ -134,26 +134,34 @@ enum SidebarBeatsCopy {
 
     static func sessionTitle(_ sessionId: String) -> String { "Session \(sessionId.prefix(8))" }
 
-    /// The next run, short: a time today, otherwise weekday and time.
+    /// The next run, short: a time today, weekday and time within 6 days, otherwise month, day and time.
     static func nextShort(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
-        calendar.isDate(date, inSameDayAs: now)
-            ? date.formatted(.dateTime.hour().minute())
-            : date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? .max
+        var style = Date.FormatStyle.dateTime.hour().minute()
+        style.calendar = calendar
+        style.timeZone = calendar.timeZone
+        if days == 0 { return date.formatted(style) }
+        return date.formatted(days > 0 && days <= 6 ? style.weekday(.abbreviated) : style.month(.abbreviated).day())
     }
 
     static func nextLong(_ date: Date) -> String {
         date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
     }
 
-    /// Row tooltip and VoiceOver hint: cron, On/Off, estimated next run and when it can fire.
-    static func rowDetail(cron: String, enabled: Bool, running: Bool, next: Date?) -> String {
-        var parts = ["Cron \(cron).", enabled ? "On." : "Off."]
+    /// Row VoiceOver value: On/Off, the estimated next run and when it can fire.
+    static func rowStatus(enabled: Bool, running: Bool, next: Date?) -> String {
+        var parts = [enabled ? "On." : "Off."]
         if !running {
             parts += ["\(notRunning).", firesOnlyWhileRunning]
         } else if enabled, let next {
             parts += ["Next run estimate: \(nextLong(next)).", "Copilot decides exact timing.", firesOnlyWhileRunning]
         }
         return parts.joined(separator: " ")
+    }
+
+    /// Row tooltip: the cron, then the same facts as the VoiceOver value.
+    static func rowDetail(cron: String, enabled: Bool, running: Bool, next: Date?) -> String {
+        "Cron \(cron). \(rowStatus(enabled: enabled, running: running, next: next))"
     }
 
     /// The form's next-run caption and its detail.
@@ -167,6 +175,40 @@ enum SidebarBeatsCopy {
     static func byteCounter(_ bytes: Int, limit: Int = BeatsLimits.maximumPromptBytes) -> String? {
         bytes * 4 >= limit * 3 ? "\(bytes)/\(limit) B" : nil
     }
+}
+
+/// What one Beat row shows, and the labels that tell rows apart for VoiceOver.
+struct SidebarBeatRowModel: Equatable {
+    let schedule: String
+    let isPreset: Bool
+    let session: String?
+    let running: Bool
+    let prompt: String
+    let detail: String
+    let status: String
+    /// Schedule and a short prompt prefix, appended to each control's label.
+    let identity: String
+
+    init(beat: SidebarBeat, target: SidebarBeatTarget?, scoped: Bool, next: Date?) {
+        let preset = SidebarBeatsCopy.presetLabel(beat.cron)
+        schedule = preset ?? beat.cron
+        isPreset = preset != nil
+        session = scoped ? nil : (target?.title ?? SidebarBeatsCopy.sessionTitle(beat.sessionId))
+        running = target != nil
+        prompt = beat.prompt
+        detail = SidebarBeatsCopy.rowDetail(cron: beat.cron, enabled: beat.enabled, running: running, next: next)
+        status = SidebarBeatsCopy.rowStatus(enabled: beat.enabled, running: running, next: next)
+        let line = beat.prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        let prefix = line.count > 24 ? "\(line.prefix(24))…" : line
+        identity = [schedule, prefix].filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+
+    var summary: String { [identity, session].compactMap { $0 }.joined(separator: ", ") }
+    var toggleLabel: String { "\(SidebarBeatsCopy.toggle), \(identity)" }
+    var editLabel: String { "Edit Beat, \(identity)" }
+    var deleteLabel: String { "Delete Beat, \(identity)" }
+    var confirmDeleteLabel: String { "Confirm delete, \(identity)" }
+    var keepLabel: String { "Keep Beat, \(identity)" }
 }
 
 struct SidebarBeatsPanel: View {
@@ -267,7 +309,6 @@ struct SidebarBeatNotRunning: View {
         Image(systemName: "circle.slash").font(.caption2).foregroundStyle(.secondary)
             .help("\(SidebarBeatsCopy.notRunning). \(SidebarBeatsCopy.firesOnlyWhileRunning)")
             .accessibilityLabel(SidebarBeatsCopy.notRunning)
-            .accessibilityHint(SidebarBeatsCopy.firesOnlyWhileRunning)
     }
 }
 
@@ -312,9 +353,7 @@ private struct BeatRow: View {
         return spec.nextTimes(after: Date(), count: 1).first
     }
 
-    private var detail: String {
-        SidebarBeatsCopy.rowDetail(cron: beat.cron, enabled: beat.enabled, running: target != nil, next: nextFire)
-    }
+    private var model: SidebarBeatRowModel { .init(beat: beat, target: target, scoped: scoped, next: nextFire) }
 
     private var isOn: Binding<Bool> {
         Binding(get: { beat.enabled }, set: { on in
@@ -322,54 +361,71 @@ private struct BeatRow: View {
         })
     }
 
+    private static let target = SidebarPresentation.minimumControlSize
+
     var body: some View {
-        HStack(spacing: 8) {
+        let model = model
+        HStack(spacing: 4) {
             Toggle(SidebarBeatsCopy.toggle, isOn: isOn)
                 .toggleStyle(.switch).controlSize(.mini).labelsHidden()
+                .frame(minWidth: Self.target, minHeight: Self.target).contentShape(Rectangle())
                 .help(beat.enabled ? "On" : "Off")
-                .accessibilityLabel(SidebarBeatsCopy.toggle)
+                .accessibilityLabel(model.toggleLabel)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
-                    if let preset = SidebarBeatsCopy.presetLabel(beat.cron) {
-                        Text(preset).font(.caption.weight(.semibold))
-                    } else {
-                        Text(beat.cron).font(.system(.caption, design: .monospaced))
+                    Group {
+                        if model.isPreset {
+                            Text(model.schedule).font(.caption.weight(.semibold))
+                        } else {
+                            Text(model.schedule).font(.system(.caption, design: .monospaced))
+                        }
                     }
-                    if !scoped {
-                        Text(target?.title ?? SidebarBeatsCopy.sessionTitle(beat.sessionId))
-                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                    .layoutPriority(1)
+                    if let session = model.session {
+                        Text(session).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                     }
-                    if target == nil { SidebarBeatNotRunning() }
+                    if !model.running { SidebarBeatNotRunning() }
                 }
                 .lineLimit(1)
-                Text(beat.prompt).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                Text(model.prompt).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
             }
+            .padding(.leading, 4)
             .opacity(beat.enabled ? 1 : 0.6)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .help(detail)
-            .accessibilityElement(children: .combine)
-            .accessibilityHint(detail)
+            .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isStaticText)
+            .accessibilityLabel(model.summary)
+            .accessibilityValue(model.status)
+            .help(model.detail)
             if pendingDelete == beat.id {
                 Button("Delete", role: .destructive) {
                     actionError = controller.perform { try $0.delete(id: beat.id) }
                     pendingDelete = nil
                 }
                 .buttonStyle(.borderless).font(.caption).foregroundStyle(SidebarTone.attention.color)
+                .frame(minHeight: Self.target).contentShape(Rectangle())
                 .help("Delete this Beat")
+                .accessibilityLabel(model.confirmDeleteLabel)
                 Button("Keep") { pendingDelete = nil }.buttonStyle(.borderless).font(.caption)
+                    .frame(minHeight: Self.target).contentShape(Rectangle())
+                    .accessibilityLabel(model.keepLabel)
             } else {
-                Button { edit(beat) } label: { Image(systemName: "pencil") }
-                    .buttonStyle(.borderless).help("Edit").accessibilityLabel("Edit Beat")
-                Button { pendingDelete = beat.id } label: { Image(systemName: "trash") }
-                    .buttonStyle(.borderless).help("Delete").accessibilityLabel("Delete Beat")
+                Button { edit(beat) } label: {
+                    Image(systemName: "pencil").frame(width: Self.target, height: Self.target).contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless).help("Edit").accessibilityLabel(model.editLabel)
+                Button { pendingDelete = beat.id } label: {
+                    Image(systemName: "trash").frame(width: Self.target, height: Self.target).contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless).help("Delete").accessibilityLabel(model.deleteLabel)
             }
         }
-        .padding(.horizontal, 8).padding(.vertical, 6)
+        .padding(.horizontal, 6).padding(.vertical, 3)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
         .contextMenu {
             Button("Edit") { edit(beat) }
-            Button(beat.enabled ? "Turn Off" : "Turn On") { isOn.wrappedValue.toggle() }
+            Button(beat.enabled ? "Disable" : "Enable") { isOn.wrappedValue.toggle() }
             Button("Delete", role: .destructive) { pendingDelete = beat.id }
         }
         .accessibilityElement(children: .contain)
