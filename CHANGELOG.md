@@ -17,7 +17,8 @@ Notable changes are recorded using Keep a Changelog categories.
   redundant `SidebarBeatStatus` is gone; `enabled` is the single source.
 - Refuse a stale Beat edit in the sidebar. The form saved its cron and prompt over whatever
   the store held, so an agent's change made while the form was open was silently lost. A
-  save now carries the revision the form opened with and is refused if the Beat changed.
+  save is now refused if the Beat's cron, prompt or session changed since the form opened
+  (pausing or resuming elsewhere is not a conflict); **Load latest** keeps the draft.
 
 ### Fixed
 

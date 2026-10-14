@@ -19,6 +19,8 @@ nonisolated enum BeatsLimits {
 nonisolated struct BeatsError: Error, Equatable {
     let message: String
     init(_ message: String) { self.message = message }
+
+    static let changedElsewhere = BeatsError("This Beat changed elsewhere. Load the latest version to keep editing.")
 }
 
 nonisolated struct BeatsCron: Equatable {
@@ -316,13 +318,14 @@ nonisolated struct SidebarBeatsState: Equatable {
     }
 
     /// Cron, prompt and target session may change; whether the Beat is on does not.
-    /// `expectedRevision` is the revision the edit was based on; a newer stored revision means
-    /// someone else changed the Beat, and the edit is refused rather than overwriting that change.
-    mutating func edit(id: String, cron: String?, prompt: String?, session: UUID?, expectedRevision: Int? = nil) throws {
+    /// `basedOn` is the Beat the edit started from. If its cron, prompt or session changed since,
+    /// the edit is refused rather than overwriting that change; on/off is never written by an edit,
+    /// so pausing or resuming elsewhere is not a conflict. Pass nil only for a deliberate blind edit.
+    mutating func edit(id: String, cron: String?, prompt: String?, session: UUID?, basedOn: SidebarBeat?) throws {
         let position = try index(id)
         var beat = beats[position]
-        if let expectedRevision, beat.revision != expectedRevision {
-            throw BeatsError("This Beat changed elsewhere. Reopen it to see the latest version.")
+        if let basedOn, (beat.cron, beat.prompt, beat.sessionId) != (basedOn.cron, basedOn.prompt, basedOn.sessionId) {
+            throw BeatsError.changedElsewhere
         }
         if let cron { beat.cron = try BeatsCron(cron).expression }
         if let prompt { beat.prompt = try Self.validatePrompt(prompt) }

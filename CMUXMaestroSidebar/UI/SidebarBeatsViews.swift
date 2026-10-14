@@ -194,9 +194,13 @@ private struct BeatsForm: View {
     @State private var cron: String
     @State private var prompt: String
     @State private var error: String?
+    /// The stored Beat this edit is based on; "Load latest" moves it forward and keeps the draft.
+    @State private var base: SidebarBeat?
+    @State private var conflict = false
 
     init(controller: SidebarBeatsController, targets: [SidebarBeatTarget], existing: SidebarBeat?, done: @escaping () -> Void) {
         self.controller = controller; self.targets = targets; self.existing = existing; self.done = done
+        _base = State(initialValue: existing)
         _session = State(initialValue: existing.flatMap { UUID(uuidString: $0.sessionId) } ?? targets.first?.id)
         _cron = State(initialValue: existing?.cron ?? "0 9 * * 1-5")
         _prompt = State(initialValue: existing?.prompt ?? "")
@@ -257,6 +261,11 @@ private struct BeatsForm: View {
             Text("\(prompt.utf8.count) / \(BeatsLimits.maximumPromptBytes) bytes").font(.caption2)
                 .foregroundStyle(prompt.utf8.count > BeatsLimits.maximumPromptBytes ? SidebarTone.attention.color : .secondary)
             if let error { Text(error).font(.caption).foregroundStyle(SidebarTone.attention.color) }
+            if conflict {
+                Button("Load latest") { loadLatest() }
+                    .help("Base your draft on the current version; your typed changes stay.")
+                    .accessibilityIdentifier("sidebar-beats-load-latest")
+            }
             HStack {
                 Button("Save") { save() }.keyboardShortcut(.defaultAction).disabled(session == nil)
                     .accessibilityIdentifier("sidebar-beats-save")
@@ -271,12 +280,24 @@ private struct BeatsForm: View {
         if let existing {
             let current = existing.sessionId == session.uuidString.lowercased()
             failure = controller.perform {
-                try $0.edit(id: existing.id, cron: cron, prompt: prompt, session: current ? nil : session,
-                            expectedRevision: existing.revision)
+                try $0.edit(id: existing.id, cron: cron, prompt: prompt, session: current ? nil : session, basedOn: base)
             }
+            conflict = failure == BeatsError.changedElsewhere.message
         } else {
             failure = controller.perform { _ = try $0.create(session: session, cron: cron, prompt: prompt) }
         }
         if let failure { error = failure } else { done() }
+    }
+
+    private func loadLatest() {
+        controller.refresh()
+        guard let latest = controller.beats.first(where: { $0.id == existing?.id }) else {
+            error = "This Beat was deleted."
+            conflict = false
+            return
+        }
+        base = latest
+        error = "Loaded the latest version; your edits are kept. Save again to apply them."
+        conflict = false
     }
 }
