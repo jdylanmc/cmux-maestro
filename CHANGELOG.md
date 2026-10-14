@@ -49,13 +49,14 @@ Notable changes are recorded using Keep a Changelog categories.
   landed, is a warning rather than an error, so a retry can't repeat the change. The bytes
   written are unchanged.
 
-- Make the Beats panel terse: a **+** (New Beat) in the header, one-line rows with an On/Off
-  switch, preset names (Hourly, Every 15 min) or the cron, and the prompt; next-run
-  estimates, "not running" and Copilot timing move to tooltips and VoiceOver.
-- Turn a Beat on and off with **Enable** and **Disable**, matching its On/Off label.
-  `beats enable` and `beats disable` are the documented commands; `beats pause` and
-  `beats resume` still work as aliases. "Resume" now means only resuming a Copilot session.
-  Beats code comments cite ADR 0007, and ADR 0020 for the store location.
+- Make the Beats panel terse, and turn a Beat on or off with **Enable** and **Disable**. The
+  panel has a **+** (New Beat) in its header and one-line rows: an On/Off switch, a preset
+  name (Hourly, Every 15 min) or the cron, and the prompt; the row's context menu offers
+  **Enable** or **Disable**. Next-run estimates (with the date beyond a week), "not running"
+  and Copilot timing move to tooltips and VoiceOver values. `beats enable` and
+  `beats disable` are the documented commands; `beats pause` and `beats resume` still work
+  as aliases. "Resume" now means only resuming a Copilot session. Beats code comments cite
+  ADR 0007, and ADR 0020 for the store location.
 - Record the Beats store as the sidebar's only write grant outside its own container
   (ADR 0020, amending ADR 0001): the accepted risk that a Beat prompt becomes agent input,
   that same-user processes may edit the store, and that Beat prompts are authored

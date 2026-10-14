@@ -10,10 +10,12 @@ Card shows agent icon and title, current activity, workspace with model on right
 worktree (worktrees labelled). No sub-agent, skill, shell or
 internal-task rows; those stay in Hierarchy. Select card to focus its terminal.
 Beats opens native popover. Create (header **+**, "New Beat"), edit, turn on or off
-(row switch, "Beat on/off"), delete recurring prompts there. Rows show a preset name or the
+(row switch or the row's **Enable**/**Disable** menu item), delete recurring prompts there.
+Each row control's VoiceOver label names its schedule and prompt prefix ("Beat on/off,
+Hourly, …"). Rows show a preset name or the
 cron, the prompt on one line, and the session only when unscoped; a slashed circle marks a
 session not running. Next-run estimates, "fires only while the session runs" and Copilot
-timing are in tooltips and VoiceOver hints, not visible prose. Icon lights while a Beat is enabled.
+timing are in tooltips and VoiceOver values, not visible prose. Icon lights while a Beat is enabled.
 An agent row (managed agent, single-session terminal, or listed Copilot session) and a
 Taskboard card show the same Beat icon as their rightmost item, after collapsed summaries,
 pin and unread badges and the row's actions (…) slot, at rest and on hover, with its glyph
