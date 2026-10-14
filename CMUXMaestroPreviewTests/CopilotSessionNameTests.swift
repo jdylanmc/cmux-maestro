@@ -55,10 +55,44 @@ nonisolated struct CopilotSessionNameTests {
         #expect(parse(text) == nil)
     }
 
+    @Test(arguments: ["\"", "'"])
+    func otherKeysQuotedValueContinuingOverLinesHidesItsContent(_ quote: String) {
+        #expect(parse("summary: \(quote)foo\nname: evil\(quote)\n") == nil, "No top-level name key")
+        #expect(parse("summary: \(quote)foo\nname: evil\(quote)\nname: Synthetic real\n") == "Synthetic real")
+        #expect(parse("- \(quote)foo\nname: evil\(quote)\n") == nil)
+        #expect(parse("summary: \(quote)closed\(quote)\nname: Synthetic after\n") == "Synthetic after")
+    }
+
+    @Test func escapedQuotesDoNotCloseOrOpenAContinuation() {
+        #expect(parse("summary: \"a \\\" b\nname: evil\"\nname: Synthetic real\n") == "Synthetic real")
+        #expect(parse("summary: 'it''s\nname: evil'\nname: Synthetic real\n") == "Synthetic real")
+        #expect(parse("summary: 'it''s closed'\nname: Synthetic real\n") == "Synthetic real")
+        #expect(parse("note: it's plain\nname: Synthetic real\n") == "Synthetic real")
+    }
+
+    @Test(arguments: ["~", "null", "Null", "NULL", "null # comment"])
+    func plainNullIsUnavailable(_ value: String) {
+        #expect(parse("name: \(value)\n") == nil)
+    }
+
+    @Test func quotedNullIsAName() {
+        #expect(parse("name: 'null'\n") == "null")
+    }
+
     @Test func controlCharactersAreStripped() {
         #expect(parse("name: Synthetic\u{07}bell\u{1B}[31m red\u{202E}\n") == "Syntheticbell[31m red")
         #expect(parse("name: \"tab\\there\"\n") == "tab here")
         #expect(parse("name: \"\\u0007\"\n") == nil, "Nothing left after stripping")
+        #expect(parse("name: a\u{061C}b\u{200E}c\u{200F}d\u{2066}e\u{2069}f\u{0085}g\n") == "abcdefg")
+    }
+
+    @Test func joinersAreKept() {
+        let emoji = "Synthetic \u{1F469}\u{200D}\u{1F4BB} pair"
+        #expect(parse("name: \(emoji)\n") == emoji, "ZWJ emoji sequence intact")
+        let persian = "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645}"
+        #expect(parse("name: \(persian)\n") == persian, "ZWNJ word intact")
+        #expect(CopilotDisplayText.sanitize("child\u{200D}name\u{202E}", limit: 100) == "child\u{200D}name",
+                "Shared with sidebar metadata")
     }
 
     @Test func lengthIsCapped() throws {
@@ -98,7 +132,19 @@ nonisolated struct CopilotSessionNameTests {
         func remove() { try? FileManager.default.removeItem(at: root) }
     }
 
-    @Test func cacheReReadsOnlyWhenTheFileChanges() throws {
+    @Test func cacheReusesAnUnchangedFile() throws {
+        let folder = try Folder()
+        defer { folder.remove() }
+        try folder.write("name: Synthetic first\n", modified: Date(timeIntervalSince1970: 1_700_000_000))
+        let directory = try folder.open()
+        defer { close(directory) }
+        var cache = CopilotSessionNameCache()
+        #expect(cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid()) == "Synthetic first")
+        #expect(cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid()) == "Synthetic first")
+        #expect(cache.reads == 1, "Unchanged size and mtime reuse the cached name")
+    }
+
+    @Test func cacheReReadsWhenOnlyTheModificationTimeChanges() throws {
         let folder = try Folder()
         defer { folder.remove() }
         let stamp = Date(timeIntervalSince1970: 1_700_000_000)
@@ -106,16 +152,85 @@ nonisolated struct CopilotSessionNameTests {
         let directory = try folder.open()
         defer { close(directory) }
         var cache = CopilotSessionNameCache()
-        #expect(cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid()) == "Synthetic first")
-        #expect(cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid()) == "Synthetic first")
-        #expect(cache.reads == 1, "Unchanged size and mtime reuse the cached name")
-        // Same size, new mtime: re-read.
+        _ = cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid())
         try folder.write("name: Synthetic other\n", modified: stamp.addingTimeInterval(5))
         #expect(cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid()) == "Synthetic other")
         #expect(cache.reads == 2)
+    }
+
+    @Test func removedFileDropsTheName() throws {
+        let folder = try Folder()
+        defer { folder.remove() }
+        try folder.write("name: Synthetic first\n")
+        let directory = try folder.open()
+        defer { close(directory) }
+        var cache = CopilotSessionNameCache()
+        _ = cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid())
         try FileManager.default.removeItem(at: folder.file)
         #expect(cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid()) == nil)
         #expect(cache.count == 0)
+    }
+
+    private final class ReadScript: @unchecked Sendable {
+        var failure: CopilotFileError?
+    }
+
+    @Test(arguments: [CopilotFileError.changed, .io])
+    func briefReadFailureKeepsThePreviousName(_ failure: CopilotFileError) throws {
+        let folder = try Folder()
+        defer { folder.remove() }
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        try folder.write("name: Synthetic steady\n", modified: stamp)
+        let directory = try folder.open()
+        defer { close(directory) }
+        let script = ReadScript()
+        var cache = CopilotSessionNameCache { directory, filename, owner, maximum in
+            if let failure = script.failure { throw failure }
+            return try CopilotFileAccess.readStableRegular(at: directory, filename: filename, owner: owner, maximum: maximum)
+        }
+        #expect(cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid()) == "Synthetic steady")
+        try folder.write("name: Synthetic next\n", modified: stamp.addingTimeInterval(5))
+        script.failure = failure
+        #expect(cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid()) == "Synthetic steady",
+                "No flicker back to the terminal title")
+        script.failure = nil
+        #expect(cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid()) == "Synthetic next",
+                "The next poll re-reads")
+    }
+
+    @Test(arguments: [CopilotFileError.missing, .unsafePath, .tooLarge, .permissionDenied])
+    func refusedReadDropsThePreviousName(_ failure: CopilotFileError) throws {
+        let folder = try Folder()
+        defer { folder.remove() }
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        try folder.write("name: Synthetic steady\n", modified: stamp)
+        let directory = try folder.open()
+        defer { close(directory) }
+        let script = ReadScript()
+        var cache = CopilotSessionNameCache { directory, filename, owner, maximum in
+            if let failure = script.failure { throw failure }
+            return try CopilotFileAccess.readStableRegular(at: directory, filename: filename, owner: owner, maximum: maximum)
+        }
+        _ = cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid())
+        try folder.write("name: Synthetic next\n", modified: stamp.addingTimeInterval(5))
+        script.failure = failure
+        #expect(cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid()) == nil)
+        #expect(cache.count == 0)
+    }
+
+    @Test func malformedReplacementDropsThePreviousName() throws {
+        let folder = try Folder()
+        defer { folder.remove() }
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        try folder.write("name: Synthetic steady\n", modified: stamp)
+        let directory = try folder.open()
+        defer { close(directory) }
+        var cache = CopilotSessionNameCache()
+        _ = cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid())
+        try folder.write("name: |\n  Synthetic block\n", modified: stamp.addingTimeInterval(5))
+        #expect(cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid()) == nil)
+        #expect(cache.name(for: folder.sessionID, sessionDirectory: directory, owner: getuid()) == nil)
+        #expect(cache.reads == 2, "A malformed file version is not re-read every poll")
     }
 
     @Test func cacheIsKeyedByExactSessionID() throws {
@@ -193,6 +308,26 @@ nonisolated struct CopilotSessionNameTests {
         let malformed = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(malformed.isComplete && malformed.issues.isEmpty)
         #expect(malformed.sessions.first?.sessionName == nil)
+    }
+
+    private final class Liveness: @unchecked Sendable {
+        var dead = false
+    }
+
+    @Test func sessionThatStopsBeingAliveDropsItsName() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        try Data("name: Synthetic ending session\n".utf8).write(to: fixture.session.appendingPathComponent("workspace.yaml"))
+        let liveness = Liveness()
+        let owner = fixture.process
+        let reader = fixture.reader(lookup: { pid in liveness.dead || pid != owner.pid ? .dead : .found(owner) })
+        let alive = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(alive.sessions.first?.sessionName == "Synthetic ending session")
+        liveness.dead = true
+        let ended = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(ended.sessions.first?.liveness == .dead)
+        #expect(ended.sessions.first?.sessionName == nil)
     }
 
     @Test func missingSessionDirectoryLeavesTheNameUnavailable() async throws {
