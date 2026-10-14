@@ -12,12 +12,17 @@ internal-task rows; those stay in Hierarchy. Select card to focus its terminal.
 Beats opens native popover. Create, edit,
 enable, disable, delete recurring prompts there. Icon lights while a Beat is enabled.
 An agent row (managed agent, single-session terminal, or listed Copilot session) and a
-Taskboard card show the same Beat icon as their rightmost trailing item, after collapsed
-summaries, pin and unread badges, when that row's exact session UUID has an enabled Beat.
-No title, path or label matching; retained context and status-only rows and internal tasks
-get none. Lit with a 2-second breathing glow when the session is running (the Beats panel's
-target liveness), dim otherwise. Reduce Motion: static glow. Clicking it opens Beats scoped
-to that session without focusing the row or navigating CMUX.
+Taskboard card show the same Beat icon as their rightmost item, after collapsed summaries,
+pin and unread badges and the row's actions (…) slot, at rest and on hover, when that row's
+exact session UUID has an enabled Beat. No title, path or label matching; retained context
+and status-only rows and internal tasks get none. Lit when the session is alive in a current
+observation (the freshness hover cards use); dim when it is not running, stale, hidden or
+disconnected. The lit glow is one Core Animation opacity pulse (about 1 second each way) in
+the render server, removed under Reduce Motion (static glow) and while the icon has no window
+or is hidden. Clicking it opens Beats scoped to that session, or rescopes an open panel in
+place, without focusing the row or navigating CMUX. A scoped **New Beat** targets only that
+session; **Show all** returns to every Beat and is absent while a form is open, so a draft
+is never discarded. Opening Beats from the header shows every Beat.
 Beats run on Copilot's own scheduler. Maestro extension loaded in each CMUX Copilot
 session asks the controller (`beats-snapshot`) for that session's enabled Beats and
 mirrors them into native cron schedules; it never parses `beats.json` itself. An invalid

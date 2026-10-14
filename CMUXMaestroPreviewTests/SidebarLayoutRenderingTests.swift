@@ -177,9 +177,15 @@ struct SidebarLayoutRenderingTests {
 
     @Test(arguments: [NSScroller.Style.overlay, .legacy])
     func nativeEightLevelOutlineRetainsMinimumTitleWidthAt280(style: NSScroller.Style) async throws {
-        let model = makeModel(fixtures: SidebarTreeFixtures(), longMetadata: true, deep: true)
+        let fixtures = SidebarTreeFixtures()
+        let model = makeModel(fixtures: fixtures, longMetadata: true, deep: true)
         let fixture = try SidebarPreferenceFixture()
-        defer { model.setVisible(false); fixture.cleanup() }
+        // An enabled Beat puts the trailing Beat icon on the session row; the deep title keeps its width.
+        let stores = SidebarStoreFixture()
+        #expect(stores.beats.perform {
+            _ = try $0.create(session: fixtures.sessionID, cron: "*/15 * * * *", prompt: "Synthetic check")
+        } == nil)
+        defer { model.setVisible(false); fixture.cleanup(); stores.cleanup() }
         let preferences = fixture.preferences()
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/layout-validation/offscreen")
@@ -189,7 +195,11 @@ struct SidebarLayoutRenderingTests {
             for appearance in [RenderAppearance.light, .dark] {
                 let file = folder.appendingPathComponent("deep8-native-minimum-\(style.rawValue)-\(density.rawValue)-\(appearance.name).png")
                 try await render(model: model, preferences: preferences, width: 280, height: 400,
-                                 appearance: appearance, destination: file) { host in
+                                 appearance: appearance, stores: stores, destination: file) { host in
+                    func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+                    let icons = descendants(host).compactMap { $0 as? SidebarBeatNativeButton }
+                    try #require(icons.count == 1, "The Beat target row shows its icon")
+                    #expect(host.convert(icons[0].bounds, from: icons[0]).maxX <= 280)
                     let title = try #require(nativeTitles(in: host)
                         .first { $0.accessibilityLabel()?.contains("Synthetic level 8") == true })
                     try await prepareDeepTitle(title, host: host)
@@ -1213,7 +1223,7 @@ struct SidebarLayoutRenderingTests {
         model: SidebarConnectionModel, preferences: SidebarPreferences, width: Int,
         height: Int = 941, focusViewportBudget: NSScroller.Style? = nil,
         appearance: RenderAppearance = .light, managed: Bool = false,
-        expectedSessions: Int = 1, nativeBackground: Bool = false,
+        expectedSessions: Int = 1, nativeBackground: Bool = false, stores: SidebarStoreFixture? = nil,
         destination: URL, inspect: ((NSView) async throws -> Void)? = nil
     ) async throws -> SidebarRenderingEvidence.Metrics {
         // Yield between renders so unrelated asynchronous navigation tests can service their deadlines.
@@ -1231,7 +1241,7 @@ struct SidebarLayoutRenderingTests {
         let evidence = AppearanceEvidence()
         // The public contrast getter is read-only; this SDK-exposed backing key is test-only.
         // A high-contrast NSAppearance alone does not update SwiftUI's contrast environment.
-        let view = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
+        let view = NSHostingView(rootView: SidebarView(model: model, preferences: preferences, stores: stores)
             .modifier(FocusViewport(budget: focusViewportBudget, frameSize: frame.size))
             .background(AppearanceProbe(evidence: evidence).frame(width: 0, height: 0))
             .environment(\._colorSchemeContrast, appearance.contrast)

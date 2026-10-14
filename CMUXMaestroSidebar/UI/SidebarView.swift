@@ -494,7 +494,6 @@ struct SidebarView: View {
     // Mutation freshness is independent of the display-only presentation clock.
     private let actionNow: () -> Date
     @State private var showingSettings = false
-    @State private var showingBeats = false
     @State private var unavailableHeaderAction: SidebarHeaderAction?
     @State private var inspector: SidebarInspection?
     @State private var showingInspector = false
@@ -619,7 +618,7 @@ struct SidebarView: View {
     }
 
     private var presentedHeaderAction: SidebarHeaderAction? {
-        if showingBeats { return .beats }
+        if beats.isPresented { return .beats }
         if showingSettings { return .settings }
         return unavailableHeaderAction
     }
@@ -627,8 +626,8 @@ struct SidebarView: View {
     @ViewBuilder private var headerPopover: some View {
         if showingSettings {
             settingsPanel
-        } else if showingBeats {
-            SidebarBeatsPanel(controller: beats, targets: beatTargets) { showingBeats = false }
+        } else if beats.isPresented {
+            SidebarBeatsPanel(controller: beats, targets: beatTargets, close: dismissHeaderPopover)
         } else if let action = unavailableHeaderAction, let reason = action.unavailable {
             VStack(alignment: .leading, spacing: 10) {
                 Text(action.title).font(.headline)
@@ -641,24 +640,13 @@ struct SidebarView: View {
         }
     }
 
-    private var beatIndicators: SidebarBeatIndicators {
-        SidebarBeatIndicators(summaries: beats.summaries, tree: model.copilot.tree)
-    }
-
-    /// The Beats panel scoped to one agent's exact session; opening it never focuses or navigates.
-    private func openBeats(for session: UUID) {
-        showingSettings = false
-        unavailableHeaderAction = nil
-        beats.scopedSession = session
-        showingBeats = true
-    }
-
     private func activateHeader(_ action: SidebarHeaderAction) {
         switch action {
         case .directory: openDirectoryAsWorkspace()
         case .beats:
-            beats.scopedSession = nil
-            showingBeats = true
+            showingSettings = false
+            unavailableHeaderAction = nil
+            beats.present(scope: nil)
         case .taskboard:
             preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
         case .settings:
@@ -668,8 +656,7 @@ struct SidebarView: View {
 
     private func dismissHeaderPopover() {
         showingSettings = false
-        showingBeats = false
-        beats.scopedSession = nil
+        beats.dismiss()
         unavailableHeaderAction = nil
     }
 
@@ -812,8 +799,12 @@ struct SidebarView: View {
         .environment(\.sidebarPrepareSeen, prepareSeen)
         .environment(\.sidebarFocusInspection, focusInspection)
         .environment(\.sidebarDismissManaged, dismissManaged)
-        .environment(\.sidebarBeatIndicators, beatIndicators)
-        .environment(\.sidebarOpenBeats, openBeats(for:))
+        .environment(\.sidebarBeats, beats)
+        .onChange(of: model.copilot.tree, initial: true) { _, tree in beats.updateLiveness(tree) }
+        // A row's Beat icon opens Beats through the controller; it replaces any other header popover.
+        .onChange(of: beats.isPresented) { _, presented in
+            if presented { showingSettings = false; unavailableHeaderAction = nil }
+        }
         .environment(\.sidebarLocalFocus, localFocus)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
@@ -1554,12 +1545,13 @@ private struct ManagedNodeRow: View {
                 .accessibilityLabel("Dismiss failed result for \(node.label)")
                 .accessibilityIdentifier("dismiss-managed-\(node.id)-\(node.generation)")
             }
-            SidebarBeatIndicator(session: beatSession, titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
-                                 belowTitle: 18)
         }
         .frame(minHeight: density.rowHeight)
         .environment(\.sidebarReorderSource, reorder?.dragSource)
-        .sidebarRowActions(title: node.label, groups: actions)
+        .sidebarRowActions(title: node.label, groups: actions) {
+            SidebarBeatIndicator(session: beatSession, titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
+                                 belowTitle: 18)
+        }
         .background { SidebarActivityBackground(visual: stateVisual,
                                                 needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate)) }
         .modifier(SidebarFocusBorder(workspaceID: node.workspaceId, surfaceID: node.surfaceId, enabled: !isRetainedRecord))
@@ -2152,13 +2144,14 @@ private struct SurfaceRow: View {
                 }
                 if surface.isPinned { StatusBadge(symbol: "pin.fill", label: "Pinned") }
                 if surface.unreadCount > 0 { UnreadBadge(count: surface.unreadCount) }
+            }
+            .frame(minHeight: density.rowHeight)
+            .environment(\.sidebarReorderSource, reorder.dragSource)
+            .sidebarRowActions(title: title, groups: actions) {
                 SidebarBeatIndicator(session: singleSession.flatMap { $0.statusOnly ? nil : $0.id },
                                      titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
                                      belowTitle: 18)
             }
-            .frame(minHeight: density.rowHeight)
-            .environment(\.sidebarReorderSource, reorder.dragSource)
-            .sidebarRowActions(title: title, groups: actions)
             .background {
                 if let singleSession {
                     SidebarActivityBackground(visual: SidebarPresentation.sessionState(singleSession),
@@ -2285,12 +2278,13 @@ private struct CopilotSessionRow: View {
                 if !expanded && session.hasShownOutline(layout) {
                     CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: [session]))
                 }
+            }
+            .frame(minHeight: density.rowHeight)
+            .sidebarRowActions(title: "Copilot \(session.shortID)", groups: actions) {
                 SidebarBeatIndicator(session: focusUnavailable ? nil : session.id,
                                      titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
                                      belowTitle: 18)
             }
-            .frame(minHeight: density.rowHeight)
-            .sidebarRowActions(title: "Copilot \(session.shortID)", groups: actions)
             .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session),
                                                 needsInput: SidebarPresentation.needsInput(session.attention)) }
             CopilotSessionContents(
@@ -2979,11 +2973,13 @@ private struct TaskboardAgentCard: View {
             }
             .agentHoverPreview(.session(session.id))
             Spacer(minLength: 0)
-            SidebarBeatIndicator(session: session.statusOnly ? nil : session.id, titleHeight: 16)
         }
         .padding(.vertical, density.spacing(6))
         .padding(.horizontal, density.spacing(4))
-        .sidebarRowActions(title: title, groups: actions)
+        .sidebarRowActions(title: title, groups: actions, trailingAlignment: .top) {
+            SidebarBeatIndicator(session: session.statusOnly ? nil : session.id, titleHeight: 16)
+                .padding(.top, density.spacing(6))
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("taskboard-session-attention-\(session.id)")
         .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session),
