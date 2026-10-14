@@ -33,7 +33,9 @@ Notable changes are recorded using Keep a Changelog categories.
   `workspace.yaml` (ADR 0022), read only for the exact bound session, bounded and strictly
   parsed. Hover cards, details, the Active window footer, Taskboard cards and Beat targets use
   the same name. If the name is unavailable, the CMUX title shows unchanged. Managed rows keep
-  their launch label; plain terminals and browsers keep the CMUX title.
+  their launch label; plain terminals and browsers keep the CMUX title. An automatic name can
+  repeat the session's first prompt, as the terminal title already does; rename the session to
+  choose its title.
 - Internal tasks no longer have their own "N internal tasks" header and chevron. They show
   whenever their owning row is expanded; that row's chevron is the only collapse control.
 - Make Beats store writes atomic and synced. The orchestrator now fsyncs the temporary file
