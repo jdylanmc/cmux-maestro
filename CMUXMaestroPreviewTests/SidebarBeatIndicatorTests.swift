@@ -420,7 +420,8 @@ struct SidebarBeatIndicatorTests {
         #expect(abs(iconFrame.maxX - headerEdge) <= 2,
                 "Icon ends at the row's trailing content edge: icon \(iconFrame.maxX), header \(headerEdge)")
         let glyphRect = icon.glyph.convert(icon.glyph.glyphRect, to: r.hosting)
-        #expect(abs(glyphRect.maxX - headerEdge) <= 2, "Visible glyph is flush right: \(glyphRect.maxX) vs \(headerEdge)")
+        #expect(abs(glyphRect.maxX - (headerEdge - SidebarBeatGlyphView.trailingInset)) <= 1,
+                "Visible glyph sits 8 pt in from the trailing edge: \(glyphRect.maxX) vs \(headerEdge)")
         let band = CGRect(x: 0, y: iconFrame.minY, width: r.hosting.bounds.width, height: titleLine)
         let right = CGRect(x: iconFrame.maxX + 1, y: band.minY,
                            width: max(0, r.hosting.bounds.width - iconFrame.maxX - 2), height: band.height)
