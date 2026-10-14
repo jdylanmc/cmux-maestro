@@ -165,21 +165,6 @@ nonisolated enum CopilotSessionName {
     }
 }
 
-// Display sanitiser shared with sidebar metadata. Removes C0/C1 controls (Cc) and
-// bidirectional controls; keeps other format characters such as ZWJ and ZWNJ.
-nonisolated enum CopilotDisplayText {
-    static let bidirectionalControls = CharacterSet(charactersIn:
-        "\u{061C}\u{200E}\u{200F}\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}")
-
-    static func sanitize(_ value: String, limit: Int) -> String? {
-        let kept = value.unicodeScalars.filter {
-            $0.properties.generalCategory != .control && !bidirectionalControls.contains($0)
-        }
-        let text = String(String.UnicodeScalarView(kept)).trimmingCharacters(in: .whitespaces)
-        return text.isEmpty ? nil : String(text.prefix(limit))
-    }
-}
-
 // Per-session cache keyed only by exact session UUID. A file is re-read only
 // when its identity, size or modification time changes.
 nonisolated struct CopilotSessionNameCache: Sendable {
