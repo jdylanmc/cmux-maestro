@@ -24,9 +24,13 @@ Notable changes are recorded using Keep a Changelog categories.
   list without labels made it add the same Beat again every sync. It now records the IDs
   Copilot returns in a per-session ledger
   (`~/Library/Application Support/CMUXMaestroPreview/BeatSchedules/<session>.json`, outside
-  every sidebar grant) and keeps or removes only those. An add whose ID cannot be recorded is
-  stopped again; an invalid ledger changes nothing. Schedules made by earlier versions are no
-  longer recognized: restart sessions that had Beats running before this update.
+  every sidebar grant) and keeps or removes only those. Each add is recorded as pending
+  before Copilot is asked, so a schedule created just before the extension stopped is
+  adopted instead of duplicated; shutdown waits up to two seconds for a sync in flight. An
+  add whose ID cannot be recorded is stopped again (or reported if it cannot be), and an
+  invalid ledger changes nothing and says how to recover. Schedules made by earlier
+  versions are no longer recognized, and Copilot keeps schedules across resume: stop
+  leftover `Beat [` schedules with Copilot's schedule commands, or start new sessions.
 
 ### Fixed
 

@@ -720,20 +720,33 @@ export function planBeatSchedules({ wanted, entries, tz, owned }) {
   return { add, remove, forget };
 }
 
-// The per-session ledger of schedule IDs this extension created, outside the Beats store (ADR 0020).
-// A missing ledger is empty; an unreadable or invalid one throws, so the caller changes nothing.
+// The per-session ledger of schedule IDs this extension created, outside the Beats store (ADR 0020):
+// `owned` (schedule ID -> Beat ID) and `pending` adds recorded before Copilot is asked, so a schedule
+// created just before the process stopped is adopted instead of duplicated. A missing ledger is
+// empty; an unreadable or invalid one throws, so the caller changes nothing.
 const LEDGER_LIMIT = 65_536;
 
+const emptyLedger = () => ({ owned: new Map(), pending: [] });
+
 export function fileLedger(file) {
-  const invalid = (cause) => Object.assign(new Error("The Beats schedule ledger is invalid.", { cause }),
-    { code: "BEATS_LEDGER" });
+  const directory = path.dirname(file);
+  const invalid = (cause) => Object.assign(new Error("The Beats schedule ledger is invalid.", { cause }), {
+    code: "BEATS_LEDGER",
+    hint: `Move ${file} aside, then stop leftover "Beat [" schedules with Copilot's schedule commands.`,
+  });
+  const privateDirectory = async () => {
+    const info = await fs.lstat(directory);
+    requireCondition(info.isDirectory() && info.uid === process.getuid() && !(info.mode & 0o077));
+  };
+  const text = (value) => typeof value === "string";
   return {
     async read() {
       let handle;
       try {
+        await privateDirectory();
         handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       } catch (error) {
-        if (error.code === "ENOENT") return new Map();
+        if (error.code === "ENOENT") return emptyLedger();
         throw invalid(error);
       }
       try {
@@ -742,24 +755,43 @@ export function fileLedger(file) {
           info.size <= LEDGER_LIMIT);
         const value = JSON.parse(decoder.decode(await handle.readFile()));
         requireCondition(value?.version === 1 && Array.isArray(value.schedules) && value.schedules.every((item) =>
-          Number.isSafeInteger(item?.id) && typeof item.beatId === "string" && UUID.test(item.beatId)));
-        return new Map(value.schedules.map((item) => [item.id, item.beatId]));
+          Number.isSafeInteger(item?.id) && text(item.beatId) && UUID.test(item.beatId)) &&
+          Array.isArray(value.pending) && value.pending.every((item) => text(item?.beatId) && UUID.test(item.beatId) &&
+            Number.isSafeInteger(item.after) && text(item.cron) && text(item.tz) && text(item.prompt) && text(item.label)));
+        return { owned: new Map(value.schedules.map((item) => [item.id, item.beatId])), pending: value.pending };
       } catch (error) {
-        throw error?.code === "BEATS_LEDGER" ? error : invalid(error);
+        throw invalid(error);
       } finally {
         await handle.close();
       }
     },
-    async write(owned) {
-      await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    async write({ owned, pending }) {
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      try {
+        await privateDirectory();
+      } catch (error) {
+        throw invalid(error);
+      }
       const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
       const schedules = [...owned].map(([id, beatId]) => ({ id, beatId }));
-      await fs.writeFile(temporary, JSON.stringify({ version: 1, schedules }), { flag: "wx", mode: 0o600 });
+      const handle = await fs.open(temporary, "wx", 0o600);
+      try {
+        await handle.writeFile(JSON.stringify({ version: 1, schedules, pending }));
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
       try {
         await fs.rename(temporary, file);
       } catch (error) {
         await fs.rm(temporary, { force: true });
         throw error;
+      }
+      const folder = await fs.open(directory, constants.O_RDONLY);
+      try {
+        await folder.sync();
+      } finally {
+        await folder.close();
       }
     },
   };
@@ -808,7 +840,8 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
   ledger = fileLedger(path.join(maestroSupport, "BeatSchedules", `${session?.sessionId}.json`)),
   tz = currentTimeZone, diagnostic = (error, beatId) => {
     const code = typeof error?.code === "string" ? error.code : error?.name ?? "UNKNOWN";
-    console.error(`Maestro Beats could not sync with Copilot scheduling${beatId ? ` for Beat ${beatId}` : ""} (${code}).`);
+    const hint = typeof error?.hint === "string" ? ` ${error.hint}` : "";
+    console.error(`Maestro Beats could not sync with Copilot scheduling${beatId ? ` for Beat ${beatId}` : ""} (${code}).${hint}`);
   } }) {
   const sessionId = session?.sessionId;
   requireCondition(typeof sessionId === "string" && UUID.test(sessionId));
@@ -838,22 +871,42 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
     })();
     return running;
   }
+  // Schedules this process created but could neither record nor stop: stopped first on every pass,
+  // and their Beats are not added again until they are gone.
+  const unrecorded = new Map();
   async function reconcile() {
     try {
       // Resolved every sync: a time zone change re-registers each Beat in the new zone.
       const zone = typeof tz === "function" ? await tz() : tz;
-      const wanted = await read(sessionId), owned = await ledger.read(), entries = await gateway.list();
-      const plan = planBeatSchedules({ wanted, entries, tz: zone, owned });
-      if (plan.forget.length) {
-        for (const id of plan.forget) owned.delete(id);
-        await ledger.write(owned);
+      const wanted = await read(sessionId), entries = await gateway.list();
+      // Every ledger change re-reads the file first, so another process's records are kept.
+      const change = async (edit) => {
+        const state = await ledger.read();
+        edit(state);
+        await ledger.write(state);
+        return state;
+      };
+      let state = await ledger.read();
+      const listed = new Set(entries.map((entry) => entry.id));
+      if (state.pending.length || [...state.owned.keys()].some((id) => !listed.has(id))) {
+        state = await change((current) => {
+          for (const intent of current.pending) {
+            const created = entries.find((entry) => !current.owned.has(entry.id) && entry.id > intent.after &&
+              entry.label === intent.label && entry.cron === intent.cron && entry.tz === intent.tz &&
+              entry.prompt === intent.prompt);
+            if (created) current.owned.set(created.id, intent.beatId);
+          }
+          current.pending = [];
+          for (const id of [...current.owned.keys()]) if (!listed.has(id)) current.owned.delete(id);
+        });
       }
+      const plan = planBeatSchedules({ wanted, entries, tz: zone, owned: state.owned });
       failing = false;
       const failingNow = new Set(), succeeded = new Set();
-      const attempt = async (key, beatId, change) => {
+      const attempt = async (key, beatId, operation) => {
         if (closed || again) return null;
         try {
-          await change();
+          await operation();
           succeeded.add(key);
           return true;
         } catch (error) {
@@ -862,28 +915,39 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
           return false;
         }
       };
+      for (const [id, beatId] of [...unrecorded]) {
+        if (!listed.has(id) || await attempt(`unrecorded ${id}`, beatId, () => gateway.remove(id))) unrecorded.delete(id);
+      }
       // A Beat whose schedule could not be stopped is not added again this sync, so an edited Beat
-      // never runs under two schedules. The ledger is saved after every change; an add whose ID cannot
-      // be recorded is stopped again rather than left unowned.
-      const stuck = new Set();
+      // never runs under two schedules.
+      const stuck = new Set(unrecorded.values());
       for (const { id, beatId } of plan.remove) {
         const removed = await attempt(`remove ${id}`, beatId, async () => {
           await gateway.remove(id);
-          owned.delete(id);
-          await ledger.write(owned);
+          await change((current) => current.owned.delete(id));
         });
         if (removed === false) stuck.add(beatId);
       }
+      let highest = Math.max(0, ...entries.map((entry) => entry.id));
       for (const { beatId, ...entry } of plan.add) {
         if (stuck.has(beatId)) continue;
         await attempt(`add ${beatId}`, beatId, async () => {
+          await change((current) => current.pending.push({ beatId, after: highest, ...entry }));
           const id = await gateway.add(entry);
-          owned.set(id, beatId);
+          highest = Math.max(highest, id);
           try {
-            await ledger.write(owned);
+            await change((current) => {
+              current.owned.set(id, beatId);
+              current.pending = current.pending.filter((intent) => intent.beatId !== beatId);
+            });
           } catch (error) {
-            owned.delete(id);
-            await gateway.remove(id).catch(() => {});
+            try {
+              await gateway.remove(id);
+            } catch (stopError) {
+              unrecorded.set(id, beatId);
+              diagnostic(Object.assign(new Error("An unrecorded Beat schedule could not be stopped.", { cause: stopError }),
+                { code: "BEATS_UNRECORDED" }), beatId);
+            }
             throw error;
           }
         });
@@ -907,5 +971,13 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
     watcher.unref?.();
   } catch { /* The directory may not exist yet; polling covers it. */ }
   const first = sync();
-  return { sync, ready: first, close() { closed = true; clearInterval(timer); clearTimeout(debounce); watcher?.close(); } };
+  // close() starts no new change and resolves when the running pass has settled, so a shutdown that
+  // awaits it never cuts off an add between Copilot creating the schedule and the ledger recording it.
+  return {
+    sync, ready: first,
+    close() {
+      closed = true; clearInterval(timer); clearTimeout(debounce); watcher?.close();
+      return running ?? Promise.resolve();
+    },
+  };
 }
