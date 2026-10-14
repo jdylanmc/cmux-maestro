@@ -134,8 +134,9 @@ private struct BeatRow: View {
 
     private var tone: Color { beat.enabled ? SidebarQuestionGlow.lightBlue : .secondary }
 
+    // No estimate for a session that is not running: the Beat cannot fire there.
     private var nextFire: String? {
-        guard beat.enabled, let spec = try? BeatsCron(beat.cron),
+        guard beat.enabled, target != nil, let spec = try? BeatsCron(beat.cron),
               let next = spec.nextTimes(after: Date(), count: 1).first else { return nil }
         return next.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
     }
@@ -144,10 +145,11 @@ private struct BeatRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Circle().fill(tone).frame(width: 7, height: 7)
-                Text(target?.title ?? "Session \(beat.sessionId.prefix(8)) (not open)")
+                Text(target?.title ?? "Session \(beat.sessionId.prefix(8)) (not running)")
                     .font(.caption.weight(.semibold)).lineLimit(1)
                 Spacer(minLength: 0)
                 Text(beat.enabled ? "On" : "Off").font(.caption2).foregroundStyle(tone)
+                    .accessibilityLabel(beat.enabled ? "Beat on" : "Beat off")
             }
             Text(beat.cron).font(.system(.caption, design: .monospaced))
             if let nextFire { Text("Next (estimate): \(nextFire)").font(.caption2).foregroundStyle(.secondary) }
@@ -218,7 +220,7 @@ private struct BeatsForm: View {
     private var targetOptions: [SidebarBeatTarget] {
         var options = targets
         if let existing, let id = UUID(uuidString: existing.sessionId), !options.contains(where: { $0.id == id }) {
-            options.append(.init(id: id, title: "Session \(existing.sessionId.prefix(8)) (not open)", live: false))
+            options.append(.init(id: id, title: "Session \(existing.sessionId.prefix(8)) (not running)", live: false))
         }
         return options
     }
@@ -245,7 +247,7 @@ private struct BeatsForm: View {
                 Text("Next (estimate): \(preview)").font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Local time. Copilot runs it about on schedule while the session is open.")
+            Text("Local time. Runs roughly on schedule while the session is running; Copilot decides exact timing.")
                 .font(.caption2).foregroundStyle(.secondary)
             TextEditor(text: $prompt)
                 .font(.caption).frame(height: 90)
