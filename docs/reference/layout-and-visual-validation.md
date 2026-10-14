@@ -13,7 +13,8 @@ Beats opens native popover. Create, edit,
 enable, disable, delete recurring prompts there. Icon lights while a Beat is enabled.
 An agent row (managed agent, single-session terminal, or listed Copilot session) and a
 Taskboard card show the same Beat icon as their rightmost item, after collapsed summaries,
-pin and unread badges and the row's actions (…) slot, at rest and on hover, when that row's
+pin and unread badges and the row's actions (…) slot, at rest and on hover, with its glyph
+flush to the row's trailing content edge (where the header controls end), when that row's
 exact session UUID has an enabled Beat. No title, path or label matching; retained context
 and status-only rows and internal tasks get none. Lit when the session is alive in a current
 observation (the freshness hover cards use); dim when it is not running, stale, hidden or
