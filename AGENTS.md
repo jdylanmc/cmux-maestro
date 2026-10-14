@@ -41,7 +41,7 @@ do not copy its source or history, modify it, or make this project depend on it.
   read only sanitized bounded metadata from its exact read-only grants, read and
   write only its Beats store outside its container (ADR 0020), and use typed host
   navigation; never add
-  raw observed prompts/results/tokens (Beat prompts are human-authored definitions), a daemon, loopback server, socket client, focus
+  raw observed prompts/results/tokens (Beat prompts are authored definitions, not observed content), a daemon, loopback server, socket client, focus
   inference, automatic tool approval, or automatic terminal/process cleanup.
 - New workers are interactive Copilot sessions with inherited terminal I/O and
   direct human follow-ups. Do not create new headless-worker tabs or infer task
@@ -106,7 +106,7 @@ Moved here from the README. Reasons are in the ADRs.
 
 - Never infer ownership from titles, paths, focus, chronology, or terminal text. Unknown stays unknown. ([ADR 0002](docs/adr/0002-exact-identity-evidence-never-heuristics.md))
 - Never infer success, progress, hang, or completion from process presence, idle time, file timestamps, terminal output, launch acceptance, or expired history. ([ADR 0003](docs/adr/0003-liveness-work-attention-completion-stay-separate.md))
-- Never read, store, or display raw transcripts, observed session prompts, tool arguments or results, credentials, tokens, or unsanitized errors. Beat prompts are human-authored definitions, not observed content. ([ADR 0020](docs/adr/0020-sidebar-writes-beats-store-outside-its-container.md))
+- Never read, store, or display raw transcripts, observed session prompts, tool arguments or results, credentials, tokens, or unsanitized errors. Beat prompts are authored Beat definitions, not observed session content. ([ADR 0020](docs/adr/0020-sidebar-writes-beats-store-outside-its-container.md))
 - Never use terminal keystrokes as a messaging or control fallback. Never restart, adopt, or signal existing sessions. ([ADR 0004](docs/adr/0004-interactive-workers-only.md), [0005](docs/adr/0005-native-peer-messaging-is-fire-and-forget.md))
 - Never treat recorded launch policy as live permissions. Deny wins. Explicit worker YOLO refuses. ([ADR 0006](docs/adr/0006-recorded-launch-policy-deny-wins.md))
 - Never key dismissal by label, path, or timestamp. Keep history presentation limits apart from ingestion limits. ([ADR 0009](docs/adr/0009-dismissal-by-event-identity.md))

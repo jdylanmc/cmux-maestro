@@ -8,8 +8,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 - Record the Beats store as the sidebar's only write grant outside its own container
   (ADR 0020, amending ADR 0001): the accepted risk that a Beat prompt becomes agent input,
-  that same-user processes may edit the store, and that Beat prompts are human-authored
-  definitions rather than observed session prompts. The sandbox reference lists all four
+  that same-user processes may edit the store, and that Beat prompts are authored
+  definitions rather than observed session content. The sandbox reference lists all four
   file grants.
 
 ### Fixed
