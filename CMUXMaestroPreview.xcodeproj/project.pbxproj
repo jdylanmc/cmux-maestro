@@ -30,6 +30,7 @@
 		C05200000000000000000001 /* SidebarHoverCard.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C05200000000000000000011; };
 		C05200000000000000000002 /* SidebarHoverContent.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C05200000000000000000012; };
 		C04900000000000000000001 /* SidebarIconPreferences.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C04900000000000000000011; };
+		C21000000000000000000001 /* SidebarOrder.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C21000000000000000000011; };
 		C04900000000000000000002 /* SidebarIconPicker.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C04900000000000000000012; };
 		C04900000000000000000003 /* SidebarItemIcon.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C04900000000000000000013; };
 		C04900000000000000000004 /* SidebarIconModels.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C04900000000000000000014; };
@@ -166,6 +167,7 @@
 		C05200000000000000000011 /* SidebarHoverCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarHoverCard.swift; sourceTree = SOURCE_ROOT; };
 		C05200000000000000000012 /* SidebarHoverContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarHoverContent.swift; sourceTree = SOURCE_ROOT; };
 		C04900000000000000000011 /* SidebarIconPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarIconPreferences.swift; sourceTree = SOURCE_ROOT; };
+		C21000000000000000000011 /* SidebarOrder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarOrder.swift; sourceTree = SOURCE_ROOT; };
 		C04900000000000000000012 /* SidebarIconPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarIconPicker.swift; sourceTree = SOURCE_ROOT; };
 		C04900000000000000000013 /* SidebarItemIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarItemIcon.swift; sourceTree = SOURCE_ROOT; };
 		C04900000000000000000014 /* SidebarIconModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarIconModels.swift; sourceTree = SOURCE_ROOT; };
@@ -320,6 +322,7 @@
 				C09200000000000000000002 /* NerdFonts */,
 				C09200000000000000000008 /* SidebarGlyphs.swift */,
 				C04900000000000000000011 /* SidebarIconPreferences.swift */,
+				C21000000000000000000011 /* SidebarOrder.swift */,
 				C04900000000000000000012 /* SidebarIconPicker.swift */,
 				C04900000000000000000013 /* SidebarItemIcon.swift */,
 				C04900000000000000000014 /* SidebarIconModels.swift */,
@@ -648,6 +651,7 @@
 				C09100000000000000000005 /* SidebarView.swift in Test Sources */,
 				C09200000000000000000007 /* SidebarGlyphs.swift in Test Sources */,
 				C04900000000000000000001 /* SidebarIconPreferences.swift in Test Sources */,
+				C21000000000000000000001 /* SidebarOrder.swift in Test Sources */,
 				C04900000000000000000002 /* SidebarIconPicker.swift in Test Sources */,
 				C04900000000000000000003 /* SidebarItemIcon.swift in Test Sources */,
 				C04900000000000000000004 /* SidebarIconModels.swift in Test Sources */,

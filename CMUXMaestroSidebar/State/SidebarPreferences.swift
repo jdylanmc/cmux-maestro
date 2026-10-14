@@ -49,6 +49,9 @@ final class SidebarPreferences {
     private let iconStore: SidebarPreferenceStore<SidebarIconSettings>
     var icons: SidebarIconSettings { iconStore.value.settings }
     var iconNotice: String? { iconStore.value.notice }
+    private let orderStore: SidebarPreferenceStore<SidebarOrderSettings>
+    var order: SidebarOrderSettings { orderStore.value.settings }
+    var orderNotice: String? { orderStore.value.notice }
     var history: SidebarHistorySettings { historyStore.value.settings }
     var historyNotice: String? { historyStore.value.notice }
     var attention: SidebarAttentionSettings { attentionStore.value.settings }
@@ -92,12 +95,16 @@ final class SidebarPreferences {
 
     init(
         defaults: UserDefaults, historyFile: URL, attentionFile: URL, layoutStore: SidebarLayoutStore,
-        iconFile: URL? = nil
+        iconFile: URL? = nil, orderFile: URL? = nil
     ) {
         self.defaults = defaults
         self.layoutStore = layoutStore
         iconStore = SidebarPreferenceStore(
             file: .init(url: iconFile ?? historyFile.deletingLastPathComponent().appendingPathComponent("sidebar-icons.json")),
+            initializeMissingFile: false, preserveSettingsOnSaveFailure: true
+        )
+        orderStore = SidebarPreferenceStore(
+            file: .init(url: orderFile ?? historyFile.deletingLastPathComponent().appendingPathComponent("sidebar-order.json")),
             initializeMissingFile: false, preserveSettingsOnSaveFailure: true
         )
         showEnded = defaults.bool(forKey: Self.showEndedKey)
@@ -181,6 +188,12 @@ final class SidebarPreferences {
 
     func resetIcons() { iconStore.apply(reset: true) { _ in } }
     func refreshIcons() { iconStore.refresh() }
+
+    /// Changes Maestro's sidebar order only; nothing is sent to CMUX (ADR 0021).
+    func applyOrder(_ change: SidebarOrderChange) { orderStore.apply(reset: change.resets) { try change.mutate(&$0) } }
+    func resetOrder() { applyOrder(.resetAll) }
+    var hasSavedOrder: Bool { !order.records.isEmpty }
+    func refreshOrder() { orderStore.refresh() }
 
     func setRetention(_ retention: SidebarHistoryRetention) {
         historyStore.apply { $0.retention = retention }
