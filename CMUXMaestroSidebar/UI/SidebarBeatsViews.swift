@@ -578,8 +578,9 @@ final class SidebarBeatGlyphView: NSView {
 
     var glyphRect: CGRect {
         let size = Self.symbolSize
-        // Flush with the trailing edge, which is the row's trailing content edge.
-        return CGRect(x: (bounds.width - size.width).rounded(.down), y: ((titleHeight - size.height) / 2).rounded(),
+        // Inset from the row's trailing content edge (owner pilot: flush was too tight).
+        return CGRect(x: max(0, bounds.width - size.width - Self.trailingInset).rounded(.down),
+                      y: ((titleHeight - size.height) / 2).rounded(),
                       width: size.width, height: size.height)
     }
 
@@ -640,6 +641,7 @@ final class SidebarBeatGlyphView: NSView {
     }
 
     private static let symbolSize = symbol(.black)?.size ?? .zero
+    static let trailingInset: CGFloat = 8
 
     private static func symbol(_ color: NSColor) -> NSImage? {
         let configuration = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)

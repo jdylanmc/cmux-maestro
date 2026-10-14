@@ -17,7 +17,7 @@ Notable changes are recorded using Keep a Changelog categories.
   Order in Workspace** in the menu, and **Reset sidebar order** in settings, return to
   CMUX's order. VoiceOver announces each move or why it was refused. Drag is being
   piloted inside CMUX. The disabled "Move or reorder…" item is gone.
-- A Beat icon at the far right of an agent row, after its actions button and flush with the
+- A Beat icon at the far right of an agent row, after its actions button and 8 pt in from the
   row's trailing edge, whose exact Copilot
   session has an enabled Beat. It glows with a slow pulse while the session is observed
   running and stays dim when the session is not running or its liveness is stale or unknown,
