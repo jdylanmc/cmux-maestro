@@ -41,6 +41,8 @@
 		C05400000000000000000002 /* extension.mjs in Resources */ = {isa = PBXBuildFile; fileRef = C05400000000000000000005; };
 		C09300000000000000000001 /* CopilotAssetEnvelope.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C09300000000000000000003; };
 		C09300000000000000000002 /* CopilotAssetEnvelope.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09300000000000000000003; };
+		C09900000000000000000001 /* CopilotSessionName.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C09900000000000000000003; };
+		C09900000000000000000002 /* CopilotSessionName.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C09900000000000000000003; };
 		C09200000000000000000003 /* maestro-icon in Resources */ = {isa = PBXBuildFile; fileRef = C09200000000000000000004; };
 		C0A100000000000000000003 /* maestro-pet in Resources */ = {isa = PBXBuildFile; fileRef = C0A100000000000000000004; };
 		C09200000000000000000001 /* NerdFonts in Test Resources */ = {isa = PBXBuildFile; fileRef = C09200000000000000000002; };
@@ -180,6 +182,7 @@
 		C05400000000000000000004 /* adapter.mjs */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = scripts/delivery-proof/adapter.mjs; sourceTree = SOURCE_ROOT; };
 		C05400000000000000000005 /* extension.mjs */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = scripts/delivery-proof/extension.mjs; sourceTree = SOURCE_ROOT; };
 		C09300000000000000000003 /* CopilotAssetEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/CopilotAssetEnvelope.swift; sourceTree = SOURCE_ROOT; };
+		C09900000000000000000003 /* CopilotSessionName.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/CopilotSessionName.swift; sourceTree = SOURCE_ROOT; };
 		C09200000000000000000004 /* maestro-icon */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ".agents/skills/maestro-icon"; sourceTree = SOURCE_ROOT; };
 		C0A100000000000000000004 /* maestro-pet */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ".agents/skills/maestro-pet"; sourceTree = SOURCE_ROOT; };
 		C09200000000000000000002 /* NerdFonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/NerdFonts; sourceTree = SOURCE_ROOT; };
@@ -325,6 +328,7 @@
 				C05400000000000000000004 /* adapter.mjs */,
 				C05400000000000000000005 /* extension.mjs */,
 				C09300000000000000000003 /* CopilotAssetEnvelope.swift */,
+				C09900000000000000000003 /* CopilotSessionName.swift */,
 				C09200000000000000000002 /* NerdFonts */,
 				C09200000000000000000008 /* SidebarGlyphs.swift */,
 				C04900000000000000000011 /* SidebarIconPreferences.swift */,
@@ -694,6 +698,7 @@
 				C06100000000000000000306,
 				C06100000000000000000307,
 				C09300000000000000000002 /* CopilotAssetEnvelope.swift in Test Sources */,
+				C09900000000000000000002 /* CopilotSessionName.swift in Test Sources */,
 				C06100000000000000000501,
 				C06100000000000000000502,
 				C06100000000000000000503,
@@ -716,6 +721,7 @@
 				C06100000000000000000106,
 				C06100000000000000000107,
 				C09300000000000000000001 /* CopilotAssetEnvelope.swift in Sidebar Sources */,
+				C09900000000000000000001 /* CopilotSessionName.swift in Sidebar Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

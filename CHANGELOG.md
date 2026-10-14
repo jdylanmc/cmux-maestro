@@ -28,6 +28,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Agent rows for one Copilot session show that session's name instead of the terminal title,
+  which Copilot sets to "name - status". The name comes from the `name:` field of the session's
+  `workspace.yaml` (ADR 0022), read only for the exact bound session, bounded and strictly
+  parsed. Hover cards, details, the Active window footer, Taskboard cards and Beat targets use
+  the same name. If the name is unavailable, the CMUX title shows unchanged. Managed rows keep
+  their launch label; plain terminals and browsers keep the CMUX title.
 - Internal tasks no longer have their own "N internal tasks" header and chevron. They show
   whenever their owning row is expanded; that row's chevron is the only collapse control.
 - Make Beats store writes atomic and synced. The orchestrator now fsyncs the temporary file

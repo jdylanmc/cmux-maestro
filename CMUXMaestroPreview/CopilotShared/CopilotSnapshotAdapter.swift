@@ -36,7 +36,8 @@ nonisolated enum CopilotSnapshotAdapter {
                 let children = observation.children.map { child($0, session: identity) }
                 let legacy = legacyHierarchy(children, session: identity)
                 var item = AgentSessionSnapshotItem(
-                    identity: identity, binding: binding, title: .unknown(),
+                    identity: identity, binding: binding,
+                    title: observation.sessionName.map { .known($0) } ?? .unknown(),
                     state: state(observation.state),
                     activity: observation.activity.map { .known($0) } ?? .unknown(),
                     model: model(observation.model), paths: .unknown(), timing: .unknown(),

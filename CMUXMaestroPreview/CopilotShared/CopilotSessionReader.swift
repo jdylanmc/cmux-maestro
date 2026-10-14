@@ -71,6 +71,7 @@ actor CopilotSessionReader {
     private var publishedCohort: Set<UUID> = []
     private var lastDiscoveryCycle: CopilotFileStamp?
     private var fastDiscoveryCycle = true
+    private var sessionNames = CopilotSessionNameCache()
 
     init() {
         roots = { (try CopilotPaths.bindingDirectory(), try CopilotPaths.sessionStateRoot()) }
@@ -128,6 +129,7 @@ actor CopilotSessionReader {
         let records = bindingOrder.compactMap { bindingsByID[$0] }
         let allowed = Set(records.map(\.record.sessionID))
         tails = tails.filter { allowed.contains($0.key) }
+        sessionNames.retain(only: allowed)
         guard try directoryRemainsValid(index.descriptor, at: index.directories.bindings) else {
             resetDiscovery()
             return snapshot(now: now, observations: [], issues: [.identityChanged])
@@ -183,6 +185,7 @@ actor CopilotSessionReader {
         var advanced = false
         var hasUnread = false
         var reachedBoundary = false
+        var sessionName: String?
         let previouslyPublished: Bool
     }
 
@@ -402,7 +405,9 @@ actor CopilotSessionReader {
         guard before.status == .alive else {
             return .contentFree(Self.liveness(before.status), Self.issues(before.status))
         }
-        let read = try advanceTail(currentTail(for: record), session: session, budget: &budget, now: now)
+        var read = try advanceTail(currentTail(for: record), session: session, budget: &budget, now: now)
+        // Published only with the stable identity verified below, under the exact session UUID.
+        read.sessionName = sessionNames.name(for: record.sessionID, sessionDirectory: session, owner: verifier.uid)
         let after = try verifier.verifyStable(before, record: record, sessionDirectory: session)
         guard try bindingRemainsValid(
             record, stamp: entry.stamp, filename: entry.filename, directory: index.descriptor
@@ -452,10 +457,12 @@ actor CopilotSessionReader {
         case .revoked:
             bindingsByID.removeValue(forKey: id)
             tails.removeValue(forKey: id)
+            sessionNames.forget(id)
             publishedCohort.remove(id)
             batch.issues.append(.identityChanged)
         case .contentFree(let liveness, let issues):
             tails.removeValue(forKey: id)
+            sessionNames.forget(id)
             publishedCohort.insert(id)
             recordIssues(issues, for: id, batch: &batch)
             batch.observations.append(observation(record, liveness: liveness, now: batch.now))
@@ -470,10 +477,12 @@ actor CopilotSessionReader {
                 || (read.advanced && (fastDiscoveryCycle || read.previouslyPublished))
             batch.unreadHistory = batch.unreadHistory || read.hasUnread
             batch.issues += read.issues
-            batch.observations.append(observation(
+            var result = observation(
                 record, liveness: .alive, now: read.tail.lastCompleteAt ?? batch.now,
                 value: read.tail.lastComplete ?? CopilotReducedState()
-            ))
+            )
+            result.sessionName = read.sessionName
+            batch.observations.append(result)
         }
     }
 
@@ -589,6 +598,7 @@ actor CopilotSessionReader {
         bindingsByID.removeAll()
         bindingOrder.removeAll()
         tails.removeAll()
+        sessionNames.removeAll()
         pendingHistory = false
         cycleChanged = false
         cycleOverflowed = false

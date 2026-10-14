@@ -54,6 +54,9 @@ What the sidebar reads, how sessions bind, what happens when observation is lost
   sidebar read that session's durable events beneath **the real user's**
   `~/.copilot/session-state/`. Displays sanitized, allowlisted metadata,
   never raw transcripts. Does not launch helper. Installs nothing.
+  For the same verified session it may read the `name:` field of
+  `workspace.yaml` (16 KiB cap, no symlinks, single-line scalar, 200
+  characters, control characters removed; ADR 0022). No other field.
   Tree navigation uses CMUX extension API and current host snapshot.
   Never fabricate unavailable evidence as live session.
 

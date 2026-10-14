@@ -79,6 +79,8 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     var petId: String? = nil
     var branch: String? = nil
     var worktree = false
+    /// Copilot's own session name (ADR 0022); nil when unavailable.
+    var sessionName: String? = nil
     let id: UUID
     let workspaceID: UUID
     let surfaceID: UUID
@@ -162,6 +164,7 @@ struct SidebarCopilotTree: Equatable {
             omittedActiveChildrenCount: session.omittedActiveChildrenCount
         )
         result.statusOnly = true
+        result.sessionName = session.sessionName
         result.lastKnownState = retainingStatus ? session.state : nil
         result.lastKnownLiveness = retainingStatus ? session.liveness : nil
         result.statusOwnerID = session.statusOwnerID
@@ -386,6 +389,7 @@ struct SidebarCopilotTree: Equatable {
                 iconId: observation.appearance?.iconId, iconColor: observation.appearance?.iconColor,
                 petId: observation.appearance?.petId,
                 branch: observation.location?.branch, worktree: observation.location?.worktree ?? false,
+                sessionName: displayMetadata(observation.title.knownValue, limit: 200),
                 id: sessionID,
                 workspaceID: workspaceID,
                 surfaceID: surfaceID,

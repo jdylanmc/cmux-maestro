@@ -44,9 +44,14 @@ sessions are not restarted or taken over to populate counts.
 
 Nonblocking notices use a Design 06-inspired green, with a darker light-mode
 variant. Blocked and failed states are red. Words and symbols distinguish attention from active work or
-successful outcomes. Generic Copilot session names and short IDs no longer lead
-outline rows. Shared-surface titles and state lead instead. Exact session
-identity stays in details.
+successful outcomes. Short IDs no longer lead outline rows. A row for exactly
+one Copilot session leads with its **session name** (ADR 0022) and state; when
+the name is unavailable, the CMUX surface title shows unchanged. The title is
+never split on " - ". Managed rows keep their launch label; plain terminals,
+browsers and other surfaces keep the CMUX title. Hover cards, details, the
+Active window footer, Taskboard cards and Beat targets use the same name.
+Work-context session rows keep "Session context". Exact session identity stays
+in details.
 
 Agent icons come from the bundled **Nerd Fonts Symbols 3.5.1** font and its
 pinned glyph-name catalog. No system font installation or uploaded images are
