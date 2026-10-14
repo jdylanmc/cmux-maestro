@@ -151,35 +151,36 @@ extension EnvironmentValues {
 
 extension View {
     func sidebarRowActions(title: String, groups: [SidebarRowActionGroup]) -> some View {
-        SidebarRowActions(title: title, groups: groups) { self }
+        SidebarRowActions(title: title, groups: groups) { self } trailing: { EmptyView() }
+    }
+
+    /// `trailing` sits after the actions slot, so it stays the rightmost item whether or not the slot shows.
+    func sidebarRowActions<Trailing: View>(
+        title: String, groups: [SidebarRowActionGroup], trailingAlignment: VerticalAlignment = .center,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        SidebarRowActions(title: title, groups: groups, trailingAlignment: trailingAlignment) { self } trailing: { trailing() }
     }
 }
 
-struct SidebarRowActions<Content: View>: View {
+struct SidebarRowActions<Content: View, Trailing: View>: View {
     let title: String
     let groups: [SidebarRowActionGroup]
+    var trailingAlignment: VerticalAlignment = .center
     @ViewBuilder var content: Content
+    @ViewBuilder var trailing: Trailing
     @State private var presenter = SidebarRowMenuPresenter()
     @State private var hovered = false
     @State private var focused = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 2) {
-            content
-            ZStack {
-                Color.clear
-                if hovered || focused {
-                    Button { presenter.show() } label: {
-                        Image(systemName: "ellipsis").font(.caption2)
-                            .frame(width: 24, height: 24)
-                    }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Actions for \(title)")
-                    .help("Actions for \(title); Shift-F10 on the row")
-                }
+        HStack(alignment: trailingAlignment, spacing: 2) {
+            HStack(spacing: 2) {
+                content
+                actionsSlot
             }
-            .frame(width: 24, height: 24)
+            trailing
         }
         .environment(\.sidebarRowMenu, configuredPresenter)
         .background(SidebarRowMenuAnchor(presenter: presenter))
@@ -191,6 +192,22 @@ struct SidebarRowActions<Content: View>: View {
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovered)
         .onHover { hovered = $0 }
+    }
+
+    private var actionsSlot: some View {
+        ZStack {
+            Color.clear
+            if hovered || focused {
+                Button { presenter.show() } label: {
+                    Image(systemName: "ellipsis").font(.caption2)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Actions for \(title)")
+                .help("Actions for \(title); Shift-F10 on the row")
+            }
+        }
+        .frame(width: 24, height: 24)
     }
 
     private var configuredPresenter: SidebarRowMenuPresenter {

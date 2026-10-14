@@ -422,6 +422,14 @@ struct SidebarCopilotTree: Equatable {
         return age >= -1 && age <= maximumAge
     }
 
+    /// Whether this tree's observation of a session is current: a usable, fresh tree and a fresh
+    /// observation. Stale, hidden or disconnected trees are not current.
+    func isCurrent(_ session: SidebarCopilotSession, now: Date) -> Bool {
+        [.ready, .partial].contains(availability)
+            && generatedAt.map { Self.isFresh($0, now: now) } == true
+            && Self.isFresh(session.observedAt, now: now)
+    }
+
     private static func trustworthyState(
         _ state: AgentWorkState, liveness: AgentProcessLiveness
     ) -> AgentWorkState {
