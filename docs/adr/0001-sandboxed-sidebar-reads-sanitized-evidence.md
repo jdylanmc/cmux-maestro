@@ -8,4 +8,4 @@ Rejected: a daemon, loopback server, XPC service, or raw CMUX socket client in t
 
 Consequence: every new capability needs a helper outside the sandbox plus a sanitized file. No grant widens for convenience. A sandbox probe passing does not prove the host loaded the UI.
 
-Amended by [ADR 0020](0020-sidebar-writes-only-its-beats-store.md): the sidebar may write its Beats store, and nothing else.
+Amended by [ADR 0020](0020-sidebar-writes-beats-store-outside-its-container.md): outside its own container, the sidebar's only writable grant is the Beats store.

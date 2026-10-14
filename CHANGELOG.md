@@ -6,8 +6,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
-- Record the Beats store as the sidebar's only writable path (ADR 0020, amending ADR 0001),
-  and that any same-user process may edit it; agent commands still prove their session.
+- Record the Beats store as the sidebar's only write grant outside its own container
+  (ADR 0020, amending ADR 0001): the accepted risk that a Beat prompt becomes agent input,
+  that same-user processes may edit the store, and that Beat prompts are human-authored
+  definitions rather than observed session prompts. The sandbox reference lists all four
+  file grants.
 
 ### Fixed
 

@@ -33,13 +33,16 @@ extensions.
 
 ## Sandbox and distribution
 
-Extension keeps App Sandbox enabled. Only additional file grants: 
-read-only home-relative temporary exceptions, with required leading and trailing
-slashes:
+Extension keeps App Sandbox enabled. Only additional file grants:
+home-relative temporary exceptions, with required leading and trailing slashes.
+All are read-only except the Beats store
+([ADR 0020](../adr/0020-sidebar-writes-beats-store-outside-its-container.md)):
 
 ```text
-/Library/Application Support/CMUXMaestroPreview/Copilot/
-/.copilot/session-state/
+read-only   /Library/Application Support/CMUXMaestroPreview/Copilot/
+read-only   /Library/Application Support/CMUXMaestroPreview/Orchestration/observer/
+read-only   /.copilot/session-state/
+read-write  /Library/Application Support/CMUXMaestroPreview/Beats/
 ```
 
 No network client/server or arbitrary process/data access entitlement added.
@@ -48,8 +51,10 @@ run explicitly selected CLI and write own integration data. This is a
 personal native distribution tradeoff, **not a claim of Mac App Store
 compatibility**. Temporary file exceptions require distribution/review scrutiny.
 
-Separately signed sandbox probe established: these exact read-only
-prefixes permit synthetic nested identity/event reconstruction. Unrelated reads and writes
+Separately signed sandbox probe established: the `Copilot/` and
+`/.copilot/session-state/` read-only prefixes permit synthetic nested
+identity/event reconstruction; it did not cover `Orchestration/observer/` or the
+`Beats/` write grant. Unrelated reads and writes
 stay denied. That is **not** an
 ExtensionKit-hosted runtime proof. Signed app/host loading and end-to-end
 installation remain explicit manual verification gates.
