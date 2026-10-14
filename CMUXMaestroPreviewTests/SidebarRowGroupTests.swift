@@ -13,11 +13,22 @@ struct SidebarRowGroupTests {
     private let managedChildSession = UUID(uuidString: "60000000-0000-0000-0000-0000000000B2")!
     private let secondSession = UUID(uuidString: "60000000-0000-0000-0000-0000000000B3")!
 
+    /// The injected pointer, in hosting coordinates; nil leaves hover to enter/exit events.
+    @MainActor private final class Pointer {
+        var location: CGPoint?
+        weak var hosting: NSView?
+        func read(_: NSView) -> NSPoint? {
+            guard let location, let hosting else { return nil }
+            return hosting.convert(location, to: nil)
+        }
+    }
+
     @MainActor private struct Rendered {
         let window: NSWindow
         let hosting: NSView
         let model: SidebarConnectionModel
         let stores: SidebarStoreFixture
+        let pointer: Pointer
 
         func views(_ view: NSView? = nil) -> [NSView] {
             (view ?? hosting).subviews.flatMap { [$0] + views($0) }
@@ -100,6 +111,20 @@ struct SidebarRowGroupTests {
             let c = color(x, y)
             return c.blueComponent - max(c.redComponent, c.greenComponent) > 0.2
         }
+        /// Dark glyph pixels (text, symbols) in a rect; hover tints stay far lighter.
+        func ink(in rect: CGRect) -> Int {
+            var count = 0
+            var y = rect.minY
+            while y < rect.maxY {
+                var x = rect.minX
+                while x < rect.maxX {
+                    if brightness(x, y) < 0.75 { count += 1 }
+                    x += 0.5
+                }
+                y += 0.5
+            }
+            return count
+        }
         /// Runs of accent pixels across a horizontal line.
         func accentRuns(y: CGFloat, from minX: CGFloat, to maxX: CGFloat) -> Int {
             var runs = 0, inside = false
@@ -151,15 +176,24 @@ struct SidebarRowGroupTests {
         orchestration.update(topology: topology, connected: true)
         model.navigation.update(topology: topology, connected: true, workspaceAllowed: true, surfaceAllowed: true,
                                 perform: { _ in Issue.record("Hover and focus rendering must not navigate") })
+        if !managed.isEmpty {
+            // Managed surfaces are read only as exact managed subjects.
+            orchestration.setVisible(true)
+            await sidebarEventually { orchestration.snapshot.nodes.count == managed.count }
+            polling.updateManagedSubjects(orchestration.snapshot)
+        }
         model.setVisible(true)
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: width, height: 600),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .aqua)
+        let pointer = Pointer()
         let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences, stores: stores)
+            .environment(\.sidebarPointerLocation, { pointer.read($0) })
             .background(Color.white))
         window.contentView = hosting
-        let rendered = Rendered(window: window, hosting: hosting, model: model, stores: stores)
+        pointer.hosting = hosting
+        let rendered = Rendered(window: window, hosting: hosting, model: model, stores: stores, pointer: pointer)
         await sidebarEventually {
             hosting.layoutSubtreeIfNeeded()
             return ready(rendered)
@@ -245,18 +279,14 @@ struct SidebarRowGroupTests {
 
     /// Group hover shows the parent's actions (…) only; children keep theirs on their own hover
     /// and add no inner highlight over the group's.
-    @Test func groupHoverShowsOnlyTheParentActionsButton() {
-        let hovered = SidebarRowGroupContext(hovered: true, focus: nil)
-        let idle = SidebarRowGroupContext(hovered: false, focus: nil)
-        #expect(SidebarRowHover.showsActions(hovered: false, focused: false, group: hovered, groupHead: true))
-        #expect(!SidebarRowHover.showsActions(hovered: false, focused: false, group: hovered, groupHead: false))
-        #expect(SidebarRowHover.showsActions(hovered: true, focused: false, group: hovered, groupHead: false))
-        #expect(!SidebarRowHover.showsActions(hovered: false, focused: false, group: idle, groupHead: true))
-        #expect(SidebarRowHover.showsActions(hovered: false, focused: true, group: idle, groupHead: false))
-        #expect(SidebarRowHover.showsActions(hovered: true, focused: false, group: nil, groupHead: true))
-        #expect(!SidebarRowHover.lit(hovered: true, group: hovered), "No inner child highlight inside a group")
-        #expect(!SidebarRowHover.lit(hovered: true, group: idle))
-        #expect(SidebarRowHover.lit(hovered: true, group: nil), "A row outside a group keeps its own highlight")
+    @Test func groupHoverActionRules() {
+        #expect(SidebarRowHover.showsActions(hovered: false, focused: false, groupHovered: true, groupHead: true))
+        #expect(!SidebarRowHover.showsActions(hovered: false, focused: false, groupHovered: true, groupHead: false))
+        #expect(SidebarRowHover.showsActions(hovered: true, focused: false, groupHovered: true, groupHead: false))
+        #expect(!SidebarRowHover.showsActions(hovered: false, focused: false, groupHovered: false, groupHead: true))
+        #expect(SidebarRowHover.showsActions(hovered: false, focused: true, groupHovered: false, groupHead: false))
+        #expect(!SidebarRowHover.lit(hovered: true, inGroup: true), "No inner child highlight inside a group")
+        #expect(SidebarRowHover.lit(hovered: true, inGroup: false), "A row outside a group keeps its own highlight")
     }
 
     /// The focus bar spans the expanded group; collapsed, just the parent row.
@@ -323,16 +353,9 @@ struct SidebarRowGroupTests {
         #expect(before.accentRuns(y: childY, from: 0, to: width) == 1, "One bar beside the nested child")
         #expect(before.accentRuns(y: r.frame(head).midY, from: 0, to: width) == 1)
 
-        // Hovering the inner session's tracker lights nothing: the outer group owns the highlight.
-        let inner = try #require(r.groups.filter {
-            r.frame($0).contains(r.frame(nestedChild)) && r.frame($0).height < outerFrame.height
-        }.min { r.frame($0).height < r.frame($1).height })
-        try r.enter(inner, at: CGPoint(x: r.frame(nestedChild).midX, y: childY))
-        try await r.settle()
-        let innerOnly = Pixels(try r.snapshot(), width: width)
+        // The inner session group tracks nothing and draws nothing: the outer group owns the highlight.
+        #expect(r.groups.filter { r.frame($0).contains(r.frame(nestedChild)) }.count == 1, "No nested tracker")
         let x = outerFrame.maxX - 3
-        #expect(abs(innerOnly.brightness(x, childY) - before.brightness(x, childY)) < 0.01,
-                "No competing nested highlight")
 
         try r.enter(outer, at: CGPoint(x: r.frame(nestedChild).midX, y: childY))
         try await r.settle()
@@ -350,28 +373,7 @@ struct SidebarRowGroupTests {
     func managedGroupBarFollowsTheFocusedSurfaceWithoutDoubleLines(_ rootFocused: Bool) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
-        let now = Date()
-        let root = SidebarOrchestrationNode(
-            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Synthetic managed root",
-            workspaceId: f.workspaceA, surfaceId: f.surfaceA, generation: 1, phase: "registered", availability: "active",
-            copilotSessionId: managedRootSession, executionMode: .interactive, createdAt: now, updatedAt: now
-        )
-        let worker = SidebarOrchestrationNode(
-            id: UUID(), runId: root.runId, parentId: root.id, role: "worker", label: "Synthetic managed child",
-            workspaceId: f.workspaceA, surfaceId: f.surfaceB, generation: 1, phase: "registered", availability: "active",
-            copilotSessionId: managedChildSession, executionMode: .interactive, createdAt: now, updatedAt: now
-        )
-        let r = try await render(
-            surfaces: [surface(f.surfaceA, "Synthetic managed root", focused: rootFocused),
-                       surface(f.surfaceB, "Synthetic managed child", focused: !rootFocused),
-                       surface(plainSurface, "Synthetic plain shell", focused: false)],
-            sessions: [f.session(id: managedRootSession, surface: f.surfaceA, state: .idle),
-                       f.session(id: managedChildSession, surface: f.surfaceB, state: .idle)],
-            managed: [root, worker], preferences: fixture.preferences()
-        ) { r in
-            r.titles.contains { $0.accessibilityLabel() == "Focus Synthetic managed child" }
-                && r.titles.contains { $0.accessibilityLabel() == "Focus Synthetic managed root" }
-        }
+        let r = try await renderManaged(rootFocused: rootFocused, preferences: fixture.preferences())
         defer { r.close() }
         let head = try r.title(prefix: "Focus Synthetic managed root")
         let childRow = try r.title(prefix: "Focus Synthetic managed child")
@@ -393,5 +395,157 @@ struct SidebarRowGroupTests {
         let x = r.frame(group).maxX - 3
         #expect(lit.brightness(x, headY) < before.brightness(x, headY) - 0.01, "Hovering the child lights the root")
         #expect(lit.brightness(x, childY) < before.brightness(x, childY) - 0.01)
+    }
+
+    private func renderManaged(
+        rootFocused: Bool, contextChildren: [CopilotChildWork]? = nil, preferences: SidebarPreferences
+    ) async throws -> Rendered {
+        let now = Date()
+        let root = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Synthetic managed root",
+            workspaceId: f.workspaceA, surfaceId: f.surfaceA, generation: 1, phase: "registered", availability: "active",
+            copilotSessionId: managedRootSession, executionMode: .interactive, createdAt: now, updatedAt: now
+        )
+        let worker = SidebarOrchestrationNode(
+            id: UUID(), runId: root.runId, parentId: root.id, role: "worker", label: "Synthetic managed child",
+            workspaceId: f.workspaceA, surfaceId: f.surfaceB, generation: 1, phase: "registered", availability: "active",
+            copilotSessionId: managedChildSession, executionMode: .interactive, createdAt: now, updatedAt: now
+        )
+        var sessions = [f.session(id: managedRootSession, surface: f.surfaceA, state: .idle),
+                        f.session(id: managedChildSession, surface: f.surfaceB, state: .idle)]
+        // An earlier, ended session on the root's surface is not the root's own: it lists as a
+        // separate context session row, a top-level `CopilotSessionRow` group.
+        if let contextChildren {
+            sessions.append(f.session(id: secondSession, surface: f.surfaceA, liveness: .dead, children: contextChildren))
+            preferences.setIdleTasksVisible(true, in: f.workspaceA)
+        }
+        return try await render(
+            surfaces: [surface(f.surfaceA, "Synthetic managed root", focused: rootFocused),
+                       surface(f.surfaceB, "Synthetic managed child", focused: !rootFocused),
+                       surface(plainSurface, "Synthetic plain shell", focused: false)],
+            sessions: sessions, managed: [root, worker], preferences: preferences
+        ) { r in
+            r.titles.contains { $0.accessibilityLabel() == "Focus Synthetic managed child" }
+                && r.titles.contains { $0.accessibilityLabel() == "Focus Synthetic managed root" }
+                && (contextChildren == nil || r.titles.contains {
+                    $0.accessibilityLabel()?.hasPrefix("Inspect context session") == true
+                })
+        }
+    }
+
+    /// Ink in a row's actions (…) slot: between its title and the group's trailing edge.
+    private func actionsInk(_ r: Rendered, _ pixels: Pixels, title: NSView, group: NSView) -> Int {
+        let t = r.frame(title), g = r.frame(group)
+        return pixels.ink(in: CGRect(x: t.maxX + 1, y: t.minY + 2, width: max(0, g.maxX - t.maxX - 2), height: t.height - 4))
+    }
+
+    /// Entering a group anywhere shows the head's actions (…) and no child's. Fails if a head
+    /// row loses its `sidebarRowGroupHead` marker, or a nested or child row gains one.
+    @Test(arguments: ["surface", "managed", "context"])
+    func groupHoverShowsOnlyTheHeadActionsButton(_ kind: String) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let r: Rendered
+        let head: NSView, children: [NSView], entry: NSView
+        switch kind {
+        case "surface":
+            r = try await render(
+                surfaces: [surface(f.surfaceA, "Synthetic shared tab", focused: false),
+                           surface(plainSurface, "Synthetic plain shell", focused: false)],
+                sessions: [copilotSession(f.sessionID, children: [child("n1", "Synthetic nested child")], name: "Synthetic first"),
+                           copilotSession(secondSession, children: [], name: "Synthetic second")],
+                preferences: fixture.preferences()
+            ) { r in r.tasks.contains { $0.stringValue == "Synthetic nested child" } }
+            head = try r.title(prefix: "Focus Terminal Synthetic shared tab")
+            children = [try r.title(prefix: "Focus Copilot session Synthetic first"),
+                        try r.title(prefix: "Focus Copilot session Synthetic second")]
+            entry = try r.task("Synthetic nested child")
+        case "managed":
+            r = try await renderManaged(rootFocused: false, preferences: fixture.preferences())
+            head = try r.title(prefix: "Focus Synthetic managed root")
+            children = [try r.title(prefix: "Focus Synthetic managed child")]
+            entry = children[0]
+        default:
+            let task = CopilotChildWork(id: "k1", parentID: nil, kind: .subagent, name: "Synthetic context task",
+                                        state: .completed, model: nil, terminalEvent: .init(id: UUID(), timestamp: Date()))
+            r = try await renderManaged(rootFocused: false, contextChildren: [task],
+                                        preferences: fixture.preferences())
+            head = try r.title(prefix: "Inspect context session")
+            children = []
+            entry = try r.task("Synthetic context task")
+        }
+        defer { r.close() }
+        let group = try r.group(containing: head, entry)
+        let width = r.hosting.bounds.width
+        let before = Pixels(try r.snapshot(), width: width)
+        try r.enter(group, at: CGPoint(x: r.frame(entry).midX, y: r.frame(entry).midY))
+        try await r.settle()
+        let after = Pixels(try r.snapshot(), width: width)
+        let headInk = (actionsInk(r, before, title: head, group: group), actionsInk(r, after, title: head, group: group))
+        #expect(headInk.1 > headInk.0 + 4, "Head shows its actions (…) on group hover: \(headInk)")
+        for row in children {
+            let ink = (actionsInk(r, before, title: row, group: group), actionsInk(r, after, title: row, group: group))
+            #expect(abs(ink.1 - ink.0) <= 2, "\(row.accessibilityLabel() ?? "") shows no actions (…): \(ink)")
+        }
+    }
+
+    /// A group that collapses away from a still pointer clears its hover; re-expanded, it stays unlit.
+    @Test func groupClearsHoverWhenItMovesAwayFromAStillPointer() async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let r = try await renderCopilot(preferences: preferences, focused: false)
+        defer { r.close() }
+        let head = try r.title(prefix: "Focus Terminal Synthetic agent")
+        let first = try r.task("Synthetic child one")
+        let plain = try r.title(prefix: "Focus Terminal Synthetic plain shell")
+        let group = try r.group(containing: head, first)
+        let x = r.frame(group).maxX - 3
+        let width = r.hosting.bounds.width
+        let before = Pixels(try r.snapshot(), width: width)
+        try r.enter(group, at: CGPoint(x: r.frame(first).midX, y: r.frame(first).midY))
+        try await r.settle()
+        #expect(group.isHovered)
+
+        // The pointer rests below the group with no exit event; the group then collapses and re-expands.
+        r.pointer.location = CGPoint(x: r.frame(plain).midX, y: r.frame(plain).maxY + 30)
+        preferences.setExpanded(false, for: .surface(f.surfaceA))
+        await sidebarEventually { r.hosting.layoutSubtreeIfNeeded(); return r.tasks.isEmpty }
+        try await r.settle()
+        #expect(r.groups.allSatisfy { !$0.isHovered }, "Collapsing away from the pointer clears hover")
+        preferences.setExpanded(true, for: .surface(f.surfaceA))
+        await sidebarEventually { r.hosting.layoutSubtreeIfNeeded(); return !r.tasks.isEmpty }
+        try await r.settle()
+        #expect(r.groups.allSatisfy { !$0.isHovered })
+        let after = Pixels(try r.snapshot(), width: width)
+        let y = r.frame(try r.task("Synthetic child one")).midY
+        #expect(abs(after.brightness(x, y) - before.brightness(x, y)) < 0.01, "Re-expanded group stays unlit")
+    }
+
+    /// A group that expands under a still pointer lights without waiting for an enter event.
+    @Test func groupExpandingUnderAStillPointerLightsWithoutAnEnterEvent() async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let r = try await renderCopilot(preferences: preferences, focused: false)
+        defer { r.close() }
+        let head = try r.title(prefix: "Focus Terminal Synthetic agent")
+        let childFrame = r.frame(try r.task("Synthetic child two"))
+        let x = r.frame(try r.group(containing: head, try r.task("Synthetic child two"))).maxX - 3
+        let width = r.hosting.bounds.width
+        let before = Pixels(try r.snapshot(), width: width)
+
+        preferences.setExpanded(false, for: .surface(f.surfaceA))
+        await sidebarEventually { r.hosting.layoutSubtreeIfNeeded(); return r.tasks.isEmpty }
+        try await r.settle()
+        r.pointer.location = CGPoint(x: childFrame.midX, y: childFrame.midY)
+        #expect(r.groups.allSatisfy { !$0.isHovered }, "The collapsed row is not under the pointer")
+        preferences.setExpanded(true, for: .surface(f.surfaceA))
+        await sidebarEventually { r.hosting.layoutSubtreeIfNeeded(); return !r.tasks.isEmpty }
+        try await r.settle()
+        let group = try r.group(containing: head, try r.task("Synthetic child two"))
+        #expect(group.isHovered, "Expanding under the pointer hovers the group")
+        let after = Pixels(try r.snapshot(), width: width)
+        #expect(after.brightness(x, childFrame.midY) < before.brightness(x, childFrame.midY) - 0.01, "Lit without an enter event")
     }
 }

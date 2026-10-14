@@ -249,7 +249,6 @@ struct SidebarFocusBar: View {
             .padding(.vertical, 2)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
-            .accessibilityIdentifier("sidebar-focus-bar")
         if let barNamespace {
             capsule.matchedGeometryEffect(id: "sidebar-focus-bar", in: barNamespace)
         } else {
@@ -1322,6 +1321,11 @@ struct ManagedHierarchyContent: View {
     var body: some View {
         let evidenceDate = now()
         let displaced = SidebarPresentation.displacedManagedNodeIDs(nodes, observations: copilotTree, now: evidenceDate)
+        // Session work each managed row owns, computed once per render.
+        let ownership = SidebarPresentation.sessionPlacements(
+            copilotTree.sessions, managed: nodes, observations: copilotTree, now: evidenceDate
+        ).compactMap { placement in placement.contentOwnerID.map { (owner: $0, session: placement.session) } }
+        let owned = Dictionary(grouping: ownership, by: \.owner).mapValues { $0.map(\.session) }
         VStack(alignment: .leading, spacing: 12) {
             ForEach(workspaceGroups, id: \.id) { group in
                 VStack(alignment: .leading, spacing: 0) {
@@ -1346,18 +1350,14 @@ struct ManagedHierarchyContent: View {
                             }
                             ForEach(ordered(roots, kind: kind)) { root in
                               let handle = rootHandle(root, kind: kind)
+                              let branch = rows(for: [root])
                               VStack(alignment: .leading, spacing: 0) {
-                                ForEach(rows(for: [root])) { row in
-                                let contents = SidebarPresentation.sessionPlacements(
-                                    copilotTree.sessions, managed: nodes, observations: copilotTree, now: evidenceDate
-                                )
-                                let retained = contents.filter { $0.contentOwnerID == row.id }.map(\.session)
+                                ForEach(branch) { row in
+                                let retained = owned[row.id] ?? []
                                 let expanded = layout.isExpanded(.managed(row.node.id))
                                 ManagedNodeRow(
                                     node: row.node, depth: row.depth,
-                                    hasChildren: row.hasChildren || retained.contains {
-                                        $0.hasShownOutline(layout) || $0.internalTaskCountsIncomplete
-                                    },
+                                    hasChildren: hasDisclosure(row, retained: retained),
                                     activeDescendants: row.activeDescendants,
                                     expanded: expanded,
                                     selected: selectedNode?.id == row.node.id,
@@ -1372,7 +1372,7 @@ struct ManagedHierarchyContent: View {
                                     },
                                     select: { selectedNode = row.node }
                                 )
-                                if !expanded && retained.contains(where: { $0.hasShownOutline(layout) || $0.internalTaskCountsIncomplete }) {
+                                if !expanded && showsRetainedWork(retained) {
                                     CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: retained))
                                         .padding(.leading, 22 + density.indentation(
                                             depth: row.depth, unresolved: false, width: contentWidth
@@ -1394,7 +1394,7 @@ struct ManagedHierarchyContent: View {
                                   focus: displaced.contains(root.id) ? nil
                                       : .surface(workspaceID: root.workspaceId, surfaceID: root.surfaceId),
                                   expanded: layout.isExpanded(.managed(root.id))
-                                      && hasVisibleChildren(root, evidenceDate: evidenceDate)
+                                      && branch.first.map { hasDisclosure($0, retained: owned[root.id] ?? []) } == true
                               )
                               // The whole branch is one drop target and moves as one.
                               .sidebarReorderDrop(handle)
@@ -1429,14 +1429,13 @@ struct ManagedHierarchyContent: View {
         return title
     }
 
-    /// Matches the root row's disclosure: managed children or retained session work.
-    private func hasVisibleChildren(_ root: SidebarOrchestrationNode, evidenceDate: Date) -> Bool {
-        if !children(of: root.id).isEmpty { return true }
-        return SidebarPresentation.sessionPlacements(
-            copilotTree.sessions, managed: nodes, observations: copilotTree, now: evidenceDate
-        ).contains {
-            $0.contentOwnerID == root.id && ($0.session.hasShownOutline(layout) || $0.session.internalTaskCountsIncomplete)
-        }
+    /// A managed row discloses managed children or the session work it owns; its group follows the same rule.
+    private func hasDisclosure(_ row: ManagedDisplayNode, retained: [SidebarCopilotSession]) -> Bool {
+        row.hasChildren || showsRetainedWork(retained)
+    }
+
+    private func showsRetainedWork(_ retained: [SidebarCopilotSession]) -> Bool {
+        retained.contains { $0.hasShownOutline(layout) || $0.internalTaskCountsIncomplete }
     }
 
     private func descendantCount(of id: UUID) -> Int {
