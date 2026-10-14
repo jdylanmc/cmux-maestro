@@ -173,6 +173,12 @@ struct SidebarRowActions<Content: View, Trailing: View>: View {
     @State private var hovered = false
     @State private var focused = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sidebarRowGroup) private var group
+    @Environment(\.sidebarRowGroupHead) private var groupHead
+    private var lit: Bool { SidebarRowHover.lit(hovered: hovered, group: group) }
+    private var showsActions: Bool {
+        SidebarRowHover.showsActions(hovered: hovered, focused: focused, group: group, groupHead: groupHead)
+    }
 
     var body: some View {
         HStack(alignment: trailingAlignment, spacing: 2) {
@@ -185,19 +191,17 @@ struct SidebarRowActions<Content: View, Trailing: View>: View {
         .environment(\.sidebarRowMenu, configuredPresenter)
         .background(SidebarRowMenuAnchor(presenter: presenter))
         .background {
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.primary.opacity(hovered ? 0.06 : 0))
-                .shadow(color: .black.opacity(hovered ? 0.28 : 0), radius: hovered ? 5 : 0, y: hovered ? 2 : 0)
-                .offset(y: hovered ? -1 : 0)
+            SidebarHoverLift(lit: lit)
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovered)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: showsActions)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: lit)
         .onHover { hovered = $0 }
     }
 
     private var actionsSlot: some View {
         ZStack {
             Color.clear
-            if hovered || focused {
+            if showsActions {
                 Button { presenter.show() } label: {
                     Image(systemName: "ellipsis").font(.caption2)
                         .frame(width: 24, height: 24)
@@ -214,6 +218,145 @@ struct SidebarRowActions<Content: View, Trailing: View>: View {
         presenter.groups = groups
         presenter.focusChanged = { focused = $0 }
         return presenter
+    }
+}
+
+enum SidebarRowHover {
+    /// Inside an expanded row group the group draws the one hover background; rows add none.
+    static func lit(hovered: Bool, group: SidebarRowGroupContext?) -> Bool { group == nil && hovered }
+
+    /// The group's agent row shows its actions (…) whenever the group is hovered; other rows on their own hover.
+    static func showsActions(hovered: Bool, focused: Bool, group: SidebarRowGroupContext?, groupHead: Bool) -> Bool {
+        hovered || focused || (groupHead && group?.hovered == true)
+    }
+}
+
+/// The raised hover background shared by a single row and a whole row group.
+struct SidebarHoverLift: View {
+    let lit: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(Color.primary.opacity(lit ? 0.06 : 0))
+            .shadow(color: .black.opacity(lit ? 0.28 : 0), radius: lit ? 5 : 0, y: lit ? 2 : 0)
+            .offset(y: lit ? -1 : 0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+/// Hover and focus state of an expanded agent block: the agent row plus every rendered descendant.
+struct SidebarRowGroupContext: Equatable {
+    var hovered: Bool
+    /// The head row's surface; its focus bar spans the whole group.
+    var focus: SidebarSeenTarget?
+}
+
+private struct SidebarRowGroupKey: EnvironmentKey {
+    static let defaultValue: SidebarRowGroupContext? = nil
+}
+
+private struct SidebarRowGroupHeadKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// The enclosing expanded row group, if any. Nested groups pass the outer group through.
+    var sidebarRowGroup: SidebarRowGroupContext? {
+        get { self[SidebarRowGroupKey.self] }
+        set { self[SidebarRowGroupKey.self] = newValue }
+    }
+
+    /// Set on the group's own agent row: its actions (…) follow the group's hover.
+    var sidebarRowGroupHead: Bool {
+        get { self[SidebarRowGroupHeadKey.self] }
+        set { self[SidebarRowGroupHeadKey.self] = newValue }
+    }
+}
+
+/// One tracking area over the whole group, so moving between its rows never exits or flickers.
+final class SidebarRowGroupHoverView: NSView {
+    var hoverChanged: (Bool) -> Void = { _ in }
+    private(set) var isHovered = false
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        guard !bounds.isEmpty else { return }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds, options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect], owner: self
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) { set(true) }
+    override func mouseExited(with event: NSEvent) { set(false) }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { set(false) }
+    }
+
+    private func set(_ hovered: Bool) {
+        guard hovered != isHovered else { return }
+        isHovered = hovered
+        hoverChanged(hovered)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func layout() { super.layout(); updateTrackingAreas() }
+}
+
+private struct SidebarRowGroupHoverTracker: NSViewRepresentable {
+    @Binding var hovered: Bool
+
+    func makeNSView(context: Context) -> SidebarRowGroupHoverView {
+        let view = SidebarRowGroupHoverView()
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ view: SidebarRowGroupHoverView, context: Context) {
+        let binding = $hovered
+        view.hoverChanged = { binding.wrappedValue = $0 }
+    }
+}
+
+/// Draws an expanded agent block's hover background and focus bar once, behind and beside
+/// the agent row and all its visible descendants. Presentation only.
+///
+/// Nesting: the outermost expanded group wins. An inner block inside an expanded group draws
+/// no group background or bar of its own; its rows join the outer group. One focus bar at a
+/// time: the group bar shows only when the head's surface is focused, and rows inside that
+/// share the surface draw none; a descendant with its own focused surface keeps its own
+/// row-height bar, which can't coincide with the group bar.
+private struct SidebarRowGroupModifier: ViewModifier {
+    let focus: SidebarSeenTarget?
+    let expanded: Bool
+    @Environment(\.sidebarRowGroup) private var outer
+    @Environment(\.sidebarFocusedSurface) private var focusedSurface
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovered = false
+    private var owns: Bool { expanded && outer == nil }
+
+    func body(content: Content) -> some View {
+        let lit = owns && hovered
+        content
+            .environment(\.sidebarRowGroup, owns ? .init(hovered: hovered, focus: focus) : outer)
+            .background { SidebarHoverLift(lit: lit) }
+            .background { SidebarRowGroupHoverTracker(hovered: $hovered) }
+            .overlay(alignment: .leading) {
+                if owns, let focus, focus == focusedSurface {
+                    SidebarFocusBar()
+                }
+            }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: lit)
+    }
+}
+
+extension View {
+    /// Groups an agent row with its rendered descendants while `expanded`; collapsed, the row stands alone.
+    func sidebarRowGroup(focus: SidebarSeenTarget?, expanded: Bool) -> some View {
+        modifier(SidebarRowGroupModifier(focus: focus, expanded: expanded))
     }
 }
 
