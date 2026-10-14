@@ -414,6 +414,13 @@ struct SidebarBeatIndicatorTests {
         #expect(iconFrame.minX >= titleFrame.maxX + 24, "After the 24-point actions slot")
         #expect(iconFrame.width == SidebarBeatIndicator.width && iconFrame.height == titleLine + 18)
         #expect(abs(iconFrame.midY - titleFrame.midY) <= 1, "Glyph sits on the title line of the same row")
+        // Trailing content edge: where the header's rightmost control ends (SidebarHeaderTests: width - 5).
+        let headerEdge = try #require(r.views().compactMap { $0 as? NSButton }
+            .filter { r.frame($0).size == CGSize(width: 28, height: 28) }.map { r.frame($0).maxX }.max())
+        #expect(abs(iconFrame.maxX - headerEdge) <= 2,
+                "Icon ends at the row's trailing content edge: icon \(iconFrame.maxX), header \(headerEdge)")
+        let glyphRect = icon.glyph.convert(icon.glyph.glyphRect, to: r.hosting)
+        #expect(abs(glyphRect.maxX - headerEdge) <= 2, "Visible glyph is flush right: \(glyphRect.maxX) vs \(headerEdge)")
         let band = CGRect(x: 0, y: iconFrame.minY, width: r.hosting.bounds.width, height: titleLine)
         let right = CGRect(x: iconFrame.maxX + 1, y: band.minY,
                            width: max(0, r.hosting.bounds.width - iconFrame.maxX - 2), height: band.height)
@@ -432,6 +439,8 @@ struct SidebarBeatIndicatorTests {
         #expect(try ink(resting, in: underTitle, of: r.hosting) == 0, "Glyph and glow stay on the title line")
         let glowFrame = r.frame(icon.glyph.glowView)
         #expect(glowFrame.minY == iconFrame.minY && glowFrame.height == titleLine && glowFrame.minX == iconFrame.minX)
+        let glow = icon.glyph.glowView.convert(icon.glyph.glowLayer.frame, to: r.hosting)
+        #expect(abs(glow.midX - glyphRect.midX) <= 0.5 && abs(glow.midY - glyphRect.midY) <= 1, "Glow under the glyph")
 
         // Hover/keyboard state: the actions button appears in its slot, still left of the icon.
         title.focusChanged(true)

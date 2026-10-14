@@ -544,10 +544,9 @@ final class SidebarBeatGlowView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    /// Centred in this view, which spans only the title line, so layer flipping cannot move it.
-    func centre(_ size: CGSize) {
-        glowLayer.frame = CGRect(x: ((bounds.width - size.width) / 2).rounded(),
-                                 y: ((bounds.height - size.height) / 2).rounded(),
+    /// Vertically centred in this view, which spans only the title line, so layer flipping cannot move it.
+    func place(x: CGFloat, size: CGSize) {
+        glowLayer.frame = CGRect(x: x, y: ((bounds.height - size.height) / 2).rounded(),
                                  width: size.width, height: size.height)
     }
 }
@@ -577,9 +576,10 @@ final class SidebarBeatGlyphView: NSView {
     override func viewDidChangeBackingProperties() { super.viewDidChangeBackingProperties(); refreshGlow() }
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); refreshGlow() }
 
-    private var glyphRect: CGRect {
+    var glyphRect: CGRect {
         let size = Self.symbolSize
-        return CGRect(x: ((bounds.width - size.width) / 2).rounded(), y: ((titleHeight - size.height) / 2).rounded(),
+        // Flush with the trailing edge, which is the row's trailing content edge.
+        return CGRect(x: (bounds.width - size.width).rounded(.down), y: ((titleHeight - size.height) / 2).rounded(),
                       width: size.width, height: size.height)
     }
 
@@ -596,7 +596,7 @@ final class SidebarBeatGlyphView: NSView {
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        glowView.centre(Self.symbolSize)
+        glowView.place(x: glyphRect.minX, size: Self.symbolSize)
         CATransaction.commit()
     }
 
@@ -612,7 +612,7 @@ final class SidebarBeatGlyphView: NSView {
         glowLayer.contents = glow
         glowLayer.contentsScale = scale
         glowLayer.rasterizationScale = scale
-        glowView.centre(Self.symbolSize)
+        glowView.place(x: glyphRect.minX, size: Self.symbolSize)
         CATransaction.commit()
         updateAnimation()
     }
