@@ -178,9 +178,9 @@ private struct BeatRow: View {
 
     @ViewBuilder private var primaryAction: some View {
         if beat.enabled {
-            Button("Pause") { actionError = controller.perform { try $0.pause(id: beat.id) } }.buttonStyle(.borderless)
+            Button("Disable") { actionError = controller.perform { try $0.disable(id: beat.id) } }.buttonStyle(.borderless)
         } else {
-            Button("Resume") { actionError = controller.perform { try $0.enable(id: beat.id) } }.buttonStyle(.borderless)
+            Button("Enable") { actionError = controller.perform { try $0.enable(id: beat.id) } }.buttonStyle(.borderless)
         }
     }
 }

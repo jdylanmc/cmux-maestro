@@ -662,6 +662,7 @@ export async function startReadiness({ joinSession, environment = process.env, s
 }
 
 // ---- Beats: recurring prompts handed to Copilot's own scheduler -------------------------------
+// Policy: docs/adr/0007.
 // Copilot owns timing, time zones and queueing. This section is the only place that knows how
 // schedules are created. `session.schedule.addCron` exists in the runtime but is absent from the
 // SDK's typed client, so it is reached through the raw connection behind this one function. If a

@@ -320,7 +320,7 @@ nonisolated struct SidebarBeatsState: Equatable {
     /// Cron, prompt and target session may change; whether the Beat is on does not.
     /// `basedOn` is the Beat the edit started from. If its cron, prompt or session changed since,
     /// the edit is refused rather than overwriting that change; on/off is never written by an edit,
-    /// so pausing or resuming elsewhere is not a conflict. Pass nil only for a deliberate blind edit.
+    /// so enabling or disabling elsewhere is not a conflict. Pass nil only for a deliberate blind edit.
     mutating func edit(id: String, cron: String?, prompt: String?, session: UUID?, basedOn: SidebarBeat?) throws {
         let position = try index(id)
         var beat = beats[position]
@@ -342,7 +342,7 @@ nonisolated struct SidebarBeatsState: Equatable {
         beats[position] = beat
     }
 
-    mutating func pause(id: String) throws {
+    mutating func disable(id: String) throws {
         let position = try index(id)
         beats[position].enabled = false
         beats[position].updatedAt = Self.stamp(); beats[position].revision += 1
@@ -359,7 +359,8 @@ nonisolated struct SidebarBeatsState: Equatable {
     }
 }
 
-/// Store shared with the orchestrator; lock file plus atomic replace.
+/// Store shared with the orchestrator; lock file plus atomic replace. Its folder is the sidebar's
+/// only write grant outside its container (docs/adr/0020).
 nonisolated struct SidebarBeatsFile {
     let root: URL
 

@@ -313,7 +313,7 @@ class AgentSurfaceTests(unittest.TestCase):
         self.assertEqual(code, 0, value)
         return value["beat"]
 
-    def test_create_list_edit_pause_resume_delete(self):
+    def test_create_list_edit_enable_disable_delete(self):
         created = self.create()
         self.assertTrue(created["enabled"])
         self.assertEqual(set(created), API["BEATS_FIELDS"])
@@ -324,17 +324,38 @@ class AgentSurfaceTests(unittest.TestCase):
         self.assertEqual(edited["beat"]["cron"], "*/5 * * * *")
         self.assertEqual(edited["beat"]["revision"], 2)
         self.assertEqual(edited["beat"]["prompt"], "check the board")
-        code, paused = self.run_beats("pause", "--beat-id", created["id"])
-        self.assertFalse(paused["beat"]["enabled"])
-        code, resumed = self.run_beats("resume", "--beat-id", created["id"])
-        self.assertTrue(resumed["beat"]["enabled"])
+        code, disabled = self.run_beats("disable", "--beat-id", created["id"])
+        self.assertEqual(code, 0, disabled)
+        self.assertFalse(disabled["beat"]["enabled"])
+        code, enabled = self.run_beats("enable", "--beat-id", created["id"])
+        self.assertEqual(code, 0, enabled)
+        self.assertTrue(enabled["beat"]["enabled"])
+        self.assertEqual(enabled["beat"]["revision"], 4)
         code, deleted = self.run_beats("delete", "--beat-id", created["id"])
         self.assertEqual(deleted["deleted"], created["id"])
         self.assertEqual(self.run_beats("list")[1]["beats"], [])
 
+    def test_pause_and_resume_remain_aliases_for_disable_and_enable(self):
+        created = self.create()
+        code, paused = self.run_beats("pause", "--beat-id", created["id"])
+        self.assertEqual(code, 0, paused)
+        self.assertFalse(paused["beat"]["enabled"])
+        code, resumed = self.run_beats("resume", "--beat-id", created["id"])
+        self.assertEqual(code, 0, resumed)
+        self.assertTrue(resumed["beat"]["enabled"])
+        self.assertEqual(resumed["beat"]["revision"], 3)
+
+    def test_help_documents_enable_and_disable_with_pause_and_resume_as_aliases(self):
+        process = subprocess.run([sys.executable, str(self.controller), "beats", "--help"], capture_output=True,
+                                 text=True, env=dict(os.environ, HOME=str(self.home)), timeout=30)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        text = " ".join(process.stdout.split())
+        self.assertIn("{list,create,edit,enable,disable,delete,cron-check}", text)
+        self.assertIn("(pause and resume are aliases)", text)
+
     def test_agent_cannot_touch_another_sessions_beat(self):
         created = self.create(session=SESSION_A)
-        for action in ("edit", "pause", "resume", "delete"):
+        for action in ("edit", "enable", "disable", "pause", "resume", "delete"):
             extra = ("--cron", "1 1 * * *") if action == "edit" else ()
             code, value = self.run_beats(action, "--beat-id", created["id"], *extra, session=SESSION_B)
             self.assertNotEqual(code, 0, action)
@@ -397,8 +418,8 @@ class AgentSurfaceTests(unittest.TestCase):
         self.assertEqual(self.snapshot(json.dumps({"sessionId": SESSION_A})), (0, {"ok": True, "beats": []}))
         self.assertFalse(self.root.exists())
         live = self.create(prompt="live")
-        paused = self.create(prompt="paused")
-        self.run_beats("pause", "--beat-id", paused["id"])
+        disabled = self.create(prompt="disabled")
+        self.run_beats("disable", "--beat-id", disabled["id"])
         self.create(prompt="other", session=SESSION_B)
         code, value = self.snapshot(json.dumps({"sessionId": SESSION_A}))
         self.assertEqual(code, 0, value)

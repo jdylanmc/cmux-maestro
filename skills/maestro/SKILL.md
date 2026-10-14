@@ -187,7 +187,7 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
 "$MAESTRO" beats create --self --session-id "$SESSION" --cron "0 9 * * 1-5" --prompt "Summarize overnight changes."
 "$MAESTRO" beats list   --self --session-id "$SESSION"
 "$MAESTRO" beats edit   --self --session-id "$SESSION" --beat-id "$ID" --cron "30 9 * * 1-5"
-"$MAESTRO" beats pause|resume|delete --self --session-id "$SESSION" --beat-id "$ID"
+"$MAESTRO" beats enable|disable|delete --self --session-id "$SESSION" --beat-id "$ID"
 ```
 
 - Cron is five numeric fields, `minute hour day-of-month month weekday` (weekday 0 or 7
@@ -196,8 +196,9 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
   exact timing, including around daylight-saving changes. `cron-check` is only an estimate.
 - Prompts are plain text up to 4 KiB. At most 16 Beats per session.
 - Maestro adds no retries, receipts, completion tracking or queue editing; Copilot decides
-  delivery. Pause, edit and delete affect future runs.
-- A Beat is simply on or off. You cannot reassign a Beat or touch another session's Beats.
+  delivery. Disable, edit and delete affect future runs.
+- A Beat is simply on or off: `enable` turns it on, `disable` turns it off (`resume` and
+  `pause` are older aliases; "resume" otherwise means resuming a Copilot session). You cannot reassign a Beat or touch another session's Beats.
 - Beats run on **Copilot's own scheduler**. The Maestro extension in each CMUX session
   asks the Maestro controller for that session's enabled Beats and mirrors them into
   Copilot schedules (labelled `Beat [id]`),

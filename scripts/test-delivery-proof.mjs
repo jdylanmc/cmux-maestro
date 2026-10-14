@@ -1324,20 +1324,20 @@ function gatedBeats(t, initial) {
   return { running, entries, calls, set: (value) => { wanted = value; }, hold };
 }
 
-test("a pause noticed during a sync stops its stale changes and reruns from the newest store", async (t) => {
+test("a disable noticed during a sync stops its stale changes and reruns from the newest store", async (t) => {
   const beat = makeBeat();
   const f = gatedBeats(t, []);
   await f.running.ready;
-  f.set([beat]);                                 // resumed
+  f.set([beat]);                                 // enabled
   const release = f.hold();
   const inFlight = f.running.sync();             // reads [beat], then waits in list()
-  f.set([]);                                     // paused while that sync is in flight
+  f.set([]);                                     // disabled while that sync is in flight
   const rerun = f.running.sync();                // the change-triggered sync arrives while busy
   release();
   await rerun;                                   // awaiting a coalesced sync means it was applied
   await inFlight;
   assert.deepEqual(f.entries, []);
-  assert.deepEqual(f.calls, [], "the stale snapshot never registered the paused Beat");
+  assert.deepEqual(f.calls, [], "the stale snapshot never registered the disabled Beat");
 });
 
 test("a failure after an interrupted success is reported again", async (t) => {

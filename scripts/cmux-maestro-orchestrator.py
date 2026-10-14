@@ -4563,6 +4563,7 @@ def cron_next_times(spec, epoch, count=5, horizon_days=800):
 
 
 def beats_root():
+    """The shared store; the sidebar's only write grant outside its container (docs/adr/0020)."""
     return Path.home() / "Library/Application Support/CMUXMaestroPreview/Beats"
 
 
@@ -4775,6 +4776,10 @@ def prove_own_session(session):
         raise OrchestrationError("This caller could not prove ownership of that session; no Beat was changed.")
 
 
+# "Resume" is reserved for Copilot sessions; these older verbs still work.
+BEATS_ACTION_ALIASES = {"pause": "disable", "resume": "enable"}
+
+
 def beats_command(args):
     """Agent surface: every operation is bound to the caller's own proven session. Reassigning a
     Beat to another session is human-only (the sidebar)."""
@@ -4787,7 +4792,7 @@ def beats_command(args):
         raise OrchestrationError("Beats are managed with --self for your own session.")
     session = canonical_uuid(args.session_id, "current session ID")
     prove_own_session(session)
-    action = args.beats_action
+    action = BEATS_ACTION_ALIASES.get(args.beats_action, args.beats_action)
 
     def own(state):
         if args.beat_id is None:
@@ -4823,9 +4828,9 @@ def beats_command(args):
                 beat["cron"] = parse_cron(args.cron).expression
             if args.prompt is not None:
                 beat["prompt"] = validate_beat_prompt(args.prompt)
-        elif action == "pause":
+        elif action == "disable":
             beat["enabled"] = False
-        elif action == "resume":
+        elif action == "enable":
             beat["enabled"] = True
         else:
             raise OrchestrationError("Unknown Beats action.")
@@ -5254,7 +5259,10 @@ def parser():
     pet.add_argument("--pet-id")
     pet.add_argument("--add", metavar="PATH")
     beats = commands.add_parser("beats", help="Manage recurring prompts for your own session")
-    beats.add_argument("beats_action", choices=["list", "create", "edit", "pause", "resume", "delete", "cron-check"])
+    beats.add_argument("beats_action", metavar="{list,create,edit,enable,disable,delete,cron-check}",
+                       choices=["list", "create", "edit", "enable", "disable", "delete", "cron-check",
+                                *BEATS_ACTION_ALIASES],
+                       help="enable/disable turn a Beat on or off (pause and resume are aliases)")
     beats.add_argument("--self", action="store_true", dest="own_session")
     beats.add_argument("--session-id")
     beats.add_argument("--beat-id")

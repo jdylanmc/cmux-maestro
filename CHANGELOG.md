@@ -6,6 +6,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Turn a Beat on and off with **Enable** and **Disable**, matching its On/Off label.
+  `beats enable` and `beats disable` are the documented commands; `beats pause` and
+  `beats resume` still work as aliases. "Resume" now means only resuming a Copilot session.
+  Beats code comments cite ADR 0007, and ADR 0020 for the store location.
 - Record the Beats store as the sidebar's only write grant outside its own container
   (ADR 0020, amending ADR 0001): the accepted risk that a Beat prompt becomes agent input,
   that same-user processes may edit the store, and that Beat prompts are authored
@@ -18,7 +22,7 @@ Notable changes are recorded using Keep a Changelog categories.
 - Refuse a stale Beat edit in the sidebar. The form saved its cron and prompt over whatever
   the store held, so an agent's change made while the form was open was silently lost. A
   save is now refused if the Beat's cron, prompt or session changed since the form opened
-  (pausing or resuming elsewhere is not a conflict); **Load latest** keeps the draft.
+  (enabling or disabling elsewhere is not a conflict); **Load latest** keeps the draft.
 - Own Copilot schedules by ID, not by label. The extension treated any schedule labelled
   `Beat [<id>] …` as a Beat, so it could stop a user's look-alike schedule, and a schedule
   list without labels made it add the same Beat again every sync. It now records the IDs
@@ -52,7 +56,7 @@ Notable changes are recorded using Keep a Changelog categories.
   `recoveryGate`, `targetEnded` and `lastFiredMinute` are gone, with the unused Maestro
   clock (`beats_due`), the unreachable `beats gate-session` command, and the sidebar's
   "Needs recovery", "Target ended" and **Re-enable** states. Moving a Beat to another
-  session keeps it on or off, and an agent's `beats resume` always resumes. A version 1
+  session keeps it on or off, and an agent's `beats enable` always turns it on. A version 1
   store reads as empty and is replaced on the next write; its Beats are not migrated.
   Every store must also be plain JSON for both readers: unique keys, Int64 integers only,
   Unicode text and at most 8 nested levels, so a duplicate `version` can no longer make
@@ -65,9 +69,9 @@ Notable changes are recorded using Keep a Changelog categories.
   extension stopped the sync there, so every later Beat in that session never registered,
   and it logged a single generic diagnostic. Each schedule change is now attempted on its
   own, and a failure is logged once per Beat (with its ID) until it succeeds.
-- Apply a pause or edit noticed during a sync from the newest store. The change-triggered
+- Apply a disable or edit noticed during a sync from the newest store. The change-triggered
   sync was dropped while one ran, so a sync that had already read the store could register
-  a just-paused Beat and leave it until the next poll. A sync requested mid-run now stops
+  a just-disabled Beat and leave it until the next poll. A sync requested mid-run now stops
   the running pass from starting further changes and reruns it, and no schedule change
   starts after the session's Beats are closed.
 - Follow a Mac time zone change in a running session. The extension fixed its zone when
