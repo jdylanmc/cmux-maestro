@@ -21,6 +21,15 @@ final class SidebarConnectionModel {
         openWorkspaceAtPath = action
     }
 
+    /// Chosen by `SidebarReorderBackends.make`; nil until the first host context (local then).
+    private(set) var reorderBackend: SidebarScopedReorderBackend?
+
+    func setReorderBackend(_ backend: SidebarScopedReorderBackend) {
+        // Keep the current instance unless the per-kind selection changed.
+        guard reorderBackend?.selection != backend.selection else { return }
+        reorderBackend = backend
+    }
+
     init(
         copilot: SidebarCopilotPolling? = nil,
         orchestration: SidebarOrchestrationPolling? = nil,

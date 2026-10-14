@@ -15,6 +15,8 @@ struct SidebarRowAction {
 struct SidebarRowActionGroup {
     let title: String
     let actions: [SidebarRowAction]
+    /// Disabled explanatory line shown after the group's actions.
+    var footnote: String? = nil
 }
 
 @MainActor
@@ -58,6 +60,12 @@ final class SidebarRowMenuPresenter: NSObject {
                     explanation.indentationLevel = 1
                     submenu.addItem(explanation)
                 }
+            }
+            if let footnote = group.footnote {
+                submenu.addItem(.separator())
+                let note = NSMenuItem(title: footnote, action: nil, keyEquivalent: "")
+                note.isEnabled = false
+                submenu.addItem(note)
             }
             parent.submenu = submenu
             menu.addItem(parent)
@@ -209,7 +217,8 @@ extension SidebarRowActionGroup {
 
     static var placement: Self {
         .init(title: "Organization", actions: [
-            .unavailable("Move or reorder…", "Native placement and sibling reordering are not available.")
+            .unavailable("Move Up", "Reorder the workspace or surface row; this row moves with it."),
+            .unavailable("Move Down", "Reorder the workspace or surface row; this row moves with it.")
         ])
     }
 

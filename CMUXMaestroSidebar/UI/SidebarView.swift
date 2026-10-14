@@ -527,6 +527,11 @@ struct SidebarView: View {
         }
     }
 
+    /// Selected by `SidebarReorderBackends.make` once CMUX connects; Maestro-local before that.
+    private var reorderBackend: any SidebarReorderBackend {
+        model.reorderBackend ?? SidebarScopedReorderBackend.localOnly(store: preferences)
+    }
+
     private var visibleWork: SidebarVisibleWork {
         SidebarVisibleWork(
             tree: model.copilot.tree, managed: model.orchestration.snapshot.nodes,
@@ -702,6 +707,11 @@ struct SidebarView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("sidebar-layout-notice")
             }
+            if let notice = reorderBackend.notice {
+                Text(notice).font(.caption2).foregroundStyle(SidebarTone.attention.color)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("sidebar-order-notice")
+            }
             if let taskFocusNotice {
                 Text(taskFocusNotice).font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -793,6 +803,7 @@ struct SidebarView: View {
         .onAppear {
             preferences.refreshLayout()
             preferences.refreshIcons()
+            preferences.refreshOrder()
             model.copilot.updateHistory(preferences.history)
             model.copilot.updateAttention(preferences.attention)
             model.copilot.updateIdleTasks(preferences.layout.revealingIdleTasksIn)
@@ -830,6 +841,7 @@ struct SidebarView: View {
             if phase == .active {
                 preferences.refreshLayout()
                 preferences.refreshIcons()
+                preferences.refreshOrder()
             }
         }
         .onDisappear { model.setVisible(false) }
@@ -861,6 +873,7 @@ struct SidebarView: View {
         case .hierarchy:
             HierarchyContent(
                 model: model, layout: preferences.layout,
+                reorderBackend: reorderBackend,
                 visibleWork: visibleWork,
                 setExpanded: { preferences.setExpanded($1, for: $0) },
                 dismiss: dismiss, acknowledge: acknowledge,
@@ -1061,6 +1074,16 @@ struct SidebarView: View {
             Button("Reset layout settings") { preferences.resetLayout() }
                 .help("Restore Compact density and expand every branch. History and acknowledgements are unchanged.")
                 .accessibilityIdentifier("sidebar-reset-layout")
+            Text("Drag a workspace or surface, or use Move Up and Move Down in its actions menu. \(SidebarReorderContext.localHelp)")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let notice = preferences.orderNotice {
+                Text(notice).font(.caption).foregroundStyle(SidebarTone.attention.color)
+            }
+            Button("Reset sidebar order") { preferences.resetOrder() }
+                .disabled(!preferences.hasSavedOrder && preferences.orderNotice == nil)
+                .help("Show every workspace and surface in CMUX's order again, in every window. CMUX is unchanged.")
+                .accessibilityIdentifier("sidebar-reset-order")
             Divider()
             Text("Completed work history").font(.headline).id("sidebar-settings-history")
             Toggle("Show ended agents", isOn: $preferences.showEnded)
@@ -1642,12 +1665,23 @@ private struct CopilotOverview: View {
 private struct HierarchyContent: View {
     let model: SidebarConnectionModel
     let layout: SidebarLayoutSettings
+    let reorderBackend: any SidebarReorderBackend
     let visibleWork: SidebarVisibleWork
     let setExpanded: (SidebarExpansionID, Bool) -> Void
     let dismiss: (SidebarDismissedOutcome) -> Void
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var managedSelection: SidebarOrchestrationNode?
     @Binding var selection: UnmanagedSelection?
+    @State private var dragSession = SidebarReorderDragSession()
+
+    private var workspaceOrder: (workspaces: [HierarchyWorkspace], context: SidebarReorderContext) {
+        let list = SidebarReorderComposition.compose(
+            model.hierarchy.workspaces, kind: .workspaces,
+            scope: model.hierarchy.windowID.map(SidebarOrderScope.workspaces(window:)),
+            backend: reorderBackend
+        ) { SidebarOrderItem(id: $0.id, pinned: $0.isPinned == .available(true)) }
+        return (list.displayed, SidebarReorderContext(list, backend: reorderBackend, session: dragSession))
+    }
 
     var body: some View {
         if !model.hierarchy.receivedSnapshot {
@@ -1657,9 +1691,12 @@ private struct HierarchyContent: View {
         } else if model.hierarchy.workspaces.isEmpty {
             SidebarNotice(title: "No shared workspaces", detail: "This CMUX window has no shared workspaces.")
         } else {
-            ForEach(model.hierarchy.workspaces) { workspace in
+            let arranged = workspaceOrder
+            ForEach(arranged.workspaces) { workspace in
                 WorkspaceRow(
                     workspace: workspace,
+                    reorder: arranged.context.handle(for: workspace.id, noun: "workspace"),
+                    reorderBackend: reorderBackend, dragSession: dragSession,
                     sessions: visibleWork.tree.sessions.filter { $0.workspaceID == workspace.id },
                     countsComplete: model.copilot.tree.hasCompleteCounts,
                     navigation: model.navigation, layout: layout, setExpanded: setExpanded,
@@ -1676,6 +1713,9 @@ private struct HierarchyContent: View {
 
 private struct WorkspaceRow: View {
     let workspace: HierarchyWorkspace
+    let reorder: SidebarReorderHandle
+    let reorderBackend: any SidebarReorderBackend
+    let dragSession: SidebarReorderDragSession
     let sessions: [SidebarCopilotSession]
     let countsComplete: Bool
     let navigation: SidebarNavigation
@@ -1737,8 +1777,20 @@ private struct WorkspaceRow: View {
                 },
                 .unavailable("Open backlog…", "Workspace backlog is not available.")
             ]),
-            .placement, .lifecycle()
+            .placement(reorder), .lifecycle()
         ]
+    }
+
+    /// Unmanaged surfaces in Maestro's order; the order scope still spans every CMUX surface.
+    private func surfaceOrder(_ surfaces: [HierarchySurface]) -> (surfaces: [HierarchySurface], context: SidebarReorderContext) {
+        let shown = Set(SidebarPresentation.unmanagedSurfaces(
+            surfaces, workspaceID: workspace.id, managed: managedNodes, observations: copilotTree, now: now()
+        ).map(\.id))
+        let list = SidebarReorderComposition.compose(
+            surfaces, kind: .surfaces, scope: .surfaces(workspace: workspace.id), backend: reorderBackend,
+            shown: { shown.contains($0.id) }
+        ) { SidebarOrderItem(id: $0.id, pinned: $0.isPinned) }
+        return (list.displayed, SidebarReorderContext(list, backend: reorderBackend, session: dragSession))
     }
 
     @ViewBuilder private func managedContent(
@@ -1783,6 +1835,7 @@ private struct WorkspaceRow: View {
                 }
                 SidebarWorkspaceTaskEye(workspaceID: workspace.id)
             }
+            .environment(\.sidebarReorderSource, reorder.dragSource)
             .sidebarRowActions(title: "workspace \(title)", groups: actions)
             .padding(.vertical, 5)
             .overlay(alignment: .bottom) { Divider() }
@@ -1802,12 +1855,11 @@ private struct WorkspaceRow: View {
                 case .available(let surfaces) where surfaces.isEmpty:
                     Text("No shared surfaces").font(.caption2).foregroundStyle(.secondary)
                 case .available(let surfaces):
-                    ForEach(SidebarPresentation.unmanagedSurfaces(
-                        surfaces,
-                        workspaceID: workspace.id, managed: managedNodes, observations: copilotTree, now: now()
-                    )) { surface in
+                    let arranged = surfaceOrder(surfaces)
+                    ForEach(arranged.surfaces) { surface in
                         SurfaceRow(
                             workspaceID: workspace.id, surface: surface,
+                            reorder: arranged.context.handle(for: surface.id, noun: "surface"),
                             sessions: placements.filter {
                                 $0.contentOwnerID == nil && !$0.requiresSeparateContext && $0.session.surfaceID == surface.id
                             }.map(\.session),
@@ -1826,6 +1878,7 @@ private struct WorkspaceRow: View {
                 }
             }
         }
+        .sidebarReorderDrop(reorder)
         .padding(.bottom, density.spacing(8))
         .onChange(of: title) { renameHintShown = false }
         .accessibilityElement(children: .contain)
@@ -1836,6 +1889,7 @@ private struct WorkspaceRow: View {
 private struct SurfaceRow: View {
     let workspaceID: UUID
     let surface: HierarchySurface
+    let reorder: SidebarReorderHandle
     let sessions: [SidebarCopilotSession]
     let countsComplete: Bool
     let navigation: SidebarNavigation
@@ -1891,7 +1945,7 @@ private struct SurfaceRow: View {
         return [
             .init(title: "Navigation", actions: items),
             .appearance(icon: iconTarget.map { target in { showingPicker = target } }, agent: singleSession != nil || surface.kind == .agentSession),
-            .placement, .lifecycle()
+            .placement(reorder), .lifecycle()
         ]
     }
 
@@ -1962,6 +2016,7 @@ private struct SurfaceRow: View {
                 if surface.unreadCount > 0 { UnreadBadge(count: surface.unreadCount) }
             }
             .frame(minHeight: density.rowHeight)
+            .environment(\.sidebarReorderSource, reorder.dragSource)
             .sidebarRowActions(title: title, groups: actions)
             .background {
                 if let singleSession {
@@ -1985,6 +2040,7 @@ private struct SurfaceRow: View {
                 }
             }
         }
+        .sidebarReorderDrop(reorder)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("surface-\(surface.id.uuidString)")
     }
