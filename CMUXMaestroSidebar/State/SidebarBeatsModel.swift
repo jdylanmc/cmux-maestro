@@ -47,30 +47,29 @@ nonisolated struct BeatsCron: Equatable {
         guard fields.count == 5 else {
             throw BeatsError("Cron must have exactly five fields: minute hour day-of-month month weekday.")
         }
-        var sets: [Set<Int>] = []
-        var stars: [Bool] = []
-        for (text, range) in zip(fields, Self.ranges) {
-            var values = Set<Int>()
-            // Copilot's scheduler refuses a bare * inside a list (for example *,5).
-            let items = text.split(separator: ",", omittingEmptySubsequences: false)
-            guard items.count == 1 || !items.contains("*") else {
-                throw BeatsError("Cron \(range.name) field cannot list * with other values.")
-            }
-            for item in items {
-                values.formUnion(try Self.expand(String(item), range))
-            }
-            if range.name == "weekday" { values = Set(values.map { $0 % 7 }) }
-            sets.append(values)
-            // Only a bare `*` leaves a day field unrestricted; `*/2` restricts it (Copilot's scheduler).
-            stars.append(text == "*")
-        }
+        let sets = try zip(fields, Self.ranges).map { text, range in try Self.fieldValues(text, range) }
         expression = fields.joined(separator: " ")
         minutes = sets[0]; hours = sets[1]; days = sets[2]; months = sets[3]; weekdays = sets[4]
-        dayIsStar = stars[2]; weekdayIsStar = stars[4]
+        // Only a bare `*` leaves a day field unrestricted; `*/2` restricts it (Copilot's scheduler).
+        dayIsStar = fields[2] == "*"; weekdayIsStar = fields[4] == "*"
         if !dayIsStar && weekdayIsStar {
             let possible = months.contains { month in days.contains { $0 <= Self.daysInMonth[month - 1] } }
             guard possible else { throw BeatsError("That cron expression can never match a real date.") }
         }
+    }
+
+    /// One cron field's values; weekday 7 folds onto 0 (Sunday).
+    private static func fieldValues(_ text: String, _ range: (name: String, low: Int, high: Int)) throws -> Set<Int> {
+        // Copilot's scheduler refuses a bare * inside a list (for example *,5).
+        let items = text.split(separator: ",", omittingEmptySubsequences: false)
+        guard items.count == 1 || !items.contains("*") else {
+            throw BeatsError("Cron \(range.name) field cannot list * with other values.")
+        }
+        var values = Set<Int>()
+        for item in items {
+            values.formUnion(try expand(String(item), range))
+        }
+        return range.name == "weekday" ? Set(values.map { $0 % 7 }) : values
     }
 
     private static let itemPattern = /^(\*|[0-9]{1,2}(?:-[0-9]{1,2})?)(?:\/([0-9]{1,2}))?$/

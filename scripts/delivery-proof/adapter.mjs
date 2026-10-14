@@ -833,6 +833,24 @@ export function fileLedger(file) {
   };
 }
 
+// Adopt only an unambiguous match: newer than the intent, same cron, zone and prompt, and the same
+// label when Copilot lists one. Two or more candidates are reported, never guessed. Owned schedules
+// Copilot no longer lists are forgotten.
+function adoptPendingSchedules(current, entries, listed, diagnostic) {
+  for (const intent of current.pending) {
+    const candidates = entries.filter((entry) => !current.owned.has(entry.id) && entry.id > intent.after &&
+      (!entry.label || entry.label === intent.label) && entry.cron === intent.cron &&
+      entry.tz === intent.tz && entry.prompt === intent.prompt);
+    if (candidates.length === 1) current.owned.set(candidates[0].id, intent.beatId);
+    else if (candidates.length > 1) {
+      diagnostic(Object.assign(new Error("A pending Beat schedule matched more than one schedule."),
+        { code: "BEATS_AMBIGUOUS" }), intent.beatId);
+    }
+  }
+  current.pending = [];
+  for (const id of [...current.owned.keys()]) if (!listed.has(id)) current.owned.delete(id);
+}
+
 // Maestro's controller owns the store contract; the adapter never parses beats.json itself. Any
 // refusal (invalid store, missing controller) throws, so the caller changes no schedule.
 export async function readBeats(sessionId, controller) {
@@ -910,6 +928,13 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
   // Schedules this process created but could neither record nor stop: stopped first on every pass,
   // and their Beats are not added again until they are gone.
   const unrecorded = new Map();
+  // Every ledger change re-reads the file first, so another process's records are kept.
+  const change = async (edit) => {
+    const state = await ledger.read();
+    edit(state);
+    await ledger.write(state);
+    return state;
+  };
   async function reconcile() {
     try {
       // Resolved every sync: a time zone change re-registers each Beat in the new zone.
@@ -920,97 +945,100 @@ export function startBeats({ session, root = path.join(maestroSupport, "Beats"),
         return;
       }
       const wanted = await read(sessionId), entries = await gateway.list();
-      // Every ledger change re-reads the file first, so another process's records are kept.
-      const change = async (edit) => {
-        const state = await ledger.read();
-        edit(state);
-        await ledger.write(state);
-        return state;
-      };
-      let state = await ledger.read();
       const listed = new Set(entries.map((entry) => entry.id));
-      if (state.pending.length || [...state.owned.keys()].some((id) => !listed.has(id))) {
-        state = await change((current) => {
-          // Adopt only an unambiguous match: newer than the intent, same cron, zone and prompt, and the
-          // same label when Copilot lists one. Two or more candidates are reported, never guessed.
-          for (const intent of current.pending) {
-            const candidates = entries.filter((entry) => !current.owned.has(entry.id) && entry.id > intent.after &&
-              (!entry.label || entry.label === intent.label) && entry.cron === intent.cron &&
-              entry.tz === intent.tz && entry.prompt === intent.prompt);
-            if (candidates.length === 1) current.owned.set(candidates[0].id, intent.beatId);
-            else if (candidates.length > 1) {
-              diagnostic(Object.assign(new Error("A pending Beat schedule matched more than one schedule."),
-                { code: "BEATS_AMBIGUOUS" }), intent.beatId);
-            }
-          }
-          current.pending = [];
-          for (const id of [...current.owned.keys()]) if (!listed.has(id)) current.owned.delete(id);
-        });
-      }
+      const state = await settleLedger(entries, listed);
       const plan = planBeatSchedules({ wanted, entries, tz: zone, owned: state.owned });
       failing = false;
-      const failingNow = new Set(), succeeded = new Set();
-      const attempt = async (key, beatId, operation) => {
-        if (closed || again) return null;
-        try {
-          await operation();
-          succeeded.add(key);
-          return true;
-        } catch (error) {
-          if (!failed.has(key)) diagnostic(error, beatId);
-          failingNow.add(key);
-          return false;
-        }
-      };
-      for (const [id, beatId] of [...unrecorded]) {
-        if (!listed.has(id) || await attempt(`unrecorded ${id}`, beatId, () => gateway.remove(id))) unrecorded.delete(id);
-      }
-      // A Beat whose schedule could not be stopped is not added again this sync, so an edited Beat
-      // never runs under two schedules.
-      const stuck = new Set(unrecorded.values());
-      for (const { id, beatId } of plan.remove) {
-        const removed = await attempt(`remove ${id}`, beatId, async () => {
-          await gateway.remove(id);
-          await change((current) => current.owned.delete(id));
-        });
-        if (removed === false) stuck.add(beatId);
-      }
-      let highest = Math.max(0, ...entries.map((entry) => entry.id));
-      for (const { beatId, ...entry } of plan.add) {
-        if (stuck.has(beatId)) continue;
-        await attempt(`add ${beatId}`, beatId, async () => {
-          await change((current) => current.pending.push({ beatId, after: highest, ...entry }));
-          if (closed || again) {
-            await change((current) => { current.pending = current.pending.filter((intent) => intent.beatId !== beatId); });
-            return;
-          }
-          const id = await gateway.add(entry);
-          highest = Math.max(highest, id);
-          try {
-            await change((current) => {
-              current.owned.set(id, beatId);
-              current.pending = current.pending.filter((intent) => intent.beatId !== beatId);
-            });
-          } catch (error) {
-            try {
-              await gateway.remove(id);
-            } catch (stopError) {
-              unrecorded.set(id, beatId);
-              diagnostic(Object.assign(new Error("An unrecorded Beat schedule could not be stopped.", { cause: stopError }),
-                { code: "BEATS_UNRECORDED" }), beatId);
-            }
-            throw error;
-          }
-        });
-      }
-      // An interrupted pass keeps earlier failures it did not resolve, so the rerun neither reports
-      // them twice nor hides a new failure after a success.
-      failed = closed || again
-        ? new Set([...[...failed].filter((key) => !succeeded.has(key)), ...failingNow])
-        : failingNow;
+      const pass = beginPass();
+      const stuck = await stopUnrecorded(listed, pass.attempt);
+      await removeSchedules(plan.remove, pass.attempt, stuck);
+      await addSchedules(plan.add, entries, pass.attempt, stuck);
+      pass.finish();
     } catch (error) {
       if (!failing) diagnostic(error);
       failing = true;
+    }
+  }
+  // Records pending adds Copilot made and forgets owned schedules it no longer lists.
+  async function settleLedger(entries, listed) {
+    const state = await ledger.read();
+    if (state.pending.length || [...state.owned.keys()].some((id) => !listed.has(id))) {
+      return change((current) => adoptPendingSchedules(current, entries, listed, diagnostic));
+    }
+    return state;
+  }
+  function beginPass() {
+    const failingNow = new Set(), succeeded = new Set();
+    const attempt = async (key, beatId, operation) => {
+      if (closed || again) return null;
+      try {
+        await operation();
+        succeeded.add(key);
+        return true;
+      } catch (error) {
+        if (!failed.has(key)) diagnostic(error, beatId);
+        failingNow.add(key);
+        return false;
+      }
+    };
+    // An interrupted pass keeps earlier failures it did not resolve, so the rerun neither reports
+    // them twice nor hides a new failure after a success.
+    const finish = () => {
+      failed = closed || again
+        ? new Set([...[...failed].filter((key) => !succeeded.has(key)), ...failingNow])
+        : failingNow;
+    };
+    return { attempt, finish };
+  }
+  // Returns the Beats still under an unstopped schedule.
+  async function stopUnrecorded(listed, attempt) {
+    for (const [id, beatId] of [...unrecorded]) {
+      if (!listed.has(id) || await attempt(`unrecorded ${id}`, beatId, () => gateway.remove(id))) unrecorded.delete(id);
+    }
+    return new Set(unrecorded.values());
+  }
+  // A Beat whose schedule could not be stopped is not added again this sync, so an edited Beat
+  // never runs under two schedules.
+  async function removeSchedules(remove, attempt, stuck) {
+    for (const { id, beatId } of remove) {
+      const removed = await attempt(`remove ${id}`, beatId, async () => {
+        await gateway.remove(id);
+        await change((current) => current.owned.delete(id));
+      });
+      if (removed === false) stuck.add(beatId);
+    }
+  }
+  async function addSchedules(add, entries, attempt, stuck) {
+    let highest = Math.max(0, ...entries.map((entry) => entry.id));
+    for (const { beatId, ...entry } of add) {
+      if (stuck.has(beatId)) continue;
+      await attempt(`add ${beatId}`, beatId, async () => {
+        await change((current) => current.pending.push({ beatId, after: highest, ...entry }));
+        if (closed || again) {
+          await change((current) => { current.pending = current.pending.filter((intent) => intent.beatId !== beatId); });
+          return;
+        }
+        const id = await gateway.add(entry);
+        highest = Math.max(highest, id);
+        await recordAdded(id, beatId);
+      });
+    }
+  }
+  async function recordAdded(id, beatId) {
+    try {
+      await change((current) => {
+        current.owned.set(id, beatId);
+        current.pending = current.pending.filter((intent) => intent.beatId !== beatId);
+      });
+    } catch (error) {
+      try {
+        await gateway.remove(id);
+      } catch (stopError) {
+        unrecorded.set(id, beatId);
+        diagnostic(Object.assign(new Error("An unrecorded Beat schedule could not be stopped.", { cause: stopError }),
+          { code: "BEATS_UNRECORDED" }), beatId);
+      }
+      throw error;
     }
   }
   const timer = setInterval(() => running ?? sync(), pollMs);
