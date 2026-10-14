@@ -19,6 +19,14 @@ Notable changes are recorded using Keep a Changelog categories.
   the store held, so an agent's change made while the form was open was silently lost. A
   save is now refused if the Beat's cron, prompt or session changed since the form opened
   (pausing or resuming elsewhere is not a conflict); **Load latest** keeps the draft.
+- Own Copilot schedules by ID, not by label. The extension treated any schedule labelled
+  `Beat [<id>] …` as a Beat, so it could stop a user's look-alike schedule, and a schedule
+  list without labels made it add the same Beat again every sync. It now records the IDs
+  Copilot returns in a per-session ledger
+  (`~/Library/Application Support/CMUXMaestroPreview/BeatSchedules/<session>.json`, outside
+  every sidebar grant) and keeps or removes only those. An add whose ID cannot be recorded is
+  stopped again; an invalid ledger changes nothing. Schedules made by earlier versions are no
+  longer recognized: restart sessions that had Beats running before this update.
 
 ### Fixed
 
