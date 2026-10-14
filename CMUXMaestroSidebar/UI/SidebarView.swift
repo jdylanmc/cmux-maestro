@@ -588,7 +588,7 @@ struct SidebarView: View {
         }, set: { if let selection = $0 { inspect(selection) } })
     }
 
-    /// Live agent sessions the human may target, titled by their terminal tab.
+    /// Live agent sessions the human may target, titled by their session name or terminal tab.
     private var beatTargets: [SidebarBeatTarget] {
         var titles: [UUID: String] = [:]
         for workspace in model.hierarchy.workspaces {
@@ -597,7 +597,7 @@ struct SidebarView: View {
             }
         }
         return SidebarBeatIndicators.runningSessions(in: model.copilot.tree)
-            .map { SidebarBeatTarget(id: $0.id, title: titles[$0.surfaceID] ?? "Copilot \($0.shortID)", live: true) }
+            .map { SidebarBeatTarget(id: $0.id, title: $0.sessionName ?? titles[$0.surfaceID] ?? "Copilot \($0.shortID)", live: true) }
     }
 
     private func openDirectoryAsWorkspace() {
@@ -2042,7 +2042,11 @@ private struct SurfaceRow: View {
         singleSession.map { $0.hasShownOutline(layout) } ?? !sessions.isEmpty
     }
 
-    private var title: String { surface.title.isEmpty ? "Untitled surface" : surface.title }
+    /// A single exact Copilot session leads with its session name; otherwise the CMUX title, unchanged.
+    private var title: String {
+        if let name = singleSession?.sessionName { return name }
+        return surface.title.isEmpty ? "Untitled surface" : surface.title
+    }
     private var inspectionLabel: String {
         if let singleSession {
             return "\(title), \(SidebarPresentation.sessionState(singleSession).title). Show session details"
@@ -2221,6 +2225,8 @@ private struct CopilotSessionRow: View {
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
     @State private var showingPicker: SidebarIconTarget?
     private var expanded: Bool { layout.isExpanded(.session(session.id)) }
+    /// Work-context rows keep their "Session context" label; current rows lead with the session name.
+    private var name: String? { retained ? nil : session.sessionName }
     private var actions: [SidebarRowActionGroup] {
         var items: [SidebarRowAction] = [
             focusUnavailable ? .unavailable("Focus original session", SidebarPresentation.retainedFocusUnavailable)
@@ -2247,20 +2253,21 @@ private struct CopilotSessionRow: View {
                     Color.clear.frame(width: 18, height: SidebarPresentation.minimumControlSize)
                 }
                 SidebarItemIcon(
-                    kind: .agent, target: session.statusOnly ? nil : .session(session.id), title: "Copilot \(session.shortID)",
+                    kind: .agent, target: session.statusOnly ? nil : .session(session.id), title: name ?? "Copilot \(session.shortID)",
                     agentGlyph: session.iconId, agentColor: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
                     inspect: { selection = .session(session.id) }, picker: $showingPicker
                 )
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation,
-                    label: retained ? "Inspect context session \(session.shortID)" : "Focus Copilot session \(session.shortID)",
+                    label: retained ? "Inspect context session \(session.shortID)"
+                        : "Focus Copilot session \(name.map { "\($0), " } ?? "")\(session.shortID)",
                     detail: retained ? SidebarPresentation.retainedFocusUnavailable : SidebarPresentation.sessionStatus(session),
                     inspectOnly: focusUnavailable ? { selection = .session(session.id) } : nil,
                     localFocusIDOverride: retained ? "session:\(session.id)" : nil
                 ) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("\(retained ? "Session context" : "Agent") \(session.shortID)")
+                        Text(name ?? "\(retained ? "Session context" : "Agent") \(session.shortID)")
                             .font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
                         HStack(spacing: 4) {
                             SessionStateBadge(session: session)
@@ -2280,7 +2287,7 @@ private struct CopilotSessionRow: View {
                 }
             }
             .frame(minHeight: density.rowHeight)
-            .sidebarRowActions(title: "Copilot \(session.shortID)", groups: actions) {
+            .sidebarRowActions(title: name ?? "Copilot \(session.shortID)", groups: actions) {
                 SidebarBeatIndicator(session: focusUnavailable ? nil : session.id,
                                      titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
                                      belowTitle: 18)
@@ -2876,7 +2883,7 @@ private struct TaskboardContent: View {
         }
         ForEach(TaskboardBucket.allCases) { bucket in
             let items = sessions.filter { TaskboardBucket.of($0) == bucket }
-                .map { (session: $0, title: SidebarPresentation.surfaceTitle(for: $0, in: hierarchy)) }
+                .map { (session: $0, title: SidebarPresentation.agentTitle(for: $0, in: hierarchy)) }
                 .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
             if !items.isEmpty {
                 HStack(spacing: 7) {

@@ -1,0 +1,11 @@
+# Agent rows use Copilot's session name
+
+A row that stands for exactly one Copilot session is titled with that session's name, read from the `name:` field of Copilot's `~/.copilot/session-state/<session-id>/workspace.yaml`. This applies to an unmanaged surface row with one session, a session row, the hover card, the details inspector, the Active window footer, the Taskboard card, and Beat targets. Managed rows keep their launch label. Plain terminals, browsers and other surfaces keep the CMUX title.
+
+The sidebar reads only that one field, through its existing read-only grant on `/.copilot/session-state/` and only for an exact session UUID the reader has already bound and verified (ADR 0001, ADR 0002). The read uses the reader's descriptor-anchored pattern: `O_NOFOLLOW`, owner check, regular file only, at most 16 KiB, and the file's stat must not change during the read. A strict parser takes only a top-level `name:` plain or quoted scalar on a single line. Block, multi-line, flow, tagged, aliased, duplicate or malformed values mean the name is unavailable. Control and bidirectional-override characters are removed and the result is capped at 200 characters. The name is cached per session UUID and is re-read only when the file's identity, size or modification time changes, at the existing polling cadence.
+
+Why: Copilot sets the CMUX terminal title to `<session name> - <status>`, so rows repeated a status the row already shows. The session name is a title Copilot generates or the user picks. It is not a transcript, prompt, tool argument or result, and CMUX already shows it in the terminal title, so reading it adds no exposure.
+
+Rejected: splitting the terminal title on " - ". A name can contain " - ", and a title is not identity evidence (ADR 0002). Reading any other `workspace.yaml` field, or adding a YAML dependency.
+
+Consequence: when the name is unavailable (missing, malformed, oversized, symlinked, unverified identity, or a dead or ambiguous session), the row shows the CMUX title unchanged. During observation loss, a row keeps the last name read for its exact session. Renaming the CMUX tab no longer changes a named Copilot row's title; renaming the Copilot session does. The workspace rename reminder (ADR 0017) is unchanged. Work-context session rows keep their "Session context" label.

@@ -52,6 +52,7 @@ nonisolated struct CopilotSessionObservation: Codable, Equatable, Sendable {
     var petId: String? = nil
     var branch: String? = nil
     var worktree: Bool? = nil
+    var sessionName: String? = nil
     var sessionIssues: [CopilotIssue]? = nil
     let sessionID: UUID
     let surfaceID: UUID

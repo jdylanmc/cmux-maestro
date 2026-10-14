@@ -102,7 +102,7 @@ enum SidebarAgentHoverContent {
         _ session: SidebarCopilotSession, hierarchy: HierarchySnapshot, tree: SidebarCopilotTree, now: Date,
         retained: Bool = false
     ) -> SidebarHoverCardData {
-        let title = SidebarPresentation.surfaceTitle(for: session, in: hierarchy)
+        let title = SidebarPresentation.agentTitle(for: session, in: hierarchy)
         guard isFresh(session, tree: tree, now: now) else {
             return .init(id: "session-\(session.id)", category: "Agent preview", title: title,
                          notice: "Session observation is no longer current.")
