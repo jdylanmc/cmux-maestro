@@ -19,7 +19,7 @@ CMUX container that groups surfaces. Capacity and Taskboard filters apply per wo
 _Avoid_: project, window
 
 **Session name**:
-Copilot's title for a session, from the `name:` field of its `workspace.yaml`. A title, not observed content or identity evidence.
+Copilot's title for a session, from the `name:` field of its `workspace.yaml`. User-chosen, or generated from the first prompt. Not identity evidence.
 _Avoid_: terminal title, tab title (the CMUX surface title Copilot derives from it)
 
 **Binding**:

@@ -57,6 +57,8 @@ What the sidebar reads, how sessions bind, what happens when observation is lost
   For the same verified session it may read the `name:` field of
   `workspace.yaml` (16 KiB cap, no symlinks, single-line scalar, 200
   characters, control characters removed; ADR 0022). No other field.
+  An automatic name can reproduce the session's first prompt; it is
+  shown because the CMUX terminal title already shows the same text.
   Tree navigation uses CMUX extension API and current host snapshot.
   Never fabricate unavailable evidence as live session.
 
