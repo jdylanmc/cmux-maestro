@@ -39,7 +39,8 @@ do not copy its source or history, modify it, or make this project depend on it.
 - Do not add a license until the repository's licensing issue is resolved.
 - Keep orchestration control outside the sandboxed sidebar. The sidebar may
   read only sanitized bounded metadata from the exact `Orchestration/observer/`
-  grant and use typed host navigation; never add
+  grant, read and write only its Beats store (ADR 0020), and use typed host
+  navigation; never add
   raw prompts/results/tokens, a daemon, loopback server, socket client, focus
   inference, automatic tool approval, or automatic terminal/process cleanup.
 - New workers are interactive Copilot sessions with inherited terminal I/O and
@@ -113,7 +114,7 @@ Moved here from the README. Reasons are in the ADRs.
 - Never delete or truncate the install lock. Never force-kill. Never remove source files or deregister foreign registrations. Treat `build-register.sh` and `install` as publication, not validation. ([ADR 0011](docs/adr/0011-coordinated-install-no-force-kill.md))
 - Never run two `build-register.sh` or install commands at once. A second build can rewrite the app mid-install and strand the transaction.
 - Never use a validation build's installer UI. Only the production identity may run setup. ([ADR 0015](docs/adr/0015-isolated-validation-identities.md))
-- Never widen sandbox entitlements or add ancestor traversal for convenience. ([ADR 0001](docs/adr/0001-sandboxed-sidebar-reads-sanitized-evidence.md))
+- Never widen sandbox entitlements or add ancestor traversal for convenience. ([ADR 0001](docs/adr/0001-sandboxed-sidebar-reads-sanitized-evidence.md)) The only writable grant is the Beats store. ([ADR 0020](docs/adr/0020-sidebar-writes-only-its-beats-store.md))
 - Keep layout changes presentation-only. Do not alter evidence, lifecycle state, counts, retention, acknowledgement, or focus. Keep layout, history, and acknowledgement storage separate.
 - Previews stay passive. ([ADR 0017](docs/adr/0017-previews-are-passive-and-rename-is-a-reminder.md))
 - Never claim a compile, parser check, screenshot, synthetic fixture, sandbox probe, registry check, or `build-register.sh` success proves hosted UI, live install, loaded hooks, or ExtensionKit runtime behavior.

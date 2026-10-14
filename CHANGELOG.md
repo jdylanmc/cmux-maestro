@@ -4,6 +4,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ## Unreleased
 
+### Changed
+
+- Record the Beats store as the sidebar's only writable path (ADR 0020, amending ADR 0001),
+  and that any same-user process may edit it; agent commands still prove their session.
+
 ### Fixed
 
 - Make every Beats reader apply one store contract. The Swift sidebar and the orchestrator
