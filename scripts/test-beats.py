@@ -253,6 +253,13 @@ class StoreTests(unittest.TestCase):
         self.addCleanup(os.close, descriptor)
         return descriptor
 
+    def write_under_held_lock(self, session=SESSION_A):
+        """A writer's change made while the test holds LOCK_EX; a reader that honors the lock sees it."""
+        path = self.root / "beats.json"
+        state = json.loads(path.read_text())
+        state["beats"].append(beat("0 10 * * *", session=session))
+        API["write_private"](path, API["beats_encode"](state))
+
     def snapshot_in_background(self):
         results = []
         thread = threading.Thread(target=lambda: results.append(API["beats_store_snapshot"](root=self.root)))
@@ -269,12 +276,16 @@ class StoreTests(unittest.TestCase):
     def test_snapshot_waits_for_a_writer(self):
         descriptor = self.hold_lock(fcntl.LOCK_EX)
         thread, results = self.snapshot_in_background()
+        # The pause only gives a lock-ignoring reader time to read the old store; the assertion
+        # below is decided by content, not by how long the reader took.
         thread.join(0.3)
-        self.assertTrue(thread.is_alive())
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        thread.join(5)
+        try:
+            self.write_under_held_lock()
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        thread.join(30)
         self.assertFalse(thread.is_alive())
-        self.assertEqual(len(results[0]["beats"]), 1)
+        self.assertEqual([item["cron"] for item in results[0]["beats"]], ["0 9 * * *", "0 10 * * *"])
 
     def test_snapshot_refuses_fifos_without_blocking(self):
         self.root.mkdir(mode=0o700)
@@ -312,6 +323,8 @@ class StoreTests(unittest.TestCase):
 
 FAKE_HELPER = """#!/usr/bin/env python3
 import json, os, sys
+if os.environ.get("FAKE_PROOF_MARKER"):
+    open(os.environ["FAKE_PROOF_MARKER"], "w").close()
 if sys.argv[1:2] != ["prove"] or os.environ.get("FAKE_PROOF") == "deny":
     print(json.dumps({"ok": False}))
     sys.exit(2)
@@ -455,16 +468,36 @@ class AgentSurfaceTests(unittest.TestCase):
         self.assertEqual((code, len(value["beats"])), (0, 1))
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         fcntl.flock(descriptor, fcntl.LOCK_EX)
-        environment = dict(os.environ, HOME=str(self.home))
+        marker = self.home / "proved"
+        environment = dict(os.environ, HOME=str(self.home), FAKE_PROOF_MARKER=str(marker))
         process = subprocess.Popen([sys.executable, str(self.controller), "beats", "list", "--self", "--session-id",
                                     SESSION_A], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
         try:
-            with self.assertRaises(subprocess.TimeoutExpired):
-                process.wait(1)
+            # Wait (hang guard only) until the ownership proof ran, so a lock-ignoring list would read
+            # the old store before the change below; a list that honors the lock always sees it.
+            deadline = time.monotonic() + 30
+            while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            time.sleep(0.3)
+            path = self.root / "beats.json"
+            state = json.loads(path.read_text())
+            state["beats"].append(beat("0 10 * * *"))
+            API["write_private"](path, API["beats_encode"](state))
         finally:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
         output, _ = process.communicate(timeout=30)
-        self.assertEqual((process.returncode, len(json.loads(output)["beats"])), (0, 1))
+        self.assertEqual(process.returncode, 0, output)
+        self.assertEqual(sorted(item["cron"] for item in json.loads(output)["beats"]), ["0 10 * * *", "0 9 * * 1-5"])
+
+    def test_list_requires_the_own_session_proof(self):
+        code, value = self.run_beats("list", deny=True)
+        self.assertNotEqual(code, 0)
+        self.assertIn("could not prove ownership", value["error"])
+        self.assertFalse(self.root.exists())
+        code, value = self.run_beats("list", own=False)
+        self.assertNotEqual(code, 0)
+        self.assertIn("--self for your own session", value["error"])
+        self.assertFalse(self.root.exists())
 
     def test_validation_and_limits(self):
         for arguments in (("--cron", "nope", "--prompt", "x"), ("--cron", "* * * * *", "--prompt", "  "),
