@@ -580,15 +580,14 @@ struct SidebarBeatIndicatorTests {
 
     // MARK: Terse panel copy
 
-    /// Sentences moved out of the visible panel into tooltips and accessibility. Checked by offscreen
-    /// OCR; hosted SwiftUI accessibility is not reachable here, so that copy is checked via `SidebarBeatsCopy`.
-    private static let removedSentences = [
-        "Recurring prompts", "No beats.", "Next (estimate)", "Local time", "Copilot decides",
-        "not running", "Start this agent", "Open an agent session", "bytes", "Loaded the latest"
+    /// Copy that still exists, but only in tooltips and accessibility, so it must never be drawn.
+    private static let hiddenCopy = [
+        "Local time", "Copilot decides", "not running", "Start this agent", "Open an agent session",
+        "Next run estimate", "Loaded the latest", "Base your draft"
     ]
 
-    private func renderPanel(_ stores: SidebarStoreFixture, targets: [SidebarBeatTarget],
-                             mode: SidebarBeatsMode = .list, name: String) async throws -> String {
+    private func hostPanel(_ stores: SidebarStoreFixture, targets: [SidebarBeatTarget], mode: SidebarBeatsMode = .list)
+        async throws -> (window: NSWindow, hosting: NSView) {
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 560),
                               styleMask: .titled, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -597,54 +596,182 @@ struct SidebarBeatIndicatorTests {
             .background(Color.white))
         window.contentView = hosting
         window.orderFront(nil)
-        defer { window.contentView = nil; window.close() }
         try await Task.sleep(for: .milliseconds(120))
         hosting.layoutSubtreeIfNeeded()
+        return (window, hosting)
+    }
+
+    private func ocr(_ hosting: NSView, name: String) throws -> String {
         let image = try evidenceFolder.appendingPathComponent(name)
         try #require(try bitmap(hosting).representation(using: .png, properties: [:])).write(to: image)
         return try SidebarRenderingEvidence.recognizedLines(in: image).joined(separator: "\n")
+    }
+
+    private struct AXNode: CustomStringConvertible {
+        let role: String, label: String, value: String, help: String
+        var description: String { "\(role) label=\(label) value=\(value) help=\(help)" }
+        /// SwiftUI exposes a static text's accessibility label as its AXValue.
+        var spoken: String { role == NSAccessibility.Role.staticText.rawValue && label.isEmpty ? value : label }
+    }
+
+    /// SwiftUI builds its accessibility tree only for an assistive client; the enhanced-UI flag is
+    /// the in-process request for it. Reads what the hosted views actually applied.
+    private func accessibilityNodes(_ hosting: NSView) async throws -> [AXNode] {
+        NSApp.setValue(true, forKey: "accessibilityEnhancedUserInterface")
+        defer { NSApp.setValue(false, forKey: "accessibilityEnhancedUserInterface") }
+        try await Task.sleep(for: .milliseconds(200))
+        var nodes: [AXNode] = [], pending: [Any] = [hosting], seen = Set<ObjectIdentifier>()
+        while let next = pending.popLast() as? NSObject, seen.count < 2_000 {
+            guard seen.insert(ObjectIdentifier(next)).inserted else { continue }
+            let element = next as AnyObject
+            let value = next.responds(to: NSSelectorFromString("accessibilityValue"))
+                ? next.perform(NSSelectorFromString("accessibilityValue"))?.takeUnretainedValue() as? String : nil
+            nodes.append(AXNode(role: element.accessibilityRole?()?.rawValue ?? "", label: element.accessibilityLabel?() ?? "",
+                                value: value ?? "", help: element.accessibilityHelp?() ?? ""))
+            pending += element.accessibilityChildren?() ?? []
+        }
+        return nodes
+    }
+
+    @Test func nextRunCaptionShowsTheDateBeyondAWeek() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 10, day: 14, hour: 10)))
+        let later = try #require(calendar.date(byAdding: .hour, value: 4, to: now))
+        let soon = try #require(calendar.date(byAdding: .day, value: 3, to: now))
+        let far = try #require(calendar.date(byAdding: .day, value: 21, to: now))
+        let month = far.formatted(.dateTime.month(.abbreviated))
+        let farDay = String(calendar.component(.day, from: far))
+        let farCaption = SidebarBeatsCopy.nextShort(far, now: now, calendar: calendar)
+        #expect(farCaption.contains(month) && farCaption.contains(farDay), "3 weeks out shows the date: \(farCaption)")
+        #expect(!farCaption.contains(far.formatted(.dateTime.weekday(.abbreviated))), "\(farCaption)")
+        let soonCaption = SidebarBeatsCopy.nextShort(soon, now: now, calendar: calendar)
+        #expect(soonCaption.contains(soon.formatted(.dateTime.weekday(.abbreviated))) && !soonCaption.contains(month), "\(soonCaption)")
+        #expect(SidebarBeatsCopy.nextShort(later, now: now, calendar: calendar) == later.formatted(.dateTime.hour().minute()))
+        let preview = try #require(SidebarBeatsCopy.preview([far], now: now))
+        #expect(preview.caption.contains(month) && preview.caption.contains(farDay), "\(preview.caption)")
     }
 
     @Test func panelShowsNoProse() async throws {
         let stores = SidebarStoreFixture()
         defer { stores.cleanup() }
         let live = UUID(), ended = UUID()
-        let targets = [SidebarBeatTarget(id: live, title: "Synthetic live", live: true)]
-        let empty = try await renderPanel(stores, targets: targets, name: "beats-terse-empty.png")
-        #expect(empty.contains("Beats") && empty.contains(SidebarBeatsCopy.empty), "Empty: \(empty)")
+        let targets = [SidebarBeatTarget(id: live, title: "Synthetic agent with a rather long session title", live: true)]
+        var rendered: [String] = []
+        do {
+            let panel = try await hostPanel(stores, targets: [])
+            defer { panel.window.contentView = nil; panel.window.close() }
+            let empty = try ocr(panel.hosting, name: "beats-terse-empty.png")
+            #expect(empty.contains("Beats") && empty.contains(SidebarBeatsCopy.empty), "Empty: \(empty)")
+            rendered.append(empty)
+        }
         #expect(stores.beats.perform { _ = try $0.create(session: live, cron: "0 * * * *", prompt: "Synthetic hourly") } == nil)
-        #expect(stores.beats.perform { _ = try $0.create(session: ended, cron: "5 4 * * *", prompt: "Synthetic custom") } == nil)
-        let list = try await renderPanel(stores, targets: targets, name: "beats-terse-list.png")
-        #expect(list.contains("Hourly") && list.contains("5 4 * * *") && list.contains("Synthetic hourly"), "Rows: \(list)")
-        let base = try #require(stores.beats.beats.first { $0.sessionId == live.uuidString.lowercased() })
-        let form = try await renderPanel(stores, targets: targets, mode: .form(base), name: "beats-terse-form.png")
-        #expect(form.contains("Presets"), "Form: \(form)")
-        for rendered in [empty, list, form] {
-            for sentence in Self.removedSentences {
-                #expect(!rendered.contains(sentence), "\"\(sentence)\" is not visible: \(rendered)")
+        #expect(stores.beats.perform {
+            _ = try $0.create(session: live, cron: "5,10,15,20,25 4 1,15 1 1", prompt: "Synthetic custom")
+        } == nil)
+        #expect(stores.beats.perform { _ = try $0.create(session: ended, cron: "5 4 1,15 1 1", prompt: "Synthetic ended") } == nil)
+        do {
+            let panel = try await hostPanel(stores, targets: targets)
+            defer { panel.window.contentView = nil; panel.window.close() }
+            let list = try ocr(panel.hosting, name: "beats-terse-list.png")
+            #expect(list.contains("Hourly") && list.contains("Synthetic hourly") && list.contains("Synthetic ended"), "Rows: \(list)")
+            // Narrow layout: a long custom cron keeps its full width beside a long session title.
+            #expect(list.contains(/5,\s?10,\s?15,\s?20,\s?25\s+4\s+1,\s?15\s+1\s+1/), "Long cron kept: \(list)")
+            rendered.append(list)
+        }
+        do {
+            stores.beats.present(scope: ended)
+            defer { stores.beats.dismiss() }
+            let panel = try await hostPanel(stores, targets: targets)
+            defer { panel.window.contentView = nil; panel.window.close() }
+            let scoped = try ocr(panel.hosting, name: "beats-terse-scoped-ended.png")
+            #expect(scoped.contains("Synthetic ended"), "Scoped to an ended session: \(scoped)")
+            rendered.append(scoped)
+        }
+        do {
+            let base = try #require(stores.beats.beats.first { $0.prompt == "Synthetic hourly" })
+            let panel = try await hostPanel(stores, targets: targets, mode: .form(base))
+            defer { panel.window.contentView = nil; panel.window.close() }
+            let form = try ocr(panel.hosting, name: "beats-terse-form.png")
+            #expect(form.contains("Presets") && form.contains("Next"), "Form: \(form)")
+            rendered.append(form)
+        }
+        for text in rendered {
+            for hidden in Self.hiddenCopy {
+                #expect(!text.contains(hidden), "\"\(hidden)\" is not drawn: \(text)")
             }
         }
     }
 
-    @Test func honestyFactsLiveInTooltipsAndAccessibility() throws {
-        let next = Date(timeIntervalSince1970: 1_800_000_000)
-        let running = SidebarBeatsCopy.rowDetail(cron: "0 * * * *", enabled: true, running: true, next: next)
-        #expect(running.contains("On.") && running.contains("Next run estimate:") && running.contains("Copilot decides exact timing")
-                && running.contains("only while the session runs"))
-        let ended = SidebarBeatsCopy.rowDetail(cron: "0 * * * *", enabled: true, running: false, next: nil)
-        #expect(ended.contains("Session not running") && ended.contains("only while the session runs") && !ended.contains("Next"))
-        let off = SidebarBeatsCopy.rowDetail(cron: "0 * * * *", enabled: false, running: true, next: nil)
-        #expect(off.contains("Off.") && !off.contains("Next") && !off.contains("Active") && !off.contains("Scheduled"))
-        #expect(SidebarBeatsCopy.timing.contains("Copilot decides exact timing") && SidebarBeatsCopy.timing.contains("while the session is running"))
-        let preview = try #require(SidebarBeatsCopy.preview([next, next.addingTimeInterval(3600)], now: next))
-        #expect(preview.caption.hasPrefix("Next ≈ ") && preview.caption.count < 24)
-        #expect(preview.detail.contains("estimate") && preview.detail.contains(SidebarBeatsCopy.timing))
-        #expect(SidebarBeatsCopy.preview([]) == nil)
-        #expect(SidebarBeatsCopy.presetLabel("0  *  * * *") == "Hourly" && SidebarBeatsCopy.presetLabel("*/15 * * * *") == "Every 15 min")
-        #expect(SidebarBeatsCopy.presetLabel("0 9 * * 1-5") == "Weekdays 9:00" && SidebarBeatsCopy.presetLabel("5 4 * * *") == nil)
+    /// The honesty facts reach VoiceOver (labels and values) and tooltips (AXHelp) from the hosted views.
+    @Test func honestyFactsReachVoiceOverAndTooltips() async throws {
+        let stores = SidebarStoreFixture()
+        defer { stores.cleanup() }
+        let live = UUID(), ended = UUID()
+        let targets = [SidebarBeatTarget(id: live, title: "Synthetic live", live: true)]
+        #expect(stores.beats.perform { _ = try $0.create(session: live, cron: "0 * * * *", prompt: "Synthetic hourly") } == nil)
+        #expect(stores.beats.perform { _ = try $0.create(session: ended, cron: "5 4 1,15 1 1", prompt: "Synthetic ended") } == nil)
+        do {
+            let panel = try await hostPanel(stores, targets: targets)
+            defer { panel.window.contentView = nil; panel.window.close() }
+            let nodes = try await accessibilityNodes(panel.hosting)
+            let dump = nodes.map(\.description).joined(separator: "\n")
+            let hourly = try #require(nodes.first { $0.label.hasPrefix("Hourly, Synthetic hourly") }, "Hourly row: \(dump)")
+            #expect(hourly.value.contains("On.") && hourly.value.contains("Next run estimate:")
+                    && hourly.value.contains("Copilot decides exact timing") && hourly.value.contains("only while the session runs"),
+                    "VoiceOver value: \(hourly)")
+            #expect(hourly.help.hasPrefix("Cron 0 * * * *.") && hourly.help.contains("Next run estimate:"), "Tooltip: \(hourly)")
+            let endedRow = try #require(nodes.first { $0.label.hasPrefix("5 4 1,15 1 1, Synthetic ended") }, "Ended row: \(dump)")
+            #expect(endedRow.value.contains(SidebarBeatsCopy.notRunning) && endedRow.value.contains("only while the session runs")
+                    && !endedRow.value.contains("Next"), "Ended value: \(endedRow)")
+            #expect(endedRow.help.contains(SidebarBeatsCopy.notRunning), "Ended tooltip: \(endedRow)")
+            for label in ["Beat on/off, Hourly, Synthetic hourly", "Edit Beat, Hourly, Synthetic hourly",
+                          "Delete Beat, Hourly, Synthetic hourly", "Beat on/off, 5 4 1,15 1 1, Synthetic ended"] {
+                #expect(nodes.contains { $0.label == label }, "Control \"\(label)\": \(dump)")
+            }
+            #expect(nodes.contains { $0.label == SidebarBeatsCopy.newBeat }, "+ is New Beat: \(dump)")
+        }
+        do {
+            let panel = try await hostPanel(stores, targets: targets, mode: .form(nil))
+            defer { panel.window.contentView = nil; panel.window.close() }
+            func views(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + views($0) } }
+            var nodes = try await accessibilityNodes(panel.hosting)
+            #expect(nodes.contains { $0.spoken.contains("estimate") && $0.help.contains("Copilot decides exact timing") },
+                    "Preview: \(nodes.map(\.description).joined(separator: "\n"))")
+            #expect(nodes.contains { $0.help == SidebarBeatsCopy.timing }, "Cron tooltip: \(nodes.map(\.description))")
+            let field = try #require(views(panel.hosting).compactMap { $0 as? NSTextField }.first { $0.stringValue == "0 9 * * 1-5" })
+            #expect(panel.window.makeFirstResponder(field))
+            let editor = try #require(field.currentEditor() as? NSTextView)
+            editor.selectAll(nil)
+            editor.insertText("61 * * * *", replacementRange: editor.selectedRange())
+            try await Task.sleep(for: .milliseconds(120))
+            panel.hosting.layoutSubtreeIfNeeded()
+            let message = try #require({ () -> String? in
+                do { _ = try BeatsCron("61 * * * *"); return nil } catch let error as BeatsError { return error.message } catch { return nil }
+            }())
+            nodes = try await accessibilityNodes(panel.hosting)
+            #expect(nodes.contains { $0.spoken == message && $0.help == message },
+                    "Invalid cron detail: \(nodes.map(\.description).joined(separator: "\n"))")
+        }
+    }
+
+    @Test func rowModelTellsRowsApart() {
+        let id = UUID()
+        let beat = SidebarBeat(id: "b", sessionId: id.uuidString.lowercased(), cron: "0 * * * *",
+                               prompt: "Synthetic prompt that is longer than the prefix\nsecond line", enabled: false,
+                               createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", revision: 1)
+        let target = SidebarBeatTarget(id: id, title: "Synthetic agent", live: true)
+        let model = SidebarBeatRowModel(beat: beat, target: target, scoped: false, next: nil)
+        #expect(model.identity == "Hourly, Synthetic prompt that is…")
+        #expect(model.toggleLabel == "Beat on/off, Hourly, Synthetic prompt that is…")
+        #expect(model.confirmDeleteLabel.hasPrefix("Confirm delete, Hourly"))
+        #expect(model.summary.hasSuffix(", Synthetic agent") && model.status == "Off.")
+        #expect(SidebarBeatRowModel(beat: beat, target: target, scoped: true, next: nil).session == nil)
+        let ended = SidebarBeatRowModel(beat: beat, target: nil, scoped: false, next: nil)
+        #expect(!ended.running && ended.session == SidebarBeatsCopy.sessionTitle(beat.sessionId))
+        #expect(SidebarBeatsCopy.latestLoaded.contains("Save to apply"))
+        #expect(SidebarBeatsCopy.presetLabel("0  *  * * *") == "Hourly" && SidebarBeatsCopy.presetLabel("5 4 * * *") == nil)
         #expect(SidebarBeatsCopy.byteCounter(100) == nil && SidebarBeatsCopy.byteCounter(3072) == "3072/4096 B")
-        #expect(SidebarBeatsCopy.byteCounter(5000) != nil)
         #expect(SidebarBeatsPanel.newBeatUnavailable(scope: nil, targets: []) == "Open an agent session to target it.")
-        #expect(BeatsError.changedElsewhere.message.contains("Load the latest"))
     }
 }
