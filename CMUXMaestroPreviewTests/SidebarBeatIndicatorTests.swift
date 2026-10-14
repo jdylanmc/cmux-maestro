@@ -193,7 +193,7 @@ struct SidebarBeatIndicatorTests {
         #expect(controller.indicators.state(for: id) == .dim)
         #expect(controller.indicators.accessibilityValue(for: id) == "1 on, not running")
         #expect(SidebarBeatsPanel.newBeatUnavailable(scope: id, targets: []) == "Start this agent's session to add a Beat.")
-        #expect(SidebarBeatsPanel.notRunningTitle(id.uuidString.lowercased()).hasSuffix("(not running)"))
+        #expect(SidebarBeatsCopy.sessionTitle(id.uuidString.lowercased()) == "Session \(id.uuidString.lowercased().prefix(8))")
     }
 
     @Test func formHasNoShowAllAndKeepsItsDraftOnScopeChange() {
@@ -572,8 +572,79 @@ struct SidebarBeatIndicatorTests {
         let image = try evidenceFolder.appendingPathComponent("beat-indicator-scoped-form.png")
         try #require(try bitmap(hosting).representation(using: .png, properties: [:])).write(to: image)
         let text = try SidebarRenderingEvidence.recognizedLines(in: image).joined(separator: "\n")
-        #expect(text.contains("Local time") && text.contains("For Synthetic B"), "Form rendered: \(text)")
+        #expect(text.contains("Presets") && text.contains("For Synthetic B"), "Form rendered: \(text)")
+        #expect(!text.contains("Local time"), "Timing detail is a tooltip: \(text)")
         #expect(!text.contains("Show all"), "A form offers no Show all: \(text)")
         #expect(stores.beats.beats.first?.prompt == "Synthetic base", "Nothing saved")
+    }
+
+    // MARK: Terse panel copy
+
+    /// Sentences moved out of the visible panel into tooltips and accessibility. Checked by offscreen
+    /// OCR; hosted SwiftUI accessibility is not reachable here, so that copy is checked via `SidebarBeatsCopy`.
+    private static let removedSentences = [
+        "Recurring prompts", "No beats.", "Next (estimate)", "Local time", "Copilot decides",
+        "not running", "Start this agent", "Open an agent session", "bytes", "Loaded the latest"
+    ]
+
+    private func renderPanel(_ stores: SidebarStoreFixture, targets: [SidebarBeatTarget],
+                             mode: SidebarBeatsMode = .list, name: String) async throws -> String {
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 560),
+                              styleMask: .titled, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        let hosting = NSHostingView(rootView: SidebarBeatsPanel(controller: stores.beats, targets: targets, mode: mode, close: {})
+            .background(Color.white))
+        window.contentView = hosting
+        window.orderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        try await Task.sleep(for: .milliseconds(120))
+        hosting.layoutSubtreeIfNeeded()
+        let image = try evidenceFolder.appendingPathComponent(name)
+        try #require(try bitmap(hosting).representation(using: .png, properties: [:])).write(to: image)
+        return try SidebarRenderingEvidence.recognizedLines(in: image).joined(separator: "\n")
+    }
+
+    @Test func panelShowsNoProse() async throws {
+        let stores = SidebarStoreFixture()
+        defer { stores.cleanup() }
+        let live = UUID(), ended = UUID()
+        let targets = [SidebarBeatTarget(id: live, title: "Synthetic live", live: true)]
+        let empty = try await renderPanel(stores, targets: targets, name: "beats-terse-empty.png")
+        #expect(empty.contains("Beats") && empty.contains(SidebarBeatsCopy.empty), "Empty: \(empty)")
+        #expect(stores.beats.perform { _ = try $0.create(session: live, cron: "0 * * * *", prompt: "Synthetic hourly") } == nil)
+        #expect(stores.beats.perform { _ = try $0.create(session: ended, cron: "5 4 * * *", prompt: "Synthetic custom") } == nil)
+        let list = try await renderPanel(stores, targets: targets, name: "beats-terse-list.png")
+        #expect(list.contains("Hourly") && list.contains("5 4 * * *") && list.contains("Synthetic hourly"), "Rows: \(list)")
+        let base = try #require(stores.beats.beats.first { $0.sessionId == live.uuidString.lowercased() })
+        let form = try await renderPanel(stores, targets: targets, mode: .form(base), name: "beats-terse-form.png")
+        #expect(form.contains("Presets"), "Form: \(form)")
+        for rendered in [empty, list, form] {
+            for sentence in Self.removedSentences {
+                #expect(!rendered.contains(sentence), "\"\(sentence)\" is not visible: \(rendered)")
+            }
+        }
+    }
+
+    @Test func honestyFactsLiveInTooltipsAndAccessibility() throws {
+        let next = Date(timeIntervalSince1970: 1_800_000_000)
+        let running = SidebarBeatsCopy.rowDetail(cron: "0 * * * *", enabled: true, running: true, next: next)
+        #expect(running.contains("On.") && running.contains("Next run estimate:") && running.contains("Copilot decides exact timing")
+                && running.contains("only while the session runs"))
+        let ended = SidebarBeatsCopy.rowDetail(cron: "0 * * * *", enabled: true, running: false, next: nil)
+        #expect(ended.contains("Session not running") && ended.contains("only while the session runs") && !ended.contains("Next"))
+        let off = SidebarBeatsCopy.rowDetail(cron: "0 * * * *", enabled: false, running: true, next: nil)
+        #expect(off.contains("Off.") && !off.contains("Next") && !off.contains("Active") && !off.contains("Scheduled"))
+        #expect(SidebarBeatsCopy.timing.contains("Copilot decides exact timing") && SidebarBeatsCopy.timing.contains("while the session is running"))
+        let preview = try #require(SidebarBeatsCopy.preview([next, next.addingTimeInterval(3600)], now: next))
+        #expect(preview.caption.hasPrefix("Next ≈ ") && preview.caption.count < 24)
+        #expect(preview.detail.contains("estimate") && preview.detail.contains(SidebarBeatsCopy.timing))
+        #expect(SidebarBeatsCopy.preview([]) == nil)
+        #expect(SidebarBeatsCopy.presetLabel("0  *  * * *") == "Hourly" && SidebarBeatsCopy.presetLabel("*/15 * * * *") == "Every 15 min")
+        #expect(SidebarBeatsCopy.presetLabel("0 9 * * 1-5") == "Weekdays 9:00" && SidebarBeatsCopy.presetLabel("5 4 * * *") == nil)
+        #expect(SidebarBeatsCopy.byteCounter(100) == nil && SidebarBeatsCopy.byteCounter(3072) == "3072/4096 B")
+        #expect(SidebarBeatsCopy.byteCounter(5000) != nil)
+        #expect(SidebarBeatsPanel.newBeatUnavailable(scope: nil, targets: []) == "Open an agent session to target it.")
+        #expect(BeatsError.changedElsewhere.message.contains("Load the latest"))
     }
 }
