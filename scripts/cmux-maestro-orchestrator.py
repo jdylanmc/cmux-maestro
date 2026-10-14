@@ -4460,45 +4460,53 @@ CRON_ITEM = re.compile(r"^(\*|[0-9]{1,2}(?:-[0-9]{1,2})?)(?:/([0-9]{1,2}))?$")
 DAYS_IN_MONTH = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 
 
+def cron_field_values(text, name, low, high):
+    """One cron field's values; weekday 7 folds onto 0 (Sunday)."""
+    items = text.split(",")
+    # Copilot's scheduler refuses a bare * inside a list (for example *,5).
+    if len(items) > 1 and "*" in items:
+        raise OrchestrationError(f"Cron {name} field cannot list * with other values.")
+    values = set()
+    for item in items:
+        values.update(cron_item_values(item, name, low, high))
+    if name == "weekday":
+        values = {value % 7 for value in values}
+    return frozenset(values)
+
+
+def cron_item_values(item, name, low, high):
+    """One list item: `*`, `n`, `a-b`, optionally `/step` after `*` or a range."""
+    match = CRON_ITEM.fullmatch(item)
+    if not match:
+        raise OrchestrationError(
+            f"Cron {name} field is invalid. Use numbers, ranges, lists and steps only (for example */15 or 1-5).")
+    base, step = match.group(1), match.group(2)
+    if base == "*":
+        first, last = low, high
+    elif "-" in base:
+        first, last = (int(part) for part in base.split("-"))
+    else:
+        if step is not None:
+            raise OrchestrationError(f"Cron {name} step needs * or a range.")
+        first = last = int(base)
+    if not (low <= first <= last <= high):
+        raise OrchestrationError(f"Cron {name} values must be {low}-{high}.")
+    increment = int(step) if step is not None else 1
+    if increment < 1:
+        raise OrchestrationError(f"Cron {name} step must be at least 1.")
+    return range(first, last + 1, increment)
+
+
 class CronSpec:
     """Five numeric fields: minute hour day-of-month month weekday, evaluated in local time."""
 
     def __init__(self, expression):
         self.expression = expression
         fields = re.split(r"[ \t]+", expression.strip(" \t"))
-        sets, stars = [], []
-        for text, (name, low, high) in zip(fields, CRON_FIELD_RANGES):
-            values = set()
-            # Copilot's scheduler refuses a bare * inside a list (for example *,5).
-            if "," in text and "*" in text.split(","):
-                raise OrchestrationError(f"Cron {name} field cannot list * with other values.")
-            for item in text.split(","):
-                match = CRON_ITEM.fullmatch(item)
-                if not match:
-                    raise OrchestrationError(
-                        f"Cron {name} field is invalid. Use numbers, ranges, lists and steps only (for example */15 or 1-5).")
-                base, step = match.group(1), match.group(2)
-                if base == "*":
-                    first, last = low, high
-                elif "-" in base:
-                    first, last = (int(part) for part in base.split("-"))
-                else:
-                    if step is not None:
-                        raise OrchestrationError(f"Cron {name} step needs * or a range.")
-                    first = last = int(base)
-                if not (low <= first <= last <= high):
-                    raise OrchestrationError(f"Cron {name} values must be {low}-{high}.")
-                increment = int(step) if step is not None else 1
-                if increment < 1:
-                    raise OrchestrationError(f"Cron {name} step must be at least 1.")
-                values.update(range(first, last + 1, increment))
-            if name == "weekday":
-                values = {value % 7 for value in values}
-            sets.append(frozenset(values))
-            # Only a bare `*` leaves a day field unrestricted; `*/2` restricts it (Copilot's scheduler).
-            stars.append(text == "*")
+        sets = [cron_field_values(text, *field) for text, field in zip(fields, CRON_FIELD_RANGES)]
         self.minutes, self.hours, self.days, self.months, self.weekdays = sets
-        self.day_star, self.weekday_star = stars[2], stars[4]
+        # Only a bare `*` leaves a day field unrestricted; `*/2` restricts it (Copilot's scheduler).
+        self.day_star, self.weekday_star = fields[2] == "*", fields[4] == "*"
         if not self.day_star and self.weekday_star:
             if not any(day <= DAYS_IN_MONTH[month - 1] for month in self.months for day in self.days):
                 raise OrchestrationError("That cron expression can never match a real date.")
@@ -4563,6 +4571,7 @@ def cron_next_times(spec, epoch, count=5, horizon_days=800):
 
 
 def beats_root():
+    """The shared store; the sidebar's only write grant outside its container (docs/adr/0020)."""
     return Path.home() / "Library/Application Support/CMUXMaestroPreview/Beats"
 
 
@@ -4661,8 +4670,8 @@ def beats_decode(raw):
     except (UnicodeError, ValueError, RecursionError) as error:
         raise OrchestrationError("The Beats store is not valid JSON.") from error
     if isinstance(state, dict) and type(state.get("version")) is int and state["version"] == BEATS_LEGACY_VERSION:
-        # Version 1 carried the rejected recovery gate and Maestro clock. Its Beats are dropped;
-        # the next write replaces the file with an empty version 2 store.
+        # Version 1 carried the rejected recovery gate and Maestro clock. Its Beats read as empty;
+        # the next write (never a read) replaces the file with a version 2 store.
         return {"version": BEATS_VERSION, "beats": []}
     return validate_beats_state(state)
 
@@ -4692,6 +4701,40 @@ def beats_open_store(path):
         os.close(descriptor)
 
 
+def beats_write_store(root, data):
+    """Atomic replace: write a temporary file in the store folder, fsync it, then rename it over
+    beats.json. A failed file fsync fails the write. The folder fsync that follows only hardens the
+    rename, which has already landed, so a failure there is a warning: reporting the change as
+    failed would invite a retry that repeats it."""
+    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        temporary = f".beats.json.{secrets.token_hex(4)}"
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                             dir_fd=directory)
+        try:
+            try:
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(descriptor, view):]
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(temporary, "beats.json", src_dir_fd=directory, dst_dir_fd=directory)
+        except BaseException:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except OSError:
+                pass
+            raise
+        try:
+            os.fsync(directory)
+        except OSError as error:
+            print(f"warning: the Beats store was written but its folder could not be synced ({error.strerror}).",
+                  file=sys.stderr)
+    finally:
+        os.close(directory)
+
+
 def beats_private_root(root):
     info = root.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
@@ -4706,11 +4749,10 @@ def beats_store_mutate(operation, *, root=None):
     lock_descriptor = os.open(root / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
-        path = root / "beats.json"
-        state = beats_open_store(path) or {"version": BEATS_VERSION, "beats": []}
+        state = beats_open_store(root / "beats.json") or {"version": BEATS_VERSION, "beats": []}
         result = operation(state)
         validate_beats_state(state)
-        write_private(path, beats_encode(state))
+        beats_write_store(root, beats_encode(state))
         return result
     finally:
         os.close(lock_descriptor)
@@ -4775,6 +4817,10 @@ def prove_own_session(session):
         raise OrchestrationError("This caller could not prove ownership of that session; no Beat was changed.")
 
 
+# "Resume" is reserved for Copilot sessions; these older verbs still work.
+BEATS_ACTION_ALIASES = {"pause": "disable", "resume": "enable"}
+
+
 def beats_command(args):
     """Agent surface: every operation is bound to the caller's own proven session. Reassigning a
     Beat to another session is human-only (the sidebar)."""
@@ -4787,52 +4833,68 @@ def beats_command(args):
         raise OrchestrationError("Beats are managed with --self for your own session.")
     session = canonical_uuid(args.session_id, "current session ID")
     prove_own_session(session)
-    action = args.beats_action
-
-    def own(state):
-        if args.beat_id is None:
-            raise OrchestrationError("Give --beat-id.")
-        beat_id = canonical_uuid(args.beat_id, "Beat ID")
-        beat = next((item for item in state["beats"] if item["id"] == beat_id), None)
-        if beat is None or beat["sessionId"] != session:
-            raise OrchestrationError("No such Beat for this session.")
-        return beat
+    action = BEATS_ACTION_ALIASES.get(args.beats_action, args.beats_action)
+    if action == "list":
+        # Reads never write: a rewrite would wake every store watcher.
+        return {"beats": [beat_view(item) for item in beats_store_snapshot()["beats"] if item["sessionId"] == session]}
 
     def operate(state):
         stamp = now()
-        if action == "list":
-            return {"beats": [beat_view(item) for item in state["beats"] if item["sessionId"] == session]}
         if action == "create":
-            spec = parse_cron(args.cron)
-            prompt = validate_beat_prompt(args.prompt)
-            if sum(item["sessionId"] == session for item in state["beats"]) >= BEATS_MAX_PER_SESSION \
-                    or len(state["beats"]) >= BEATS_MAX_TOTAL:
-                raise OrchestrationError("The Beat limit was reached; delete one first.")
-            beat = {"id": str(uuid.uuid4()), "sessionId": session, "cron": spec.expression, "prompt": prompt,
-                    "enabled": True, "createdAt": stamp, "updatedAt": stamp, "revision": 1}
-            state["beats"].append(beat)
-            return {"beat": beat_view(beat)}
-        beat = own(state)
+            return beats_create(state, session, args, stamp)
+        beat = beats_own(state, session, args.beat_id)
         if action == "delete":
             state["beats"].remove(beat)
             return {"deleted": beat["id"]}
-        if action == "edit":
-            if args.cron is None and args.prompt is None:
-                raise OrchestrationError("Give --cron and/or --prompt.")
-            if args.cron is not None:
-                beat["cron"] = parse_cron(args.cron).expression
-            if args.prompt is not None:
-                beat["prompt"] = validate_beat_prompt(args.prompt)
-        elif action == "pause":
-            beat["enabled"] = False
-        elif action == "resume":
-            beat["enabled"] = True
-        else:
+        update = BEATS_UPDATES.get(action)
+        if update is None:
             raise OrchestrationError("Unknown Beats action.")
+        update(beat, args)
         beat["updatedAt"], beat["revision"] = stamp, beat["revision"] + 1
         return {"beat": beat_view(beat)}
 
     return beats_store_mutate(operate)
+
+
+def beats_own(state, session, raw_beat_id):
+    if raw_beat_id is None:
+        raise OrchestrationError("Give --beat-id.")
+    beat_id = canonical_uuid(raw_beat_id, "Beat ID")
+    beat = next((item for item in state["beats"] if item["id"] == beat_id), None)
+    if beat is None or beat["sessionId"] != session:
+        raise OrchestrationError("No such Beat for this session.")
+    return beat
+
+
+def beats_create(state, session, args, stamp):
+    spec = parse_cron(args.cron)
+    prompt = validate_beat_prompt(args.prompt)
+    if sum(item["sessionId"] == session for item in state["beats"]) >= BEATS_MAX_PER_SESSION \
+            or len(state["beats"]) >= BEATS_MAX_TOTAL:
+        raise OrchestrationError("The Beat limit was reached; delete one first.")
+    beat = {"id": str(uuid.uuid4()), "sessionId": session, "cron": spec.expression, "prompt": prompt,
+            "enabled": True, "createdAt": stamp, "updatedAt": stamp, "revision": 1}
+    state["beats"].append(beat)
+    return {"beat": beat_view(beat)}
+
+
+def beats_edit(beat, args):
+    if args.cron is None and args.prompt is None:
+        raise OrchestrationError("Give --cron and/or --prompt.")
+    if args.cron is not None:
+        beat["cron"] = parse_cron(args.cron).expression
+    if args.prompt is not None:
+        beat["prompt"] = validate_beat_prompt(args.prompt)
+
+
+def beats_set_enabled(enabled):
+    def update(beat, _args):
+        beat["enabled"] = enabled
+    return update
+
+
+# Verbs that change one owned Beat in place; each bumps its revision.
+BEATS_UPDATES = {"edit": beats_edit, "disable": beats_set_enabled(False), "enable": beats_set_enabled(True)}
 
 
 def command_icon(args, root, cmux):
@@ -5254,7 +5316,10 @@ def parser():
     pet.add_argument("--pet-id")
     pet.add_argument("--add", metavar="PATH")
     beats = commands.add_parser("beats", help="Manage recurring prompts for your own session")
-    beats.add_argument("beats_action", choices=["list", "create", "edit", "pause", "resume", "delete", "cron-check"])
+    beats.add_argument("beats_action", metavar="{list,create,edit,enable,disable,delete,cron-check}",
+                       choices=["list", "create", "edit", "enable", "disable", "delete", "cron-check",
+                                *BEATS_ACTION_ALIASES],
+                       help="enable/disable turn a Beat on or off (pause and resume are aliases)")
     beats.add_argument("--self", action="store_true", dest="own_session")
     beats.add_argument("--session-id")
     beats.add_argument("--beat-id")

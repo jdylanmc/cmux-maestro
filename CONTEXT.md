@@ -134,7 +134,8 @@ _Avoid_: dashboard
 
 **Beat**:
 Recurring prompt for one exact session, scheduled through Copilot's own scheduler.
-_Avoid_: cron job, timer
+Enabled (On) or disabled (Off).
+_Avoid_: cron job, timer; pause/resume for turning a Beat on or off ("resume" means resuming a Copilot session)
 
 **Active window footer**:
 Pinned card for the selected workspace's focused surface. Resizable.

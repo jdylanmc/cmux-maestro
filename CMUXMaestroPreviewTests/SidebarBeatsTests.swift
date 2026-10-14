@@ -179,7 +179,7 @@ struct SidebarBeatsTests {
         let first = UUID(), second = UUID()
         let beat = try state.create(session: first, cron: "  0   9 * * 1-5", prompt: "Plan the day")
         #expect(beat.cron == "0 9 * * 1-5" && beat.enabled)
-        try state.pause(id: beat.id)
+        try state.disable(id: beat.id)
         #expect(!state.beats[0].enabled)
         try state.enable(id: beat.id)
         #expect(state.beats[0].enabled)
@@ -190,7 +190,7 @@ struct SidebarBeatsTests {
         try state.edit(id: beat.id, cron: nil, prompt: "New words", session: second, basedOn: nil)
         #expect(state.beats[0].sessionId == second.uuidString.lowercased())
         #expect(state.beats[0].enabled && state.beats[0].prompt == "New words")
-        try state.pause(id: beat.id)
+        try state.disable(id: beat.id)
         try state.edit(id: beat.id, cron: nil, prompt: nil, session: first, basedOn: nil)
         #expect(!state.beats[0].enabled)
         try state.delete(id: beat.id)
@@ -213,11 +213,11 @@ struct SidebarBeatsTests {
         #expect(state.beats[0].prompt == "Human words" && state.beats[0].cron == "30 9 * * *")
     }
 
-    @Test func pauseOrResumeElsewhereIsNotAConflict() throws {
+    @Test func enableOrDisableElsewhereIsNotAConflict() throws {
         var state = SidebarBeatsState()
         let beat = try state.create(session: UUID(), cron: "0 9 * * *", prompt: "Original")
         let opened = state.beats[0]
-        try state.pause(id: beat.id)
+        try state.disable(id: beat.id)
         try state.edit(id: beat.id, cron: nil, prompt: "Human words", session: nil, basedOn: opened)
         #expect(state.beats[0].prompt == "Human words" && !state.beats[0].enabled)
     }

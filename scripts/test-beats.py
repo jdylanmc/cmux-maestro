@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Fast, deterministic tests for Beats: cron evaluation, local-time/DST rules, the shared
 definition store, and the exact-self agent surface. No real clock, session or network."""
+import fcntl
+import io
 import json
 import os
 import runpy
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -12,6 +15,7 @@ import threading
 import time
 import unittest
 import uuid
+from unittest import mock
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -233,6 +237,59 @@ class StoreTests(unittest.TestCase):
         after = os.stat(self.root / "beats.json")
         self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
 
+    def test_snapshot_leaves_store_bytes_untouched_and_creates_nothing(self):
+        self.root.mkdir(mode=0o700)
+        self.assertEqual(API["beats_store_snapshot"](root=self.root)["beats"], [])
+        self.assertEqual(sorted(os.listdir(self.root)), [])
+        store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
+        path = self.root / "beats.json"
+        before, content = os.stat(path), path.read_bytes()
+        API["beats_store_snapshot"](root=self.root)
+        after = os.stat(path)
+        self.assertEqual(path.read_bytes(), content)
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+
+    def hold_lock(self, operation):
+        store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
+        descriptor = os.open(self.root / ".lock", os.O_RDONLY)
+        fcntl.flock(descriptor, operation)
+        self.addCleanup(os.close, descriptor)
+        return descriptor
+
+    def write_under_held_lock(self, session=SESSION_A):
+        """A writer's change made while the test holds LOCK_EX; a reader that honors the lock sees it."""
+        path = self.root / "beats.json"
+        state = json.loads(path.read_text())
+        state["beats"].append(beat("0 10 * * *", session=session))
+        API["write_private"](path, API["beats_encode"](state))
+
+    def snapshot_in_background(self):
+        results = []
+        thread = threading.Thread(target=lambda: results.append(API["beats_store_snapshot"](root=self.root)))
+        thread.start()
+        return thread, results
+
+    def test_snapshot_coexists_with_another_reader(self):
+        self.hold_lock(fcntl.LOCK_SH)
+        thread, results = self.snapshot_in_background()
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(results[0]["beats"]), 1)
+
+    def test_snapshot_waits_for_a_writer(self):
+        descriptor = self.hold_lock(fcntl.LOCK_EX)
+        thread, results = self.snapshot_in_background()
+        # The pause only gives a lock-ignoring reader time to read the old store; the assertion
+        # below is decided by content, not by how long the reader took.
+        thread.join(0.3)
+        try:
+            self.write_under_held_lock()
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        thread.join(30)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual([item["cron"] for item in results[0]["beats"]], ["0 9 * * *", "0 10 * * *"])
+
     def test_snapshot_refuses_fifos_without_blocking(self):
         self.root.mkdir(mode=0o700)
         os.mkfifo(self.root / ".lock", 0o600)
@@ -253,6 +310,49 @@ class StoreTests(unittest.TestCase):
             store_mutate(corrupt, root=self.root)
         self.assertEqual((self.root / "beats.json").read_bytes(), before)
 
+    def test_writes_fsync_the_file_before_the_rename_and_the_folder_after(self):
+        self.root.mkdir(mode=0o700)
+        root_inode = os.stat(self.root).st_ino
+        path = self.root / "beats.json"
+        real_fsync, calls = os.fsync, []
+
+        def record(descriptor):
+            info = os.fstat(descriptor)
+            calls.append((stat.S_ISDIR(info.st_mode), info.st_ino, path.exists()))
+            real_fsync(descriptor)
+        with mock.patch("os.fsync", side_effect=record):
+            store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
+        # The temporary file (now beats.json) before the rename, then the folder after it.
+        self.assertEqual(calls, [(False, os.stat(path).st_ino, False), (True, root_inode, True)])
+        self.assertEqual(sorted(os.listdir(self.root)), [".lock", "beats.json"])
+
+    def test_failed_file_fsync_fails_the_write_and_changes_nothing(self):
+        store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
+        path = self.root / "beats.json"
+        before = path.read_bytes()
+
+        def fail_files(descriptor):
+            if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError(5, "Input/output error")
+        with mock.patch("os.fsync", side_effect=fail_files):
+            with self.assertRaises(OSError):
+                store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(sorted(os.listdir(self.root)), [".lock", "beats.json"])
+
+    def test_failed_folder_fsync_is_a_warning_not_a_failure(self):
+        real_fsync = os.fsync
+
+        def fail_folders(descriptor):
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError(5, "Input/output error")
+            real_fsync(descriptor)
+        with mock.patch("os.fsync", side_effect=fail_folders), mock.patch("sys.stderr", new=io.StringIO()) as stderr:
+            result = store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")) or "done", root=self.root)
+        self.assertEqual(result, "done")
+        self.assertIn("could not be synced", stderr.getvalue())
+        self.assertEqual(len(API["beats_store_snapshot"](root=self.root)["beats"]), 1)
+
     def test_size_limit_counts_utf8_bytes(self):
         # Escaped as \u00e9 this store would be about 1.6 MiB; as UTF-8 it is about 0.6 MiB.
         prompt = "é" * 1360
@@ -269,6 +369,8 @@ class StoreTests(unittest.TestCase):
 
 FAKE_HELPER = """#!/usr/bin/env python3
 import json, os, sys
+if os.environ.get("FAKE_PROOF_MARKER"):
+    open(os.environ["FAKE_PROOF_MARKER"], "w").close()
 if sys.argv[1:2] != ["prove"] or os.environ.get("FAKE_PROOF") == "deny":
     print(json.dumps({"ok": False}))
     sys.exit(2)
@@ -313,7 +415,7 @@ class AgentSurfaceTests(unittest.TestCase):
         self.assertEqual(code, 0, value)
         return value["beat"]
 
-    def test_create_list_edit_pause_resume_delete(self):
+    def test_create_list_edit_enable_disable_delete(self):
         created = self.create()
         self.assertTrue(created["enabled"])
         self.assertEqual(set(created), API["BEATS_FIELDS"])
@@ -324,17 +426,38 @@ class AgentSurfaceTests(unittest.TestCase):
         self.assertEqual(edited["beat"]["cron"], "*/5 * * * *")
         self.assertEqual(edited["beat"]["revision"], 2)
         self.assertEqual(edited["beat"]["prompt"], "check the board")
-        code, paused = self.run_beats("pause", "--beat-id", created["id"])
-        self.assertFalse(paused["beat"]["enabled"])
-        code, resumed = self.run_beats("resume", "--beat-id", created["id"])
-        self.assertTrue(resumed["beat"]["enabled"])
+        code, disabled = self.run_beats("disable", "--beat-id", created["id"])
+        self.assertEqual(code, 0, disabled)
+        self.assertFalse(disabled["beat"]["enabled"])
+        code, enabled = self.run_beats("enable", "--beat-id", created["id"])
+        self.assertEqual(code, 0, enabled)
+        self.assertTrue(enabled["beat"]["enabled"])
+        self.assertEqual(enabled["beat"]["revision"], 4)
         code, deleted = self.run_beats("delete", "--beat-id", created["id"])
         self.assertEqual(deleted["deleted"], created["id"])
         self.assertEqual(self.run_beats("list")[1]["beats"], [])
 
+    def test_pause_and_resume_remain_aliases_for_disable_and_enable(self):
+        created = self.create()
+        code, paused = self.run_beats("pause", "--beat-id", created["id"])
+        self.assertEqual(code, 0, paused)
+        self.assertFalse(paused["beat"]["enabled"])
+        code, resumed = self.run_beats("resume", "--beat-id", created["id"])
+        self.assertEqual(code, 0, resumed)
+        self.assertTrue(resumed["beat"]["enabled"])
+        self.assertEqual(resumed["beat"]["revision"], 3)
+
+    def test_help_documents_enable_and_disable_with_pause_and_resume_as_aliases(self):
+        process = subprocess.run([sys.executable, str(self.controller), "beats", "--help"], capture_output=True,
+                                 text=True, env=dict(os.environ, HOME=str(self.home)), timeout=30)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        text = " ".join(process.stdout.split())
+        self.assertIn("{list,create,edit,enable,disable,delete,cron-check}", text)
+        self.assertIn("(pause and resume are aliases)", text)
+
     def test_agent_cannot_touch_another_sessions_beat(self):
         created = self.create(session=SESSION_A)
-        for action in ("edit", "pause", "resume", "delete"):
+        for action in ("edit", "enable", "disable", "pause", "resume", "delete"):
             extra = ("--cron", "1 1 * * *") if action == "edit" else ()
             code, value = self.run_beats(action, "--beat-id", created["id"], *extra, session=SESSION_B)
             self.assertNotEqual(code, 0, action)
@@ -357,15 +480,70 @@ class AgentSurfaceTests(unittest.TestCase):
         self.assertIn("could not prove ownership", value["error"])
         self.assertFalse((self.root / "beats.json").exists())
 
-    def test_version_one_store_is_dropped_on_next_write(self):
+    def test_version_one_store_reads_empty_and_is_dropped_on_next_write(self):
         self.root.mkdir(mode=0o700, parents=True)
         path = self.root / "beats.json"
         path.write_text(json.dumps({"version": 1, "beats": [{"id": "legacy", "recoveryGate": True}]}))
         path.chmod(0o600)
+        content = path.read_bytes()
         self.assertEqual(self.run_beats("list")[1]["beats"], [])
-        self.assertEqual(json.loads(path.read_text()), {"version": 2, "beats": []})
+        self.assertEqual(path.read_bytes(), content)
         created = self.create()
         self.assertEqual([item["id"] for item in json.loads(path.read_text())["beats"]], [created["id"]])
+
+    def test_list_never_writes_or_creates_the_store(self):
+        code, value = self.run_beats("list")
+        self.assertEqual((code, value["beats"]), (0, []))
+        self.assertFalse(self.root.exists())
+        self.create()
+        path = self.root / "beats.json"
+        before, content = os.stat(path), path.read_bytes()
+        names = sorted(os.listdir(self.root))
+        self.assertEqual(len(self.run_beats("list")[1]["beats"]), 1)
+        after = os.stat(path)
+        self.assertEqual(path.read_bytes(), content)
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+        self.assertEqual(sorted(os.listdir(self.root)), names)
+
+    def test_list_shares_the_lock_with_readers_and_waits_for_writers(self):
+        self.create()
+        descriptor = os.open(self.root / ".lock", os.O_RDONLY)
+        self.addCleanup(os.close, descriptor)
+        fcntl.flock(descriptor, fcntl.LOCK_SH)
+        code, value = self.run_beats("list")
+        self.assertEqual((code, len(value["beats"])), (0, 1))
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        marker = self.home / "proved"
+        environment = dict(os.environ, HOME=str(self.home), FAKE_PROOF_MARKER=str(marker))
+        process = subprocess.Popen([sys.executable, str(self.controller), "beats", "list", "--self", "--session-id",
+                                    SESSION_A], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
+        try:
+            # Wait (hang guard only) until the ownership proof ran, so a lock-ignoring list would read
+            # the old store before the change below; a list that honors the lock always sees it.
+            deadline = time.monotonic() + 30
+            while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            time.sleep(0.3)
+            path = self.root / "beats.json"
+            state = json.loads(path.read_text())
+            state["beats"].append(beat("0 10 * * *"))
+            API["write_private"](path, API["beats_encode"](state))
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        output, _ = process.communicate(timeout=30)
+        self.assertEqual(process.returncode, 0, output)
+        self.assertEqual(sorted(item["cron"] for item in json.loads(output)["beats"]), ["0 10 * * *", "0 9 * * 1-5"])
+
+    def test_list_requires_the_own_session_proof(self):
+        code, value = self.run_beats("list", deny=True)
+        self.assertNotEqual(code, 0)
+        self.assertIn("could not prove ownership", value["error"])
+        self.assertFalse(self.root.exists())
+        code, value = self.run_beats("list", own=False)
+        self.assertNotEqual(code, 0)
+        self.assertIn("--self for your own session", value["error"])
+        self.assertFalse(self.root.exists())
 
     def test_validation_and_limits(self):
         for arguments in (("--cron", "nope", "--prompt", "x"), ("--cron", "* * * * *", "--prompt", "  "),
@@ -397,8 +575,8 @@ class AgentSurfaceTests(unittest.TestCase):
         self.assertEqual(self.snapshot(json.dumps({"sessionId": SESSION_A})), (0, {"ok": True, "beats": []}))
         self.assertFalse(self.root.exists())
         live = self.create(prompt="live")
-        paused = self.create(prompt="paused")
-        self.run_beats("pause", "--beat-id", paused["id"])
+        disabled = self.create(prompt="disabled")
+        self.run_beats("disable", "--beat-id", disabled["id"])
         self.create(prompt="other", session=SESSION_B)
         code, value = self.snapshot(json.dumps({"sessionId": SESSION_A}))
         self.assertEqual(code, 0, value)

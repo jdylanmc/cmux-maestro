@@ -10,7 +10,7 @@ Card shows agent icon and title, current activity, workspace with model on right
 worktree (worktrees labelled). No sub-agent, skill, shell or
 internal-task rows; those stay in Hierarchy. Select card to focus its terminal.
 Beats opens native popover. Create, edit,
-pause, delete recurring prompts there. Icon lights while a Beat is enabled.
+enable, disable, delete recurring prompts there. Icon lights while a Beat is enabled.
 Beats run on Copilot's own scheduler. Maestro extension loaded in each CMUX Copilot
 session asks the controller (`beats-snapshot`) for that session's enabled Beats and
 mirrors them into native cron schedules; it never parses `beats.json` itself. An invalid

@@ -47,30 +47,29 @@ nonisolated struct BeatsCron: Equatable {
         guard fields.count == 5 else {
             throw BeatsError("Cron must have exactly five fields: minute hour day-of-month month weekday.")
         }
-        var sets: [Set<Int>] = []
-        var stars: [Bool] = []
-        for (text, range) in zip(fields, Self.ranges) {
-            var values = Set<Int>()
-            // Copilot's scheduler refuses a bare * inside a list (for example *,5).
-            let items = text.split(separator: ",", omittingEmptySubsequences: false)
-            guard items.count == 1 || !items.contains("*") else {
-                throw BeatsError("Cron \(range.name) field cannot list * with other values.")
-            }
-            for item in items {
-                values.formUnion(try Self.expand(String(item), range))
-            }
-            if range.name == "weekday" { values = Set(values.map { $0 % 7 }) }
-            sets.append(values)
-            // Only a bare `*` leaves a day field unrestricted; `*/2` restricts it (Copilot's scheduler).
-            stars.append(text == "*")
-        }
+        let sets = try zip(fields, Self.ranges).map { text, range in try Self.fieldValues(text, range) }
         expression = fields.joined(separator: " ")
         minutes = sets[0]; hours = sets[1]; days = sets[2]; months = sets[3]; weekdays = sets[4]
-        dayIsStar = stars[2]; weekdayIsStar = stars[4]
+        // Only a bare `*` leaves a day field unrestricted; `*/2` restricts it (Copilot's scheduler).
+        dayIsStar = fields[2] == "*"; weekdayIsStar = fields[4] == "*"
         if !dayIsStar && weekdayIsStar {
             let possible = months.contains { month in days.contains { $0 <= Self.daysInMonth[month - 1] } }
             guard possible else { throw BeatsError("That cron expression can never match a real date.") }
         }
+    }
+
+    /// One cron field's values; weekday 7 folds onto 0 (Sunday).
+    private static func fieldValues(_ text: String, _ range: (name: String, low: Int, high: Int)) throws -> Set<Int> {
+        // Copilot's scheduler refuses a bare * inside a list (for example *,5).
+        let items = text.split(separator: ",", omittingEmptySubsequences: false)
+        guard items.count == 1 || !items.contains("*") else {
+            throw BeatsError("Cron \(range.name) field cannot list * with other values.")
+        }
+        var values = Set<Int>()
+        for item in items {
+            values.formUnion(try expand(String(item), range))
+        }
+        return range.name == "weekday" ? Set(values.map { $0 % 7 }) : values
     }
 
     private static let itemPattern = /^(\*|[0-9]{1,2}(?:-[0-9]{1,2})?)(?:\/([0-9]{1,2}))?$/
@@ -320,7 +319,7 @@ nonisolated struct SidebarBeatsState: Equatable {
     /// Cron, prompt and target session may change; whether the Beat is on does not.
     /// `basedOn` is the Beat the edit started from. If its cron, prompt or session changed since,
     /// the edit is refused rather than overwriting that change; on/off is never written by an edit,
-    /// so pausing or resuming elsewhere is not a conflict. Pass nil only for a deliberate blind edit.
+    /// so enabling or disabling elsewhere is not a conflict. Pass nil only for a deliberate blind edit.
     mutating func edit(id: String, cron: String?, prompt: String?, session: UUID?, basedOn: SidebarBeat?) throws {
         let position = try index(id)
         var beat = beats[position]
@@ -342,7 +341,7 @@ nonisolated struct SidebarBeatsState: Equatable {
         beats[position] = beat
     }
 
-    mutating func pause(id: String) throws {
+    mutating func disable(id: String) throws {
         let position = try index(id)
         beats[position].enabled = false
         beats[position].updatedAt = Self.stamp(); beats[position].revision += 1
@@ -359,7 +358,8 @@ nonisolated struct SidebarBeatsState: Equatable {
     }
 }
 
-/// Store shared with the orchestrator; lock file plus atomic replace.
+/// Store shared with the orchestrator; lock file plus atomic replace. Its folder is the sidebar's
+/// only write grant outside its container (docs/adr/0020).
 nonisolated struct SidebarBeatsFile {
     let root: URL
 
@@ -438,6 +438,13 @@ nonisolated struct SidebarBeatsFile {
         if failed || rename(temporary.path, root.appendingPathComponent("beats.json").path) != 0 {
             unlink(temporary.path)
             throw BeatsError("The Beats store could not be written.")
+        }
+        // Harden the rename, as the orchestrator does. The change has already landed, so a failed
+        // folder sync is not a write failure; reporting one would invite a repeated change.
+        let folder = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        if folder >= 0 {
+            _ = fsync(folder)
+            close(folder)
         }
     }
 }
