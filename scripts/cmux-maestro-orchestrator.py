@@ -4662,8 +4662,8 @@ def beats_decode(raw):
     except (UnicodeError, ValueError, RecursionError) as error:
         raise OrchestrationError("The Beats store is not valid JSON.") from error
     if isinstance(state, dict) and type(state.get("version")) is int and state["version"] == BEATS_LEGACY_VERSION:
-        # Version 1 carried the rejected recovery gate and Maestro clock. Its Beats are dropped;
-        # the next write replaces the file with an empty version 2 store.
+        # Version 1 carried the rejected recovery gate and Maestro clock. Its Beats read as empty;
+        # the next write (never a read) replaces the file with a version 2 store.
         return {"version": BEATS_VERSION, "beats": []}
     return validate_beats_state(state)
 
@@ -4793,6 +4793,9 @@ def beats_command(args):
     session = canonical_uuid(args.session_id, "current session ID")
     prove_own_session(session)
     action = BEATS_ACTION_ALIASES.get(args.beats_action, args.beats_action)
+    if action == "list":
+        # Reads never write: a rewrite would wake every store watcher.
+        return {"beats": [beat_view(item) for item in beats_store_snapshot()["beats"] if item["sessionId"] == session]}
 
     def own(state):
         if args.beat_id is None:
@@ -4805,8 +4808,6 @@ def beats_command(args):
 
     def operate(state):
         stamp = now()
-        if action == "list":
-            return {"beats": [beat_view(item) for item in state["beats"] if item["sessionId"] == session]}
         if action == "create":
             spec = parse_cron(args.cron)
             prompt = validate_beat_prompt(args.prompt)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fast, deterministic tests for Beats: cron evaluation, local-time/DST rules, the shared
 definition store, and the exact-self agent surface. No real clock, session or network."""
+import fcntl
 import json
 import os
 import runpy
@@ -233,6 +234,48 @@ class StoreTests(unittest.TestCase):
         after = os.stat(self.root / "beats.json")
         self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
 
+    def test_snapshot_leaves_store_bytes_untouched_and_creates_nothing(self):
+        self.root.mkdir(mode=0o700)
+        self.assertEqual(API["beats_store_snapshot"](root=self.root)["beats"], [])
+        self.assertEqual(sorted(os.listdir(self.root)), [])
+        store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
+        path = self.root / "beats.json"
+        before, content = os.stat(path), path.read_bytes()
+        API["beats_store_snapshot"](root=self.root)
+        after = os.stat(path)
+        self.assertEqual(path.read_bytes(), content)
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+
+    def hold_lock(self, operation):
+        store_mutate(lambda state: state["beats"].append(beat("0 9 * * *")), root=self.root)
+        descriptor = os.open(self.root / ".lock", os.O_RDONLY)
+        fcntl.flock(descriptor, operation)
+        self.addCleanup(os.close, descriptor)
+        return descriptor
+
+    def snapshot_in_background(self):
+        results = []
+        thread = threading.Thread(target=lambda: results.append(API["beats_store_snapshot"](root=self.root)))
+        thread.start()
+        return thread, results
+
+    def test_snapshot_coexists_with_another_reader(self):
+        self.hold_lock(fcntl.LOCK_SH)
+        thread, results = self.snapshot_in_background()
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(results[0]["beats"]), 1)
+
+    def test_snapshot_waits_for_a_writer(self):
+        descriptor = self.hold_lock(fcntl.LOCK_EX)
+        thread, results = self.snapshot_in_background()
+        thread.join(0.3)
+        self.assertTrue(thread.is_alive())
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(results[0]["beats"]), 1)
+
     def test_snapshot_refuses_fifos_without_blocking(self):
         self.root.mkdir(mode=0o700)
         os.mkfifo(self.root / ".lock", 0o600)
@@ -378,15 +421,50 @@ class AgentSurfaceTests(unittest.TestCase):
         self.assertIn("could not prove ownership", value["error"])
         self.assertFalse((self.root / "beats.json").exists())
 
-    def test_version_one_store_is_dropped_on_next_write(self):
+    def test_version_one_store_reads_empty_and_is_dropped_on_next_write(self):
         self.root.mkdir(mode=0o700, parents=True)
         path = self.root / "beats.json"
         path.write_text(json.dumps({"version": 1, "beats": [{"id": "legacy", "recoveryGate": True}]}))
         path.chmod(0o600)
+        content = path.read_bytes()
         self.assertEqual(self.run_beats("list")[1]["beats"], [])
-        self.assertEqual(json.loads(path.read_text()), {"version": 2, "beats": []})
+        self.assertEqual(path.read_bytes(), content)
         created = self.create()
         self.assertEqual([item["id"] for item in json.loads(path.read_text())["beats"]], [created["id"]])
+
+    def test_list_never_writes_or_creates_the_store(self):
+        code, value = self.run_beats("list")
+        self.assertEqual((code, value["beats"]), (0, []))
+        self.assertFalse(self.root.exists())
+        self.create()
+        path = self.root / "beats.json"
+        before, content = os.stat(path), path.read_bytes()
+        names = sorted(os.listdir(self.root))
+        self.assertEqual(len(self.run_beats("list")[1]["beats"]), 1)
+        after = os.stat(path)
+        self.assertEqual(path.read_bytes(), content)
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+        self.assertEqual(sorted(os.listdir(self.root)), names)
+
+    def test_list_shares_the_lock_with_readers_and_waits_for_writers(self):
+        self.create()
+        descriptor = os.open(self.root / ".lock", os.O_RDONLY)
+        self.addCleanup(os.close, descriptor)
+        fcntl.flock(descriptor, fcntl.LOCK_SH)
+        code, value = self.run_beats("list")
+        self.assertEqual((code, len(value["beats"])), (0, 1))
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        environment = dict(os.environ, HOME=str(self.home))
+        process = subprocess.Popen([sys.executable, str(self.controller), "beats", "list", "--self", "--session-id",
+                                    SESSION_A], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
+        try:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                process.wait(1)
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        output, _ = process.communicate(timeout=30)
+        self.assertEqual((process.returncode, len(json.loads(output)["beats"])), (0, 1))
 
     def test_validation_and_limits(self):
         for arguments in (("--cron", "nope", "--prompt", "x"), ("--cron", "* * * * *", "--prompt", "  "),
