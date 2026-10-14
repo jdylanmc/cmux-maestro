@@ -198,7 +198,8 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
 - Maestro adds no retries, receipts, completion tracking or queue editing; Copilot decides
   delivery. Disable, edit and delete affect future runs.
 - A Beat is simply on or off: `enable` turns it on, `disable` turns it off (`resume` and
-  `pause` are older aliases; "resume" otherwise means resuming a Copilot session). You cannot reassign a Beat or touch another session's Beats.
+  `pause` are older aliases; "resume" otherwise means resuming a Copilot session).
+  You cannot reassign a Beat or touch another session's Beats.
 - Beats run on **Copilot's own scheduler**. The Maestro extension in each CMUX session
   asks the Maestro controller for that session's enabled Beats and mirrors them into
   Copilot schedules (labelled `Beat [id]`),
