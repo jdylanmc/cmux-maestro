@@ -13,7 +13,22 @@ nonisolated struct SidebarOrderScope: Hashable, Codable, Sendable {
 
 nonisolated struct SidebarOrderItem: Equatable, Sendable {
     let id: UUID
-    let pinned: Bool
+    /// Nil when CMUX did not report pin state. Unknown is never treated as unpinned
+    /// (ADR 0002): such an item keeps its base position and cannot move or be a target.
+    let pinned: Bool?
+    /// Presentation block the row renders in (e.g. managed agents before other surfaces).
+    /// Items never move between blocks.
+    var block: Int = 0
+
+    init(id: UUID, pinned: Bool?, block: Int = 0) {
+        self.id = id
+        self.pinned = pinned
+        self.block = block
+    }
+
+    fileprivate var group: Group? { pinned.map { Group(block: block, pinned: $0) } }
+
+    fileprivate struct Group: Hashable { let block: Int; let pinned: Bool }
 }
 
 nonisolated enum SidebarOrderPlacement: Equatable, Sendable {
@@ -30,32 +45,37 @@ nonisolated enum SidebarOrderPlacement: Equatable, Sendable {
 nonisolated enum SidebarOrderDirection: Sendable { case up, down }
 
 nonisolated enum SidebarOrderRefusal: Error, Equatable, Sendable {
-    case ambiguous, unknownItem, outsideScope, acrossPinBoundary, atEdge
+    case ambiguous, pinUnknown, unknownItem, outsideScope, acrossPinBoundary, acrossBlock, atEdge
 
     var notice: String {
         switch self {
-        case .ambiguous: "CMUX reported the same item twice, so Maestro's order is unavailable here."
+        case .ambiguous: "CMUX reported the same item twice, so this list can't be reordered."
+        case .pinUnknown: "CMUX did not report whether this item is pinned, so it can't be reordered."
         case .unknownItem: "That item is no longer shown. Nothing was moved."
         case .outsideScope: "Items move only among their siblings. Nothing was moved."
         case .acrossPinBoundary: "Pinned and unpinned items keep their own groups. Nothing was moved."
+        case .acrossBlock: "Managed agents and other surfaces keep their own groups. Nothing was moved."
         case .atEdge: "Already at the edge of its group. Nothing was moved."
         }
     }
 }
 
-/// Pure ordering rules. CMUX's order is the base; a saved list only permutes it.
+/// Pure ordering rules. The base order (CMUX's, or Maestro's default presentation of it)
+/// is kept; a saved list only permutes items inside their own group.
 nonisolated enum SidebarOrdering {
-    /// Display order of `items` (CMUX order) under `saved`.
+    /// Display order of `items` (base order) under `saved`.
     /// - Saved IDs keep their saved relative order; stale saved IDs are ignored.
-    /// - An unsaved (new) item goes right after its CMUX-order predecessor in the
-    ///   same pin group, or first in the group when it has none.
-    /// - Pinned and unpinned items each keep the positions CMUX gave their group,
-    ///   so reordering never moves an item across the pin boundary.
-    /// - Duplicate IDs are ambiguous evidence: CMUX order is returned unchanged.
+    /// - An unsaved (new) item goes right after its base-order predecessor in the
+    ///   same group, or first in the group when it has none.
+    /// - Each group (block × pinned) keeps the positions the base gave it, so a
+    ///   reorder never crosses the pin boundary or a presentation block.
+    /// - Items with unknown pin state keep their base position.
+    /// - Duplicate IDs leave the base order unchanged.
     static func display(_ items: [SidebarOrderItem], saved: [UUID]?) -> [UUID] {
-        guard let saved, !saved.isEmpty, isUnambiguous(items) else { return items.map(\.id) }
-        return fill(items, pinned: merge(items.filter(\.pinned).map(\.id), saved: saved),
-                    unpinned: merge(items.filter { !$0.pinned }.map(\.id), saved: saved))
+        guard let saved, !saved.isEmpty, refusal(items) == nil else { return items.map(\.id) }
+        var groups: [SidebarOrderItem.Group: [UUID]] = [:]
+        for item in items { if let group = item.group { groups[group, default: []].append(item.id) } }
+        return fill(items, groups.mapValues { merge($0, saved: saved) })
     }
 
     static func arrange<Value>(
@@ -67,36 +87,45 @@ nonisolated enum SidebarOrdering {
         return display(items, saved: saved).compactMap { byID[$0] }
     }
 
+    /// Why the whole list can't be reordered, or nil.
+    static func refusal(_ items: [SidebarOrderItem]) -> SidebarOrderRefusal? {
+        isUnambiguous(items) ? nil : .ambiguous
+    }
+
     /// New saved list after moving `id` next to the placement target, or a refusal.
     /// The result is the full display order of present items, so stale IDs are pruned.
     static func move(
         _ id: UUID, to placement: SidebarOrderPlacement, in items: [SidebarOrderItem], saved: [UUID]?
     ) -> Result<[UUID], SidebarOrderRefusal> {
-        guard isUnambiguous(items) else { return .failure(.ambiguous) }
+        if let refusal = refusal(items) { return .failure(refusal) }
         guard let moving = items.first(where: { $0.id == id }) else { return .failure(.unknownItem) }
         guard let target = items.first(where: { $0.id == placement.target }) else { return .failure(.outsideScope) }
+        guard moving.pinned != nil, target.pinned != nil else { return .failure(.pinUnknown) }
+        guard moving.block == target.block else { return .failure(.acrossBlock) }
         guard moving.pinned == target.pinned else { return .failure(.acrossPinBoundary) }
         let current = display(items, saved: saved)
         guard id != target.id else { return .success(current) }
-        let pinnedIDs = Set(items.filter(\.pinned).map(\.id))
-        var group = current.filter { pinnedIDs.contains($0) == moving.pinned && $0 != id }
-        guard let index = group.firstIndex(of: target.id) else { return .failure(.outsideScope) }
+        let groupOf = Dictionary(uniqueKeysWithValues: items.compactMap { item in item.group.map { (item.id, $0) } })
+        var groups: [SidebarOrderItem.Group: [UUID]] = [:]
+        for itemID in current { if let group = groupOf[itemID] { groups[group, default: []].append(itemID) } }
+        guard let key = moving.group, var group = groups[key]?.filter({ $0 != id }),
+              let index = group.firstIndex(of: target.id) else { return .failure(.outsideScope) }
         if case .before = placement { group.insert(id, at: index) } else { group.insert(id, at: index + 1) }
-        let other = current.filter { pinnedIDs.contains($0) != moving.pinned }
-        return .success(fill(items, pinned: moving.pinned ? group : other, unpinned: moving.pinned ? other : group))
+        groups[key] = group
+        return .success(fill(items, groups))
     }
 
-    /// Placement for Move Up/Down among the rows actually shown, skipping the
-    /// other pin group. Nil at the edge of the group.
+    /// Placement for Move Up/Down among the rows actually shown, skipping other
+    /// groups. Nil at the edge of the group.
     static func step(
         _ id: UUID, _ direction: SidebarOrderDirection, visible: [UUID], items: [SidebarOrderItem]
     ) -> SidebarOrderPlacement? {
-        guard isUnambiguous(items), let moving = items.first(where: { $0.id == id }),
+        guard refusal(items) == nil, let moving = items.first(where: { $0.id == id }), moving.group != nil,
               let index = visible.firstIndex(of: id) else { return nil }
-        let pinned = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.pinned) })
+        let groupOf = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.group) })
         let candidates = direction == .up
             ? Array(visible[..<index].reversed()) : Array(visible[(index + 1)...])
-        guard let neighbor = candidates.first(where: { pinned[$0] == moving.pinned }) else { return nil }
+        guard let neighbor = candidates.first(where: { groupOf[$0] == moving.group }) else { return nil }
         return direction == .up ? .before(neighbor) : .after(neighbor)
     }
 
@@ -104,22 +133,25 @@ nonisolated enum SidebarOrdering {
         Set(items.map(\.id)).count == items.count
     }
 
-    private static func merge(_ cmux: [UUID], saved: [UUID]) -> [UUID] {
-        let present = Set(cmux)
+    private static func merge(_ base: [UUID], saved: [UUID]) -> [UUID] {
+        let present = Set(base)
         var seen: Set<UUID> = []
         var result = saved.filter { present.contains($0) && seen.insert($0).inserted }
-        for (offset, id) in cmux.enumerated() where !seen.contains(id) {
-            // Earlier CMUX items are already placed, so the predecessor always exists.
-            let position = offset == 0 ? 0 : (result.firstIndex(of: cmux[offset - 1]).map { $0 + 1 } ?? result.count)
+        for (offset, id) in base.enumerated() where !seen.contains(id) {
+            // Earlier base items are already placed, so the predecessor always exists.
+            let position = offset == 0 ? 0 : (result.firstIndex(of: base[offset - 1]).map { $0 + 1 } ?? result.count)
             result.insert(id, at: position)
             seen.insert(id)
         }
         return result
     }
 
-    private static func fill(_ items: [SidebarOrderItem], pinned: [UUID], unpinned: [UUID]) -> [UUID] {
-        var pinnedSlots = pinned.makeIterator(), unpinnedSlots = unpinned.makeIterator()
-        return items.compactMap { $0.pinned ? pinnedSlots.next() : unpinnedSlots.next() }
+    private static func fill(_ items: [SidebarOrderItem], _ groups: [SidebarOrderItem.Group: [UUID]]) -> [UUID] {
+        var slots = groups.mapValues { $0.makeIterator() }
+        return items.compactMap { item in
+            guard let group = item.group else { return item.id }
+            return slots[group]?.next()
+        }
     }
 }
 
@@ -139,7 +171,7 @@ nonisolated struct SidebarOrderSettings: SidebarPreferenceValue {
     static let saveNotice = "Sidebar order could not be saved. CMUX's order is unchanged. Check local storage and retry."
 
     var version = 1
-    /// Least recently changed first; the oldest scope is evicted when full.
+    /// Least recently changed first. When full, surface lists are evicted before workspace lists.
     private(set) var records: [SidebarOrderRecord] = []
 
     var isValid: Bool {
@@ -168,11 +200,20 @@ nonisolated struct SidebarOrderSettings: SidebarPreferenceValue {
                 throw SidebarPreferenceRejection(notice: "This list is too long to reorder (limit 512). Nothing was moved.")
             }
             records.append(.init(scope: scope, ids: order))
-            if records.count > Self.maximumScopes { records.removeFirst(records.count - Self.maximumScopes) }
-            while try JSONEncoder().encode(self).count > Self.maximumStoredBytes, records.count > 1 {
-                records.removeFirst()
-            }
+            while records.count > Self.maximumScopes, evictOne(keeping: scope) {}
+            while try JSONEncoder().encode(self).count > Self.maximumStoredBytes, evictOne(keeping: scope) {}
         }
+    }
+
+    /// Drops the least recently changed surface list first; a window's workspace list is
+    /// saved rarely but read constantly, so it goes only when no surface list is left.
+    private mutating func evictOne(keeping scope: SidebarOrderScope) -> Bool {
+        let candidates = records.indices.filter { records[$0].scope != scope }
+        guard let index = candidates.first(where: { records[$0].scope.kind == .surfaces }) ?? candidates.first else {
+            return false
+        }
+        records.remove(at: index)
+        return true
     }
 
     mutating func reset(_ scope: SidebarOrderScope) {

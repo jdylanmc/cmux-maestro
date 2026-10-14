@@ -168,4 +168,63 @@ struct SidebarOrderTests {
         preferences.applyOrder(.move(b, .before(a), scope: scope, items: items([a, b])))
         #expect(fixture.preferences().order.ids(for: scope) == [b, a])
     }
+
+    @Test func aNewPinnedItemInAnInterleavedListFollowsItsPinnedPredecessor() {
+        let n = UUID()
+        // CMUX: a(p) c n(p) b(p) d. Saved: b a d c. n follows a, its pinned CMUX predecessor.
+        let cmux = items([a, c, n, b, d], pinned: [a, n, b])
+        #expect(SidebarOrdering.display(cmux, saved: [b, a, d, c]) == [b, d, a, n, c])
+    }
+
+    @Test func unknownPinStateKeepsTheItemInPlaceAndUnmovable() {
+        let cmux = [SidebarOrderItem(id: a, pinned: false), SidebarOrderItem(id: b, pinned: nil),
+                    SidebarOrderItem(id: c, pinned: false)]
+        #expect(SidebarOrdering.display(cmux, saved: [c, a]) == [c, b, a])
+        #expect(SidebarOrdering.move(b, to: .before(a), in: cmux, saved: nil) == .failure(.pinUnknown))
+        #expect(SidebarOrdering.move(c, to: .before(b), in: cmux, saved: nil) == .failure(.pinUnknown))
+        #expect(SidebarOrdering.step(b, .up, visible: [a, b, c], items: cmux) == nil)
+        #expect(SidebarOrdering.step(c, .up, visible: [a, b, c], items: cmux) == .before(a))
+        #expect(SidebarOrdering.move(c, to: .before(a), in: cmux, saved: nil) == .success([c, b, a]))
+    }
+
+    @Test func presentationBlocksKeepTheirSlots() {
+        let cmux = [SidebarOrderItem(id: a, pinned: false, block: 0), SidebarOrderItem(id: b, pinned: false, block: 0),
+                    SidebarOrderItem(id: c, pinned: false, block: 1), SidebarOrderItem(id: d, pinned: false, block: 1)]
+        #expect(SidebarOrdering.display(cmux, saved: [d, b, c, a]) == [b, a, d, c])
+        #expect(SidebarOrdering.move(c, to: .before(a), in: cmux, saved: nil) == .failure(.acrossBlock))
+        #expect(SidebarOrdering.step(c, .up, visible: [a, b, c, d], items: cmux) == nil)
+        #expect(SidebarOrdering.move(b, to: .before(a), in: cmux, saved: nil) == .success([b, a, c, d]))
+    }
+
+    @Test func evictionKeepsALiveWorkspaceListThatWasSavedFirst() throws {
+        var settings = SidebarOrderSettings()
+        let workspaces = SidebarOrderScope.workspaces(window: UUID())
+        try settings.move(b, to: .before(a), in: workspaces, items: items([a, b]))
+        for _ in 0..<(SidebarOrderSettings.maximumScopes + 10) {
+            try settings.move(b, to: .before(a), in: .surfaces(workspace: UUID()), items: items([a, b]))
+        }
+        #expect(settings.records.count == SidebarOrderSettings.maximumScopes)
+        #expect(settings.ids(for: workspaces) == [b, a])
+    }
+
+    @Test func byteCapEvictsOldestSurfaceListsAndKeepsTheOneBeingSaved() throws {
+        var settings = SidebarOrderSettings()
+        let workspaces = SidebarOrderScope.workspaces(window: UUID())
+        try settings.move(b, to: .before(a), in: workspaces, items: items([a, b]))
+        var scopes: [SidebarOrderScope] = []
+        for _ in 0..<60 {
+            let ids = (0..<SidebarOrderSettings.maximumIDsPerScope).map { _ in UUID() }
+            let scope = SidebarOrderScope.surfaces(workspace: UUID())
+            scopes.append(scope)
+            try settings.move(ids[ids.count - 1], to: .before(ids[0]), in: scope, items: items(ids))
+        }
+        let size = try JSONEncoder().encode(settings).count
+        #expect(size <= SidebarOrderSettings.maximumStoredBytes)
+        #expect(settings.records.count < 61)
+        let newest = try #require(scopes.last), oldest = try #require(scopes.first)
+        #expect(settings.ids(for: newest) != nil)
+        #expect(settings.ids(for: oldest) == nil)
+        #expect(settings.ids(for: workspaces) == [b, a])
+        #expect(settings.isValid)
+    }
 }

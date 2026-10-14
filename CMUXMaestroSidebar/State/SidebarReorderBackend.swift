@@ -16,6 +16,13 @@ nonisolated struct SidebarReorderCapabilities: Equatable, Sendable {
     static let full = Self(canMove: true, canReset: true)
 }
 
+nonisolated enum SidebarReorderOutcome: Equatable, Sendable {
+    case applied
+    /// Accepted by an asynchronous backend; the next snapshot shows the result.
+    case pending
+    case refused(String)
+}
+
 /// The one seam every move or reset goes through, whether from drag, menu or VoiceOver.
 /// Operations take exact CMUX UUIDs only (ADR 0002). `siblings` is the current CMUX
 /// order of the list with pin flags; a host backend may ignore it.
@@ -25,9 +32,19 @@ protocol SidebarReorderBackend: AnyObject {
     func capabilities(for kind: SidebarOrderScope.Kind) -> SidebarReorderCapabilities
     /// Saved Maestro order for one list, or nil. Ignored unless the authority is local.
     func overlay(for scope: SidebarOrderScope) -> [UUID]?
-    func moveWorkspace(_ id: UUID, _ placement: SidebarOrderPlacement, window: UUID, siblings: [SidebarOrderItem])
-    func moveSurface(_ id: UUID, _ placement: SidebarOrderPlacement, workspace: UUID, siblings: [SidebarOrderItem])
+    @discardableResult
+    func moveWorkspace(_ id: UUID, _ placement: SidebarOrderPlacement, window: UUID, siblings: [SidebarOrderItem]) -> SidebarReorderOutcome
+    @discardableResult
+    func moveSurface(_ id: UUID, _ placement: SidebarOrderPlacement, workspace: UUID, siblings: [SidebarOrderItem]) -> SidebarReorderOutcome
     func resetOrder(_ scope: SidebarOrderScope)
+    /// Settings' global reset. False when any kind it covers is host-ordered, so a reset
+    /// can never wipe a saved order that is waiting to be migrated (ADR 0021).
+    var canResetAll: Bool { get }
+    /// Whether anything is saved (or unreadable) for the global reset to clear.
+    var hasSavedOrder: Bool { get }
+    func resetAll()
+    /// Re-read any stored order (on appear and activation).
+    func refresh()
     /// Latest visible failure, if any.
     var notice: String? { get }
 }
@@ -43,15 +60,24 @@ final class LocalSidebarReorderBackend: SidebarReorderBackend {
     func capabilities(for kind: SidebarOrderScope.Kind) -> SidebarReorderCapabilities { .full }
     func overlay(for scope: SidebarOrderScope) -> [UUID]? { store.order.ids(for: scope) }
 
-    func moveWorkspace(_ id: UUID, _ placement: SidebarOrderPlacement, window: UUID, siblings: [SidebarOrderItem]) {
-        store.applyOrder(.move(id, placement, scope: .workspaces(window: window), items: siblings))
+    func moveWorkspace(_ id: UUID, _ placement: SidebarOrderPlacement, window: UUID, siblings: [SidebarOrderItem]) -> SidebarReorderOutcome {
+        apply(.move(id, placement, scope: .workspaces(window: window), items: siblings))
     }
 
-    func moveSurface(_ id: UUID, _ placement: SidebarOrderPlacement, workspace: UUID, siblings: [SidebarOrderItem]) {
-        store.applyOrder(.move(id, placement, scope: .surfaces(workspace: workspace), items: siblings))
+    func moveSurface(_ id: UUID, _ placement: SidebarOrderPlacement, workspace: UUID, siblings: [SidebarOrderItem]) -> SidebarReorderOutcome {
+        apply(.move(id, placement, scope: .surfaces(workspace: workspace), items: siblings))
+    }
+
+    private func apply(_ change: SidebarOrderChange) -> SidebarReorderOutcome {
+        store.applyOrder(change)
+        return store.orderNotice.map(SidebarReorderOutcome.refused) ?? .applied
     }
 
     func resetOrder(_ scope: SidebarOrderScope) { store.applyOrder(.reset(scope)) }
+    var canResetAll: Bool { true }
+    var hasSavedOrder: Bool { store.hasSavedOrder || store.orderNotice != nil }
+    func resetAll() { store.resetOrder() }
+    func refresh() { store.refreshOrder() }
     var notice: String? { store.orderNotice }
 }
 
@@ -89,15 +115,34 @@ final class SidebarScopedReorderBackend: SidebarReorderBackend {
     func capabilities(for kind: SidebarOrderScope.Kind) -> SidebarReorderCapabilities { backend(kind).capabilities(for: kind) }
     func overlay(for scope: SidebarOrderScope) -> [UUID]? { backend(scope.kind).overlay(for: scope) }
 
-    func moveWorkspace(_ id: UUID, _ placement: SidebarOrderPlacement, window: UUID, siblings: [SidebarOrderItem]) {
+    func moveWorkspace(_ id: UUID, _ placement: SidebarOrderPlacement, window: UUID, siblings: [SidebarOrderItem]) -> SidebarReorderOutcome {
         workspaces.moveWorkspace(id, placement, window: window, siblings: siblings)
     }
 
-    func moveSurface(_ id: UUID, _ placement: SidebarOrderPlacement, workspace: UUID, siblings: [SidebarOrderItem]) {
+    func moveSurface(_ id: UUID, _ placement: SidebarOrderPlacement, workspace: UUID, siblings: [SidebarOrderItem]) -> SidebarReorderOutcome {
         surfaces.moveSurface(id, placement, workspace: workspace, siblings: siblings)
     }
 
     func resetOrder(_ scope: SidebarOrderScope) { backend(scope.kind).resetOrder(scope) }
+
+    /// Only when every kind is Maestro-local; the local file covers both kinds.
+    var canResetAll: Bool {
+        selection == .init(workspaces: .maestroLocal, surfaces: .maestroLocal)
+            && workspaces.canResetAll && surfaces.canResetAll
+    }
+
+    var hasSavedOrder: Bool { workspaces.hasSavedOrder || surfaces.hasSavedOrder }
+
+    func resetAll() {
+        guard canResetAll else { return }
+        workspaces.resetAll()
+        if surfaces !== workspaces { surfaces.resetAll() }
+    }
+
+    func refresh() {
+        workspaces.refresh()
+        if surfaces !== workspaces { surfaces.refresh() }
+    }
 
     var notice: String? {
         if workspaces === surfaces { return workspaces.notice }
@@ -119,6 +164,8 @@ nonisolated struct SidebarReorderList<Value> {
     let displayed: [Value]
     let visible: [UUID]
     let hasCustomOrder: Bool
+    /// Row titles for announcements, by ID.
+    var titles: [UUID: String] = [:]
 }
 
 /// Display-order composition. The UI asks this, never `SidebarOrdering`, for order.
@@ -127,6 +174,7 @@ enum SidebarReorderComposition {
     static func compose<Value>(
         _ values: [Value], kind: SidebarOrderScope.Kind, scope: SidebarOrderScope?,
         backend: any SidebarReorderBackend, shown: ((Value) -> Bool)? = nil,
+        title: ((Value) -> String)? = nil,
         item: (Value) -> SidebarOrderItem
     ) -> SidebarReorderList<Value> {
         let authority = backend.authority(for: kind)
@@ -137,11 +185,15 @@ enum SidebarReorderComposition {
         return .init(
             kind: kind, scope: scope, authority: authority, capabilities: backend.capabilities(for: kind),
             items: values.map(item), displayed: displayed, visible: displayed.map { item($0).id },
-            hasCustomOrder: overlay != nil
+            hasCustomOrder: overlay != nil,
+            titles: title.map { title in
+                Dictionary(values.map { (item($0).id, title($0)) }, uniquingKeysWith: { first, _ in first })
+            } ?? [:]
         )
     }
 
-    static func isUnambiguous(_ items: [SidebarOrderItem]) -> Bool { SidebarOrdering.isUnambiguous(items) }
+    /// Why the whole list can't be reordered (duplicate IDs, unknown pin state), or nil.
+    static func refusal(_ items: [SidebarOrderItem]) -> SidebarOrderRefusal? { SidebarOrdering.refusal(items) }
 
     static func step(
         _ id: UUID, _ direction: SidebarOrderDirection, visible: [UUID], items: [SidebarOrderItem]

@@ -31,8 +31,36 @@ final class SidebarReorderDragSession {
 }
 
 nonisolated extension SidebarOrderScope.Kind {
-    var dragType: UTType {
-        UTType(exportedAs: "com.jdylanmc.CMUXMaestroPreview.sidebar-order.\(rawValue)")
+    /// Declared under `UTExportedTypeDeclarations` in `CMUXMaestroSidebar/Info.plist`.
+    var dragTypeIdentifier: String { "com.jdylanmc.CMUXMaestroPreview.sidebar-order.\(rawValue)" }
+    var dragType: UTType { UTType(exportedAs: dragTypeIdentifier, conformingTo: .data) }
+}
+
+/// Sidebar settings' order section, driven only by the backend.
+@MainActor
+struct SidebarReorderSettings {
+    static let resetTitle = "Reset sidebar order"
+    static let resetHelp = "Show every workspace and surface in CMUX's order again, in every window. CMUX is unchanged."
+    let backend: any SidebarReorderBackend
+
+    var copy: String {
+        let how = "Drag a workspace or surface, or use Move Up and Move Down in its actions menu."
+        switch (backend.authority(for: .workspaces), backend.authority(for: .surfaces)) {
+        case (.maestroLocal, .maestroLocal): return "\(how) \(SidebarReorderContext.localHelp)"
+        case (.host, .host): return "\(how) \(SidebarReorderContext.hostHelp)"
+        case (.host, .maestroLocal): return "\(how) Workspace moves change CMUX's order; surface moves change Maestro's order only."
+        case (.maestroLocal, .host): return "\(how) Surface moves change CMUX's order; workspace moves change Maestro's order only."
+        }
+    }
+
+    /// Hidden whenever any kind is host-ordered, so it can't wipe an order awaiting migration.
+    var resetShown: Bool { backend.canResetAll }
+    var resetEnabled: Bool { resetShown && backend.hasSavedOrder }
+    var notice: String? { backend.notice }
+
+    func reset() {
+        guard resetShown else { return }
+        backend.resetAll()
     }
 }
 
@@ -49,6 +77,7 @@ struct SidebarReorderContext {
     let items: [SidebarOrderItem]
     let visible: [UUID]
     let hasCustomOrder: Bool
+    let titles: [UUID: String]
     let session: SidebarReorderDragSession
     let backend: any SidebarReorderBackend
 
@@ -60,15 +89,22 @@ struct SidebarReorderContext {
         items = list.items
         visible = list.visible
         hasCustomOrder = list.hasCustomOrder
+        titles = list.titles
         self.session = session
         self.backend = backend
+    }
+
+    static func empty(backend: any SidebarReorderBackend, session: SidebarReorderDragSession) -> Self {
+        .init(SidebarReorderComposition.compose([UUID](), kind: .surfaces, scope: nil, backend: backend) {
+            SidebarOrderItem(id: $0, pinned: false)
+        }, backend: backend, session: session)
     }
 
     var help: String { authority == .host ? Self.hostHelp : Self.localHelp }
 
     var unavailable: String? {
         if scope == nil { return "CMUX did not report this window's identity, so reordering is unavailable." }
-        if !SidebarReorderComposition.isUnambiguous(items) { return SidebarOrderRefusal.ambiguous.notice }
+        if let refusal = SidebarReorderComposition.refusal(items) { return refusal.notice }
         if !capabilities.canMove { return "CMUX does not allow reordering this list." }
         return nil
     }
@@ -84,16 +120,37 @@ struct SidebarReorderHandle {
     let id: UUID
     let noun: String
 
+    /// Why this row can't move: the whole list is unavailable, or its own pin state is unknown.
+    var unavailable: String? {
+        if let reason = context.unavailable { return reason }
+        if item?.pinned == nil { return SidebarOrderRefusal.pinUnknown.notice }
+        return nil
+    }
+
     func step(_ direction: SidebarOrderDirection) -> SidebarOrderPlacement? {
-        guard context.unavailable == nil else { return nil }
+        guard unavailable == nil else { return nil }
         return SidebarReorderComposition.step(id, direction, visible: context.visible, items: context.items)
     }
 
-    func move(_ placement: SidebarOrderPlacement) {
-        guard let scope = context.scope, context.unavailable == nil else { return }
+    @discardableResult
+    func move(_ placement: SidebarOrderPlacement) -> SidebarReorderOutcome {
+        guard let scope = context.scope else { return .refused(context.unavailable ?? SidebarOrderRefusal.outsideScope.notice) }
+        if let reason = unavailable { return .refused(reason) }
         switch scope.kind {
-        case .workspaces: context.backend.moveWorkspace(id, placement, window: scope.id, siblings: context.items)
-        case .surfaces: context.backend.moveSurface(id, placement, workspace: scope.id, siblings: context.items)
+        case .workspaces: return context.backend.moveWorkspace(id, placement, window: scope.id, siblings: context.items)
+        case .surfaces: return context.backend.moveSurface(id, placement, workspace: scope.id, siblings: context.items)
+        }
+    }
+
+    /// Spoken result of a VoiceOver move: success and what to announce.
+    func announcedMove(_ placement: SidebarOrderPlacement) -> SidebarReorderAnnouncement {
+        let neighbor = context.titles[placement.target] ?? "the next \(noun)"
+        switch move(placement) {
+        case .applied, .pending:
+            if case .before = placement { return .init(succeeded: true, message: "Moved above \(neighbor)") }
+            return .init(succeeded: true, message: "Moved below \(neighbor)")
+        case .refused(let reason):
+            return .init(succeeded: false, message: reason)
         }
     }
 
@@ -102,17 +159,18 @@ struct SidebarReorderHandle {
         context.backend.resetOrder(scope)
     }
 
-    var pinned: Bool { context.items.first { $0.id == id }?.pinned ?? false }
+    private var item: SidebarOrderItem? { context.items.first { $0.id == id } }
+    var pinned: Bool { item?.pinned == true }
 
-    /// Accepts only this sidebar's own drag of a sibling in the same pin group.
+    /// Accepts only this sidebar's own drag of a sibling in the same group (block and pin).
     func accepts(dragging: (scope: SidebarOrderScope, id: UUID)?) -> Bool {
-        guard context.unavailable == nil, let dragging, dragging.scope == context.scope, dragging.id != id,
-              let moving = context.items.first(where: { $0.id == dragging.id }) else { return false }
-        return moving.pinned == pinned
+        guard unavailable == nil, let dragging, dragging.scope == context.scope, dragging.id != id,
+              let item, let moving = context.items.first(where: { $0.id == dragging.id }) else { return false }
+        return moving.pinned == item.pinned && moving.block == item.block
     }
 
     var dragSource: SidebarReorderSource? {
-        guard let scope = context.scope, context.unavailable == nil else { return nil }
+        guard let scope = context.scope, unavailable == nil else { return nil }
         let session = context.session
         return .init(
             type: NSPasteboard.PasteboardType(scope.kind.dragType.identifier),
@@ -126,15 +184,20 @@ struct SidebarReorderHandle {
     var accessibilityActions: [SidebarReorderAccessibilityAction] {
         let suffix = context.authority == .host ? "" : " in Maestro"
         var actions: [SidebarReorderAccessibilityAction] = []
-        if let up = step(.up) { actions.append(.init(name: "Move up\(suffix)", perform: { move(up) })) }
-        if let down = step(.down) { actions.append(.init(name: "Move down\(suffix)", perform: { move(down) })) }
+        if let up = step(.up) { actions.append(.init(name: "Move up\(suffix)", perform: { announcedMove(up) })) }
+        if let down = step(.down) { actions.append(.init(name: "Move down\(suffix)", perform: { announcedMove(down) })) }
         return actions
     }
 }
 
+struct SidebarReorderAnnouncement: Equatable {
+    let succeeded: Bool
+    let message: String
+}
+
 struct SidebarReorderAccessibilityAction {
     let name: String
-    let perform: @MainActor () -> Void
+    let perform: @MainActor () -> SidebarReorderAnnouncement
 }
 
 struct SidebarReorderSource {
@@ -157,10 +220,10 @@ extension EnvironmentValues {
 }
 
 extension SidebarRowActionGroup {
-    static func placement(_ handle: SidebarReorderHandle?) -> Self {
-        guard let handle else { return .placement }
+    static func placement(_ handle: SidebarReorderHandle?, otherwise fixed: FixedPlacement = .listUnavailable) -> Self {
+        guard let handle else { return .placement(fixed) }
         let context = handle.context
-        if let reason = context.unavailable {
+        if let reason = handle.unavailable {
             return .init(title: "Organization", actions: [
                 .unavailable("Move Up", reason), .unavailable("Move Down", reason)
             ], footnote: context.help)
@@ -182,39 +245,63 @@ extension SidebarRowActionGroup {
     }
 }
 
-private struct SidebarReorderDropDelegate: DropDelegate {
+/// Drop handling for one row, independent of SwiftUI's `DropInfo` so it can be tested.
+@MainActor
+struct SidebarReorderDropTarget {
     let handle: SidebarReorderHandle
     let height: Double
 
-    private func placement(_ info: DropInfo) -> SidebarOrderPlacement {
-        SidebarReorderDrop.placement(locationY: info.location.y, height: height, target: handle.id)
+    private var session: SidebarReorderDragSession { handle.context.session }
+
+    func placement(locationY: Double) -> SidebarOrderPlacement {
+        SidebarReorderDrop.placement(locationY: locationY, height: height, target: handle.id)
     }
 
-    func validateDrop(info: DropInfo) -> Bool {
-        guard let kind = handle.context.scope?.kind else { return false }
-        return info.hasItemsConforming(to: [kind.dragType]) && handle.accepts(dragging: handle.context.session.dragging)
+    /// `hasPayload`: the drag carries this list kind's declared type.
+    func validate(hasPayload: Bool) -> Bool {
+        hasPayload && handle.accepts(dragging: session.dragging)
     }
 
+    /// Shows the insertion cue; false means the drop is forbidden here.
+    func update(hasPayload: Bool, locationY: Double) -> Bool {
+        guard validate(hasPayload: hasPayload), let scope = handle.context.scope else { return false }
+        session.show(.init(scope: scope, placement: placement(locationY: locationY)))
+        return true
+    }
+
+    func exit() {
+        if session.indicator?.placement.target == handle.id { session.show(nil) }
+    }
+
+    func perform(hasPayload: Bool, locationY: Double) -> Bool {
+        defer { session.end() }
+        guard validate(hasPayload: hasPayload), let dragging = session.dragging else { return false }
+        let outcome = SidebarReorderHandle(context: handle.context, id: dragging.id, noun: handle.noun)
+            .move(placement(locationY: locationY))
+        if case .refused = outcome { return false }
+        return true
+    }
+}
+
+private struct SidebarReorderDropDelegate: DropDelegate {
+    let target: SidebarReorderDropTarget
+
+    private func hasPayload(_ info: DropInfo) -> Bool {
+        guard let kind = target.handle.context.scope?.kind else { return false }
+        return info.hasItemsConforming(to: [kind.dragType])
+    }
+
+    func validateDrop(info: DropInfo) -> Bool { target.validate(hasPayload: hasPayload(info)) }
     func dropEntered(info: DropInfo) { _ = dropUpdated(info: info) }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        guard validateDrop(info: info), let scope = handle.context.scope else {
-            return DropProposal(operation: .forbidden)
-        }
-        handle.context.session.show(.init(scope: scope, placement: placement(info)))
-        return DropProposal(operation: .move)
+        DropProposal(operation: target.update(hasPayload: hasPayload(info), locationY: info.location.y) ? .move : .forbidden)
     }
 
-    func dropExited(info: DropInfo) {
-        if handle.context.session.indicator?.placement.target == handle.id { handle.context.session.show(nil) }
-    }
+    func dropExited(info: DropInfo) { target.exit() }
 
     func performDrop(info: DropInfo) -> Bool {
-        let session = handle.context.session
-        defer { session.end() }
-        guard validateDrop(info: info), let dragging = session.dragging else { return false }
-        SidebarReorderHandle(context: handle.context, id: dragging.id, noun: handle.noun).move(placement(info))
-        return true
+        target.perform(hasPayload: hasPayload(info), locationY: info.location.y)
     }
 }
 
@@ -223,10 +310,12 @@ private struct SidebarReorderDropModifier: ViewModifier {
     @State private var height: Double = 0
 
     func body(content: Content) -> some View {
-        if let handle, let kind = handle.context.scope?.kind, handle.context.unavailable == nil {
+        if let handle, let kind = handle.context.scope?.kind, handle.unavailable == nil {
             content
                 .onGeometryChange(for: Double.self) { Double($0.size.height) } action: { height = $0 }
-                .onDrop(of: [kind.dragType], delegate: SidebarReorderDropDelegate(handle: handle, height: height))
+                .onDrop(of: [kind.dragType], delegate: SidebarReorderDropDelegate(
+                    target: SidebarReorderDropTarget(handle: handle, height: height)
+                ))
                 .overlay(alignment: edge(handle) ?? .top) {
                     if edge(handle) != nil {
                         Capsule().fill(Color.accentColor)
@@ -292,7 +381,9 @@ extension SidebarTitleNativeButton: NSDraggingSource {
     }
 
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        context == .withinApplication ? .move : []
+        // A remote ExtensionKit view may report its host's window as outside this
+        // application. Acceptance is gated by the in-process drag session instead.
+        .move
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {

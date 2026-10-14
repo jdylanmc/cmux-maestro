@@ -10,6 +10,7 @@ private final class FakeNativeReorderBackend: SidebarReorderBackend {
         case workspace(UUID, SidebarOrderPlacement, window: UUID)
         case surface(UUID, SidebarOrderPlacement, workspace: UUID)
         case reset(SidebarOrderScope)
+        case resetAll
     }
 
     var calls: [Call] = []
@@ -19,13 +20,19 @@ private final class FakeNativeReorderBackend: SidebarReorderBackend {
     func capabilities(for kind: SidebarOrderScope.Kind) -> SidebarReorderCapabilities { capabilities }
     // A misbehaving host backend may report an overlay; composition must still ignore it.
     func overlay(for scope: SidebarOrderScope) -> [UUID]? { [UUID()] }
-    func moveWorkspace(_ id: UUID, _ placement: SidebarOrderPlacement, window: UUID, siblings: [SidebarOrderItem]) {
+    func moveWorkspace(_ id: UUID, _ placement: SidebarOrderPlacement, window: UUID, siblings: [SidebarOrderItem]) -> SidebarReorderOutcome {
         calls.append(.workspace(id, placement, window: window))
+        return .pending
     }
-    func moveSurface(_ id: UUID, _ placement: SidebarOrderPlacement, workspace: UUID, siblings: [SidebarOrderItem]) {
+    func moveSurface(_ id: UUID, _ placement: SidebarOrderPlacement, workspace: UUID, siblings: [SidebarOrderItem]) -> SidebarReorderOutcome {
         calls.append(.surface(id, placement, workspace: workspace))
+        return .pending
     }
     func resetOrder(_ scope: SidebarOrderScope) { calls.append(.reset(scope)) }
+    var canResetAll: Bool { false }
+    var hasSavedOrder: Bool { false }
+    func resetAll() { calls.append(.resetAll) }
+    func refresh() {}
     var notice: String? { nil }
 }
 
@@ -191,5 +198,163 @@ struct SidebarReorderTests {
         #expect(!target.accepts(dragging: session.dragging))
         session.end()
         #expect(session.dragging == nil && session.indicator == nil)
+    }
+
+    @Test func settingsResetIsHiddenWheneverAnyKindIsHostOrdered() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let file = fixture.root.appendingPathComponent("sidebar-order.json")
+        preferences.applyOrder(.move(c, .before(a), scope: .workspaces(window: window), items: items([a, b, c])))
+        let savedBytes = try Data(contentsOf: file)
+
+        let native = FakeNativeReorderBackend()
+        let allNative = SidebarReorderSettings(backend: SidebarScopedReorderBackend(workspaces: native, surfaces: native))
+        #expect(!allNative.resetShown && !allNative.resetEnabled)
+        #expect(allNative.copy.hasSuffix(SidebarReorderContext.hostHelp))
+        allNative.reset()
+        #expect(native.calls.isEmpty)
+        #expect(try Data(contentsOf: file) == savedBytes)
+
+        let local = LocalSidebarReorderBackend(store: preferences)
+        let mixed = SidebarReorderSettings(backend: SidebarScopedReorderBackend(workspaces: native, surfaces: local))
+        #expect(!mixed.resetShown)
+        #expect(mixed.copy.contains("Workspace moves change CMUX's order; surface moves change Maestro's order only."))
+        mixed.reset()
+        #expect(try Data(contentsOf: file) == savedBytes)
+
+        let localOnly = SidebarReorderSettings(backend: SidebarScopedReorderBackend.localOnly(store: preferences))
+        #expect(localOnly.resetShown && localOnly.resetEnabled)
+        #expect(localOnly.copy.hasSuffix(SidebarReorderContext.localHelp))
+        localOnly.reset()
+        #expect(preferences.order.records.isEmpty && !localOnly.resetEnabled)
+    }
+
+    @Test func dropTargetValidatesShowsCueExitsAndPerformsOnlyForSiblings() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let backend = SidebarScopedReorderBackend.localOnly(store: preferences)
+        let session = SidebarReorderDragSession()
+        let scope = SidebarOrderScope.surfaces(workspace: workspace)
+        let context = SidebarReorderContext(compose(.surfaces, [a, b, c], backend: backend), backend: backend, session: session)
+        let onC = SidebarReorderDropTarget(handle: context.handle(for: c, noun: "surface"), height: 40)
+        let onA = SidebarReorderDropTarget(handle: context.handle(for: a, noun: "surface"), height: 40)
+
+        // No drag in progress, or a foreign payload: nothing is accepted.
+        #expect(!onC.validate(hasPayload: true))
+        session.begin(scope, a)
+        #expect(!onC.validate(hasPayload: false))
+        #expect(!onC.update(hasPayload: false, locationY: 5) && session.indicator == nil)
+
+        // Dropping a row onto itself is refused and moves nothing.
+        #expect(!onA.validate(hasPayload: true))
+        #expect(!onA.perform(hasPayload: true, locationY: 5))
+        #expect(session.dragging == nil && preferences.order.records.isEmpty)
+
+        session.begin(scope, a)
+        #expect(onC.update(hasPayload: true, locationY: 30))
+        #expect(session.indicator == .init(scope: scope, placement: .after(c)))
+        onA.exit()
+        #expect(session.indicator != nil)
+        onC.exit()
+        #expect(session.indicator == nil)
+        #expect(onC.update(hasPayload: true, locationY: 30))
+        #expect(onC.perform(hasPayload: true, locationY: 30))
+        #expect(preferences.order.ids(for: scope) == [b, c, a])
+        #expect(session.dragging == nil && session.indicator == nil)
+    }
+
+    @Test func voiceOverMovesAnnounceTheResultAndReportRefusal() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let backend = SidebarScopedReorderBackend.localOnly(store: preferences)
+        let names = [a: "Alpha", b: "Beta", c: "Gamma"]
+        let list = SidebarReorderComposition.compose(
+            [a, b, c], kind: .surfaces, scope: .surfaces(workspace: workspace), backend: backend,
+            title: { names[$0] ?? "" }
+        ) { SidebarOrderItem(id: $0, pinned: false) }
+        let context = SidebarReorderContext(list, backend: backend, session: SidebarReorderDragSession())
+        let actions = context.handle(for: b, noun: "surface").accessibilityActions
+        let up = try #require(actions.first)
+        #expect(up.perform() == .init(succeeded: true, message: "Moved above Alpha"))
+        let down = try #require(context.handle(for: a, noun: "surface").accessibilityActions.last)
+        #expect(down.perform() == .init(succeeded: true, message: "Moved below Beta"))
+
+        // A store that can't be read refuses the move; VoiceOver hears why.
+        try Data("{\"version\":9}".utf8).write(to: fixture.root.appendingPathComponent("sidebar-order.json"))
+        preferences.refreshOrder()
+        let refused = context.handle(for: c, noun: "surface").announcedMove(.before(a))
+        #expect(refused == .init(succeeded: false, message: SidebarOrderSettings.unreadableNotice))
+    }
+
+    @Test func unknownPinStateMakesOnlyThatRowUnmovable() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let backend = SidebarScopedReorderBackend.localOnly(store: fixture.preferences())
+        let session = SidebarReorderDragSession()
+        let list = SidebarReorderComposition.compose(
+            [a, b, c], kind: .workspaces, scope: .workspaces(window: window), backend: backend
+        ) { SidebarOrderItem(id: $0, pinned: $0 == b ? nil : false) }
+        let context = SidebarReorderContext(list, backend: backend, session: session)
+        let unknown = context.handle(for: b, noun: "workspace")
+        #expect(unknown.unavailable == SidebarOrderRefusal.pinUnknown.notice)
+        #expect(unknown.dragSource == nil && unknown.accessibilityActions.isEmpty)
+        for item in try menu(unknown).items { #expect(!item.isEnabled) }
+        #expect(unknown.move(.before(a)) == .refused(SidebarOrderRefusal.pinUnknown.notice))
+        session.begin(.workspaces(window: window), a)
+        #expect(!unknown.accepts(dragging: session.dragging))
+        // Known rows still move, stepping past the unknown one.
+        #expect(context.handle(for: c, noun: "workspace").step(.up) == .before(a))
+    }
+
+    @Test func managedRootAgentsReorderInTheWorkspaceSurfaceListWithinTheirBlock() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let backend = SidebarScopedReorderBackend.localOnly(store: preferences)
+        let start = Date(timeIntervalSince1970: 1_000)
+        func node(_ label: String, surface: UUID, parent: UUID? = nil, offset: TimeInterval) -> SidebarOrchestrationNode {
+            .init(id: UUID(), runId: UUID(), parentId: parent, role: "worker", label: label,
+                  workspaceId: workspace, surfaceId: surface, generation: 1, phase: "completed", availability: "ready",
+                  createdAt: start.addingTimeInterval(offset), updatedAt: start.addingTimeInterval(offset))
+        }
+        func surface(_ id: UUID, _ title: String) -> HierarchySurface {
+            .init(id: id, title: title, kind: .terminal, isFocused: false, isPinned: false, unreadCount: 0,
+                  workingDirectory: .available(nil))
+        }
+        let agentSurfaceA = UUID(), agentSurfaceB = UUID(), childSurface = UUID(), plain = UUID(), orphan = UUID()
+        let first = node("First", surface: agentSurfaceA, offset: 0)
+        let second = node("Second", surface: agentSurfaceB, offset: 10)
+        let child = node("Child", surface: childSurface, parent: first.id, offset: 20)
+        let gone = node("Gone", surface: orphan, offset: 30)
+        let surfaces = [surface(agentSurfaceA, "a"), surface(plain, "Plain"), surface(agentSurfaceB, "b"), surface(childSurface, "c")]
+        func compose() -> SidebarReorderList<SidebarSurfaceUnit> {
+            SidebarSurfaceUnit.compose(
+                workspaceID: workspace, surfaces: surfaces, managed: [first, second, child, gone],
+                observations: .waiting, now: start, backend: backend
+            )
+        }
+        var list = compose()
+        // Managed roots first (default order), then other surfaces; the child agent is not a sibling.
+        #expect(list.visible == [agentSurfaceA, agentSurfaceB, orphan, plain])
+        #expect(list.displayed.compactMap(\.surface).map(\.id) == [plain])
+        let context = SidebarReorderContext(list, backend: backend, session: SidebarReorderDragSession())
+        let secondHandle = context.handle(for: agentSurfaceB, noun: "agent")
+        #expect(secondHandle.step(.up) == .before(agentSurfaceA))
+        #expect(secondHandle.step(.down) == nil, "An agent whose surface is gone has unknown pin state")
+        #expect(context.handle(for: plain, noun: "surface").step(.up) == nil, "Blocks keep their place")
+        #expect(context.handle(for: orphan, noun: "agent").unavailable == SidebarOrderRefusal.pinUnknown.notice)
+        #expect(secondHandle.move(.before(plain)) == .refused(SidebarOrderRefusal.acrossBlock.notice))
+
+        let menuTitles = try menu(secondHandle).items.map(\.title)
+        #expect(menuTitles.contains("Move Up") && menuTitles.last == SidebarReorderContext.localHelp)
+        #expect(secondHandle.move(.before(agentSurfaceA)) == .applied)
+        list = compose()
+        #expect(list.visible == [agentSurfaceB, agentSurfaceA, orphan, plain])
+        #expect(ManagedHierarchyContent.orderedRoots([first, second, gone], visible: list.visible).map(\.label)
+            == ["Second", "First", "Gone"])
+        #expect(ManagedHierarchyContent.orderedRoots([first, second], visible: nil).map(\.label) == ["First", "Second"])
     }
 }

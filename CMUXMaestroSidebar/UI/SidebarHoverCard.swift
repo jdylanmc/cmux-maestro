@@ -818,7 +818,17 @@ struct SidebarTitleButton<Label: View>: NSViewRepresentable {
         button.toolTip = hint
         button.reorder = reorder
         let actions = (reorder?.actions ?? []).map { action in
-            NSAccessibilityCustomAction(name: action.name) { MainActor.assumeIsolated { action.perform() }; return true }
+            NSAccessibilityCustomAction(name: action.name) { [weak button] in
+                MainActor.assumeIsolated {
+                    let result = action.perform()
+                    // Spoken either way, so a refused move is never silent.
+                    NSAccessibility.post(element: button ?? NSApp as Any, notification: .announcementRequested, userInfo: [
+                        .announcement: result.message,
+                        .priority: NSAccessibilityPriorityLevel.high.rawValue
+                    ])
+                    return result.succeeded
+                }
+            }
         }
         button.setAccessibilityCustomActions(actions.isEmpty ? nil : actions)
         button.localFocusID = localFocusID

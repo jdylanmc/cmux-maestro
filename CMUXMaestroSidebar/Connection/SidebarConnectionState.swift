@@ -25,7 +25,10 @@ final class SidebarConnectionModel {
     private(set) var reorderBackend: SidebarScopedReorderBackend?
 
     func setReorderBackend(_ backend: SidebarScopedReorderBackend) {
-        // Keep the current instance unless the per-kind selection changed.
+        // Keep the current instance unless the per-kind selection changed. This assumes a
+        // backend's host transport stays valid across contexts. A future host backend must
+        // resolve the latest `CmuxSidebarHost` per call (or widen `Selection` to include it),
+        // or moves after a reconnect would use a stale host.
         guard reorderBackend?.selection != backend.selection else { return }
         reorderBackend = backend
     }
