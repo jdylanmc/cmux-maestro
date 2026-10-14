@@ -3231,10 +3231,14 @@ struct SidebarPinnedFooter: View {
         .accessibilityIdentifier("sidebar-pinned-details")
     }
 
-    /// The Copilot suffix is shown as a corner icon instead of title text.
-    private var displayTitle: String {
+    private var displayTitle: String { Self.displayTitle(content) }
+
+    /// The Copilot suffix of a CMUX terminal title is shown as a corner icon instead of title text.
+    /// A session name is Copilot's own title and is shown whole.
+    static func displayTitle(_ content: SidebarDetailContent) -> String {
         let suffix = " - GitHub Copilot"
-        guard content.isAgent, content.title.hasSuffix(suffix), content.title.count > suffix.count else { return content.title }
+        guard content.isAgent, !content.titleIsSessionName,
+              content.title.hasSuffix(suffix), content.title.count > suffix.count else { return content.title }
         return String(content.title.dropLast(suffix.count))
     }
 
