@@ -133,13 +133,18 @@ container, using the same coordinator. It holds one list of CMUX UUIDs per windo
 (workspaces) and per workspace (surfaces) and is never sent to CMUX. A list is
 pruned to present IDs only when that list is saved, and dropped when it matches
 CMUX's order again; other windows' lists are never pruned from a current snapshot.
-Storage is bounded to **256 lists / 512 IDs each / 1 MiB**; the least recently
-changed list is evicted. Unreadable or unknown-schema files show CMUX's order and a
+Storage is bounded to **256 lists / 512 IDs each / 1 MiB**. When full, the least
+recently changed surface list is evicted first; workspace lists go only when no
+surface list is left. Lists for closed workspaces are not pruned before that. Unreadable or unknown-schema files show CMUX's order and a
 recoverable notice; only **Reset sidebar order** replaces them. Drag sources are
 the row title controls; drops show a 2-point insertion line at the nearer edge of
 the whole row, including the children it carries.
 All moves and resets go through `SidebarReorderBackend`; the backend is chosen
-per kind in `SidebarReorderBackends.make` (always Maestro-local today).
+per kind in `SidebarReorderBackends.make` (always Maestro-local today). Primary
+managed agents share their workspace's surface list as a first block, keyed by
+their CMUX surface UUID; blocks and pin groups keep their slots. Drag types
+`com.jdylanmc.CMUXMaestroPreview.sidebar-order.{workspaces,surfaces}` are declared
+under `UTExportedTypeDeclarations` in `CMUXMaestroSidebar/Info.plist`.
 
 Layout's file/store types are thin adapters over same preference coordinator
 used by history and acknowledgements. Only layout's mutations and safe eviction
