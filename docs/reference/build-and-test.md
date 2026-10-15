@@ -1,6 +1,7 @@
 # Build and test
 
 Requirements, validation entrypoints, test evidence, validation builds. Short version: [README](../../README.md). Terms: [CONTEXT](../../CONTEXT.md).
+Where suite time goes: [test performance](test-performance.md).
 
 ## Requirements
 
@@ -286,9 +287,11 @@ root explicitly. The Python suites fake only the outside world:
 - The synthetic host (`FAKE_ATTACH_BARRIER`, `FAKE_ATTACH_FAILURE`) holds or
   fails the creator's first `identify` of a new surface.
 - `controller-fixture.py`, written by `scripts/test-cmux-maestro-orchestrator.py`,
-  is the only reader of `FAKE_STARTUP_SECONDS`, `FAKE_HEARTBEAT_SECONDS`,
+  applies `scripts/test-fixtures/orchestrator-controller-edges.py`, the only
+  reader of `FAKE_STARTUP_SECONDS`, `FAKE_HEARTBEAT_SECONDS`,
   `FAKE_ARCHIVE_SECONDS` and `FAKE_GIT`. It also becomes the re-entry point for
-  runtimes and terminals.
+  runtimes and terminals. It loads the controller and those edges, not the whole
+  suite, through one run-scoped bytecode cache.
 
 Worker Copilot processes receive only the controller's `CMUX_MAESTRO_`
 allowlist. Bounded runtimes build the provider environment without any inherited
