@@ -550,8 +550,11 @@ struct SidebarBeatIndicatorTests {
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 560),
                               styleMask: .titled, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        // Light and opaque so OCR reads every line on CI's virtual display too.
+        window.appearance = NSAppearance(named: .aqua)
         let hosting = NSHostingView(rootView: SidebarBeatsPanel(
-            controller: stores.beats, targets: targets, mode: .form(existing), close: {}))
+            controller: stores.beats, targets: targets, mode: .form(existing), close: {})
+            .background(Color.white))
         window.contentView = hosting
         window.orderFront(nil)
         defer { window.contentView = nil; window.close() }
