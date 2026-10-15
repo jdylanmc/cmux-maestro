@@ -1,0 +1,406 @@
+--- a/Sources/CmuxExtensionKit/Sidebar/CMUXSidebarExtension.swift
++++ b/Sources/CmuxExtensionKit/Sidebar/CMUXSidebarExtension.swift
+@@ -31,6 +31,11 @@
+     @ViewBuilder var body: Body { get }
+ 
+     /// Called whenever CMUX sends a new filtered sidebar snapshot.
++    ///
++    /// This callback is process-wide: every hosted scene calls it on the same
++    /// extension instance, and only for a connection that scene is exactly
++    /// paired with. Extensions that support several CMUX windows should read
++    /// per-window state from `@Environment(\.cmuxSidebarScene)` instead.
+     func update(context: CmuxSidebarContext)
+ 
+     /// Called when the CMUX host connection changes state or reports an error.
+--- a/Sources/CmuxExtensionKit/Sidebar/CMUXSidebarExtensionConnection.swift
++++ b/Sources/CmuxExtensionKit/Sidebar/CMUXSidebarExtensionConnection.swift
+@@ -14,6 +14,9 @@
+     /// Receives connection state changes and transport errors.
+     typealias StatusHandler = @MainActor @Sendable (CmuxSidebarConnectionStatus) -> Void
+ 
++    /// Receives notice that the accepted host connection was invalidated or closed.
++    typealias ClosedHandler = @MainActor @Sendable () -> Void
++
+     /// Receives the result for a host action request.
+     typealias ActionReplyHandler = @MainActor @Sendable (CmuxSidebarActionResult) -> Void
+ 
+@@ -22,6 +25,7 @@
+ 
+     private let onSnapshot: SnapshotHandler
+     private let onStatus: StatusHandler
++    private let onClosed: ClosedHandler
+     private let lifecycleLock = NSLock()
+     private let lock = NSLock()
+     private var state = ConnectionState()
+@@ -32,11 +36,13 @@
+     init(
+         manifest: CmuxExtensionManifest,
+         onSnapshot: @escaping SnapshotHandler,
+-        onStatus: @escaping StatusHandler = { _ in }
++        onStatus: @escaping StatusHandler = { _ in },
++        onClosed: @escaping ClosedHandler = {}
+     ) {
+         self.manifest = manifest
+         self.onSnapshot = onSnapshot
+         self.onStatus = onStatus
++        self.onClosed = onClosed
+     }
+ 
+     /// Accepts a host-provided XPC connection.
+@@ -166,6 +172,7 @@
+         connection?.invalidate()
+         deliver(.rejected("cmux connection was closed"), to: pendingReplies)
+         report(.waitingForHost, ifCurrentGeneration: generation)
++        reportClosed()
+     }
+ 
+     private func receive(snapshot payload: Data, ifCurrentGeneration generation: UInt64) {
+@@ -224,6 +231,13 @@
+         if let repliesToDrain {
+             deliver(.rejected("cmux connection was closed"), to: repliesToDrain)
+             report(.waitingForHost, ifCurrentGeneration: generation)
++            reportClosed()
++        }
++    }
++
++    private func reportClosed() {
++        Task { @MainActor [onClosed] in
++            onClosed()
+         }
+     }
+ 
+--- a/Sources/CmuxExtensionKit/Sidebar/CmuxSidebarExtensionRuntime.swift
++++ b/Sources/CmuxExtensionKit/Sidebar/CmuxSidebarExtensionRuntime.swift
+@@ -1,42 +1,47 @@
+ import Foundation
+ 
+-/// Runtime bridge between one sidebar extension instance and its XPC connection.
++/// Lock-protected registry of the per-connection transports owned by one sidebar scene.
+ ///
+-/// `@unchecked Sendable` is safe here because the only stored state is the
+-/// lock-protected `CMUXSidebarExtensionConnection`. The extension instance is
+-/// captured weakly inside `@MainActor` callbacks and is not stored on this type.
++/// Each accepted host connection gets its own `CMUXSidebarExtensionConnection`, so a
++/// new window's connection never replaces or invalidates another window's connection.
++/// `@unchecked Sendable` is safe because all mutable state is guarded by `lock`.
+ final class CmuxSidebarExtensionRuntime: @unchecked Sendable {
+-    private let connection: CMUXSidebarExtensionConnection
++    private let lock = NSLock()
++    private var nextRawID: UInt64 = 0
++    private var transports: [CmuxSidebarConnectionID: CMUXSidebarExtensionConnection] = [:]
+ 
+-    @MainActor
+-    init<Extension: CmuxSidebarExtension>(sidebarExtension: Extension) {
+-        var transport: CMUXSidebarExtensionConnection!
+-        transport = CMUXSidebarExtensionConnection(
+-            manifest: Extension.manifest,
+-            onSnapshot: { [weak sidebarExtension] snapshot in
+-                let host = CmuxSidebarHost(
+-                    performCancellableAction: { action, reply in
+-                        transport.perform(action, reply: reply)
+-                    },
+-                    refreshSnapshot: {
+-                        transport.refreshSnapshot()
+-                    }
+-                )
+-                sidebarExtension?.update(context: CmuxSidebarContext(snapshot: snapshot, host: host))
+-            },
+-            onStatus: { [weak sidebarExtension] status in
+-                sidebarExtension?.connectionStatusDidChange(status)
+-            }
+-        )
+-        self.connection = transport
++    func register(
++        _ makeTransport: (CmuxSidebarConnectionID) -> CMUXSidebarExtensionConnection
++    ) -> (id: CmuxSidebarConnectionID, transport: CMUXSidebarExtensionConnection) {
++        lock.lock()
++        defer { lock.unlock() }
++        nextRawID += 1
++        let id = CmuxSidebarConnectionID(rawValue: nextRawID)
++        let transport = makeTransport(id)
++        transports[id] = transport
++        return (id, transport)
+     }
+ 
++    func transport(for id: CmuxSidebarConnectionID) -> CMUXSidebarExtensionConnection? {
++        lock.lock()
++        defer { lock.unlock() }
++        return transports[id]
++    }
++
+     @discardableResult
+-    func accept(_ connection: NSXPCConnection) -> Bool {
+-        self.connection.accept(connection)
++    func remove(_ id: CmuxSidebarConnectionID) -> CMUXSidebarExtensionConnection? {
++        lock.lock()
++        defer { lock.unlock() }
++        return transports.removeValue(forKey: id)
+     }
+ 
+     deinit {
+-        connection.invalidate()
++        lock.lock()
++        let remaining = Array(transports.values)
++        transports.removeAll()
++        lock.unlock()
++        for transport in remaining {
++            transport.invalidate()
++        }
+     }
+ }
+--- a/Sources/CmuxExtensionKit/Sidebar/CmuxSidebarExtensionScene.swift
++++ b/Sources/CmuxExtensionKit/Sidebar/CmuxSidebarExtensionScene.swift
+@@ -14,14 +14,13 @@
+ 
+     @MainActor
+     var body: PrimitiveAppExtensionScene {
+-        let runtime = CmuxSidebarExtensionRuntime(sidebarExtension: sidebarExtension)
+-        let acceptConnection: @Sendable (NSXPCConnection) -> Bool = { connection in
+-            runtime.accept(connection)
+-        }
++        // One CmuxSidebarScene per scene evaluation. It keeps one transport per accepted
++        // connection and pairs its views with a connection only when that is exact.
++        let scene = CmuxSidebarScene(sidebarExtension: sidebarExtension)
+         return PrimitiveAppExtensionScene(id: id) {
+-            sidebarExtension.body
++            CmuxSidebarSceneScope(scene: scene, content: sidebarExtension.body)
+         } onConnection: { connection in
+-            acceptConnection(connection)
++            scene.accept(connection)
+         }
+     }
+ }
+--- /dev/null
++++ b/Sources/CmuxExtensionKit/Sidebar/CmuxSidebarScene.swift
+@@ -0,0 +1,231 @@
++import Foundation
++import SwiftUI
++
++/// Identifies one CMUX host connection accepted by a sidebar scene.
++public struct CmuxSidebarConnectionID: Hashable, Sendable, CustomStringConvertible {
++    public let rawValue: UInt64
++
++    public init(rawValue: UInt64) {
++        self.rawValue = rawValue
++    }
++
++    public var description: String { "connection-\(rawValue)" }
++}
++
++/// What one hosted sidebar scene may render.
++///
++/// CMUX opens one host view, and therefore one connection, per window. A scene's
++/// views are bound to a connection only when exactly one connection and at most
++/// one view belong to the scene; anything else is reported as `unpaired`.
++public enum CmuxSidebarSceneState: Sendable {
++    /// No live CMUX connection belongs to this scene.
++    case waitingForHost
++
++    /// Exactly one live connection belongs to this scene. `context` is its latest
++    /// snapshot, whose `host` sends actions to that same connection only.
++    case bound(
++        connection: CmuxSidebarConnectionID,
++        status: CmuxSidebarConnectionStatus,
++        context: CmuxSidebarContext?
++    )
++
++    /// The scene cannot be paired with exactly one connection, for example when
++    /// ExtensionKit shares one scene across several CMUX windows. Render no host
++    /// data rather than another window's data.
++    case unpaired
++}
++
++/// Per-scene sidebar state delivered to the views of one CMUX sidebar host view.
++///
++/// Read it from the SwiftUI environment with `@Environment(\.cmuxSidebarScene)`.
++/// Unlike `CmuxSidebarExtension.update(context:)`, which is process-wide, each
++/// scene reports only the connection it is exactly paired with.
++@MainActor
++public final class CmuxSidebarScene {
++    public private(set) var state: CmuxSidebarSceneState = .waitingForHost
++
++    private struct Entry {
++        var status: CmuxSidebarConnectionStatus = .waitingForHost
++        var context: CmuxSidebarContext?
++    }
++
++    private nonisolated let manifest: CmuxExtensionManifest
++    private nonisolated let runtime = CmuxSidebarExtensionRuntime()
++    private let legacySnapshot: @MainActor (CmuxSidebarContext) -> Void
++    private let legacyStatus: @MainActor (CmuxSidebarConnectionStatus) -> Void
++    private var connections: [CmuxSidebarConnectionID: Entry] = [:]
++    private var views: Set<UUID> = []
++    private var observers: [UUID: @MainActor (CmuxSidebarSceneState) -> Void] = [:]
++
++    init(
++        manifest: CmuxExtensionManifest,
++        legacySnapshot: @escaping @MainActor (CmuxSidebarContext) -> Void,
++        legacyStatus: @escaping @MainActor (CmuxSidebarConnectionStatus) -> Void
++    ) {
++        self.manifest = manifest
++        self.legacySnapshot = legacySnapshot
++        self.legacyStatus = legacyStatus
++    }
++
++    convenience init<Extension: CmuxSidebarExtension>(sidebarExtension: Extension) {
++        self.init(
++            manifest: Extension.manifest,
++            legacySnapshot: { [weak sidebarExtension] in sidebarExtension?.update(context: $0) },
++            legacyStatus: { [weak sidebarExtension] in sidebarExtension?.connectionStatusDidChange($0) }
++        )
++    }
++
++    /// Creates a scene without an extension instance, for transport tests.
++    @_spi(CmuxExtensionTransport)
++    public convenience init(manifest: CmuxExtensionManifest) {
++        self.init(manifest: manifest, legacySnapshot: { _ in }, legacyStatus: { _ in })
++    }
++
++    /// Calls `handler` with the current state now and after every change until cancelled.
++    public func observe(
++        _ handler: @escaping @MainActor (CmuxSidebarSceneState) -> Void
++    ) -> CmuxSidebarSceneObservation {
++        let id = UUID()
++        observers[id] = handler
++        handler(state)
++        return CmuxSidebarSceneObservation { [weak self] in
++            self?.observers.removeValue(forKey: id)
++        }
++    }
++
++    /// Accepts one host connection with its own transport. Existing connections stay live.
++    @_spi(CmuxExtensionTransport)
++    @discardableResult
++    public nonisolated func accept(_ connection: NSXPCConnection) -> Bool {
++        let (id, transport) = runtime.register { id in
++            CMUXSidebarExtensionConnection(
++                manifest: manifest,
++                onSnapshot: { [weak self] snapshot in self?.receive(snapshot, from: id) },
++                onStatus: { [weak self] status in self?.receive(status, from: id) },
++                onClosed: { [weak self] in self?.close(id) }
++            )
++        }
++        // Count the connection before its first snapshot, so a second window is never missed.
++        Task { @MainActor [weak self] in self?.open(id) }
++        return transport.accept(connection)
++    }
++
++    @_spi(CmuxExtensionTransport)
++    public func viewDidAppear(_ id: UUID) {
++        guard views.insert(id).inserted else { return }
++        publish()
++    }
++
++    @_spi(CmuxExtensionTransport)
++    public func viewDidDisappear(_ id: UUID) {
++        guard views.remove(id) != nil else { return }
++        publish()
++    }
++
++    private func receive(_ snapshot: CmuxSidebarSnapshot, from id: CmuxSidebarConnectionID) {
++        guard runtime.transport(for: id) != nil else { return }
++        let runtime = runtime
++        let host = CmuxSidebarHost(
++            performCancellableAction: { action, reply in
++                guard let transport = runtime.transport(for: id) else {
++                    reply(.rejected("cmux connection was closed"))
++                    return nil
++                }
++                return transport.perform(action, reply: reply)
++            },
++            refreshSnapshot: {
++                runtime.transport(for: id)?.refreshSnapshot()
++            }
++        )
++        let context = CmuxSidebarContext(snapshot: snapshot, host: host)
++        connections[id, default: Entry()].context = context
++        publish()
++        if isBound(to: id) { legacySnapshot(context) }
++    }
++
++    private func receive(_ status: CmuxSidebarConnectionStatus, from id: CmuxSidebarConnectionID) {
++        guard runtime.transport(for: id) != nil else { return }
++        connections[id, default: Entry()].status = status
++        publish()
++        if isBound(to: id) { legacyStatus(status) }
++    }
++
++    private func open(_ id: CmuxSidebarConnectionID) {
++        guard runtime.transport(for: id) != nil, connections[id] == nil else { return }
++        connections[id] = Entry()
++        publish()
++    }
++
++    private func close(_ id: CmuxSidebarConnectionID) {
++        runtime.remove(id)
++        guard connections.removeValue(forKey: id) != nil else { return }
++        publish()
++    }
++
++    private func isBound(to id: CmuxSidebarConnectionID) -> Bool {
++        if case .bound(let connection, _, _) = state { return connection == id }
++        return false
++    }
++
++    private func publish() {
++        let wasBound: Bool
++        if case .bound = state { wasBound = true } else { wasBound = false }
++        if connections.count > 1 || views.count > 1 {
++            state = .unpaired
++        } else if let (id, entry) = connections.first {
++            state = .bound(connection: id, status: entry.status, context: entry.context)
++        } else {
++            state = .waitingForHost
++        }
++        if wasBound, !isBoundState { legacyStatus(.waitingForHost) }
++        for handler in observers.values {
++            handler(state)
++        }
++    }
++
++    private var isBoundState: Bool {
++        if case .bound = state { return true }
++        return false
++    }
++}
++
++/// Stops a `CmuxSidebarScene.observe(_:)` registration.
++@MainActor
++public final class CmuxSidebarSceneObservation {
++    private var onCancel: (@MainActor () -> Void)?
++
++    init(onCancel: @escaping @MainActor () -> Void) {
++        self.onCancel = onCancel
++    }
++
++    public func cancel() {
++        onCancel?()
++        onCancel = nil
++    }
++}
++
++private struct CmuxSidebarSceneKey: EnvironmentKey {
++    static var defaultValue: CmuxSidebarScene? { nil }
++}
++
++public extension EnvironmentValues {
++    /// The scene for the CMUX sidebar host view rendering this view, if any.
++    var cmuxSidebarScene: CmuxSidebarScene? {
++        get { self[CmuxSidebarSceneKey.self] }
++        set { self[CmuxSidebarSceneKey.self] = newValue }
++    }
++}
++
++/// Injects the scene into its view and reports when that view is on screen.
++struct CmuxSidebarSceneScope<Content: View>: View {
++    let scene: CmuxSidebarScene
++    let content: Content
++    @State private var viewID = UUID()
++
++    var body: some View {
++        content
++            .environment(\.cmuxSidebarScene, scene)
++            .onAppear { scene.viewDidAppear(viewID) }
++            .onDisappear { scene.viewDidDisappear(viewID) }
++    }
++}

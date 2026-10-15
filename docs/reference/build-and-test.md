@@ -35,6 +35,9 @@ continued history updates stay part of deployment acceptance.
 ./scripts/test.sh
 ```
 
+`fetch-sdk.sh` applies the reviewed patches in `scripts/sdk-patches/` to the
+pinned SDK, exactly and in name order (ADR 0023).
+
 `test.sh` is the full-coverage entrypoint. It builds once. It runs the unchanged
 blocking-observer concurrency regression alone in the integrated host. It verifies
 exact identity/count from the hosted xcresult. Then it runs all other tests
