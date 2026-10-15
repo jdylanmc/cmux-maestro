@@ -137,6 +137,8 @@ ALLOWED_DOC_REFERENCES = {
     ("scripts/cmux-maestro-orchestrator.py", "docs/adr/0007"),
     ("scripts/cmux-maestro-orchestrator.py", "docs/adr/0020"),
     ("CMUXMaestroPreviewTests/SidebarBeatsTests.swift", "test-beats.py"),
+    ("scripts/delivery-proof/adapter.mjs", "docs/adr/0007"),
+    ("scripts/test-build-metadata.py", "docs/reference/ci-runner-placement.md"),
 }
 
 
@@ -166,11 +168,12 @@ def narrower_inputs(paths, rules):
             if classify.classify_paths([candidate], rules, SUITES)[0][0][2] != SUITES]
 
 
-def narrower_needles(rules):
-    """(regex, label) for every literal path or directory a narrower rule names."""
+def narrower_needles(rules, job=None):
+    """(regex, label) for every literal path or directory a narrower rule names (or, given a job, every
+    path or directory a rule that does not select that job names)."""
     needles = {}
     for rule in rules:
-        if rule["suites"] == SUITES:
+        if rule["suites"] == SUITES or (job is not None and job in rule["suites"]):
             continue
         for pattern in rule["paths"]:
             prefix = re.split(r"[*?]", pattern, 1)[0]
@@ -186,11 +189,12 @@ def narrower_needles(rules):
     return needles
 
 
-def doc_references(relative, text, rules):
-    """Mentions of narrower-mapped paths in a native or probe source, minus the comment allow-list."""
+def doc_references(relative, text, rules, job=None):
+    """Mentions of narrower-mapped paths in a native or probe source, minus the comment allow-list.
+    Given a job, mentions of paths the map does not send to that job."""
     found = []
     lines = text.splitlines()
-    for regex in narrower_needles(rules):
+    for regex in narrower_needles(rules, job):
         for match in re.finditer(regex, text):
             token = match.group(0).rstrip(".")
             line = lines[text.count("\n", 0, match.start())].strip()
@@ -220,6 +224,64 @@ def native_and_probe_sources():
         pending += re.findall(r'with_name\("([^"]+\.py)"\)', text)
     files |= {ROOT / "scripts" / name for name in scanned}
     return sorted(files), scanned
+
+
+WORKFLOW = ROOT / ".github/workflows/ci.yml"
+# Contract-suite mentions of paths the map does not send to validate-contracts. Each is either a
+# reviewed read whose file the map routes to validate-contracts, or a command string, not a read.
+ALLOWED_CONTRACT_REFERENCES = {
+    # Reads the merge policy; merge-policy-doc selects validate-contracts.
+    ("scripts/test-build-metadata.py", "docs/agents/merge-policy.md"),
+    # Command strings in the workflow guards (VALIDATION_JOBS and its mutations); never read.
+    ("scripts/test-build-metadata.py", "scripts/test-skill-overrides.mjs"),
+    ("scripts/test-build-metadata.py", "test-skill-overrides.mjs"),
+}
+
+
+def job_scripts(workflow, job):
+    """The repository scripts a workflow job's run commands invoke."""
+    block = workflow.split(f"\n  {job}:\n", 1)[1]
+    block = re.split(r"\n  [A-Za-z0-9_-]+:\n", block, 1)[0]
+    commands = re.findall(r"^        run: (.+)$", block, re.MULTILINE)
+    return commands, [name for command in commands for name in re.findall(r"scripts/([A-Za-z0-9_.-]+)", command)]
+
+
+def contract_sources(workflow):
+    """validate-contracts' scripts, everything they load, compile or run, and native Swift sources."""
+    files = {path for directory in ROOT.glob("CMUXMaestro*") if directory.is_dir()
+             for path in directory.rglob("*.swift")}
+    pending = job_scripts(workflow, "validate-contracts")[1]
+    scanned = set()
+    while pending:
+        name = pending.pop().rstrip("/")
+        target = ROOT / "scripts" / name
+        if name in scanned or not target.exists():
+            continue
+        scanned.add(name)
+        if target.is_dir():
+            files |= {path for path in target.rglob("*") if path.is_file()}
+            continue
+        text = target.read_text()
+        pending += re.findall(r'\$ROOT/scripts/([^"\s]+)', text)
+        pending += re.findall(r'spec_from_file_location\([^)]*"scripts/([^"]+)"\)', text)
+        pending += re.findall(r'(?:ROOT|REPO) / "scripts/([^"]+)"', text)
+        pending += re.findall(r'(?:ROOT|REPO) / "scripts" / "([^"]+)"', text)
+        pending += re.findall(r'with_name\("([^"]+)"\)', text)
+        pending += [str(Path(name).parent / match).removeprefix("./") for match in
+                    re.findall(r'from "\./([^"]+)"', text) + re.findall(r'import\("\./([^"]+)"\)', text)]
+    files |= {ROOT / "scripts" / name for name in scanned if (ROOT / "scripts" / name).is_file()}
+    return sorted(files), scanned
+
+
+def contract_doc_references(files, rules, texts=None):
+    """Mentions, in validate-contracts' sources, of paths whose rule does not select validate-contracts."""
+    found = []
+    for path in files:
+        relative = path.relative_to(ROOT).as_posix()
+        text = (texts or {}).get(relative, path.read_text(errors="replace"))
+        found += [hit for hit in doc_references(relative, text, rules, CONTRACTS)
+                  if (hit[0], hit[1]) not in ALLOWED_CONTRACT_REFERENCES]
+    return found
 
 
 class PackagedInputGuardTests(unittest.TestCase):
@@ -317,16 +379,47 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(applicable(record), {CONTRACTS, PORTABLE})
         self.assertEqual(rows[0][1], "merge-policy-doc")
 
-    def test_every_docs_file_a_contract_suite_reads_selects_that_suite(self):
-        # Dependency edge: test-build-metadata.py (validate-contracts) reads these docs. If it reads a
-        # new one, a docs-only change to it must still select validate-contracts.
+    def test_contract_suites_name_no_path_the_map_keeps_from_them(self):
+        # Dependency edge: docs select only validate-portable, so a validate-contracts suite that reads
+        # README.md, AGENTS.md or anything under docs/ would be skipped by a docs-only change.
         rules = classify.load_map(MAP_TEXT, SUITES)
-        text = (ROOT / "scripts/test-build-metadata.py").read_text()
-        read = sorted(set(re.findall(r'ROOT / "((?:docs/|README|CHANGELOG|CONTEXT|AGENTS)[^"]*)"', text)))
-        self.assertEqual(read, ["docs/agents/merge-policy.md"])
-        for path in read:
-            with self.subTest(path=path):
-                self.assertIn(CONTRACTS, classify.classify_paths([path], rules, SUITES)[0][0][2])
+        workflow = WORKFLOW.read_text()
+        commands, names = job_scripts(workflow, "validate-contracts")
+        self.assertEqual(len(names), len(commands), "Every validate-contracts command names its script.")
+        files, scanned = contract_sources(workflow)
+        for expected in ("test-build-metadata.py", "verify-build-metadata.py", "cmux-maestro-orchestrator.py",
+                         "CopilotSetupTestMain.swift", "delivery-proof", "delivery-proof/adapter.mjs",
+                         "test-fixtures", "local-preview.py", "run-integrated-test-scopes.py"):
+            self.assertIn(expected, scanned, "The contract source scan no longer reaches a known input.")
+        self.assertEqual(contract_doc_references(files, rules), [])
+        for relative, token in ALLOWED_CONTRACT_REFERENCES:
+            self.assertIn(token, (ROOT / relative).read_text(), "Stale allow-list entry.")
+            if token.startswith("docs/"):
+                self.assertIn(CONTRACTS, classify.classify_paths([token], rules, SUITES)[0][0][2])
+
+    def test_contract_reader_guard_mutations_fail(self):
+        rules = classify.load_map(MAP_TEXT, SUITES)
+        files, _ = contract_sources(WORKFLOW.read_text())
+        beats, setup = ROOT / "scripts/test-beats.py", ROOT / "scripts/test-copilot-setup.sh"
+        self.assertIn(beats, files)
+        self.assertIn(setup, files)
+        for name, (path, addition) in {
+            "README read in test-beats.py": (beats, 'GUIDE = REPO / "README.md"\n'),
+            "docs directory join": (beats, 'GUIDE = REPO / "docs" / "reference" / "x.md"\n'),
+            "AGENTS read": (beats, 'GUIDE = (REPO / "AGENTS.md").read_text()\n'),
+            "docs file in test-copilot-setup.sh": (setup, 'cat "$ROOT/docs/x.md"\n'),
+            "another reader of the merge policy": (setup, 'cat "$ROOT/docs/agents/merge-policy.md"\n'),
+            "portable test read by a contract suite": (beats, 'X = REPO / "scripts/test-skill-overrides.mjs"\n'),
+            "allow-listed ADR cited in code": (beats, 'ADR = REPO / "docs/adr/0007"\n'),
+        }.items():
+            with self.subTest(mutation=name):
+                relative = path.relative_to(ROOT).as_posix()
+                texts = {relative: path.read_text() + addition}
+                self.assertTrue(contract_doc_references(files, rules, texts))
+        # The scan follows includes: a new script that only a contract suite loads is scanned too.
+        workflow = WORKFLOW.read_text().replace("        run: python3 scripts/test-beats.py\n",
+                                                "        run: python3 scripts/test-ci-gate.py\n", 1)
+        self.assertIn("test-ci-gate.py", contract_sources(workflow)[1])
 
     def test_docs_images_only_change_runs_no_validation_suite(self):
         record, _ = self.record(["docs/images/sidebar.png", "docs/design/2026-09-25/images/beats.png"])
