@@ -600,12 +600,15 @@ struct CopilotSetupTests {
         #expect(await runner.calls.isEmpty)
     }
 
-    // Removed 2026-10-15 by owner decision: the zero-delay timeout/cancellation
-    // cleanup test (cancel false/true) hung for ~4.5 h in CI run 38680234264
-    // attempt 1 and its cause was not established. Lost coverage: only the
-    // zero-launch-delay variant. Timeout and cancellation cleanup of the same
-    // TERM-ignoring launcher/child, reaping and no-late-write oracles remain in
-    // queuedStartupDoesNotConsumeChildReadinessBudget(cancel:).
+    // Removed 2026-10-15 by owner decision: timeoutAndCancellationStopLauncherAndChild-
+    // WithoutLateWrites(cancel:) hung for ~4.5 h in CI run 38680234264 attempt 1;
+    // its cause was not established. It was the only exerciseCleanup caller with
+    // delayStartup: false. Lost coverage: non-delayed launcher cleanup
+    // (delayStartup: false) for both timeout and cancel, the production-like path
+    // that hung. Remaining cleanup coverage uses a delayed launcher only:
+    // cancel via queuedStartupDoesNotConsumeChildReadinessBudget(cancel: true),
+    // timeout via its cancel: false case, delayedStartupDoesNotExpireBeforeDeadlineIsArmed
+    // and lateQueuedStartupRetainsFullChildReadinessBudget.
 
     @Test func delayedStartupDoesNotExpireBeforeDeadlineIsArmed() async throws {
         try await exerciseCleanup(cancel: false, delayStartup: true)
@@ -661,11 +664,15 @@ struct CopilotSetupTests {
                                     arguments: ["-c", "exit 7"], path: "/usr/bin:/bin")
         }
         defer { task.cancel() }
-        #expect(await bounded { await clock.waitForStartup() } == true)
+        let started = await bounded { await clock.waitForStartup() }
+        #expect(started == true, Comment(rawValue: "startup=\(started.map { "\($0)" } ?? "unreturned"); "
+            + supervisionDiagnostics(fixture.directory, clock: clock)))
         let waiting = ContinuousClock.now
         #expect(try await waitForGatedWriter(in: fixture.directory, deadlineClock: clock) == false)
         #expect(waiting.duration(to: .now) >= .seconds(3))
-        #expect(await bounded { await task.value } == .exited(7))
+        let exited = await bounded { await task.value }
+        #expect(exited == .exited(7), Comment(rawValue: "result=\(exited.map { "\($0)" } ?? "unreturned"); "
+            + supervisionDiagnostics(fixture.directory, clock: clock)))
         #expect(clock.elapsed == .zero)
     }
 
@@ -775,9 +782,13 @@ struct CopilotSetupTests {
         if !startedConcurrently { tasks.forEach { $0.cancel() } }
         clocks.forEach { $0.advance(by: .seconds(0.4)) }
         var results: [CopilotProcessResult] = []
-        for task in tasks {
+        for (index, task) in tasks.enumerated() {
             guard let result = await bounded({ await task.value }) else {
-                Issue.record("Supervised run did not return within \(supervisedWaitLimit)"); return
+                let detail = fixtures.indices.map {
+                    "[\($0)] " + supervisionDiagnostics(fixtures[$0].directory, clock: clocks[$0])
+                }.joined(separator: " | ")
+                Issue.record("Supervised run \(index) did not return within \(supervisedWaitLimit); \(detail)")
+                return
             }
             results.append(result)
             if startedConcurrently { #expect(result == .timedOut) }
@@ -787,7 +798,7 @@ struct CopilotSetupTests {
         for fixture in fixtures {
             try fixture.reader.close()
             _ = releaseMutationGate(fixture.writer)
-            #expect(try mutationCompletion(fixture.completion).isEmpty)
+            #expect(try mutationCompletion(fixture.completion, in: fixture.directory).isEmpty)
             #expect(!FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("late-mutation").path))
         }
     }
@@ -843,17 +854,17 @@ struct CopilotSetupTests {
         // The runner first samples after posix_spawn. Scheduling its driver is
         // not part of the child's three-second readiness budget.
         var ready = false
-        if await bounded({ await clock.waitForStartup() }) == true {
+        let started = await bounded { await clock.waitForStartup() }
+        if started == true {
             ready = try await waitForGatedWriter(in: directory, deadlineClock: clock)
         }
         var readinessFailure = "Synthetic child must execute before the timeout/cancellation assertion"
         if !ready {
-            let sampled = clock.wasSampled
+            let detail = supervisionDiagnostics(directory, clock: clock)
             task.cancel()
             let stopped = await bounded { await task.value }
-            let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-            let boundedFiles = files.sorted().prefix(16).map { String($0.prefix(64)) }.joined(separator: ",")
-            readinessFailure += "; result=\(stopped); clock.wasSampled=\(sampled); files=\(boundedFiles)"
+            readinessFailure += "; startup=\(started.map { "\($0)" } ?? "unreturned")"
+                + "; result=\(stopped.map { "\($0)" } ?? "unreturned"); \(detail)"
         }
         try #require(ready, Comment(rawValue: readinessFailure))
         let launcherPID = try recordedProcessValue("launcher.pid", in: directory)
@@ -876,7 +887,9 @@ struct CopilotSetupTests {
             clock.advance(by: .seconds(runner.timeout))
         }
         guard let result = await bounded({ await task.value }) else {
-            Issue.record("Supervised run did not return within \(supervisedWaitLimit)"); return
+            let detail = supervisionDiagnostics(directory, clock: clock)
+            Issue.record("Supervised run did not return within \(supervisedWaitLimit); cancel=\(cancel); \(detail)")
+            return
         }
         #expect(result == (cancel ? .cancelled : .timedOut))
         #expect(clock.elapsed == (cancel ? .zero : .seconds(runner.timeout)))
@@ -890,7 +903,8 @@ struct CopilotSetupTests {
         // the child cannot perform another write after that channel closes.
         let release = releaseMutationGate(fixture.writer)
         try #require(release.bytes == 8 || (release.bytes == -1 && release.error == EPIPE))
-        #expect(try mutationCompletion(fixture.completion).isEmpty, "A writer survived returned cleanup")
+        #expect(try mutationCompletion(fixture.completion, in: directory, clock: clock).isEmpty,
+                "A writer survived returned cleanup")
         #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("late-mutation").path))
         #expect(unrelated.isRunning)
     }
@@ -925,7 +939,7 @@ struct CopilotSetupTests {
         #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("late-mutation").path))
         let release = releaseMutationGate(fixture.writer)
         #expect(release.bytes == 8 && release.error == 0, "The negative-control writer must receive the gate")
-        #expect(try String(decoding: mutationCompletion(fixture.completion), as: UTF8.self) == "mutated")
+        #expect(try String(decoding: mutationCompletion(fixture.completion, in: directory), as: UTF8.self) == "mutated")
         writer.waitUntilExit()
         #expect(writer.terminationStatus == 0)
         #expect(try String(contentsOf: directory.appendingPathComponent("late-mutation"), encoding: .utf8) == "forbidden")
@@ -1029,10 +1043,29 @@ struct CopilotSetupTests {
         }
     }
 
-    private func mutationCompletion(_ completion: FileHandle) throws -> Data {
+    private func mutationCompletion(_ completion: FileHandle, in directory: URL,
+                                    clock: SetupDeadlineClock? = nil) throws -> Data {
         // EOF proves every writer closed; a surviving writer fails at the bound.
-        try #require(boundedReadToEnd(completion.fileDescriptor,
-                                      until: .now.advanced(by: supervisedWaitLimit)))
+        guard let data = boundedReadToEnd(completion.fileDescriptor,
+                                          until: .now.advanced(by: supervisedWaitLimit)) else {
+            let detail = supervisionDiagnostics(directory, clock: clock)
+            Issue.record("Completion writer stayed open past \(supervisedWaitLimit); \(detail)")
+            throw CancellationError()
+        }
+        return data
+    }
+
+    /// Bounded evidence for a give-up path: clock sampling, fixture files and recorded PIDs.
+    private func supervisionDiagnostics(_ directory: URL, clock: SetupDeadlineClock?) -> String {
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        let listing = files.sorted().prefix(16).map { String($0.prefix(64)) }.joined(separator: ",")
+        let pids = ["launcher.pid", "child.pid"].map { name in
+            let value = (try? String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8))
+                .map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(16)) }
+            return "\(name)=\(value ?? "unknown")"
+        }.joined(separator: " ")
+        let sampled = clock.map { "\($0.wasSampled)" } ?? "n/a"
+        return "clock.wasSampled=\(sampled); files=\(listing); \(pids)"
     }
 
     @Test func isolatedRunnerPreservesExitStatusAndSpawnFailure() async {

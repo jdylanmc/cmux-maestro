@@ -77,37 +77,24 @@ missing-file failure behavior.
 This exposes a
 blocked boundary. It does not establish or repair the cause of a prior CI hang.
 Production timeouts, cleanup and all original assertions stay unchanged.
-Separate metadata-cancellation test uses same per-phase diagnostic bound,
-with test identity and launch-delay argument retained. It distinguishes
-startup, PID publication, cancellation/owned-process completion and exit checks
-without advancing fixture's frozen clock or changing its three-second PID
-publication deadline. Diagnostic timeout fails host. It is not a retry or
-a cancellation pass. At PID readiness it captures exact direct child's
-PID, parent, process group, start identity and numeric state. At a stall it
-revalidates that identity before reading at most 64 members of that exact group.
-These are sequential observations, not an atomic snapshot or a quiescence
-verdict. Missing identities, failed queries and incomplete enumeration stay
-unknown. Changed identity prevents group inspection. If Darwin hides an
-exited child from `proc_pidinfo`, a non-consuming `waitid` observation can
-distinguish exited child from `ECHILD`. It cannot revalidate start
-identity or prove group cleanup. Watchdog never signals the metadata group.
+The separate metadata-cancellation test (#174,
+`cancellingMetadataStopsItsOwnedProcessBeforeReturning(launchDelay:)`) was
+removed on 2026-10-15 by owner decision after intermittent stalls whose cause
+was not established. No test now cancels an in-flight metadata exchange.
 
-`runnerMetadataReturned` records test task receiving result of
-`await runner.metadata(...)`. It does not observe private dispatch worker
-producing its result. `outerTaskValueReceived` separately records outer
-test receiving `task.value`. Both flags are captured at watchdog deadline,
-before subsequent OS observations. False flags do not establish where a
-continuation is blocked. Observation runs outside locks with existing
-watchdog and five-second diagnostic containment still armed. Prior stalled
-runs did not capture this evidence. Their underlying cause remains unproven.
-Sampler exit/signal/timeout and reap status save independently of a missing
-or unreadable sample file. Its error is retained as `sampleReadError`.
+The watchdog report keeps `runnerMetadataReturned` and
+`outerTaskValueReceived` flags, captured at the watchdog deadline. They stay
+false unless a caller reports the runner result or task value; no current
+integrated test does. False flags do not establish where a continuation is
+blocked. Sampler exit/signal/timeout and reap status save independently of a
+missing or unreadable sample file. Its error is retained as `sampleReadError`.
 
-For cancellation diagnosis (#174), test explicitly injects one
-`CopilotSetupObservation` into its runner and watchdog. Normal runners keep
-`observation == nil`: no observation storage, callbacks, queries or logging
-enable automatically. Optional `stall.json.supervision` version 1
-snapshot contains 14 fixed numeric boundary slots:
+`CopilotSetupObservation` remains for diagnosis. Only the
+`MetadataWatchdogProbe` `diagnostic-*` controls and `CopilotSetupObservationTests`
+inject one; normal runners keep `observation == nil`: no observation storage,
+callbacks, queries or logging enable automatically. Optional
+`stall.json.supervision` version 1 snapshot contains 14 fixed numeric
+boundary slots:
 
 | Index | Boundary | Index | Boundary |
 | --- | --- | --- | --- |
@@ -139,12 +126,9 @@ unknown. Snapshot adds no process enumeration or provider data and has a
 tested 8 KiB encoded bound. Serialization runs after releasing observation
 locks. Snapshot may be unavailable while a tiny record update is in progress.
 
-Cancellation phase still begins **before** `task.cancel()`: only slot 0's
-return establishes that it returned. Slot 13's begin establishes the await
-was entered. Resume-return and async-caller progress are distinct. Caller
-may execute before dispatch worker records resume-return. Existing return
-flags, clock samples and later process queries stay sequential observations.
-These diagnostics neither shorten cleanup nor establish the historical cause.
+Slot order is not causality: resume-return and async-caller progress are
+distinct, and these diagnostics neither shorten cleanup nor establish a
+historical cause.
 
 `test-copilot-setup.sh` also runs disposable Foundation-only controls: successful
 disarming, stalled injected clock, continued polling of frozen clock, and

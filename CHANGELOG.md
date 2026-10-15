@@ -48,10 +48,12 @@ Notable changes are recorded using Keep a Changelog categories.
   hang held a run for about 4.5 hours. A job that hits its ceiling fails `ci-gate`. Step-level
   timeouts stay forbidden (owner decision 2026-10-15, overriding #190 for job ceilings only).
 - Two intermittently hanging process-supervision tests were removed (owner decision
-  2026-10-15, #174): metadata cancellation of a running TERM-ignoring server, and the
-  zero-delay launcher/child timeout and cancellation cleanup. The delayed-launch variant still
-  covers launcher/child cleanup. The remaining real-process supervision tests now give up
-  after 30 seconds instead of waiting indefinitely.
+  2026-10-15, #174). Now untested: metadata cancelled during an in-flight exchange (its
+  `.failed(.cancelled)` result and the server's exit and reaping), and non-delayed launcher
+  cleanup for both timeout and cancel, the production-like path that hung in CI. Cleanup
+  stays covered only with a delayed launcher; `queuedStartupDoesNotConsumeChildReadinessBudget`
+  is the remaining cancel coverage. The remaining real-process supervision tests give up after
+  30 seconds, recording clock, fixture-file and PID evidence, instead of waiting indefinitely.
 - CI runs once per pull request update and on pushes to `main`; feature-branch pushes no longer
   run a duplicate suite. Open a draft PR to validate a branch (#192).
 - The orchestration test suite runs in about half the time locally (#195). Its fixture controller

@@ -83,10 +83,10 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 
 **Hang ceilings (owner decision 2026-10-15):**
 
-- Every job has exactly one job-level `timeout-minutes`: a ceiling against hung tests, not a speed target. Each is about three times the job's normal duration, rounded up generously:
-  - `validate-native`: 60 min (normally 16–19 min)
-  - `validate-contracts`: 50 min (normally 13–15 min)
-  - `guide-ui-consumer-probe`: 15 min (normally about 2 min)
+- Every job has exactly one job-level `timeout-minutes`: a ceiling against hung tests, not a speed target. Each is about three times the job's normal duration, rounded up generously. Normal durations are the job wall times of the ten green CI runs from 38680647119 to 38742271654 (2026-10-15):
+  - `validate-native`: 60 min (normally about 13–19 min)
+  - `validate-contracts`: 50 min (normally about 10–17 min)
+  - `guide-ui-consumer-probe`: 15 min (normally about 1–3 min)
   - `ci-classify`: 10 min (normally under 1 min)
   - `validate-portable`: 10 min (normally under 1 min)
   - `ci-gate`: 10 min (normally under 1 min)

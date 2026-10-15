@@ -2108,9 +2108,9 @@ struct CopilotObserverRegistrationTests {
     // Removed 2026-10-15 by owner decision (#174): the cancelling-metadata test
     // (launch delays 0 s and 4 s) intermittently stalled in its
     // cancel-and-await-owned-process phase and the cause was not established.
-    // Lost coverage: no test cancels an in-flight `metadata` call whose
-    // TERM-ignoring server is running and then proves `.failed(.cancelled)` plus
-    // exit/reaping of that exact PID. Timeout cleanup of a TERM-ignoring metadata
+    // Lost coverage: metadata cancelled during an in-flight exchange is untested,
+    // including the `.failed(.cancelled)` result mapping and exit/reaping of that
+    // exact TERM-ignoring server PID. Timeout cleanup of a TERM-ignoring metadata
     // server remains covered above; launcher/child cancellation cleanup remains
     // covered by CopilotSetupTests.queuedStartupDoesNotConsumeChildReadinessBudget.
 
