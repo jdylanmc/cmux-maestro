@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "gate_job": "ci-gate",
+  "suites": [
+    {
+      "job": "validate",
+      "purpose": "Validation commands, integrated Swift tests and their required artifacts"
+    },
+    {
+      "job": "guide-ui-consumer-probe",
+      "purpose": "Public UI consumer probe with exact candidate/base attribution and its evidence"
+    }
+  ]
+}

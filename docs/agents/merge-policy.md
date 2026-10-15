@@ -43,7 +43,7 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
    (or an evidenced not-applicable result for nonvisual work), and resolution
    of all findings. No missing evidence may be reported as a pass.
 4. Require all repository CI commands below to pass for the **exact candidate
-   head against current `main`**. Record both SHAs and check results. If either
+   head against current `main`**, shown by a green `ci-gate` check for that run. Record both SHAs and check results. If either
    changes, reconcile the candidate and refresh affected review plus complete
    CI evidence; stale success is insufficient.
 5. Immediately before merging, re-read provider branch/ruleset protections,
@@ -64,6 +64,17 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 - CI runs the full validation for pushes to `main`.
 - A feature-branch push without a PR runs nothing. To validate one, open a draft pull request.
 - Tags are not validated; the project pushes none today.
+
+**Final coverage gate (#197):**
+
+- The check named `ci-gate` is the merge signal, not the individual jobs. It needs every validation job, uses `if: always()`, and so runs for every validated pull request update and `main` push, even after a job fails or the run is cancelled.
+- It passes only when every required suite in `scripts/ci-required-suites.json` reports exactly `success`. Failure, cancellation, a missing job or result, contract drift, and any skip block it. That includes a job GitHub skipped because a job it needs failed: a skipped job can look green in a roll-up, but not to the gate.
+- No suite may be "not applicable" yet. Selective suites (#194) must add a complete, successful classification to the evaluator, contract and tests together; until then any classification record fails the gate.
+- Split or parallel jobs (#191, #196) join by adding the job to the gate's `needs` and to the contract. `scripts/test-build-metadata.py` fails if any job is missing from either.
+- The gate judges job results, not the evidence inside them. Each job enforces its own: required artifacts upload with `if-no-files-found: error`, and the integrated harness enforces nonzero test execution, coverage accounting and candidate/base attribution. Losing that evidence fails the job, and so the gate.
+- It runs on `ubuntu-latest`: evaluation is pure Python over job results and needs no macOS behaviour, so it does not wait for a macOS runner. It runs its own tests (`python3 scripts/test-ci-gate.py`) on that runner first.
+- To verify: open the run for the exact candidate head, confirm `ci-gate` succeeded, and read its "Evaluate required suites" log or the run summary. The per-suite table must list every required suite as `PASS`. A missing `ci-gate` check is not a pass.
+- Branch protection on `main` is currently off (`gh api repos/jdylanmc/cmux-maestro/branches/main/protection` returns 404, and the repository has no rulesets), so the gate is advisory: GitHub does not block a merge on it. Requiring it is a separate human decision. Re-read protections before relying on them; a displayed check is not an enforced rule.
 
 Its current commands, in order:
 

@@ -92,3 +92,20 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
+
+  # Final coverage gate (#197): the merge signal. Pure result logic, so it runs on Linux.
+  ci-gate:
+    needs: [validate, guide-ui-consumer-probe]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify final gate evaluator
+        run: python3 scripts/test-ci-gate.py
+      - name: Evaluate required suites
+        if: always()
+        env:
+          CI_GATE_NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci-gate.py
