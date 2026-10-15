@@ -5,6 +5,10 @@ import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// The skills CLI sorts with the host's default collation. The lock's hashes come from en-US hosts,
+// so pin en-US: Linux CI's default (en-US-u-va-posix) sorts uppercase first and would report drift.
+const pathOrder = new Intl.Collator("en-US");
+
 // Match the skills CLI: sorted relative paths followed by raw file bytes.
 export async function skillFolderHash(root) {
   const files = [];
@@ -20,7 +24,7 @@ export async function skillFolderHash(root) {
     }
   }
   await collect(root);
-  files.sort((a, b) => a.path.localeCompare(b.path));
+  files.sort((a, b) => pathOrder.compare(a.path, b.path));
   const hash = createHash("sha256");
   for (const file of files) hash.update(file.path).update(file.bytes);
   return hash.digest("hex");

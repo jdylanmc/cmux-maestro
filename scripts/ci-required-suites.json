@@ -5,11 +5,15 @@
   "suites": [
     {
       "job": "validate-native",
-      "purpose": "Integrated Swift tests, unsigned build, setup/hook/sandbox checks and their required artifacts"
+      "purpose": "Integrated Swift tests (scripts/test.sh) and their required artifacts"
     },
     {
       "job": "validate-contracts",
-      "purpose": "Script and contract suites, including orchestrator and preview-transaction tests"
+      "purpose": "Script, contract and standalone native suites on macOS, including orchestrator and preview-transaction tests"
+    },
+    {
+      "job": "validate-portable",
+      "purpose": "Checks proven portable to Linux: local skill override hashes and policy links in tracked Markdown"
     },
     {
       "job": "guide-ui-consumer-probe",

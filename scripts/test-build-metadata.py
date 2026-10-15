@@ -70,7 +70,7 @@ def job_commands(block):
     return re.findall(r"^        run: (.+)$", block, re.MULTILINE)
 
 
-# Early failures (#196): every validation command runs at most once, in one of two independent jobs.
+# Early failures (#196): every validation command runs at most once, in one of three independent jobs.
 # The native job starts the integrated Swift tests right after checkout; the contract job runs its
 # fastest suites first. Update docs/agents/merge-policy.md with any change here.
 VALIDATION_JOBS = {
@@ -78,8 +78,6 @@ VALIDATION_JOBS = {
         "./scripts/test.sh",
     ],
     "validate-contracts": [
-        "node --test scripts/test-skill-overrides.mjs",
-        "node scripts/check-skill-overrides.mjs",
         "python3 scripts/test-joe-role-appearance.py",
         "python3 scripts/test-pet-kit.py",
         "python3 scripts/test-beats.py",
@@ -95,6 +93,20 @@ VALIDATION_JOBS = {
         "python3 scripts/test-local-preview.py",
         "python3 scripts/test-cmux-maestro-orchestrator.py",
     ],
+    "validate-portable": [
+        "node --test scripts/test-skill-overrides.mjs",
+        "node scripts/check-skill-overrides.mjs",
+    ],
+}
+# Runner placement (#191): validation stays on macOS unless a command is proven to behave identically
+# on Linux (docs/reference/ci-runner-placement.md). Native builds, AppKit, sandbox and hosted-UI checks
+# never move; the guide probe is hosted UI. Adding a command here needs that proof.
+MACOS, LINUX = "macos-latest", "ubuntu-latest"
+JOB_RUNNERS = {"validate-native": MACOS, "validate-contracts": MACOS, "validate-portable": LINUX,
+               "guide-ui-consumer-probe": MACOS}
+PROVEN_PORTABLE_COMMANDS = {
+    "node --test scripts/test-skill-overrides.mjs",
+    "node scripts/check-skill-overrides.mjs",
 }
 # Suite selection (#194): ci-classify publishes a record and one run_<job> flag per suite. Each
 # validation job needs only the classifier and has exactly this condition: it is skipped only when its
@@ -1114,13 +1126,25 @@ class BuildMetadataTests(unittest.TestCase):
             # other's suites; its only condition is the sanctioned selection flag (#194).
             self.assertEqual(re.findall(r"^    needs: (.+)$", jobs[job], re.MULTILINE), [f"[{CLASSIFIER_JOB}]"], job)
             self.assertEqual(re.findall(r"^    if: (.+)$", jobs[job], re.MULTILINE), [selection_condition(job)], job)
-            self.assertRegex(jobs[job], r"(?m)^    runs-on: macos-latest$",
-                             "Runner placement is #191's decision; native work stays on macOS.")
+        self.assert_runner_placement(workflow)
         steps = job_steps(jobs["validate-native"])
         self.assertEqual(steps[0], "      - uses: actions/checkout@v4\n")
         self.assertEqual(steps[1], "      - name: Run integrated Swift tests\n        run: ./scripts/test.sh\n",
                          "Integrated Swift tests start right after checkout (#196).")
         self.assertNotIn("continue-on-error", workflow)
+
+    def assert_runner_placement(self, workflow):
+        """Each suite's runner is the reviewed placement; a Linux job holds only proven-portable commands."""
+        jobs = workflow_jobs(workflow)
+        self.assertEqual(set(JOB_RUNNERS), set(VALIDATION_JOBS) | {"guide-ui-consumer-probe"})
+        for job, runner in JOB_RUNNERS.items():
+            self.assertEqual(re.findall(r"^    runs-on: (.+)$", jobs[job], re.MULTILINE), [runner],
+                             f"{job}: runner placement is #191's reviewed decision.")
+            if runner != MACOS:
+                self.assertLessEqual(set(job_commands(jobs[job])), PROVEN_PORTABLE_COMMANDS,
+                                     f"{job} runs on {runner}: move only commands proven portable there.")
+                self.assertFalse([step for step in job_steps(jobs[job]) if "upload-artifact" in step],
+                                 f"{job}: required artifacts stay with their macOS producers.")
 
     def assert_artifacts_follow_their_producers(self, workflow):
         """Each required artifact uploads always, once, from its producers' job, after every producer."""
@@ -1185,6 +1209,12 @@ class BuildMetadataTests(unittest.TestCase):
         hook = "      - name: Verify compiled hooks fail open\n        run: ./scripts/test-copilot-hook.sh\n"
         setup = "      - name: Verify Settings guide and setup process isolation\n        run: ./scripts/test-copilot-setup.sh\n"
         beats = "        run: python3 scripts/test-beats.py\n"
+        metadata = ("      - name: Verify build and registration metadata contracts\n"
+                    "        run: python3 scripts/test-build-metadata.py\n")
+        portable_last = ("      - name: Verify local skill overrides and policy links\n"
+                         "        run: node scripts/check-skill-overrides.mjs\n")
+        portable_steps = ("      - name: Test local skill override validation\n"
+                          "        run: node --test scripts/test-skill-overrides.mjs\n" + portable_last)
         setup_upload = workflow[workflow.index("      - name: Upload setup process isolation evidence\n"):]
         setup_upload = setup_upload[:setup_upload.index("retention-days: 14\n") + len("retention-days: 14\n")]
         validation_mutations = {
@@ -1197,6 +1227,27 @@ class BuildMetadataTests(unittest.TestCase):
             "command duplicated across jobs": workflow.replace(test_sh, test_sh + "      - name: dup\n" + beats, 1),
             "dropped command": workflow.replace(hook, ""),
             "command moved to the gate": workflow.replace(hook, "").rstrip("\n") + "\n" + hook,
+            # Runner placement (#191).
+            "native on Linux": workflow.replace(
+                "    if: needs.ci-classify.outputs.run_validate_native != 'false'\n    runs-on: macos-latest\n",
+                "    if: needs.ci-classify.outputs.run_validate_native != 'false'\n    runs-on: ubuntu-latest\n"),
+            "contracts on Linux": workflow.replace(
+                "    if: needs.ci-classify.outputs.run_validate_contracts != 'false'\n    runs-on: macos-latest\n",
+                "    if: needs.ci-classify.outputs.run_validate_contracts != 'false'\n    runs-on: ubuntu-latest\n"),
+            "probe on Linux": workflow.replace(
+                "    if: needs.ci-classify.outputs.run_guide_ui_consumer_probe != 'false'\n    runs-on: macos-latest\n",
+                "    if: needs.ci-classify.outputs.run_guide_ui_consumer_probe != 'false'\n    runs-on: ubuntu-latest\n"),
+            "portable job on macOS": workflow.replace(
+                "    if: needs.ci-classify.outputs.run_validate_portable != 'false'\n    runs-on: ubuntu-latest\n",
+                "    if: needs.ci-classify.outputs.run_validate_portable != 'false'\n    runs-on: macos-latest\n"),
+            "portable job on a matrix of runners": workflow.replace(
+                "    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Test local",
+                "    runs-on: [ubuntu-latest, macos-latest]\n    steps:\n      - uses: actions/checkout@v4\n"
+                "      - name: Test local"),
+            "unproven command moved to Linux": workflow.replace(metadata, "").replace(
+                portable_last, portable_last + metadata),
+            "skill checks moved back to macOS": workflow.replace(portable_steps, "").replace(
+                "      - name: Verify local Joe role", portable_steps + "      - name: Verify local Joe role"),
         }
         artifact_mutations = {
             "setup upload before its producer": workflow.replace(setup_upload, "").replace(setup, setup_upload + setup),
@@ -1411,6 +1462,15 @@ class BuildMetadataTests(unittest.TestCase):
                 self.assertEqual(workflow.count(old), 1, name)
                 with self.assertRaises((AssertionError, ValueError)):
                     self.assert_final_gate(workflow.replace(old, new), contract)
+
+    def test_ci_runner_placement_is_documented_merge_policy(self):
+        policy = (ROOT / "docs/agents/merge-policy.md").read_text()
+        section = policy.split("**Runner placement (#191):**", 1)[1].split("Its current commands", 1)[0]
+        for phrase in ("ci-runner-placement.md", "`validate-portable` (`ubuntu-latest`)", "never move",
+                       "Python or Node source alone is not proof", "en-US collation", "/usr/bin/plutil",
+                       "not split further", "merge-policy change"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, section)
 
     def test_ci_suite_selection_is_documented_merge_policy(self):
         policy = (ROOT / "docs/agents/merge-policy.md").read_text()

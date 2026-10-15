@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -41,6 +42,32 @@ test("canonical digest uses path order and raw bytes, excluding dependency inter
   await f.write(".agents/skills/example/.git/ignored", "not skill content");
   assert.equal(await skillFolderHash(f.skill),
     "a7d03e437c3f2d958354ad355688d3b9609ed37110b4b99b49d06882efccc19a");
+});
+
+test("digest keeps en-US path order on a host whose default collation is POSIX (Linux CI)", async (t) => {
+  const f = await fixture(t);
+  const files = { "agents/openai.yaml": "agent\n", "README.md": "readme\n", "SKILL.md": "# Skill\n" };
+  for (const [path, contents] of Object.entries(files)) await f.write(`.agents/skills/example/${path}`, contents);
+  const enUS = ["agents/openai.yaml", "README.md", "SKILL.md"];
+  const posix = new Intl.Collator("en-US-u-va-posix");
+  assert.deepEqual(Object.keys(files).sort(posix.compare), ["README.md", "SKILL.md", "agents/openai.yaml"],
+    "The simulated host must order these paths differently from en-US.");
+  const expected = createHash("sha256");
+  for (const path of enUS) expected.update(path).update(files[path]);
+
+  const { localeCompare } = String.prototype;
+  const { Collator } = Intl;
+  String.prototype.localeCompare = function (other) { return posix.compare(String(this), other); };
+  Intl.Collator = function (locales, options) {
+    return new Collator(locales ?? "en-US-u-va-posix", options);
+  };
+  try {
+    const host = await import(`./check-skill-overrides.mjs?posix-host-${Date.now()}`);
+    assert.equal(await host.skillFolderHash(f.skill), expected.digest("hex"));
+  } finally {
+    String.prototype.localeCompare = localeCompare;
+    Intl.Collator = Collator;
+  }
 });
 
 test("checks manifest anchors and inbound multiline links, including duplicate headings", async (t) => {
