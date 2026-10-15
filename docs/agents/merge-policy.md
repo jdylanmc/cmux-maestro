@@ -55,7 +55,16 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 
 ## Actual CI and formatting gates
 
-`.github/workflows/ci.yml` is authoritative. Its current commands, in order:
+`.github/workflows/ci.yml` is authoritative.
+
+**When it runs (#192):**
+
+- CI runs once for every pull request update, against GitHub's synthetic merge of the candidate with its current base. That PR run is the merge evidence; a push run for a different tree never substitutes for it.
+- CI runs the full validation for pushes to `main`.
+- A feature-branch push without a PR runs nothing. To validate one, open a draft pull request.
+- Tags are not validated; the project pushes none today.
+
+Its current commands, in order:
 
 ```sh
 node --test scripts/test-skill-overrides.mjs
