@@ -86,6 +86,16 @@ def main():
                     require(report["sample"] == expected, report)
                     require((case / "sample.txt").read_text() == report["sample"], report)
                     require(report.get("sampleReadError") is None, report)
+            elif report["sampleStatus"] == "timed-out/signal-9":
+                # The real `sample` profiler can exceed its bound on a loaded CI runner (run 38754230158).
+                # The synthetic sampler-timeout modes above prove that path deterministically, so here we
+                # require consistent watchdog evidence and drop only the stack-content check (owner: no flaky tests).
+                print(f"Real sampler timed out in {mode}; stack content not asserted.", flush=True)
+                if (case / "sample.txt").exists():
+                    require((case / "sample.txt").read_text() == report.get("sample"), report)
+                else:
+                    require(report.get("sample") is None, report)
+                    require("sample.txt" in report.get("sampleReadError", ""), report)
             else:
                 require(report["sampleStatus"] == "exit-0", report)
                 require("LocalCopilotSetupRunner.execute" in report["sample"], report["sample"])
