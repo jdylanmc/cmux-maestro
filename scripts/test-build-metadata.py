@@ -96,6 +96,33 @@ VALIDATION_JOBS = {
         "python3 scripts/test-cmux-maestro-orchestrator.py",
     ],
 }
+# Suite selection (#194): ci-classify publishes a record and one run_<job> flag per suite. Each
+# validation job needs only the classifier and has exactly this condition: it is skipped only when its
+# flag is exactly 'false', so a missing or garbled flag runs the suite. ci-gate verifies every skip.
+CLASSIFIER_JOB = "ci-classify"
+
+
+def selection_condition(job):
+    return f"needs.{CLASSIFIER_JOB}.outputs.run_{job.replace('-', '_')} != 'false'"
+
+
+CLASSIFIER_BLOCK = (
+    "    runs-on: ubuntu-latest\n"
+    "    permissions:\n"
+    "      contents: read\n"
+    "    outputs:\n"
+    "      classification: ${{{{ steps.classify.outputs.classification }}}}\n"
+    "{flags}"
+    "    steps:\n"
+    "      - uses: actions/checkout@v4\n"
+    "        with:\n"
+    "          fetch-depth: 0\n"
+    "      - name: Classify changed files\n"
+    "        id: classify\n"
+    "        env:\n"
+    "          CI_CLASSIFY_BASE: ${{{{ github.event.pull_request.base.sha }}}}\n"
+    "          CI_CLASSIFY_HEAD: ${{{{ github.event.pull_request.head.sha }}}}\n"
+    "        run: python3 scripts/ci-classify.py\n")
 # Each required artifact: (job, upload step title, producer commands that must precede it, exact path).
 REQUIRED_ARTIFACTS = {
     "sidebar-layout-offscreen": ("validate-native", "Upload synthetic sidebar layout renders",
@@ -1082,8 +1109,10 @@ class BuildMetadataTests(unittest.TestCase):
             self.assertEqual(len(run_steps), len(VALIDATION_JOBS[job]))
             for step in run_steps:
                 self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
-            # Independent: no needs, so a failure in either job never skips the other's suites.
-            self.assertNotRegex(jobs[job], r"(?m)^    needs:", job)
+            # Independent: each needs only the classifier, so a failure in either job never skips the
+            # other's suites; its only condition is the sanctioned selection flag (#194).
+            self.assertEqual(re.findall(r"^    needs: (.+)$", jobs[job], re.MULTILINE), [f"[{CLASSIFIER_JOB}]"], job)
+            self.assertEqual(re.findall(r"^    if: (.+)$", jobs[job], re.MULTILINE), [selection_condition(job)], job)
             self.assertRegex(jobs[job], r"(?m)^    runs-on: macos-latest$",
                              "Runner placement is #191's decision; native work stays on macOS.")
         steps = job_steps(jobs["validate-native"])
@@ -1202,10 +1231,13 @@ class BuildMetadataTests(unittest.TestCase):
                          "The CI event matrix is merge policy: update docs/agents/merge-policy.md "
                          "('When it runs') together with any trigger change.")
         jobs = workflow_jobs(workflow)
-        self.assertEqual(sorted(jobs), sorted([*VALIDATION_JOBS, "guide-ui-consumer-probe", "ci-gate"]))
+        self.assertEqual(sorted(jobs), sorted([CLASSIFIER_JOB, *VALIDATION_JOBS, "guide-ui-consumer-probe", "ci-gate"]))
         for job in (*VALIDATION_JOBS, "guide-ui-consumer-probe"):
             with self.subTest(job=job):
-                self.assertNotRegex(jobs[job], r"(?m)^    if:", "Jobs must not be event-filtered; triggers own the matrix.")
+                # Jobs are never event-filtered; triggers own the matrix. The only job condition is the
+                # suite-selection flag, which the classifier always sets to 'true' on a push.
+                self.assertEqual(re.findall(r"^    if: (.+)$", jobs[job], re.MULTILINE), [selection_condition(job)])
+        self.assertNotRegex(jobs[CLASSIFIER_JOB], r"(?m)^    if:", "The classifier runs for every validated event.")
         # The gate's only job condition is always(), so it exists for every validated event.
         self.assertEqual(re.findall(r"^    if: (.+)$", jobs["ci-gate"], re.MULTILINE), ["always()"])
         policy = (ROOT / "docs/agents/merge-policy.md").read_text()
@@ -1237,6 +1269,9 @@ class BuildMetadataTests(unittest.TestCase):
         "      - name: Verify final gate evaluator\n"
         "        if: always()\n"
         "        run: python3 scripts/test-ci-gate.py\n"
+        "      - name: Verify suite classifier\n"
+        "        if: always()\n"
+        "        run: python3 scripts/test-ci-classify.py\n"
         "      - name: Evaluate required suites\n"
         "        if: always()\n"
         "        env:\n"
@@ -1248,17 +1283,32 @@ class BuildMetadataTests(unittest.TestCase):
         gate = contract["gate_job"]
         self.assertEqual(gate, "ci-gate", "The gate's job id is the documented check name.")
         self.assertEqual(list(jobs)[-1], gate, "Keep the gate last so its block holds no other job.")
-        validation = sorted(job for job in jobs if job != gate)
+        classifier = contract["classifier_job"]
+        self.assertEqual(classifier, CLASSIFIER_JOB)
+        validation = sorted(job for job in jobs if job not in (gate, classifier))
         self.assertTrue(validation)
         self.assertEqual(sorted(suite["job"] for suite in contract["suites"]), validation,
                          "Every validation job is a required suite; update scripts/ci-required-suites.json.")
         # Whole block to end of file: every step runs even on cancellation, so the table always prints.
         self.assertEqual(jobs[gate].rstrip("\n") + "\n", self.GATE_BLOCK.format(
-            needs=", ".join(suite["job"] for suite in contract["suites"])))
-        for job in validation:
-            # A job-level condition could skip a suite; not-applicable needs #194's classifier and the gate.
-            self.assertNotRegex(jobs[job], r"(?m)^    if:", job)
+            needs=", ".join([classifier, *(suite["job"] for suite in contract["suites"])])))
+        self.assert_suite_selection(workflow, contract)
         self.assertNotIn("continue-on-error", workflow)
+
+    def assert_suite_selection(self, workflow, contract):
+        """The classifier's exact block, and each suite's only needs/condition: its own selection flag."""
+        jobs = workflow_jobs(workflow)
+        suites = [suite["job"] for suite in contract["suites"]]
+        self.assertEqual(list(jobs)[0], CLASSIFIER_JOB, "The classifier starts first; every suite needs it.")
+        flags = "".join(f"      run_{job.replace('-', '_')}: ${{{{ steps.classify.outputs.run_{job.replace('-', '_')} }}}}\n"
+                        for job in suites)
+        body = re.sub(r"(?m)^    #.*\n", "", jobs[CLASSIFIER_JOB]).rstrip("\n") + "\n"
+        self.assertEqual(body, CLASSIFIER_BLOCK.format(flags=flags))
+        for job in suites:
+            # A job-level condition could skip a suite; only the classifier's flag may, and ci-gate
+            # accepts that skip only with the classifier's matching not-applicable record.
+            self.assertEqual(re.findall(r"^    (needs|if): (.+)$", jobs[job], re.MULTILINE),
+                             [("needs", f"[{CLASSIFIER_JOB}]"), ("if", selection_condition(job))], job)
 
     def test_ci_final_gate_requires_every_validation_job_through_the_contract(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -1273,11 +1323,24 @@ class BuildMetadataTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, section)
 
-    def assert_job_and_step_shapes(self, workflow, gate):
+    def assert_job_and_step_shapes(self, workflow, gate, classifier=CLASSIFIER_JOB, suites=None):
         policy = "; see docs/agents/merge-policy.md (#190: no arbitrary timeouts or blanket skips)."
+        if suites is None:
+            suites = [suite["job"] for suite in json.loads((ROOT / "scripts/ci-required-suites.json").read_text())["suites"]]
         self.assertNotIn("timeout-minutes", workflow, "No timeout-minutes anywhere" + policy)
         for job, body in yaml_jobs(workflow).items():
-            allowed = {"runs-on", "steps", "permissions"} | ({"needs", "if"} if job == gate else set())
+            allowed = {"runs-on", "steps", "permissions"}
+            if job == gate:
+                allowed |= {"needs", "if"}
+                self.assertEqual(body.get("if"), "always()", "The gate is always created" + policy)
+            elif job == classifier:
+                allowed |= {"outputs"}
+            elif job in suites:
+                # Suite selection (#194): exactly the classifier dependency and this job's own flag.
+                allowed |= {"needs", "if"}
+                self.assertEqual(body.get("needs"), [classifier], f"Job {job} may only need {classifier}" + policy)
+                self.assertEqual(body.get("if"), selection_condition(job),
+                                 f"Job {job} may only use its sanctioned selection condition" + policy)
             self.assertLessEqual(set(body), allowed, f"Job {job} has keys outside the allow-list" + policy)
             for step in body["steps"]:
                 self.assertIn(step.get("if", "always()"), ("always()",),
@@ -1287,6 +1350,8 @@ class BuildMetadataTests(unittest.TestCase):
     def test_ci_jobs_and_steps_use_only_allowed_keys_and_conditions(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         self.assert_job_and_step_shapes(workflow, "ci-gate")
+        native_if = "    if: needs.ci-classify.outputs.run_validate_native != 'false'\n"
+        probe_if = "    if: needs.ci-classify.outputs.run_guide_ui_consumer_probe != 'false'\n"
         mutations = {
             "job timeout-minutes": ("  validate-native:\n", "  validate-native:\n    timeout-minutes: 30\n"),
             "job strategy": ("  validate-native:\n", "  validate-native:\n    strategy:\n      fail-fast: false\n"),
@@ -1294,12 +1359,67 @@ class BuildMetadataTests(unittest.TestCase):
                                    "      - uses: actions/checkout@v4\n        if: false\n      - name: Test local"),
             "step timeout-minutes": ("        run: ./scripts/test.sh\n",
                                      "        run: ./scripts/test.sh\n        timeout-minutes: 30\n"),
+            # Suite selection (#194): only the sanctioned dependency and condition.
+            "classifier gains an if": ("  ci-classify:\n    runs-on:",
+                                       "  ci-classify:\n    if: github.event_name == 'pull_request'\n    runs-on:"),
+            "classifier gains needs": ("  ci-classify:\n    runs-on:",
+                                       "  ci-classify:\n    needs: [validate-native]\n    runs-on:"),
+            "suite run on 'true' only": (native_if, native_if.replace("!= 'false'", "== 'true'")),
+            "suite condition with always()": (native_if, native_if.replace("if: ", "if: always() && ")),
+            "suite condition is always()": (native_if, "    if: always()\n"),
+            "suite event filter": (native_if, "    if: github.event_name == 'push'\n"),
+            "suite reads another suite's flag": (probe_if, probe_if.replace("run_guide_ui_consumer_probe",
+                                                                            "run_validate_native")),
+            "suite condition dropped": (probe_if, ""),
+            "suite needs another suite": ("    needs: [ci-classify]\n    if: needs.ci-classify.outputs.run_validate_contracts",
+                                          "    needs: [ci-classify, validate-native]\n"
+                                          "    if: needs.ci-classify.outputs.run_validate_contracts"),
+            "gate condition narrowed": ("    if: always()\n    runs-on: ubuntu-latest\n",
+                                        "    if: success()\n    runs-on: ubuntu-latest\n"),
         }
         for name, (old, new) in mutations.items():
             with self.subTest(mutation=name):
                 self.assertEqual(workflow.count(old), 1)
                 with self.assertRaises(AssertionError):
                     self.assert_job_and_step_shapes(workflow.replace(old, new), "ci-gate")
+
+    def test_ci_suite_selection_guard_rejects_classifier_and_condition_drift(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        contract = json.loads((ROOT / "scripts/ci-required-suites.json").read_text())
+        self.assert_suite_selection(workflow, contract)
+        mutations = {
+            "shallow classifier checkout": ("          fetch-depth: 0\n", "          fetch-depth: 1\n"),
+            "base inlined into run": ("        run: python3 scripts/ci-classify.py\n",
+                                      "        run: python3 scripts/ci-classify.py "
+                                      "${{ github.event.pull_request.base.sha }}\n"),
+            "head from the wrong ref": ("pull_request.head.sha", "pull_request.head.ref"),
+            "flag output dropped": ("      run_validate_contracts: ${{ steps.classify.outputs.run_validate_contracts }}\n",
+                                    ""),
+            "flag output hard-coded": ("${{ steps.classify.outputs.run_guide_ui_consumer_probe }}", "'false'"),
+            "classifier tests before classification": ("      - name: Classify changed files\n",
+                                                       "      - name: Pre\n        run: python3 scripts/test-ci-classify.py\n"
+                                                       "      - name: Classify changed files\n"),
+            "suite condition inverted": ("outputs.run_validate_contracts != 'false'",
+                                         "outputs.run_validate_contracts == 'false'"),
+            "gate loses the classifier": ("    needs: [ci-classify, validate-native,", "    needs: [validate-native,"),
+            "gate skips classifier tests": ("        run: python3 scripts/test-ci-classify.py\n",
+                                            "        run: echo skipped\n"),
+        }
+        for name, (old, new) in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertEqual(workflow.count(old), 1, name)
+                with self.assertRaises((AssertionError, ValueError)):
+                    self.assert_final_gate(workflow.replace(old, new), contract)
+
+    def test_ci_suite_selection_is_documented_merge_policy(self):
+        policy = (ROOT / "docs/agents/merge-policy.md").read_text()
+        section = policy.split("**Suite selection (#194):**", 1)[1].split("Its current commands", 1)[0]
+        for phrase in ("`ci-classify`", "scripts/ci-suite-map.json", "scripts/ci-classify.py",
+                       "not applicable", "NOT APPLICABLE", "pushes to `main`", "unmapped", "every suite",
+                       "never an empty success", "same run", "later full run on `main`",
+                       "changes to merge policy"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, section)
 
     def test_ci_final_gate_guard_rejects_hidden_jobs_and_gate_drift(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()

@@ -1,6 +1,7 @@
 {
-  "version": 1,
+  "version": 2,
   "gate_job": "ci-gate",
+  "classifier_job": "ci-classify",
   "suites": [
     {
       "job": "validate-native",
