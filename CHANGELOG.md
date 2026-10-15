@@ -41,8 +41,12 @@ Notable changes are recorded using Keep a Changelog categories.
   unclassifiable runs everything, and `main` always runs everything. `ci-gate` accepts a skipped
   suite only with that run's complete classification marking it not applicable.
 - CI ends with a `ci-gate` check, the merge signal: it passes only when every required suite
-  succeeds, and fails on any failure, cancellation, skip or missing result (#197). Branch
-  protection is off, so it is advisory until a maintainer requires it.
+  succeeds, and fails on any failure, cancellation, skip or missing result (#197). It is a
+  required status check on `main`, enforced for administrators too (owner decision 2026-10-15).
+- Every CI job has a pinned job-level `timeout-minutes` hang ceiling, about three times its
+  normal duration (native 60, contracts 50, probe 15, Linux jobs 10 minutes), after a setup-test
+  hang held a run for about 4.5 hours. A job that hits its ceiling fails `ci-gate`. Step-level
+  timeouts stay forbidden (owner decision 2026-10-15, overriding #190 for job ceilings only).
 - Two intermittently hanging process-supervision tests were removed (owner decision
   2026-10-15, #174): metadata cancellation of a running TERM-ignoring server, and the
   zero-delay launcher/child timeout and cancellation cleanup. The delayed-launch variant still

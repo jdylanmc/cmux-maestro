@@ -83,6 +83,14 @@ class EvaluatorTests(unittest.TestCase):
         self.assertFalse(passed)
         self.assertEqual(self.verdicts(rows)["probe"], ("FAIL", "cancelled"))
 
+    def test_job_stopped_by_its_hang_ceiling_blocks(self):
+        # A job that exceeds its timeout-minutes ceiling ends cancelled or failed; either fails the gate.
+        for result in ("cancelled", "failure"):
+            with self.subTest(result=result):
+                passed, rows, _ = self.evaluate(needs(build="success", native_tests=result, probe="success"))
+                self.assertFalse(passed)
+                self.assertEqual(self.verdicts(rows)["native-tests"], ("FAIL", result))
+
     def test_missing_job_blocks(self):
         passed, rows, _ = self.evaluate(needs(build="success", native_tests="success"))
         self.assertFalse(passed)

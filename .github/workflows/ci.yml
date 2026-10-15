@@ -10,6 +10,7 @@ jobs:
   # A validation job is skipped only when its flag is 'false' (GitHub compares case-insensitively);
   # ci-gate rejects any flag other than the literal 'false' and verifies the record.
   ci-classify:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -34,6 +35,7 @@ jobs:
     # Early failures (#196): integrated Swift tests start right after checkout, in their own job,
     # so a native failure reports without waiting for the other suites, and a failure in either
     # job never skips the other's suites. This job holds only test.sh and its evidence.
+    timeout-minutes: 60
     needs: [ci-classify]
     if: needs.ci-classify.outputs.run_validate_native != 'false'
     runs-on: macos-latest
@@ -69,6 +71,7 @@ jobs:
   validate-contracts:
     # Script, contract and standalone native suites, short suites first; the long preview-transaction
     # and orchestrator suites run last so a quick failure is not queued behind them.
+    timeout-minutes: 50
     needs: [ci-classify]
     if: needs.ci-classify.outputs.run_validate_contracts != 'false'
     runs-on: macos-latest
@@ -117,6 +120,7 @@ jobs:
   validate-portable:
     # Runner placement (#191): only checks proven to behave identically on Linux, so documentation-only
     # changes need no macOS runner. Proof and measurements: docs/reference/ci-runner-placement.md.
+    timeout-minutes: 10
     needs: [ci-classify]
     if: needs.ci-classify.outputs.run_validate_portable != 'false'
     runs-on: ubuntu-latest
@@ -128,6 +132,7 @@ jobs:
         run: node scripts/check-skill-overrides.mjs
 
   guide-ui-consumer-probe:
+    timeout-minutes: 15
     needs: [ci-classify]
     if: needs.ci-classify.outputs.run_guide_ui_consumer_probe != 'false'
     runs-on: macos-latest
@@ -154,6 +159,7 @@ jobs:
 
   # Final coverage gate (#197): the merge signal. Pure result logic, so it runs on Linux.
   ci-gate:
+    timeout-minutes: 10
     needs: [ci-classify, validate-native, validate-contracts, validate-portable, guide-ui-consumer-probe]
     if: always()
     runs-on: ubuntu-latest

@@ -119,7 +119,19 @@ def selection_condition(job):
     return f"needs.{CLASSIFIER_JOB}.outputs.run_{job.replace('-', '_')} != 'false'"
 
 
+# Hang ceilings (owner decision 2026-10-15): exactly one job-level timeout-minutes per job, at
+# about 3x the observed normal duration. Changing one is a merge-policy change.
+JOB_CEILINGS = {
+    "ci-classify": 10,
+    "validate-native": 60,
+    "validate-contracts": 50,
+    "validate-portable": 10,
+    "guide-ui-consumer-probe": 15,
+    "ci-gate": 10,
+}
+
 CLASSIFIER_BLOCK = (
+    "    timeout-minutes: 10\n"
     "    runs-on: ubuntu-latest\n"
     "    permissions:\n"
     "      contents: read\n"
@@ -1364,6 +1376,7 @@ class BuildMetadataTests(unittest.TestCase):
                 self.assertEqual(commands.splitlines(), job_commands(jobs[job]))
 
     GATE_BLOCK = (
+        "    timeout-minutes: 10\n"
         "    needs: [{needs}]\n"
         "    if: always()\n"
         "    runs-on: ubuntu-latest\n"
@@ -1423,19 +1436,30 @@ class BuildMetadataTests(unittest.TestCase):
         policy = (ROOT / "docs/agents/merge-policy.md").read_text()
         section = policy.split("**Final coverage gate (#197):**", 1)[1].split("Its current commands", 1)[0]
         for phrase in ("`ci-gate`", "scripts/ci-required-suites.json", "merge signal",
-                       "if-no-files-found: error", "branches/main/protection", "advisory",
+                       "if-no-files-found: error", "branches/main/protection",
+                       "required status check", "`enforce_admins: true`", "`strict: false`",
                        "every gate step uses `if: always()`", "fails closed on any job it cannot parse",
                        "candidate's own", "changes to merge policy"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, section)
 
     def assert_job_and_step_shapes(self, workflow, gate, classifier=CLASSIFIER_JOB, suites=None):
-        policy = "; see docs/agents/merge-policy.md (#190: no arbitrary timeouts or blanket skips)."
+        policy = ("; see docs/agents/merge-policy.md (#190: no arbitrary timeouts or blanket skips; "
+                  "job-level hang ceilings only, owner decision 2026-10-15).")
         if suites is None:
             suites = [suite["job"] for suite in json.loads((ROOT / "scripts/ci-required-suites.json").read_text())["suites"]]
-        self.assertNotIn("timeout-minutes", workflow, "No timeout-minutes anywhere" + policy)
+        # Every timeout-minutes is a job-level key (four-space indent), exactly one per job, pinned.
+        self.assertEqual(re.findall(r"^( *)timeout-minutes:", workflow, re.MULTILINE),
+                         ["    "] * len(JOB_CEILINGS), "Only one job-level timeout-minutes per job" + policy)
+        blocks = workflow_jobs(workflow)
+        self.assertEqual(sorted(blocks), sorted(JOB_CEILINGS), "Every job needs a pinned hang ceiling" + policy)
+        for job, block in blocks.items():
+            self.assertEqual(re.findall(r"^    timeout-minutes: (.*)$", block, re.MULTILINE),
+                             [str(JOB_CEILINGS[job])], f"Job {job} hang ceiling" + policy)
         for job, body in yaml_jobs(workflow).items():
-            allowed = {"runs-on", "steps", "permissions"}
+            self.assertIs(type(body.get("timeout-minutes")), int, f"Job {job} hang ceiling" + policy)
+            self.assertEqual(body["timeout-minutes"], JOB_CEILINGS[job], f"Job {job} hang ceiling" + policy)
+            allowed = {"runs-on", "steps", "permissions", "timeout-minutes"}
             if job == gate:
                 allowed |= {"needs", "if"}
                 self.assertEqual(body.get("if"), "always()", "The gate is always created" + policy)
@@ -1459,17 +1483,23 @@ class BuildMetadataTests(unittest.TestCase):
         native_if = "    if: needs.ci-classify.outputs.run_validate_native != 'false'\n"
         probe_if = "    if: needs.ci-classify.outputs.run_guide_ui_consumer_probe != 'false'\n"
         mutations = {
-            "job timeout-minutes": ("  validate-native:\n", "  validate-native:\n    timeout-minutes: 30\n"),
+            "duplicate job ceiling": ("  validate-native:\n", "  validate-native:\n    timeout-minutes: 60\n"),
+            "missing job ceiling": ("    timeout-minutes: 60\n", ""),
+            "shortened job ceiling": ("    timeout-minutes: 60\n", "    timeout-minutes: 30\n"),
+            "raised job ceiling": ("    timeout-minutes: 15\n", "    timeout-minutes: 360\n"),
+            "expression job ceiling": ("    timeout-minutes: 50\n", "    timeout-minutes: ${{ 50 }}\n"),
+            "quoted job ceiling": ("    timeout-minutes: 50\n", "    timeout-minutes: '50'\n"),
             "job strategy": ("  validate-native:\n", "  validate-native:\n    strategy:\n      fail-fast: false\n"),
             "checkout if: false": ("      - uses: actions/checkout@v4\n      - name: Test local",
                                    "      - uses: actions/checkout@v4\n        if: false\n      - name: Test local"),
             "step timeout-minutes": ("        run: ./scripts/test.sh\n",
                                      "        run: ./scripts/test.sh\n        timeout-minutes: 30\n"),
             # Suite selection (#194): only the sanctioned dependency and condition.
-            "classifier gains an if": ("  ci-classify:\n    runs-on:",
-                                       "  ci-classify:\n    if: github.event_name == 'pull_request'\n    runs-on:"),
-            "classifier gains needs": ("  ci-classify:\n    runs-on:",
-                                       "  ci-classify:\n    needs: [validate-native]\n    runs-on:"),
+            "classifier gains an if": ("  ci-classify:\n    timeout-minutes: 10\n",
+                                       "  ci-classify:\n    timeout-minutes: 10\n"
+                                       "    if: github.event_name == 'pull_request'\n"),
+            "classifier gains needs": ("  ci-classify:\n    timeout-minutes: 10\n",
+                                       "  ci-classify:\n    timeout-minutes: 10\n    needs: [validate-native]\n"),
             "suite run on 'true' only": (native_if, native_if.replace("!= 'false'", "== 'true'")),
             "suite condition with always()": (native_if, native_if.replace("if: ", "if: always() && ")),
             "suite condition is always()": (native_if, "    if: always()\n"),
@@ -1516,6 +1546,17 @@ class BuildMetadataTests(unittest.TestCase):
                 self.assertEqual(workflow.count(old), 1, name)
                 with self.assertRaises((AssertionError, ValueError)):
                     self.assert_final_gate(workflow.replace(old, new), contract)
+
+    def test_ci_hang_ceilings_are_documented_merge_policy(self):
+        policy = (ROOT / "docs/agents/merge-policy.md").read_text()
+        section = policy.split("**Hang ceilings (owner decision 2026-10-15):**", 1)[1].split("\n**", 1)[0]
+        documented = dict(re.findall(r"^  - `([a-z-]+)`: (\d+) min ", section, re.MULTILINE))
+        self.assertEqual({job: int(value) for job, value in documented.items()}, JOB_CEILINGS)
+        for phrase in ("exactly one job-level `timeout-minutes`", "not a speed target",
+                       "step-level `timeout-minutes` stays forbidden", "`ci-gate` (which runs `if: always()`) fails",
+                       "merge-policy change"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, section)
 
     def test_ci_runner_placement_is_documented_merge_policy(self):
         policy = (ROOT / "docs/agents/merge-policy.md").read_text()
