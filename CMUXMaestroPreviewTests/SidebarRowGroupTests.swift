@@ -77,6 +77,17 @@ struct SidebarRowGroupTests {
             hosting.layoutSubtreeIfNeeded()
         }
 
+        /// Renders until `condition` holds (or a 5 s deadline), instead of trusting one fixed delay under load.
+        func snapshot(until condition: (Pixels) -> Bool) async throws -> Pixels {
+            let width = hosting.bounds.width
+            var pixels = Pixels(try snapshot(), width: width)
+            for _ in 0..<100 where !condition(pixels) {
+                try await Task.sleep(for: .milliseconds(50))
+                pixels = Pixels(try snapshot(), width: width)
+            }
+            return pixels
+        }
+
         func snapshot() throws -> NSBitmapImageRep {
             hosting.layoutSubtreeIfNeeded()
             let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
@@ -250,7 +261,8 @@ struct SidebarRowGroupTests {
         try r.enter(group, at: point)
         try await r.settle()
         #expect(group.isHovered)
-        let after = Pixels(try r.snapshot(), width: width)
+        let probe = CGPoint(x: groupFrame.maxX - 3, y: r.frame(head).midY)
+        let after = try await r.snapshot { $0.brightness(probe.x, probe.y) < before.brightness(probe.x, probe.y) - 0.01 }
 
         // A blank strip near the trailing edge darkens continuously from the parent through every child.
         let x = groupFrame.maxX - 3
@@ -272,7 +284,8 @@ struct SidebarRowGroupTests {
 
         try r.exit(group, at: CGPoint(x: groupFrame.midX, y: groupFrame.maxY + 40))
         try await r.settle()
-        let cleared = Pixels(try r.snapshot(), width: width)
+        let firstY = r.frame(first).midY
+        let cleared = try await r.snapshot { abs($0.brightness(x, firstY) - before.brightness(x, firstY)) < 0.01 }
         #expect(!group.isHovered)
         #expect(abs(cleared.brightness(x, r.frame(first).midY) - before.brightness(x, r.frame(first).midY)) < 0.01)
     }
