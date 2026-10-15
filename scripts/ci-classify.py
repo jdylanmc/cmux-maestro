@@ -6,12 +6,19 @@ suite in scripts/ci-required-suites.json, whether it applies. The reviewed map
 is scripts/ci-suite-map.json: ordered rules of path globs; the first matching
 rule decides a file's suites, and a file no rule matches selects every suite.
 
+The base is the checkout's first parent: GitHub's synthetic merge commit is
+the run commit, its first parent is the base it merged into and its second
+parent must be the event's head SHA. The event's base SHA is recorded as
+`payload_base`, for information only.
+
 Every outcome is a complete record (a decision and a reason for every suite).
 Anything other than a fully classified pull request selects every suite: a push
 (only `main` pushes run CI), an unsupported event, a missing or malformed
-base/head SHA, a checkout that is not the synthetic merge of exactly that base
-and head, a git error, an empty change set, or an invalid map. A change to the
-selection or gate files themselves also selects every suite, whatever the map says.
+head/run SHA, a checkout that is not a merge of exactly that head, a git error,
+an empty change set, an invalid map, or a tracked symlink that resolves into a
+path the map does not send to every suite (or outside the repository). A change
+to the selection or gate files themselves also selects every suite, whatever
+the map says.
 
 Outputs (GITHUB_OUTPUT): `classification` (the JSON record that ci-gate
 verifies) and one `run_<job>` flag per suite, `true` or `false`. A validation
@@ -26,6 +33,7 @@ fails, the suites are skipped and ci-gate fails.
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import subprocess
 import sys
@@ -157,18 +165,52 @@ def run_git(*args):
     return result.stdout
 
 
-def changed_files(git, base, head, sha):
-    """Every path that differs between base and the tested merge, or that head changed since the merge base."""
+def merge_base_parent(git, head, sha):
+    """The run commit's first parent, after checking that it is a merge whose second parent is head."""
     if git("rev-parse", "HEAD").decode().strip() != sha:
         raise GitError("checkout HEAD is not the run's commit")
     parents = git("rev-list", "--parents", "-n", "1", "HEAD").decode().split()
-    if parents != [sha, base, head]:
-        raise GitError("checkout is not the synthetic merge of exactly this base and head")
+    if len(parents) != 3 or parents[0] != sha or parents[2] != head or not SHA.fullmatch(parents[1]):
+        raise GitError("checkout is not a two-parent merge whose second parent is this head")
+    return parents[1]
+
+
+def changed_files(git, base, head, sha):
+    """Every path that differs between base and the tested merge, or that head changed since the merge base."""
     paths = set()
     for revisions in ((base, sha), (f"{base}...{head}",)):
         output = git("diff", "--no-renames", "--name-only", "-z", *revisions, "--")
         paths.update(path.decode("utf-8", "surrogateescape") for path in output.split(b"\0") if path)
     return sorted(paths)
+
+
+def symlinks(git, sha):
+    """(path, repository-relative target or None) for every tracked symlink in the run commit."""
+    links = []
+    for entry in git("ls-tree", "-r", "-z", "--full-tree", sha).split(b"\0"):
+        if not entry:
+            continue
+        meta, _, path = entry.partition(b"\t")
+        mode, _, oid = meta.split(b" ")
+        if mode != b"120000":
+            continue
+        path = path.decode("utf-8", "surrogateescape")
+        target = git("cat-file", "blob", oid.decode()).decode("utf-8", "surrogateescape")
+        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(path), target))
+        inside = not posixpath.isabs(target) and resolved != ".." and not resolved.startswith("../")
+        links.append((path, resolved if inside else None))
+    return links
+
+
+def symlink_problem(links, rules, suites):
+    """Why a symlink makes selection unsafe: it reaches a narrower-mapped path or leaves the repository."""
+    for path, target in links:
+        if target is None:
+            return f"symlink {path} points outside the repository"
+        for candidate in (target, target + "/x"):
+            if classify_paths([candidate], rules, suites)[0][0][2] != list(suites):
+                return f"symlink {path} resolves to {target}, which the map does not send to every suite"
+    return None
 
 
 def full_record(context, suites, reason, changed=None):
@@ -184,25 +226,33 @@ def build_record(environ, suites, map_text, git=run_git):
     sha = environ.get("GITHUB_SHA", "")
     context = {"version": RECORD_VERSION, "complete": True, "event": event,
                "run_id": environ.get("GITHUB_RUN_ID", ""), "sha": sha,
-               "base": base or None, "head": head or None}
+               "base": None, "head": head or None, "payload_base": base or None}
     if event == "push":
         return full_record(context, suites, "push to main: full validation"), []
     if event != "pull_request":
         return full_record(context, suites, f"unsupported event {event!r}: full validation"), []
-    if not all(SHA.fullmatch(value) for value in (base, head, sha)):
-        return full_record(context, suites, "base, head or run SHA is missing or malformed: full validation"), []
+    if not all(SHA.fullmatch(value) for value in (head, sha)):
+        return full_record(context, suites, "head or run SHA is missing or malformed: full validation"), []
     try:
         rules = load_map(map_text, suites)
     except MapError as error:
         return full_record(context, suites, f"suite map invalid ({error}): full validation"), []
     try:
-        paths = changed_files(git, base, head, sha)
+        context["base"] = merge_base_parent(git, head, sha)
+        paths = changed_files(git, context["base"], head, sha)
     except GitError as error:
         return full_record(context, suites, f"change set unavailable ({error}): full validation"), []
     if not paths:
         return full_record(context, suites, "empty change set: nothing to classify, full validation", 0), []
     rows, decisions = classify_paths(paths, rules, suites)
     selective = not all(decision["applicable"] for decision in decisions.values())
+    if selective:
+        try:
+            problem = symlink_problem(symlinks(git, sha), rules, suites)
+        except (GitError, ValueError) as error:
+            problem = f"tracked symlinks unavailable ({error})"
+        if problem:
+            return full_record(context, suites, f"{problem}: full validation", len(paths)), []
     record = {**context, "mode": "selective" if selective else "full",
               "reason": f"classified {len(paths)} changed file(s) with scripts/ci-suite-map.json",
               "changed_files": len(paths), "suites": decisions}
@@ -215,8 +265,8 @@ def cell(text):
 
 def render(record, rows):
     lines = [f"Mode: **{record['mode']}**. {cell(record['reason'])}.", "",
-             f"Event `{record['event']}`, run commit `{record['sha']}`, base `{record['base']}`, "
-             f"head `{record['head']}`.", "",
+             f"Event `{record['event']}`, run commit `{record['sha']}`, base `{record['base']}` "
+             f"(event payload base `{record['payload_base']}`, information only), head `{record['head']}`.", "",
              "| Suite | Selected | Reason |", "| --- | --- | --- |"]
     for job, decision in record["suites"].items():
         selected = "yes" if decision["applicable"] else "no (not applicable)"

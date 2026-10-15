@@ -29,8 +29,10 @@ def environ(event="pull_request", base=BASE, head=HEAD, sha=MERGE):
             "GITHUB_SHA": sha, "GITHUB_RUN_ID": "7"}
 
 
-def fake_git(paths, parents=None, head_sha=MERGE, fail=None):
-    """A git stand-in for one synthetic merge: HEAD, its parents and the diff output."""
+def fake_git(paths, parents=None, head_sha=MERGE, fail=None, links=()):
+    """A git stand-in for one synthetic merge: HEAD, its parents, the diff and tracked symlinks."""
+    blobs = {f"{index:040x}": target for index, (_, target) in enumerate(links)}
+
     def git(*args):
         if fail and args[0] == fail:
             raise classify.GitError(f"git {fail} failed (128): fatal: bad object")
@@ -40,6 +42,12 @@ def fake_git(paths, parents=None, head_sha=MERGE, fail=None):
             return (" ".join(parents or [MERGE, BASE, HEAD]) + "\n").encode()
         if args[0] == "diff":
             return b"".join(path.encode() + b"\0" for path in paths)
+        if args[0] == "ls-tree":
+            entries = [f"100644 blob {'e' * 40}\tREADME.md"]
+            entries += [f"120000 blob {oid}\t{path}" for oid, (path, _) in zip(blobs, links)]
+            return "\0".join(entries).encode() + b"\0"
+        if args[0] == "cat-file":
+            return blobs[args[2]].encode()
         raise AssertionError(args)
     return git
 
@@ -185,9 +193,8 @@ class ClassificationTests(unittest.TestCase):
         record, _ = classify.build_record(environ("workflow_dispatch"), SUITES, MAP_TEXT, fake_git(["README.md"]))
         self.assert_full(record, "unsupported event 'workflow_dispatch'")
 
-    def test_missing_or_malformed_base_or_head_selects_every_suite(self):
-        for overrides in ({"base": ""}, {"head": ""}, {"sha": ""}, {"base": "main"}, {"head": "C" * 40},
-                          {"base": BASE + "\n"}):
+    def test_missing_or_malformed_head_or_run_sha_selects_every_suite(self):
+        for overrides in ({"head": ""}, {"sha": ""}, {"head": "C" * 40}, {"sha": MERGE + "\n"}):
             with self.subTest(overrides=overrides):
                 record, _ = classify.build_record(environ(**overrides), SUITES, MAP_TEXT, fake_git(["README.md"]))
                 self.assert_full(record, "missing or malformed")
@@ -198,12 +205,58 @@ class ClassificationTests(unittest.TestCase):
                 record, _ = classify.build_record(environ(), SUITES, MAP_TEXT, fake_git(["README.md"], fail=failing))
                 self.assert_full(record, f"change set unavailable (git {failing} failed")
 
-    def test_checkout_that_is_not_the_exact_merge_selects_every_suite(self):
-        for kwargs in ({"head_sha": "d" * 40}, {"parents": [MERGE, "d" * 40, HEAD]},
-                       {"parents": [MERGE, HEAD, BASE]}, {"parents": [MERGE, BASE]}):
+    def test_base_is_the_merge_first_parent_and_the_payload_base_is_information_only(self):
+        moved = "d" * 40
+        for payload in (BASE, "", "main"):
+            with self.subTest(payload=payload):
+                record, _ = classify.build_record(environ(base=payload), SUITES, MAP_TEXT,
+                                                  fake_git(["README.md"], parents=[MERGE, moved, HEAD]))
+                self.assertEqual((record["base"], record["payload_base"]), (moved, payload or None))
+                self.assertEqual(record["mode"], "selective")
+
+    def test_base_diff_uses_the_first_parent(self):
+        calls = []
+        git = fake_git(["README.md"], parents=[MERGE, "d" * 40, HEAD])
+
+        def recording(*args):
+            calls.append(args)
+            return git(*args)
+        classify.build_record(environ(), SUITES, MAP_TEXT, recording)
+        diffs = [call[4:-1] for call in calls if call[0] == "diff"]
+        self.assertEqual(diffs, [("d" * 40, MERGE), (f"{'d' * 40}...{HEAD}",)])
+
+    def test_checkout_that_is_not_a_merge_of_this_head_selects_every_suite(self):
+        for kwargs in ({"head_sha": "d" * 40}, {"parents": [MERGE, HEAD, BASE]}, {"parents": [MERGE, BASE]},
+                       {"parents": [MERGE, BASE, HEAD, "d" * 40]}, {"parents": ["d" * 40, BASE, HEAD]},
+                       {"parents": [MERGE, "main", HEAD]}):
             with self.subTest(kwargs=kwargs):
                 record, _ = classify.build_record(environ(), SUITES, MAP_TEXT, fake_git(["README.md"], **kwargs))
                 self.assert_full(record, "change set unavailable")
+
+    def test_symlink_into_a_narrower_mapped_path_selects_every_suite(self):
+        cases = {
+            "into docs markdown": ("Resources/guide.md", "../docs/reference/x.md", "resolves to docs/reference/x.md"),
+            "into a docs directory": ("CMUXMaestroPreview/docs", "../docs", "resolves to docs,"),
+            "into a leaf test": ("scripts/beats-test.py", "test-beats.py", "resolves to scripts/test-beats.py"),
+            "to an image": ("Resources/icon.png", "../docs/images/sidebar.png", "resolves to docs/images/sidebar.png"),
+            "outside the repository": ("Resources/out", "../../elsewhere", "points outside the repository"),
+            "absolute": ("Resources/abs", "/etc/hosts", "points outside the repository"),
+        }
+        for name, (path, target, phrase) in cases.items():
+            with self.subTest(case=name):
+                record, rows = classify.build_record(environ(), SUITES, MAP_TEXT,
+                                                     fake_git(["README.md"], links=[(path, target)]))
+                self.assert_full(record, phrase)
+                self.assertEqual(rows, [])
+
+    def test_symlink_to_an_every_suite_path_keeps_the_selection(self):
+        record, _ = self.record(["README.md"], links=[("Resources/hook", "../scripts/test.sh")])
+        self.assertEqual(applicable(record), {CONTRACTS})
+
+    def test_checked_in_tree_has_no_symlink_into_a_narrower_mapped_path(self):
+        rules = classify.load_map(MAP_TEXT, SUITES)
+        links = classify.symlinks(lambda *args: classify.run_git("-C", str(ROOT), *args), "HEAD")
+        self.assertIsNone(classify.symlink_problem(links, rules, SUITES))
 
     def test_invalid_map_selects_every_suite(self):
         record, _ = classify.build_record(environ(), SUITES, "{", fake_git(["README.md"]))
@@ -259,8 +312,11 @@ class GitChangeSetTests(unittest.TestCase):
         return self.git("rev-parse", "HEAD")
 
     def pull_request(self, change, base_change=None):
+        return self.pull_request_named("topic", change, base_change)
+
+    def pull_request_named(self, branch, change, base_change=None):
         """Branch, apply `change`, optionally move main, then build GitHub's synthetic merge."""
-        self.git("checkout", "-q", "-b", "topic")
+        self.git("checkout", "-q", "-b", branch)
         change()
         head = self.commit("topic")
         self.git("checkout", "-q", "main")
@@ -309,6 +365,18 @@ class GitChangeSetTests(unittest.TestCase):
         record, rows = self.pull_request(lambda: self.write(same), lambda: self.write(same))
         self.assertEqual([row[0] for row in rows], ["src/x.swift"])
         self.assertEqual(applicable(record), set(SUITES))
+
+    def test_tracked_symlink_into_docs_selects_every_suite(self):
+        def change():
+            (self.repo / "src").mkdir(exist_ok=True)
+            (self.repo / "src/guide.md").symlink_to("../docs/a.md")
+            self.git("add", "src/guide.md")
+        self.pull_request(change)
+        # A later docs-only candidate on top of that tree.
+        self.git("checkout", "-q", "-B", "main")
+        record, _ = self.pull_request_named("topic2", lambda: self.write({"docs/a.md": "changed\n"}))
+        self.assertEqual(record["mode"], "full")
+        self.assertIn("symlink src/guide.md resolves to docs/a.md", record["reason"])
 
     def test_unknown_revision_is_a_git_error(self):
         env = environ(sha=self.git("rev-parse", "HEAD"))
