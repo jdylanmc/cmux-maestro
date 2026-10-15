@@ -70,7 +70,7 @@ def job_commands(block):
     return re.findall(r"^        run: (.+)$", block, re.MULTILINE)
 
 
-# Early failures (#196): every validation command runs exactly once, in one of two independent jobs.
+# Early failures (#196): every validation command runs at most once, in one of two independent jobs.
 # The native job starts the integrated Swift tests right after checkout; the contract job runs its
 # fastest suites first. Update docs/agents/merge-policy.md with any change here.
 VALIDATION_JOBS = {
@@ -98,7 +98,8 @@ VALIDATION_JOBS = {
 }
 # Suite selection (#194): ci-classify publishes a record and one run_<job> flag per suite. Each
 # validation job needs only the classifier and has exactly this condition: it is skipped only when its
-# flag is exactly 'false', so a missing or garbled flag runs the suite. ci-gate verifies every skip.
+# flag is 'false' (GitHub compares case-insensitively), so a missing or garbled flag runs the suite.
+# ci-gate rejects any flag other than the literal 'false' and verifies every skip.
 CLASSIFIER_JOB = "ci-classify"
 
 
@@ -1417,9 +1418,20 @@ class BuildMetadataTests(unittest.TestCase):
         for phrase in ("`ci-classify`", "scripts/ci-suite-map.json", "scripts/ci-classify.py",
                        "not applicable", "NOT APPLICABLE", "pushes to `main`", "unmapped", "every suite",
                        "never an empty success", "same run", "later full run on `main`",
-                       "changes to merge policy"):
+                       "changes to merge policy", "(case-insensitively", "other than the literal `false`"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, section)
+        # Merge evidence (review item 4) and the command lists must allow deliberate not-applicable skips.
+        gate_item = policy.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
+        gate_item = " ".join(gate_item.split())
+        for phrase in ("every applicable suite passed", "`NOT APPLICABLE`", "from that run's `ci-classify`",
+                       "record's `base` must equal current `main`", "its `head` must equal the candidate",
+                       "stacked parent branch, or a stale base, is not merge evidence"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, gate_item)
+        self.assertNotIn("Require all repository CI commands", policy)
+        self.assertIn("Each runs at most once; a not-applicable suite runs none of its commands", policy)
+        self.assertNotIn("Each runs exactly once", policy)
 
     def test_ci_final_gate_guard_rejects_hidden_jobs_and_gate_drift(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()

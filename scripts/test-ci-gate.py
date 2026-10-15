@@ -237,7 +237,8 @@ class EvaluatorTests(unittest.TestCase):
 
     def test_job_flags_must_match_the_record(self):
         value = record(not_applicable=("probe",))
-        for flags in ({"run_probe": "true"}, {"run_probe": ""}, {"run_build": "false"}):
+        for flags in ({"run_probe": "true"}, {"run_probe": ""}, {"run_build": "false"}, {"run_probe": "False"},
+                      {"run_probe": "FALSE"}, {"run_build": "True"}):
             with self.subTest(flags=flags):
                 good = {gate.flag_name(job): "true" for job in JOBS} | {"run_probe": "false"}
                 classify = classifier_entry(value, flags=good | flags)

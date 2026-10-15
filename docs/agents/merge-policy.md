@@ -42,10 +42,14 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 3. Before merge, PR Sniper checks issue coverage, intended visual alignment
    (or an evidenced not-applicable result for nonvisual work), and resolution
    of all findings. No missing evidence may be reported as a pass.
-4. Require all repository CI commands below to pass for the **exact candidate
-   head against current `main`**, shown by a green `ci-gate` check for that run. Record both SHAs and check results. If either
-   changes, reconcile the candidate and refresh affected review plus complete
-   CI evidence; stale success is insufficient.
+4. Require a green `ci-gate` check for the **exact candidate head against current
+   `main`**: every applicable suite passed, or `ci-gate` shows it `NOT APPLICABLE`
+   from that run's `ci-classify`. The classification record's `base` must equal
+   current `main` and its `head` must equal the candidate. A selection computed
+   against a stacked parent branch, or a stale base, is not merge evidence.
+   Record both SHAs and check results. If either changes, reconcile the candidate
+   and refresh affected review plus complete CI evidence; stale success is
+   insufficient.
 5. Immediately before merging, re-read provider branch/ruleset protections,
    required checks, reviews, mergeability, and human authorization. Use an
    allowed merge method with `gh pr merge --match-head-commit <reviewed-head>`
@@ -85,7 +89,7 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
   - Leaf contract tests that only `validate-contracts` runs (`scripts/test-beats.py`, `test-pet-kit.py`, `test-joe-role-appearance.py`, `test-skill-overrides.mjs`, `test-local-preview.py`, `test-cmux-maestro-orchestrator.py`, `test-delivery-proof.py`, `test-delivery-proof.mjs`) select only `validate-contracts`.
 - Everything else selects every suite, including bundled skills (`skills/`, `.agents/skills/`), `skills/maestro/SKILL.md` (the guide's build fingerprint), bundled and shared scripts and fixtures, resources, and native, orchestration, messaging and guide code. The workflow and the selection and gate files (`.github/workflows/**`, `scripts/ci-classify.py`, `scripts/ci-suite-map.json`, `scripts/test-ci-classify.py`, `scripts/ci-gate.py`, `scripts/ci-required-suites.json`, `scripts/test-ci-gate.py`) always select every suite; the classifier enforces that even if the map is edited. Mixed changes select the union.
 - Any doubt selects every suite, never an empty success: pushes to `main` (the classifier never reads git for them, and the gate rejects a push record that marks any suite not applicable), an unsupported event, a missing or malformed base, head or run SHA, a checkout that is not that exact merge, a git error, an empty change set, or an invalid map. If the classifier job itself fails or is cancelled, every validation job is skipped and the gate fails; that is an explicit failure, not a selection.
-- It publishes a JSON record (job output `classification`) and one `run_<job>` flag per suite. The step summary "Suite selection" lists each suite as selected or not applicable with its reason, and each changed file with the rule that matched it. A validation job is skipped only when its flag is exactly `false`; a missing or garbled flag runs it.
+- It publishes a JSON record (job output `classification`) and one `run_<job>` flag per suite. The step summary "Suite selection" lists each suite as selected or not applicable with its reason, and each changed file with the rule that matched it. A validation job is skipped only when its flag is `false` (case-insensitively, because GitHub compares expression strings that way); a missing or garbled flag runs it, and the gate rejects any flag other than the literal `false`.
 - "Not applicable" means the classifier decided, for this run, that no changed file can affect that suite. It is a gate verdict (`NOT APPLICABLE`), distinct from a skip: the gate accepts a skipped suite only when `ci-classify` succeeded and its record is complete, from the same run (run id, event and commit), decides exactly the required suites, agrees with the published flags, and marks that suite not applicable with a reason. Any other skip, and any malformed, partial or mismatched record, fails the gate. An applicable suite that fails still blocks it.
 - `main` always runs everything. A later full run on `main` is not a substitute for applicable PR coverage, and a not-applicable suite on a PR is not evidence that the suite passes.
 - Trade-off: every validation job now waits for `ci-classify` (a full-history checkout on Linux) before it is queued. Reviewers treat changes to the map, the classifier or their tests as changes to merge policy. A new rule must prove its dependency edges (bundling, build phases, test inputs, the guide probe's source inventory) and add a test; when in doubt, leave the path unmapped.
@@ -99,7 +103,7 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 - Within a job a failing step still skips its later steps, as before; the always-run uploads keep failure evidence. If a step before setup fails, the setup upload also reports that its files are missing. The integrated harness's selector restrictions, isolated regression, guide acceptance and full-complement accounting are unchanged.
 - Trade-off: the split adds a third macOS job, which can queue separately when runners are scarce. #191 measures concurrency and owns runner placement.
 
-Its current commands, in order, per job. Each runs exactly once; `scripts/test-build-metadata.py` checks these lists against the workflow.
+Its current commands, in order, per job. Each runs at most once; a not-applicable suite runs none of its commands; `scripts/test-build-metadata.py` checks these lists against the workflow.
 
 `validate-native` (integrated Swift tests):
 
