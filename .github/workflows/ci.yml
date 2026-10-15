@@ -6,10 +6,34 @@ on:
   pull_request:
 
 jobs:
+  # Suite selection (#194): classifies the exact change set and publishes which suites apply and why.
+  # A validation job is skipped only when its flag is exactly 'false'; ci-gate verifies the record.
+  ci-classify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      classification: ${{ steps.classify.outputs.classification }}
+      run_validate_native: ${{ steps.classify.outputs.run_validate_native }}
+      run_validate_contracts: ${{ steps.classify.outputs.run_validate_contracts }}
+      run_guide_ui_consumer_probe: ${{ steps.classify.outputs.run_guide_ui_consumer_probe }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Classify changed files
+        id: classify
+        env:
+          CI_CLASSIFY_BASE: ${{ github.event.pull_request.base.sha }}
+          CI_CLASSIFY_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci-classify.py
+
   validate-native:
     # Early failures (#196): integrated Swift tests start right after checkout, in their own job,
     # so a native failure reports without waiting for the other suites, and a failure in either
     # job never skips the other's suites. This job holds only test.sh and its evidence.
+    needs: [ci-classify]
+    if: needs.ci-classify.outputs.run_validate_native != 'false'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +67,8 @@ jobs:
   validate-contracts:
     # Script, contract and standalone native suites, short suites first; the long preview-transaction
     # and orchestrator suites run last so a quick failure is not queued behind them.
+    needs: [ci-classify]
+    if: needs.ci-classify.outputs.run_validate_contracts != 'false'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -91,6 +117,8 @@ jobs:
           retention-days: 14
 
   guide-ui-consumer-probe:
+    needs: [ci-classify]
+    if: needs.ci-classify.outputs.run_guide_ui_consumer_probe != 'false'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -115,7 +143,7 @@ jobs:
 
   # Final coverage gate (#197): the merge signal. Pure result logic, so it runs on Linux.
   ci-gate:
-    needs: [validate-native, validate-contracts, guide-ui-consumer-probe]
+    needs: [ci-classify, validate-native, validate-contracts, guide-ui-consumer-probe]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -126,6 +154,9 @@ jobs:
       - name: Verify final gate evaluator
         if: always()
         run: python3 scripts/test-ci-gate.py
+      - name: Verify suite classifier
+        if: always()
+        run: python3 scripts/test-ci-classify.py
       - name: Evaluate required suites
         if: always()
         env:

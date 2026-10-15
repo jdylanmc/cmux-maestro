@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "ci-selection-and-gate",
+      "paths": [
+        ".github/workflows/**",
+        "scripts/ci-classify.py",
+        "scripts/ci-suite-map.json",
+        "scripts/test-ci-classify.py",
+        "scripts/ci-gate.py",
+        "scripts/ci-required-suites.json",
+        "scripts/test-ci-gate.py"
+      ],
+      "suites": "all",
+      "reason": "Workflow, suite map, classifier and gate changes are merge-policy changes; they always run every suite."
+    },
+    {
+      "id": "markdown-docs",
+      "paths": [
+        "docs/**/*.md",
+        "README.md",
+        "CHANGELOG.md",
+        "CONTEXT.md",
+        "AGENTS.md"
+      ],
+      "suites": ["validate-contracts"],
+      "reason": "Markdown outside the bundled skills and scripts. check-skill-overrides.mjs checks policy-anchor links in every tracked Markdown file, and test-build-metadata.py reads docs/agents/merge-policy.md, so validate-contracts applies. No Xcode resource, build phase, test.sh input or guide probe input reads these files."
+    },
+    {
+      "id": "docs-images",
+      "paths": [
+        "docs/**/*.png"
+      ],
+      "suites": [],
+      "reason": "Documentation images. No build input, bundled resource, test or CI suite reads them."
+    },
+    {
+      "id": "other-docs",
+      "paths": [
+        "docs/**"
+      ],
+      "suites": ["validate-contracts"],
+      "reason": "Design evidence and prototypes under docs/. Not bundled or read by native tests or the guide probe. validate-contracts still runs, conservatively, in case the Markdown checks read a file whose name the markdown-docs rule does not match."
+    },
+    {
+      "id": "contract-suite-tests",
+      "paths": [
+        "scripts/test-beats.py",
+        "scripts/test-pet-kit.py",
+        "scripts/test-joe-role-appearance.py",
+        "scripts/test-skill-overrides.mjs",
+        "scripts/test-local-preview.py",
+        "scripts/test-cmux-maestro-orchestrator.py",
+        "scripts/test-delivery-proof.py",
+        "scripts/test-delivery-proof.mjs"
+      ],
+      "suites": ["validate-contracts"],
+      "reason": "Leaf test files that only validate-contracts runs. Nothing bundles, builds, imports or hashes them; the code they test is unmapped and selects every suite."
+    }
+  ]
+}

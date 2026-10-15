@@ -28,6 +28,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Pull requests run only the CI suites their changes can affect (#194). A new `ci-classify` job
+  classifies the exact change set with the reviewed map `scripts/ci-suite-map.json` and publishes
+  each suite's selection and reason. Documentation-only changes skip the native tests and the
+  guide probe; documentation images skip every suite. Anything unmapped, shared, bundled or
+  unclassifiable runs everything, and `main` always runs everything. `ci-gate` accepts a skipped
+  suite only with that run's complete classification marking it not applicable.
 - CI ends with a `ci-gate` check, the merge signal: it passes only when every required suite
   succeeds, and fails on any failure, cancellation, skip or missing result (#197). Branch
   protection is off, so it is advisory until a maintainer requires it.
