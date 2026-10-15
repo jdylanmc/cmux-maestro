@@ -1288,8 +1288,8 @@ class BuildMetadataTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         self.assert_job_and_step_shapes(workflow, "ci-gate")
         mutations = {
-            "job timeout-minutes": ("  validate:\n", "  validate:\n    timeout-minutes: 30\n"),
-            "job strategy": ("  validate:\n", "  validate:\n    strategy:\n      fail-fast: false\n"),
+            "job timeout-minutes": ("  validate-native:\n", "  validate-native:\n    timeout-minutes: 30\n"),
+            "job strategy": ("  validate-native:\n", "  validate-native:\n    strategy:\n      fail-fast: false\n"),
             "checkout if: false": ("      - uses: actions/checkout@v4\n      - name: Test local",
                                    "      - uses: actions/checkout@v4\n        if: false\n      - name: Test local"),
             "step timeout-minutes": ("        run: ./scripts/test.sh\n",
