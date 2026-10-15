@@ -27,11 +27,34 @@ BENCHMARK_TEST = "CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSynthe
 BENCHMARK_FLAG = "CMUX_MAESTRO_READER_BENCHMARK"
 
 
+def yaml_job_ids(workflow):
+    """Job ids from a real YAML parse: PyYAML if installed, else Ruby's bundled YAML."""
+    try:
+        import yaml
+    except ImportError:
+        result = subprocess.run(
+            ["ruby", "-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.safe_load(STDIN.read)['jobs'].keys)"],
+            input=workflow, capture_output=True, text=True, check=True)
+        return json.loads(result.stdout)
+    return list(yaml.safe_load(workflow)["jobs"])
+
+
 def workflow_jobs(workflow):
-    """Map each top-level job id in a workflow to its block text."""
+    """Map each top-level job id to its block text; refuse any job shape the line parser cannot see."""
+    if workflow.count("\njobs:\n") != 1:
+        raise ValueError("workflow must have exactly one block-style 'jobs:' key")
     section = workflow.split("\njobs:\n", 1)[1]
+    for line in section.splitlines():
+        if not line.strip() or line.startswith("   ") or re.fullmatch(r"  #.*", line):
+            continue
+        # Quoted ids, trailing comments, flow mappings and later top-level keys all fail closed.
+        if not re.fullmatch(r"  [A-Za-z0-9_-]+:", line):
+            raise ValueError(f"unsupported line under jobs: {line!r}")
     parts = re.split(r"^  ([A-Za-z0-9_-]+):\n", section, flags=re.MULTILINE)
-    return dict(zip(parts[1::2], parts[2::2]))
+    jobs = dict(zip(parts[1::2], parts[2::2]))
+    if list(jobs) != yaml_job_ids(workflow):
+        raise ValueError("line-parsed job ids disagree with the YAML parse")
+    return jobs
 
 
 class IntegratedTestScopeTests(unittest.TestCase):
@@ -1021,43 +1044,75 @@ class BuildMetadataTests(unittest.TestCase):
         documented = section.split("```sh\n", 1)[1].split("\n```", 1)[0].splitlines()
         self.assertEqual(documented, commands)
 
-    def test_ci_final_gate_requires_every_validation_job_through_the_contract(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    GATE_BLOCK = (
+        "    needs: [{needs}]\n"
+        "    if: always()\n"
+        "    runs-on: ubuntu-latest\n"
+        "    permissions:\n"
+        "      contents: read\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "        if: always()\n"
+        "      - name: Verify final gate evaluator\n"
+        "        if: always()\n"
+        "        run: python3 scripts/test-ci-gate.py\n"
+        "      - name: Evaluate required suites\n"
+        "        if: always()\n"
+        "        env:\n"
+        "          CI_GATE_NEEDS: ${{{{ toJSON(needs) }}}}\n"
+        "        run: python3 scripts/ci-gate.py\n")
+
+    def assert_final_gate(self, workflow, contract):
         jobs = workflow_jobs(workflow)
-        contract = json.loads((ROOT / "scripts/ci-required-suites.json").read_text())
         gate = contract["gate_job"]
         self.assertEqual(gate, "ci-gate", "The gate's job id is the documented check name.")
+        self.assertEqual(list(jobs)[-1], gate, "Keep the gate last so its block holds no other job.")
         validation = sorted(job for job in jobs if job != gate)
         self.assertTrue(validation)
         self.assertEqual(sorted(suite["job"] for suite in contract["suites"]), validation,
                          "Every validation job is a required suite; update scripts/ci-required-suites.json.")
-        self.assertEqual(jobs[gate].rstrip("\n").split("\n\n", 1)[0] + "\n",
-                         f"    needs: [{', '.join(suite['job'] for suite in contract['suites'])}]\n"
-                         "    if: always()\n"
-                         "    runs-on: ubuntu-latest\n"
-                         "    permissions:\n"
-                         "      contents: read\n"
-                         "    steps:\n"
-                         "      - uses: actions/checkout@v4\n"
-                         "      - name: Verify final gate evaluator\n"
-                         "        run: python3 scripts/test-ci-gate.py\n"
-                         "      - name: Evaluate required suites\n"
-                         "        if: always()\n"
-                         "        env:\n"
-                         "          CI_GATE_NEEDS: ${{ toJSON(needs) }}\n"
-                         "        run: python3 scripts/ci-gate.py\n")
-        self.assertEqual(list(jobs)[-1], gate, "Keep the gate last so its block holds no other job.")
+        # Whole block to end of file: every step runs even on cancellation, so the table always prints.
+        self.assertEqual(jobs[gate].rstrip("\n") + "\n", self.GATE_BLOCK.format(
+            needs=", ".join(suite["job"] for suite in contract["suites"])))
         for job in validation:
-            with self.subTest(job=job):
-                # A job-level condition could skip a suite; not-applicable needs #194's classifier and the gate.
-                self.assertNotRegex(jobs[job], r"(?m)^    if:")
+            # A job-level condition could skip a suite; not-applicable needs #194's classifier and the gate.
+            self.assertNotRegex(jobs[job], r"(?m)^    if:", job)
         self.assertNotIn("continue-on-error", workflow)
+
+    def test_ci_final_gate_requires_every_validation_job_through_the_contract(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        contract = json.loads((ROOT / "scripts/ci-required-suites.json").read_text())
+        self.assert_final_gate(workflow, contract)
         policy = (ROOT / "docs/agents/merge-policy.md").read_text()
         section = policy.split("**Final coverage gate (#197):**", 1)[1].split("Its current commands", 1)[0]
         for phrase in ("`ci-gate`", "scripts/ci-required-suites.json", "merge signal",
-                       "if-no-files-found: error", "branches/main/protection", "advisory"):
+                       "if-no-files-found: error", "branches/main/protection", "advisory",
+                       "every gate step uses `if: always()`", "fails closed on any job it cannot parse",
+                       "candidate's own", "changes to merge policy"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, section)
+
+    def test_ci_final_gate_guard_rejects_hidden_jobs_and_gate_drift(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        contract = json.loads((ROOT / "scripts/ci-required-suites.json").read_text())
+        hidden = "\n  {}\n    runs-on: macos-latest\n    steps:\n      - run: echo hidden\n\n  # Final coverage"
+        mutations = {
+            "quoted job id": workflow.replace("\n\n  # Final coverage", hidden.format('"extra":')),
+            "job id with trailing comment": workflow.replace("\n\n  # Final coverage", hidden.format("extra:  # c")),
+            "flow-mapping job": workflow.replace(
+                "\n\n  # Final coverage", "\n  extra: {runs-on: macos-latest, steps: [{run: echo}]}\n\n  # Final coverage"),
+            "key after a blank line in the gate": workflow.rstrip("\n") + "\n\n    timeout-minutes: 1\n",
+            "checkout without always()": workflow.replace(
+                "      - uses: actions/checkout@v4\n        if: always()\n      - name: Verify final gate",
+                "      - uses: actions/checkout@v4\n      - name: Verify final gate"),
+            "evaluator tests without always()": workflow.replace(
+                "evaluator\n        if: always()\n", "evaluator\n"),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, workflow)
+                with self.assertRaises((AssertionError, ValueError)):
+                    self.assert_final_gate(mutated, contract)
 
     def test_ci_always_uploads_json_evidence_and_retains_required_png_artifact(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
