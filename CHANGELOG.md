@@ -28,6 +28,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- CI runs once per pull request update and on pushes to `main`; feature-branch pushes no longer
+  run a duplicate suite. Open a draft PR to validate a branch (#192).
 - An expanded agent row and everything rendered under it (sub-agents, internal tasks, nested
   workers and sessions) now hover as one block: one continuous highlight behind the whole
   group, whichever row the pointer is over, with the agent's actions (…) shown. The focused

@@ -985,6 +985,24 @@ class BuildMetadataTests(unittest.TestCase):
             self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
         self.assertNotIn("continue-on-error", workflow)
 
+    def test_ci_runs_one_suite_per_pr_update_and_full_validation_on_main(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        triggers = workflow.split("\non:\n", 1)[1].split("\njobs:", 1)[0]
+        # Feature-branch pushes would duplicate the PR suite; only main pushes and PR updates validate.
+        self.assertEqual(triggers, "  push:\n    branches: [main]\n  pull_request:\n",
+                         "The CI event matrix is merge policy: update docs/agents/merge-policy.md "
+                         "('When it runs') together with any trigger change.")
+        for job in ("validate", "guide-ui-consumer-probe"):
+            with self.subTest(job=job):
+                block = workflow.split(f"\n  {job}:\n", 1)[1].split("\n  guide-ui-consumer-probe:", 1)[0]
+                self.assertNotIn("\n    if:", block, "Jobs must not be event-filtered; triggers own the matrix.")
+        policy = (ROOT / "docs/agents/merge-policy.md").read_text()
+        section = policy.split("**When it runs (#192):**", 1)[1].split("Its current commands", 1)[0]
+        for phrase in ("pushes to `main`", "every pull request update", "is stale too",
+                       "draft pull request", "Tags are not validated"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, section)
+
     def test_ci_documentation_tracks_the_guarded_validation_commands(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0]
