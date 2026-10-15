@@ -80,24 +80,21 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 **Early failures (#196):**
 
 - Validation runs as two independent macOS jobs with no `needs` between them, so a failure in one never skips the other's suites. Each is its own check and reports as soon as it finishes; `ci-gate` still requires both, plus `guide-ui-consumer-probe`.
-- `validate-native` starts the integrated Swift tests (`./scripts/test.sh`) immediately after checkout. They fetch the SDK and compile in their own derived data, and need nothing else; previously they waited about 12 minutes behind the orchestrator and preview-transaction suites. It owns both artifact uploads, so `./scripts/test.sh` and `./scripts/test-copilot-setup.sh` run before the final evidence upload in the same job.
-- `validate-contracts` runs the script and contract suites fastest first, ending with the long preview-transaction and orchestrator suites.
-- Within a job a failing step still skips its later steps, as before; the always-run uploads keep failure evidence. The integrated harness's selector restrictions, isolated regression, guide acceptance and full-complement accounting are unchanged.
+- `validate-native` runs only the integrated Swift tests (`./scripts/test.sh`), immediately after checkout, then uploads their evidence. They fetch the SDK and compile in their own derived data, and need nothing else. Before the split they waited behind the orchestrator, preview-transaction and other suites: runner start to `test.sh` start was 11m58s in run 38662873916, 15m50s in run 37978471696 and 17m01s in run 38671818542. With the split, run 38676895215 started `test.sh` 11s after the workflow was created.
+- `validate-contracts` runs everything else, short suites first, including the standalone native checks (hooks, sandbox, unsigned build, setup). It ends with the long preview-transaction and orchestrator suites, then uploads the setup evidence.
+- Each artifact uploads from the job that produces it, after its producer: `integrated-test-scope-evidence` and `sidebar-layout-offscreen` after `./scripts/test.sh`, and `copilot-setup-evidence` (the metadata watchdog controls and any metadata stall diagnostics) after `./scripts/test-copilot-setup.sh`.
+- Within a job a failing step still skips its later steps, as before; the always-run uploads keep failure evidence. If a step before setup fails, the setup upload also reports that its files are missing. The integrated harness's selector restrictions, isolated regression, guide acceptance and full-complement accounting are unchanged.
 - Trade-off: the split adds a third macOS job, which can queue separately when runners are scarce. #191 measures concurrency and owns runner placement.
 
 Its current commands, in order, per job. Each runs exactly once; `scripts/test-build-metadata.py` checks these lists against the workflow.
 
-`validate-native` (native build and tests):
+`validate-native` (integrated Swift tests):
 
 ```sh
 ./scripts/test.sh
-./scripts/build-unsigned.sh
-./scripts/test-copilot-setup.sh
-./scripts/test-copilot-hook.sh
-./scripts/test-copilot-sandbox.sh
 ```
 
-`validate-contracts` (script and contract suites):
+`validate-contracts` (script, contract and standalone native suites):
 
 ```sh
 node --test scripts/test-skill-overrides.mjs
@@ -110,6 +107,10 @@ node --test scripts/test-delivery-proof.mjs
 python3 scripts/test-build-metadata.py
 ./scripts/test-copilot-shell-reducer.sh
 ./scripts/test-fetch-sdk-concurrency.sh
+./scripts/test-copilot-hook.sh
+./scripts/test-copilot-sandbox.sh
+./scripts/build-unsigned.sh
+./scripts/test-copilot-setup.sh
 python3 scripts/test-local-preview.py
 python3 scripts/test-cmux-maestro-orchestrator.py
 ```

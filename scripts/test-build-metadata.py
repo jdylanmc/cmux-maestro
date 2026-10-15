@@ -76,10 +76,6 @@ def job_commands(block):
 VALIDATION_JOBS = {
     "validate-native": [
         "./scripts/test.sh",
-        "./scripts/build-unsigned.sh",
-        "./scripts/test-copilot-setup.sh",
-        "./scripts/test-copilot-hook.sh",
-        "./scripts/test-copilot-sandbox.sh",
     ],
     "validate-contracts": [
         "node --test scripts/test-skill-overrides.mjs",
@@ -92,9 +88,31 @@ VALIDATION_JOBS = {
         "python3 scripts/test-build-metadata.py",
         "./scripts/test-copilot-shell-reducer.sh",
         "./scripts/test-fetch-sdk-concurrency.sh",
+        "./scripts/test-copilot-hook.sh",
+        "./scripts/test-copilot-sandbox.sh",
+        "./scripts/build-unsigned.sh",
+        "./scripts/test-copilot-setup.sh",
         "python3 scripts/test-local-preview.py",
         "python3 scripts/test-cmux-maestro-orchestrator.py",
     ],
+}
+# Each required artifact: (job, upload step title, producer commands that must precede it, exact path).
+REQUIRED_ARTIFACTS = {
+    "sidebar-layout-offscreen": ("validate-native", "Upload synthetic sidebar layout renders",
+                                 ["./scripts/test.sh"], ".build/layout-validation/offscreen/*.png"),
+    "integrated-test-scope-evidence": (
+        "validate-native", "Upload integrated test scope evidence", ["./scripts/test.sh"],
+        "|\n            .build/tests/scoped-results/**/*.json\n"
+        "            .build/tests/scoped-results/**/*.txt\n"
+        "            .build/tests/scoped-results/**/guide-acceptance/*.log\n"
+        "            .build/tests/scoped-results/**/guide-acceptance/probe.xcresult\n"
+        "            .build/tests/scoped-results/**/guide-acceptance/images/*.png\n"
+        "            .build/tests/scoped-results/**/failure-diagnostics/*/*.zip"),
+    # Standalone setup tests write their watchdog controls and any metadata stall diagnostics here.
+    "copilot-setup-evidence": (
+        "validate-contracts", "Upload setup process isolation evidence", ["./scripts/test-copilot-setup.sh"],
+        "|\n            .build/setup-tests/metadata-watchdog/\n"
+        "            .build/tests/scoped-results/metadata-diagnostics/"),
 }
 SEVENTEEN_VALIDATION_COMMANDS = {
     "node --test scripts/test-skill-overrides.mjs",
@@ -1046,49 +1064,135 @@ class BuildMetadataTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(destination.exists())
 
-    def test_ci_preserves_all_seventeen_validation_commands_without_new_conditions(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    def assert_validation_jobs(self, workflow):
+        """Per-job command lists, complete non-duplicated coverage, independence and early native start."""
         jobs = workflow_jobs(workflow)
         for job, expected in VALIDATION_JOBS.items():
-            with self.subTest(job=job):
-                self.assertEqual(job_commands(jobs[job]), expected)
+            self.assertEqual(job_commands(jobs[job]), expected, job)
         # Complete, non-duplicated coverage: the split jobs together run each of the 17 exactly once.
         split = [command for job in VALIDATION_JOBS for command in job_commands(jobs[job])]
         self.assertEqual(len(split), 17)
         self.assertEqual(set(split), SEVENTEEN_VALIDATION_COMMANDS)
         for job, block in jobs.items():
             if job not in VALIDATION_JOBS:
-                with self.subTest(other_job=job):
-                    self.assertFalse(set(job_commands(block)) & SEVENTEEN_VALIDATION_COMMANDS,
-                                     "Validation commands belong to the guarded validation jobs only.")
+                self.assertFalse(set(job_commands(block)) & SEVENTEEN_VALIDATION_COMMANDS,
+                                 f"Validation commands belong to the guarded validation jobs only ({job}).")
         for job in VALIDATION_JOBS:
             run_steps = [step for step in job_steps(jobs[job]) if "\n        run:" in step]
             self.assertEqual(len(run_steps), len(VALIDATION_JOBS[job]))
             for step in run_steps:
                 self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
-        self.assertNotIn("continue-on-error", workflow)
-
-    def test_ci_native_tests_wait_only_for_their_own_prerequisites(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        jobs = workflow_jobs(workflow)
-        native = jobs["validate-native"]
-        # Independent of the contract suites: no needs, so a failure in either job never skips the other.
-        for job in VALIDATION_JOBS:
-            with self.subTest(job=job):
-                self.assertNotRegex(jobs[job], r"(?m)^    needs:")
-                self.assertRegex(jobs[job], r"(?m)^    runs-on: macos-latest$",
-                                 "Runner placement is #191's decision; native work stays on macOS.")
-        steps = job_steps(native)
+            # Independent: no needs, so a failure in either job never skips the other's suites.
+            self.assertNotRegex(jobs[job], r"(?m)^    needs:", job)
+            self.assertRegex(jobs[job], r"(?m)^    runs-on: macos-latest$",
+                             "Runner placement is #191's decision; native work stays on macOS.")
+        steps = job_steps(jobs["validate-native"])
         self.assertEqual(steps[0], "      - uses: actions/checkout@v4\n")
         self.assertEqual(steps[1], "      - name: Run integrated Swift tests\n        run: ./scripts/test.sh\n",
                          "Integrated Swift tests start right after checkout (#196).")
-        # test.sh fetches the SDK and compiles in its own derived data; it never reads the unsigned build.
-        harness = (ROOT / "scripts/test.sh").read_text() + (ROOT / "scripts/run-integrated-test-scopes.py").read_text()
-        self.assertIn('"$ROOT/scripts/fetch-sdk.sh"', (ROOT / "scripts/test.sh").read_text())
-        self.assertIn('DERIVED_DATA="$ROOT/.build/tests"', (ROOT / "scripts/test.sh").read_text())
-        for prerequisite in ("build-unsigned", ".build/unsigned"):
-            with self.subTest(prerequisite=prerequisite):
-                self.assertNotIn(prerequisite, harness)
+        self.assertNotIn("continue-on-error", workflow)
+
+    def assert_artifacts_follow_their_producers(self, workflow):
+        """Each required artifact uploads always, once, from its producers' job, after every producer."""
+        jobs = workflow_jobs(workflow)
+        for name, (job, title, producers, path) in REQUIRED_ARTIFACTS.items():
+            self.assertEqual(workflow.count(f"          name: {name}\n"), 1, f"{name} has one upload step.")
+            steps = job_steps(jobs[job])
+            uploads = [index for index, step in enumerate(steps) if f"          name: {name}\n" in step]
+            self.assertEqual(len(uploads), 1, f"{name} uploads from {job}, its producers' runner.")
+            self.assertEqual(steps[uploads[0]],
+                             f"      - name: {title}\n"
+                             "        if: always()\n"
+                             "        uses: actions/upload-artifact@v4\n"
+                             "        with:\n"
+                             f"          name: {name}\n"
+                             f"          path: {path}\n"
+                             "          include-hidden-files: true\n"
+                             "          if-no-files-found: error\n"
+                             "          retention-days: 14\n")
+            for command in producers:
+                found = [index for index, step in enumerate(steps) if f"        run: {command}\n" in step]
+                self.assertEqual(len(found), 1, f"{command} must run in {name}'s job.")
+                self.assertLess(found[0], uploads[0], f"{name} would miss {command}'s later partial diagnostics.")
+
+    def test_ci_preserves_all_seventeen_validation_commands_without_new_conditions(self):
+        self.assert_validation_jobs((ROOT / ".github/workflows/ci.yml").read_text())
+
+    def test_ci_native_tests_do_not_read_the_unsigned_build(self):
+        # Textual proxy: test.sh and every script it runs or loads, plus the project build phases'
+        # scripts, never name build-unsigned or its output. It cannot see dynamic paths or Xcode's
+        # implicit state; the live native job, which starts test.sh right after checkout, proves the rest.
+        test_sh = (ROOT / "scripts/test.sh").read_text()
+        self.assertIn('DERIVED_DATA="$ROOT/.build/tests"', test_sh)
+        self.assertEqual(sorted(set(re.findall(r'"\$ROOT/scripts/([^"]+)"', test_sh))),
+                         ["build-preference-test-client.sh", "fetch-sdk.sh",
+                          "run-integrated-test-scopes.py", "verify-build-metadata.py"],
+                         "test.sh runs a new script: add it to this scan.")
+        scanned, pending = [], ["test.sh"]
+        project = (ROOT / "CMUXMaestroPreview.xcodeproj/project.pbxproj").read_text()
+        pending += re.findall(r"scripts/([A-Za-z0-9_.-]+\.(?:py|sh))", project)
+        while pending:
+            name = pending.pop()
+            if name in scanned:
+                continue
+            scanned.append(name)
+            text = (ROOT / "scripts" / name).read_text()
+            pending += re.findall(r'"\$ROOT/scripts/([^"/]+\.(?:sh|py))"', text)
+            pending += re.findall(r'spec_from_file_location\([^)]*"scripts/([^"]+\.py)"\)', text)
+            pending += re.findall(r'with_name\("([^"]+\.py)"\)', text)
+        for name in ("fetch-sdk.sh", "build-preference-test-client.sh", "run-integrated-test-scopes.py",
+                     "run-guide-ui-validation.py", "guide-acceptance-evidence.py", "write-guide-reference.py"):
+            self.assertIn(name, scanned)
+        for name in scanned:
+            text = (ROOT / "scripts" / name).read_text()
+            for prerequisite in ("build-unsigned", ".build/unsigned"):
+                with self.subTest(script=name, prerequisite=prerequisite):
+                    self.assertNotIn(prerequisite, text)
+
+    def test_ci_split_job_guards_reject_order_coverage_and_dependency_drift(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        test_sh = "      - name: Run integrated Swift tests\n        run: ./scripts/test.sh\n"
+        hook = "      - name: Verify compiled hooks fail open\n        run: ./scripts/test-copilot-hook.sh\n"
+        setup = "      - name: Verify Settings guide and setup process isolation\n        run: ./scripts/test-copilot-setup.sh\n"
+        beats = "        run: python3 scripts/test-beats.py\n"
+        setup_upload = workflow[workflow.index("      - name: Upload setup process isolation evidence\n"):]
+        setup_upload = setup_upload[:setup_upload.index("retention-days: 14\n") + len("retention-days: 14\n")]
+        validation_mutations = {
+            "native needs contracts": workflow.replace(
+                "  validate-native:\n", "  validate-native:\n    needs: [validate-contracts]\n"),
+            "contracts needs native": workflow.replace(
+                "  validate-contracts:\n", "  validate-contracts:\n    needs: validate-native\n"),
+            # Same command lists; only a non-prerequisite step now runs ahead of test.sh.
+            "test.sh not first": workflow.replace(test_sh, "      - uses: actions/setup-node@v4\n" + test_sh, 1),
+            "command duplicated across jobs": workflow.replace(test_sh, test_sh + "      - name: dup\n" + beats, 1),
+            "dropped command": workflow.replace(hook, ""),
+            "command moved to the gate": workflow.replace(hook, "").rstrip("\n") + "\n" + hook,
+        }
+        artifact_mutations = {
+            "setup upload before its producer": workflow.replace(setup_upload, "").replace(setup, setup_upload + setup),
+            "layout upload before test.sh": workflow.replace(test_sh, "", 1).replace(
+                "      - name: Upload integrated test scope evidence\n",
+                test_sh + "      - name: Upload integrated test scope evidence\n", 1),
+            "integrated upload before test.sh": workflow.replace(test_sh, "", 1).replace(
+                "  validate-contracts:\n", "      - name: late\n" + test_sh[len("      - name: Run integrated Swift tests\n"):]
+                + "\n  validate-contracts:\n", 1),
+            "setup upload in the other job": workflow.replace(setup_upload, "").replace(
+                "          retention-days: 14\n\n  validate-contracts:",
+                "          retention-days: 14\n" + setup_upload + "\n  validate-contracts:", 1),
+            "upload without always()": workflow.replace(
+                "Upload setup process isolation evidence\n        if: always()\n",
+                "Upload setup process isolation evidence\n"),
+        }
+        for name, mutated in validation_mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, workflow)
+                with self.assertRaises(AssertionError):
+                    self.assert_validation_jobs(mutated)
+        for name, mutated in artifact_mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, workflow)
+                with self.assertRaises((AssertionError, KeyError, ValueError)):
+                    self.assert_artifacts_follow_their_producers(mutated)
 
     def test_ci_runs_one_suite_per_pr_update_and_full_validation_on_main(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -1220,56 +1324,27 @@ class BuildMetadataTests(unittest.TestCase):
                     self.assert_final_gate(mutated, contract)
 
     def test_ci_always_uploads_json_evidence_and_retains_required_png_artifact(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        steps = job_steps(workflow_jobs(workflow)["validate-native"])
-        for title, name, path in (
-            ("Upload integrated test scope evidence", "integrated-test-scope-evidence",
-             "|\n            .build/tests/scoped-results/**/*.json\n"
-             "            .build/tests/scoped-results/**/*.txt\n"
-             "            .build/tests/scoped-results/**/guide-acceptance/*.log\n"
-             "            .build/tests/scoped-results/**/guide-acceptance/probe.xcresult\n"
-             "            .build/tests/scoped-results/**/guide-acceptance/images/*.png\n"
-             "            .build/tests/scoped-results/**/failure-diagnostics/*/*.zip\n"
-             "            .build/setup-tests/metadata-watchdog/"),
-            ("Upload synthetic sidebar layout renders", "sidebar-layout-offscreen",
-             ".build/layout-validation/offscreen/*.png"),
-        ):
-            with self.subTest(artifact=name):
-                self.assertEqual(workflow.count(f"          name: {name}\n"), 1, "Each artifact has one producer job.")
-                actual = [step for step in steps if f"          name: {name}\n" in step]
-                self.assertEqual(actual, [
-                    f"      - name: {title}\n"
-                    "        if: always()\n"
-                    "        uses: actions/upload-artifact@v4\n"
-                    "        with:\n"
-                    f"          name: {name}\n"
-                    f"          path: {path}\n"
-                    "          include-hidden-files: true\n"
-                    "          if-no-files-found: error\n"
-                    "          retention-days: 14\n"
-                ])
+        self.assert_artifacts_follow_their_producers((ROOT / ".github/workflows/ci.yml").read_text())
 
     def test_ci_collects_final_metadata_diagnostics_after_both_producers(self):
-        jobs = workflow_jobs((ROOT / ".github/workflows/ci.yml").read_text())
-        uploads = [(job, index, step) for job, block in jobs.items() for index, step in enumerate(job_steps(block))
-                   if "          name: integrated-test-scope-evidence\n" in step]
-        self.assertEqual(len(uploads), 1, "One final upload must collect both diagnostic producers.")
-        upload_job, upload_index, upload = uploads[0]
-        # Artifacts are per runner: both producers must run earlier in the same job as the upload.
-        steps = job_steps(jobs[upload_job])
-        for command in ("./scripts/test.sh", "./scripts/test-copilot-setup.sh"):
-            with self.subTest(producer=command):
-                producers = [index for index, step in enumerate(steps) if f"        run: {command}\n" in step]
-                self.assertEqual(len(producers), 1, "The producer must run in the upload's job.")
-                self.assertLess(producers[0], upload_index, "An earlier upload cannot retain later partial diagnostics.")
-        layouts = [index for index, step in enumerate(steps) if "          name: sidebar-layout-offscreen\n" in step]
-        renders = [index for index, step in enumerate(steps) if "        run: ./scripts/test.sh\n" in step]
-        self.assertEqual(len(layouts), 1, "Layout renders upload from test.sh's job.")
-        self.assertLess(renders[0], layouts[0])
+        # Both producers write metadata stall diagnostics; each job's upload follows its own producer.
+        self.assertEqual(REQUIRED_ARTIFACTS["integrated-test-scope-evidence"][::2],
+                         ("validate-native", ["./scripts/test.sh"]))
+        self.assertEqual(REQUIRED_ARTIFACTS["copilot-setup-evidence"][::2],
+                         ("validate-contracts", ["./scripts/test-copilot-setup.sh"]))
+        integrated = REQUIRED_ARTIFACTS["integrated-test-scope-evidence"][3]
+        setup_paths = REQUIRED_ARTIFACTS["copilot-setup-evidence"][3]
+        self.assertIn(".build/tests/scoped-results/**/*.json", integrated)
+        self.assertIn(".build/tests/scoped-results/**/*.txt", integrated)
+        self.assertIn(".build/tests/scoped-results/metadata-diagnostics/", setup_paths)
+        self.assertIn(".build/setup-tests/metadata-watchdog/", setup_paths)
         setup = (ROOT / "scripts/test-copilot-setup.sh").read_text()
         self.assertIn('OUTPUT="$ROOT/.build/setup-tests"', setup)
         self.assertIn('--results-root "$OUTPUT/metadata-watchdog"', setup)
-        self.assertIn("            .build/setup-tests/metadata-watchdog/\n", upload)
+        self.assertIn('"$ROOT/CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift"', setup)
+        observer = (ROOT / "CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift").read_text()
+        self.assertEqual(observer.count('".build/tests/scoped-results/metadata-diagnostics/'), 2)
+        self.assert_artifacts_follow_their_producers((ROOT / ".github/workflows/ci.yml").read_text())
 
     def test_app_bridge_markers_are_wired_as_input_plist_in_both_configurations(self):
         project = json.loads(subprocess.check_output([

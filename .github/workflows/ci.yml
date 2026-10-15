@@ -8,8 +8,8 @@ on:
 jobs:
   validate-native:
     # Early failures (#196): integrated Swift tests start right after checkout, in their own job,
-    # so a native failure reports without waiting for the script/contract suites, and a failure in
-    # either job never skips the other's suites.
+    # so a native failure reports without waiting for the other suites, and a failure in either
+    # job never skips the other's suites. This job holds only test.sh and its evidence.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,14 +24,6 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
-      - name: Build isolated validation targets
-        run: ./scripts/build-unsigned.sh
-      - name: Verify Settings guide and setup process isolation
-        run: ./scripts/test-copilot-setup.sh
-      - name: Verify compiled hooks fail open
-        run: ./scripts/test-copilot-hook.sh
-      - name: Verify shared file traversal under narrow sandbox grants
-        run: ./scripts/test-copilot-sandbox.sh
       - name: Upload integrated test scope evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -44,14 +36,13 @@ jobs:
             .build/tests/scoped-results/**/guide-acceptance/probe.xcresult
             .build/tests/scoped-results/**/guide-acceptance/images/*.png
             .build/tests/scoped-results/**/failure-diagnostics/*/*.zip
-            .build/setup-tests/metadata-watchdog/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
 
   validate-contracts:
-    # Script and contract suites, fastest first; the long preview-transaction and orchestrator
-    # suites run last so a quick failure is not queued behind them.
+    # Script, contract and standalone native suites, short suites first; the long preview-transaction
+    # and orchestrator suites run last so a quick failure is not queued behind them.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,10 +66,29 @@ jobs:
         run: ./scripts/test-copilot-shell-reducer.sh
       - name: Verify SDK fetch concurrency and cleanup
         run: ./scripts/test-fetch-sdk-concurrency.sh
+      - name: Verify compiled hooks fail open
+        run: ./scripts/test-copilot-hook.sh
+      - name: Verify shared file traversal under narrow sandbox grants
+        run: ./scripts/test-copilot-sandbox.sh
+      - name: Build isolated validation targets
+        run: ./scripts/build-unsigned.sh
+      - name: Verify Settings guide and setup process isolation
+        run: ./scripts/test-copilot-setup.sh
       - name: Verify local preview transactions and recovery
         run: python3 scripts/test-local-preview.py
       - name: Verify terminal orchestration contracts
         run: python3 scripts/test-cmux-maestro-orchestrator.py
+      - name: Upload setup process isolation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: copilot-setup-evidence
+          path: |
+            .build/setup-tests/metadata-watchdog/
+            .build/tests/scoped-results/metadata-diagnostics/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   guide-ui-consumer-probe:
     runs-on: macos-latest
