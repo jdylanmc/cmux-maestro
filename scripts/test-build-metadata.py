@@ -27,16 +27,20 @@ BENCHMARK_TEST = "CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSynthe
 BENCHMARK_FLAG = "CMUX_MAESTRO_READER_BENCHMARK"
 
 
-def yaml_job_ids(workflow):
-    """Job ids from a real YAML parse: PyYAML if installed, else Ruby's bundled YAML."""
+def yaml_jobs(workflow):
+    """The jobs mapping from a real YAML parse: PyYAML if installed, else Ruby's bundled YAML."""
     try:
         import yaml
     except ImportError:
         result = subprocess.run(
-            ["ruby", "-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.safe_load(STDIN.read)['jobs'].keys)"],
+            ["ruby", "-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.safe_load(STDIN.read)['jobs'])"],
             input=workflow, capture_output=True, text=True, check=True)
         return json.loads(result.stdout)
-    return list(yaml.safe_load(workflow)["jobs"])
+    return yaml.safe_load(workflow)["jobs"]
+
+
+def yaml_job_ids(workflow):
+    return list(yaml_jobs(workflow))
 
 
 def workflow_jobs(workflow):
@@ -1091,6 +1095,34 @@ class BuildMetadataTests(unittest.TestCase):
                        "candidate's own", "changes to merge policy"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, section)
+
+    def assert_job_and_step_shapes(self, workflow, gate):
+        policy = "; see docs/agents/merge-policy.md (#190: no arbitrary timeouts or blanket skips)."
+        self.assertNotIn("timeout-minutes", workflow, "No timeout-minutes anywhere" + policy)
+        for job, body in yaml_jobs(workflow).items():
+            allowed = {"runs-on", "steps", "permissions"} | ({"needs", "if"} if job == gate else set())
+            self.assertLessEqual(set(body), allowed, f"Job {job} has keys outside the allow-list" + policy)
+            for step in body["steps"]:
+                self.assertIn(step.get("if", "always()"), ("always()",),
+                              f"Step {step.get('name', step.get('uses'))} in {job} may only use if: always()" + policy)
+                self.assertNotIn("timeout-minutes", step, policy)
+
+    def test_ci_jobs_and_steps_use_only_allowed_keys_and_conditions(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assert_job_and_step_shapes(workflow, "ci-gate")
+        mutations = {
+            "job timeout-minutes": ("  validate:\n", "  validate:\n    timeout-minutes: 30\n"),
+            "job strategy": ("  validate:\n", "  validate:\n    strategy:\n      fail-fast: false\n"),
+            "checkout if: false": ("      - uses: actions/checkout@v4\n      - name: Test local",
+                                   "      - uses: actions/checkout@v4\n        if: false\n      - name: Test local"),
+            "step timeout-minutes": ("        run: ./scripts/test.sh\n",
+                                     "        run: ./scripts/test.sh\n        timeout-minutes: 30\n"),
+        }
+        for name, (old, new) in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertEqual(workflow.count(old), 1)
+                with self.assertRaises(AssertionError):
+                    self.assert_job_and_step_shapes(workflow.replace(old, new), "ci-gate")
 
     def test_ci_final_gate_guard_rejects_hidden_jobs_and_gate_drift(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
