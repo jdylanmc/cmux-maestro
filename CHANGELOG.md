@@ -28,6 +28,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- CI ends with a `ci-gate` check, the merge signal: it passes only when every required suite
+  succeeds, and fails on any failure, cancellation, skip or missing result (#197). Branch
+  protection is off, so it is advisory until a maintainer requires it.
 - CI runs once per pull request update and on pushes to `main`; feature-branch pushes no longer
   run a duplicate suite. Open a draft PR to validate a branch (#192).
 - An expanded agent row and everything rendered under it (sub-agents, internal tasks, nested

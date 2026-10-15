@@ -27,6 +27,13 @@ BENCHMARK_TEST = "CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSynthe
 BENCHMARK_FLAG = "CMUX_MAESTRO_READER_BENCHMARK"
 
 
+def workflow_jobs(workflow):
+    """Map each top-level job id in a workflow to its block text."""
+    section = workflow.split("\njobs:\n", 1)[1]
+    parts = re.split(r"^  ([A-Za-z0-9_-]+):\n", section, flags=re.MULTILINE)
+    return dict(zip(parts[1::2], parts[2::2]))
+
+
 class IntegratedTestScopeTests(unittest.TestCase):
     def setUp(self):
         self.directory = ROOT / ".build/metadata-tests" / str(uuid.uuid4())
@@ -992,10 +999,12 @@ class BuildMetadataTests(unittest.TestCase):
         self.assertEqual(triggers, "  push:\n    branches: [main]\n  pull_request:\n",
                          "The CI event matrix is merge policy: update docs/agents/merge-policy.md "
                          "('When it runs') together with any trigger change.")
+        jobs = workflow_jobs(workflow)
         for job in ("validate", "guide-ui-consumer-probe"):
             with self.subTest(job=job):
-                block = workflow.split(f"\n  {job}:\n", 1)[1].split("\n  guide-ui-consumer-probe:", 1)[0]
-                self.assertNotIn("\n    if:", block, "Jobs must not be event-filtered; triggers own the matrix.")
+                self.assertNotRegex(jobs[job], r"(?m)^    if:", "Jobs must not be event-filtered; triggers own the matrix.")
+        # The gate's only job condition is always(), so it exists for every validated event.
+        self.assertEqual(re.findall(r"^    if: (.+)$", jobs["ci-gate"], re.MULTILINE), ["always()"])
         policy = (ROOT / "docs/agents/merge-policy.md").read_text()
         section = policy.split("**When it runs (#192):**", 1)[1].split("Its current commands", 1)[0]
         for phrase in ("pushes to `main`", "every pull request update", "is stale too",
@@ -1011,6 +1020,44 @@ class BuildMetadataTests(unittest.TestCase):
         section = policy.split("## Actual CI and formatting gates", 1)[1]
         documented = section.split("```sh\n", 1)[1].split("\n```", 1)[0].splitlines()
         self.assertEqual(documented, commands)
+
+    def test_ci_final_gate_requires_every_validation_job_through_the_contract(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        jobs = workflow_jobs(workflow)
+        contract = json.loads((ROOT / "scripts/ci-required-suites.json").read_text())
+        gate = contract["gate_job"]
+        self.assertEqual(gate, "ci-gate", "The gate's job id is the documented check name.")
+        validation = sorted(job for job in jobs if job != gate)
+        self.assertTrue(validation)
+        self.assertEqual(sorted(suite["job"] for suite in contract["suites"]), validation,
+                         "Every validation job is a required suite; update scripts/ci-required-suites.json.")
+        self.assertEqual(jobs[gate].rstrip("\n").split("\n\n", 1)[0] + "\n",
+                         f"    needs: [{', '.join(suite['job'] for suite in contract['suites'])}]\n"
+                         "    if: always()\n"
+                         "    runs-on: ubuntu-latest\n"
+                         "    permissions:\n"
+                         "      contents: read\n"
+                         "    steps:\n"
+                         "      - uses: actions/checkout@v4\n"
+                         "      - name: Verify final gate evaluator\n"
+                         "        run: python3 scripts/test-ci-gate.py\n"
+                         "      - name: Evaluate required suites\n"
+                         "        if: always()\n"
+                         "        env:\n"
+                         "          CI_GATE_NEEDS: ${{ toJSON(needs) }}\n"
+                         "        run: python3 scripts/ci-gate.py\n")
+        self.assertEqual(list(jobs)[-1], gate, "Keep the gate last so its block holds no other job.")
+        for job in validation:
+            with self.subTest(job=job):
+                # A job-level condition could skip a suite; not-applicable needs #194's classifier and the gate.
+                self.assertNotRegex(jobs[job], r"(?m)^    if:")
+        self.assertNotIn("continue-on-error", workflow)
+        policy = (ROOT / "docs/agents/merge-policy.md").read_text()
+        section = policy.split("**Final coverage gate (#197):**", 1)[1].split("Its current commands", 1)[0]
+        for phrase in ("`ci-gate`", "scripts/ci-required-suites.json", "merge signal",
+                       "if-no-files-found: error", "branches/main/protection", "advisory"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, section)
 
     def test_ci_always_uploads_json_evidence_and_retains_required_png_artifact(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
