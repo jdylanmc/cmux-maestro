@@ -100,3 +100,5 @@ Why each rule exists: [decisions](docs/adr/).
 ## Status
 
 Alpha. Local preview only. Public repo of [jdylanmc](https://github.com/jdylanmc). Independent of the older interpreted Maestro project. No license decided yet, so all rights reserved until one is chosen.
+
+<!-- ci #194 docs-only probe; do not merge -->
