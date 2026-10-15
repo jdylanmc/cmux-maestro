@@ -1205,10 +1205,13 @@ class BuildMetadataTests(unittest.TestCase):
 
     def assert_no_cross_run_reuse(self, workflow):
         """#193 measured setup reuse and rejected it: every validation job starts from a clean checkout."""
-        actions = set(re.findall(r"^\s+(?:- )?uses: (\S+)$", workflow, re.MULTILINE))
-        self.assertEqual(actions, {"actions/checkout@v4", "actions/upload-artifact@v4"},
-                         "A new action can restore state across runs; re-measure and record it under #193 first.")
-        for token in ("actions/cache", "restore-keys", "cache:", "cache-dependency-path", "download-artifact"):
+        actions = re.findall(r"""^\s*(?:-\s+)?uses:\s*["']?([^\s"'#]+)""", workflow, re.MULTILINE)
+        self.assertEqual(len(actions), workflow.count("uses:"), "Every uses: must be a parseable step action.")
+        self.assertEqual(set(actions), {"actions/checkout@v4", "actions/upload-artifact@v4"},
+                         "Any new action, even one without a cache such as actions/setup-python, can carry state "
+                         "across runs: it needs a setup-reuse review (#193) and an update to this guard.")
+        for token in ("actions/cache", "actions/cache/", "restore-keys", "cache:", "cache-dependency-path",
+                      "download-artifact", "gh run download", "gh cache"):
             self.assertNotIn(token, workflow, f"{token}: cross-run reuse needs #193's measured decision.")
 
     def test_ci_reuses_no_setup_state_across_runs(self):
@@ -1233,6 +1236,20 @@ class BuildMetadataTests(unittest.TestCase):
             "prior run's artifact": workflow.replace(
                 checkout, "      - uses: actions/checkout@v4\n      - uses: actions/download-artifact@v4\n"
                 "      - name: Run integrated Swift tests\n", 1),
+            "comment-suffixed third-party restore": workflow.replace(
+                checkout, "      - uses: actions/checkout@v4\n"
+                "      - uses: example/restore-derived-data@0123456789abcdef0123456789abcdef01234567 # v1\n"
+                "      - name: Run integrated Swift tests\n", 1),
+            "quoted action": workflow.replace(
+                checkout, "      - uses: actions/checkout@v4\n      - uses: 'actions/setup-python@v5'\n"
+                "      - name: Run integrated Swift tests\n", 1),
+            "gh run download": workflow.replace(
+                checkout, "      - uses: actions/checkout@v4\n      - name: Restore prior build\n"
+                "        run: gh run download 1 -n derived-data -D .build/tests\n"
+                "      - name: Run integrated Swift tests\n", 1),
+            "gh cache": workflow.replace(
+                checkout, "      - uses: actions/checkout@v4\n      - name: Restore prior build\n"
+                "        run: gh cache list\n      - name: Run integrated Swift tests\n", 1),
         }
         for name, mutated in mutations.items():
             with self.subTest(mutation=name):
