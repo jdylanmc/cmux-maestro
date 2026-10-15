@@ -1095,6 +1095,8 @@ class GuideUIValidationTests(unittest.TestCase):
     def test_probe_ci_job_is_independent_and_preserves_failure_evidence(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         original, additive = workflow.split("\n  guide-ui-consumer-probe:", 1)
+        # The probe job itself stays independent; only the final ci-gate (#197) may depend on it.
+        additive = additive.split("\n  ci-gate:", 1)[0]
         self.assertNotIn("needs:", additive)
         self.assertNotIn("continue-on-error", workflow)
         self.assertIn("if: always()", additive)
