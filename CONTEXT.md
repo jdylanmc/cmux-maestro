@@ -18,6 +18,10 @@ _Avoid_: tab, window, pane (CMUX calls the tab a surface)
 CMUX container that groups surfaces. Capacity and Taskboard filters apply per workspace.
 _Avoid_: project, window
 
+**CMUX window**:
+One CMUX app window with its own workspaces, Maestro sidebar view, and host connection. One extension process serves every window (ADR 0023).
+_Avoid_: window alone, when a surface or workspace is meant
+
 **Session name**:
 Copilot's title for a session, from the `name:` field of its `workspace.yaml`. User-chosen, or generated from the first prompt. Not identity evidence.
 _Avoid_: terminal title, tab title (the CMUX surface title Copilot derives from it)

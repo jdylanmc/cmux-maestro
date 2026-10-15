@@ -22,13 +22,16 @@ final class SidebarBeatsController {
     }
     /// Row icon state. Assigned only when it changes, so unrelated sidebar updates leave icons alone.
     private(set) var indicators = SidebarBeatIndicators()
-    /// Whether the Beats panel is open, and the session it is scoped to. Presentation only.
+    /// Whether the Beats panel is open, the session it is scoped to, and the sidebar window
+    /// that opened it (nil outside a multi-window host). Presentation only.
     private(set) var isPresented = false
     private(set) var scopedSession: UUID?
+    private(set) var presenter: ObjectIdentifier?
     private(set) var notice: String?
     private let file: SidebarBeatsFile?
     private let now: () -> Date
-    private var tree = SidebarCopilotTree.waiting
+    /// One tree per sidebar window; a session lives in exactly one window's tree.
+    private var trees: [ObjectIdentifier?: SidebarCopilotTree] = [:]
 
     init(file: SidebarBeatsFile? = .standard(), now: @escaping () -> Date = { Date() }) {
         self.file = file
@@ -38,9 +41,15 @@ final class SidebarBeatsController {
 
     /// Opens the panel, or rescopes it in place when it is already open, so a second row's click
     /// never races a dismissal. `nil` shows every Beat.
-    func present(scope: UUID?) {
+    func present(scope: UUID?, from presenter: ObjectIdentifier? = nil) {
+        if self.presenter != presenter { self.presenter = presenter }
         if scopedSession != scope { scopedSession = scope }
         if !isPresented { isPresented = true }
+    }
+
+    /// Whether the panel is open in the sidebar window identified by `presenter`.
+    func isPresented(in presenter: ObjectIdentifier?) -> Bool {
+        isPresented && self.presenter == presenter
     }
 
     func showAll() { scopedSession = nil }
@@ -48,17 +57,37 @@ final class SidebarBeatsController {
     func dismiss() {
         isPresented = false
         scopedSession = nil
+        presenter = nil
+    }
+
+    /// Closes the panel only if `presenter`'s window opened it.
+    func dismiss(from presenter: ObjectIdentifier?) {
+        guard self.presenter == presenter else { return }
+        dismiss()
     }
 
     /// Liveness for row icons. Called on every tree change; re-evaluated against the clock on each refresh.
-    func updateLiveness(_ tree: SidebarCopilotTree) {
-        self.tree = tree
+    func updateLiveness(_ tree: SidebarCopilotTree, from window: ObjectIdentifier? = nil) {
+        trees[window] = tree
+        updateIndicators()
+    }
+
+    /// Forgets a closed sidebar window's liveness.
+    func removeLiveness(from window: ObjectIdentifier?) {
+        guard trees.removeValue(forKey: window) != nil else { return }
         updateIndicators()
     }
 
     private func updateIndicators() {
-        let next = SidebarBeatIndicators(summaries: summaries, tree: tree, now: now())
-        if next != indicators { indicators = next }
+        let now = now()
+        let next = trees.values.reduce(into: SidebarBeatIndicators(summaries: summaries)) { result, tree in
+            let window = SidebarBeatIndicators(summaries: summaries, tree: tree, now: now)
+            result.running.formUnion(window.running)
+            result.ended.formUnion(window.ended)
+        }
+        let merged = SidebarBeatIndicators(summaries: summaries, running: next.running,
+                                           ended: next.ended.subtracting(next.running))
+        if merged != indicators { indicators = merged }
     }
 
     func refresh() {
@@ -660,6 +689,16 @@ extension EnvironmentValues {
         get { self[SidebarBeatsControllerKey.self] }
         set { self[SidebarBeatsControllerKey.self] = newValue }
     }
+
+    /// The sidebar window a row's Beat icon opens the panel in.
+    var sidebarBeatsPresenter: ObjectIdentifier? {
+        get { self[SidebarBeatsPresenterKey.self] }
+        set { self[SidebarBeatsPresenterKey.self] = newValue }
+    }
+}
+
+private struct SidebarBeatsPresenterKey: EnvironmentKey {
+    static let defaultValue: ObjectIdentifier? = nil
 }
 
 /// Trailing Beat icon on a row that represents exactly one Copilot session.
@@ -672,6 +711,7 @@ struct SidebarBeatIndicator: View {
     /// Space under the title line, so the icon centres on the title rather than the whole row.
     var belowTitle: CGFloat = 0
     @Environment(\.sidebarBeats) private var controller
+    @Environment(\.sidebarBeatsPresenter) private var presenter
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @MainActor private static var titleHeights: [Double: CGFloat] = [:]
@@ -692,7 +732,7 @@ struct SidebarBeatIndicator: View {
                 SidebarBeatButton(
                     state: state, reduceMotion: reduceMotion, titleHeight: titleHeight,
                     value: indicators.accessibilityValue(for: session), help: indicators.help(for: session),
-                    action: { [weak controller] in controller?.present(scope: session) }
+                    action: { [weak controller, presenter] in controller?.present(scope: session, from: presenter) }
                 )
                 .frame(width: Self.width, height: titleHeight + belowTitle)
             }

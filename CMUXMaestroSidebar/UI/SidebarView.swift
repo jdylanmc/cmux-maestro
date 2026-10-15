@@ -533,6 +533,9 @@ struct SidebarView: View {
         }
     }
 
+    /// This sidebar window's identity for the shared Beats controller; one model per window.
+    private var window: ObjectIdentifier { ObjectIdentifier(model) }
+
     /// Selected by `SidebarReorderBackends.make` once CMUX connects; Maestro-local before that.
     private var reorderBackend: any SidebarReorderBackend {
         model.reorderBackend ?? SidebarScopedReorderBackend.localOnly(store: preferences)
@@ -625,7 +628,7 @@ struct SidebarView: View {
     }
 
     private var presentedHeaderAction: SidebarHeaderAction? {
-        if beats.isPresented { return .beats }
+        if beats.isPresented(in: window) { return .beats }
         if showingSettings { return .settings }
         return unavailableHeaderAction
     }
@@ -633,7 +636,7 @@ struct SidebarView: View {
     @ViewBuilder private var headerPopover: some View {
         if showingSettings {
             settingsPanel
-        } else if beats.isPresented {
+        } else if beats.isPresented(in: window) {
             SidebarBeatsPanel(controller: beats, targets: beatTargets, close: dismissHeaderPopover)
         } else if let action = unavailableHeaderAction, let reason = action.unavailable {
             VStack(alignment: .leading, spacing: 10) {
@@ -653,7 +656,7 @@ struct SidebarView: View {
         case .beats:
             showingSettings = false
             unavailableHeaderAction = nil
-            beats.present(scope: nil)
+            beats.present(scope: nil, from: window)
         case .taskboard:
             preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
         case .settings:
@@ -663,7 +666,7 @@ struct SidebarView: View {
 
     private func dismissHeaderPopover() {
         showingSettings = false
-        beats.dismiss()
+        beats.dismiss(from: window)
         unavailableHeaderAction = nil
     }
 
@@ -807,9 +810,10 @@ struct SidebarView: View {
         .environment(\.sidebarFocusInspection, focusInspection)
         .environment(\.sidebarDismissManaged, dismissManaged)
         .environment(\.sidebarBeats, beats)
-        .onChange(of: model.copilot.tree, initial: true) { _, tree in beats.updateLiveness(tree) }
+        .environment(\.sidebarBeatsPresenter, window)
+        .onChange(of: model.copilot.tree, initial: true) { _, tree in beats.updateLiveness(tree, from: window) }
         // A row's Beat icon opens Beats through the controller; it replaces any other header popover.
-        .onChange(of: beats.isPresented) { _, presented in
+        .onChange(of: beats.isPresented(in: window)) { _, presented in
             if presented { showingSettings = false; unavailableHeaderAction = nil }
         }
         .environment(\.sidebarLocalFocus, localFocus)
@@ -823,6 +827,7 @@ struct SidebarView: View {
             model.copilot.updateIdleTasks(preferences.layout.revealingIdleTasksIn)
             model.copilot.updateManagedSubjects(model.orchestration.snapshot)
             model.setVisible(true)
+            beats.updateLiveness(model.copilot.tree, from: window)
         }
         .onChange(of: preferences.history) { _, history in model.copilot.updateHistory(history) }
         .onChange(of: preferences.attention) { _, attention in model.copilot.updateAttention(attention) }
@@ -858,7 +863,10 @@ struct SidebarView: View {
                 reorderBackend.refresh()
             }
         }
-        .onDisappear { model.setVisible(false) }
+        .onDisappear {
+            model.setVisible(false)
+            beats.removeLiveness(from: window)
+        }
     }
 
     private func restoreFocus(afterDismissing owner: (session: UUID, surface: UUID, workspace: UUID)) {
@@ -1180,6 +1188,10 @@ struct SidebarView: View {
             EmptyView()
         case .degraded:
             Label("CMUX disconnected. Focus and live status unavailable.", systemImage: "exclamationmark.triangle")
+                .font(.caption2).foregroundStyle(SidebarTone.attention.color)
+        case .unpaired:
+            Label("This window's CMUX connection is unavailable. No workspace data shown.",
+                  systemImage: "rectangle.on.rectangle.slash")
                 .font(.caption2).foregroundStyle(SidebarTone.attention.color)
         }
     }

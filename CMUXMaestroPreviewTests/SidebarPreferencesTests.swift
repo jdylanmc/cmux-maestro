@@ -27,6 +27,7 @@ struct SidebarPreferencesTests {
                 .waiting,
                 .connected(workspaceCount: 2, surfaceCount: 3),
                 .degraded(message: "Host unavailable"),
+                .unpaired,
             ]
 
             for (index, state) in states.enumerated() {
@@ -207,6 +208,8 @@ struct SidebarPreferencesTests {
             )
         case .degraded(let message):
             connection.showDegraded(message: message)
+        case .unpaired:
+            connection.showUnpaired()
         }
     }
 }

@@ -4,6 +4,8 @@ enum SidebarConnectionState: Equatable {
     case waiting
     case connected(workspaceCount: Int, surfaceCount: Int)
     case degraded(message: String)
+    /// This view cannot be paired with exactly one CMUX window's connection (ADR 0023).
+    case unpaired
 }
 
 @Observable
@@ -70,6 +72,20 @@ final class SidebarConnectionModel {
             workspaceCount: workspaceCount,
             surfaceCount: surfaceCount
         )
+    }
+
+    /// Drops every window-scoped fact before a different connection's data can arrive.
+    func resetWindow() {
+        latestSequence = nil
+        openWorkspaceAtPath = nil
+        hierarchy = .empty
+        showWaiting()
+    }
+
+    /// Shows no window data when this view cannot be paired with exactly one connection.
+    func showUnpaired() {
+        resetWindow()
+        state = .unpaired
     }
 
     func showDegraded(message: String) {

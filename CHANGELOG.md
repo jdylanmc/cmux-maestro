@@ -118,6 +118,14 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Each CMUX window's Maestro sidebar shows only its own window. Opening a second window no
+  longer replaces the first window's workspaces, and focus or actions in one window no
+  longer reach another (ADR 0023). A reviewed patch to the pinned SDK, applied by
+  `scripts/fetch-sdk.sh`, keeps one connection per window instead of replacing the
+  previous one; each sidebar view owns its own state. If ExtensionKit shares one scene
+  across windows, both say "This window's CMUX connection is unavailable" until one
+  closes, rather than showing the wrong window. Beat row icons keep each window's
+  liveness, and the Beats panel opens only in the window that asked for it.
 - Make every Beats reader apply one store contract. The Swift sidebar and the orchestrator
   now refuse the same stores (shared `scripts/test-fixtures/beats-store-cases.json`):
   `true`, `1.0` or out-of-range integers, uppercase UUIDs, non-text timestamps, lone
