@@ -16,6 +16,18 @@ Policy: [merge policy](../agents/merge-policy.md). Entrypoints:
   excluded). Queueing is job `started_at` minus `created_at`; execution is
   `completed_at` minus `started_at`. Jobs cancelled before a runner picked them up
   are not counted as active.
+- **Reproduce:** the concurrency and queue tables are one-time measurements of
+  this window. `scripts/ci-concurrency-report.py` regenerates them read-only
+  through `gh api` (about 90 seconds), while GitHub still retains the runs:
+
+  ```sh
+  GH_TOKEN="$(gh auth token --user jdylanmc)" python3 scripts/ci-concurrency-report.py \
+      --owner jdylanmc --repo cmux-maestro --repo pr-sniper --repo homebrew-pr-sniper \
+      --since 2026-10-14 --until 2026-10-15T11:40:46Z
+  ```
+
+  On 2026-10-15 it reproduced the tables below exactly. The layout table and
+  the step timings come from the same jobs API, read by hand.
 - **Test counts:** the suites' own summary lines in the job log, e.g. job
   116344761792 (run 38711815326, `validate-contracts`, image `macos-26-arm64`).
 
@@ -27,10 +39,10 @@ macOS concurrency is limited per account, not per repository, and
 | Simultaneous account macOS jobs | Minutes in the window |
 | --- | --- |
 | 0 | 438 |
-| 1 | 306 |
+| 1 | 305 |
 | 2 | 143 |
 | 3 | 137 |
-| 4 | 115 |
+| 4 | 114 |
 | 5 | 240 |
 
 - The maximum was **5**, which is GitHub's macOS limit for this plan. It was
