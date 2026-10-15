@@ -131,6 +131,10 @@ None of them calls `xcrun`, `swiftc`, `xcodebuild`, `plutil`, `sw_vers`, `sips`,
 - Fix: `check-skill-overrides.mjs` sorts with an explicit `Intl.Collator("en-US")`.
   This matches the macOS hosts that wrote `skills-lock.json` and the macOS CI
   runs that verified it.
+- Regenerate lock hashes (`npx skills …`) only on a host with en-US collation.
+  POSIX/C collation (for example Linux with `LANG=C.UTF-8`) and some locales,
+  such as Lithuanian, order paths differently, so the CLI would write hashes
+  this check reports as drift. The drift error says so.
 - A new test simulates a POSIX-default host, by replacing `localeCompare` and
   the default `Intl.Collator`, and requires en-US order. Reverting to either
   `localeCompare` or a default `Intl.Collator()` fails it.
@@ -142,8 +146,8 @@ None of them calls `xcrun`, `swiftc`, `xcodebuild`, `plutil`, `sw_vers`, `sips`,
 | Case-sensitive file system | Every configured link and skill folder matches a tracked path exactly. Inbound links are compared as exact path strings on both systems. |
 | Unicode path normalization | No tracked path contains non-ASCII characters. |
 | Line endings | There is no `.gitattributes`, and both checkouts write the same bytes. |
-| Node version | Locally, Node 20.20.2 (`npx node@20`) and Node 24.20.0 both run 13 of 13 tests and verify 9 skill hashes and 119 policy links. |
-| `node --test` output | Node 20 prints TAP (`# tests 13`) and newer Node prints spec (`ℹ tests 13`). The counts are the same. |
+| Node version | The runner images' defaults are Node 22.23.3 on `ubuntu-latest` (Ubuntu 24.04) and Node 24.20.0 on `macos-latest`. Both versions, and also Node 20.20.2, run 13 of 13 tests and verify 9 skill hashes and 119 policy links locally; the roast confirmed the same on 22.23.3. |
+| `node --test` output | It may print TAP (`# tests 13`) or spec (`ℹ tests 13`), depending on the version and terminal. The counts are the same. |
 
 **What a live run must confirm.** In the `validate-portable` job of the first
 run, check the following. Compare the counts with a local macOS run at the same
@@ -157,6 +161,11 @@ commit (13 tests; 9 hashes and 119 links at this branch's head).
   macOS baseline (run 38711815326) and a local macOS run of this commit. The
   count changes only when tracked Markdown changes.
 - The job's runner image is `ubuntu-24.04` (or the current `ubuntu-latest`).
+- The Node version. Expected: 22.23.3. The job runs no `node --version` step
+  (validation jobs hold only their guarded commands), so read it from the
+  "Included Software" readme that the job log's "Set up job" > "Runner Image"
+  group links for the exact image version. A different version still needs
+  the same counts.
 
 ## Not moved
 
