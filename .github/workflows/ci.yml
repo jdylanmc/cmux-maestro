@@ -6,36 +6,13 @@ on:
   pull_request:
 
 jobs:
-  validate:
+  validate-native:
+    # Early failures (#196): integrated Swift tests start right after checkout, in their own job,
+    # so a native failure reports without waiting for the script/contract suites, and a failure in
+    # either job never skips the other's suites.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Test local skill override validation
-        run: node --test scripts/test-skill-overrides.mjs
-      - name: Verify local skill overrides and policy links
-        run: node scripts/check-skill-overrides.mjs
-      - name: Verify local Joe role appearance defaults and metadata
-        run: python3 scripts/test-joe-role-appearance.py
-      - name: Verify terminal orchestration contracts
-        run: python3 scripts/test-cmux-maestro-orchestrator.py
-      - name: Verify dependency-free pet drawing kit
-        run: python3 scripts/test-pet-kit.py
-      - name: Verify Beats cron, local-time rules, store and agent surface
-        run: python3 scripts/test-beats.py
-      - name: Verify managed messaging and legacy proof launcher contracts
-        run: python3 scripts/test-delivery-proof.py
-      - name: Verify native delivery adapter contracts
-        run: node --test scripts/test-delivery-proof.mjs
-      - name: Verify build and registration metadata contracts
-        run: python3 scripts/test-build-metadata.py
-      - name: Verify local preview transactions and recovery
-        run: python3 scripts/test-local-preview.py
-      - name: Verify compiled shell notification reducer
-        run: ./scripts/test-copilot-shell-reducer.sh
-      - name: Verify SDK fetch concurrency and cleanup
-        run: ./scripts/test-fetch-sdk-concurrency.sh
-      - name: Build isolated validation targets
-        run: ./scripts/build-unsigned.sh
       - name: Run integrated Swift tests
         run: ./scripts/test.sh
       - name: Upload synthetic sidebar layout renders
@@ -47,6 +24,8 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
+      - name: Build isolated validation targets
+        run: ./scripts/build-unsigned.sh
       - name: Verify Settings guide and setup process isolation
         run: ./scripts/test-copilot-setup.sh
       - name: Verify compiled hooks fail open
@@ -69,6 +48,37 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
+
+  validate-contracts:
+    # Script and contract suites, fastest first; the long preview-transaction and orchestrator
+    # suites run last so a quick failure is not queued behind them.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test local skill override validation
+        run: node --test scripts/test-skill-overrides.mjs
+      - name: Verify local skill overrides and policy links
+        run: node scripts/check-skill-overrides.mjs
+      - name: Verify local Joe role appearance defaults and metadata
+        run: python3 scripts/test-joe-role-appearance.py
+      - name: Verify dependency-free pet drawing kit
+        run: python3 scripts/test-pet-kit.py
+      - name: Verify Beats cron, local-time rules, store and agent surface
+        run: python3 scripts/test-beats.py
+      - name: Verify managed messaging and legacy proof launcher contracts
+        run: python3 scripts/test-delivery-proof.py
+      - name: Verify native delivery adapter contracts
+        run: node --test scripts/test-delivery-proof.mjs
+      - name: Verify build and registration metadata contracts
+        run: python3 scripts/test-build-metadata.py
+      - name: Verify compiled shell notification reducer
+        run: ./scripts/test-copilot-shell-reducer.sh
+      - name: Verify SDK fetch concurrency and cleanup
+        run: ./scripts/test-fetch-sdk-concurrency.sh
+      - name: Verify local preview transactions and recovery
+        run: python3 scripts/test-local-preview.py
+      - name: Verify terminal orchestration contracts
+        run: python3 scripts/test-cmux-maestro-orchestrator.py
 
   guide-ui-consumer-probe:
     runs-on: macos-latest
@@ -95,7 +105,7 @@ jobs:
 
   # Final coverage gate (#197): the merge signal. Pure result logic, so it runs on Linux.
   ci-gate:
-    needs: [validate, guide-ui-consumer-probe]
+    needs: [validate-native, validate-contracts, guide-ui-consumer-probe]
     if: always()
     runs-on: ubuntu-latest
     permissions:

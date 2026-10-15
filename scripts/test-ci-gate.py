@@ -145,25 +145,44 @@ class MainTests(unittest.TestCase):
         return gate.main(environ, contract_path, out), out.getvalue()
 
     def test_main_prints_a_per_suite_table_and_writes_the_step_summary(self):
-        context = json.dumps({"validate": {"result": "success"}, "guide-ui-consumer-probe": {"result": "skipped"}})
+        jobs = gate.required_jobs(gate.load_contract(gate.CONTRACT_PATH.read_text()))
+        context = json.dumps({job: {"result": "success"} for job in jobs[:-1]} | {jobs[-1]: {"result": "skipped"}})
         summary = Path(__file__).resolve().parent / f".ci-gate-summary-{id(self)}.md"
         try:
             code, output = self.run_main({"CI_GATE_NEEDS": context, "GITHUB_STEP_SUMMARY": str(summary)})
             self.assertEqual(code, 1)
             self.assertIn("| Required suite | Result | Verdict | Detail |", output)
-            self.assertIn("| validate | success | PASS |  |", output)
-            self.assertIn("| guide-ui-consumer-probe | skipped | FAIL |", output)
+            for job in jobs[:-1]:
+                self.assertIn(f"| {job} | success | PASS |  |", output)
+            self.assertIn(f"| {jobs[-1]} | skipped | FAIL |", output)
             self.assertTrue(output.endswith("Final coverage gate: FAIL\n"))
             self.assertEqual(summary.read_text(), "## Final coverage gate\n\n" + output)
         finally:
             summary.unlink(missing_ok=True)
 
     def test_main_passes_only_on_complete_success(self):
-        context = json.dumps({"validate": {"result": "success"}, "guide-ui-consumer-probe": {"result": "success"}})
+        jobs = gate.required_jobs(gate.load_contract(gate.CONTRACT_PATH.read_text()))
+        context = json.dumps({job: {"result": "success"} for job in jobs})
         code, output = self.run_main({"CI_GATE_NEEDS": context})
         self.assertEqual(code, 0)
         self.assertTrue(output.endswith("Final coverage gate: PASS\n"))
         self.assertEqual(self.run_main({})[0], 1)
+
+    def test_any_one_failed_or_missing_split_suite_fails_the_checked_in_gate(self):
+        jobs = gate.required_jobs(gate.load_contract(gate.CONTRACT_PATH.read_text()))
+        self.assertGreaterEqual(len(jobs), 3)
+        for job in jobs:
+            for result in ("failure", "cancelled", "skipped", None):
+                with self.subTest(job=job, result=result):
+                    context = {other: {"result": "success"} for other in jobs if other != job}
+                    if result:
+                        context[job] = {"result": result}
+                    code, output = self.run_main({"CI_GATE_NEEDS": json.dumps(context)})
+                    self.assertEqual(code, 1)
+                    self.assertRegex(output, rf"(?m)^\| {job} \| [^|]+ \| FAIL \|")
+                    for other in jobs:
+                        if other != job:
+                            self.assertIn(f"| {other} | success | PASS |  |", output)
 
     def test_unreadable_contract_fails_closed(self):
         code, output = self.run_main({"CI_GATE_NEEDS": "{}"}, ROOT / "scripts/does-not-exist.json")
