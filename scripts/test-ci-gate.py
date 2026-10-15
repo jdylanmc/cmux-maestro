@@ -32,7 +32,7 @@ def record(not_applicable=(), **changes):
                        "reason": "docs-only change" if job in not_applicable else "unmapped: Sources/x.swift"}
                  for job in JOBS}
     value = {"version": 1, "complete": True, "event": "pull_request", "run_id": "42", "sha": MERGE,
-             "base": BASE, "head": HEAD, "mode": "selective" if not_applicable else "full",
+             "base": BASE, "head": HEAD, "payload_base": BASE, "mode": "selective" if not_applicable else "full",
              "reason": "classified 1 changed file(s)", "changed_files": 1, "suites": decisions}
     value.update(changes)
     return value

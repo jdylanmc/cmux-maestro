@@ -34,8 +34,8 @@ CONTRACT_PATH = Path(__file__).resolve().parent / "ci-required-suites.json"
 KNOWN_RESULTS = {"success", "failure", "cancelled", "skipped"}
 SUITE_KEYS = {"job", "purpose"}
 CONTRACT_KEYS = {"version", "gate_job", "classifier_job", "suites"}
-RECORD_KEYS = {"version", "complete", "event", "run_id", "sha", "base", "head", "mode", "reason",
-               "changed_files", "suites"}
+RECORD_KEYS = {"version", "complete", "event", "run_id", "sha", "base", "head", "payload_base", "mode",
+               "reason", "changed_files", "suites"}
 DECISION_KEYS = {"applicable", "reason"}
 SHA = re.compile(r"[0-9a-f]{40}")
 
