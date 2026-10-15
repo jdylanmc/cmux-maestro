@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "ci-selection-and-gate",
+      "paths": [
+        ".github/workflows/**",
+        "scripts/ci-classify.py",
+        "scripts/ci-suite-map.json",
+        "scripts/test-ci-classify.py",
+        "scripts/ci-gate.py",
+        "scripts/ci-required-suites.json",
+        "scripts/test-ci-gate.py"
+      ],
+      "suites": "all",
+      "reason": "Workflow, suite map, classifier and gate changes are merge-policy changes; they always run every suite."
+    },
+    {
+      "id": "merge-policy-doc",
+      "paths": [
+        "docs/agents/merge-policy.md"
+      ],
+      "suites": ["validate-contracts", "validate-portable"],
+      "reason": "Markdown, so validate-portable's link check reads it; scripts/test-build-metadata.py (validate-contracts, macOS-only because it runs /usr/bin/plutil) also checks the workflow's command lists, triggers and gate against it. It is the only file under docs/ a validate-contracts suite reads."
+    },
+    {
+      "id": "markdown-docs",
+      "paths": [
+        "docs/**/*.md",
+        "README.md",
+        "CHANGELOG.md",
+        "CONTEXT.md",
+        "AGENTS.md"
+      ],
+      "suites": ["validate-portable"],
+      "reason": "Markdown outside the bundled skills and scripts. check-skill-overrides.mjs checks policy-anchor links in every tracked Markdown file, so validate-portable applies. No Xcode resource, build phase, test.sh input, guide probe input or validate-contracts suite reads these files; the merge policy, which one does, matches merge-policy-doc first."
+    },
+    {
+      "id": "docs-images",
+      "paths": [
+        "docs/**/*.png"
+      ],
+      "suites": [],
+      "reason": "Documentation images. No build input, bundled resource, test or CI suite reads them."
+    },
+    {
+      "id": "other-docs",
+      "paths": [
+        "docs/**"
+      ],
+      "suites": ["validate-portable"],
+      "reason": "Design evidence and prototypes under docs/. Not bundled or read by native tests, the guide probe or any validate-contracts suite. validate-portable still runs, conservatively, in case the Markdown checks read a file whose name the markdown-docs rule does not match."
+    },
+    {
+      "id": "contract-suite-tests",
+      "paths": [
+        "scripts/test-beats.py",
+        "scripts/test-pet-kit.py",
+        "scripts/test-joe-role-appearance.py",
+        "scripts/test-local-preview.py",
+        "scripts/test-cmux-maestro-orchestrator.py",
+        "scripts/test-delivery-proof.py",
+        "scripts/test-delivery-proof.mjs"
+      ],
+      "suites": ["validate-contracts"],
+      "reason": "Leaf test files that only validate-contracts runs. Nothing bundles, builds, imports or hashes them; the code they test is unmapped and selects every suite."
+    },
+    {
+      "id": "portable-suite-tests",
+      "paths": [
+        "scripts/test-skill-overrides.mjs"
+      ],
+      "suites": ["validate-portable"],
+      "reason": "Leaf test file that only validate-portable runs. Nothing bundles, builds, imports or hashes it; the checker it tests is unmapped and selects every suite."
+    }
+  ]
+}

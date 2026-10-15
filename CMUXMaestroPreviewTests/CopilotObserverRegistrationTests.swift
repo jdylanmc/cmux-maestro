@@ -2105,99 +2105,14 @@ struct CopilotObserverRegistrationTests {
         }
     }
 
-    @Test(arguments: [Duration.zero, .seconds(4)])
-    func cancellingMetadataStopsItsOwnedProcessBeforeReturning(launchDelay: Duration) async throws {
-        let observation = CopilotSetupObservation()
-        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        let watchdog = try MetadataProcessTestWatchdog(
-            directory: repository.appendingPathComponent(
-                ".build/tests/scoped-results/metadata-diagnostics/\(UUID().uuidString)"),
-            testIdentity: "CMUXMaestroPreviewTests/CopilotObserverRegistrationTests/cancellingMetadataStopsItsOwnedProcessBeforeReturning(launchDelay:)/\(launchDelay)",
-            observation: observation)
-        defer { watchdog.finish() }
-        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
-        let server = fixture.directory.appendingPathComponent("metadata-waiter")
-        let ready = fixture.directory.appendingPathComponent("metadata.pid")
-        let pending = fixture.directory.appendingPathComponent("metadata.pid.pending")
-        let command = "#!/bin/sh\nset -eu\nprintf '%s' $$ > \(CopilotPluginManifest.shellQuoted(pending.path))\n/bin/mv \(CopilotPluginManifest.shellQuoted(pending.path)) \(CopilotPluginManifest.shellQuoted(ready.path))\ntrap '' TERM\n/bin/cat >/dev/null\n"
-        try fixture.write(Data(command.utf8), to: server)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: server.path)
-        let clock = SetupDeadlineClock()
-        let runner = LocalCopilotSetupRunner(terminationGrace: 0.02, deadlineNow: {
-            _ = watchdog.now()
-            return clock.now()
-        }, observation: observation)
-        watchdog.begin("startup/\(launchDelay)")
-        let task = Task {
-            defer { clock.finishStartup() }
-            do { try await Task.sleep(for: launchDelay) }
-            catch is CancellationError { return CopilotMetadataResult.failed(.cancelled) }
-            catch { Issue.record(error); return CopilotMetadataResult.failed(.unavailable) }
-            let result = await runner.metadata(executable: server, path: "/usr/bin:/bin")
-            watchdog.metadataCallReturned()
-            return result
-        }
-        defer { task.cancel() }
-        do {
-            let started = await clock.waitForStartup()
-            if !started {
-                watchdog.begin("startup-failed-cancellation")
-                observation.begin(.cancelCall)
-                task.cancel()
-                observation.end(.cancelCall)
-                observation.begin(.taskValue)
-                let stopped = await task.value
-                observation.end(.taskValue)
-                watchdog.taskValueReceived()
-                Issue.record("Metadata did not spawn; result=\(stopped)")
-                return
-            }
-            watchdog.begin("pid-publication")
-            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-            while !FileManager.default.fileExists(atPath: ready.path), ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(10))
-            }
-            let readyExists = FileManager.default.fileExists(atPath: ready.path)
-            if !readyExists {
-                watchdog.begin("missing-pid-cancellation")
-                observation.begin(.cancelCall)
-                task.cancel()
-                observation.end(.cancelCall)
-                observation.begin(.taskValue)
-                let stopped = await task.value
-                observation.end(.taskValue)
-                watchdog.taskValueReceived()
-                Issue.record("Metadata writer was not ready after spawn; result=\(stopped); sampled=\(clock.wasSampled)")
-            }
-            try #require(readyExists)
-            let pid = try #require(Int32(String(contentsOf: ready, encoding: .utf8)))
-            watchdog.metadataPIDReady(pid)
-            watchdog.begin("cancel-and-await-owned-process")
-            observation.begin(.cancelCall)
-            task.cancel()
-            observation.end(.cancelCall)
-            observation.begin(.taskValue)
-            let result = await task.value
-            observation.end(.taskValue)
-            watchdog.taskValueReceived()
-            guard case .failed(.cancelled) = result else {
-                Issue.record("Expected metadata cancellation"); return
-            }
-            watchdog.begin("verify-owned-process-exit")
-            #expect(HookProcess.current(pid) == nil)
-            #expect(kill(pid, 0) == -1 && errno == ESRCH)
-        } catch {
-            watchdog.begin("error-cancellation")
-            observation.begin(.cancelCall)
-            task.cancel()
-            observation.end(.cancelCall)
-            observation.begin(.taskValue)
-            _ = await task.value
-            observation.end(.taskValue)
-            watchdog.taskValueReceived()
-            throw error
-        }
-    }
+    // Removed 2026-10-15 by owner decision (#174): the cancelling-metadata test
+    // (launch delays 0 s and 4 s) intermittently stalled in its
+    // cancel-and-await-owned-process phase and the cause was not established.
+    // Lost coverage: metadata cancelled during an in-flight exchange is untested,
+    // including the `.failed(.cancelled)` result mapping and exit/reaping of that
+    // exact TERM-ignoring server PID. Timeout cleanup of a TERM-ignoring metadata
+    // server remains covered above; launcher/child cancellation cleanup remains
+    // covered by CopilotSetupTests.queuedStartupDoesNotConsumeChildReadinessBudget.
 
     @Test(arguments: [false, true])
     func metadataPIDPublicationDoesNotExposeAnEmptyReadyMarker(atomic: Bool) async throws {

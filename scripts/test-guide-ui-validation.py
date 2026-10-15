@@ -1095,7 +1095,11 @@ class GuideUIValidationTests(unittest.TestCase):
     def test_probe_ci_job_is_independent_and_preserves_failure_evidence(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         original, additive = workflow.split("\n  guide-ui-consumer-probe:", 1)
-        self.assertNotIn("needs:", additive)
+        # The probe job itself stays independent of the other suites; it needs only the suite classifier
+        # (#194), and only the final ci-gate (#197) may depend on it.
+        additive = additive.split("\n  ci-gate:", 1)[0]
+        self.assertEqual(additive.count("needs:"), 1)
+        self.assertIn("\n    needs: [ci-classify]\n", additive)
         self.assertNotIn("continue-on-error", workflow)
         self.assertIn("if: always()", additive)
         self.assertIn("run-*/probe.xcresult", additive)

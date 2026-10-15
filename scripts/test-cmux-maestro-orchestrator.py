@@ -24,39 +24,23 @@ REPO = Path(__file__).resolve().parents[1]
 CONTROLLER = REPO / "scripts" / "cmux-maestro-orchestrator.py"
 CONTROLLER_API = runpy.run_path(str(CONTROLLER))
 MAX_LIVE_WORKERS = CONTROLLER_API["MAX_LIVE_WORKERS"]
+# Resource-accounting cases fill a small configured workspace limit; the same
+# admission check applies to any limit. test_pending_launches_hold_all_live_resource_slots
+# keeps the default reference budget end to end.
+ACCOUNTING_CAPACITY = 4
 
-def fixture_edges(environment, driver):
-    """Fixture clock and executable edges; the shipped controller reads none of these variables."""
-    edges = {"CONTROLLER_ENTRYPOINT": Path(driver)}
-    for name in ("STARTUP_SECONDS", "HEARTBEAT_SECONDS", "ARCHIVE_SECONDS"):
-        if f"FAKE_{name}" in environment:
-            edges[name] = float(environment[f"FAKE_{name}"])
-    if "FAKE_GIT" in environment:
-        edges["GIT_EXECUTABLE"] = environment["FAKE_GIT"]
-    return edges
-
-
-def configure_fixture_controller(api, driver):
-    controller = api["main"].__globals__
-    controller.update(fixture_edges(os.environ, driver))
-    controller["launch_reserved_session"] = legacy_fixture_launcher(controller["launch_reserved_session"], api)
+FIXTURE_EDGES = REPO / "scripts" / "test-fixtures" / "orchestrator-controller-edges.py"
+_edges = runpy.run_path(str(FIXTURE_EDGES))
+fixture_edges = _edges["fixture_edges"]
+configure_fixture_controller = _edges["configure_fixture_controller"]
+legacy_fixture_launcher = _edges["legacy_fixture_launcher"]
+# Fixture controller processes share one compiled-bytecode cache for the run.
+FIXTURE_BYTECODE = tempfile.TemporaryDirectory(prefix="cmux-maestro-fixture-bytecode-")
 
 
 def fixture_root(home):
     return Path(home) / "Library/Application Support/CMUXMaestroPreview/Orchestration"
 
-
-def legacy_fixture_launcher(original, api):
-    def launch(root, cmux, identifier, *args):
-        if os.environ.get("FAKE_SESSION_MODE") in {"bounded", "legacy-interactive"}:
-            def persisted(state):
-                node = state["nodes"][identifier]
-                if os.environ["FAKE_SESSION_MODE"] == "bounded":
-                    node.pop("executionMode", None)
-                node.pop("launchMethod", None)
-            api["mutate"](root, persisted)
-        return original(root, cmux, identifier, *args)
-    return launch
 
 FAKE_CMUX = r'''#!/usr/bin/env python3
 import fcntl, json, os, runpy, shlex, subprocess, sys, tempfile, time, uuid
@@ -603,10 +587,18 @@ class Harness:
         self.driver = self.path / "controller-fixture.py"
         self.driver.write_text(
             f"#!{sys.executable}\n"
-            "import runpy\n"
-            f"api = runpy.run_path({str(CONTROLLER)!r})\n"
-            f"tests = runpy.run_path({str(Path(__file__).resolve())!r})\n"
-            f"tests['configure_fixture_controller'](api, {str(self.driver)!r})\n"
+            "import sys\n"
+            f"sys.pycache_prefix = {FIXTURE_BYTECODE.name!r}\n"
+            "import importlib.util\n"
+            "def load(name, path):\n"
+            "    spec = importlib.util.spec_from_file_location(name, path)\n"
+            "    module = importlib.util.module_from_spec(spec)\n"
+            "    sys.modules[name] = module\n"
+            "    spec.loader.exec_module(module)\n"
+            "    return vars(module)\n"
+            f"api = load('cmux_maestro_orchestrator', {str(CONTROLLER)!r})\n"
+            f"edges = load('orchestrator_controller_edges', {str(FIXTURE_EDGES)!r})\n"
+            f"edges['configure_fixture_controller'](api, {str(self.driver)!r})\n"
             "raise SystemExit(api['main']())\n"
         )
         self.driver.chmod(0o755)
@@ -709,6 +701,12 @@ class Harness:
         return {"nodeId": node["id"], "workspaceId": node["workspaceId"], "sessionId": session,
                 "generation": node["generation"], "capability": capability,
                 "login": "synthetic-account", "host": "github.com"}
+
+    def limit_capacity(self, limit):
+        configured = self.run("capacity", "--workspace", self.workspace, "--limit", str(limit),
+                              "--actor-id", self.node, "--token", self.token)
+        if configured["capacity"]["limit"] != limit:
+            raise AssertionError(f"Workspace capacity was not configured: {configured}")
 
     def allow_coordinator_tools(self, *rules):
         self.change_state(lambda state: state["nodes"][self.node]["toolPolicy"].update(allow=list(rules)))
@@ -3311,8 +3309,9 @@ class OrchestratorTests(unittest.TestCase):
             "--name", "Replacement coordinator",
         )
         self.h.identity = self.h.seed_native_parent()
+        self.h.limit_capacity(ACCOUNTING_CAPACITY)
         # The retained terminal and the new managed coordinator hold two slots.
-        for index in range(MAX_LIVE_WORKERS - 2):
+        for index in range(ACCOUNTING_CAPACITY - 2):
             added = self.h.spawn(label=f"Capacity {index}")
             self.h.wait_node(added["workerId"], lambda node: node["availability"] == "idle")
         surfaces_before = set(self.h.cmux_data()["surfaces"])
@@ -3329,6 +3328,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(set(self.h.cmux_data()["surfaces"]), surfaces_before)
 
     def test_failed_attachment_retains_exact_created_surface_in_capacity(self):
+        self.h.limit_capacity(ACCOUNTING_CAPACITY)
         env = self.h.env.copy()
         env["FAKE_ATTACH_FAILURE"] = "1"
         failed = self.h.spawn_native(task="bounded", label="Attachment failure", check=False, env=env)
@@ -3341,7 +3341,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(failed_node["phase"], "launch-failed")
         self.assertIn(failed_node["surfaceId"], self.h.cmux_data()["surfaces"])
         self.assertEqual(state["launches"], {})
-        for index in range(MAX_LIVE_WORKERS - 2):
+        for index in range(ACCOUNTING_CAPACITY - 2):
             worker = self.h.spawn(label=f"Capacity {index}")
             idle = self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
             self.assertTrue(CONTROLLER_API["process_matches"](idle))
@@ -3663,8 +3663,9 @@ class OrchestratorTests(unittest.TestCase):
             CONTROLLER_API["normalize_tool_policy"](["write"], ["network"], parent_policy)
 
     def test_completed_live_resources_reject_over_capacity_until_exact_resource_retired(self):
+        self.h.limit_capacity(ACCOUNTING_CAPACITY)
         workers = []
-        for index in range(MAX_LIVE_WORKERS - 1):
+        for index in range(ACCOUNTING_CAPACITY - 1):
             worker = self.h.spawn(label=f"Worker {index}")
             self.h.wait_node(worker["workerId"], lambda node: node["availability"] == "idle")
             workers.append(worker)
@@ -4028,7 +4029,8 @@ class DirectLaunchTests(unittest.TestCase):
         self.assertIn("uncertain", refused["stderr"])
 
     def test_unobserved_direct_sessions_refuse_over_capacity_without_new_terminal(self):
-        receipts = [self.h.spawn(label=f"Unobserved {index}") for index in range(MAX_LIVE_WORKERS - 1)]
+        self.h.limit_capacity(ACCOUNTING_CAPACITY)
+        receipts = [self.h.spawn(label=f"Unobserved {index}") for index in range(ACCOUNTING_CAPACITY - 1)]
         self.assertTrue(all(item["launchAccepted"] and item["startup"] == "pending" for item in receipts))
         before = set(self.h.cmux_data()["surfaces"])
         refused = self.h.spawn_native(task="No", label="Over capacity", cwd=self.h.path, check=False)

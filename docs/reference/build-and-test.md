@@ -1,6 +1,7 @@
 # Build and test
 
 Requirements, validation entrypoints, test evidence, validation builds. Short version: [README](../../README.md). Terms: [CONTEXT](../../CONTEXT.md).
+Where suite time goes: [test performance](test-performance.md).
 
 ## Requirements
 
@@ -66,45 +67,34 @@ cleanup stays explicit, never a success. Diagnostics
 preserve observed sampler exit/timeout and reap state separately from optional
 `sampleReadError`. Missing sample cannot erase that process outcome.
 Host still fails with exit 124. Diagnostics
-under `.build/tests/scoped-results/metadata-diagnostics/` go into the
-existing scope-evidence artifact, including partial samples. Its final upload
-runs after both integrated and standalone setup tests. It also retains the
-complete `.build/setup-tests/metadata-watchdog/` control evidence directory.
-Required artifact names and missing-file failure behavior stay unchanged.
+under `.build/tests/scoped-results/metadata-diagnostics/` are kept, including
+partial samples. CI uploads each producer's copy from its own job, after it
+runs: integrated tests' copy in the `integrated-test-scope-evidence` artifact
+(`validate-native`), and the standalone setup tests' copy, with the complete
+`.build/setup-tests/metadata-watchdog/` control evidence directory, in the
+`copilot-setup-evidence` artifact (`validate-contracts`). Every upload keeps
+missing-file failure behavior.
 This exposes a
 blocked boundary. It does not establish or repair the cause of a prior CI hang.
 Production timeouts, cleanup and all original assertions stay unchanged.
-Separate metadata-cancellation test uses same per-phase diagnostic bound,
-with test identity and launch-delay argument retained. It distinguishes
-startup, PID publication, cancellation/owned-process completion and exit checks
-without advancing fixture's frozen clock or changing its three-second PID
-publication deadline. Diagnostic timeout fails host. It is not a retry or
-a cancellation pass. At PID readiness it captures exact direct child's
-PID, parent, process group, start identity and numeric state. At a stall it
-revalidates that identity before reading at most 64 members of that exact group.
-These are sequential observations, not an atomic snapshot or a quiescence
-verdict. Missing identities, failed queries and incomplete enumeration stay
-unknown. Changed identity prevents group inspection. If Darwin hides an
-exited child from `proc_pidinfo`, a non-consuming `waitid` observation can
-distinguish exited child from `ECHILD`. It cannot revalidate start
-identity or prove group cleanup. Watchdog never signals the metadata group.
+The separate metadata-cancellation test (#174,
+`cancellingMetadataStopsItsOwnedProcessBeforeReturning(launchDelay:)`) was
+removed on 2026-10-15 by owner decision after intermittent stalls whose cause
+was not established. No test now cancels an in-flight metadata exchange.
 
-`runnerMetadataReturned` records test task receiving result of
-`await runner.metadata(...)`. It does not observe private dispatch worker
-producing its result. `outerTaskValueReceived` separately records outer
-test receiving `task.value`. Both flags are captured at watchdog deadline,
-before subsequent OS observations. False flags do not establish where a
-continuation is blocked. Observation runs outside locks with existing
-watchdog and five-second diagnostic containment still armed. Prior stalled
-runs did not capture this evidence. Their underlying cause remains unproven.
-Sampler exit/signal/timeout and reap status save independently of a missing
-or unreadable sample file. Its error is retained as `sampleReadError`.
+The watchdog report keeps `runnerMetadataReturned` and
+`outerTaskValueReceived` flags, captured at the watchdog deadline. They stay
+false unless a caller reports the runner result or task value; no current
+integrated test does. False flags do not establish where a continuation is
+blocked. Sampler exit/signal/timeout and reap status save independently of a
+missing or unreadable sample file. Its error is retained as `sampleReadError`.
 
-For cancellation diagnosis (#174), test explicitly injects one
-`CopilotSetupObservation` into its runner and watchdog. Normal runners keep
-`observation == nil`: no observation storage, callbacks, queries or logging
-enable automatically. Optional `stall.json.supervision` version 1
-snapshot contains 14 fixed numeric boundary slots:
+`CopilotSetupObservation` remains for diagnosis. Only the
+`MetadataWatchdogProbe` `diagnostic-*` controls and `CopilotSetupObservationTests`
+inject one; normal runners keep `observation == nil`: no observation storage,
+callbacks, queries or logging enable automatically. Optional
+`stall.json.supervision` version 1 snapshot contains 14 fixed numeric
+boundary slots:
 
 | Index | Boundary | Index | Boundary |
 | --- | --- | --- | --- |
@@ -136,12 +126,9 @@ unknown. Snapshot adds no process enumeration or provider data and has a
 tested 8 KiB encoded bound. Serialization runs after releasing observation
 locks. Snapshot may be unavailable while a tiny record update is in progress.
 
-Cancellation phase still begins **before** `task.cancel()`: only slot 0's
-return establishes that it returned. Slot 13's begin establishes the await
-was entered. Resume-return and async-caller progress are distinct. Caller
-may execute before dispatch worker records resume-return. Existing return
-flags, clock samples and later process queries stay sequential observations.
-These diagnostics neither shorten cleanup nor establish the historical cause.
+Slot order is not causality: resume-return and async-caller progress are
+distinct, and these diagnostics neither shorten cleanup nor establish a
+historical cause.
 
 `test-copilot-setup.sh` also runs disposable Foundation-only controls: successful
 disarming, stalled injected clock, continued polling of frozen clock, and
@@ -284,9 +271,11 @@ root explicitly. The Python suites fake only the outside world:
 - The synthetic host (`FAKE_ATTACH_BARRIER`, `FAKE_ATTACH_FAILURE`) holds or
   fails the creator's first `identify` of a new surface.
 - `controller-fixture.py`, written by `scripts/test-cmux-maestro-orchestrator.py`,
-  is the only reader of `FAKE_STARTUP_SECONDS`, `FAKE_HEARTBEAT_SECONDS`,
+  applies `scripts/test-fixtures/orchestrator-controller-edges.py`, the only
+  reader of `FAKE_STARTUP_SECONDS`, `FAKE_HEARTBEAT_SECONDS`,
   `FAKE_ARCHIVE_SECONDS` and `FAKE_GIT`. It also becomes the re-entry point for
-  runtimes and terminals.
+  runtimes and terminals. It loads the controller and those edges, not the whole
+  suite, through one run-scoped bytecode cache.
 
 Worker Copilot processes receive only the controller's `CMUX_MAESTRO_`
 allowlist. Bounded runtimes build the provider environment without any inherited

@@ -28,8 +28,38 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Documentation-only pull requests no longer need a macOS runner (#191). The skill-override and
+  policy-link checks moved to a new `validate-portable` job on Linux after a portability proof.
+  The skill hash now sorts paths with an explicit en-US collation; Linux's default would report
+  false drift. Changes to the merge policy still run `validate-contracts`, which reads it. Every
+  other suite stays on macOS. Concurrency measurements and decisions:
+  `docs/reference/ci-runner-placement.md`.
+- Pull requests run only the CI suites their changes can affect (#194). A new `ci-classify` job
+  classifies the exact change set with the reviewed map `scripts/ci-suite-map.json` and publishes
+  each suite's selection and reason. Documentation-only changes skip the native tests and the
+  guide probe; documentation images skip every suite. Anything unmapped, shared, bundled or
+  unclassifiable runs everything, and `main` always runs everything. `ci-gate` accepts a skipped
+  suite only with that run's complete classification marking it not applicable.
+- CI ends with a `ci-gate` check, the merge signal: it passes only when every required suite
+  succeeds, and fails on any failure, cancellation, skip or missing result (#197). It is a
+  required status check on `main`, enforced for administrators too (owner decision 2026-10-15).
+- Every CI job has a pinned job-level `timeout-minutes` hang ceiling, about three times its
+  normal duration (native 60, contracts 50, probe 15, Linux jobs 10 minutes), after a setup-test
+  hang held a run for about 4.5 hours. A job that hits its ceiling fails `ci-gate`. Step-level
+  timeouts stay forbidden (owner decision 2026-10-15, overriding #190 for job ceilings only).
+- Two intermittently hanging process-supervision tests were removed (owner decision
+  2026-10-15, #174). Now untested: metadata cancelled during an in-flight exchange (its
+  `.failed(.cancelled)` result and the server's exit and reaping), and non-delayed launcher
+  cleanup for both timeout and cancel, the production-like path that hung in CI. Cleanup
+  stays covered only with a delayed launcher; `queuedStartupDoesNotConsumeChildReadinessBudget`
+  is the remaining cancel coverage. The remaining real-process supervision tests give up after
+  30 seconds, recording clock, fixture-file and PID evidence, instead of waiting indefinitely.
 - CI runs once per pull request update and on pushes to `main`; feature-branch pushes no longer
   run a duplicate suite. Open a draft PR to validate a branch (#192).
+- The orchestration test suite runs in about half the time locally (#195). Its fixture controller
+  processes no longer load the whole suite, and four resource-accounting tests fill a small
+  configured workspace limit; one test still fills the default 32. Profile and next steps:
+  `docs/reference/test-performance.md`.
 - An expanded agent row and everything rendered under it (sub-agents, internal tasks, nested
   workers and sessions) now hover as one block: one continuous highlight behind the whole
   group, whichever row the pointer is over, with the agent's actions (…) shown. The focused

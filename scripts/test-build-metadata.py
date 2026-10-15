@@ -27,6 +27,166 @@ BENCHMARK_TEST = "CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSynthe
 BENCHMARK_FLAG = "CMUX_MAESTRO_READER_BENCHMARK"
 
 
+def yaml_jobs(workflow):
+    """The jobs mapping from a real YAML parse: PyYAML if installed, else Ruby's bundled YAML."""
+    try:
+        import yaml
+    except ImportError:
+        result = subprocess.run(
+            ["ruby", "-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.safe_load(STDIN.read)['jobs'])"],
+            input=workflow, capture_output=True, text=True, check=True)
+        return json.loads(result.stdout)
+    return yaml.safe_load(workflow)["jobs"]
+
+
+def yaml_job_ids(workflow):
+    return list(yaml_jobs(workflow))
+
+
+def workflow_jobs(workflow):
+    """Map each top-level job id to its block text; refuse any job shape the line parser cannot see."""
+    if workflow.count("\njobs:\n") != 1:
+        raise ValueError("workflow must have exactly one block-style 'jobs:' key")
+    section = workflow.split("\njobs:\n", 1)[1]
+    for line in section.splitlines():
+        if not line.strip() or line.startswith("   ") or re.fullmatch(r"  #.*", line):
+            continue
+        # Quoted ids, trailing comments, flow mappings and later top-level keys all fail closed.
+        if not re.fullmatch(r"  [A-Za-z0-9_-]+:", line):
+            raise ValueError(f"unsupported line under jobs: {line!r}")
+    parts = re.split(r"^  ([A-Za-z0-9_-]+):\n", section, flags=re.MULTILINE)
+    jobs = dict(zip(parts[1::2], parts[2::2]))
+    if list(jobs) != yaml_job_ids(workflow):
+        raise ValueError("line-parsed job ids disagree with the YAML parse")
+    return jobs
+
+
+def job_steps(block):
+    """Split a job block into its step texts (each starting at `      - `)."""
+    return re.findall(r"^      - .*?(?=^      - |\Z)", block.rstrip() + "\n", re.MULTILINE | re.DOTALL)
+
+
+def job_commands(block):
+    return re.findall(r"^        run: (.+)$", block, re.MULTILINE)
+
+
+# Early failures (#196): every validation command runs at most once, in one of three independent jobs.
+# The native job starts the integrated Swift tests right after checkout; the contract job runs its
+# fastest suites first. Update docs/agents/merge-policy.md with any change here.
+VALIDATION_JOBS = {
+    "validate-native": [
+        "./scripts/test.sh",
+    ],
+    "validate-contracts": [
+        "python3 scripts/test-joe-role-appearance.py",
+        "python3 scripts/test-pet-kit.py",
+        "python3 scripts/test-beats.py",
+        "python3 scripts/test-delivery-proof.py",
+        "node --test scripts/test-delivery-proof.mjs",
+        "python3 scripts/test-build-metadata.py",
+        "./scripts/test-copilot-shell-reducer.sh",
+        "./scripts/test-fetch-sdk-concurrency.sh",
+        "./scripts/test-copilot-hook.sh",
+        "./scripts/test-copilot-sandbox.sh",
+        "./scripts/build-unsigned.sh",
+        "./scripts/test-copilot-setup.sh",
+        "python3 scripts/test-local-preview.py",
+        "python3 scripts/test-cmux-maestro-orchestrator.py",
+    ],
+    "validate-portable": [
+        "node --test scripts/test-skill-overrides.mjs",
+        "node scripts/check-skill-overrides.mjs",
+    ],
+}
+# Runner placement (#191): validation stays on macOS unless a command is proven to behave identically
+# on Linux (docs/reference/ci-runner-placement.md). Native builds, AppKit, sandbox and hosted-UI checks
+# never move; the guide probe is hosted UI. Adding a command here needs that proof.
+MACOS, LINUX = "macos-latest", "ubuntu-latest"
+JOB_RUNNERS = {"validate-native": MACOS, "validate-contracts": MACOS, "validate-portable": LINUX,
+               "guide-ui-consumer-probe": MACOS}
+PROVEN_PORTABLE_COMMANDS = {
+    "node --test scripts/test-skill-overrides.mjs",
+    "node scripts/check-skill-overrides.mjs",
+}
+# Suite selection (#194): ci-classify publishes a record and one run_<job> flag per suite. Each
+# validation job needs only the classifier and has exactly this condition: it is skipped only when its
+# flag is 'false' (GitHub compares case-insensitively), so a missing or garbled flag runs the suite.
+# ci-gate rejects any flag other than the literal 'false' and verifies every skip.
+CLASSIFIER_JOB = "ci-classify"
+
+
+def selection_condition(job):
+    return f"needs.{CLASSIFIER_JOB}.outputs.run_{job.replace('-', '_')} != 'false'"
+
+
+# Hang ceilings (owner decision 2026-10-15): exactly one job-level timeout-minutes per job, at
+# about 3x the observed normal duration. Changing one is a merge-policy change.
+JOB_CEILINGS = {
+    "ci-classify": 10,
+    "validate-native": 60,
+    "validate-contracts": 50,
+    "validate-portable": 10,
+    "guide-ui-consumer-probe": 15,
+    "ci-gate": 10,
+}
+
+CLASSIFIER_BLOCK = (
+    "    timeout-minutes: 10\n"
+    "    runs-on: ubuntu-latest\n"
+    "    permissions:\n"
+    "      contents: read\n"
+    "    outputs:\n"
+    "      classification: ${{{{ steps.classify.outputs.classification }}}}\n"
+    "{flags}"
+    "    steps:\n"
+    "      - uses: actions/checkout@v4\n"
+    "        with:\n"
+    "          fetch-depth: 0\n"
+    "      - name: Classify changed files\n"
+    "        id: classify\n"
+    "        env:\n"
+    "          CI_CLASSIFY_BASE: ${{{{ github.event.pull_request.base.sha }}}}\n"
+    "          CI_CLASSIFY_HEAD: ${{{{ github.event.pull_request.head.sha }}}}\n"
+    "        run: python3 scripts/ci-classify.py\n")
+# Each required artifact: (job, upload step title, producer commands that must precede it, exact path).
+REQUIRED_ARTIFACTS = {
+    "sidebar-layout-offscreen": ("validate-native", "Upload synthetic sidebar layout renders",
+                                 ["./scripts/test.sh"], ".build/layout-validation/offscreen/*.png"),
+    "integrated-test-scope-evidence": (
+        "validate-native", "Upload integrated test scope evidence", ["./scripts/test.sh"],
+        "|\n            .build/tests/scoped-results/**/*.json\n"
+        "            .build/tests/scoped-results/**/*.txt\n"
+        "            .build/tests/scoped-results/**/guide-acceptance/*.log\n"
+        "            .build/tests/scoped-results/**/guide-acceptance/probe.xcresult\n"
+        "            .build/tests/scoped-results/**/guide-acceptance/images/*.png\n"
+        "            .build/tests/scoped-results/**/failure-diagnostics/*/*.zip"),
+    # Standalone setup tests write their watchdog controls and any metadata stall diagnostics here.
+    "copilot-setup-evidence": (
+        "validate-contracts", "Upload setup process isolation evidence", ["./scripts/test-copilot-setup.sh"],
+        "|\n            .build/setup-tests/metadata-watchdog/\n"
+        "            .build/tests/scoped-results/metadata-diagnostics/"),
+}
+SEVENTEEN_VALIDATION_COMMANDS = {
+    "node --test scripts/test-skill-overrides.mjs",
+    "node scripts/check-skill-overrides.mjs",
+    "python3 scripts/test-joe-role-appearance.py",
+    "python3 scripts/test-cmux-maestro-orchestrator.py",
+    "python3 scripts/test-pet-kit.py",
+    "python3 scripts/test-beats.py",
+    "python3 scripts/test-delivery-proof.py",
+    "node --test scripts/test-delivery-proof.mjs",
+    "python3 scripts/test-build-metadata.py",
+    "python3 scripts/test-local-preview.py",
+    "./scripts/test-copilot-shell-reducer.sh",
+    "./scripts/test-fetch-sdk-concurrency.sh",
+    "./scripts/build-unsigned.sh",
+    "./scripts/test.sh",
+    "./scripts/test-copilot-setup.sh",
+    "./scripts/test-copilot-hook.sh",
+    "./scripts/test-copilot-sandbox.sh",
+}
+
+
 class IntegratedTestScopeTests(unittest.TestCase):
     def setUp(self):
         self.directory = ROOT / ".build/metadata-tests" / str(uuid.uuid4())
@@ -956,34 +1116,230 @@ class BuildMetadataTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(destination.exists())
 
-    def test_ci_preserves_all_seventeen_validation_commands_without_new_conditions(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
-        self.assertEqual(re.findall(r"^        run: (.+)$", workflow, re.MULTILINE), [
-            "node --test scripts/test-skill-overrides.mjs",
-            "node scripts/check-skill-overrides.mjs",
-            "python3 scripts/test-joe-role-appearance.py",
-            "python3 scripts/test-cmux-maestro-orchestrator.py",
-            "python3 scripts/test-pet-kit.py",
-            "python3 scripts/test-beats.py",
-            "python3 scripts/test-delivery-proof.py",
-            "node --test scripts/test-delivery-proof.mjs",
-            "python3 scripts/test-build-metadata.py",
-            "python3 scripts/test-local-preview.py",
-            "./scripts/test-copilot-shell-reducer.sh",
-            "./scripts/test-fetch-sdk-concurrency.sh",
-            "./scripts/build-unsigned.sh",
-            "./scripts/test.sh",
-            "./scripts/test-copilot-setup.sh",
-            "./scripts/test-copilot-hook.sh",
-            "./scripts/test-copilot-sandbox.sh",
-        ])
-        steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
-        run_steps = [step for step in steps if "\n        run:" in step]
-        self.assertEqual(len(run_steps), 17)
-        for step in run_steps:
-            self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
+    def assert_validation_jobs(self, workflow):
+        """Per-job command lists, complete non-duplicated coverage, independence and early native start."""
+        jobs = workflow_jobs(workflow)
+        for job, expected in VALIDATION_JOBS.items():
+            self.assertEqual(job_commands(jobs[job]), expected, job)
+        # Complete, non-duplicated coverage: the split jobs together run each of the 17 exactly once.
+        split = [command for job in VALIDATION_JOBS for command in job_commands(jobs[job])]
+        self.assertEqual(len(split), 17)
+        self.assertEqual(set(split), SEVENTEEN_VALIDATION_COMMANDS)
+        for job, block in jobs.items():
+            if job not in VALIDATION_JOBS:
+                self.assertFalse(set(job_commands(block)) & SEVENTEEN_VALIDATION_COMMANDS,
+                                 f"Validation commands belong to the guarded validation jobs only ({job}).")
+        for job in VALIDATION_JOBS:
+            run_steps = [step for step in job_steps(jobs[job]) if "\n        run:" in step]
+            self.assertEqual(len(run_steps), len(VALIDATION_JOBS[job]))
+            for step in run_steps:
+                self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
+            # Independent: each needs only the classifier, so a failure in either job never skips the
+            # other's suites; its only condition is the sanctioned selection flag (#194).
+            self.assertEqual(re.findall(r"^    needs: (.+)$", jobs[job], re.MULTILINE), [f"[{CLASSIFIER_JOB}]"], job)
+            self.assertEqual(re.findall(r"^    if: (.+)$", jobs[job], re.MULTILINE), [selection_condition(job)], job)
+        self.assert_runner_placement(workflow)
+        steps = job_steps(jobs["validate-native"])
+        self.assertEqual(steps[0], "      - uses: actions/checkout@v4\n")
+        self.assertEqual(steps[1], "      - name: Run integrated Swift tests\n        run: ./scripts/test.sh\n",
+                         "Integrated Swift tests start right after checkout (#196).")
         self.assertNotIn("continue-on-error", workflow)
+
+    def assert_runner_placement(self, workflow):
+        """Each suite's runner is the reviewed placement; a Linux job holds only proven-portable commands."""
+        jobs = workflow_jobs(workflow)
+        self.assertEqual(set(JOB_RUNNERS), set(VALIDATION_JOBS) | {"guide-ui-consumer-probe"})
+        for job, runner in JOB_RUNNERS.items():
+            self.assertEqual(re.findall(r"^    runs-on: (.+)$", jobs[job], re.MULTILINE), [runner],
+                             f"{job}: runner placement is #191's reviewed decision.")
+            if runner != MACOS:
+                self.assertLessEqual(set(job_commands(jobs[job])), PROVEN_PORTABLE_COMMANDS,
+                                     f"{job} runs on {runner}: move only commands proven portable there.")
+                self.assertFalse([step for step in job_steps(jobs[job]) if "upload-artifact" in step],
+                                 f"{job}: required artifacts stay with their macOS producers.")
+
+    def assert_artifacts_follow_their_producers(self, workflow):
+        """Each required artifact uploads always, once, from its producers' job, after every producer."""
+        jobs = workflow_jobs(workflow)
+        for name, (job, title, producers, path) in REQUIRED_ARTIFACTS.items():
+            self.assertEqual(workflow.count(f"          name: {name}\n"), 1, f"{name} has one upload step.")
+            steps = job_steps(jobs[job])
+            uploads = [index for index, step in enumerate(steps) if f"          name: {name}\n" in step]
+            self.assertEqual(len(uploads), 1, f"{name} uploads from {job}, its producers' runner.")
+            self.assertEqual(steps[uploads[0]],
+                             f"      - name: {title}\n"
+                             "        if: always()\n"
+                             "        uses: actions/upload-artifact@v4\n"
+                             "        with:\n"
+                             f"          name: {name}\n"
+                             f"          path: {path}\n"
+                             "          include-hidden-files: true\n"
+                             "          if-no-files-found: error\n"
+                             "          retention-days: 14\n")
+            for command in producers:
+                found = [index for index, step in enumerate(steps) if f"        run: {command}\n" in step]
+                self.assertEqual(len(found), 1, f"{command} must run in {name}'s job.")
+                self.assertLess(found[0], uploads[0], f"{name} would miss {command}'s later partial diagnostics.")
+
+    def test_ci_preserves_all_seventeen_validation_commands_without_new_conditions(self):
+        self.assert_validation_jobs((ROOT / ".github/workflows/ci.yml").read_text())
+
+    def test_ci_native_tests_do_not_read_the_unsigned_build(self):
+        # Textual proxy: test.sh and every script it runs or loads, plus the project build phases'
+        # scripts, never name build-unsigned or its output. It cannot see dynamic paths or Xcode's
+        # implicit state; the live native job, which starts test.sh right after checkout, proves the rest.
+        test_sh = (ROOT / "scripts/test.sh").read_text()
+        self.assertIn('DERIVED_DATA="$ROOT/.build/tests"', test_sh)
+        self.assertEqual(sorted(set(re.findall(r'"\$ROOT/scripts/([^"]+)"', test_sh))),
+                         ["build-preference-test-client.sh", "fetch-sdk.sh",
+                          "run-integrated-test-scopes.py", "verify-build-metadata.py"],
+                         "test.sh runs a new script: add it to this scan.")
+        scanned, pending = [], ["test.sh"]
+        project = (ROOT / "CMUXMaestroPreview.xcodeproj/project.pbxproj").read_text()
+        pending += re.findall(r"scripts/([A-Za-z0-9_.-]+\.(?:py|sh))", project)
+        while pending:
+            name = pending.pop()
+            if name in scanned:
+                continue
+            scanned.append(name)
+            text = (ROOT / "scripts" / name).read_text()
+            pending += re.findall(r'"\$ROOT/scripts/([^"/]+\.(?:sh|py))"', text)
+            pending += re.findall(r'spec_from_file_location\([^)]*"scripts/([^"]+\.py)"\)', text)
+            pending += re.findall(r'with_name\("([^"]+\.py)"\)', text)
+        for name in ("fetch-sdk.sh", "build-preference-test-client.sh", "run-integrated-test-scopes.py",
+                     "run-guide-ui-validation.py", "guide-acceptance-evidence.py", "write-guide-reference.py"):
+            self.assertIn(name, scanned)
+        for name in scanned:
+            text = (ROOT / "scripts" / name).read_text()
+            for prerequisite in ("build-unsigned", ".build/unsigned"):
+                with self.subTest(script=name, prerequisite=prerequisite):
+                    self.assertNotIn(prerequisite, text)
+
+    def assert_no_cross_run_reuse(self, workflow):
+        """#193 measured setup reuse and rejected it: every validation job starts from a clean checkout."""
+        actions = re.findall(r"""^\s*(?:-\s+)?uses:\s*["']?([^\s"'#]+)""", workflow, re.MULTILINE)
+        self.assertEqual(len(actions), workflow.count("uses:"), "Every uses: must be a parseable step action.")
+        self.assertEqual(set(actions), {"actions/checkout@v4", "actions/upload-artifact@v4"},
+                         "Any new action, even one without a cache such as actions/setup-python, can carry state "
+                         "across runs: it needs a setup-reuse review (#193) and an update to this guard.")
+        for token in ("actions/cache", "actions/cache/", "restore-keys", "cache:", "cache-dependency-path",
+                      "download-artifact", "gh run download", "gh cache"):
+            self.assertNotIn(token, workflow, f"{token}: cross-run reuse needs #193's measured decision.")
+
+    def test_ci_reuses_no_setup_state_across_runs(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assert_no_cross_run_reuse(workflow)
+        test_sh = (ROOT / "scripts/test.sh").read_text()
+        unsigned = (ROOT / "scripts/build-unsigned.sh").read_text()
+        self.assertIn('DERIVED_DATA="$ROOT/.build/tests"', test_sh)
+        self.assertIn('DERIVED_DATA="$ROOT/.build/unsigned"', unsigned)
+        checkout = "      - uses: actions/checkout@v4\n      - name: Run integrated Swift tests\n"
+        self.assertIn(checkout, workflow)
+        restore = ("      - uses: actions/checkout@v4\n"
+                   "      - uses: actions/cache@v4\n        with:\n          path: .build/tests\n"
+                   "          key: tests-${{ hashFiles('**/*.swift') }}\n"
+                   "      - name: Run integrated Swift tests\n")
+        mutations = {
+            "DerivedData cache": workflow.replace(checkout, restore, 1),
+            "cached toolchain": workflow.replace(
+                "      - uses: actions/checkout@v4\n      - name: Test local skill override validation\n",
+                "      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n"
+                "          cache: npm\n      - name: Test local skill override validation\n", 1),
+            "prior run's artifact": workflow.replace(
+                checkout, "      - uses: actions/checkout@v4\n      - uses: actions/download-artifact@v4\n"
+                "      - name: Run integrated Swift tests\n", 1),
+            "comment-suffixed third-party restore": workflow.replace(
+                checkout, "      - uses: actions/checkout@v4\n"
+                "      - uses: example/restore-derived-data@0123456789abcdef0123456789abcdef01234567 # v1\n"
+                "      - name: Run integrated Swift tests\n", 1),
+            "quoted action": workflow.replace(
+                checkout, "      - uses: actions/checkout@v4\n      - uses: 'actions/setup-python@v5'\n"
+                "      - name: Run integrated Swift tests\n", 1),
+            "gh run download": workflow.replace(
+                checkout, "      - uses: actions/checkout@v4\n      - name: Restore prior build\n"
+                "        run: gh run download 1 -n derived-data -D .build/tests\n"
+                "      - name: Run integrated Swift tests\n", 1),
+            "gh cache": workflow.replace(
+                checkout, "      - uses: actions/checkout@v4\n      - name: Restore prior build\n"
+                "        run: gh cache list\n      - name: Run integrated Swift tests\n", 1),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, workflow)
+                with self.assertRaises(AssertionError):
+                    self.assert_no_cross_run_reuse(mutated)
+
+    def test_ci_split_job_guards_reject_order_coverage_and_dependency_drift(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        test_sh = "      - name: Run integrated Swift tests\n        run: ./scripts/test.sh\n"
+        hook = "      - name: Verify compiled hooks fail open\n        run: ./scripts/test-copilot-hook.sh\n"
+        setup = "      - name: Verify Settings guide and setup process isolation\n        run: ./scripts/test-copilot-setup.sh\n"
+        beats = "        run: python3 scripts/test-beats.py\n"
+        metadata = ("      - name: Verify build and registration metadata contracts\n"
+                    "        run: python3 scripts/test-build-metadata.py\n")
+        portable_last = ("      - name: Verify local skill overrides and policy links\n"
+                         "        run: node scripts/check-skill-overrides.mjs\n")
+        portable_steps = ("      - name: Test local skill override validation\n"
+                          "        run: node --test scripts/test-skill-overrides.mjs\n" + portable_last)
+        setup_upload = workflow[workflow.index("      - name: Upload setup process isolation evidence\n"):]
+        setup_upload = setup_upload[:setup_upload.index("retention-days: 14\n") + len("retention-days: 14\n")]
+        validation_mutations = {
+            "native needs contracts": workflow.replace(
+                "  validate-native:\n", "  validate-native:\n    needs: [validate-contracts]\n"),
+            "contracts needs native": workflow.replace(
+                "  validate-contracts:\n", "  validate-contracts:\n    needs: validate-native\n"),
+            # Same command lists; only a non-prerequisite step now runs ahead of test.sh.
+            "test.sh not first": workflow.replace(test_sh, "      - uses: actions/setup-node@v4\n" + test_sh, 1),
+            "command duplicated across jobs": workflow.replace(test_sh, test_sh + "      - name: dup\n" + beats, 1),
+            "dropped command": workflow.replace(hook, ""),
+            "command moved to the gate": workflow.replace(hook, "").rstrip("\n") + "\n" + hook,
+            # Runner placement (#191).
+            "native on Linux": workflow.replace(
+                "    if: needs.ci-classify.outputs.run_validate_native != 'false'\n    runs-on: macos-latest\n",
+                "    if: needs.ci-classify.outputs.run_validate_native != 'false'\n    runs-on: ubuntu-latest\n"),
+            "contracts on Linux": workflow.replace(
+                "    if: needs.ci-classify.outputs.run_validate_contracts != 'false'\n    runs-on: macos-latest\n",
+                "    if: needs.ci-classify.outputs.run_validate_contracts != 'false'\n    runs-on: ubuntu-latest\n"),
+            "probe on Linux": workflow.replace(
+                "    if: needs.ci-classify.outputs.run_guide_ui_consumer_probe != 'false'\n    runs-on: macos-latest\n",
+                "    if: needs.ci-classify.outputs.run_guide_ui_consumer_probe != 'false'\n    runs-on: ubuntu-latest\n"),
+            "portable job on macOS": workflow.replace(
+                "    if: needs.ci-classify.outputs.run_validate_portable != 'false'\n    runs-on: ubuntu-latest\n",
+                "    if: needs.ci-classify.outputs.run_validate_portable != 'false'\n    runs-on: macos-latest\n"),
+            "portable job on a matrix of runners": workflow.replace(
+                "    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Test local",
+                "    runs-on: [ubuntu-latest, macos-latest]\n    steps:\n      - uses: actions/checkout@v4\n"
+                "      - name: Test local"),
+            "unproven command moved to Linux": workflow.replace(metadata, "").replace(
+                portable_last, portable_last + metadata),
+            "skill checks moved back to macOS": workflow.replace(portable_steps, "").replace(
+                "      - name: Verify local Joe role", portable_steps + "      - name: Verify local Joe role"),
+        }
+        artifact_mutations = {
+            "setup upload before its producer": workflow.replace(setup_upload, "").replace(setup, setup_upload + setup),
+            "layout upload before test.sh": workflow.replace(test_sh, "", 1).replace(
+                "      - name: Upload integrated test scope evidence\n",
+                test_sh + "      - name: Upload integrated test scope evidence\n", 1),
+            "integrated upload before test.sh": workflow.replace(test_sh, "", 1).replace(
+                "  validate-contracts:\n", "      - name: late\n" + test_sh[len("      - name: Run integrated Swift tests\n"):]
+                + "\n  validate-contracts:\n", 1),
+            "setup upload in the other job": workflow.replace(setup_upload, "").replace(
+                "          retention-days: 14\n\n  validate-contracts:",
+                "          retention-days: 14\n" + setup_upload + "\n  validate-contracts:", 1),
+            "upload without always()": workflow.replace(
+                "Upload setup process isolation evidence\n        if: always()\n",
+                "Upload setup process isolation evidence\n"),
+        }
+        for name, mutated in validation_mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, workflow)
+                with self.assertRaises(AssertionError):
+                    self.assert_validation_jobs(mutated)
+        for name, mutated in artifact_mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, workflow)
+                with self.assertRaises((AssertionError, KeyError, ValueError)):
+                    self.assert_artifacts_follow_their_producers(mutated)
 
     def test_ci_runs_one_suite_per_pr_update_and_full_validation_on_main(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -992,10 +1348,16 @@ class BuildMetadataTests(unittest.TestCase):
         self.assertEqual(triggers, "  push:\n    branches: [main]\n  pull_request:\n",
                          "The CI event matrix is merge policy: update docs/agents/merge-policy.md "
                          "('When it runs') together with any trigger change.")
-        for job in ("validate", "guide-ui-consumer-probe"):
+        jobs = workflow_jobs(workflow)
+        self.assertEqual(sorted(jobs), sorted([CLASSIFIER_JOB, *VALIDATION_JOBS, "guide-ui-consumer-probe", "ci-gate"]))
+        for job in (*VALIDATION_JOBS, "guide-ui-consumer-probe"):
             with self.subTest(job=job):
-                block = workflow.split(f"\n  {job}:\n", 1)[1].split("\n  guide-ui-consumer-probe:", 1)[0]
-                self.assertNotIn("\n    if:", block, "Jobs must not be event-filtered; triggers own the matrix.")
+                # Jobs are never event-filtered; triggers own the matrix. The only job condition is the
+                # suite-selection flag, which the classifier always sets to 'true' on a push.
+                self.assertEqual(re.findall(r"^    if: (.+)$", jobs[job], re.MULTILINE), [selection_condition(job)])
+        self.assertNotRegex(jobs[CLASSIFIER_JOB], r"(?m)^    if:", "The classifier runs for every validated event.")
+        # The gate's only job condition is always(), so it exists for every validated event.
+        self.assertEqual(re.findall(r"^    if: (.+)$", jobs["ci-gate"], re.MULTILINE), ["always()"])
         policy = (ROOT / "docs/agents/merge-policy.md").read_text()
         section = policy.split("**When it runs (#192):**", 1)[1].split("Its current commands", 1)[0]
         for phrase in ("pushes to `main`", "every pull request update", "is stale too",
@@ -1004,61 +1366,273 @@ class BuildMetadataTests(unittest.TestCase):
                 self.assertIn(phrase, section)
 
     def test_ci_documentation_tracks_the_guarded_validation_commands(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0]
-        commands = re.findall(r"^        run: (.+)$", workflow, re.MULTILINE)
+        jobs = workflow_jobs((ROOT / ".github/workflows/ci.yml").read_text())
         policy = (ROOT / "docs/agents/merge-policy.md").read_text()
-        section = policy.split("## Actual CI and formatting gates", 1)[1]
-        documented = section.split("```sh\n", 1)[1].split("\n```", 1)[0].splitlines()
-        self.assertEqual(documented, commands)
+        section = policy.split("## Actual CI and formatting gates", 1)[1].split("Its current commands", 1)[1]
+        documented = re.findall(r"^`([a-z-]+)`[^\n]*:\n\n```sh\n(.*?)\n```", section, re.MULTILINE | re.DOTALL)
+        self.assertEqual([job for job, _ in documented], list(VALIDATION_JOBS))
+        for job, commands in documented:
+            with self.subTest(job=job):
+                self.assertEqual(commands.splitlines(), job_commands(jobs[job]))
+
+    GATE_BLOCK = (
+        "    timeout-minutes: 10\n"
+        "    needs: [{needs}]\n"
+        "    if: always()\n"
+        "    runs-on: ubuntu-latest\n"
+        "    permissions:\n"
+        "      contents: read\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "        if: always()\n"
+        "      - name: Verify final gate evaluator\n"
+        "        if: always()\n"
+        "        run: python3 scripts/test-ci-gate.py\n"
+        "      - name: Verify suite classifier\n"
+        "        if: always()\n"
+        "        run: python3 scripts/test-ci-classify.py\n"
+        "      - name: Evaluate required suites\n"
+        "        if: always()\n"
+        "        env:\n"
+        "          CI_GATE_NEEDS: ${{{{ toJSON(needs) }}}}\n"
+        "        run: python3 scripts/ci-gate.py\n")
+
+    def assert_final_gate(self, workflow, contract):
+        jobs = workflow_jobs(workflow)
+        gate = contract["gate_job"]
+        self.assertEqual(gate, "ci-gate", "The gate's job id is the documented check name.")
+        self.assertEqual(list(jobs)[-1], gate, "Keep the gate last so its block holds no other job.")
+        classifier = contract["classifier_job"]
+        self.assertEqual(classifier, CLASSIFIER_JOB)
+        validation = sorted(job for job in jobs if job not in (gate, classifier))
+        self.assertTrue(validation)
+        self.assertEqual(sorted(suite["job"] for suite in contract["suites"]), validation,
+                         "Every validation job is a required suite; update scripts/ci-required-suites.json.")
+        # Whole block to end of file: every step runs even on cancellation, so the table always prints.
+        self.assertEqual(jobs[gate].rstrip("\n") + "\n", self.GATE_BLOCK.format(
+            needs=", ".join([classifier, *(suite["job"] for suite in contract["suites"])])))
+        self.assert_suite_selection(workflow, contract)
+        self.assertNotIn("continue-on-error", workflow)
+
+    def assert_suite_selection(self, workflow, contract):
+        """The classifier's exact block, and each suite's only needs/condition: its own selection flag."""
+        jobs = workflow_jobs(workflow)
+        suites = [suite["job"] for suite in contract["suites"]]
+        self.assertEqual(list(jobs)[0], CLASSIFIER_JOB, "The classifier starts first; every suite needs it.")
+        flags = "".join(f"      run_{job.replace('-', '_')}: ${{{{ steps.classify.outputs.run_{job.replace('-', '_')} }}}}\n"
+                        for job in suites)
+        body = re.sub(r"(?m)^    #.*\n", "", jobs[CLASSIFIER_JOB]).rstrip("\n") + "\n"
+        self.assertEqual(body, CLASSIFIER_BLOCK.format(flags=flags))
+        for job in suites:
+            # A job-level condition could skip a suite; only the classifier's flag may, and ci-gate
+            # accepts that skip only with the classifier's matching not-applicable record.
+            self.assertEqual(re.findall(r"^    (needs|if): (.+)$", jobs[job], re.MULTILINE),
+                             [("needs", f"[{CLASSIFIER_JOB}]"), ("if", selection_condition(job))], job)
+
+    def test_ci_final_gate_requires_every_validation_job_through_the_contract(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        contract = json.loads((ROOT / "scripts/ci-required-suites.json").read_text())
+        self.assert_final_gate(workflow, contract)
+        policy = (ROOT / "docs/agents/merge-policy.md").read_text()
+        section = policy.split("**Final coverage gate (#197):**", 1)[1].split("Its current commands", 1)[0]
+        for phrase in ("`ci-gate`", "scripts/ci-required-suites.json", "merge signal",
+                       "if-no-files-found: error", "branches/main/protection",
+                       "required status check", "`enforce_admins: true`", "`strict: false`",
+                       "every gate step uses `if: always()`", "fails closed on any job it cannot parse",
+                       "candidate's own", "changes to merge policy"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, section)
+
+    def assert_job_and_step_shapes(self, workflow, gate, classifier=CLASSIFIER_JOB, suites=None):
+        policy = ("; see docs/agents/merge-policy.md (#190: no arbitrary timeouts or blanket skips; "
+                  "job-level hang ceilings only, owner decision 2026-10-15).")
+        if suites is None:
+            suites = [suite["job"] for suite in json.loads((ROOT / "scripts/ci-required-suites.json").read_text())["suites"]]
+        # Every timeout-minutes is a job-level key (four-space indent), exactly one per job, pinned.
+        self.assertEqual(re.findall(r"^( *)timeout-minutes:", workflow, re.MULTILINE),
+                         ["    "] * len(JOB_CEILINGS), "Only one job-level timeout-minutes per job" + policy)
+        blocks = workflow_jobs(workflow)
+        self.assertEqual(sorted(blocks), sorted(JOB_CEILINGS), "Every job needs a pinned hang ceiling" + policy)
+        for job, block in blocks.items():
+            self.assertEqual(re.findall(r"^    timeout-minutes: (.*)$", block, re.MULTILINE),
+                             [str(JOB_CEILINGS[job])], f"Job {job} hang ceiling" + policy)
+        for job, body in yaml_jobs(workflow).items():
+            self.assertIs(type(body.get("timeout-minutes")), int, f"Job {job} hang ceiling" + policy)
+            self.assertEqual(body["timeout-minutes"], JOB_CEILINGS[job], f"Job {job} hang ceiling" + policy)
+            allowed = {"runs-on", "steps", "permissions", "timeout-minutes"}
+            if job == gate:
+                allowed |= {"needs", "if"}
+                self.assertEqual(body.get("if"), "always()", "The gate is always created" + policy)
+            elif job == classifier:
+                allowed |= {"outputs"}
+            elif job in suites:
+                # Suite selection (#194): exactly the classifier dependency and this job's own flag.
+                allowed |= {"needs", "if"}
+                self.assertEqual(body.get("needs"), [classifier], f"Job {job} may only need {classifier}" + policy)
+                self.assertEqual(body.get("if"), selection_condition(job),
+                                 f"Job {job} may only use its sanctioned selection condition" + policy)
+            self.assertLessEqual(set(body), allowed, f"Job {job} has keys outside the allow-list" + policy)
+            for step in body["steps"]:
+                self.assertIn(step.get("if", "always()"), ("always()",),
+                              f"Step {step.get('name', step.get('uses'))} in {job} may only use if: always()" + policy)
+                self.assertNotIn("timeout-minutes", step, policy)
+
+    def test_ci_jobs_and_steps_use_only_allowed_keys_and_conditions(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assert_job_and_step_shapes(workflow, "ci-gate")
+        native_if = "    if: needs.ci-classify.outputs.run_validate_native != 'false'\n"
+        probe_if = "    if: needs.ci-classify.outputs.run_guide_ui_consumer_probe != 'false'\n"
+        mutations = {
+            "duplicate job ceiling": ("  validate-native:\n", "  validate-native:\n    timeout-minutes: 60\n"),
+            "missing job ceiling": ("    timeout-minutes: 60\n", ""),
+            "shortened job ceiling": ("    timeout-minutes: 60\n", "    timeout-minutes: 30\n"),
+            "raised job ceiling": ("    timeout-minutes: 15\n", "    timeout-minutes: 360\n"),
+            "expression job ceiling": ("    timeout-minutes: 50\n", "    timeout-minutes: ${{ 50 }}\n"),
+            "quoted job ceiling": ("    timeout-minutes: 50\n", "    timeout-minutes: '50'\n"),
+            "job strategy": ("  validate-native:\n", "  validate-native:\n    strategy:\n      fail-fast: false\n"),
+            "checkout if: false": ("      - uses: actions/checkout@v4\n      - name: Test local",
+                                   "      - uses: actions/checkout@v4\n        if: false\n      - name: Test local"),
+            "step timeout-minutes": ("        run: ./scripts/test.sh\n",
+                                     "        run: ./scripts/test.sh\n        timeout-minutes: 30\n"),
+            # Suite selection (#194): only the sanctioned dependency and condition.
+            "classifier gains an if": ("  ci-classify:\n    timeout-minutes: 10\n",
+                                       "  ci-classify:\n    timeout-minutes: 10\n"
+                                       "    if: github.event_name == 'pull_request'\n"),
+            "classifier gains needs": ("  ci-classify:\n    timeout-minutes: 10\n",
+                                       "  ci-classify:\n    timeout-minutes: 10\n    needs: [validate-native]\n"),
+            "suite run on 'true' only": (native_if, native_if.replace("!= 'false'", "== 'true'")),
+            "suite condition with always()": (native_if, native_if.replace("if: ", "if: always() && ")),
+            "suite condition is always()": (native_if, "    if: always()\n"),
+            "suite event filter": (native_if, "    if: github.event_name == 'push'\n"),
+            "suite reads another suite's flag": (probe_if, probe_if.replace("run_guide_ui_consumer_probe",
+                                                                            "run_validate_native")),
+            "suite condition dropped": (probe_if, ""),
+            "suite needs another suite": ("    needs: [ci-classify]\n    if: needs.ci-classify.outputs.run_validate_contracts",
+                                          "    needs: [ci-classify, validate-native]\n"
+                                          "    if: needs.ci-classify.outputs.run_validate_contracts"),
+            "gate condition narrowed": ("    if: always()\n    runs-on: ubuntu-latest\n",
+                                        "    if: success()\n    runs-on: ubuntu-latest\n"),
+        }
+        for name, (old, new) in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertEqual(workflow.count(old), 1)
+                with self.assertRaises(AssertionError):
+                    self.assert_job_and_step_shapes(workflow.replace(old, new), "ci-gate")
+
+    def test_ci_suite_selection_guard_rejects_classifier_and_condition_drift(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        contract = json.loads((ROOT / "scripts/ci-required-suites.json").read_text())
+        self.assert_suite_selection(workflow, contract)
+        mutations = {
+            "shallow classifier checkout": ("          fetch-depth: 0\n", "          fetch-depth: 1\n"),
+            "base inlined into run": ("        run: python3 scripts/ci-classify.py\n",
+                                      "        run: python3 scripts/ci-classify.py "
+                                      "${{ github.event.pull_request.base.sha }}\n"),
+            "head from the wrong ref": ("pull_request.head.sha", "pull_request.head.ref"),
+            "flag output dropped": ("      run_validate_contracts: ${{ steps.classify.outputs.run_validate_contracts }}\n",
+                                    ""),
+            "flag output hard-coded": ("${{ steps.classify.outputs.run_guide_ui_consumer_probe }}", "'false'"),
+            "classifier tests before classification": ("      - name: Classify changed files\n",
+                                                       "      - name: Pre\n        run: python3 scripts/test-ci-classify.py\n"
+                                                       "      - name: Classify changed files\n"),
+            "suite condition inverted": ("outputs.run_validate_contracts != 'false'",
+                                         "outputs.run_validate_contracts == 'false'"),
+            "gate loses the classifier": ("    needs: [ci-classify, validate-native,", "    needs: [validate-native,"),
+            "gate skips classifier tests": ("        run: python3 scripts/test-ci-classify.py\n",
+                                            "        run: echo skipped\n"),
+        }
+        for name, (old, new) in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertEqual(workflow.count(old), 1, name)
+                with self.assertRaises((AssertionError, ValueError)):
+                    self.assert_final_gate(workflow.replace(old, new), contract)
+
+    def test_ci_hang_ceilings_are_documented_merge_policy(self):
+        policy = (ROOT / "docs/agents/merge-policy.md").read_text()
+        section = policy.split("**Hang ceilings (owner decision 2026-10-15):**", 1)[1].split("\n**", 1)[0]
+        documented = dict(re.findall(r"^  - `([a-z-]+)`: (\d+) min ", section, re.MULTILINE))
+        self.assertEqual({job: int(value) for job, value in documented.items()}, JOB_CEILINGS)
+        for phrase in ("exactly one job-level `timeout-minutes`", "not a speed target",
+                       "step-level `timeout-minutes` stays forbidden", "`ci-gate` (which runs `if: always()`) fails",
+                       "merge-policy change"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, section)
+
+    def test_ci_runner_placement_is_documented_merge_policy(self):
+        policy = (ROOT / "docs/agents/merge-policy.md").read_text()
+        section = policy.split("**Runner placement (#191):**", 1)[1].split("Its current commands", 1)[0]
+        for phrase in ("ci-runner-placement.md", "`validate-portable` (`ubuntu-latest`)", "never move",
+                       "Python or Node source alone is not proof", "en-US collation", "/usr/bin/plutil",
+                       "not split further", "merge-policy change"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, section)
+
+    def test_ci_suite_selection_is_documented_merge_policy(self):
+        policy = (ROOT / "docs/agents/merge-policy.md").read_text()
+        section = policy.split("**Suite selection (#194):**", 1)[1].split("Its current commands", 1)[0]
+        for phrase in ("`ci-classify`", "scripts/ci-suite-map.json", "scripts/ci-classify.py",
+                       "not applicable", "NOT APPLICABLE", "pushes to `main`", "unmapped", "every suite",
+                       "never an empty success", "same run", "later full run on `main`",
+                       "changes to merge policy", "(case-insensitively", "other than the literal `false`"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, section)
+        # Merge evidence (review item 4) and the command lists must allow deliberate not-applicable skips.
+        gate_item = policy.split("\n4. ", 1)[1].split("\n5. ", 1)[0]
+        gate_item = " ".join(gate_item.split())
+        for phrase in ("every applicable suite passed", "`NOT APPLICABLE`", "from that run's `ci-classify`",
+                       "record's `base` must equal current `main`", "its `head` must equal the candidate",
+                       "stacked parent branch, or a stale base, is not merge evidence"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, gate_item)
+        self.assertNotIn("Require all repository CI commands", policy)
+        self.assertIn("Each runs at most once; a not-applicable suite runs none of its commands", policy)
+        self.assertNotIn("Each runs exactly once", policy)
+
+    def test_ci_final_gate_guard_rejects_hidden_jobs_and_gate_drift(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        contract = json.loads((ROOT / "scripts/ci-required-suites.json").read_text())
+        hidden = "\n  {}\n    runs-on: macos-latest\n    steps:\n      - run: echo hidden\n\n  # Final coverage"
+        mutations = {
+            "quoted job id": workflow.replace("\n\n  # Final coverage", hidden.format('"extra":')),
+            "job id with trailing comment": workflow.replace("\n\n  # Final coverage", hidden.format("extra:  # c")),
+            "flow-mapping job": workflow.replace(
+                "\n\n  # Final coverage", "\n  extra: {runs-on: macos-latest, steps: [{run: echo}]}\n\n  # Final coverage"),
+            "key after a blank line in the gate": workflow.rstrip("\n") + "\n\n    timeout-minutes: 1\n",
+            "checkout without always()": workflow.replace(
+                "      - uses: actions/checkout@v4\n        if: always()\n      - name: Verify final gate",
+                "      - uses: actions/checkout@v4\n      - name: Verify final gate"),
+            "evaluator tests without always()": workflow.replace(
+                "evaluator\n        if: always()\n", "evaluator\n"),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, workflow)
+                with self.assertRaises((AssertionError, ValueError)):
+                    self.assert_final_gate(mutated, contract)
 
     def test_ci_always_uploads_json_evidence_and_retains_required_png_artifact(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
-        steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
-        for title, name, path in (
-            ("Upload integrated test scope evidence", "integrated-test-scope-evidence",
-             "|\n            .build/tests/scoped-results/**/*.json\n"
-             "            .build/tests/scoped-results/**/*.txt\n"
-             "            .build/tests/scoped-results/**/guide-acceptance/*.log\n"
-             "            .build/tests/scoped-results/**/guide-acceptance/probe.xcresult\n"
-             "            .build/tests/scoped-results/**/guide-acceptance/images/*.png\n"
-             "            .build/tests/scoped-results/**/failure-diagnostics/*/*.zip\n"
-             "            .build/setup-tests/metadata-watchdog/"),
-            ("Upload synthetic sidebar layout renders", "sidebar-layout-offscreen",
-             ".build/layout-validation/offscreen/*.png"),
-        ):
-            with self.subTest(artifact=name):
-                actual = [step for step in steps if f"          name: {name}\n" in step]
-                self.assertEqual(actual, [
-                    f"      - name: {title}\n"
-                    "        if: always()\n"
-                    "        uses: actions/upload-artifact@v4\n"
-                    "        with:\n"
-                    f"          name: {name}\n"
-                    f"          path: {path}\n"
-                    "          include-hidden-files: true\n"
-                    "          if-no-files-found: error\n"
-                    "          retention-days: 14\n"
-                ])
+        self.assert_artifacts_follow_their_producers((ROOT / ".github/workflows/ci.yml").read_text())
 
     def test_ci_collects_final_metadata_diagnostics_after_both_producers(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
-        steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
-        uploads = [(index, step) for index, step in enumerate(steps)
-                   if "          name: integrated-test-scope-evidence\n" in step]
-        self.assertEqual(len(uploads), 1, "One final upload must collect both diagnostic producers.")
-        upload_index, upload = uploads[0]
-        for command in ("./scripts/test.sh", "./scripts/test-copilot-setup.sh"):
-            with self.subTest(producer=command):
-                producers = [index for index, step in enumerate(steps) if f"        run: {command}\n" in step]
-                self.assertEqual(len(producers), 1)
-                self.assertLess(producers[0], upload_index, "An earlier upload cannot retain later partial diagnostics.")
+        # Both producers write metadata stall diagnostics; each job's upload follows its own producer.
+        self.assertEqual(REQUIRED_ARTIFACTS["integrated-test-scope-evidence"][::2],
+                         ("validate-native", ["./scripts/test.sh"]))
+        self.assertEqual(REQUIRED_ARTIFACTS["copilot-setup-evidence"][::2],
+                         ("validate-contracts", ["./scripts/test-copilot-setup.sh"]))
+        integrated = REQUIRED_ARTIFACTS["integrated-test-scope-evidence"][3]
+        setup_paths = REQUIRED_ARTIFACTS["copilot-setup-evidence"][3]
+        self.assertIn(".build/tests/scoped-results/**/*.json", integrated)
+        self.assertIn(".build/tests/scoped-results/**/*.txt", integrated)
+        self.assertIn(".build/tests/scoped-results/metadata-diagnostics/", setup_paths)
+        self.assertIn(".build/setup-tests/metadata-watchdog/", setup_paths)
         setup = (ROOT / "scripts/test-copilot-setup.sh").read_text()
         self.assertIn('OUTPUT="$ROOT/.build/setup-tests"', setup)
         self.assertIn('--results-root "$OUTPUT/metadata-watchdog"', setup)
-        self.assertIn("            .build/setup-tests/metadata-watchdog/\n", upload)
+        self.assertIn('"$ROOT/CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift"', setup)
+        observer = (ROOT / "CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift").read_text()
+        # One watchdog-guarded metadata test remains; the cancellation one was removed (#174, 2026-10-15).
+        self.assertEqual(observer.count('".build/tests/scoped-results/metadata-diagnostics/'), 1)
+        self.assert_artifacts_follow_their_producers((ROOT / ".github/workflows/ci.yml").read_text())
 
     def test_app_bridge_markers_are_wired_as_input_plist_in_both_configurations(self):
         project = json.loads(subprocess.check_output([

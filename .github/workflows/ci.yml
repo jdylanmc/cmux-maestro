@@ -6,36 +6,41 @@ on:
   pull_request:
 
 jobs:
-  validate:
+  # Suite selection (#194): classifies the exact change set and publishes which suites apply and why.
+  # A validation job is skipped only when its flag is 'false' (GitHub compares case-insensitively);
+  # ci-gate rejects any flag other than the literal 'false' and verifies the record.
+  ci-classify:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      classification: ${{ steps.classify.outputs.classification }}
+      run_validate_native: ${{ steps.classify.outputs.run_validate_native }}
+      run_validate_contracts: ${{ steps.classify.outputs.run_validate_contracts }}
+      run_validate_portable: ${{ steps.classify.outputs.run_validate_portable }}
+      run_guide_ui_consumer_probe: ${{ steps.classify.outputs.run_guide_ui_consumer_probe }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Classify changed files
+        id: classify
+        env:
+          CI_CLASSIFY_BASE: ${{ github.event.pull_request.base.sha }}
+          CI_CLASSIFY_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci-classify.py
+
+  validate-native:
+    # Early failures (#196): integrated Swift tests start right after checkout, in their own job,
+    # so a native failure reports without waiting for the other suites, and a failure in either
+    # job never skips the other's suites. This job holds only test.sh and its evidence.
+    timeout-minutes: 60
+    needs: [ci-classify]
+    if: needs.ci-classify.outputs.run_validate_native != 'false'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Test local skill override validation
-        run: node --test scripts/test-skill-overrides.mjs
-      - name: Verify local skill overrides and policy links
-        run: node scripts/check-skill-overrides.mjs
-      - name: Verify local Joe role appearance defaults and metadata
-        run: python3 scripts/test-joe-role-appearance.py
-      - name: Verify terminal orchestration contracts
-        run: python3 scripts/test-cmux-maestro-orchestrator.py
-      - name: Verify dependency-free pet drawing kit
-        run: python3 scripts/test-pet-kit.py
-      - name: Verify Beats cron, local-time rules, store and agent surface
-        run: python3 scripts/test-beats.py
-      - name: Verify managed messaging and legacy proof launcher contracts
-        run: python3 scripts/test-delivery-proof.py
-      - name: Verify native delivery adapter contracts
-        run: node --test scripts/test-delivery-proof.mjs
-      - name: Verify build and registration metadata contracts
-        run: python3 scripts/test-build-metadata.py
-      - name: Verify local preview transactions and recovery
-        run: python3 scripts/test-local-preview.py
-      - name: Verify compiled shell notification reducer
-        run: ./scripts/test-copilot-shell-reducer.sh
-      - name: Verify SDK fetch concurrency and cleanup
-        run: ./scripts/test-fetch-sdk-concurrency.sh
-      - name: Build isolated validation targets
-        run: ./scripts/build-unsigned.sh
       - name: Run integrated Swift tests
         run: ./scripts/test.sh
       - name: Upload synthetic sidebar layout renders
@@ -47,12 +52,6 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
-      - name: Verify Settings guide and setup process isolation
-        run: ./scripts/test-copilot-setup.sh
-      - name: Verify compiled hooks fail open
-        run: ./scripts/test-copilot-hook.sh
-      - name: Verify shared file traversal under narrow sandbox grants
-        run: ./scripts/test-copilot-sandbox.sh
       - name: Upload integrated test scope evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -65,12 +64,77 @@ jobs:
             .build/tests/scoped-results/**/guide-acceptance/probe.xcresult
             .build/tests/scoped-results/**/guide-acceptance/images/*.png
             .build/tests/scoped-results/**/failure-diagnostics/*/*.zip
-            .build/setup-tests/metadata-watchdog/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
 
+  validate-contracts:
+    # Script, contract and standalone native suites, short suites first; the long preview-transaction
+    # and orchestrator suites run last so a quick failure is not queued behind them.
+    timeout-minutes: 50
+    needs: [ci-classify]
+    if: needs.ci-classify.outputs.run_validate_contracts != 'false'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify local Joe role appearance defaults and metadata
+        run: python3 scripts/test-joe-role-appearance.py
+      - name: Verify dependency-free pet drawing kit
+        run: python3 scripts/test-pet-kit.py
+      - name: Verify Beats cron, local-time rules, store and agent surface
+        run: python3 scripts/test-beats.py
+      - name: Verify managed messaging and legacy proof launcher contracts
+        run: python3 scripts/test-delivery-proof.py
+      - name: Verify native delivery adapter contracts
+        run: node --test scripts/test-delivery-proof.mjs
+      - name: Verify build and registration metadata contracts
+        run: python3 scripts/test-build-metadata.py
+      - name: Verify compiled shell notification reducer
+        run: ./scripts/test-copilot-shell-reducer.sh
+      - name: Verify SDK fetch concurrency and cleanup
+        run: ./scripts/test-fetch-sdk-concurrency.sh
+      - name: Verify compiled hooks fail open
+        run: ./scripts/test-copilot-hook.sh
+      - name: Verify shared file traversal under narrow sandbox grants
+        run: ./scripts/test-copilot-sandbox.sh
+      - name: Build isolated validation targets
+        run: ./scripts/build-unsigned.sh
+      - name: Verify Settings guide and setup process isolation
+        run: ./scripts/test-copilot-setup.sh
+      - name: Verify local preview transactions and recovery
+        run: python3 scripts/test-local-preview.py
+      - name: Verify terminal orchestration contracts
+        run: python3 scripts/test-cmux-maestro-orchestrator.py
+      - name: Upload setup process isolation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: copilot-setup-evidence
+          path: |
+            .build/setup-tests/metadata-watchdog/
+            .build/tests/scoped-results/metadata-diagnostics/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  validate-portable:
+    # Runner placement (#191): only checks proven to behave identically on Linux, so documentation-only
+    # changes need no macOS runner. Proof and measurements: docs/reference/ci-runner-placement.md.
+    timeout-minutes: 10
+    needs: [ci-classify]
+    if: needs.ci-classify.outputs.run_validate_portable != 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test local skill override validation
+        run: node --test scripts/test-skill-overrides.mjs
+      - name: Verify local skill overrides and policy links
+        run: node scripts/check-skill-overrides.mjs
+
   guide-ui-consumer-probe:
+    timeout-minutes: 15
+    needs: [ci-classify]
+    if: needs.ci-classify.outputs.run_guide_ui_consumer_probe != 'false'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -92,3 +156,26 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
+
+  # Final coverage gate (#197): the merge signal. Pure result logic, so it runs on Linux.
+  ci-gate:
+    timeout-minutes: 10
+    needs: [ci-classify, validate-native, validate-contracts, validate-portable, guide-ui-consumer-probe]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        if: always()
+      - name: Verify final gate evaluator
+        if: always()
+        run: python3 scripts/test-ci-gate.py
+      - name: Verify suite classifier
+        if: always()
+        run: python3 scripts/test-ci-classify.py
+      - name: Evaluate required suites
+        if: always()
+        env:
+          CI_GATE_NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci-gate.py

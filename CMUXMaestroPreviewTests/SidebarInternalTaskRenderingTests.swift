@@ -78,7 +78,8 @@ struct SidebarInternalTaskRenderingTests {
                   model: nil, terminalEvent: .init(id: UUID(), timestamp: now))
         ], now: now)
         defer { model.setVisible(false) }
-        let mounted = mount(model, preferences, width: 280)
+        // This tests dismissal of a hidden child, not expiry: one instant, so gate waits cannot age it out.
+        let mounted = mount(model, preferences, width: 280, now: now, actionNow: { now })
         defer { mounted.window.contentView = nil; mounted.window.close() }
         await sidebarEventually { names(mounted.host).count == 1 }
         let control = try #require(buttons(mounted.host).first { $0.localFocusID == "task-dismiss:\(data.sessionID):result" })

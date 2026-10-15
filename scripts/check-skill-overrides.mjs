@@ -5,7 +5,13 @@ import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Match the skills CLI: sorted relative paths followed by raw file bytes.
+// The skills CLI sorts with the host's default collation, so its hash depends on the host. The lock's
+// hashes come from en-US hosts; pin en-US so this check does not. POSIX/C (Linux `LANG=C.UTF-8`, Node
+// `en-US-u-va-posix`) sorts uppercase first, and some locales (e.g. Lithuanian) order letters differently.
+const pathOrder = new Intl.Collator("en-US");
+
+// The skills CLI's digest as computed on an en-US-collation host: relative paths in en-US order,
+// each followed by the file's raw bytes.
 export async function skillFolderHash(root) {
   const files = [];
   async function collect(directory) {
@@ -20,7 +26,7 @@ export async function skillFolderHash(root) {
     }
   }
   await collect(root);
-  files.sort((a, b) => a.path.localeCompare(b.path));
+  files.sort((a, b) => pathOrder.compare(a.path, b.path));
   const hash = createHash("sha256");
   for (const file of files) hash.update(file.path).update(file.bytes);
   return hash.digest("hex");
@@ -65,7 +71,8 @@ export async function checkOverrides(root) {
     }
     const hash = await skillFolderHash(await inside(join(root, ".agents/skills", id)));
     if (hash !== lock.skills[id].computedHash) {
-      throw new Error(`Skill hash drift: ${id}; review the local override, then update its lock hash`);
+      throw new Error(`Skill hash drift: ${id}; review the local override, then update its lock hash ` +
+        "on a host with en-US collation (POSIX/C, e.g. Linux LANG=C.UTF-8, and some locales hash differently)");
     }
   }
 

@@ -174,7 +174,7 @@ struct SidebarPreferenceCoordinationTests {
         #expect(try await b.line() == "ready")
         try a.send("retain never")
         #expect(try await a.line() == "done")
-        try await eventually { preferences.history.retention == .never && projection.tree.retainedHistoryCount == 4 }
+        try await eventually("retain never") { preferences.history.retention == .never && projection.tree.retainedHistoryCount == 4 }
 
         try a.send("hold a")
         #expect(try await a.line() == "locked")
@@ -183,7 +183,7 @@ struct SidebarPreferenceCoordinationTests {
         try a.send("continue")
         #expect(try await a.line() == "done")
         #expect(try await b.line() == "done")
-        try await eventually {
+        try await eventually("concurrent dismiss a+b") {
             preferences.history == .init(retention: .never, dismissed: [key("a"), key("b")])
                 && projection.tree.hiddenHistoryCount == 2
         }
@@ -197,11 +197,11 @@ struct SidebarPreferenceCoordinationTests {
         try b.send("expect 0 never")
         #expect(try await a.line() == "done")
         #expect(try await b.line() == "done")
-        try await eventually { projection.tree.retainedHistoryCount == 4 }
+        try await eventually("restore dismissed") { projection.tree.retainedHistoryCount == 4 }
 
         try b.send("reset")
         #expect(try await b.line() == "done")
-        try await eventually { preferences.history == .init() && projection.tree.hiddenHistoryCount == 2 }
+        try await eventually("reset") { preferences.history == .init() && projection.tree.hiddenHistoryCount == 2 }
         #expect(projection.tree.retainedHistoryCount == 2)
         #expect(Set(projection.tree.sessions.flatMap(\.nodes).filter { $0.state.isTerminal }.map(\.id)) == ["a", "b"],
                 "Reset expires only legacy activity, not internal task outcomes")
@@ -217,12 +217,14 @@ struct SidebarPreferenceCoordinationTests {
         .init(sessionID: sessionID, childID: child, eventID: eventID)
     }
 
-    private func eventually(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+    // Cross-process file presentation can lag on a loaded CI runner (run 38761640483 missed a 10 s bound).
+    // Still bounded; the label names the step that failed to converge.
+    private func eventually(_ step: String, _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
         while !condition() && ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        try #require(condition(), "Existing observable preferences did not converge from file presentation")
+        try #require(condition(), "Existing observable preferences did not converge from file presentation: \(step)")
     }
 }
 
