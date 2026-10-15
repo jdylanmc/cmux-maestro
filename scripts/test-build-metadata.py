@@ -1203,6 +1203,43 @@ class BuildMetadataTests(unittest.TestCase):
                 with self.subTest(script=name, prerequisite=prerequisite):
                     self.assertNotIn(prerequisite, text)
 
+    def assert_no_cross_run_reuse(self, workflow):
+        """#193 measured setup reuse and rejected it: every validation job starts from a clean checkout."""
+        actions = set(re.findall(r"^\s+(?:- )?uses: (\S+)$", workflow, re.MULTILINE))
+        self.assertEqual(actions, {"actions/checkout@v4", "actions/upload-artifact@v4"},
+                         "A new action can restore state across runs; re-measure and record it under #193 first.")
+        for token in ("actions/cache", "restore-keys", "cache:", "cache-dependency-path", "download-artifact"):
+            self.assertNotIn(token, workflow, f"{token}: cross-run reuse needs #193's measured decision.")
+
+    def test_ci_reuses_no_setup_state_across_runs(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assert_no_cross_run_reuse(workflow)
+        test_sh = (ROOT / "scripts/test.sh").read_text()
+        unsigned = (ROOT / "scripts/build-unsigned.sh").read_text()
+        self.assertIn('DERIVED_DATA="$ROOT/.build/tests"', test_sh)
+        self.assertIn('DERIVED_DATA="$ROOT/.build/unsigned"', unsigned)
+        checkout = "      - uses: actions/checkout@v4\n      - name: Run integrated Swift tests\n"
+        self.assertIn(checkout, workflow)
+        restore = ("      - uses: actions/checkout@v4\n"
+                   "      - uses: actions/cache@v4\n        with:\n          path: .build/tests\n"
+                   "          key: tests-${{ hashFiles('**/*.swift') }}\n"
+                   "      - name: Run integrated Swift tests\n")
+        mutations = {
+            "DerivedData cache": workflow.replace(checkout, restore, 1),
+            "cached toolchain": workflow.replace(
+                "      - uses: actions/checkout@v4\n      - name: Test local skill override validation\n",
+                "      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n"
+                "          cache: npm\n      - name: Test local skill override validation\n", 1),
+            "prior run's artifact": workflow.replace(
+                checkout, "      - uses: actions/checkout@v4\n      - uses: actions/download-artifact@v4\n"
+                "      - name: Run integrated Swift tests\n", 1),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, workflow)
+                with self.assertRaises(AssertionError):
+                    self.assert_no_cross_run_reuse(mutated)
+
     def test_ci_split_job_guards_reject_order_coverage_and_dependency_drift(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         test_sh = "      - name: Run integrated Swift tests\n        run: ./scripts/test.sh\n"

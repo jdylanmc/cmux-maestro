@@ -113,6 +113,11 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 - The macOS jobs are not split further. The account's macOS jobs, shared with other repositories, peak at five at once, and every measured macOS queue over a minute happened at that ceiling. More macOS jobs per run would add to that queue.
 - `scripts/test-build-metadata.py` pins each suite's runner and allows only proven-portable commands on a Linux job. Changing either is a merge-policy change that needs the same proof.
 
+**Setup reuse (#193):**
+
+- No setup state crosses runs: no `actions/cache`, no restored DerivedData, toolchains or artifacts. Each job builds from a clean checkout, and `.build/tests` and `.build/unsigned` stay separate namespaces. Measured, the realistic candidate (test-build DerivedData) would save an estimated 10–65 seconds net on a 16–18 minute job; the inventory, numbers and revisit conditions are in [CI setup reuse](../reference/ci-setup-reuse.md).
+- `scripts/test-build-metadata.py` allows only `actions/checkout` and `actions/upload-artifact`. Adding reuse is a merge-policy change that needs a live cold/warm measurement and must never stand in for test execution, source attribution or fresh evidence.
+
 Its current commands, in order, per job. Each runs at most once; a not-applicable suite runs none of its commands; `scripts/test-build-metadata.py` checks these lists against the workflow.
 
 `validate-native` (integrated Swift tests):
