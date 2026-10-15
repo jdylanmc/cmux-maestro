@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -112,7 +113,6 @@ class MapTests(unittest.TestCase):
         for path in ("skills/maestro/SKILL.md", ".agents/skills/maestro-icon", ".agents/skills/maestro-pet",
                      "scripts/delivery-proof/adapter.mjs", "scripts/cmux-maestro-orchestrator.py"):
             self.assertIn(path, project, "The bundled-input list above is out of date.")
-        self.assertNotIn("docs/", project.replace("$(SRCROOT)", ""), "docs/ became a build input: remap it.")
 
     def test_edited_map_cannot_shrink_coverage_of_selection_files(self):
         loose = json.dumps({"version": 1, "rules": [
@@ -123,6 +123,170 @@ class MapTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(classify.classify_paths([path], rules, SUITES)[0][0][1:],
                                  ("ci-selection-and-gate", SUITES))
+
+
+PROJECT = ROOT / "CMUXMaestroPreview.xcodeproj/project.pbxproj"
+PROBE = ROOT / "scripts/run-guide-ui-validation.py"
+# Existing comments and docstrings that cite ADRs or a sibling suite; they are not file reads. Each
+# must stay on a comment or docstring line.
+COMMENT_PREFIXES = ("//", "#", '"""')
+ALLOWED_DOC_REFERENCES = {
+    ("CMUXMaestroSidebar/State/SidebarBeatsModel.swift", "docs/adr/0007"),
+    ("CMUXMaestroSidebar/State/SidebarBeatsModel.swift", "docs/adr/0020"),
+    ("scripts/cmux-maestro-orchestrator.py", "docs/adr/0007"),
+    ("scripts/cmux-maestro-orchestrator.py", "docs/adr/0020"),
+    ("CMUXMaestroPreviewTests/SidebarBeatsTests.swift", "test-beats.py"),
+}
+
+
+def pbxproj_inputs(text):
+    """Every repository path the Xcode project names: path values, input paths and $SRCROOT references."""
+    paths = {match.strip('"') for match in re.findall(r'\bpath = ("(?:[^"\\]|\\.)*"|[^;\s]+);', text)}
+    for listing in re.findall(r"\binput(?:FileList)?Paths = \((.*?)\);", text, re.DOTALL):
+        paths.update(item.strip().strip('"') for item in listing.split(",") if item.strip())
+    paths.update(re.findall(r'\$\(?SRCROOT\)?/([^"\s\\;,]+)', text))
+    cleaned = set()
+    for path in paths:
+        path = re.sub(r"^\$\(?SRCROOT\)?/", "", path).removeprefix("./")
+        if path and "$" not in path:
+            cleaned.add(path)
+    return sorted(cleaned)
+
+
+def probe_inventory(text):
+    """The guide probe's explicit hashed source inventory (string literals in its `paths` set)."""
+    block = text.split("for path in sources} | {", 1)[1].split("})", 1)[0]
+    return re.findall(r'"([^"]+)"', block)
+
+
+def narrower_inputs(paths, rules):
+    """Inputs that, or whose directory contents, the map would send to fewer than every suite."""
+    return [candidate for path in paths for candidate in (path, path.rstrip("/") + "/x")
+            if classify.classify_paths([candidate], rules, SUITES)[0][0][2] != SUITES]
+
+
+def narrower_needles(rules):
+    """(regex, label) for every literal path or directory a narrower rule names."""
+    needles = {}
+    for rule in rules:
+        if rule["suites"] == SUITES:
+            continue
+        for pattern in rule["paths"]:
+            prefix = re.split(r"[*?]", pattern, 1)[0]
+            if prefix != pattern:
+                if not prefix.endswith("/"):
+                    raise AssertionError(f"unsupported pattern for the source scan: {pattern}")
+                directory = prefix.rstrip("/")
+                needles[rf"(?<![A-Za-z0-9_.-]){re.escape(prefix)}[A-Za-z0-9_./-]*"] = prefix
+                needles[rf"[\"']{re.escape(directory)}[\"']"] = directory
+            else:
+                for literal in {pattern, pattern.rsplit("/", 1)[-1]}:
+                    needles[rf"(?<![A-Za-z0-9_.-]){re.escape(literal)}(?![A-Za-z0-9_-])"] = literal
+    return needles
+
+
+def doc_references(relative, text, rules):
+    """Mentions of narrower-mapped paths in a native or probe source, minus the comment allow-list."""
+    found = []
+    lines = text.splitlines()
+    for regex in narrower_needles(rules):
+        for match in re.finditer(regex, text):
+            token = match.group(0).rstrip(".")
+            line = lines[text.count("\n", 0, match.start())].strip()
+            if (relative, token) in ALLOWED_DOC_REFERENCES and line.startswith(COMMENT_PREFIXES):
+                continue
+            found.append((relative, token, line))
+    return found
+
+
+def native_and_probe_sources():
+    """Native Swift sources plus every script test.sh, the probe and the Xcode build phases reach."""
+    files = {path for directory in ROOT.glob("CMUXMaestro*") if directory.is_dir()
+             for path in directory.rglob("*.swift")}
+    pending = ["test.sh", "test-guide-ui-validation.sh", "run-guide-ui-validation.py",
+               "test-guide-ui-validation.py", "fetch-sdk.sh"]
+    pending += re.findall(r"scripts/([A-Za-z0-9_.-]+\.(?:py|sh|mjs|swift))", PROJECT.read_text())
+    scanned = set()
+    while pending:
+        name = pending.pop()
+        if name in scanned or not (ROOT / "scripts" / name).is_file():
+            continue
+        scanned.add(name)
+        text = (ROOT / "scripts" / name).read_text()
+        pending += re.findall(r'\$ROOT/scripts/([^"/\s]+\.(?:sh|py|mjs|swift))', text)
+        pending += re.findall(r'spec_from_file_location\([^)]*"scripts/([^"/]+\.py)"\)', text)
+        pending += re.findall(r'ROOT / "scripts" / "([^"/]+\.(?:py|sh|swift))"', text)
+        pending += re.findall(r'with_name\("([^"]+\.py)"\)', text)
+    files |= {ROOT / "scripts" / name for name in scanned}
+    return sorted(files), scanned
+
+
+class PackagedInputGuardTests(unittest.TestCase):
+    """The map may narrow only paths that no build input, bundle resource or native/probe source reads."""
+
+    def setUp(self):
+        self.rules = classify.load_map(MAP_TEXT, SUITES)
+
+    def test_every_xcode_project_input_selects_every_suite(self):
+        inputs = pbxproj_inputs(PROJECT.read_text())
+        for expected in ("skills/maestro/SKILL.md", "scripts/write-guide-reference.py", ".agents/skills/maestro-pet",
+                         "scripts/delivery-proof/adapter.mjs", "CMUXMaestroSidebar"):
+            self.assertIn(expected, inputs, "The project parser no longer sees a known input.")
+        self.assertEqual(narrower_inputs(inputs, self.rules), [])
+
+    def test_probe_hashed_inventory_selects_every_suite(self):
+        inventory = probe_inventory(PROBE.read_text())
+        for expected in ("skills/maestro/SKILL.md", "scripts/test-build-metadata.py", ".github/workflows/ci.yml"):
+            self.assertIn(expected, inventory, "The probe inventory parser no longer sees a known input.")
+        self.assertEqual(narrower_inputs(inventory, self.rules), [])
+
+    def test_native_and_probe_sources_name_no_narrower_mapped_path(self):
+        files, scanned = native_and_probe_sources()
+        for expected in ("test.sh", "run-guide-ui-validation.py", "run-integrated-test-scopes.py",
+                         "write-guide-reference.py", "verify-build-metadata.py"):
+            self.assertIn(expected, scanned, "The source scan no longer reaches a known script.")
+        self.assertGreater(len(files), 50)
+        found = [hit for path in files
+                 for hit in doc_references(path.relative_to(ROOT).as_posix(), path.read_text(), self.rules)]
+        self.assertEqual(found, [])
+        # The allow-list stays exact: every entry is still present, on a comment line.
+        for relative, token in ALLOWED_DOC_REFERENCES:
+            lines = [line.strip() for line in (ROOT / relative).read_text().splitlines() if token in line]
+            self.assertTrue(lines and all(line.startswith(COMMENT_PREFIXES) for line in lines), (relative, token))
+
+    def test_guard_mutations_fail(self):
+        project = PROJECT.read_text()
+        group = "path = CMUXMaestroSidebar;"
+        self.assertIn(group, project)
+        for name, mutated in {
+            "synchronized root group for docs": project.replace(group, "path = docs;", 1),
+            "README resource": project.replace(group, "path = README.md;", 1),
+            "quoted docs path": project.replace(group, 'path = "docs/reference";', 1),
+            "input path into docs": project.replace('"$(SRCROOT)/skills/maestro/SKILL.md",',
+                                                    '"$(SRCROOT)/docs/reference/x.md",', 1),
+            "build phase reads a leaf test": project.replace("$SRCROOT/scripts/write-guide-reference.py",
+                                                             "$SRCROOT/scripts/test-beats.py", 1),
+        }.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, project)
+                self.assertTrue(narrower_inputs(pbxproj_inputs(mutated), self.rules))
+        probe = PROBE.read_text()
+        mutated = probe.replace('"skills/maestro/SKILL.md",', '"skills/maestro/SKILL.md", "docs/reference/x.md",', 1)
+        self.assertNotEqual(mutated, probe)
+        self.assertTrue(narrower_inputs(probe_inventory(mutated), self.rules))
+        swift = "CMUXMaestroPreviewTests/Example.swift"
+        for name, text in {
+            "Swift literal": 'let path = "docs/reference/x.md"\n',
+            "Swift directory literal": 'root.appendingPathComponent("docs")\n',
+            "README literal": 'let readme = "README.md"\n',
+            "leaf test name": 'run("scripts/test-beats.py")\n',
+            "allow-listed token in code": 'let adr = "docs/adr/0007"\n',
+        }.items():
+            with self.subTest(mutation=name):
+                self.assertTrue(doc_references(swift, text, self.rules))
+        allowed = "CMUXMaestroSidebar/State/SidebarBeatsModel.swift"
+        self.assertEqual(doc_references(allowed, "/// Policy: docs/adr/0007\n", self.rules), [])
+        self.assertTrue(doc_references(allowed, 'let adr = "docs/adr/0007"\n', self.rules))
 
 
 class ClassificationTests(unittest.TestCase):
