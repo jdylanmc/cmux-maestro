@@ -1589,7 +1589,8 @@ class BuildMetadataTests(unittest.TestCase):
         self.assertIn('--results-root "$OUTPUT/metadata-watchdog"', setup)
         self.assertIn('"$ROOT/CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift"', setup)
         observer = (ROOT / "CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift").read_text()
-        self.assertEqual(observer.count('".build/tests/scoped-results/metadata-diagnostics/'), 2)
+        # One watchdog-guarded metadata test remains; the cancellation one was removed (#174, 2026-10-15).
+        self.assertEqual(observer.count('".build/tests/scoped-results/metadata-diagnostics/'), 1)
         self.assert_artifacts_follow_their_producers((ROOT / ".github/workflows/ci.yml").read_text())
 
     def test_app_bridge_markers_are_wired_as_input_plist_in_both_configurations(self):

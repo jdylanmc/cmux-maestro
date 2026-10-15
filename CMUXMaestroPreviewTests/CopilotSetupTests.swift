@@ -127,6 +127,64 @@ final class SetupDeadlineClock: @unchecked Sendable {
     }
 }
 
+/// Upper bound for a test's wait on supervised real-process work. It is a hang
+/// ceiling, not a speed oracle: passing runs finish in a few seconds.
+let supervisedWaitLimit: Duration = .seconds(30)
+
+private final class FirstResume<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value?, Never>?
+
+    init(_ continuation: CheckedContinuation<Value?, Never>) { self.continuation = continuation }
+
+    func resume(_ value: Value?) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: value)
+    }
+}
+
+/// Returns the operation's value, or nil once `limit` elapses. An operation that
+/// never completes is abandoned rather than awaited, so the caller cannot hang.
+func bounded<Value: Sendable>(
+    within limit: Duration = supervisedWaitLimit,
+    _ operation: @escaping @Sendable () async -> Value
+) async -> Value? {
+    await withCheckedContinuation { continuation in
+        let first = FirstResume(continuation)
+        let timer = Task.detached {
+            guard (try? await Task.sleep(for: limit)) != nil else { return }
+            first.resume(nil)
+        }
+        Task.detached {
+            let value = await operation()
+            timer.cancel()
+            first.resume(value)
+        }
+    }
+}
+
+/// Reads to EOF without blocking past `deadline`; nil means a writer stayed open.
+/// Polls a nonblocking read because Darwin's poll(2) does not report FIFO hangup.
+func boundedReadToEnd(_ fd: Int32, until deadline: ContinuousClock.Instant) -> Data? {
+    let flags = fcntl(fd, F_GETFL)
+    guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { return nil }
+    var data = Data()
+    var bytes = [UInt8](repeating: 0, count: 4096)
+    while true {
+        let count = read(fd, &bytes, bytes.count)
+        if count > 0 {
+            data.append(contentsOf: bytes.prefix(count))
+            continue
+        }
+        if count == 0 { return data }
+        guard errno == EAGAIN || errno == EINTR, ContinuousClock.now < deadline else { return nil }
+        Thread.sleep(forTimeInterval: 0.01)
+    }
+}
+
 struct CopilotPluginExchangeTests {
     @Test(arguments: ["1.0.89", "1.0.91", "1.1.0", "1.99.123"])
     func disableUsesIdentityPrecheckOfficialAPIAndReadback(version: String) throws {
@@ -542,10 +600,12 @@ struct CopilotSetupTests {
         #expect(await runner.calls.isEmpty)
     }
 
-    @Test(arguments: [false, true])
-    func timeoutAndCancellationStopLauncherAndChildWithoutLateWrites(cancel: Bool) async throws {
-        try await exerciseCleanup(cancel: cancel)
-    }
+    // Removed 2026-10-15 by owner decision: the zero-delay timeout/cancellation
+    // cleanup test (cancel false/true) hung for ~4.5 h in CI run 38680234264
+    // attempt 1 and its cause was not established. Lost coverage: only the
+    // zero-launch-delay variant. Timeout and cancellation cleanup of the same
+    // TERM-ignoring launcher/child, reaping and no-late-write oracles remain in
+    // queuedStartupDoesNotConsumeChildReadinessBudget(cancel:).
 
     @Test func delayedStartupDoesNotExpireBeforeDeadlineIsArmed() async throws {
         try await exerciseCleanup(cancel: false, delayStartup: true)
@@ -601,12 +661,34 @@ struct CopilotSetupTests {
                                     arguments: ["-c", "exit 7"], path: "/usr/bin:/bin")
         }
         defer { task.cancel() }
-        #expect(await clock.waitForStartup())
+        #expect(await bounded { await clock.waitForStartup() } == true)
         let waiting = ContinuousClock.now
         #expect(try await waitForGatedWriter(in: fixture.directory, deadlineClock: clock) == false)
         #expect(waiting.duration(to: .now) >= .seconds(3))
-        #expect(await task.value == .exited(7))
+        #expect(await bounded { await task.value } == .exited(7))
         #expect(clock.elapsed == .zero)
+    }
+
+    @Test func supervisedWaitHelpersReturnAtTheirBoundInsteadOfHanging() async throws {
+        let never = AsyncStream<Void>.makeStream()
+        defer { never.continuation.finish() }
+        let started = ContinuousClock.now
+        let abandoned = await bounded(within: .milliseconds(200)) {
+            for await _ in never.stream {}
+            return true
+        }
+        #expect(abandoned == nil)
+        #expect(started.duration(to: .now) < .seconds(10))
+        #expect(await bounded(within: .seconds(10)) { 7 } == 7)
+
+        var channel: [Int32] = [-1, -1]
+        try #require(pipe(&channel) == 0)
+        defer { for fd in channel where fd >= 0 { close(fd) } }
+        #expect(boundedReadToEnd(channel[0], until: .now.advanced(by: .milliseconds(200))) == nil,
+                "An open writer must fail at the bound rather than block")
+        try #require(Darwin.write(channel[1], "partial", 7) == 7)
+        close(channel[1]); channel[1] = -1
+        #expect(boundedReadToEnd(channel[0], until: .now.advanced(by: .seconds(10))) == Data("partial".utf8))
     }
 
     @Test func supervisionDefaultsKeepTheRealMonotonicClock() {
@@ -694,7 +776,9 @@ struct CopilotSetupTests {
         clocks.forEach { $0.advance(by: .seconds(0.4)) }
         var results: [CopilotProcessResult] = []
         for task in tasks {
-            let result = await task.value
+            guard let result = await bounded({ await task.value }) else {
+                Issue.record("Supervised run did not return within \(supervisedWaitLimit)"); return
+            }
             results.append(result)
             if startedConcurrently { #expect(result == .timedOut) }
         }
@@ -759,14 +843,14 @@ struct CopilotSetupTests {
         // The runner first samples after posix_spawn. Scheduling its driver is
         // not part of the child's three-second readiness budget.
         var ready = false
-        if await clock.waitForStartup() {
+        if await bounded({ await clock.waitForStartup() }) == true {
             ready = try await waitForGatedWriter(in: directory, deadlineClock: clock)
         }
         var readinessFailure = "Synthetic child must execute before the timeout/cancellation assertion"
         if !ready {
             let sampled = clock.wasSampled
             task.cancel()
-            let stopped = await task.value
+            let stopped = await bounded { await task.value }
             let files = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
             let boundedFiles = files.sorted().prefix(16).map { String($0.prefix(64)) }.joined(separator: ",")
             readinessFailure += "; result=\(stopped); clock.wasSampled=\(sampled); files=\(boundedFiles)"
@@ -791,7 +875,9 @@ struct CopilotSetupTests {
         } else {
             clock.advance(by: .seconds(runner.timeout))
         }
-        let result = await task.value
+        guard let result = await bounded({ await task.value }) else {
+            Issue.record("Supervised run did not return within \(supervisedWaitLimit)"); return
+        }
         #expect(result == (cancel ? .cancelled : .timedOut))
         #expect(clock.elapsed == (cancel ? .zero : .seconds(runner.timeout)))
         #expect(unrelated.isRunning)
@@ -944,9 +1030,9 @@ struct CopilotSetupTests {
     }
 
     private func mutationCompletion(_ completion: FileHandle) throws -> Data {
-        let flags = fcntl(completion.fileDescriptor, F_GETFL)
-        try #require(flags >= 0 && fcntl(completion.fileDescriptor, F_SETFL, flags & ~O_NONBLOCK) == 0)
-        return try completion.readToEnd() ?? Data()
+        // EOF proves every writer closed; a surviving writer fails at the bound.
+        try #require(boundedReadToEnd(completion.fileDescriptor,
+                                      until: .now.advanced(by: supervisedWaitLimit)))
     }
 
     @Test func isolatedRunnerPreservesExitStatusAndSpawnFailure() async {

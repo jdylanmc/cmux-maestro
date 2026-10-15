@@ -43,6 +43,11 @@ Notable changes are recorded using Keep a Changelog categories.
 - CI ends with a `ci-gate` check, the merge signal: it passes only when every required suite
   succeeds, and fails on any failure, cancellation, skip or missing result (#197). Branch
   protection is off, so it is advisory until a maintainer requires it.
+- Two intermittently hanging process-supervision tests were removed (owner decision
+  2026-10-15, #174): metadata cancellation of a running TERM-ignoring server, and the
+  zero-delay launcher/child timeout and cancellation cleanup. The delayed-launch variant still
+  covers launcher/child cleanup. The remaining real-process supervision tests now give up
+  after 30 seconds instead of waiting indefinitely.
 - CI runs once per pull request update and on pushes to `main`; feature-branch pushes no longer
   run a duplicate suite. Open a draft PR to validate a branch (#192).
 - The orchestration test suite runs in about half the time locally (#195). Its fixture controller
