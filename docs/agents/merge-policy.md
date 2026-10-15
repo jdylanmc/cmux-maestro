@@ -77,30 +77,46 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 - On a pull request the gate checks out the candidate, so it runs the candidate's own `scripts/ci-gate.py`, `scripts/ci-required-suites.json` and `.github/workflows/ci.yml`. A candidate can therefore change what its own gate requires. Reviewers treat any change to those files as changes to merge policy, and check them against `scripts/test-ci-gate.py` and the guards in `scripts/test-build-metadata.py`.
 - Branch protection on `main` is currently off (`gh api repos/jdylanmc/cmux-maestro/branches/main/protection` returns 404, and the repository has no rulesets), so the gate is advisory: GitHub does not block a merge on it. Requiring it is a separate human decision. Re-read protections before relying on them; a displayed check is not an enforced rule.
 
-Its current commands, in order:
+**Early failures (#196):**
+
+- Validation runs as two independent macOS jobs with no `needs` between them, so a failure in one never skips the other's suites. Each is its own check and reports as soon as it finishes; `ci-gate` still requires both, plus `guide-ui-consumer-probe`.
+- `validate-native` starts the integrated Swift tests (`./scripts/test.sh`) immediately after checkout. They fetch the SDK and compile in their own derived data, and need nothing else; previously they waited about 12 minutes behind the orchestrator and preview-transaction suites. It owns both artifact uploads, so `./scripts/test.sh` and `./scripts/test-copilot-setup.sh` run before the final evidence upload in the same job.
+- `validate-contracts` runs the script and contract suites fastest first, ending with the long preview-transaction and orchestrator suites.
+- Within a job a failing step still skips its later steps, as before; the always-run uploads keep failure evidence. The integrated harness's selector restrictions, isolated regression, guide acceptance and full-complement accounting are unchanged.
+- Trade-off: the split adds a third macOS job, which can queue separately when runners are scarce. #191 measures concurrency and owns runner placement.
+
+Its current commands, in order, per job. Each runs exactly once; `scripts/test-build-metadata.py` checks these lists against the workflow.
+
+`validate-native` (native build and tests):
 
 ```sh
-node --test scripts/test-skill-overrides.mjs
-node scripts/check-skill-overrides.mjs
-python3 scripts/test-joe-role-appearance.py
-python3 scripts/test-cmux-maestro-orchestrator.py
-python3 scripts/test-pet-kit.py
-python3 scripts/test-beats.py
-python3 scripts/test-delivery-proof.py
-node --test scripts/test-delivery-proof.mjs
-python3 scripts/test-build-metadata.py
-python3 scripts/test-local-preview.py
-./scripts/test-copilot-shell-reducer.sh
-./scripts/test-fetch-sdk-concurrency.sh
-./scripts/build-unsigned.sh
 ./scripts/test.sh
+./scripts/build-unsigned.sh
 ./scripts/test-copilot-setup.sh
 ./scripts/test-copilot-hook.sh
 ./scripts/test-copilot-sandbox.sh
 ```
 
+`validate-contracts` (script and contract suites):
+
+```sh
+node --test scripts/test-skill-overrides.mjs
+node scripts/check-skill-overrides.mjs
+python3 scripts/test-joe-role-appearance.py
+python3 scripts/test-pet-kit.py
+python3 scripts/test-beats.py
+python3 scripts/test-delivery-proof.py
+node --test scripts/test-delivery-proof.mjs
+python3 scripts/test-build-metadata.py
+./scripts/test-copilot-shell-reducer.sh
+./scripts/test-fetch-sdk-concurrency.sh
+python3 scripts/test-local-preview.py
+python3 scripts/test-cmux-maestro-orchestrator.py
+```
+
 CI also requires the synthetic sidebar layout render artifact
-`sidebar-layout-offscreen` from `.build/layout-validation/offscreen/*.png`.
+`sidebar-layout-offscreen` from `.build/layout-validation/offscreen/*.png`,
+uploaded by `validate-native`.
 Visual delivery review uses applicable renders and acceptance evidence, not
 merely a successful artifact upload.
 

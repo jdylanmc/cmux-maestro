@@ -61,6 +61,62 @@ def workflow_jobs(workflow):
     return jobs
 
 
+def job_steps(block):
+    """Split a job block into its step texts (each starting at `      - `)."""
+    return re.findall(r"^      - .*?(?=^      - |\Z)", block.rstrip() + "\n", re.MULTILINE | re.DOTALL)
+
+
+def job_commands(block):
+    return re.findall(r"^        run: (.+)$", block, re.MULTILINE)
+
+
+# Early failures (#196): every validation command runs exactly once, in one of two independent jobs.
+# The native job starts the integrated Swift tests right after checkout; the contract job runs its
+# fastest suites first. Update docs/agents/merge-policy.md with any change here.
+VALIDATION_JOBS = {
+    "validate-native": [
+        "./scripts/test.sh",
+        "./scripts/build-unsigned.sh",
+        "./scripts/test-copilot-setup.sh",
+        "./scripts/test-copilot-hook.sh",
+        "./scripts/test-copilot-sandbox.sh",
+    ],
+    "validate-contracts": [
+        "node --test scripts/test-skill-overrides.mjs",
+        "node scripts/check-skill-overrides.mjs",
+        "python3 scripts/test-joe-role-appearance.py",
+        "python3 scripts/test-pet-kit.py",
+        "python3 scripts/test-beats.py",
+        "python3 scripts/test-delivery-proof.py",
+        "node --test scripts/test-delivery-proof.mjs",
+        "python3 scripts/test-build-metadata.py",
+        "./scripts/test-copilot-shell-reducer.sh",
+        "./scripts/test-fetch-sdk-concurrency.sh",
+        "python3 scripts/test-local-preview.py",
+        "python3 scripts/test-cmux-maestro-orchestrator.py",
+    ],
+}
+SEVENTEEN_VALIDATION_COMMANDS = {
+    "node --test scripts/test-skill-overrides.mjs",
+    "node scripts/check-skill-overrides.mjs",
+    "python3 scripts/test-joe-role-appearance.py",
+    "python3 scripts/test-cmux-maestro-orchestrator.py",
+    "python3 scripts/test-pet-kit.py",
+    "python3 scripts/test-beats.py",
+    "python3 scripts/test-delivery-proof.py",
+    "node --test scripts/test-delivery-proof.mjs",
+    "python3 scripts/test-build-metadata.py",
+    "python3 scripts/test-local-preview.py",
+    "./scripts/test-copilot-shell-reducer.sh",
+    "./scripts/test-fetch-sdk-concurrency.sh",
+    "./scripts/build-unsigned.sh",
+    "./scripts/test.sh",
+    "./scripts/test-copilot-setup.sh",
+    "./scripts/test-copilot-hook.sh",
+    "./scripts/test-copilot-sandbox.sh",
+}
+
+
 class IntegratedTestScopeTests(unittest.TestCase):
     def setUp(self):
         self.directory = ROOT / ".build/metadata-tests" / str(uuid.uuid4())
@@ -992,32 +1048,47 @@ class BuildMetadataTests(unittest.TestCase):
 
     def test_ci_preserves_all_seventeen_validation_commands_without_new_conditions(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
-        self.assertEqual(re.findall(r"^        run: (.+)$", workflow, re.MULTILINE), [
-            "node --test scripts/test-skill-overrides.mjs",
-            "node scripts/check-skill-overrides.mjs",
-            "python3 scripts/test-joe-role-appearance.py",
-            "python3 scripts/test-cmux-maestro-orchestrator.py",
-            "python3 scripts/test-pet-kit.py",
-            "python3 scripts/test-beats.py",
-            "python3 scripts/test-delivery-proof.py",
-            "node --test scripts/test-delivery-proof.mjs",
-            "python3 scripts/test-build-metadata.py",
-            "python3 scripts/test-local-preview.py",
-            "./scripts/test-copilot-shell-reducer.sh",
-            "./scripts/test-fetch-sdk-concurrency.sh",
-            "./scripts/build-unsigned.sh",
-            "./scripts/test.sh",
-            "./scripts/test-copilot-setup.sh",
-            "./scripts/test-copilot-hook.sh",
-            "./scripts/test-copilot-sandbox.sh",
-        ])
-        steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
-        run_steps = [step for step in steps if "\n        run:" in step]
-        self.assertEqual(len(run_steps), 17)
-        for step in run_steps:
-            self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
+        jobs = workflow_jobs(workflow)
+        for job, expected in VALIDATION_JOBS.items():
+            with self.subTest(job=job):
+                self.assertEqual(job_commands(jobs[job]), expected)
+        # Complete, non-duplicated coverage: the split jobs together run each of the 17 exactly once.
+        split = [command for job in VALIDATION_JOBS for command in job_commands(jobs[job])]
+        self.assertEqual(len(split), 17)
+        self.assertEqual(set(split), SEVENTEEN_VALIDATION_COMMANDS)
+        for job, block in jobs.items():
+            if job not in VALIDATION_JOBS:
+                with self.subTest(other_job=job):
+                    self.assertFalse(set(job_commands(block)) & SEVENTEEN_VALIDATION_COMMANDS,
+                                     "Validation commands belong to the guarded validation jobs only.")
+        for job in VALIDATION_JOBS:
+            run_steps = [step for step in job_steps(jobs[job]) if "\n        run:" in step]
+            self.assertEqual(len(run_steps), len(VALIDATION_JOBS[job]))
+            for step in run_steps:
+                self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
         self.assertNotIn("continue-on-error", workflow)
+
+    def test_ci_native_tests_wait_only_for_their_own_prerequisites(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        jobs = workflow_jobs(workflow)
+        native = jobs["validate-native"]
+        # Independent of the contract suites: no needs, so a failure in either job never skips the other.
+        for job in VALIDATION_JOBS:
+            with self.subTest(job=job):
+                self.assertNotRegex(jobs[job], r"(?m)^    needs:")
+                self.assertRegex(jobs[job], r"(?m)^    runs-on: macos-latest$",
+                                 "Runner placement is #191's decision; native work stays on macOS.")
+        steps = job_steps(native)
+        self.assertEqual(steps[0], "      - uses: actions/checkout@v4\n")
+        self.assertEqual(steps[1], "      - name: Run integrated Swift tests\n        run: ./scripts/test.sh\n",
+                         "Integrated Swift tests start right after checkout (#196).")
+        # test.sh fetches the SDK and compiles in its own derived data; it never reads the unsigned build.
+        harness = (ROOT / "scripts/test.sh").read_text() + (ROOT / "scripts/run-integrated-test-scopes.py").read_text()
+        self.assertIn('"$ROOT/scripts/fetch-sdk.sh"', (ROOT / "scripts/test.sh").read_text())
+        self.assertIn('DERIVED_DATA="$ROOT/.build/tests"', (ROOT / "scripts/test.sh").read_text())
+        for prerequisite in ("build-unsigned", ".build/unsigned"):
+            with self.subTest(prerequisite=prerequisite):
+                self.assertNotIn(prerequisite, harness)
 
     def test_ci_runs_one_suite_per_pr_update_and_full_validation_on_main(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -1027,7 +1098,8 @@ class BuildMetadataTests(unittest.TestCase):
                          "The CI event matrix is merge policy: update docs/agents/merge-policy.md "
                          "('When it runs') together with any trigger change.")
         jobs = workflow_jobs(workflow)
-        for job in ("validate", "guide-ui-consumer-probe"):
+        self.assertEqual(sorted(jobs), sorted([*VALIDATION_JOBS, "guide-ui-consumer-probe", "ci-gate"]))
+        for job in (*VALIDATION_JOBS, "guide-ui-consumer-probe"):
             with self.subTest(job=job):
                 self.assertNotRegex(jobs[job], r"(?m)^    if:", "Jobs must not be event-filtered; triggers own the matrix.")
         # The gate's only job condition is always(), so it exists for every validated event.
@@ -1040,13 +1112,14 @@ class BuildMetadataTests(unittest.TestCase):
                 self.assertIn(phrase, section)
 
     def test_ci_documentation_tracks_the_guarded_validation_commands(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0]
-        commands = re.findall(r"^        run: (.+)$", workflow, re.MULTILINE)
+        jobs = workflow_jobs((ROOT / ".github/workflows/ci.yml").read_text())
         policy = (ROOT / "docs/agents/merge-policy.md").read_text()
-        section = policy.split("## Actual CI and formatting gates", 1)[1]
-        documented = section.split("```sh\n", 1)[1].split("\n```", 1)[0].splitlines()
-        self.assertEqual(documented, commands)
+        section = policy.split("## Actual CI and formatting gates", 1)[1].split("Its current commands", 1)[1]
+        documented = re.findall(r"^`([a-z-]+)`[^\n]*:\n\n```sh\n(.*?)\n```", section, re.MULTILINE | re.DOTALL)
+        self.assertEqual([job for job, _ in documented], list(VALIDATION_JOBS))
+        for job, commands in documented:
+            with self.subTest(job=job):
+                self.assertEqual(commands.splitlines(), job_commands(jobs[job]))
 
     GATE_BLOCK = (
         "    needs: [{needs}]\n"
@@ -1148,8 +1221,7 @@ class BuildMetadataTests(unittest.TestCase):
 
     def test_ci_always_uploads_json_evidence_and_retains_required_png_artifact(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
-        steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
+        steps = job_steps(workflow_jobs(workflow)["validate-native"])
         for title, name, path in (
             ("Upload integrated test scope evidence", "integrated-test-scope-evidence",
              "|\n            .build/tests/scoped-results/**/*.json\n"
@@ -1163,6 +1235,7 @@ class BuildMetadataTests(unittest.TestCase):
              ".build/layout-validation/offscreen/*.png"),
         ):
             with self.subTest(artifact=name):
+                self.assertEqual(workflow.count(f"          name: {name}\n"), 1, "Each artifact has one producer job.")
                 actual = [step for step in steps if f"          name: {name}\n" in step]
                 self.assertEqual(actual, [
                     f"      - name: {title}\n"
@@ -1177,18 +1250,22 @@ class BuildMetadataTests(unittest.TestCase):
                 ])
 
     def test_ci_collects_final_metadata_diagnostics_after_both_producers(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        workflow = workflow.split("\n  guide-ui-consumer-probe:", 1)[0].rstrip() + "\n"
-        steps = re.findall(r"^      - .*?(?=^      - |\Z)", workflow, re.MULTILINE | re.DOTALL)
-        uploads = [(index, step) for index, step in enumerate(steps)
+        jobs = workflow_jobs((ROOT / ".github/workflows/ci.yml").read_text())
+        uploads = [(job, index, step) for job, block in jobs.items() for index, step in enumerate(job_steps(block))
                    if "          name: integrated-test-scope-evidence\n" in step]
         self.assertEqual(len(uploads), 1, "One final upload must collect both diagnostic producers.")
-        upload_index, upload = uploads[0]
+        upload_job, upload_index, upload = uploads[0]
+        # Artifacts are per runner: both producers must run earlier in the same job as the upload.
+        steps = job_steps(jobs[upload_job])
         for command in ("./scripts/test.sh", "./scripts/test-copilot-setup.sh"):
             with self.subTest(producer=command):
                 producers = [index for index, step in enumerate(steps) if f"        run: {command}\n" in step]
-                self.assertEqual(len(producers), 1)
+                self.assertEqual(len(producers), 1, "The producer must run in the upload's job.")
                 self.assertLess(producers[0], upload_index, "An earlier upload cannot retain later partial diagnostics.")
+        layouts = [index for index, step in enumerate(steps) if "          name: sidebar-layout-offscreen\n" in step]
+        renders = [index for index, step in enumerate(steps) if "        run: ./scripts/test.sh\n" in step]
+        self.assertEqual(len(layouts), 1, "Layout renders upload from test.sh's job.")
+        self.assertLess(renders[0], layouts[0])
         setup = (ROOT / "scripts/test-copilot-setup.sh").read_text()
         self.assertIn('OUTPUT="$ROOT/.build/setup-tests"', setup)
         self.assertIn('--results-root "$OUTPUT/metadata-watchdog"', setup)

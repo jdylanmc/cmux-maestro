@@ -3,8 +3,12 @@
   "gate_job": "ci-gate",
   "suites": [
     {
-      "job": "validate",
-      "purpose": "Validation commands, integrated Swift tests and their required artifacts"
+      "job": "validate-native",
+      "purpose": "Integrated Swift tests, unsigned build, setup/hook/sandbox checks and their required artifacts"
+    },
+    {
+      "job": "validate-contracts",
+      "purpose": "Script and contract suites, including orchestrator and preview-transaction tests"
     },
     {
       "job": "guide-ui-consumer-probe",
