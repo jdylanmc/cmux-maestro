@@ -115,8 +115,8 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 
 **Setup reuse (#193):**
 
-- No setup state crosses runs: no `actions/cache`, no restored DerivedData, toolchains or artifacts. Each job builds from a clean checkout, and `.build/tests` and `.build/unsigned` stay separate namespaces. Measured, the realistic candidate (test-build DerivedData) would save an estimated 10–65 seconds net on a 16–18 minute job; the inventory, numbers and revisit conditions are in [CI setup reuse](../reference/ci-setup-reuse.md).
-- `scripts/test-build-metadata.py` allows only `actions/checkout` and `actions/upload-artifact`. Adding reuse is a merge-policy change that needs a live cold/warm measurement and must never stand in for test execution, source attribution or fresh evidence.
+- No setup state crosses runs: no `actions/cache`, no restored DerivedData, toolchains or artifacts. Each job builds from a clean checkout, and `.build/tests` and `.build/unsigned` stay separate namespaces. Measured, the realistic candidate (test-build DerivedData) would save an estimated 10–95 seconds net on a 16–18 minute job, below the 2-minute revisit threshold; the inventory, numbers and revisit conditions are in [CI setup reuse](../reference/ci-setup-reuse.md).
+- `scripts/test-build-metadata.py` allows only `actions/checkout` and `actions/upload-artifact`, and forbids cache, artifact-download and `gh run download`/`gh cache` steps. Any new action, even one with no cache such as `actions/setup-python`, needs a setup-reuse review and a guard update. Adding reuse is a merge-policy change that needs a live cold/warm measurement and must never stand in for test execution, source attribution or fresh evidence.
 
 Its current commands, in order, per job. Each runs at most once; a not-applicable suite runs none of its commands; `scripts/test-build-metadata.py` checks these lists against the workflow.
 
