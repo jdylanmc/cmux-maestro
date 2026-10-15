@@ -66,11 +66,13 @@ cleanup stays explicit, never a success. Diagnostics
 preserve observed sampler exit/timeout and reap state separately from optional
 `sampleReadError`. Missing sample cannot erase that process outcome.
 Host still fails with exit 124. Diagnostics
-under `.build/tests/scoped-results/metadata-diagnostics/` go into the
-existing scope-evidence artifact, including partial samples. Its final upload
-runs after both integrated and standalone setup tests. It also retains the
-complete `.build/setup-tests/metadata-watchdog/` control evidence directory.
-Required artifact names and missing-file failure behavior stay unchanged.
+under `.build/tests/scoped-results/metadata-diagnostics/` are kept, including
+partial samples. CI uploads each producer's copy from its own job, after it
+runs: integrated tests' copy in the `integrated-test-scope-evidence` artifact
+(`validate-native`), and the standalone setup tests' copy, with the complete
+`.build/setup-tests/metadata-watchdog/` control evidence directory, in the
+`copilot-setup-evidence` artifact (`validate-contracts`). Every upload keeps
+missing-file failure behavior.
 This exposes a
 blocked boundary. It does not establish or repair the cause of a prior CI hang.
 Production timeouts, cleanup and all original assertions stay unchanged.
