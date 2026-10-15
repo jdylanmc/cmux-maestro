@@ -33,7 +33,7 @@ Notable changes are recorded using Keep a Changelog categories.
   protection is off, so it is advisory until a maintainer requires it.
 - CI runs once per pull request update and on pushes to `main`; feature-branch pushes no longer
   run a duplicate suite. Open a draft PR to validate a branch (#192).
-- The orchestration test suite runs in about half the time (#195). Its fixture controller
+- The orchestration test suite runs in about half the time locally (#195). Its fixture controller
   processes no longer load the whole suite, and four resource-accounting tests fill a small
   configured workspace limit; one test still fills the default 32. Profile and next steps:
   `docs/reference/test-performance.md`.

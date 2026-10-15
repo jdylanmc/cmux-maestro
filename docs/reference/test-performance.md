@@ -41,9 +41,14 @@ CI `validate` step, run 38662873916:
 ### Profile
 
 Baseline local run (load 15–21, 909 s, 144 tests). Five tests that fill or
-hold the 32-slot live-resource budget took 328 s: three launched up to 30 real
+hold the 32-slot live-resource budget took 328 s: three launched 30–31 real
 fixture workers one at a time and waited for each, two held 31 pending
 launches.
+
+After #195, the default 32-slot fill is still exercised by pending and completing
+workers (`test_pending_launches_hold_all_live_resource_slots`), but no test keeps 31
+idle workers writing the shared state file at once. Lock waits sized for that load
+(`with_store`, `MAX_LIVE_WORKERS / 8`) are no longer stressed by idle workers.
 
 Per-process costs, measured inside one harness:
 
