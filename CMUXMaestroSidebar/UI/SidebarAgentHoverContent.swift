@@ -95,16 +95,14 @@ enum SidebarAgentHoverContent {
     }
 
     private static func isFresh(_ session: SidebarCopilotSession, tree: SidebarCopilotTree, now: Date) -> Bool {
-        [.ready, .partial].contains(tree.availability)
-            && tree.generatedAt.map { SidebarCopilotTree.isFresh($0, now: now) } == true
-            && SidebarCopilotTree.isFresh(session.observedAt, now: now)
+        tree.isCurrent(session, now: now)
     }
 
     private static func sessionCard(
         _ session: SidebarCopilotSession, hierarchy: HierarchySnapshot, tree: SidebarCopilotTree, now: Date,
         retained: Bool = false
     ) -> SidebarHoverCardData {
-        let title = SidebarPresentation.surfaceTitle(for: session, in: hierarchy)
+        let title = SidebarPresentation.agentTitle(for: session, in: hierarchy)
         guard isFresh(session, tree: tree, now: now) else {
             return .init(id: "session-\(session.id)", category: "Agent preview", title: title,
                          notice: "Session observation is no longer current.")

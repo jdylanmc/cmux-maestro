@@ -111,7 +111,7 @@ struct SidebarHostedWiringTests {
         }
     }
 
-    @Test func internalTaskDisclosureStoresExpansionInPreferencesNotViewState() async throws {
+    @Test func internalTasksHaveNoGroupDisclosureAndStayVisibleAcrossRemount() async throws {
         let hosted = try await SidebarHostedSidebar(mode: .hierarchy)
         defer { hosted.close() }
         func taskNames() -> [NSTextField] {
@@ -119,15 +119,10 @@ struct SidebarHostedWiringTests {
                 .filter { $0.accessibilityIdentifier() == "internal-task-name" }
         }
         try #require(taskNames().count == 1)
-        let layout = hosted.preferences.layout
-        let disclosure = try #require(hosted.descendants().compactMap { $0 as? SidebarTitleNativeButton }
-            .first { $0.accessibilityLabel()?.hasPrefix("Internal tasks.") == true })
-        disclosure.activate()
-        await sidebarEventually { taskNames().isEmpty }
-        #expect(taskNames().isEmpty)
-        #expect(hosted.preferences.layout != layout, "Disclosure state is stored in layout preferences")
+        #expect(!hosted.descendants().compactMap { $0 as? SidebarTitleNativeButton }
+            .contains { $0.accessibilityLabel()?.hasPrefix("Internal tasks.") == true })
         hosted.remount()
-        #expect(taskNames().isEmpty, "A fresh view restores the stored disclosure")
+        #expect(taskNames().count == 1, "The owning row's disclosure is the only collapse control")
         #expect(hosted.navigations.isEmpty)
     }
 }

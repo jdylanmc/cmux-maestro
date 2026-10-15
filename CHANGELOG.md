@@ -17,19 +17,46 @@ Notable changes are recorded using Keep a Changelog categories.
   Order in Workspace** in the menu, and **Reset sidebar order** in settings, return to
   CMUX's order. VoiceOver announces each move or why it was refused. Drag is being
   piloted inside CMUX. The disabled "Move or reorder…" item is gone.
+- A Beat icon at the far right of an agent row, after its actions button and 8 pt in from the
+  row's trailing edge, whose exact Copilot
+  session has an enabled Beat. It glows with a slow pulse while the session is observed
+  running and stays dim when the session is not running or its liveness is stale or unknown,
+  since Beats fire only while the session runs. Reduce Motion keeps a static glow. Click it,
+  or press it with VoiceOver ("Beats for this agent"), to open Beats scoped to that session;
+  **New Beat** targets only it and **Show all** returns to every Beat. It never focuses the
+  row or navigates CMUX. Its tooltip lists the enabled Beats by cron.
 
 ### Changed
 
+- An expanded agent row and everything rendered under it (sub-agents, internal tasks, nested
+  workers and sessions) now hover as one block: one continuous highlight behind the whole
+  group, whichever row the pointer is over, with the agent's actions (…) shown. The focused
+  agent's blue bar runs down the full group; collapsed, it marks just the row as before.
+  Nested blocks join the outermost one, so there is never a second highlight or bar.
+- Agent rows for one Copilot session show that session's name instead of the terminal title,
+  which Copilot sets to "name - status". The name comes from the `name:` field of the session's
+  `workspace.yaml` (ADR 0022), read only for the exact bound session, bounded and strictly
+  parsed. Hover cards, details, the Active window footer, Taskboard cards and Beat targets use
+  the same name. If the name is unavailable, the CMUX title shows unchanged. Managed rows keep
+  their launch label; plain terminals and browsers keep the CMUX title. An automatic name can
+  repeat the session's first prompt, as the terminal title already does; rename the session to
+  choose its title.
+- Internal tasks no longer have their own "N internal tasks" header and chevron. They show
+  whenever their owning row is expanded; that row's chevron is the only collapse control.
 - Make Beats store writes atomic and synced. The orchestrator now fsyncs the temporary file
   before the rename and the folder after it, and the sidebar syncs the folder after its rename,
   so a crash or OS failure can't tear the store. A failed folder sync, after the change has
   landed, is a warning rather than an error, so a retry can't repeat the change. The bytes
   written are unchanged.
 
-- Turn a Beat on and off with **Enable** and **Disable**, matching its On/Off label.
-  `beats enable` and `beats disable` are the documented commands; `beats pause` and
-  `beats resume` still work as aliases. "Resume" now means only resuming a Copilot session.
-  Beats code comments cite ADR 0007, and ADR 0020 for the store location.
+- Make the Beats panel terse, and turn a Beat on or off with **Enable** and **Disable**. The
+  panel has a **+** (New Beat) in its header and one-line rows: an On/Off switch, a preset
+  name (Hourly, Every 15 min) or the cron, and the prompt; the row's context menu offers
+  **Enable** or **Disable**. Next-run estimates (with the date beyond a week), "not running"
+  and Copilot timing move to tooltips and VoiceOver values. `beats enable` and
+  `beats disable` are the documented commands; `beats pause` and `beats resume` still work
+  as aliases. "Resume" now means only resuming a Copilot session. Beats code comments cite
+  ADR 0007, and ADR 0020 for the store location.
 - Record the Beats store as the sidebar's only write grant outside its own container
   (ADR 0020, amending ADR 0001): the accepted risk that a Beat prompt becomes agent input,
   that same-user processes may edit the store, and that Beat prompts are authored

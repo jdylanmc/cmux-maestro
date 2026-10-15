@@ -79,6 +79,8 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     var petId: String? = nil
     var branch: String? = nil
     var worktree = false
+    /// Copilot's own session name (ADR 0022); nil when unavailable.
+    var sessionName: String? = nil
     let id: UUID
     let workspaceID: UUID
     let surfaceID: UUID
@@ -162,6 +164,7 @@ struct SidebarCopilotTree: Equatable {
             omittedActiveChildrenCount: session.omittedActiveChildrenCount
         )
         result.statusOnly = true
+        result.sessionName = session.sessionName
         result.lastKnownState = retainingStatus ? session.state : nil
         result.lastKnownLiveness = retainingStatus ? session.liveness : nil
         result.statusOwnerID = session.statusOwnerID
@@ -386,6 +389,7 @@ struct SidebarCopilotTree: Equatable {
                 iconId: observation.appearance?.iconId, iconColor: observation.appearance?.iconColor,
                 petId: observation.appearance?.petId,
                 branch: observation.location?.branch, worktree: observation.location?.worktree ?? false,
+                sessionName: displayMetadata(observation.title.knownValue, limit: 200),
                 id: sessionID,
                 workspaceID: workspaceID,
                 surfaceID: surfaceID,
@@ -420,6 +424,14 @@ struct SidebarCopilotTree: Equatable {
     static func isFresh(_ date: Date, now: Date) -> Bool {
         let age = now.timeIntervalSince(date)
         return age >= -1 && age <= maximumAge
+    }
+
+    /// Whether this tree's observation of a session is current: a usable, fresh tree and a fresh
+    /// observation. Stale, hidden or disconnected trees are not current.
+    func isCurrent(_ session: SidebarCopilotSession, now: Date) -> Bool {
+        [.ready, .partial].contains(availability)
+            && generatedAt.map { Self.isFresh($0, now: now) } == true
+            && Self.isFresh(session.observedAt, now: now)
     }
 
     private static func trustworthyState(
@@ -537,13 +549,7 @@ struct SidebarCopilotTree: Equatable {
     }
 
     private static func displayMetadata(_ value: String?, limit: Int = 100) -> String? {
-        guard let value else { return nil }
-        let cleaned = value.unicodeScalars.filter {
-            !CharacterSet.controlCharacters.contains($0)
-                && !CharacterSet(charactersIn: "\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}").contains($0)
-        }
-        let text = String(String.UnicodeScalarView(cleaned)).trimmingCharacters(in: .whitespaces)
-        return text.isEmpty ? nil : String(text.prefix(limit))
+        value.flatMap { CopilotDisplayText.sanitize($0, limit: limit) }
     }
 
     private static func signals(

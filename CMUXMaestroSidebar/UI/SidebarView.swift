@@ -220,21 +220,28 @@ private struct SidebarFocusBorder: ViewModifier {
     let surfaceID: UUID
     var enabled = true
     @Environment(\.sidebarFocusedSurface) private var target
-    @Environment(\.sidebarFocusBarNamespace) private var barNamespace
-    private var focused: Bool { enabled && target == .surface(workspaceID: workspaceID, surfaceID: surfaceID) }
+    @Environment(\.sidebarRowGroup) private var group
+    private var surface: SidebarSeenTarget { .surface(workspaceID: workspaceID, surfaceID: surfaceID) }
+    private var focused: Bool { enabled && target == surface }
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .leading) {
-                if focused {
-                    bar
+                // A row group whose head owns this surface draws the one group-height bar instead.
+                if focused && group?.focus != surface {
+                    SidebarFocusBar()
                 }
             }
             .accessibilityAddTraits(focused ? .isSelected : [])
     }
+}
+
+/// The leading accent bar marking the focused surface's row or row group.
+struct SidebarFocusBar: View {
+    @Environment(\.sidebarFocusBarNamespace) private var barNamespace
 
     // One shared identity lets the bar glide to the newly focused row.
-    @ViewBuilder private var bar: some View {
+    var body: some View {
         let capsule = Capsule()
             .fill(Color.accentColor)
             .frame(width: 2)
@@ -494,7 +501,6 @@ struct SidebarView: View {
     // Mutation freshness is independent of the display-only presentation clock.
     private let actionNow: () -> Date
     @State private var showingSettings = false
-    @State private var showingBeats = false
     @State private var unavailableHeaderAction: SidebarHeaderAction?
     @State private var inspector: SidebarInspection?
     @State private var showingInspector = false
@@ -589,7 +595,7 @@ struct SidebarView: View {
         }, set: { if let selection = $0 { inspect(selection) } })
     }
 
-    /// Live agent sessions the human may target, titled by their terminal tab.
+    /// Live agent sessions the human may target, titled by their session name or terminal tab.
     private var beatTargets: [SidebarBeatTarget] {
         var titles: [UUID: String] = [:]
         for workspace in model.hierarchy.workspaces {
@@ -597,9 +603,8 @@ struct SidebarView: View {
                 for surface in surfaces { titles[surface.id] = surface.title }
             }
         }
-        return model.copilot.tree.sessions
-            .filter { $0.liveness == .alive }
-            .map { SidebarBeatTarget(id: $0.id, title: titles[$0.surfaceID] ?? "Copilot \($0.shortID)", live: true) }
+        return SidebarBeatIndicators.runningSessions(in: model.copilot.tree)
+            .map { SidebarBeatTarget(id: $0.id, title: $0.sessionName ?? titles[$0.surfaceID] ?? "Copilot \($0.shortID)", live: true) }
     }
 
     private func openDirectoryAsWorkspace() {
@@ -620,7 +625,7 @@ struct SidebarView: View {
     }
 
     private var presentedHeaderAction: SidebarHeaderAction? {
-        if showingBeats { return .beats }
+        if beats.isPresented { return .beats }
         if showingSettings { return .settings }
         return unavailableHeaderAction
     }
@@ -628,8 +633,8 @@ struct SidebarView: View {
     @ViewBuilder private var headerPopover: some View {
         if showingSettings {
             settingsPanel
-        } else if showingBeats {
-            SidebarBeatsPanel(controller: beats, targets: beatTargets) { showingBeats = false }
+        } else if beats.isPresented {
+            SidebarBeatsPanel(controller: beats, targets: beatTargets, close: dismissHeaderPopover)
         } else if let action = unavailableHeaderAction, let reason = action.unavailable {
             VStack(alignment: .leading, spacing: 10) {
                 Text(action.title).font(.headline)
@@ -645,7 +650,10 @@ struct SidebarView: View {
     private func activateHeader(_ action: SidebarHeaderAction) {
         switch action {
         case .directory: openDirectoryAsWorkspace()
-        case .beats: showingBeats = true
+        case .beats:
+            showingSettings = false
+            unavailableHeaderAction = nil
+            beats.present(scope: nil)
         case .taskboard:
             preferences.selectedMode = preferences.selectedMode == .taskboard ? .hierarchy : .taskboard
         case .settings:
@@ -655,7 +663,7 @@ struct SidebarView: View {
 
     private func dismissHeaderPopover() {
         showingSettings = false
-        showingBeats = false
+        beats.dismiss()
         unavailableHeaderAction = nil
     }
 
@@ -798,6 +806,12 @@ struct SidebarView: View {
         .environment(\.sidebarPrepareSeen, prepareSeen)
         .environment(\.sidebarFocusInspection, focusInspection)
         .environment(\.sidebarDismissManaged, dismissManaged)
+        .environment(\.sidebarBeats, beats)
+        .onChange(of: model.copilot.tree, initial: true) { _, tree in beats.updateLiveness(tree) }
+        // A row's Beat icon opens Beats through the controller; it replaces any other header popover.
+        .onChange(of: beats.isPresented) { _, presented in
+            if presented { showingSettings = false; unavailableHeaderAction = nil }
+        }
         .environment(\.sidebarLocalFocus, localFocus)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
@@ -1307,6 +1321,11 @@ struct ManagedHierarchyContent: View {
     var body: some View {
         let evidenceDate = now()
         let displaced = SidebarPresentation.displacedManagedNodeIDs(nodes, observations: copilotTree, now: evidenceDate)
+        // Session work each managed row owns, computed once per render.
+        let ownership = SidebarPresentation.sessionPlacements(
+            copilotTree.sessions, managed: nodes, observations: copilotTree, now: evidenceDate
+        ).compactMap { placement in placement.contentOwnerID.map { (owner: $0, session: placement.session) } }
+        let owned = Dictionary(grouping: ownership, by: \.owner).mapValues { $0.map(\.session) }
         VStack(alignment: .leading, spacing: 12) {
             ForEach(workspaceGroups, id: \.id) { group in
                 VStack(alignment: .leading, spacing: 0) {
@@ -1331,18 +1350,14 @@ struct ManagedHierarchyContent: View {
                             }
                             ForEach(ordered(roots, kind: kind)) { root in
                               let handle = rootHandle(root, kind: kind)
+                              let branch = rows(for: [root])
                               VStack(alignment: .leading, spacing: 0) {
-                                ForEach(rows(for: [root])) { row in
-                                let contents = SidebarPresentation.sessionPlacements(
-                                    copilotTree.sessions, managed: nodes, observations: copilotTree, now: evidenceDate
-                                )
-                                let retained = contents.filter { $0.contentOwnerID == row.id }.map(\.session)
+                                ForEach(branch) { row in
+                                let retained = owned[row.id] ?? []
                                 let expanded = layout.isExpanded(.managed(row.node.id))
                                 ManagedNodeRow(
                                     node: row.node, depth: row.depth,
-                                    hasChildren: row.hasChildren || retained.contains {
-                                        $0.hasShownOutline(layout) || $0.internalTaskCountsIncomplete
-                                    },
+                                    hasChildren: hasDisclosure(row, retained: retained),
                                     activeDescendants: row.activeDescendants,
                                     expanded: expanded,
                                     selected: selectedNode?.id == row.node.id,
@@ -1357,7 +1372,7 @@ struct ManagedHierarchyContent: View {
                                     },
                                     select: { selectedNode = row.node }
                                 )
-                                if !expanded && retained.contains(where: { $0.hasShownOutline(layout) || $0.internalTaskCountsIncomplete }) {
+                                if !expanded && showsRetainedWork(retained) {
                                     CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: retained))
                                         .padding(.leading, 22 + density.indentation(
                                             depth: row.depth, unresolved: false, width: contentWidth
@@ -1375,6 +1390,12 @@ struct ManagedHierarchyContent: View {
                                 }
                                 }
                               }
+                              .sidebarRowGroup(
+                                  focus: displaced.contains(root.id) ? nil
+                                      : .surface(workspaceID: root.workspaceId, surfaceID: root.surfaceId),
+                                  expanded: layout.isExpanded(.managed(root.id))
+                                      && branch.first.map { hasDisclosure($0, retained: owned[root.id] ?? []) } == true
+                              )
                               // The whole branch is one drop target and moves as one.
                               .sidebarReorderDrop(handle)
                             }
@@ -1406,6 +1427,15 @@ struct ManagedHierarchyContent: View {
             return "Workspace"
         }
         return title
+    }
+
+    /// A managed row discloses managed children or the session work it owns; its group follows the same rule.
+    private func hasDisclosure(_ row: ManagedDisplayNode, retained: [SidebarCopilotSession]) -> Bool {
+        row.hasChildren || showsRetainedWork(retained)
+    }
+
+    private func showsRetainedWork(_ retained: [SidebarCopilotSession]) -> Bool {
+        retained.contains { $0.hasShownOutline(layout) || $0.internalTaskCountsIncomplete }
     }
 
     private func descendantCount(of id: UUID) -> Int {
@@ -1541,7 +1571,11 @@ private struct ManagedNodeRow: View {
         }
         .frame(minHeight: density.rowHeight)
         .environment(\.sidebarReorderSource, reorder?.dragSource)
-        .sidebarRowActions(title: node.label, groups: actions)
+        .sidebarRowActions(title: node.label, groups: actions) {
+            SidebarBeatIndicator(session: beatSession, titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
+                                 belowTitle: 18)
+        }
+        .environment(\.sidebarRowGroupHead, depth == 0)
         .background { SidebarActivityBackground(visual: stateVisual,
                                                 needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate)) }
         .modifier(SidebarFocusBorder(workspaceID: node.workspaceId, surfaceID: node.surfaceId, enabled: !isRetainedRecord))
@@ -1559,6 +1593,14 @@ private struct ManagedNodeRow: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("managed-node-\(node.id)")
+    }
+
+    /// The exact session this agent's Beats target; a retained work context has none.
+    private var beatSession: UUID? {
+        guard !isRetainedRecord,
+              case .session(let id) = SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate)
+        else { return nil }
+        return id
     }
 
     private var assignedWorktree: String? {
@@ -2024,7 +2066,11 @@ private struct SurfaceRow: View {
         singleSession.map { $0.hasShownOutline(layout) } ?? !sessions.isEmpty
     }
 
-    private var title: String { surface.title.isEmpty ? "Untitled surface" : surface.title }
+    /// A single exact Copilot session leads with its session name; otherwise the CMUX title, unchanged.
+    private var title: String {
+        if let name = singleSession?.sessionName { return name }
+        return surface.title.isEmpty ? "Untitled surface" : surface.title
+    }
     private var inspectionLabel: String {
         if let singleSession {
             return "\(title), \(SidebarPresentation.sessionState(singleSession).title). Show session details"
@@ -2129,7 +2175,12 @@ private struct SurfaceRow: View {
             }
             .frame(minHeight: density.rowHeight)
             .environment(\.sidebarReorderSource, reorder.dragSource)
-            .sidebarRowActions(title: title, groups: actions)
+            .sidebarRowActions(title: title, groups: actions) {
+                SidebarBeatIndicator(session: singleSession.flatMap { $0.statusOnly ? nil : $0.id },
+                                     titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
+                                     belowTitle: 18)
+            }
+            .environment(\.sidebarRowGroupHead, true)
             .background {
                 if let singleSession {
                     SidebarActivityBackground(visual: SidebarPresentation.sessionState(singleSession),
@@ -2152,6 +2203,7 @@ private struct SurfaceRow: View {
                 }
             }
         }
+        .sidebarRowGroup(focus: .surface(workspaceID: workspaceID, surfaceID: surface.id), expanded: expanded && hasChildren)
         .sidebarReorderDrop(reorder)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("surface-\(surface.id.uuidString)")
@@ -2197,8 +2249,11 @@ private struct CopilotSessionRow: View {
     private var focusUnavailable: Bool { retained || session.statusOnly }
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
+    @Environment(\.sidebarRowGroup) private var outerGroup
     @State private var showingPicker: SidebarIconTarget?
     private var expanded: Bool { layout.isExpanded(.session(session.id)) }
+    /// Work-context rows keep their "Session context" label; current rows lead with the session name.
+    private var name: String? { retained ? nil : session.sessionName }
     private var actions: [SidebarRowActionGroup] {
         var items: [SidebarRowAction] = [
             focusUnavailable ? .unavailable("Focus original session", SidebarPresentation.retainedFocusUnavailable)
@@ -2225,20 +2280,21 @@ private struct CopilotSessionRow: View {
                     Color.clear.frame(width: 18, height: SidebarPresentation.minimumControlSize)
                 }
                 SidebarItemIcon(
-                    kind: .agent, target: session.statusOnly ? nil : .session(session.id), title: "Copilot \(session.shortID)",
+                    kind: .agent, target: session.statusOnly ? nil : .session(session.id), title: name ?? "Copilot \(session.shortID)",
                     agentGlyph: session.iconId, agentColor: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
                     inspect: { selection = .session(session.id) }, picker: $showingPicker
                 )
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation,
-                    label: retained ? "Inspect context session \(session.shortID)" : "Focus Copilot session \(session.shortID)",
+                    label: retained ? "Inspect context session \(session.shortID)"
+                        : "Focus Copilot session \(name.map { "\($0), " } ?? "")\(session.shortID)",
                     detail: retained ? SidebarPresentation.retainedFocusUnavailable : SidebarPresentation.sessionStatus(session),
                     inspectOnly: focusUnavailable ? { selection = .session(session.id) } : nil,
                     localFocusIDOverride: retained ? "session:\(session.id)" : nil
                 ) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("\(retained ? "Session context" : "Agent") \(session.shortID)")
+                        Text(name ?? "\(retained ? "Session context" : "Agent") \(session.shortID)")
                             .font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
                         HStack(spacing: 4) {
                             SessionStateBadge(session: session)
@@ -2258,7 +2314,13 @@ private struct CopilotSessionRow: View {
                 }
             }
             .frame(minHeight: density.rowHeight)
-            .sidebarRowActions(title: "Copilot \(session.shortID)", groups: actions)
+            .sidebarRowActions(title: name ?? "Copilot \(session.shortID)", groups: actions) {
+                SidebarBeatIndicator(session: focusUnavailable ? nil : session.id,
+                                     titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
+                                     belowTitle: 18)
+            }
+            // Nested inside an expanded surface group, this row is one of that group's children.
+            .environment(\.sidebarRowGroupHead, outerGroup == nil)
             .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session),
                                                 needsInput: SidebarPresentation.needsInput(session.attention)) }
             CopilotSessionContents(
@@ -2268,6 +2330,7 @@ private struct CopilotSessionRow: View {
                 parentFocusUnavailable: focusUnavailable ? SidebarPresentation.retainedFocusUnavailable : nil
             )
         }
+        .sidebarRowGroup(focus: nil, expanded: expanded && session.hasShownOutline(layout))
         .padding(.leading, density.spacing(8))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("copilot-session-\(session.id)")
@@ -2379,58 +2442,22 @@ struct SidebarInternalTaskGroup<Activity: View>: View {
     var ownerDepth = 0
     var taskboard = false
     @ViewBuilder let activity: (SidebarChildRow) -> Activity
-    @Environment(\.sidebarDensity) private var density
-    @Environment(\.sidebarContentWidth) private var width
 
+    // No group header or chevron: the owning row's disclosure already collapses these tasks.
     var body: some View {
-        let shownTasks = section.rows.filter { showsRow($0) && $0.node.isInternalTask }.count
-        if let disclosure = section.taskDisclosure, shownTasks > 0 {
-            let expanded = layout.isExpanded(disclosure)
-            let summary = session.taskSummary(for: section)
+        let rows = section.rows.filter(showsRow)
+        if section.taskDisclosure != nil, rows.contains(where: { $0.node.isInternalTask }) {
             VStack(alignment: .leading, spacing: 0) {
-                SidebarTitleButton(
-                    label: "Internal tasks. \(summary.taskCount) observed. Related branch activity: \(summary.lines.joined(separator: ". "))",
-                    hint: "Related branch activity: \(summary.lines.joined(separator: ". "))", value: expanded ? "Expanded" : "Collapsed",
-                    localFocusID: "task-disclosure:\(session.id):\(disclosure.childID ?? "session")",
-                    action: { setExpanded(disclosure, !expanded) }
-                ) {
-                    HStack(spacing: 4) {
-                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 8, weight: .semibold)).frame(width: 12)
-                        Text("\(shownTasks) internal \(shownTasks == 1 ? "task" : "tasks")")
-                            .lineLimit(1)
-                        if !expanded {
-                            if summary.running > 0 {
-                                SidebarStateBadge(visual: SidebarPresentation.state(.working))
-                            }
-                            if summary.blocked > 0 { Image(systemName: "pause") }
-                            if summary.attention > 0 { Image(systemName: "exclamationmark") }
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .font(.system(size: density.rowMetadataSize))
-                    .foregroundStyle(.secondary)
-                    .frame(minHeight: 24)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Internal tasks. \(summary.taskCount) observed. Related branch activity: \(summary.lines.joined(separator: ". "))")
-                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-                .accessibilityIdentifier("internal-tasks-disclosure-\(session.id)-\(disclosure.childID ?? "session")")
-                .help("Related branch activity: \(summary.lines.joined(separator: ". "))")
-                .padding(.leading, SidebarInternalTaskRow.indentation(depth: ownerDepth, width: width))
-                if expanded {
-                    ForEach(section.rows.filter(showsRow)) { row in
-                        if row.node.isInternalTask {
-                            SidebarInternalTaskRow(
-                                row: row, sessionID: session.id,
-                                baseDepth: (section.rows.first?.node.depth ?? 0) - ownerDepth,
-                                followingDepth: followingDepth(row),
-                                setExpanded: setExpanded, dismiss: dismiss
-                            )
-                        } else if !taskboard {
-                            activity(row)
-                        }
+                ForEach(rows) { row in
+                    if row.node.isInternalTask {
+                        SidebarInternalTaskRow(
+                            row: row, sessionID: session.id,
+                            baseDepth: (section.rows.first?.node.depth ?? 0) - ownerDepth,
+                            followingDepth: followingDepth(row),
+                            setExpanded: setExpanded, dismiss: dismiss
+                        )
+                    } else if !taskboard {
+                        activity(row)
                     }
                 }
             }
@@ -2886,7 +2913,7 @@ private struct TaskboardContent: View {
         }
         ForEach(TaskboardBucket.allCases) { bucket in
             let items = sessions.filter { TaskboardBucket.of($0) == bucket }
-                .map { (session: $0, title: SidebarPresentation.surfaceTitle(for: $0, in: hierarchy)) }
+                .map { (session: $0, title: SidebarPresentation.agentTitle(for: $0, in: hierarchy)) }
                 .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
             if !items.isEmpty {
                 HStack(spacing: 7) {
@@ -2986,7 +3013,10 @@ private struct TaskboardAgentCard: View {
         }
         .padding(.vertical, density.spacing(6))
         .padding(.horizontal, density.spacing(4))
-        .sidebarRowActions(title: title, groups: actions)
+        .sidebarRowActions(title: title, groups: actions, trailingAlignment: .top) {
+            SidebarBeatIndicator(session: session.statusOnly ? nil : session.id, titleHeight: 16)
+                .padding(.top, density.spacing(6))
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("taskboard-session-attention-\(session.id)")
         .background { SidebarActivityBackground(visual: SidebarPresentation.sessionState(session),
@@ -3231,10 +3261,14 @@ struct SidebarPinnedFooter: View {
         .accessibilityIdentifier("sidebar-pinned-details")
     }
 
-    /// The Copilot suffix is shown as a corner icon instead of title text.
-    private var displayTitle: String {
+    private var displayTitle: String { Self.displayTitle(content) }
+
+    /// The Copilot suffix of a CMUX terminal title is shown as a corner icon instead of title text.
+    /// A session name is Copilot's own title and is shown whole.
+    static func displayTitle(_ content: SidebarDetailContent) -> String {
         let suffix = " - GitHub Copilot"
-        guard content.isAgent, content.title.hasSuffix(suffix), content.title.count > suffix.count else { return content.title }
+        guard content.isAgent, !content.titleIsSessionName,
+              content.title.hasSuffix(suffix), content.title.count > suffix.count else { return content.title }
         return String(content.title.dropLast(suffix.count))
     }
 

@@ -9,8 +9,26 @@ Cards group under headings with count: **Waiting on you**, **Working**, **Failed
 Card shows agent icon and title, current activity, workspace with model on right. Card shows branch only when agent works in git repository or linked
 worktree (worktrees labelled). No sub-agent, skill, shell or
 internal-task rows; those stay in Hierarchy. Select card to focus its terminal.
-Beats opens native popover. Create, edit,
-enable, disable, delete recurring prompts there. Icon lights while a Beat is enabled.
+Beats opens native popover. Create (header **+**, "New Beat"), edit, turn on or off
+(row switch or the row's **Enable**/**Disable** menu item), delete recurring prompts there.
+Each row control's VoiceOver label names its schedule and prompt prefix ("Beat on/off,
+Hourly, …"). Rows show a preset name or the
+cron, the prompt on one line, and the session only when unscoped; a slashed circle marks a
+session not running. Next-run estimates, "fires only while the session runs" and Copilot
+timing are in tooltips and VoiceOver values, not visible prose. Icon lights while a Beat is enabled.
+An agent row (managed agent, single-session terminal, or listed Copilot session) and a
+Taskboard card show the same Beat icon as their rightmost item, after collapsed summaries,
+pin and unread badges and the row's actions (…) slot, at rest and on hover, with its glyph
+8 pt in from the row's trailing content edge (where the header controls end), when that row's
+exact session UUID has an enabled Beat. No title, path or label matching; retained context
+and status-only rows and internal tasks get none. Lit when the session is alive in a current
+observation (the freshness hover cards use); dim when it is not running, stale, hidden or
+disconnected. The lit glow is one Core Animation opacity pulse (about 1 second each way) in
+the render server, removed under Reduce Motion (static glow) and while the icon has no window
+or is hidden. Clicking it opens Beats scoped to that session, or rescopes an open panel in
+place, without focusing the row or navigating CMUX. A scoped **New Beat** (**+**) targets only that
+session; **Show all** returns to every Beat and is absent while a form is open, so a draft
+is never discarded. Opening Beats from the header shows every Beat.
 Beats run on Copilot's own scheduler. Maestro extension loaded in each CMUX Copilot
 session asks the controller (`beats-snapshot`) for that session's enabled Beats and
 mirrors them into native cron schedules; it never parses `beats.json` itself. An invalid
@@ -101,6 +119,20 @@ nesting and 4-point increments beyond level three, bounded to 32 points or 12%
 of available width. Full Git diagnostics remain in hover/details so titles keep priority.
 At eight levels and 280 points, stable overflow slot leaves at least 124 points
 for name without hover-time reflow. 50-point host-footer clearance unchanged.
+
+An expanded agent block is one row group: a managed root agent with its descendants, a
+terminal surface row with its session's children or sessions, or a listed Copilot session
+with its children. Workspace headers are not grouped. One tracking area covers the group, so
+the pointer moving between its rows never exits it; after every layout the group re-checks
+where the pointer is, so a group that collapses, reorders or expands under a still pointer
+follows it without waiting for the next enter or exit. Hovering any row draws one rounded
+highlight behind the whole group and shows the agent row's actions (…); rows inside add no
+highlight of their own and show their own actions (…) or dismiss controls on their own hover.
+When the agent row's surface is focused, the leading blue focus bar spans the group; collapsed,
+it spans the row only. Nested blocks join the outermost expanded group: no inner highlight or
+bar. One bar at a time: rows inside a focused group that share its surface draw none, and a
+descendant with its own focused surface keeps its own row-height bar. Presentation only:
+hover, grouping and the bar change no focus, read state, expansion or order.
 
 Hierarchy expansion persists by workspace/surface UUID and provider/session/
 child identity—not names, paths or current window. Moves and reloads keep

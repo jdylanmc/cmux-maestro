@@ -23,6 +23,8 @@ struct SidebarInspection: Equatable {
 
 struct SidebarDetailContent: Equatable {
     var title: String
+    /// The title is Copilot's session name (ADR 0022), not CMUX's terminal title.
+    var titleIsSessionName = false
     var visual: SidebarVisual? = nil
     var lines: [SidebarDetailLine] = []
     var notice: String? = nil
@@ -526,6 +528,10 @@ enum SidebarPresentation {
             return result
         }
         result.isAgent = true
+        if let name = session.sessionName {
+            result.title = name
+            result.titleIsSessionName = true
+        }
         result.petSessionID = session.id
         result.petChoice = session.petId
         result.visual = sessionState(session)
@@ -544,6 +550,7 @@ enum SidebarPresentation {
            (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(node.updatedAt)),
            managedSession(for: node, in: tree, now: now)?.id == session.id {
             result.title = node.label
+            result.titleIsSessionName = false
             result.visual = managedState(node, availability: availability, now: now, tree: tree)
             let fields = Set([
                 "Model", "Branch", "Worktree", "Git evidence", "Git changes",
@@ -709,7 +716,7 @@ enum SidebarPresentation {
                     hierarchy.pathContext(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     copyable: true
                 )
-                return .init(title: "Copilot · \(session.shortID)", lines: sessionDetails(session) + context,
+                return .init(title: session.sessionName ?? "Copilot · \(session.shortID)", lines: sessionDetails(session) + context,
                              notice: notice, isAgent: true, needsInput: needsInput(session.attention),
                              petSessionID: session.id, petChoice: session.petId,
                              otherActivity: session.secondaryActivity)
@@ -1310,7 +1317,9 @@ enum SidebarPresentation {
         return result + activityDetails(session.activity) + attentionDetails(session.attention)
     }
 
-    static func surfaceTitle(for session: SidebarCopilotSession, in hierarchy: HierarchySnapshot) -> String {
+    /// Copilot's session name when available (ADR 0022), otherwise the CMUX surface title unchanged.
+    static func agentTitle(for session: SidebarCopilotSession, in hierarchy: HierarchySnapshot) -> String {
+        if let name = session.sessionName { return name }
         guard let workspace = hierarchy.workspaces.first(where: { $0.id == session.workspaceID }),
               case .available(let surfaces) = workspace.surfaces,
               let surface = surfaces.first(where: { $0.id == session.surfaceID }),
