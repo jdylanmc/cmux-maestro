@@ -22,6 +22,7 @@ gate_spec.loader.exec_module(gate)
 SUITES = classify.load_suites(classify.CONTRACT_PATH.read_text())
 MAP_TEXT = classify.MAP_PATH.read_text()
 NATIVE, CONTRACTS, PROBE = "validate-native", "validate-contracts", "guide-ui-consumer-probe"
+PORTABLE = "validate-portable"
 BASE, HEAD, MERGE = "b" * 40, "c" * 40, "a" * 40
 
 
@@ -296,13 +297,36 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(sorted(record["suites"]), sorted(SUITES))
         return record, rows
 
-    def test_markdown_docs_only_change_skips_native_and_probe(self):
+    def test_markdown_docs_only_change_runs_only_the_portable_suite(self):
         record, rows = self.record(["docs/reference/build-and-test.md", "README.md", "CHANGELOG.md"])
         self.assertEqual(record["mode"], "selective")
-        self.assertEqual(applicable(record), {CONTRACTS})
+        self.assertEqual(applicable(record), {PORTABLE})
         self.assertEqual({row[1] for row in rows}, {"markdown-docs"})
-        self.assertIn("markdown-docs: 3 file(s)", record["suites"][CONTRACTS]["reason"])
-        self.assertEqual(record["suites"][NATIVE]["reason"], "no changed file maps to it; files matched only: markdown-docs")
+        self.assertIn("markdown-docs: 3 file(s)", record["suites"][PORTABLE]["reason"])
+        for job in (NATIVE, CONTRACTS, "guide-ui-consumer-probe"):
+            self.assertEqual(record["suites"][job]["reason"],
+                             "no changed file maps to it; files matched only: markdown-docs")
+
+    def test_other_docs_select_only_the_portable_suite(self):
+        record, rows = self.record(["docs/design/2026-09-25/prototype.html", "docs/agents/issue-tracker.md"])
+        self.assertEqual(applicable(record), {PORTABLE})
+        self.assertEqual({row[1] for row in rows}, {"other-docs", "markdown-docs"})
+
+    def test_merge_policy_change_also_runs_the_metadata_suite_that_reads_it(self):
+        record, rows = self.record(["docs/agents/merge-policy.md"])
+        self.assertEqual(applicable(record), {CONTRACTS, PORTABLE})
+        self.assertEqual(rows[0][1], "merge-policy-doc")
+
+    def test_every_docs_file_a_contract_suite_reads_selects_that_suite(self):
+        # Dependency edge: test-build-metadata.py (validate-contracts) reads these docs. If it reads a
+        # new one, a docs-only change to it must still select validate-contracts.
+        rules = classify.load_map(MAP_TEXT, SUITES)
+        text = (ROOT / "scripts/test-build-metadata.py").read_text()
+        read = sorted(set(re.findall(r'ROOT / "((?:docs/|README|CHANGELOG|CONTEXT|AGENTS)[^"]*)"', text)))
+        self.assertEqual(read, ["docs/agents/merge-policy.md"])
+        for path in read:
+            with self.subTest(path=path):
+                self.assertIn(CONTRACTS, classify.classify_paths([path], rules, SUITES)[0][0][2])
 
     def test_docs_images_only_change_runs_no_validation_suite(self):
         record, _ = self.record(["docs/images/sidebar.png", "docs/design/2026-09-25/images/beats.png"])
@@ -312,6 +336,13 @@ class ClassificationTests(unittest.TestCase):
     def test_single_area_contract_test_change(self):
         record, _ = self.record(["scripts/test-beats.py"])
         self.assertEqual(applicable(record), {CONTRACTS})
+
+    def test_portable_suite_test_change_needs_no_macos_suite(self):
+        record, _ = self.record(["scripts/test-skill-overrides.mjs"])
+        self.assertEqual(applicable(record), {PORTABLE})
+        # The checker it tests is shared and stays unmapped.
+        record, _ = self.record(["scripts/check-skill-overrides.mjs"])
+        self.assertEqual(applicable(record), set(SUITES))
 
     def test_cross_area_change_selects_the_union(self):
         record, _ = self.record(["docs/images/sidebar.png", "README.md", "CMUXMaestroSidebar/UI/SidebarView.swift"])
@@ -415,7 +446,7 @@ class ClassificationTests(unittest.TestCase):
 
     def test_symlink_to_an_every_suite_path_keeps_the_selection(self):
         record, _ = self.record(["README.md"], links=[("Resources/hook", "../scripts/test.sh")])
-        self.assertEqual(applicable(record), {CONTRACTS})
+        self.assertEqual(applicable(record), {PORTABLE})
 
     def test_checked_in_tree_has_no_symlink_into_a_narrower_mapped_path(self):
         rules = classify.load_map(MAP_TEXT, SUITES)
@@ -500,7 +531,7 @@ class GitChangeSetTests(unittest.TestCase):
             self.git("rm", "-q", "docs/images/i.png")
         record, rows = self.pull_request(change)
         self.assertEqual(sorted(row[0] for row in rows), ["docs/a.md", "docs/b.md", "docs/images/i.png"])
-        self.assertEqual(applicable(record), {CONTRACTS})
+        self.assertEqual(applicable(record), {PORTABLE})
         self.assertEqual(record["changed_files"], 3)
 
     def test_rename_of_code_into_docs_keeps_full_coverage(self):
@@ -521,7 +552,7 @@ class GitChangeSetTests(unittest.TestCase):
         record, rows = self.pull_request(lambda: self.write({"docs/a.md": "b\n"}),
                                          lambda: self.write({"src/x.swift": "let x = 3\n"}))
         self.assertEqual([row[0] for row in rows], ["docs/a.md"])
-        self.assertEqual(applicable(record), {CONTRACTS})
+        self.assertEqual(applicable(record), {PORTABLE})
 
     def test_change_main_already_has_is_still_classified(self):
         # The candidate's own change counts even when the merge's net diff against base is empty.
@@ -567,22 +598,22 @@ class MainTests(unittest.TestCase):
         lines = output.splitlines()
         self.assertEqual([line.split("=", 1)[0] for line in lines],
                          ["classification", "run_validate_native", "run_validate_contracts",
-                          "run_guide_ui_consumer_probe"])
+                          "run_validate_portable", "run_guide_ui_consumer_probe"])
         flags = dict(line.split("=", 1) for line in lines[1:])
-        self.assertEqual(flags, {"run_validate_native": "false", "run_validate_contracts": "true",
-                                 "run_guide_ui_consumer_probe": "false"})
+        self.assertEqual(flags, {"run_validate_native": "false", "run_validate_contracts": "false",
+                                 "run_validate_portable": "true", "run_guide_ui_consumer_probe": "false"})
         record = json.loads(lines[0].split("=", 1)[1])
         self.assertEqual((record["event"], record["run_id"], record["sha"]), ("pull_request", "7", MERGE))
         self.assertTrue(summary.startswith("## Suite selection\n\n"))
         self.assertEqual(summary, "## Suite selection\n\n" + stdout)
         self.assertIn("| Suite | Selected | Reason |", stdout)
         self.assertIn("| validate-native | no (not applicable) | no changed file maps to it;", stdout)
-        self.assertIn("| validate-contracts | yes | markdown-docs: 1 file(s), e.g. README.md |", stdout)
+        self.assertIn("| validate-portable | yes | markdown-docs: 1 file(s), e.g. README.md |", stdout)
         self.assertIn("| docs/images/x.png | docs-images | none |", stdout)
 
     def test_main_escapes_paths_in_the_summary(self):
         _, stdout, output, _ = self.run_main(environ(), git=fake_git(["docs/a|b\nc.md"]))
-        self.assertIn("| docs/a\\|b c.md | markdown-docs | validate-contracts |", stdout)
+        self.assertIn("| docs/a\\|b c.md | markdown-docs | validate-portable |", stdout)
         self.assertEqual(len(output.splitlines()), 1 + len(SUITES))
 
     def test_unreadable_map_publishes_a_full_selection(self):

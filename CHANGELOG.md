@@ -28,6 +28,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Documentation-only pull requests no longer need a macOS runner (#191). The skill-override and
+  policy-link checks moved to a new `validate-portable` job on Linux after a portability proof.
+  The skill hash now sorts paths with an explicit en-US collation; Linux's default would report
+  false drift. Changes to the merge policy still run `validate-contracts`, which reads it. Every
+  other suite stays on macOS. Concurrency measurements and decisions:
+  `docs/reference/ci-runner-placement.md`.
 - Pull requests run only the CI suites their changes can affect (#194). A new `ci-classify` job
   classifies the exact change set with the reviewed map `scripts/ci-suite-map.json` and publishes
   each suite's selection and reason. Documentation-only changes skip the native tests and the
