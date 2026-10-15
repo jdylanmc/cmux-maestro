@@ -15,7 +15,9 @@ selection or gate files themselves also selects every suite, whatever the map sa
 
 Outputs (GITHUB_OUTPUT): `classification` (the JSON record that ci-gate
 verifies) and one `run_<job>` flag per suite, `true` or `false`. A validation
-job is skipped only when its flag is exactly `false`. The step summary lists
+job is skipped only when its flag is `false` (case-insensitively, because GitHub
+compares expression strings that way); the gate rejects any flag other than the
+literal `false`. The step summary lists
 the selected suites, the reasons and the classified files.
 
 Exits nonzero only when the required-suite contract is unreadable; the job then

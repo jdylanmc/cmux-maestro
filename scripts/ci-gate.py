@@ -14,7 +14,9 @@ Failure, cancellation, a missing job or result, an unknown result, contract
 drift, a skip without a valid not-applicable record (including one caused by a
 failed upstream job or a failed classifier), and a malformed, partial or
 mismatched record all block the gate. A push run may not mark any suite not
-applicable: `main` always runs everything.
+applicable: `main` always runs everything. Each `run_<job>` output must be the
+literal `true` or `false` matching the record; GitHub compares the job condition
+case-insensitively, so any other spelling is rejected here.
 
 The gate judges job results only. Each job enforces its own evidence: required
 artifacts use `if-no-files-found: error`, and the integrated harness enforces

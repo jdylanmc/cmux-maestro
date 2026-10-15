@@ -7,7 +7,8 @@ on:
 
 jobs:
   # Suite selection (#194): classifies the exact change set and publishes which suites apply and why.
-  # A validation job is skipped only when its flag is exactly 'false'; ci-gate verifies the record.
+  # A validation job is skipped only when its flag is 'false' (GitHub compares case-insensitively);
+  # ci-gate rejects any flag other than the literal 'false' and verifies the record.
   ci-classify:
     runs-on: ubuntu-latest
     permissions:
