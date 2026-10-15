@@ -15,6 +15,8 @@ struct SidebarRowAction {
 struct SidebarRowActionGroup {
     let title: String
     let actions: [SidebarRowAction]
+    /// Disabled explanatory line shown after the group's actions.
+    var footnote: String? = nil
 }
 
 @MainActor
@@ -58,6 +60,12 @@ final class SidebarRowMenuPresenter: NSObject {
                     explanation.indentationLevel = 1
                     submenu.addItem(explanation)
                 }
+            }
+            if let footnote = group.footnote {
+                submenu.addItem(.separator())
+                let note = NSMenuItem(title: footnote, action: nil, keyEquivalent: "")
+                note.isEnabled = false
+                submenu.addItem(note)
             }
             parent.submenu = submenu
             menu.addItem(parent)
@@ -207,9 +215,25 @@ extension SidebarRowActionGroup {
         return .init(title: "Appearance", actions: actions)
     }
 
-    static var placement: Self {
+    /// Why a row without its own place in a sibling list can't be moved.
+    enum FixedPlacement {
+        case movesWithParent, movesWithParentAgent, movesWithParentSession, workContext, taskboard, listUnavailable
+
+        var reason: String {
+            switch self {
+            case .movesWithParent: "Moves with its surface."
+            case .movesWithParentAgent: "Moves with its parent agent."
+            case .movesWithParentSession: "Moves with its parent session."
+            case .workContext: "Work context stays in its own section and keeps its order."
+            case .taskboard: "Taskboard groups cards by state. Reorder in the Hierarchy."
+            case .listUnavailable: "Reordering isn't available in this view."
+            }
+        }
+    }
+
+    static func placement(_ fixed: FixedPlacement) -> Self {
         .init(title: "Organization", actions: [
-            .unavailable("Move or reorder…", "Native placement and sibling reordering are not available.")
+            .unavailable("Move Up", fixed.reason), .unavailable("Move Down", fixed.reason)
         ])
     }
 

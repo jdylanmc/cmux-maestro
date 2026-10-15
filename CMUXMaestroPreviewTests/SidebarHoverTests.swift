@@ -360,7 +360,7 @@ struct SidebarHoverTests {
         let presenter = SidebarRowMenuPresenter()
         presenter.groups = [
             .init(title: "Navigation", actions: [focus]),
-            .appearance(icon: nil, agent: true, child: true), .placement, .lifecycle(child: true)
+            .appearance(icon: nil, agent: true, child: true), .placement(.movesWithParentSession), .lifecycle(child: true)
         ]
         let menu = presenter.menu()
         #expect(menu.items.map(\.title) == ["Navigation", "Appearance", "Organization", "Lifecycle"])

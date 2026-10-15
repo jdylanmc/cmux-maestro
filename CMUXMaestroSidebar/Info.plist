@@ -7,5 +7,28 @@
         <key>EXExtensionPointIdentifier</key>
         <string>$(CMUX_SIDEBAR_EXTENSION_POINT_ID)</string>
     </dict>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.jdylanmc.CMUXMaestroPreview.sidebar-order.workspaces</string>
+            <key>UTTypeDescription</key>
+            <string>Maestro sidebar workspace row</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.jdylanmc.CMUXMaestroPreview.sidebar-order.surfaces</string>
+            <key>UTTypeDescription</key>
+            <string>Maestro sidebar surface row</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

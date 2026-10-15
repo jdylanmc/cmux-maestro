@@ -28,6 +28,9 @@ final class CMUXMaestroSidebarExtension: @MainActor CmuxSidebarExtension {
 
     func update(context: CmuxSidebarContext) {
         model.update(context: context)
+        model.setReorderBackend(SidebarReorderBackends.make(
+            grantedActionScopes: context.grantedActionScopes, host: context.host, store: preferences
+        ))
     }
 
     func connectionStatusDidChange(_ status: CmuxSidebarConnectionStatus) {

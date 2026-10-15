@@ -165,6 +165,10 @@ _Avoid_: footer inset
 `sidebar-layout.json`: density and expansion state. Separate from history and acknowledgement records.
 _Avoid_: settings blob
 
+**Sidebar order**:
+Maestro-only order of workspaces in a window and of surfaces in a workspace, kept in `sidebar-order.json`. Never sent to CMUX; CMUX's order is the base.
+_Avoid_: CMUX order, tab order, sort
+
 ### Install and trust
 
 **Stable local preview**:

@@ -4,6 +4,20 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ## Unreleased
 
+### Added
+
+- Reorder workspaces, and the surfaces in one workspace, in Maestro's sidebar. Drag a row's
+  title, or use **Move Up** and **Move Down** in its actions menu or as VoiceOver actions.
+  The order is Maestro's only and is never sent to CMUX (ADR 0021): it lives in the
+  sidebar's own `sidebar-order.json`, keyed by CMUX UUIDs. Pinned items stay among pinned
+  ones, surfaces stay in their workspace, and new items appear after their CMUX
+  predecessor. Root managed agents reorder among themselves in their workspace's surface
+  list; nested agents and session rows move with their parent, and their menus say so.
+  An item with unknown pin state keeps its place. **Reset Workspace Order** / **Reset
+  Order in Workspace** in the menu, and **Reset sidebar order** in settings, return to
+  CMUX's order. VoiceOver announces each move or why it was refused. Drag is being
+  piloted inside CMUX. The disabled "Move or reorder…" item is gone.
+
 ### Changed
 
 - Make Beats store writes atomic and synced. The orchestrator now fsyncs the temporary file

@@ -707,6 +707,7 @@ final class SidebarTitleNativeButton: NSButton {
     var focusChanged: (Bool) -> Void = { _ in }
     var localFocusID: String?
     var localFocusOrder = 0
+    var reorder: SidebarReorderSource?
     private var returningFromPreview = false
     private var restoringLocalFocus = false
 
@@ -722,6 +723,10 @@ final class SidebarTitleNativeButton: NSButton {
     required init?(coder: NSCoder) { nil }
     @objc private func pressTitle() { preview.dismiss(); activate() }
     override var acceptsFirstResponder: Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        if trackReorderDrag(event) { return }
+        super.mouseDown(with: event)
+    }
     override var canBecomeKeyView: Bool { !isHiddenOrHasHiddenAncestor && window != nil }
     override func hitTest(_ point: NSPoint) -> NSView? {
         bounds.contains(convert(point, from: superview)) ? self : nil
@@ -796,6 +801,7 @@ struct SidebarTitleButton<Label: View>: NSViewRepresentable {
     @Environment(\.sidebarPreviewInteraction) private var preview
     @Environment(\.sidebarRowMenu) private var rowMenu
     @Environment(\.sidebarLocalFocus) private var localFocus
+    @Environment(\.sidebarReorderSource) private var reorder
 
     func makeNSView(context: Context) -> SidebarTitleNativeButton { SidebarTitleNativeButton() }
     func updateNSView(_ button: SidebarTitleNativeButton, context: Context) {
@@ -810,6 +816,21 @@ struct SidebarTitleButton<Label: View>: NSViewRepresentable {
         button.setAccessibilityValue(value)
         button.setAccessibilityHelp(preview.available ? "\(hint). Tab enters preview controls, then continues past this title. Escape or Shift-Tab returns; the next Tab continues onward. Shift-F10 opens actions." : hint)
         button.toolTip = hint
+        button.reorder = reorder
+        let actions = (reorder?.actions ?? []).map { action in
+            NSAccessibilityCustomAction(name: action.name) { [weak button] in
+                MainActor.assumeIsolated {
+                    let result = action.perform()
+                    // Spoken either way, so a refused move is never silent.
+                    NSAccessibility.post(element: button ?? NSApp as Any, notification: .announcementRequested, userInfo: [
+                        .announcement: result.message,
+                        .priority: NSAccessibilityPriorityLevel.high.rawValue
+                    ])
+                    return result.succeeded
+                }
+            }
+        }
+        button.setAccessibilityCustomActions(actions.isEmpty ? nil : actions)
         button.localFocusID = localFocusID
         if let localFocusID { localFocus?.register(button, id: localFocusID) }
         _ = button.measure(width: button.bounds.width > 0 ? button.bounds.width : nil)

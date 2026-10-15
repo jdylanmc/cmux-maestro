@@ -23,7 +23,7 @@ Run five agents and you lose track. Which one waits on a permission? Which one d
 
 | Thing | What it does |
 |---|---|
-| **Hierarchy** | Workspaces, terminals, agents, nested workers, and their internal tasks. Git branch and worktree per agent. |
+| **Hierarchy** | Workspaces, terminals, agents, nested workers, and their internal tasks. Git branch and worktree per agent. Drag or use the row menu to reorder; Maestro's order only, CMUX's is unchanged. |
 | **Taskboard** | One card per agent, bucketed: Waiting on you, Working, Failed, Idle, Finished, Unknown. |
 | **Attention** | Permission and question requests, errors, aborts. Separate cues. Acknowledge hides the notice only. |
 | **Beats** | Recurring prompts for one exact session. Copilot's own scheduler runs them. |
