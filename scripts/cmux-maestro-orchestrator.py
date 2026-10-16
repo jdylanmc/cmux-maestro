@@ -1062,6 +1062,11 @@ def _validate_node_launch_configuration(node, mode):
         raise OrchestrationError("Stored launch permission mode is invalid.")
     if node.get("permissionMode") == "yolo" and mode != "interactive":
         raise OrchestrationError("YOLO requires an explicitly launched interactive session.")
+    if "enrollment" in node and (
+        node["enrollment"] != "born" or node.get("role") != "coordinator"
+        or mode != "interactive" or not is_direct_launch(node)
+    ):
+        raise OrchestrationError("Stored enrollment origin is invalid.")
     if "permissionPolicyUnverified" in node and node["permissionPolicyUnverified"] is not True:
         raise OrchestrationError("Stored permission policy provenance is invalid.")
 
@@ -2523,6 +2528,165 @@ def command_native_observe(root):
             node["phase"] = "turn-running"
         return {"observed": True}
     return mutate(root, observe)
+
+
+BORN_LABEL = "Copilot session"
+BORN_LAUNCHER_INPUTS = (
+    "CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER",
+    "CMUX_MAESTRO_WORKER_ID", "CMUX_MAESTRO_EXECUTION_MODE",
+)
+
+
+class EnrollmentRefused(OrchestrationError):
+    """A born-managed refusal with one stable reason; the session stays unmanaged."""
+
+    def __init__(self, reason):
+        super().__init__(f"enrollment refused: {reason}")
+        self.reason = reason
+
+
+def process_start_epoch(start):
+    try:
+        return time.mktime(time.strptime(" ".join(start.split()), "%a %b %d %H:%M:%S %Y"))
+    except (AttributeError, ValueError, OverflowError):
+        return None
+
+
+def integration_installed_at(messaging):
+    """Newest install time of the integration files that make a session born managed."""
+    files = [Path(messaging["extension"]) / name for name in ("adapter.mjs", "extension.mjs")]
+    try:
+        return max(os.stat(path, follow_symlinks=False).st_mtime for path in files)
+    except OSError:
+        return None
+
+
+def born_enrollment_request():
+    try:
+        raw = sys.stdin.buffer.read(8193)
+        if len(raw) > 8192:
+            raise ValueError()
+        request = json.loads(raw)
+        if not isinstance(request, dict) or set(request) != {
+            "workspaceId", "surfaceId", "sessionId", "pid", "login", "host",
+        } or type(request["pid"]) is not int or not isinstance(request["login"], str):
+            raise ValueError()
+    except (UnicodeError, ValueError) as error:
+        raise EnrollmentRefused("enrollment-failed") from error
+    try:
+        session = canonical_uuid(request["sessionId"], "session ID")
+        if (session != os.environ.get("SESSION_ID")
+                or str(request["pid"]) != os.environ.get("COPILOT_EXTENSION_PARENT_PID")
+                or any(os.environ.get(key) for key in BORN_LAUNCHER_INPUTS)):
+            raise OrchestrationError("Enrollment does not match the invoking native session.")
+        workspace = canonical_uuid(request["workspaceId"], "workspace ID")
+        surface = canonical_uuid(request["surfaceId"], "surface ID")
+        require_current_surface(workspace, surface)
+    except OrchestrationError as error:
+        raise EnrollmentRefused("cmux-identity-unverified") from error
+    if request["host"] not in {"github.com", "https://github.com"}:
+        raise EnrollmentRefused("account-unverified")
+    try:
+        validate_launch_settings({"version": 1, "copilotAccount": request["login"]})
+    except OrchestrationError as error:
+        raise EnrollmentRefused("account-unverified") from error
+    return workspace, surface, session, request["pid"], request["login"]
+
+
+def command_native_enroll(root, cmux):
+    """Born managed (ADR 0025): enroll the invoking session, at its start, as its own root."""
+    workspace, surface, session, pid, login = born_enrollment_request()
+    try:
+        messaging = messaging_configuration(root)
+    except OrchestrationError as error:
+        raise EnrollmentRefused("integration-not-installed") from error
+    if messaging is None:
+        raise EnrollmentRefused("integration-not-installed")
+    try:
+        anchor = direct_process_identity(pid)
+    except OrchestrationError as error:
+        raise EnrollmentRefused("provider-process-unverified") from error
+    started = process_start_epoch(anchor["start"])
+    installed = integration_installed_at(messaging)
+    # A session that was already running when this integration was installed is never enrolled
+    # in place. Same-second starts are refused; process start times have one-second precision.
+    if started is None or installed is None or started <= int(installed):
+        raise EnrollmentRefused("session-started-before-install")
+    try:
+        pane = cmux.validate_surface(workspace, surface)
+        if surface not in cmux.workspace_surfaces(workspace):
+            raise OrchestrationError("CMUX surface inventory does not list the exact surface.")
+        copilot, launch_path = provider_launch_context()
+    except (OrchestrationError, OSError) as error:
+        raise EnrollmentRefused("cmux-identity-unverified") from error
+
+    def existing(state):
+        for node in state["nodes"].values():
+            if node.get("copilotSessionId") == session:
+                if (node.get("enrollment") == "born" and node.get("providerProcess") == anchor
+                        and (node["workspaceId"], node["surfaceId"]) == (workspace, surface)
+                        and node["phase"] == "turn-running"):
+                    return node
+                raise EnrollmentRefused("session-previously-managed")
+            if node.get("providerProcess") == anchor:
+                raise EnrollmentRefused("provider-already-enrolled")
+        return None
+
+    def receipt(node):
+        return {
+            "nodeId": node["id"], "workspaceId": node["workspaceId"], "sessionId": session,
+            "generation": node["generation"], "routes": node["messaging"]["routes"],
+            "peer": message_peer(node),
+        }
+
+    snapshot = read_state(root)
+    current = existing(snapshot)
+    if current is not None:
+        # Extension reload inside the same enrolled provider process: same node and route.
+        return receipt(current)
+    # The account is observed from the session itself; no pinned launch login is stored.
+    settings = {"version": 1}
+    node, _ = new_root(workspace, surface, pane, BORN_LABEL)
+    node.update({
+        "runtimeProtocolVersion": 2, "launchMethod": "direct", "enrollment": "born",
+        "copilotExecutable": copilot, "launchPath": launch_path,
+        "executionMode": "interactive", "generation": 1, "copilotSessionId": session,
+        "launchSettings": settings, "copilotAccount": {"login": login, "host": RECORDED_ACCOUNT_HOST},
+        "messaging": messaging, "permissionMode": "default", "providerProcess": anchor,
+        "phase": "turn-running", "availability": "busy",
+    })
+
+    def enroll(state):
+        if existing(state) is not None:
+            raise EnrollmentRefused("session-previously-managed")
+        if (any(item.get("surfaceId") == surface for item in state["nodes"].values())
+                or any(item["surfaceId"] == surface for item in state["retainedResources"])
+                or any(lease.get("surfaceId") == surface for lease in state["launches"].values())):
+            raise EnrollmentRefused("surface-owned")
+        try:
+            require_node_capacity(state, workspace)
+            require_workspace_capacity(state, workspace)
+        except OrchestrationError as error:
+            raise EnrollmentRefused("capacity-unavailable") from error
+        state["nodes"][node["id"]] = node
+        return receipt(node)
+
+    try:
+        bind_messaging(node)
+    except (OrchestrationError, OSError) as error:
+        raise EnrollmentRefused("enrollment-failed") from error
+    try:
+        return mutate(root, enroll)
+    except CommittedProjectionError:
+        raise
+    except (OrchestrationError, OSError) as error:
+        try:
+            retire_messaging(node)
+        except (OrchestrationError, OSError):
+            pass  # A route whose identity cannot be proven stays in place.
+        if isinstance(error, EnrollmentRefused):
+            raise
+        raise EnrollmentRefused("enrollment-failed") from error
 
 
 def close_process_is_live(process):
@@ -5269,6 +5433,7 @@ def parser():
     commands.add_parser("native-spawn", help="Private session-bound launch ingress; use the native maestro_spawn tool")
     commands.add_parser("native-close", help="Private owned-child close ingress; use the native maestro_close tool")
     commands.add_parser("native-observe", help=argparse.SUPPRESS)
+    commands.add_parser("native-enroll", help="Private born-managed enrollment ingress; used by the native adapter")
     commands.add_parser("beats-snapshot", help=argparse.SUPPRESS)
     commands.add_parser("launch-credential", help=argparse.SUPPRESS)
     commands.add_parser(
@@ -5442,6 +5607,8 @@ def main(argv=None):
             output = command_native_close(root, cmux)
         elif args.command == "native-observe":
             output = command_native_observe(root)
+        elif args.command == "native-enroll":
+            output = command_native_enroll(root, cmux)
         elif args.command == "runtime":
             output = command_runtime(args, root)
         elif args.command == "report":

@@ -196,6 +196,30 @@ proof bypass was fixed before credential lookup/reservation. No full parent
 permission inheritance, auto-approval callback, or persistent policy rewrite is
 inferred. Cleanup must follow exact lifecycle ownership, not a guessed idle state.
 
+### Born managed sessions (#252, ADR 0025)
+
+A Copilot session that starts in a CMUX terminal with no launcher inputs now
+enrolls itself as its own root coordinator. The loader joins once with the
+managed tools plus `maestro_readiness`. The managed tools refuse until
+enrollment succeeds. The loader then reads the session's own account with
+`gitHubAuth.getStatus()` and calls the controller's private `native-enroll`
+ingress with the session, workspace, surface, provider PID
+(`COPILOT_EXTENSION_PARENT_PID`) and account. The controller verifies each value
+and either records a new root and publishes its route, or refuses with one
+stable reason. `maestro_readiness` then reports `managed` with the node and
+generation, or `diagnostic-only` with that reason. See
+[ADR 0025](adr/0025-copilot-sessions-started-in-cmux-are-born-managed.md) for
+the checks.
+
+Reasons: `provider-process-unverified`, `account-unverified`,
+`integration-not-installed`, `session-started-before-install`,
+`cmux-identity-unverified`, `surface-owned`, `provider-already-enrolled`,
+`session-previously-managed`, `capacity-unavailable`, `enrollment-failed`.
+Unknown controller output becomes `enrollment-failed`; raw errors are never shown.
+
+The readiness-only branch below now applies only when launcher inputs are
+incomplete.
+
 ### Ordinary-session readiness (partial #162)
 
 When this loader is enabled and discovered by Copilot in an ordinary CMUX

@@ -6,6 +6,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Copilot sessions you start in a CMUX terminal are born managed (#252, ADR 0025). After setup,
+  each new session enrolls itself as its own root: it can see and message its workspace peers
+  and spawn and close its own children. It records your session's account, with no credential,
+  and a default policy with no grants. Sessions that were running before setup stay unmanaged.
+  At capacity, or if any identity check fails, the session stays unmanaged and
+  `maestro_readiness` says why.
 - Managed nodes have one recorded account `{login, host}` (#252): the launch's pinned login, or
   the account a session reported itself. No credential is stored. ADR 0024 sets one restore owner
   per node and the rules for resuming an ended managed session after a CMUX relaunch; ADR 0004

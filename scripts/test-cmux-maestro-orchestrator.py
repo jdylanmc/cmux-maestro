@@ -1718,6 +1718,185 @@ class RecordedAccountStateLoadTests(unittest.TestCase):
                          {"login": "synthetic-account", "host": "github.com"})
 
 
+BORN_PROVIDER = r"""
+import json, os, subprocess, sys
+# Stands in for the Copilot provider: the enrolling controller runs as its descendant.
+driver, request, overrides = sys.argv[1], json.loads(sys.argv[2]), json.loads(sys.argv[3])
+request.setdefault("pid", os.getpid())
+env = {**os.environ, "COPILOT_EXTENSION_PARENT_PID": str(os.getpid()), **overrides}
+env = {key: value for key, value in env.items() if value is not None}
+sessions = json.loads(sys.argv[5])
+runs = [({**request, "sessionId": session}, {**env, "SESSION_ID": session}) for session in sessions] or \
+    [(request, env)] * int(sys.argv[4])
+results = [subprocess.run([sys.executable, driver, "native-enroll"], input=json.dumps(body),
+                          env=environment, capture_output=True, text=True, timeout=15)
+           for body, environment in runs]
+print(json.dumps([{"pid": os.getpid(), "returncode": result.returncode,
+                   "stdout": result.stdout, "stderr": result.stderr} for result in results]))
+"""
+
+
+class BornManagedEnrollmentTests(unittest.TestCase):
+    """Copilot sessions started in CMUX enroll as their own root (ADR 0025)."""
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.close)
+        self.routes = Path(tempfile.mkdtemp(prefix="m61-", dir="/tmp")).resolve()
+        self.addCleanup(shutil.rmtree, self.routes, True)
+        self.extension = self.h.path / "installed-extension"
+        self.extension.mkdir(mode=0o700)
+        for name in ("adapter.mjs", "extension.mjs"):
+            shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, self.extension / name)
+            (self.extension / name).chmod(0o600)
+        self.install(age=10)
+        self.provider = self.h.path / "born-provider.py"
+        self.provider.write_text(BORN_PROVIDER)
+
+    def install(self, age):
+        bin_directory = self.h.root / "bin"
+        bin_directory.mkdir(mode=0o700, exist_ok=True)
+        config = bin_directory / "messaging.json"
+        config.write_text(json.dumps({"version": 1, "routes": str(self.routes), "extension": str(self.extension)}))
+        config.chmod(0o600)
+        stamp = time.time() - age
+        for name in ("adapter.mjs", "extension.mjs"):
+            os.utime(self.extension / name, (stamp, stamp))
+
+    def enroll(self, surface=None, session=None, login="human-account", host="github.com",
+               env=None, repeat=1, sessions=(), **request):
+        surface = surface or str(uuid.uuid4())
+        if surface not in self.h.cmux_data()["surfaces"]:
+            self.h.add_surface(surface)
+        session = session or str(uuid.uuid4())
+        body = {"workspaceId": self.h.workspace, "surfaceId": surface, "sessionId": session,
+                "login": login, "host": host, **request}
+        overrides = {"CMUX_SURFACE_ID": surface, "SESSION_ID": session, **(env or {})}
+        with open(self.h.lifetime.name, "rb") as lifetime:
+            fcntl.flock(lifetime, fcntl.LOCK_SH)
+            completed = subprocess.run(
+                [sys.executable, str(self.provider), str(self.h.driver), json.dumps(body), json.dumps(overrides),
+                 str(repeat), json.dumps(list(sessions))],
+                env={**self.h.env, "FAKE_PROCESS_LIFETIME_FD": str(lifetime.fileno())},
+                pass_fds=(lifetime.fileno(),), capture_output=True, text=True, timeout=20,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        outcomes = []
+        for result in json.loads(completed.stdout):
+            if result["returncode"] == 0:
+                outcomes.append({"ok": True, "surface": surface, "session": session, "pid": result["pid"],
+                                 **json.loads(result["stdout"])})
+            else:
+                outcomes.append({"ok": False, "surface": surface, "session": session,
+                                 "error": json.loads(result["stderr"])["error"]})
+        return outcomes[0] if len(outcomes) == 1 else outcomes
+
+    def refused(self, outcome, reason):
+        self.assertFalse(outcome["ok"], outcome)
+        self.assertEqual(outcome["error"], f"enrollment refused: {reason}")
+
+    def test_session_born_in_cmux_becomes_its_own_root_with_recorded_account(self):
+        outcome = self.enroll()
+        self.assertTrue(outcome["ok"], outcome)
+        node = self.h.state()["nodes"][outcome["nodeId"]]
+        self.assertEqual((node["role"], node["parentId"], node["enrollment"]), ("coordinator", None, "born"))
+        self.assertNotEqual(node["runId"], self.h.registration["runId"])
+        self.assertEqual((node["surfaceId"], node["copilotSessionId"], node["generation"]),
+                         (outcome["surface"], outcome["session"], 1))
+        self.assertEqual(node["copilotAccount"], {"login": "human-account", "host": "github.com"})
+        self.assertEqual(node["toolPolicy"], {"allow": [], "deny": []})
+        self.assertEqual(node["permissionMode"], "default")
+        self.assertEqual(node["providerProcess"]["pid"], outcome["pid"])
+        self.assertEqual((outcome["routes"], outcome["peer"]),
+                         (str(self.routes), CONTROLLER_API["message_peer"](node)))
+        binding = json.loads((self.routes / f"{outcome['peer']}.json").read_text())
+        self.assertEqual((binding["nodeId"], binding["sessionId"], binding["generation"]),
+                         (node["id"], outcome["session"], 1))
+        self.assertNotIn("synthetic-work-token", json.dumps(self.h.state()))
+        self.assertEqual(self.h.calls(), [])
+
+    def test_extension_reload_in_the_same_provider_reuses_the_node(self):
+        first, reload = self.enroll(repeat=2)
+        self.assertTrue(first["ok"] and reload["ok"], (first, reload))
+        self.assertEqual(reload, first)
+        born = [n for n in self.h.state()["nodes"].values() if n.get("enrollment") == "born"]
+        self.assertEqual([n["id"] for n in born], [first["nodeId"]])
+        node = born[0]
+        # A different provider process on the same session is not a reload.
+        again = self.enroll(surface=first["surface"], session=first["session"])
+        self.refused(again, "session-previously-managed")
+        self.assertEqual(self.h.state()["nodes"][first["nodeId"]], node)
+
+    def test_a_second_session_in_the_same_provider_is_refused(self):
+        # After /clear the same provider process reports a new session in the same surface.
+        first, second = self.enroll(sessions=[str(uuid.uuid4()), str(uuid.uuid4())])
+        self.assertTrue(first["ok"], first)
+        self.refused(second, "provider-already-enrolled")
+        self.assertEqual(len([n for n in self.h.state()["nodes"].values() if n.get("enrollment")]), 1)
+
+    def test_already_running_sessions_are_never_enrolled_in_place(self):
+        self.install(age=-30)
+        before = self.h.state()
+        self.refused(self.enroll(), "session-started-before-install")
+        self.assertEqual(self.h.state(), before)
+        self.assertEqual(list(self.routes.iterdir()), [])
+
+    def test_without_production_integration_the_session_stays_unmanaged(self):
+        (self.h.root / "bin" / "messaging.json").unlink()
+        before = self.h.state()
+        self.refused(self.enroll(), "integration-not-installed")
+        self.assertEqual(self.h.state(), before)
+
+    def test_capacity_refusal_keeps_history_and_writes_nothing(self):
+        self.h.limit_capacity(1)
+        before = self.h.state()
+        self.refused(self.enroll(), "capacity-unavailable")
+        self.assertEqual(self.h.state()["nodes"], before["nodes"])
+        self.assertEqual(self.h.state()["archives"], before["archives"])
+        self.assertEqual(list(self.routes.iterdir()), [])
+
+    def test_an_owned_surface_is_never_taken(self):
+        self.refused(self.enroll(surface=self.h.surface), "surface-owned")
+
+    def test_identity_mismatches_refuse_before_any_write(self):
+        before = self.h.state()
+        other = str(uuid.uuid4())
+        self.refused(self.enroll(env={"CMUX_SURFACE_ID": other}), "cmux-identity-unverified")
+        self.refused(self.enroll(env={"SESSION_ID": str(uuid.uuid4())}), "cmux-identity-unverified")
+        self.refused(self.enroll(env={"CMUX_MAESTRO_WORKER_ID": str(uuid.uuid4())}), "cmux-identity-unverified")
+        self.refused(self.enroll(env={"COPILOT_EXTENSION_PARENT_PID": "1"}), "cmux-identity-unverified")
+        self.refused(self.enroll(pid=os.getpid()), "cmux-identity-unverified")
+        surface = str(uuid.uuid4())
+        self.refused(self.enroll(surface=surface, env={"CMUX_SURFACE_ID": surface},
+                                 surfaceId=str(uuid.uuid4())), "cmux-identity-unverified")
+        self.assertEqual(self.h.state(), before)
+
+    def test_unverified_account_refuses(self):
+        for login, host in (("--show-token", "github.com"), ("human", "example.com"), ("", "github.com")):
+            with self.subTest(login=login, host=host):
+                self.refused(self.enroll(login=login, host=host), "account-unverified")
+
+    def test_surface_missing_from_cmux_inventory_refuses(self):
+        surface = str(uuid.uuid4())
+        self.h.add_surface(surface)
+        data = self.h.cmux_data()
+        data["inventoryUnavailable"] = True
+        self.h.cmux_state.write_text(json.dumps(data))
+        self.refused(self.enroll(surface=surface), "cmux-identity-unverified")
+
+    def test_born_root_spawns_children_with_its_own_account_and_no_grants(self):
+        h = self.h
+        outcome = self.enroll()
+        binding = json.loads((self.routes / f"{outcome['peer']}.json").read_text())
+        identity = {key: binding[key] for key in ("nodeId", "workspaceId", "sessionId", "generation", "capability")}
+        node = h.state()["nodes"][outcome["nodeId"]]
+        authorized = CONTROLLER_API["authorize_native_spawn"](
+            h.state(), {**identity, "login": "human-account", "host": "github.com"})
+        self.assertEqual(authorized["id"], node["id"])
+        self.assertEqual(CONTROLLER_API["recorded_native_permissions"](node),
+                         ("default", {"allow": [], "deny": []}))
+
+
 class OrchestratorTests(unittest.TestCase):
     def setUp(self):
         self.h = Harness()
