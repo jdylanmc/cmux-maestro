@@ -1652,6 +1652,41 @@ class AdmissionGateTests(unittest.TestCase):
         self.assertEqual(self.h.calls(), [])
 
 
+class RecordedAccountTests(unittest.TestCase):
+    validate = staticmethod(CONTROLLER_API["validate_recorded_account"])
+
+    def test_records_login_and_host_without_credentials(self):
+        record = CONTROLLER_API["recorded_account"]({"version": 1, "copilotAccount": "work-user"})
+        self.assertEqual(record, {"login": "work-user", "host": "github.com"})
+        self.assertIsNone(CONTROLLER_API["recorded_account"]({"version": 1}))
+        self.assertIsNone(CONTROLLER_API["recorded_account"](None))
+
+    def test_absent_record_is_unknown_not_invalid(self):
+        self.validate({"launchSettings": {"version": 1, "copilotAccount": "work-user"}})
+        self.validate({})
+
+    def test_matching_record_validates(self):
+        self.validate({
+            "launchSettings": {"version": 1, "copilotAccount": "work-user"},
+            "copilotAccount": {"login": "work-user", "host": "github.com"},
+        })
+
+    def test_drifted_or_extra_record_refuses(self):
+        settings = {"version": 1, "copilotAccount": "work-user"}
+        for record in (
+            {"login": "other-user", "host": "github.com"},
+            {"login": "work-user", "host": "example.com"},
+            {"login": "work-user", "host": "github.com", "token": "synthetic"},
+            {"login": "work-user"},
+            "work-user",
+            None,
+        ):
+            with self.subTest(record=record), self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+                self.validate({"launchSettings": settings, "copilotAccount": record})
+        with self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+            self.validate({"copilotAccount": {"login": "work-user", "host": "github.com"}})
+
+
 class OrchestratorTests(unittest.TestCase):
     def setUp(self):
         self.h = Harness()
@@ -1938,6 +1973,7 @@ class OrchestratorTests(unittest.TestCase):
             self.assertIsNone(node["parentId"])
             self.assertNotEqual(node["runId"], h.registration["runId"])
             self.assertEqual(node["launchSettings"]["copilotAccount"], "root-account")
+            self.assertEqual(node["copilotAccount"], {"login": "root-account", "host": "github.com"})
             self.assertEqual(node["toolPolicy"]["deny"], ["web"])
             self.assertEqual(h.state()["nodes"][h.node]["surfaceId"], h.surface)
             self.assertEqual(h.cmux_data()["selected"], h.surface)
@@ -4158,6 +4194,8 @@ class DirectLaunchTests(unittest.TestCase):
             child = h.wait_node(receipt["workerId"], lambda item: item.get("providerProcess"))
             self.assertEqual(child["parentId"], root_id)
             self.assertEqual(child["launchSettings"]["copilotAccount"], "root-account")
+            self.assertEqual(child["copilotAccount"], {"login": "root-account", "host": "github.com"})
+            self.assertNotIn("synthetic-work-token", json.dumps(h.state()))
             call = next(call for call in h.calls() if call["session"] == child["copilotSessionId"])
             prompt = call["args"][call["args"].index("--interactive") + 1]
             address = json.loads(next(line.split(": ", 1)[1] for line in prompt.splitlines()

@@ -6,6 +6,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Managed coordinator and child node records now keep the launch account `{login, host}`
+  as a recorded account, with no credential (#252). ADR 0024 sets the rules for resuming an
+  ended managed session after a CMUX relaunch; ADR 0004 now limits the fresh session ID to
+  new workers. Nothing resumes yet.
 - Reorder workspaces, and the surfaces in one workspace, in Maestro's sidebar. Drag a row's
   title, or use **Move Up** and **Move Down** in its actions menu or as VoiceOver actions.
   The order is Maestro's only and is never sent to CMUX (ADR 0021): it lives in the

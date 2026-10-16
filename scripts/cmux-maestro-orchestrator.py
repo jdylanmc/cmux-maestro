@@ -323,6 +323,25 @@ def validate_launch_settings(value):
     return value
 
 
+RECORDED_ACCOUNT_HOST = "github.com"
+
+
+def recorded_account(launch_settings):
+    """Account {login, host} recorded for a node at launch. Never a credential."""
+    login = (launch_settings or {}).get("copilotAccount")
+    return None if login is None else {"login": login, "host": RECORDED_ACCOUNT_HOST}
+
+
+def validate_recorded_account(node):
+    if "copilotAccount" not in node:
+        return
+    account = node["copilotAccount"]
+    if (not isinstance(account, dict) or set(account) != {"login", "host"}
+            or account["host"] != RECORDED_ACCOUNT_HOST
+            or account != recorded_account(node.get("launchSettings"))):
+        raise OrchestrationError("Stored recorded account is invalid.")
+
+
 def worker_launch_settings(root):
     data = with_store(root, lambda store: store._read_regular(
         "worker-settings.json", 8192, private=True, directory=store.root_fd
@@ -1016,6 +1035,7 @@ def _validate_node_mode(node):
 def _validate_node_launch_configuration(node, mode):
     if node.get("launchSettings") is not None:
         validate_launch_settings(node["launchSettings"])
+    validate_recorded_account(node)
     if "launchSelection" in node:
         validate_launch_selection(node["launchSelection"])
         configured = node["launchSelection"]["configured"]
@@ -2136,6 +2156,7 @@ def command_launch_coordinator(args, root, cmux):
         "copilotExecutable": copilot, "launchPath": launch_path,
         "executionMode": "interactive", "generation": 1,
         "copilotSessionId": str(uuid.uuid4()), "launchSettings": settings,
+        "copilotAccount": recorded_account(settings),
         "messaging": messaging, "permissionMode": "yolo" if args.yolo else "default",
         "phase": "launching", "availability": "busy", "task": task,
         "toolPolicy": policy,
@@ -2910,6 +2931,9 @@ def command_spawn(args, root, cmux, *, native_identity=None):
             "archiving": False,
             "verifiedBoundaryGeneration": None, "toolPolicy": tool_policy,
         }
+        account = recorded_account(launch_settings)
+        if account is not None:
+            state["nodes"][identifier]["copilotAccount"] = account
         if proof is not None:
             state["nodes"][identifier]["deliveryProof"] = proof
         if messaging is not None:
