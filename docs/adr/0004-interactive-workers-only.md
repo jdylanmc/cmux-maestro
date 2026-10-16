@@ -11,3 +11,7 @@ Consequence: no deterministic startup or completion proof. Launch return means e
 ## Amendment (2026-10-16, #252)
 
 A fresh `--session-id` applies to new workers only. A managed session that CMUX ended by quitting or crashing may be resumed in its restored terminal with its recorded session ID, under [ADR 0024](0024-resume-ended-managed-sessions-after-relaunch.md). A resumed session is still visible and interactive. Maestro still never restarts, adopts, or signals a live session.
+
+## Amendment (2026-10-16, #252): born managed
+
+A Copilot session the human starts in a CMUX terminal is managed from its start under [ADR 0025](0025-copilot-sessions-started-in-cmux-are-born-managed.md). Maestro does not launch it and does not give it a session ID. It is still a visible, interactive session. Already-running sessions are still never enrolled.
