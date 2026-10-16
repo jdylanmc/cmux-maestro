@@ -122,6 +122,22 @@ _Avoid_: follow-up, terminal input
 Generation-bound, capability-bound messaging path. Retired when the provider exits or the run is archived.
 _Avoid_: channel
 
+**Recorded account**:
+`{login, host}` of the account a managed session launched with, kept in its node record. No credential.
+_Avoid_: saved account, pinned account (those are launch settings)
+
+**Relaunch**:
+CMUX quits or crashes, then opens again. Windows, workspaces, and surfaces return. Processes do not.
+_Avoid_: restart, reboot
+
+**Ended session**:
+Managed session with no live or uncertain process: no live `inuse.<PID>.lock` owner and no recorded process that may still run.
+_Avoid_: dead session, stale session
+
+**Resume** (managed):
+Start an ended managed session again in its restored surface, by exact recorded session ID, as a new generation. Never a live session. (ADR 0024)
+_Avoid_: restart, reattach, adopt
+
 **Workspace capacity**:
 Launch limit (1 to 128, default 32) against current managed usage. Preflight is advisory; reservation rechecks.
 _Avoid_: quota
