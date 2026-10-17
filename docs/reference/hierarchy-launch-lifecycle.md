@@ -63,6 +63,9 @@ run first. Children's surfaces become retained resources; the root's surface
 goes to the new root. To free capacity by hand, run
 `cmux-maestro-orchestrator archive-ended --workspace <id>`. It archives only
 proven-ended born runs and reports `archivedRuns`, `keptRuns`, and capacity.
+Direct launches set `CMUX_COPILOT_HOOKS_DISABLED=1` and attach a CMUX resume
+binding to their surface. After a relaunch, `resume-managed` resumes them as
+the next generation. See [Relaunch restore](relaunch-restore.md).
 Ordinary shell `spawn` cannot establish that evidence and refuses. Source-only
 disposable proof compatibility is not production fallback. **New workers are
 interactive Copilot sessions**, launched with `--interactive` and initial

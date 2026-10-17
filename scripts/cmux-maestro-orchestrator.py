@@ -1177,8 +1177,8 @@ def _validate_node_session_claim(node, role, mode, runtime_version):
         canonical_uuid(session_id, "stored Copilot session ID")
     if role == "coordinator":
         if mode == "interactive":
-            # A born root's generation continues across enrollments of its session.
-            resumable = node.get("enrollment") == "born" and node["generation"] >= 1
+            # Born roots and direct launches resume as later generations (ADR 0024).
+            resumable = (node.get("enrollment") == "born" or is_direct_launch(node)) and node["generation"] >= 1
             if (session_id is None or (node["generation"] != 1 and not resumable)
                     or node.get("launchSettings") is None or runtime_version != 2):
                 raise OrchestrationError("Managed coordinator requires an exact launch identity.")
@@ -1904,6 +1904,17 @@ class Cmux:
                     walk(child)
         walk(report)
         return normalized_tty(found[0]) if len(found) == 1 else None
+
+    def set_resume_binding(self, workspace, surface, cwd, session, argv):
+        """Attach Maestro's restart command to one exact surface. Identifiers only, no secrets."""
+        invocation = [self.executable, "surface", "resume", "set", "--workspace", workspace,
+                      "--surface", surface, "--cwd", cwd, "--kind", "agent", "--checkpoint", session,
+                      "--", *argv]
+        try:
+            result = subprocess.run(invocation, capture_output=True, text=True, timeout=close_timeout(15))
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+        return result.returncode == 0
 
     def workspace_surfaces(self, workspace):
         # surface.list takes one host main-actor snapshot. Separate pane reads
@@ -3102,6 +3113,141 @@ def resume_born_root(root, cmux, snapshot, previous, workspace, surface, session
         raise EnrollmentRefused("enrollment-failed") from error
 
 
+class ResumeRefused(OrchestrationError):
+    """One plain diagnostic line; the restored tab stays a plain shell."""
+
+
+def resume_binding_argv(node):
+    return [sys.executable, str(CONTROLLER_ENTRYPOINT), "resume-managed",
+            "--worker-id", node["id"], "--session-id", node["copilotSessionId"]]
+
+
+def session_has_live_owner(session):
+    """True when any inuse.<PID>.lock owner may be alive, or ownership cannot be read."""
+    source = Path.home() / ".copilot/session-state" / session
+    try:
+        names = os.listdir(source)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    if len(names) > 512 or source.is_symlink():
+        return True
+    for name in names:
+        match = re.fullmatch(r"inuse\.([1-9][0-9]{0,9})\.lock", name)
+        if not match:
+            continue
+        try:
+            os.kill(int(match.group(1)), 0)
+        except ProcessLookupError:
+            continue
+        except OSError:
+            return True
+        return True
+    return False
+
+
+def command_resume_managed(args, root, cmux):
+    """Run by CMUX in a restored surface: resume one ended managed session there (ADR 0024)."""
+    try:
+        worker_id = canonical_uuid(args.worker_id, "worker ID")
+        session = canonical_uuid(args.session_id, "session ID")
+        workspace = canonical_uuid(os.environ.get("CMUX_WORKSPACE_ID"), "current workspace ID")
+        surface = canonical_uuid(os.environ.get("CMUX_SURFACE_ID"), "current surface ID")
+    except OrchestrationError as error:
+        raise ResumeRefused("this terminal's CMUX workspace or surface is unknown") from error
+    if any(os.environ.get(key) for key in BORN_LAUNCHER_INPUTS):
+        raise ResumeRefused("this terminal already carries Maestro launcher inputs")
+    snapshot = read_state(root)
+    node = snapshot["nodes"].get(worker_id)
+    if node is None or node.get("copilotSessionId") != session:
+        raise ResumeRefused("Maestro has no record of this session")
+    if (not is_direct_launch(node) or node.get("enrollment") or node.get("launchError")
+            or not node.get("launchAccepted") or not node.get("messaging")):
+        raise ResumeRefused("this session was not launched by Maestro as a managed session")
+    if (node["workspaceId"], node.get("surfaceId")) != (workspace, surface):
+        raise ResumeRefused("this is not the session's recorded surface")
+    if (node["id"] in snapshot["launches"] or node.get("surfaceUnknown")
+            or process_observation(node.get("providerProcess")) is not False
+            or session_has_live_owner(session)):
+        raise ResumeRefused("the session may still be running")
+    account = node.get("copilotAccount")
+    if account is None:
+        raise ResumeRefused("the session has no recorded account")
+    try:
+        recorded_native_permissions(node)
+        validate_tool_policy(node["toolPolicy"])
+    except OrchestrationError as error:
+        raise ResumeRefused("the recorded launch policy is unavailable") from error
+    try:
+        messaging = messaging_configuration(root)
+    except OrchestrationError as error:
+        raise ResumeRefused("Maestro integration is not installed") from error
+    if messaging != node["messaging"]:
+        raise ResumeRefused("Maestro integration changed since launch; start a new session")
+    try:
+        cmux.validate_surface(workspace, surface)
+        if surface not in cmux.workspace_surfaces(workspace):
+            raise OrchestrationError("Surface is not listed.")
+        arguments = resume_arguments(node)
+    except OrchestrationError as error:
+        raise ResumeRefused("CMUX did not confirm this surface or Copilot is unavailable") from error
+    try:
+        subscription = resolve_copilot_token(account["login"])
+    except OrchestrationError as error:
+        raise ResumeRefused(f"recorded account {account['login']} is not signed in to GitHub CLI") from error
+    token = secrets.token_hex(32)
+    resumed = {**node, "generation": node["generation"] + 1, "tokenHash": token_hash(token),
+               "providerProcess": None}
+    identity_keys = ("runId", "parentId", "role", "workspaceId", "surfaceId", "copilotSessionId",
+                     "generation", "providerProcess", "tokenHash", "messaging", "toolPolicy",
+                     "permissionMode", "launchSettings", "copilotAccount")
+    try:
+        bind_messaging(resumed)
+    except (OrchestrationError, OSError) as error:
+        raise ResumeRefused("the session's peer route could not be published") from error
+
+    def resume(state, retiring):
+        current = state["nodes"].get(worker_id)
+        if (current is None or any(current.get(key) != node.get(key) for key in identity_keys)
+                or worker_id in state["launches"]):
+            raise ResumeRefused("the session's record changed")
+        retiring.append(dict(current))
+        current.update(generation=resumed["generation"], tokenHash=resumed["tokenHash"],
+                       providerProcess=None, phase="launching", availability="busy",
+                       result=None, updatedAt=now())
+        current.pop("runtimeNotStarted", None)
+    try:
+        mutate_retiring_routes(root, resume)
+    except (OrchestrationError, OSError) as error:
+        try:
+            retire_messaging(resumed)
+        except (OrchestrationError, OSError):
+            pass
+        if isinstance(error, ResumeRefused):
+            raise
+        raise ResumeRefused("the session's record could not be updated") from error
+    environment = worker_environment(worker_id, token, resumed, credentials=False)
+    environment = {key: value for key, value in environment.items()
+                   if not key.startswith("CMUX_MAESTRO_") or key in DIRECT_ENVIRONMENT_KEYS}
+    environment.update({
+        "CMUX_WORKSPACE_ID": workspace, "CMUX_SURFACE_ID": surface,
+        "CMUX_MAESTRO_LAUNCH_PID": str(os.getpid()), "CMUX_MAESTRO_DIRECT_LAUNCH": "1",
+        "CMUX_COPILOT_HOOKS_DISABLED": "1", "COPILOT_GITHUB_TOKEN": subscription,
+    })
+    try:
+        os.chdir(node["workingDirectory"])
+        os.execve(arguments[0], arguments, environment)
+    except OSError as error:
+        def failed(state):
+            current = state["nodes"].get(worker_id)
+            if current is not None and current["generation"] == resumed["generation"]:
+                current.update(phase="launch-failed", availability="unavailable",
+                               runtimeNotStarted=True, updatedAt=now())
+        mutate(root, failed)
+        raise ResumeRefused("Copilot could not start") from error
+
+
 def close_process_is_live(process):
     """Affirmative close admission, not conservative resource retention."""
     if not process:
@@ -3630,12 +3776,25 @@ def maestro_task(task, coordinator=None):
 
 
 def interactive_arguments(node, prompt):
-    arguments = [
+    return [
         trusted_executable(node.get("copilotExecutable") or "copilot"),
         "--no-auto-update", "--interactive", prompt,
         "--session-id", node["copilotSessionId"], "--name", node["label"],
         "-C", node["workingDirectory"],
-    ]
+    ] + recorded_launch_flags(node)
+
+
+def resume_arguments(node):
+    # Copilot rejects --name with --resume; the session keeps its name. No new prompt or ID.
+    return [
+        trusted_executable(node.get("copilotExecutable") or "copilot"),
+        "--no-auto-update", f"--resume={node['copilotSessionId']}", "-C", node["workingDirectory"],
+    ] + recorded_launch_flags(node)
+
+
+def recorded_launch_flags(node):
+    """The node's recorded model and tool policy, replayed exactly; denies always included."""
+    arguments = []
     model = (node.get("launchSettings") or {}).get("model")
     if model is not None:
         arguments += ["--model", model]
@@ -3690,6 +3849,8 @@ def prepare_direct_launch(root, node, token):
     script += "".join(f"export {key}={shlex.quote(environment[key])}\n"
                       for key in sorted(keys) if key in environment)
     script += 'export CMUX_MAESTRO_LAUNCH_PID=$$\nexport CMUX_MAESTRO_DIRECT_LAUNCH=1\n'
+    # CMUX's own Copilot restore never claims a managed tab; Maestro's binding does (ADR 0024).
+    script += "export CMUX_COPILOT_HOOKS_DISABLED=1\n"
     script += "unset CMUX_MAESTRO_INITIAL_TASK\n"
     script += f"CMUX_MAESTRO_INITIAL_TASK={shlex.quote(arguments[3])}\n"
     if (node.get("launchSettings") or {}).get("copilotAccount"):
@@ -3766,7 +3927,11 @@ def launch_direct_session(root, cmux, node, token, pane):
                 "surfaceId": surface, "workspaceId": workspace, "generation": current["generation"],
                 "phase": current["phase"], **startup_observation(current, True),
             }
-        return mutate(root, attach)
+        receipt = mutate(root, attach)
+        # Best effort: a missing binding only means this tab cannot be resumed after a relaunch.
+        bound = cmux.set_resume_binding(workspace, surface, node["workingDirectory"],
+                                        node["copilotSessionId"], resume_binding_argv(node))
+        return {**receipt, "resumeBinding": "set" if bound else "unavailable"}
     except (OrchestrationError, OSError) as error:
         def failed(state, retiring):
             current = state["nodes"].get(identifier)
@@ -5867,6 +6032,9 @@ def parser():
     commands.add_parser("native-session-end", help=argparse.SUPPRESS)
     ended = commands.add_parser("archive-ended", help="Archive born-managed runs whose processes all ended")
     ended.add_argument("--workspace", required=True)
+    resume = commands.add_parser("resume-managed", help="Resume one ended managed session in its restored CMUX surface")
+    resume.add_argument("--worker-id", required=True)
+    resume.add_argument("--session-id", required=True)
     commands.add_parser("beats-snapshot", help=argparse.SUPPRESS)
     commands.add_parser("launch-credential", help=argparse.SUPPRESS)
     commands.add_parser(
@@ -6016,6 +6184,14 @@ def main(argv=None):
             print(json.dumps({"ok": True, **command_self_icon(args)}, sort_keys=True))
             return 0
         root = default_root()
+        if args.command == "resume-managed":
+            # Runs in the restored tab: one plain line on refusal, and the shell stays.
+            try:
+                command_resume_managed(args, root, Cmux())
+            except Exception as error:  # noqa: BLE001 - one plain line, never a traceback or raw error
+                reason = str(error) if isinstance(error, ResumeRefused) else "the session could not be verified"
+                print(f"Maestro did not resume this session: {reason}.", file=sys.stderr)
+                return 2
         if args.command == "launch-credential":
             # Captured directly into the new terminal's environment, never a
             # state file, host RPC argument, prompt, or launch receipt.
