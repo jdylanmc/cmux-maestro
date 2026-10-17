@@ -95,7 +95,9 @@ selected CLI.
 Setup installs distinct, now **hookless `cmux-maestro-native`** plugin and
 its bundled skills, private local controller, native loader at
 `~/.copilot/extensions/maestro/extension.mjs`, and
-**`~/.copilot/hooks/cmux-maestro-observer.json`**. Dedicated version-1 file
+**`~/.copilot/hooks/cmux-maestro-observer.json`**, plus the owned CMUX Copilot
+hooks **`~/.copilot/hooks/cmux-maestro-cmux-hooks.json`** ([relaunch restore](relaunch-restore.md)).
+The observer is a dedicated version-1 file
 declares only `sessionStart`, `userPromptSubmitted` and `postToolUse`, using
 unchanged silenced helper wrapper. Private generation/provenance and
 advisory setup lock live under existing application `Copilot/` support

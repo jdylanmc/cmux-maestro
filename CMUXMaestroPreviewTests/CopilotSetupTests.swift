@@ -1238,6 +1238,20 @@ struct CopilotSetupTests {
         #expect(try Data(contentsOf: installed.deletingLastPathComponent().appendingPathComponent("NerdFonts/glyphnames.json"))
             == Data(contentsOf: repository.appendingPathComponent("Resources/NerdFonts/glyphnames.json")))
         #expect(try String(contentsOf: configuration, encoding: .utf8) == "preserved")
+        let restoreHooks = local.cmuxHooksFile
+        #expect(restoreHooks.path == directory.appendingPathComponent("hooks/cmux-maestro-cmux-hooks.json").path)
+        #expect(try Data(contentsOf: restoreHooks) == CopilotCMUXHooks.manifest())
+        #expect((try FileManager.default.attributesOfItem(atPath: restoreHooks.path)[.posixPermissions] as? Int) == 0o600)
+        let declared = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: restoreHooks)) as? [String: Any])
+        let restoreDeclarations = try #require(declared["hooks"] as? [String: [[String: Any]]])
+        #expect(Set(restoreDeclarations.keys) == ["SessionStart", "Stop", "Notification", "SessionEnd"])
+        // CMUX 0.65.1's exact queued Copilot command and env guards.
+        #expect(restoreDeclarations["SessionStart"]?.first?["bash"] as? String == #"cmux_cli="${CMUX_BUNDLED_CLI_PATH:-}"; if [ -z "$cmux_cli" ] || [ ! -x "$cmux_cli" ]; then cmux_cli="$(command -v cmux 2>/dev/null || true)"; fi; agent_pid="${CMUX_COPILOT_PID:-${PPID:-}}"; if [ -n "$CMUX_SURFACE_ID" ] && [ "$CMUX_COPILOT_HOOKS_DISABLED" != "1" ] && [ -n "$cmux_cli" ]; then if [ -n "${CMUX_SOCKET_PATH:-}" ]; then CMUX_COPILOT_PID="$agent_pid" CMUXTERM_CLI_RESPONSE_TIMEOUT_SEC=0.5 "$cmux_cli" --socket "$CMUX_SOCKET_PATH" hooks enqueue copilot session-start 2>/dev/null || { cat >/dev/null; echo '{}'; }; else CMUX_COPILOT_PID="$agent_pid" CMUXTERM_CLI_RESPONSE_TIMEOUT_SEC=0.5 "$cmux_cli" hooks enqueue copilot session-start 2>/dev/null || { cat >/dev/null; echo '{}'; }; fi; else cat >/dev/null; echo '{}'; fi"#)
+        for (event, subcommand) in [("Stop", "stop"), ("Notification", "stop"), ("SessionEnd", "session-end")] {
+            #expect(restoreDeclarations[event]?.first?["bash"] as? String == CopilotCMUXHooks.command(subcommand))
+            #expect(restoreDeclarations[event]?.first?["timeoutSec"] as? Int == 5)
+            #expect(restoreDeclarations[event]?.first?["type"] as? String == "command")
+        }
         let kitData = try Data(contentsOf: petKit)
         try FileManager.default.removeItem(at: petKit)
         #expect(throws: (any Error).self) {
@@ -1284,10 +1298,121 @@ struct CopilotSetupTests {
         #expect(try Data(contentsOf: unrelatedGuide) == Data("unrelated guide".utf8))
         let retained = routes.appendingPathComponent("retained.json")
         try Data("live route must survive uninstall".utf8).write(to: retained)
+        let unrelatedHook = restoreHooks.deletingLastPathComponent().appendingPathComponent("unrelated.json")
+        try Data("{\"version\":1,\"hooks\":{}}".utf8).write(to: unrelatedHook)
         try local.removeMessaging(root: integration)
         #expect(!FileManager.default.fileExists(atPath: native.appendingPathComponent("extension.mjs").path))
         #expect(!FileManager.default.fileExists(atPath: installed.deletingLastPathComponent().appendingPathComponent("messaging.json").path))
         #expect(FileManager.default.fileExists(atPath: retained.path))
+        #expect(!FileManager.default.fileExists(atPath: restoreHooks.path))
+        #expect(try Data(contentsOf: unrelatedHook) == Data("{\"version\":1,\"hooks\":{}}".utf8))
+        #expect(local.foreignCMUXHooksRemaining() == nil)
+        // Clean fixture: only the CMUX hooks file can make the next preparations refuse.
+        try FileManager.default.removeItem(at: obsolete)
+        try FileManager.default.moveItem(at: savedObsolete, to: obsolete)
+        _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        #expect(try Data(contentsOf: restoreHooks) == CopilotCMUXHooks.manifest())
+        let extensionFile = native.appendingPathComponent("extension.mjs")
+        let installedExtension = try Data(contentsOf: extensionFile)
+        // A file at the owned name that Maestro did not write is never replaced or removed.
+        let foreign = Data("{\"version\":1,\"hooks\":{\"SessionStart\":[]}}".utf8)
+        try foreign.write(to: restoreHooks)
+        do {
+            _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+            Issue.record("Setup must refuse a CMUX hooks file Maestro did not write")
+        } catch let failure as CopilotResourcePreparationFailure {
+            #expect(failure.outcome == .untouched)
+            #expect(failure.detail?.contains(restoreHooks.path) == true)
+        }
+        #expect(try Data(contentsOf: restoreHooks) == foreign)
+        #expect(try Data(contentsOf: extensionFile) == installedExtension)
+        try local.removeMessaging(root: integration)
+        #expect(try Data(contentsOf: restoreHooks) == foreign)
+        #expect(local.foreignCMUXHooksRemaining() == restoreHooks.path)
+        func asideCopies() throws -> [String] {
+            try FileManager.default.contentsOfDirectory(atPath: restoreHooks.deletingLastPathComponent().path)
+                .filter { $0.contains(".removing-") }
+        }
+        #expect(try asideCopies().isEmpty)
+
+        // A file swapped in between any check and the removal is the one verified, and kept.
+        try FileManager.default.removeItem(at: restoreHooks)
+        _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        var racing = local
+        let swapped = restoreHooks
+        racing.beforeCMUXHooksRemoval = { try? foreign.write(to: swapped) }
+        try racing.removeMessaging(root: integration)
+        #expect(try Data(contentsOf: restoreHooks) == foreign)
+        #expect(try asideCopies().isEmpty)
+
+        // Uninstall is one transaction: a later removal failure puts the CMUX hooks file back.
+        try FileManager.default.removeItem(at: restoreHooks)
+        _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        let messaging = installed.deletingLastPathComponent().appendingPathComponent("messaging.json")
+        try FileManager.default.removeItem(at: messaging)
+        try FileManager.default.createDirectory(at: messaging.appendingPathComponent("blocker"), withIntermediateDirectories: true)
+        #expect(throws: (any Error).self) { try local.removeMessaging(root: integration) }
+        #expect(try Data(contentsOf: restoreHooks) == CopilotCMUXHooks.manifest())
+        #expect(try asideCopies().isEmpty)
+        try FileManager.default.removeItem(at: messaging)
+        try local.removeMessaging(root: integration)
+        #expect(!FileManager.default.fileExists(atPath: restoreHooks.path))
+
+        // A manifest an earlier release shipped is Maestro's: setup replaces it, uninstall removes it.
+        let earlier = Data("{\"maestro\":{\"cmux\":\"0.64.0\"},\"version\":1}".utf8)
+        var upgrading = local
+        upgrading.shippedCMUXManifests = [try CopilotCMUXHooks.manifest(), earlier]
+        try earlier.write(to: restoreHooks)
+        _ = try upgrading.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        #expect(try Data(contentsOf: restoreHooks) == CopilotCMUXHooks.manifest())
+        try earlier.write(to: restoreHooks)
+        try upgrading.removeMessaging(root: integration)
+        #expect(!FileManager.default.fileExists(atPath: restoreHooks.path))
+        #expect(try asideCopies().isEmpty)
+    }
+
+    @Test func everyShippedCMUXHooksManifestIsOwnedAndLookAlikesAreNot() throws {
+        let shipped = try CopilotCMUXHooks.shippedManifests()
+        #expect(shipped.first == (try CopilotCMUXHooks.manifest()))
+        #expect(shipped.allSatisfy(CopilotCMUXHooks.isOwned))
+        var object = try CopilotSetupJSON.object(CopilotCMUXHooks.manifest())
+        var maestro = try #require(object["maestro"] as? [String: Any])
+        maestro["cmux"] = "0.0.0"
+        object["maestro"] = maestro
+        #expect(!CopilotCMUXHooks.isOwned(try CopilotSetupJSON.data(object)))
+        // The commands were generated from this CMUX release; regenerate and append on any change.
+        #expect(CopilotCMUXHooks.cmuxVersion == "0.65.1")
+    }
+
+    @Test func cmuxHookCommandFollowsCMUXGuards() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fakeCLI = directory.appendingPathComponent("cmux")
+        let record = directory.appendingPathComponent("record")
+        try Data("#!/bin/sh\nprintf '%s|%s' \"$*\" \"$CMUX_COPILOT_PID\" > \"\(record.path)\"\n".utf8).write(to: fakeCLI)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fakeCLI.path)
+        func run(_ environment: [String: String]) throws -> String {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", CopilotCMUXHooks.command("session-end")]
+            process.environment = ["PATH": "/usr/bin:/bin", "CMUX_BUNDLED_CLI_PATH": fakeCLI.path].merging(environment) { _, new in new }
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardInput = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            #expect(process.terminationStatus == 0)
+            return String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        }
+        #expect(try run([:]) == "{}\n")
+        #expect(!FileManager.default.fileExists(atPath: record.path))
+        #expect(try run(["CMUX_SURFACE_ID": "S", "CMUX_COPILOT_HOOKS_DISABLED": "1"]) == "{}\n")
+        #expect(!FileManager.default.fileExists(atPath: record.path))
+        _ = try run(["CMUX_SURFACE_ID": "S", "CMUX_COPILOT_PID": "4242"])
+        #expect(try String(contentsOf: record, encoding: .utf8) == "hooks enqueue copilot session-end|4242")
+        _ = try run(["CMUX_SURFACE_ID": "S", "CMUX_COPILOT_PID": "4242", "CMUX_SOCKET_PATH": "/synthetic.sock"])
+        #expect(try String(contentsOf: record, encoding: .utf8) == "--socket /synthetic.sock hooks enqueue copilot session-end|4242")
     }
 }
 

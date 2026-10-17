@@ -20,6 +20,7 @@ nonisolated enum CopilotSetupAccess {
 
 nonisolated enum CopilotSetupResult: Equatable, Sendable {
     case installed, uninstalled, unavailable, failed(Int32), timedOut, cancelled, validationOnly
+    case uninstalledKeeping(String)
     case installedDisabled
     case installedPartiallyDisabled, installedDisableUnresolved
     case conflict(String)
@@ -37,6 +38,8 @@ nonisolated enum CopilotSetupResult: Equatable, Sendable {
             "Owned registration is verified on disk, but applicability of configured disable keys is unresolved. No keys were changed; loaded behavior is not verified."
         case .uninstalled:
             "Owned observer registration and the native plugin are removed, and new messaging entry points are disabled. Existing sessions may retain cached hooks and adapters; close them normally."
+        case .uninstalledKeeping(let path):
+            "Owned observer registration and the native plugin are removed, and new messaging entry points are disabled. \(path) was not written by Maestro and was left in place. Existing sessions may retain cached hooks and adapters; close them normally."
         case .unavailable:
             "Setup could not access the selected executable, bundled helper, or integration directory. Choose a trusted Copilot CLI executable and retry."
         case .failed(let status):
@@ -214,11 +217,19 @@ nonisolated protocol CopilotSetupFileSystem: Sendable {
     func executable(selected: URL?, path: String) throws -> URL
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL
     func removeMessaging(root: URL) throws
+    /// The path of a file Maestro did not write at its CMUX hooks name, which uninstall leaves.
+    func foreignCMUXHooksRemaining() -> String?
+}
+
+extension CopilotSetupFileSystem {
+    func foreignCMUXHooksRemaining() -> String? { nil }
 }
 
 nonisolated struct CopilotResourcePreparationFailure: Error {
     enum Outcome { case untouched, restored, unverified }
     let outcome: Outcome
+    /// A named, user-actionable cause, such as a hook file Maestro did not write.
+    var detail: String? = nil
     var restored: Bool { outcome == .restored }
 }
 
@@ -321,7 +332,9 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
         let plan: CopilotPluginResources
         do { plan = try resources(root: root, helper: helper, controller: controller, skill: skill) }
-        catch { throw CopilotResourcePreparationFailure(outcome: .untouched) }
+        catch let conflict as CopilotCMUXHooks.Conflict {
+            throw CopilotResourcePreparationFailure(outcome: .untouched, detail: conflict.message)
+        } catch { throw CopilotResourcePreparationFailure(outcome: .untouched) }
         try plan.publish()
         return root.appendingPathComponent("plugin", isDirectory: true)
     }
@@ -360,6 +373,12 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         guard routes.appendingPathComponent(String(repeating: "0", count: 16) + ".sock").path.utf8.count <= 100 else {
             throw HookFiles.Failure.unavailable
         }
+        // Never replace a hook file Maestro did not write; preserve every other hook.
+        let cmuxHooks = cmuxHooksFile
+        let cmuxManifest = try CopilotCMUXHooks.manifest()
+        if let existing = try CopilotSetupFileState.read(cmuxHooks).data, !ownsCMUXHooks(existing) {
+            throw CopilotCMUXHooks.Conflict(path: cmuxHooks.path)
+        }
         let plugin = root.appendingPathComponent("plugin", isDirectory: true)
         let orchestration = root.deletingLastPathComponent()
             .appendingPathComponent("Orchestration", isDirectory: true)
@@ -378,6 +397,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
             .init(file: bin.appendingPathComponent("messaging.json"), data: try JSONSerialization.data(withJSONObject: [
                 "version": 1, "routes": routes.path, "extension": nativeRoot.path,
             ], options: [.sortedKeys])),
+            .init(file: cmuxHooks, data: cmuxManifest),
         ]
         for (index, resource) in glyphData.enumerated() {
             writes.append(.init(file: bin.appendingPathComponent("NerdFonts/\(resource.0)"),
@@ -405,23 +425,97 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         return plugin.appendingPathComponent("skills/maestro/SKILL.md")
     }
 
+    var cmuxHooksFile: URL {
+        nativeExtensions.deletingLastPathComponent().appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+    }
+
+    /// Test seam: runs just before the CMUX hooks file is moved aside for removal.
+    var beforeCMUXHooksRemoval: (@Sendable () -> Void)? = nil
+    /// Test seam: the shipped CMUX hooks manifests; nil means every manifest a release shipped.
+    var shippedCMUXManifests: [Data]? = nil
+
+    private func ownsCMUXHooks(_ data: Data) -> Bool {
+        guard let shippedCMUXManifests else { return CopilotCMUXHooks.isOwned(data) }
+        return shippedCMUXManifests.contains(data)
+    }
+
     func removeMessaging(root: URL) throws {
-        // Remove only the installed entry point/configuration. Do not touch live
-        // route bindings, sockets, cached children, or other extensions.
-        let targets = [
-            nativeExtensions.appendingPathComponent("maestro/extension.mjs"),
-            root.deletingLastPathComponent().appendingPathComponent("Orchestration/bin/messaging.json"),
-        ]
-        for target in targets {
-            let directory: Int32
-            do {
-                directory = try CopilotFileAccess.openDirectory(target.deletingLastPathComponent(), owner: getuid())
-            } catch CopilotFileError.missing { continue }
+        // The CMUX hooks file is moved aside first, then verified by the bytes actually moved, so a
+        // file swapped in at that name is never deleted. It is deleted only after every other
+        // removal succeeds; otherwise it goes back.
+        let quarantine = try quarantineCMUXHooks()
+        do {
+            // Remove only the installed entry point/configuration. Do not touch live
+            // route bindings, sockets, cached children, or other extensions.
+            let targets = [
+                nativeExtensions.appendingPathComponent("maestro/extension.mjs"),
+                root.deletingLastPathComponent().appendingPathComponent("Orchestration/bin/messaging.json"),
+            ]
+            for target in targets {
+                let directory: Int32
+                do {
+                    directory = try CopilotFileAccess.openDirectory(target.deletingLastPathComponent(), owner: getuid())
+                } catch CopilotFileError.missing { continue }
+                defer { close(directory) }
+                if unlinkat(directory, target.lastPathComponent, 0) != 0, errno != ENOENT {
+                    throw HookFiles.Failure.unavailable
+                }
+            }
+        } catch {
+            if let quarantine {
+                do { try restoreQuarantined(quarantine) } catch {
+                    throw CopilotRegistrationConflict(
+                        "Uninstall stopped and could not put Maestro's CMUX Copilot hooks back: rename "
+                            + "\(cmuxHooksFile.deletingLastPathComponent().appendingPathComponent(quarantine).path) "
+                            + "to \(cmuxHooksFile.path).")
+                }
+            }
+            throw error
+        }
+        if let quarantine {
+            let directory = try CopilotFileAccess.openDirectory(cmuxHooksFile.deletingLastPathComponent(), owner: getuid())
             defer { close(directory) }
-            if unlinkat(directory, target.lastPathComponent, 0) != 0, errno != ENOENT {
+            guard unlinkat(directory, quarantine, 0) == 0, fsync(directory) == 0 else { throw HookFiles.Failure.unavailable }
+        }
+    }
+
+    func foreignCMUXHooksRemaining() -> String? {
+        guard let data = try? CopilotSetupFileState.read(cmuxHooksFile).data, !ownsCMUXHooks(data) else {
+            return nil
+        }
+        return cmuxHooksFile.path
+    }
+
+    private func quarantineCMUXHooks() throws -> String? {
+        let directory: Int32
+        do {
+            directory = try CopilotFileAccess.openDirectory(cmuxHooksFile.deletingLastPathComponent(), owner: getuid())
+        } catch CopilotFileError.missing { return nil }
+        defer { close(directory) }
+        beforeCMUXHooksRemoval?()
+        let name = cmuxHooksFile.lastPathComponent
+        let aside = ".\(name).removing-\(UUID().uuidString)"
+        guard renameatx_np(directory, name, directory, aside, UInt32(RENAME_EXCL)) == 0 else {
+            if errno == ENOENT { return nil }
+            throw HookFiles.Failure.unavailable
+        }
+        let moved = try? CopilotFileAccess.readStableRegular(
+            at: directory, filename: aside, owner: getuid(), maximum: 65_536)
+        guard let moved, ownsCMUXHooks(moved) else {
+            // Not Maestro's: put it back exactly as found and leave it.
+            guard renameatx_np(directory, aside, directory, name, UInt32(RENAME_EXCL)) == 0 else {
                 throw HookFiles.Failure.unavailable
             }
+            return nil
         }
+        return aside
+    }
+
+    private func restoreQuarantined(_ aside: String) throws {
+        let directory = try CopilotFileAccess.openDirectory(cmuxHooksFile.deletingLastPathComponent(), owner: getuid())
+        defer { close(directory) }
+        guard renameatx_np(directory, aside, directory, cmuxHooksFile.lastPathComponent, UInt32(RENAME_EXCL)) == 0,
+              fsync(directory) == 0 else { throw HookFiles.Failure.unavailable }
     }
 
     private func boundedResource(_ url: URL, maximum: Int) throws -> Data {
@@ -940,11 +1034,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         let before = try record.metadata.plugins.filter { $0.name != CopilotPluginManifest.name }.map { try encoder.encode($0).base64EncodedString() }.sorted()
         let after = try observed.plugins.filter { $0.name != CopilotPluginManifest.name }.map { try encoder.encode($0).base64EncodedString() }.sorted()
         guard before == after else { throw CopilotFileError.changed }
-        func foreign(_ hook: CopilotSetupMetadata.Hook) -> Bool {
-            !(hook.origin == "plugin" && hook.source == CopilotPluginManifest.name)
-                && !(hook.origin == "user" && [registration.file.path,
-                    "hooks/\(CopilotObserverRegistration.filename)"].contains(hook.source))
-        }
+        func foreign(_ hook: CopilotSetupMetadata.Hook) -> Bool { !registration.isMaestroHookSource(hook) }
         let beforeHooks = try record.metadata.hooks.filter(foreign).map { try encoder.encode($0).base64EncodedString() }.sorted()
         let afterHooks = try observed.hooks.filter(foreign).map { try encoder.encode($0).base64EncodedString() }.sorted()
         guard beforeHooks == afterHooks else { throw CopilotFileError.changed }
@@ -2032,7 +2122,7 @@ nonisolated struct CopilotSetup: Sendable {
                     try operation.verifyRemoval(changed)
                     try self.files.removeMessaging(root: root)
                 }
-                return .uninstalled
+                return files.foreignCMUXHooksRemaining().map(CopilotSetupResult.uninstalledKeeping) ?? .uninstalled
             }
             try await CopilotSetupFileWork.run {
                 try operation.verifyPlugin(changed)
@@ -2060,6 +2150,7 @@ nonisolated struct CopilotSetup: Sendable {
                 }
                 switch resources.outcome {
                 case .untouched: reason = "Resource preparation refused before changing resource files."
+                    + (resources.detail.map { " " + $0 } ?? "")
                 case .restored: reason = "Resource preparation failed; previous owned resource files were restored and verified."
                 case .unverified: reason = "Resource preparation failed and previous owned resources could not be restored and verified."
                 }

@@ -187,6 +187,8 @@ requires the current build number. This feature does not bump it.
 
 ### Transaction and recovery contract
 
+- **CMUX Copilot hooks file.** Setup owns `~/.copilot/hooks/cmux-maestro-cmux-hooks.json` only while its bytes equal a manifest some Maestro release shipped; update replaces an earlier copy. If setup, update or `recover` refuses and names that file, it holds hooks Maestro did not write: move it away (or remove your own CMUX hooks there) and rerun. Uninstall puts the file back if a later removal fails, and names a file it left in place.
+
 - One kernel-held, nonblocking install lock and a private `0700` ownership
   directory live at `~/Applications/.cmux-maestro-preview-install/`. Receipts
   are `0600`, atomically written and synchronized. The persistent lock file is
