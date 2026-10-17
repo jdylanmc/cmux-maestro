@@ -24,7 +24,7 @@ private func boundedInput() -> Data? {
 }
 
 private func run() {
-    let keys = ["CMUX_WORKSPACE_ID", "CMUX_SURFACE_ID", "CMUX_COPILOT_HOOKS_DISABLED", "MAESTRO_NATIVE_DISABLED"]
+    let keys = ["CMUX_WORKSPACE_ID", "CMUX_SURFACE_ID", "MAESTRO_NATIVE_DISABLED"]
     let environment = Dictionary(uniqueKeysWithValues: keys.compactMap { key in inherited(key).map { (key, $0) } })
     guard !CopilotHookRecorder.isDisabled(environment) else { return }
     let root: URL

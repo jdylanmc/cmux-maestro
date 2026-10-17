@@ -1923,6 +1923,14 @@ class Cmux:
             return False
         return result.returncode == 0
 
+    def clear_resume_binding(self, workspace, surface):
+        invocation = [self.executable, "surface", "resume", "clear", "--workspace", workspace, "--surface", surface]
+        try:
+            result = subprocess.run(invocation, capture_output=True, text=True, timeout=close_timeout(5))
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+        return result.returncode == 0
+
     def workspace_surfaces(self, workspace):
         # surface.list takes one host main-actor snapshot. Separate pane reads
         # can miss a live surface moved into an already-read pane.
@@ -3010,8 +3018,20 @@ def command_native_session_end(root, cmux=None):
         actor["sessionEndedGeneration"] = actor["generation"]
         actor["updatedAt"] = now()
         return dict(actor)
-    mutate(root, record)
-    return {"recorded": True}
+    actor = mutate(root, record)
+    return {"recorded": True, **session_end_effects(cmux, actor)}
+
+
+def session_end_effects(cmux, actor):
+    """A Maestro launch's observed user exit also clears its CMUX resume binding, like CMUX's own
+    restore. Identifiers only. Fail open: if CMUX cannot clear it, the binding remains."""
+    if actor.get("enrollment") == "born":
+        return {}
+    try:
+        cmux = cmux or Cmux()
+    except OrchestrationError:
+        return {"cleared": False}
+    return {"cleared": cmux.clear_resume_binding(actor["workspaceId"], actor["surfaceId"])}
 
 
 def resume_born_root(root, cmux, snapshot, previous, workspace, surface, session, anchor, login, key, receipt):
@@ -3149,7 +3169,9 @@ class ResumeRefused(OrchestrationError):
 
 
 def resume_binding_argv(node):
-    return [sys.executable, str(CONTROLLER_ENTRYPOINT), "resume-managed",
+    # The installed controller path is stable across Python and app upgrades and runs through its
+    # own `#!/usr/bin/env python3`. Never persist a resolved, version-pinned interpreter path.
+    return [str(CONTROLLER_ENTRYPOINT), "resume-managed",
             "--worker-id", node["id"], "--session-id", node["copilotSessionId"]]
 
 
@@ -3198,11 +3220,13 @@ def command_resume_managed(args, root, cmux):
         raise ResumeRefused("this session was not launched by Maestro as a managed session")
     if (node["workspaceId"], node.get("surfaceId")) != (workspace, surface):
         raise ResumeRefused("this is not the session's recorded surface")
+    if node.get("sessionEndedGeneration") == node["generation"]:
+        raise ResumeRefused("the session was ended by its user")
     if (node["id"] in snapshot["launches"] or node.get("surfaceUnknown")
             or process_observation(node.get("providerProcess")) is not False
             or session_has_live_owner(session)):
         raise ResumeRefused("the session may still be running")
-    account = node.get("copilotAccount")
+    account = recorded_account(node)
     if account is None:
         raise ResumeRefused("the session has no recorded account")
     try:
@@ -6060,9 +6084,9 @@ def parser():
     commands.add_parser("native-close", help="Private owned-child close ingress; use the native maestro_close tool")
     commands.add_parser("native-observe", help=argparse.SUPPRESS)
     commands.add_parser("native-enroll", help="Private born-managed enrollment ingress; used by the native adapter")
-    commands.add_parser("native-session-end", help=argparse.SUPPRESS)
     ended = commands.add_parser("archive-ended", help="Archive born-managed runs whose processes all ended")
     ended.add_argument("--workspace", required=True)
+    commands.add_parser("native-session-end", help=argparse.SUPPRESS)
     resume = commands.add_parser("resume-managed", help="Resume one ended managed session in its restored CMUX surface")
     resume.add_argument("--worker-id", required=True)
     resume.add_argument("--session-id", required=True)

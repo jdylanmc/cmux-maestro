@@ -649,7 +649,8 @@ export async function start({ root, peer, joinSession, managed = false, expected
 // Inert in ordinary CLI sessions, including sessions with no launcher binding.
 // SESSION_ID is supplied by Copilot to its native extension child.
 export async function startManaged({ joinSession, environment = process.env, diagnostic, signal, onListener,
-  observe = (request, controller) => invokeController("native-observe", request, controller, signal) }) {
+  observe = (request, controller) => invokeController("native-observe", request, controller, signal),
+  sessionEnd = recordSessionEnd }) {
   const root = environment.CMUX_MAESTRO_MESSAGE_ROOT;
   const peer = environment.CMUX_MAESTRO_MESSAGE_PEER;
   if (!root || !peer || !environment.CMUX_MAESTRO_WORKER_ID ||
@@ -672,7 +673,9 @@ export async function startManaged({ joinSession, environment = process.env, dia
       generation, surfaceId, pid,
     }, expected.controller);
   }
-  return start({ root, peer, joinSession, managed: true, expected, diagnostic, observe: observation, signal, onListener });
+  const endSession = environment.CMUX_MAESTRO_DIRECT_LAUNCH === "1" ? sessionEnd : undefined;
+  return start({ root, peer, joinSession, managed: true, expected, diagnostic, observe: observation, signal,
+    onListener, endSession });
 }
 
 const LAUNCHER_INPUTS = ["CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER",
