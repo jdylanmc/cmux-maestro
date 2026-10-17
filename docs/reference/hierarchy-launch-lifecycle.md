@@ -47,11 +47,11 @@ subscription. Missing identity/API/credentials fail before terminal creation.
 Current credential resolver uses GitHub CLI's keychain-backed account
 store. Authenticate required account there once. Copilot-only login is
 not silently imported or replaced with another GitHub CLI account.
-Each managed coordinator and child node records its **recorded account**
-`{login, host}` at launch (host `github.com`). The record holds no credential.
-A later resume after relaunch must use that account or refuse
-([ADR 0024](../adr/0024-resume-ended-managed-sessions-after-relaunch.md)).
-Nodes created before this record have none; their account stays unknown.
+A managed node's **recorded account** `{login, host}` is its launch's pinned
+GitHub.com login, or, for a session that reported its own account, that
+observed account. One store only; it holds no credential. Older launched nodes
+derive it from their launch settings. A resume after relaunch must use it or
+refuse ([ADR 0024](../adr/0024-resume-ended-managed-sessions-after-relaunch.md)).
 Ordinary shell `spawn` cannot establish that evidence and refuses. Source-only
 disposable proof compatibility is not production fallback. **New workers are
 interactive Copilot sessions**, launched with `--interactive` and initial

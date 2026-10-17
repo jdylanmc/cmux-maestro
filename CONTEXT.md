@@ -123,20 +123,28 @@ Generation-bound, capability-bound messaging path. Retired when the provider exi
 _Avoid_: channel
 
 **Recorded account**:
-`{login, host}` of the account a managed session launched with, kept in its node record. No credential.
-_Avoid_: saved account, pinned account (those are launch settings)
+`{login, host}` of a managed session's account. Observed from the session when it reports its own, otherwise the launch's pinned login. Never a credential.
+_Avoid_: saved account (that is a launch setting)
 
 **Relaunch**:
 CMUX quits or crashes, then opens again. Windows, workspaces, and surfaces return. Processes do not.
 _Avoid_: restart, reboot
 
 **Ended session**:
-Managed session with no live or uncertain process: no live `inuse.<PID>.lock` owner and no recorded process that may still run.
+Managed session with no live or uncertain process: the recorded process is observed ended and no live `inuse.<PID>.lock` owner exists.
 _Avoid_: dead session, stale session
 
+**Resume binding**:
+CMUX restart command Maestro attaches to a launched session's exact surface. Identifiers only. Cleared by that session's `SessionEnd`.
+_Avoid_: restore hook
+
 **Resume** (managed):
-Start an ended managed session again in its restored surface, by exact recorded session ID, as a new generation. Never a live session. (ADR 0024)
+Start an ended Maestro-launched session again in its restored surface through its resume binding, by exact session ID, as a new generation. Never a live session. (ADR 0024)
 _Avoid_: restart, reattach, adopt
+
+**Re-enrollment**:
+Maestro takes back a human-started root that CMUX's own restore resumed, by exact session, workspace and surface, as a new generation of the same node. (ADR 0024, ADR 0025)
+_Avoid_: adoption
 
 **Workspace capacity**:
 Launch limit (1 to 128, default 32) against current managed usage. Preflight is advisory; reservation rechecks.

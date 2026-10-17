@@ -324,11 +324,18 @@ def validate_launch_settings(value):
 
 
 RECORDED_ACCOUNT_HOST = "github.com"
+ACCOUNT_LOGIN = r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}"
 
 
-def recorded_account(launch_settings):
-    """Account {login, host} recorded for a node at launch. Never a credential."""
-    login = (launch_settings or {}).get("copilotAccount")
+def recorded_account(node):
+    """The node's one recorded account {login, host}; never a credential.
+
+    An explicitly observed account (a session that reported its own account) wins. Otherwise
+    the account is the launch's pinned GitHub.com login, so older launched nodes keep theirs.
+    """
+    if "copilotAccount" in node:
+        return dict(node["copilotAccount"])
+    login = (node.get("launchSettings") or {}).get("copilotAccount")
     return None if login is None else {"login": login, "host": RECORDED_ACCOUNT_HOST}
 
 
@@ -336,9 +343,11 @@ def validate_recorded_account(node):
     if "copilotAccount" not in node:
         return
     account = node["copilotAccount"]
+    # One source of truth: an observed account never coexists with a pinned launch login.
     if (not isinstance(account, dict) or set(account) != {"login", "host"}
             or account["host"] != RECORDED_ACCOUNT_HOST
-            or account != recorded_account(node.get("launchSettings"))):
+            or not isinstance(account["login"], str) or re.fullmatch(ACCOUNT_LOGIN, account["login"]) is None
+            or (node.get("launchSettings") or {}).get("copilotAccount") is not None):
         raise OrchestrationError("Stored recorded account is invalid.")
 
 
@@ -2156,7 +2165,6 @@ def command_launch_coordinator(args, root, cmux):
         "copilotExecutable": copilot, "launchPath": launch_path,
         "executionMode": "interactive", "generation": 1,
         "copilotSessionId": str(uuid.uuid4()), "launchSettings": settings,
-        "copilotAccount": recorded_account(settings),
         "messaging": messaging, "permissionMode": "yolo" if args.yolo else "default",
         "phase": "launching", "availability": "busy", "task": task,
         "toolPolicy": policy,
@@ -2931,9 +2939,6 @@ def command_spawn(args, root, cmux, *, native_identity=None):
             "archiving": False,
             "verifiedBoundaryGeneration": None, "toolPolicy": tool_policy,
         }
-        account = recorded_account(launch_settings)
-        if account is not None:
-            state["nodes"][identifier]["copilotAccount"] = account
         if proof is not None:
             state["nodes"][identifier]["deliveryProof"] = proof
         if messaging is not None:
