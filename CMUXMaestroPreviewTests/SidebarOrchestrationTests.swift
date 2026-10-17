@@ -74,6 +74,19 @@ struct SidebarOrchestrationTests {
         poll.setVisible(false)
     }
 
+    @Test func resumedInteractiveCoordinatorKeepsTheSnapshotReadable() throws {
+        // A relaunch resume records the next generation of the same root (ADR 0024).
+        for generation in [1, 2, 7] {
+            let root = SidebarOrchestrationNode(
+                id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Coordinator",
+                workspaceId: UUID(), surfaceId: UUID(), generation: generation, phase: "turn-running",
+                availability: "busy", copilotSessionId: UUID(), executionMode: .interactive,
+                createdAt: Date(), updatedAt: Date())
+            try SidebarOrchestrationReader.validate(
+                .init(version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [root]))
+        }
+    }
+
     @Test func filteredCoordinatorDoesNotPromoteChildToProvenRoot() async {
         let workspace = UUID()
         let run = UUID()
