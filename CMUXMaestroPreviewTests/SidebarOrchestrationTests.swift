@@ -498,6 +498,81 @@ struct SidebarOrchestrationTests {
         #expect(decoded.currentGitChanges(at: captured) == nil)
     }
 
+    private func bornRoot(workspace: UUID, surface: UUID, session: UUID) -> SidebarOrchestrationNode {
+        let timestamp = Date()
+        var root = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Copilot session",
+            workspaceId: workspace, surfaceId: surface, generation: 1, phase: "turn-running",
+            availability: "busy", copilotSessionId: session, executionMode: .interactive,
+            createdAt: timestamp, updatedAt: timestamp
+        )
+        root.enrollment = "born"
+        return root
+    }
+
+    private func observed(_ session: UUID, workspace: UUID, surface: UUID, name: String?) -> SidebarCopilotSession {
+        var value = SidebarCopilotSession(
+            id: session, workspaceID: workspace, surfaceID: surface, liveness: .alive, state: .working,
+            model: nil, observedAt: Date(), nodes: [], childrenComplete: true, treeDegraded: false,
+            omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        value.sessionName = name
+        return value
+    }
+
+    @Test func bornRootTakesItsExactSessionNameAndLaunchesKeepTheirLabel() throws {
+        let workspace = UUID(), surface = UUID(), session = UUID()
+        let born = bornRoot(workspace: workspace, surface: surface, session: session)
+        let launched = node(run: UUID(), role: "worker", parent: nil, workspace: workspace,
+                            copilotSessionId: UUID())
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [born])
+        try SidebarOrchestrationReader.validate(snapshot)
+        let named = snapshot.namingBornRoots(from: [observed(session, workspace: workspace, surface: surface,
+                                                             name: "Synthetic refactor")])
+        #expect(named.nodes.map(\.label) == ["Synthetic refactor"])
+        // Placement or a different session never names a row.
+        for other in [observed(UUID(), workspace: workspace, surface: surface, name: "Other"),
+                      observed(session, workspace: workspace, surface: UUID(), name: "Moved"),
+                      observed(session, workspace: workspace, surface: surface, name: nil),
+                      observed(session, workspace: workspace, surface: surface, name: "   ")] {
+            #expect(snapshot.namingBornRoots(from: [other]).nodes.map(\.label) == ["Copilot session"])
+        }
+        let duplicate = observed(session, workspace: workspace, surface: surface, name: "A")
+        #expect(snapshot.namingBornRoots(from: [duplicate, duplicate]).nodes.map(\.label) == ["Copilot session"])
+        let launchedSnapshot = SidebarOrchestrationSnapshot(version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [launched])
+        #expect(launchedSnapshot.namingBornRoots(from: [observed(launched.copilotSessionId!, workspace: workspace,
+            surface: launched.surfaceId, name: "Ignored")]).nodes.map(\.label) == ["Implementation"])
+    }
+
+    @Test func bornLabelIsBoundedOnACharacterBoundary() {
+        let long = String(repeating: "é", count: 80)
+        let label = SidebarOrchestrationSnapshot.boundedLabel(long)
+        #expect(label.map { $0.utf8.count <= 100 } == true)
+        #expect(label == String(repeating: "é", count: 50))
+    }
+
+    @Test func enrollmentDecodesAndOnlyBornRootsMayCarryIt() throws {
+        let workspace = UUID(), surface = UUID(), session = UUID()
+        let born = bornRoot(workspace: workspace, surface: surface, session: session)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(SidebarOrchestrationNode.self, from: encoder.encode(born))
+        #expect(decoded.enrollment == "born")
+        var worker = node(run: born.runId, role: "worker", parent: born.id, workspace: workspace)
+        worker.enrollment = "born"
+        var invented = born
+        invented.enrollment = "adopted"
+        for nodes in [[born, worker], [invented]] {
+            #expect(throws: CopilotFileError.self) {
+                try SidebarOrchestrationReader.validate(
+                    .init(version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: nodes))
+            }
+        }
+    }
+
     private func node(
         id: UUID = UUID(),
         run: UUID,

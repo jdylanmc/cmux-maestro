@@ -58,6 +58,12 @@ On any refusal it prints one line, such as `Maestro did not resume this session:
 
 CMUX runs a custom resume binding only after a human approves its command prefix. Open **CMUX Settings > Terminal > Resume Commands** and approve the Maestro `resume-managed` command the first time it appears. Maestro never approves it for you. CMUX also needs **Resume agent sessions** (`terminal.autoResumeAgentSessions`) on.
 
+## Sidebar rows
+
+A restored tab used to show as `Terminal`. The sidebar shows an unmanaged Copilot row only after Maestro's observer hook binds the session to its surface. A restored session can show the CMUX surface title until that binding exists. Live checks must confirm when the hook binds a resumed session.
+
+A born-managed or resumed managed session does not wait for the hook. The controller's projection names its exact surface, so the sidebar shows a managed Copilot row at once. A born root's row shows its Copilot session name when one exact observed session matches (ADR 0022). Otherwise it shows `Copilot session`.
+
 ## Known gaps
 
 - Maestro setup does not yet install CMUX's Copilot hooks (#252 follow-up). Without them CMUX has no record to restore, and the tab stays a plain shell.
