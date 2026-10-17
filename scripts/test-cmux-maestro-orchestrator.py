@@ -2145,6 +2145,19 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
         self.assertTrue(again["ok"], again)
         self.assertEqual(again["generation"], 8)
 
+    def test_generation_is_decided_inside_the_lock_after_a_superseding_archive(self):
+        first = self.enroll()
+        cap = CONTROLLER_API["MAX_HOST_NODES"]
+        self.h.change_state(lambda state: state.update(bornGenerations={str(uuid.uuid4()): 9 for _ in range(cap)}))
+        second = self.enroll(surface=first["surface"])
+        self.assertTrue(second["ok"], second)
+        # Archiving the superseded run evicted a mark into the floor, so the new root starts above it.
+        self.assertEqual(second["generation"], 10)
+        self.assertEqual(self.h.state()["nodes"][second["nodeId"]]["generation"], 10)
+        stale = CONTROLLER_API["message_peer"]({"copilotSessionId": second["session"], "generation": 1})
+        self.assertFalse((self.routes / f"{stale}.json").exists())
+        self.assertTrue((self.routes / f"{second['peer']}.json").exists())
+
     def test_attempt_records_of_ended_providers_are_all_swept(self):
         dead = self.dead_pid()
         attempts = {f"{uuid.uuid4()}:{dead}:Thu Jan  1 00:00:00 2026": {

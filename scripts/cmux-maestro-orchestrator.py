@@ -2897,13 +2897,12 @@ def enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anch
         "phase": "turn-running", "availability": "busy",
     })
     archived = []
+    stale_routes = []
 
     def enroll(state, retiring):
         if reload_match(state) is not None or key in state.get("enrollmentAttempts", {}):
             raise EnrollmentRefused("provider-already-enrolled")
         conflicts(state)
-        if node["generation"] != born_generation(state, session):
-            raise EnrollmentRefused("session-previously-managed")
         holder = next((item for item in state["nodes"].values() if item.get("surfaceId") == surface), None)
         # A new session in a surface whose earlier born run is proven ended supersedes it.
         # Uncertain or live runs keep the surface; nothing is guessed.
@@ -2922,6 +2921,12 @@ def enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anch
         prune_attempts(state)
         if len(state["enrollmentAttempts"]) >= MAX_HOST_NODES:
             raise EnrollmentRefused("capacity-unavailable")
+        # Decide the generation under the lock, after any archive above moved the floor.
+        generation = born_generation(state, session)
+        if generation != node["generation"]:
+            stale_routes.append(dict(node))
+            node["generation"] = generation
+            bind_messaging(node)
         state["nodes"][node["id"]] = node
         state["enrollmentAttempts"][key] = {"outcome": "enrolled", "nodeId": node["id"], "at": now()}
         return receipt(node)
@@ -2938,13 +2943,15 @@ def enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anch
                                 **({"routesNotRetired": error.routesNotRetired}
                                    if hasattr(error, "routesNotRetired") else {})})
     except (OrchestrationError, OSError) as error:
-        try:
-            retire_messaging(node)
-        except (OrchestrationError, OSError):
-            pass  # A route whose identity cannot be proven stays in place.
+        for route in [node, *stale_routes]:
+            try:
+                retire_messaging(route)
+            except (OrchestrationError, OSError):
+                pass  # A route whose identity cannot be proven stays in place.
         if isinstance(error, EnrollmentRefused):
             raise
         raise EnrollmentRefused("enrollment-failed") from error
+    retire_committed_routes(stale_routes)  # routes bound for a generation the lock replaced
     remove_direct_scripts(root, archived)
     return result
 
