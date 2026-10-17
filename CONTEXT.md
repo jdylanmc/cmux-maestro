@@ -139,7 +139,7 @@ Managed session with no live or uncertain process: the recorded process is obser
 _Avoid_: dead session, stale session
 
 **Resume binding**:
-CMUX restart command Maestro attaches to a launched session's exact surface. Identifiers only. Cleared by that session's `SessionEnd`.
+CMUX restart command (`<controller> resume <session-id>`) Maestro attaches to a launched session's exact surface. Identifiers only. Cleared when that session ends with `/exit` (a `SessionEnd` with no hangup before it).
 _Avoid_: restore hook
 
 **Resume** (managed):

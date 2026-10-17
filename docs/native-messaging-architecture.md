@@ -181,7 +181,7 @@ path; existing sessions are not converted or restarted.
 The CLI may stop and reload an extension within the same owned session. On
 SIGTERM or SIGHUP, the loader cancels its pending local observation and closes only its
 own listener/connections before exiting, including during initialization. On
-SIGTERM it first waits up to one second for an in-flight `/exit` SessionEnd
+SIGTERM it first waits up to two seconds for an in-flight `/exit` SessionEnd
 record; after SIGHUP it records no SessionEnd (see
 [Relaunch restore](reference/relaunch-restore.md)).
 The private session binding stays intact for the CLI's replacement extension.

@@ -19,8 +19,8 @@ function fail(context, error) {
 async function stop() {
   if (stopping) return;
   stopping = true;
-  // /exit sends SIGTERM just before SessionEnd; give that record up to a second to land.
-  await sessionEndGate.drain(1000);
+  // /exit sends SIGTERM just before SessionEnd; give that record (and its binding clear) two seconds.
+  await sessionEndGate.drain(2000);
   shutdown.abort();
   try {
     // Let a Beats sync in flight record what it created; never wait more than two seconds.
