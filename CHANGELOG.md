@@ -11,7 +11,8 @@ Notable changes are recorded using Keep a Changelog categories.
   and spawn and close its own children. It records your session's account, with no credential,
   and a default policy with no grants. Sessions that were running before setup stay unmanaged.
   At capacity, or if any identity check fails, the session stays unmanaged and
-  `maestro_readiness` says why.
+  `maestro_readiness` says why. A new session in a tab whose earlier born run has fully ended
+  archives that run first; `archive-ended --workspace <id>` archives every such run by hand.
 - Managed nodes have one recorded account `{login, host}` (#252): the launch's pinned login, or
   the account a session reported itself. No credential is stored. ADR 0024 sets one restore owner
   per node and the rules for resuming an ended managed session after a CMUX relaunch; ADR 0004

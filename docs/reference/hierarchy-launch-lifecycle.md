@@ -58,6 +58,11 @@ Its node has `enrollment: "born"`, generation 1, the label `Copilot session`,
 the account its own session reports, and a default policy with no grants.
 It has no control token: it acts only through its native tools. Its children
 use the normal `maestro_spawn` path.
+A new session in a surface held by a **proven-ended** born run archives that
+run first. Children's surfaces become retained resources; the root's surface
+goes to the new root. To free capacity by hand, run
+`cmux-maestro-orchestrator archive-ended --workspace <id>`. It archives only
+proven-ended born runs and reports `archivedRuns`, `keptRuns`, and capacity.
 Ordinary shell `spawn` cannot establish that evidence and refuses. Source-only
 disposable proof compatibility is not production fallback. **New workers are
 interactive Copilot sessions**, launched with `--interactive` and initial

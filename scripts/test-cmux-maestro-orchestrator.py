@@ -1884,6 +1884,67 @@ class BornManagedEnrollmentTests(unittest.TestCase):
         self.h.cmux_state.write_text(json.dumps(data))
         self.refused(self.enroll(surface=surface), "cmux-identity-unverified")
 
+    def add_child(self, root_id, *, provider="ended"):
+        child_id, surface = str(uuid.uuid4()), str(uuid.uuid4())
+
+        def add(state):
+            root = state["nodes"][root_id]
+            child = {key: value for key, value in json.loads(json.dumps(root)).items() if key != "enrollment"}
+            child.update(id=child_id, role="worker", parentId=root_id, surfaceId=surface,
+                         copilotSessionId=str(uuid.uuid4()), launchAccepted=True,
+                         providerProcess=root["providerProcess"] if provider == "ended" else None)
+            state["nodes"][child_id] = child
+        self.h.change_state(add)
+        return child_id, surface
+
+    def test_new_session_supersedes_a_proven_ended_born_run_in_its_surface(self):
+        first = self.enroll()
+        child_id, child_surface = self.add_child(first["nodeId"])
+        archives = len(self.h.state()["archives"])
+        second = self.enroll(surface=first["surface"])
+        self.assertTrue(second["ok"], second)
+        state = self.h.state()
+        self.assertNotIn(first["nodeId"], state["nodes"])
+        self.assertNotIn(child_id, state["nodes"])
+        self.assertEqual(state["nodes"][second["nodeId"]]["surfaceId"], first["surface"])
+        self.assertEqual(len(state["archives"]), archives + 1)
+        self.assertEqual(state["archives"][-1]["coordinatorLabel"], "Copilot session")
+        # The human's surface is reused, never retained; the Maestro-created child surface stays owned.
+        retained = [item["surfaceId"] for item in state["retainedResources"]]
+        self.assertEqual(retained, [child_surface])
+        self.assertFalse((self.routes / f"{first['peer']}.json").exists())
+
+    def test_live_or_uncertain_born_run_keeps_the_surface(self):
+        first = self.enroll()
+        self.add_child(first["nodeId"], provider=None)
+        before = self.h.state()
+        self.refused(self.enroll(surface=first["surface"]), "surface-owned")
+        self.assertEqual(self.h.state(), before)
+        live = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+        self.addCleanup(lambda: (live.stdin.close(), live.wait(timeout=5)))
+        anchor = {"pid": live.pid, "start": None}
+        while anchor["start"] is None:
+            anchor["start"] = CONTROLLER_API["process_start"](live.pid)
+        other = self.enroll()
+        self.h.change_state(lambda state: state["nodes"][other["nodeId"]].update(providerProcess=anchor))
+        before = self.h.state()
+        self.refused(self.enroll(surface=other["surface"]), "surface-owned")
+        self.assertEqual(self.h.state(), before)
+
+    def test_archive_ended_archives_only_proven_ended_born_runs(self):
+        ended = self.enroll()
+        uncertain = self.enroll()
+        self.add_child(uncertain["nodeId"], provider=None)
+        result = self.h.run("archive-ended", "--workspace", self.h.workspace)
+        self.assertEqual((result["archivedRuns"], result["keptRuns"]),
+                         ([self.h.state()["archives"][-1]["runId"]], 1))
+        state = self.h.state()
+        self.assertNotIn(ended["nodeId"], state["nodes"])
+        self.assertIn(uncertain["nodeId"], state["nodes"])
+        self.assertIn(self.h.node, state["nodes"])
+        again = self.h.run("archive-ended", "--workspace", self.h.workspace)
+        self.assertEqual((again["archivedRuns"], again["keptRuns"]), ([], 1))
+
     def test_born_root_spawns_children_with_its_own_account_and_no_grants(self):
         h = self.h
         outcome = self.enroll()

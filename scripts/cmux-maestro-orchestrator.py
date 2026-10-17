@@ -2593,6 +2593,80 @@ def born_enrollment_request():
     return workspace, surface, session, request["pid"], request["login"]
 
 
+def born_run_proven_ended(state, run_id):
+    """Every node of a born run has a proven-ended process; no lease or unresolved surface."""
+    nodes = [node for node in state["nodes"].values() if node["runId"] == run_id]
+    roots = [node for node in nodes if node["parentId"] is None]
+    return (
+        len(roots) == 1 and roots[0].get("enrollment") == "born"
+        and not any(launch["runId"] == run_id for launch in state["launches"].values())
+        and not any(node.get("surfaceUnknown") or node.get("archiving") for node in nodes)
+        and all(has_managed_runtime(node) and worker_processes_exited(node) for node in nodes)
+    )
+
+
+def archive_born_run(state, run_id, retiring):
+    """Archive one proven-ended born run with the existing archive record.
+
+    Children's Maestro-created surfaces stay owned as retained resources. The born root's
+    surface was the human's, so it is released, not retained. Returns the archived nodes.
+    """
+    nodes = [node for node in state["nodes"].values() if node["runId"] == run_id]
+    workspace = nodes[0]["workspaceId"]
+    state["archives"].append(archive_summary(state, run_id))
+    state["archives"] = state["archives"][-MAX_ARCHIVES:]
+    for node in nodes:
+        retiring.append(node)
+        if node.get("enrollment") != "born" and has_managed_runtime(node) and node.get("surfaceId"):
+            state["retainedResources"].append({
+                "runId": run_id, "workspaceId": node["workspaceId"],
+                "surfaceId": node["surfaceId"], "archivedAt": now(),
+            })
+        del state["nodes"][node["id"]]
+    if sum(same_workspace(item["workspaceId"], workspace) for item in state["retainedResources"]) > MAX_NODES:
+        raise OrchestrationError("Workspace retained-resource limit reached; the ended run stays recorded.")
+    if len(state["retainedResources"]) > MAX_HOST_NODES:
+        raise OrchestrationError("Host retained-resource safety limit reached; the ended run stays recorded.")
+    return nodes
+
+
+def remove_direct_scripts(root, nodes):
+    direct = [node for node in nodes if is_direct_launch(node) and node.get("enrollment") != "born"]
+    if not direct:
+        return
+
+    def cleanup(store):
+        for node in direct:
+            try:
+                os.unlink(f"direct-{node['id']}-{node['generation']}.sh", dir_fd=store.control_fd)
+            except FileNotFoundError:
+                pass
+    with_store(root, cleanup)
+
+
+def command_archive_ended(args, root):
+    """Human-run: archive every born run in one workspace whose processes are all proven ended."""
+    workspace = canonical_uuid(args.workspace, "workspace ID")
+    archived = []
+
+    def archive(state, retiring):
+        roots = [node for node in state["nodes"].values()
+                 if node.get("enrollment") == "born" and node["parentId"] is None
+                 and same_workspace(node["workspaceId"], workspace)]
+        runs, kept = [], 0
+        for node in roots:
+            if born_run_proven_ended(state, node["runId"]):
+                archived.extend(archive_born_run(state, node["runId"], retiring))
+                runs.append(node["runId"])
+            else:
+                kept += 1
+        return {"workspaceId": workspace, "archivedRuns": runs, "keptRuns": kept,
+                "capacity": workspace_capacity(state, workspace)}
+    result = mutate_retiring_routes(root, archive)
+    remove_direct_scripts(root, archived)
+    return result
+
+
 def command_native_enroll(root, cmux):
     """Born managed (ADR 0025): enroll the invoking session, at its start, as its own root."""
     workspace, surface, session, pid, login = born_enrollment_request()
@@ -2656,9 +2730,17 @@ def command_native_enroll(root, cmux):
         "phase": "turn-running", "availability": "busy",
     })
 
-    def enroll(state):
+    archived = []
+
+    def enroll(state, retiring):
         if existing(state) is not None:
             raise EnrollmentRefused("session-previously-managed")
+        holder = next((item for item in state["nodes"].values() if item.get("surfaceId") == surface), None)
+        # A new session in a surface whose earlier born run is proven ended supersedes it.
+        # Uncertain or live runs keep the surface; nothing is guessed.
+        if (holder is not None and holder.get("enrollment") == "born" and holder["parentId"] is None
+                and holder["workspaceId"] == workspace and born_run_proven_ended(state, holder["runId"])):
+            archived.extend(archive_born_run(state, holder["runId"], retiring))
         if (any(item.get("surfaceId") == surface for item in state["nodes"].values())
                 or any(item["surfaceId"] == surface for item in state["retainedResources"])
                 or any(lease.get("surfaceId") == surface for lease in state["launches"].values())):
@@ -2676,7 +2758,9 @@ def command_native_enroll(root, cmux):
     except (OrchestrationError, OSError) as error:
         raise EnrollmentRefused("enrollment-failed") from error
     try:
-        return mutate(root, enroll)
+        result = mutate_retiring_routes(root, enroll)
+        remove_direct_scripts(root, archived)
+        return result
     except CommittedProjectionError:
         raise
     except (OrchestrationError, OSError) as error:
@@ -5434,6 +5518,8 @@ def parser():
     commands.add_parser("native-close", help="Private owned-child close ingress; use the native maestro_close tool")
     commands.add_parser("native-observe", help=argparse.SUPPRESS)
     commands.add_parser("native-enroll", help="Private born-managed enrollment ingress; used by the native adapter")
+    ended = commands.add_parser("archive-ended", help="Archive born-managed runs whose processes all ended")
+    ended.add_argument("--workspace", required=True)
     commands.add_parser("beats-snapshot", help=argparse.SUPPRESS)
     commands.add_parser("launch-credential", help=argparse.SUPPRESS)
     commands.add_parser(
@@ -5588,7 +5674,9 @@ def main(argv=None):
             # state file, host RPC argument, prompt, or launch receipt.
             print(command_launch_credential(root), end="")
             return 0
-        cmux = None if args.command in {"launch-settings", "capacity", "runtime", "report", "native-observe"} else Cmux()
+        cmux = None if args.command in {
+            "launch-settings", "capacity", "runtime", "report", "native-observe", "archive-ended",
+        } else Cmux()
         if args.command == "launch-settings":
             output = command_launch_settings(root)
         elif args.command == "capacity":
@@ -5609,6 +5697,8 @@ def main(argv=None):
             output = command_native_observe(root)
         elif args.command == "native-enroll":
             output = command_native_enroll(root, cmux)
+        elif args.command == "archive-ended":
+            output = command_archive_ended(args, root)
         elif args.command == "runtime":
             output = command_runtime(args, root)
         elif args.command == "report":
