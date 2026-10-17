@@ -26,9 +26,42 @@ Any refusal leaves the session running but unmanaged. Maestro does not retry.
 
 CMUX's own restore needs its Copilot hooks. `cmux hooks copilot install` fails on Copilot 1.0.98 because Copilot writes comments in `config.json`. See [Known gaps](#known-gaps).
 
+## Maestro-launched sessions
+
+Children from `maestro_spawn`, and coordinators from `launch-coordinator`, do not use CMUX's own restore. The owner approved the binding for `launch-coordinator` roots too: they carry recorded flags just like children. Their launch sets `CMUX_COPILOT_HOOKS_DISABLED=1`, so CMUX's hooks never record them. CMUX's restore drops launch flags, which could drop deny rules or the parent link.
+
+Instead, each launch attaches a resume binding to its exact surface:
+
+```text
+cmux surface resume set --workspace <workspace> --surface <surface> --cwd <dir> \
+  --kind agent --checkpoint <session> -- <controller> resume-managed \
+  --worker-id <node> --session-id <session>
+```
+
+The binding holds identifiers only. It holds no token, prompt, or temporary path. `<controller>` is the installed `~/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/cmux-maestro-orchestrator`. It runs through its own `#!/usr/bin/env python3`, so the binding and its approved prefix survive Python and app upgrades. The launch receipt reports `resumeBinding: "set"` or `"unavailable"`.
+
+When the session ends by user exit (Copilot `SessionEnd` with reason `user_exit`, for example `/exit`), Maestro's native extension records the end for that generation and clears that surface's binding with `cmux surface resume clear`, like CMUX does for its own records. It sends only identifiers and reads nothing from the hook input. If the clear fails, the binding stays, but `resume-managed` still refuses a user-ended generation. Other end reasons are not trusted, because a CMUX quit may report them. The extension is Maestro's own SessionEnd observer: `CMUX_COPILOT_HOOKS_DISABLED` silences only CMUX's hooks, never Maestro's extension or its identity hook. `resume-managed` refuses when the Maestro integration that carries this observer is not installed. A quit, crash, or kill sends no end event, so the session resumes at the next relaunch.
+
+On relaunch, CMUX types that command into the restored shell. `resume-managed` checks:
+
+- The terminal's `CMUX_WORKSPACE_ID` and `CMUX_SURFACE_ID` match the record. CMUX confirms the surface.
+- The node is a Maestro launch with that exact session, and its route configuration is unchanged.
+- The recorded process has ended, and no live process holds the session's `inuse.<PID>.lock`.
+- The recorded launch policy is valid. It is replayed as is: same model, allow rules, deny rules, and mode. Nothing is added.
+- The recorded account resolves through GitHub CLI. The token goes into the process environment only.
+
+Then it records the next generation with a new control token, publishes a new peer route, retires the old one, and replaces itself with `copilot --resume=<session>`. It passes no `--name`, `--session-id`, or prompt.
+
+On any refusal it prints one line, such as `Maestro did not resume this session: recorded account work-user is not signed in to GitHub CLI.`, and the shell stays. It does not retry.
+
+### One-time approval in CMUX
+
+CMUX runs a custom resume binding only after a human approves its command prefix. Open **CMUX Settings > Terminal > Resume Commands** and approve the Maestro `resume-managed` command the first time it appears. Maestro never approves it for you. CMUX also needs **Resume agent sessions** (`terminal.autoResumeAgentSessions`) on.
+
 ## Known gaps
 
 - Maestro setup does not yet install CMUX's Copilot hooks (#252 follow-up). Without them CMUX has no record to restore, and the tab stays a plain shell.
 - CMUX's Copilot restore keeps `--name` and adds `--resume`. Copilot 1.0.98 refuses that pair. A session started with `--name` does not come back through CMUX's restore. Rename the session inside Copilot instead.
 - Sessions launched through wrappers such as Agency are not covered.
+- Launches made before this change have no binding and do not resume.
 - A session started before the Maestro integration was installed is never enrolled, so it is not resumed as managed.

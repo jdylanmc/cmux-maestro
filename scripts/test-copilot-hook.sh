@@ -65,7 +65,7 @@ try:
         invoke("synthetic-hook", args, payload)
         assert not binding.exists()
         assert json.loads((fixture / "integration/hook-status.json").read_text()) == {"status": "invalidInput"}
-    for key in ("CMUX_COPILOT_HOOKS_DISABLED", "MAESTRO_NATIVE_DISABLED"):
+    for key in ("MAESTRO_NATIVE_DISABLED",):
         invoke("production-hook", [], b"{}", {**environment, key: "1"})
     invoke("production-hook", ["--unsupported"], b"{}")
     # There is no production test-root flag. This must not create a binding.
